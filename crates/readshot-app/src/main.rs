@@ -14,12 +14,14 @@
 
 use std::sync::Arc;
 
+use clap::Parser;
 use readshot_capture::default_capturer;
 use readshot_core::Preferences;
 use readshot_ocr::default_engine;
 use tracing::Level;
 
 use readshot_app::app::App;
+use readshot_app::cli::{exit_code, Cli};
 use readshot_app::coordinator::CaptureCoordinator;
 use readshot_app::permissions::default_provider;
 
@@ -28,6 +30,23 @@ fn main() {
         .with_max_level(Level::INFO)
         .with_target(true)
         .init();
+
+    // Parse CLI first. Bare `readshot` with no subcommand falls
+    // through to the GUI bootstrap below; any subcommand routes to
+    // the headless surface and exits with a stable status code.
+    let cli = Cli::parse();
+    if cli.command.is_some() {
+        let capturer = Arc::from(default_capturer());
+        let ocr = Arc::from(default_engine());
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let mut stdout = std::io::stdout().lock();
+        let result = runtime.block_on(cli.run(capturer, ocr, &mut stdout));
+        if let Err(err) = result {
+            eprintln!("readshot: {err}");
+            std::process::exit(exit_code(&err));
+        }
+        return;
+    }
 
     let permissions = Arc::from(default_provider());
     let coordinator = CaptureCoordinator::new(

@@ -13,6 +13,7 @@
 //! constructs the container and starts iced.
 
 pub mod app;
+pub mod cli;
 pub mod coordinator;
 pub mod permissions;
 pub mod url_scheme;
