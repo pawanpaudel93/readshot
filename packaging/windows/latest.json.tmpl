@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Readshot's own update endpoint for Windows users. The release workflow regenerates this file on every tag push and commits it to gh-pages, so https://pawanpaudel93.github.io/readshot/latest.json always points at the most recent stable release.",
+
+  "version": "{{VERSION}}",
+  "tag": "v{{VERSION}}",
+  "released_at": "{{DATE_ISO8601}}",
+  "channel": "stable",
+  "min_supported_windows": "10.0.19041",
+
+  "downloads": {
+    "x86_64": {
+      "url": "https://github.com/pawanpaudel93/readshot/releases/download/v{{VERSION}}/readshot-windows-x86_64.msi",
+      "sha256": "{{MSI_SHA256}}",
+      "byte_length": {{MSI_BYTE_LENGTH}}
+    }
+  },
+
+  "release_notes_url": "https://github.com/pawanpaudel93/readshot/releases/tag/v{{VERSION}}"
+}

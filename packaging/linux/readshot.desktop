@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Readshot
+GenericName=Screenshot Tool
+Comment=Capture, annotate, and OCR text from screen regions
+Exec=readshot
+Icon=readshot
+Terminal=false
+Categories=Graphics;Utility;
+StartupNotify=true
+MimeType=x-scheme-handler/readshot;
+Keywords=screenshot;capture;ocr;text;annotation;

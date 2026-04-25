@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+    <channel>
+        <title>Readshot</title>
+        <link>https://github.com/pawanpaudel93/readshot</link>
+        <description>Readshot release feed.</description>
+        <language>en</language>
+
+        <!-- One <item> per release. The release workflow appends a new
+             entry on every tag push. -->
+        <item>
+            <title>Version {{VERSION}}</title>
+            <pubDate>{{DATE_RFC822}}</pubDate>
+            <sparkle:version>{{VERSION}}</sparkle:version>
+            <sparkle:shortVersionString>{{VERSION}}</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+                {{RELEASE_NOTES_HTML}}
+            ]]></description>
+            <enclosure
+                url="https://github.com/pawanpaudel93/readshot/releases/download/v{{VERSION}}/readshot-macos-{{ARCH}}.dmg"
+                length="{{DMG_BYTE_LENGTH}}"
+                type="application/octet-stream"
+                sparkle:edSignature="{{SPARKLE_ED_SIGNATURE}}"
+            />
+        </item>
+    </channel>
+</rss>

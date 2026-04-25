@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>dev.pawanpaudel93.readshot</string>
+
+    <key>CFBundleName</key>
+    <string>Readshot</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>Readshot</string>
+
+    <key>CFBundleExecutable</key>
+    <string>readshot</string>
+
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleSignature</key>
+    <string>????</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+
+    <key>LSUIElement</key>
+    <true/>
+
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Readshot needs Screen Recording access so it can capture the region you select.</string>
+
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>dev.pawanpaudel93.readshot.url</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>readshot</string>
+            </array>
+        </dict>
+    </array>
+
+    <key>SUFeedURL</key>
+    <string>https://pawanpaudel93.github.io/readshot/appcast.xml</string>
+
+    <key>SUPublicEDKey</key>
+    <string><!-- replaced by build pipeline --></string>
+</dict>
+</plist>

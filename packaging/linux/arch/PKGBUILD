@@ -1,0 +1,47 @@
+# Maintainer: Pawan Paudel <pawanpaudel93@gmail.com>
+
+pkgname=readshot
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Cross-platform screenshot + offline OCR app, written in Rust"
+arch=('x86_64' 'aarch64')
+url="https://github.com/pawanpaudel93/readshot"
+license=('MIT')
+depends=(
+  'libxcb'
+  'wayland'
+  'libxkbcommon'
+  'fontconfig'
+  'dbus'
+  'libayatana-appindicator'
+  'gtk3'
+)
+makedepends=('cargo' 'pkg-config')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')  # replaced by the release pipeline
+
+prepare() {
+  cd "${pkgname}-${pkgver}"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked
+}
+
+build() {
+  cd "${pkgname}-${pkgver}"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo build --release --frozen --bin readshot
+}
+
+check() {
+  cd "${pkgname}-${pkgver}"
+  cargo test --release --frozen --workspace
+}
+
+package() {
+  cd "${pkgname}-${pkgver}"
+  install -Dm755 "target/release/readshot" "${pkgdir}/usr/bin/readshot"
+  install -Dm644 "packaging/linux/readshot.desktop" \
+    "${pkgdir}/usr/share/applications/${pkgname}.desktop"
+  install -Dm644 "LICENSE" \
+    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

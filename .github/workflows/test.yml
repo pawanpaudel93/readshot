@@ -1,0 +1,94 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt-check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-22.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-randr0-dev \
+            libwayland-dev libxkbcommon-dev \
+            libfontconfig1-dev \
+            libdbus-1-dev \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: cargo check --workspace
+        run: cargo check --workspace --all-targets
+
+      - name: cargo clippy --workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo nextest run
+        run: cargo nextest run --workspace --no-fail-fast
+
+  # Nightly job: enables `--features integration` and pre-grants
+  # Screen Recording on macOS so the per-OS smoke tests
+  # (screencapturekit, Apple Vision) actually run. Off by default
+  # because granting TCC requires a privileged tccutil call.
+  integration:
+    name: integration (${{ matrix.os }})
+    if: github.event_name == 'schedule' || contains(github.event.head_commit.message, '[run integration]')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14]
+    runs-on: ${{ matrix.os }}
+    env:
+      CI_HAS_SCREEN_PERMISSION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Pre-grant Screen Recording (macOS only)
+        if: runner.os == 'macOS'
+        run: |
+          # `tccutil reset ScreenCapture` then a programmatic grant
+          # is the standard CI pattern. Implementation deferred to
+          # the first runner that needs it.
+          echo "TODO: pre-grant Screen Recording via tccutil"
+      - name: cargo nextest run --features integration
+        run: cargo nextest run --workspace --features readshot-capture/integration,readshot-ocr/integration --no-fail-fast

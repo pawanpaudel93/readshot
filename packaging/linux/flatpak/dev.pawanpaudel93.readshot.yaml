@@ -1,0 +1,52 @@
+# Flatpak manifest for Readshot.
+#
+# Submitted to https://github.com/flathub/dev.pawanpaudel93.readshot
+# once the project lands on Flathub. The release workflow opens a
+# bot-driven PR against that repo on every tag push.
+#
+# Build locally with:
+#   flatpak-builder --force-clean build packaging/linux/flatpak/dev.pawanpaudel93.readshot.yaml
+
+app-id: dev.pawanpaudel93.readshot
+runtime: org.freedesktop.Platform
+runtime-version: "23.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: readshot
+
+finish-args:
+  # Wayland + X11 fallback for the overlay.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # GPU access for iced's wgpu renderer.
+  - --device=dri
+  # Network for Sparkle / latest.json update checks. Opt-out by
+  # disabling auto-update in Settings.
+  - --share=network
+  # xdg-desktop-portal access for ScreenCast capture.
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --talk-name=org.freedesktop.portal.ScreenCast
+  # File chooser portal for Save dialog.
+  - --talk-name=org.freedesktop.portal.FileChooser
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  build-args:
+    - --share=network
+  env:
+    CARGO_HOME: /run/build/readshot/cargo
+
+modules:
+  - name: readshot
+    buildsystem: simple
+    build-commands:
+      - cargo --offline fetch --manifest-path Cargo.toml --verbose
+      - cargo --offline build --release --bin readshot
+      - install -Dm755 target/release/readshot /app/bin/readshot
+      - install -Dm644 packaging/linux/readshot.desktop /app/share/applications/dev.pawanpaudel93.readshot.desktop
+      - install -Dm644 packaging/linux/readshot.png /app/share/icons/hicolor/512x512/apps/dev.pawanpaudel93.readshot.png
+    sources:
+      - type: dir
+        path: ../../..

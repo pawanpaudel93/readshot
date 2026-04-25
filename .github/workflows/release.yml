@@ -1,0 +1,155 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+            artifact: readshot-macos-aarch64.dmg
+          - target: x86_64-apple-darwin
+            os: macos-14
+            artifact: readshot-macos-x86_64.dmg
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+            artifact: readshot-windows-x86_64.msi
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            artifact: readshot-linux-x86_64.AppImage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-randr0-dev \
+            libwayland-dev libxkbcommon-dev \
+            libfontconfig1-dev libdbus-1-dev \
+            libayatana-appindicator3-dev libgtk-3-dev \
+            libfuse2
+
+      - name: Build release binary
+        run: cargo build --release --bin readshot --target ${{ matrix.target }}
+
+      # ─── macOS DMG (self-signed; no notarisation per spec) ────────────────
+      - name: Package DMG (macOS)
+        if: runner.os == 'macOS'
+        env:
+          MACOS_SELF_SIGN_CERT_BASE64: ${{ secrets.MACOS_SELF_SIGN_CERT_BASE64 }}
+          MACOS_SELF_SIGN_CERT_PASSWORD: ${{ secrets.MACOS_SELF_SIGN_CERT_PASSWORD }}
+          SPARKLE_ED_KEY_BASE64: ${{ secrets.SPARKLE_ED_KEY_BASE64 }}
+        run: bash packaging/macos/build-dmg.sh
+
+      # ─── Windows MSI (SignPath OSS programme; falls back to unsigned) ────
+      - name: Package MSI (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cargo install cargo-wix --version 0.3 --locked
+          cargo wix --target ${{ matrix.target }} --no-build --output target/wix/readshot.msi
+        shell: pwsh
+
+      - name: Sign MSI via SignPath
+        if: runner.os == 'Windows' && env.SIGNPATH_API_TOKEN != ''
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ env.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORG_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: msi
+          github-artifact-id: target/wix/readshot.msi
+
+      # ─── Linux AppImage ──────────────────────────────────────────────────
+      - name: Package AppImage (Linux)
+        if: runner.os == 'Linux'
+        run: bash packaging/linux/build-appimage.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            target/${{ matrix.target }}/release/readshot*
+            target/wix/readshot.msi
+            target/release/Readshot-*.AppImage
+            target/release/readshot.dmg
+          if-no-files-found: warn
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Compute SHA-256 hashes
+        run: |
+          mkdir -p out
+          find artifacts -type f \( -name "*.dmg" -o -name "*.msi" -o -name "*.AppImage" \) -exec sh -c 'cp "$1" out/; sha256sum "$1" >> out/SHA256SUMS' _ {} \;
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/*.dmg
+            out/*.msi
+            out/*.AppImage
+            out/SHA256SUMS
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+
+      # ─── Sparkle appcast (macOS) ─────────────────────────────────────────
+      - name: Update Sparkle appcast
+        run: |
+          # Generates appcast.xml entry pointing at the new DMG and pushes
+          # to the gh-pages branch. See packaging/macos/sparkle-appcast.xml.tmpl
+          # for the schema. Implementation deferred to first real release.
+          echo "TODO: implement appcast publication"
+
+      # ─── Windows latest.json (Windows updater) ───────────────────────────
+      - name: Update Windows latest.json
+        run: |
+          # See packaging/windows/latest.json.tmpl. Pushed to gh-pages
+          # alongside the appcast.
+          echo "TODO: implement latest.json publication"
+
+      # ─── Homebrew Cask + Flathub PR ──────────────────────────────────────
+      - name: Bump Homebrew Cask
+        run: echo "TODO: open a PR against the homebrew-readshot tap"
+
+      - name: Submit Flathub update
+        run: echo "TODO: open a PR against flathub/dev.pawanpaudel93.readshot"
