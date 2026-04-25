@@ -9,7 +9,9 @@
 //! design rationale.
 
 pub mod annotation;
+pub mod arrowhead;
 pub mod error;
+pub mod filters;
 pub mod geom;
 pub mod log;
 pub mod render;

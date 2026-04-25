@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Pure-Rust domain core for Readshot — annotation model, traits, persistence schema."
 
 [dependencies]
+ab_glyph = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

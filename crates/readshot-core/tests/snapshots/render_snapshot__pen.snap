@@ -1,0 +1,7 @@
+---
+source: crates/readshot-core/tests/render_snapshot.rs
+assertion_line: 108
+expression: png
+extension: png
+snapshot_kind: binary
+---
