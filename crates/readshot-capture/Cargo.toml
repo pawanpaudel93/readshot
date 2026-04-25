@@ -7,12 +7,25 @@ license.workspace = true
 repository.workspace = true
 description = "Per-OS screen capture for Readshot behind a Capturer trait."
 
+[features]
+default = []
+# Enables tests that hit real OS capture APIs. Off by default because
+# they require the user to grant Screen Recording permission (macOS) or
+# accept the xdg-desktop-portal dialog (Linux). Higher crates and CI
+# enable it via `--features integration`.
+integration = []
+
 [dependencies]
 async-trait = { workspace = true }
 image = { workspace = true }
 readshot-core = { path = "../readshot-core" }
 readshot-test-fixtures = { path = "../readshot-test-fixtures" }
 tiny-skia = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = { version = "1.5", features = ["macos_14_0"] }
+core-graphics = "0.25"
+core-foundation = "0.10"
 
 [dev-dependencies]
 tokio = { workspace = true }
