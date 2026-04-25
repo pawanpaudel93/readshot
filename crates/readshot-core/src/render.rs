@@ -22,7 +22,11 @@ use crate::filters::{blur_rect, pixelate_rect};
 use crate::geom::PointLike;
 use crate::{arrowhead, RectLike};
 
-const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
+/// Bundled JetBrains Mono Regular font bytes (OFL 1.1).
+///
+/// Exposed publicly so the iced runtime can register the same font
+/// via `iced::daemon::font(...)` for visually consistent text.
+pub const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
 
 /// Render `model` over `base` and return the flattened result.
 ///

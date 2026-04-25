@@ -39,6 +39,11 @@ use crate::permissions::{PermissionStatus, PermissionsProvider};
 /// Bag of services the coordinator binds against. Owned by the App
 /// state and shared via `Arc` so the capture coordinator can spawn
 /// background tasks that outlive a single iced `update` call.
+///
+/// `Clone` is `Arc`-cheap (every field is already an `Arc`) — it's
+/// derived so iced `Task`s can capture an owned coordinator without
+/// borrowing across `await` points.
+#[derive(Clone)]
 pub struct CaptureCoordinator {
     capturer: Arc<dyn Capturer>,
     ocr: Arc<dyn OCREngine>,

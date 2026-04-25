@@ -16,5 +16,6 @@ pub mod app;
 pub mod cli;
 pub mod coordinator;
 pub mod permissions;
+pub mod runtime;
 pub mod url_scheme;
 pub mod welcome;

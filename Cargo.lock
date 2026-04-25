@@ -4406,6 +4406,7 @@ dependencies = [
  "chrono",
  "clap",
  "core-graphics 0.25.0",
+ "directories",
  "iced",
  "image",
  "readshot-capture",

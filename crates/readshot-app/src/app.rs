@@ -13,8 +13,11 @@
 //! permission gating, message routing) is covered by unit tests in
 //! sibling modules.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use iced::window;
 use readshot_core::Preferences;
 use readshot_ui::{
     ActionMessage, CanvasMessage, HotkeyMessage, SelectionMessage, SettingsMessage, ToolbarMessage,
@@ -24,6 +27,35 @@ use readshot_ui::{
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::PermissionsProvider;
 use crate::welcome::WelcomeState;
+
+/// Distinct purposes a top-level iced window can serve. The runtime
+/// uses this to dispatch `view` and `title` per `window::Id`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum WindowKind {
+    Welcome,
+}
+
+/// Mapping from live `window::Id`s to their kind, so the daemon's
+/// per-window callbacks know what tree to render. Phase A only ever
+/// has a single Welcome window; the structure is built to grow.
+#[derive(Default)]
+pub struct Windows {
+    by_id: HashMap<window::Id, WindowKind>,
+}
+
+impl Windows {
+    pub fn register(&mut self, id: window::Id, kind: WindowKind) {
+        self.by_id.insert(id, kind);
+    }
+
+    pub fn forget(&mut self, id: window::Id) {
+        self.by_id.remove(&id);
+    }
+
+    pub fn kind(&self, id: window::Id) -> Option<WindowKind> {
+        self.by_id.get(&id).copied()
+    }
+}
 
 /// Top-level application message — every event from every UI surface
 /// or background task funnels through this enum.
@@ -38,10 +70,23 @@ pub enum Message {
     Settings(SettingsMessage),
     /// Permission-status poll fired on a timer.
     PermissionPoll(crate::permissions::PermissionStatus),
+    /// Subscription tick — `runtime::update` reads the current status
+    /// and feeds it as `PermissionPoll`. Separate from the latter so
+    /// tests can drive `PermissionPoll` directly without faking the
+    /// timer.
+    PermissionTick,
     /// User clicked "Grant" in the welcome window.
     GrantPermissionRequested,
     /// User clicked "Open Settings" in the denied state.
     OpenPermissionSettingsRequested,
+    /// User clicked "Capture primary display" in the welcome window.
+    CaptureFullPrimaryRequested,
+    /// Background capture-and-save task finished. Carries the final
+    /// PNG path or a stringified error.
+    CaptureSaved(Result<PathBuf, String>),
+    /// First `view` call after the welcome window is opened. Used by
+    /// the runtime to detect the window-ready transition.
+    WelcomeWindowReady,
     /// Capture coordinator finished a `capture_region` call.
     CaptureCompleted(Result<image::RgbaImage, String>),
     /// OCR engine finished a `recognise` call.
@@ -56,6 +101,13 @@ pub struct App {
     pub permissions: Arc<dyn PermissionsProvider>,
     pub preferences: Preferences,
     pub welcome: WelcomeState,
+    pub windows: Windows,
+    /// `true` while a capture-and-save task is in flight; the welcome
+    /// window's button is disabled in that state.
+    pub capture_in_flight: bool,
+    /// Last toast text shown under the capture button. Cleared when
+    /// the user kicks off a new capture.
+    pub last_capture_status: Option<String>,
 }
 
 impl App {
@@ -70,6 +122,9 @@ impl App {
             permissions,
             preferences,
             welcome,
+            windows: Windows::default(),
+            capture_in_flight: false,
+            last_capture_status: None,
         }
     }
 
