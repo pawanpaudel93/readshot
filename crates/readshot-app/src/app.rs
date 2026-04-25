@@ -81,6 +81,9 @@ pub enum Message {
     OpenPermissionSettingsRequested,
     /// User clicked "Capture primary display" in the welcome window.
     CaptureFullPrimaryRequested,
+    /// 50 ms drain tick — runtime polls the global-hotkey receiver and
+    /// emits a `CaptureFullPrimaryRequested` if any events arrived.
+    HotkeyTick,
     /// Background capture-and-save task finished. Carries the final
     /// PNG path or a stringified error.
     CaptureSaved(Result<PathBuf, String>),
@@ -108,6 +111,10 @@ pub struct App {
     /// Last toast text shown under the capture button. Cleared when
     /// the user kicks off a new capture.
     pub last_capture_status: Option<String>,
+    /// Live `GlobalHotKeyManager` for the registered capture shortcut.
+    /// Held here so it isn't dropped (which unregisters the hotkey).
+    /// Tests and CLI invocations leave this `None`.
+    pub hotkey_manager: Option<global_hotkey::GlobalHotKeyManager>,
 }
 
 impl App {
@@ -125,6 +132,7 @@ impl App {
             windows: Windows::default(),
             capture_in_flight: false,
             last_capture_status: None,
+            hotkey_manager: None,
         }
     }
 

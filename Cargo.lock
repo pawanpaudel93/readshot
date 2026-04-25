@@ -4407,6 +4407,7 @@ dependencies = [
  "clap",
  "core-graphics 0.25.0",
  "directories",
+ "global-hotkey",
  "iced",
  "image",
  "readshot-capture",

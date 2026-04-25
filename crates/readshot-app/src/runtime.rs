@@ -30,12 +30,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
 use iced::widget::{button, column, container, row, text, Space};
 use iced::window;
 use iced::{Alignment, Element, Length, Subscription, Task, Theme};
 
 use readshot_capture::{CaptureRequest, DisplayInfo};
 use readshot_core::Preferences;
+use readshot_ui::hotkey;
 
 use crate::app::{App, Message, WindowKind};
 use crate::coordinator::CaptureCoordinator;
@@ -56,11 +58,54 @@ pub fn start() -> (App, Task<Message>) {
     );
     let mut app = App::new(coordinator, permissions, Preferences::default());
 
+    // Register the user's preferred global hotkey. Failures are
+    // logged-and-swallowed: the binary remains usable from the GUI
+    // button + CLI / MCP surfaces if hotkey registration fails (e.g.
+    // another app already owns the chord).
+    if let Some(manager) = register_default_hotkey(&app.preferences) {
+        app.hotkey_manager = Some(manager);
+    }
+
     let (id, open_task) = window::open(welcome_window_settings());
     app.windows.register(id, WindowKind::Welcome);
 
     let task = open_task.map(|_id| Message::WelcomeWindowReady);
     (app, task)
+}
+
+fn register_default_hotkey(prefs: &Preferences) -> Option<GlobalHotKeyManager> {
+    let spec = match hotkey::parse(&prefs.capture_hotkey) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                target: "readshot::hotkey",
+                "could not parse capture_hotkey `{}`: {e}",
+                prefs.capture_hotkey,
+            );
+            return None;
+        }
+    };
+    let manager = match GlobalHotKeyManager::new() {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(target: "readshot::hotkey", "GlobalHotKeyManager init failed: {e}");
+            return None;
+        }
+    };
+    if let Err(e) = manager.register(spec.to_global_hotkey()) {
+        tracing::warn!(
+            target: "readshot::hotkey",
+            "failed to register `{}`: {e}",
+            prefs.capture_hotkey,
+        );
+        return None;
+    }
+    tracing::info!(
+        target: "readshot::hotkey",
+        "registered global hotkey: {}",
+        prefs.capture_hotkey,
+    );
+    Some(manager)
 }
 
 fn welcome_window_settings() -> window::Settings {
@@ -89,17 +134,22 @@ pub fn theme(_state: &App, _id: window::Id) -> Theme {
     Theme::Dark
 }
 
-/// Background subscriptions — currently just the permission poll.
-/// Tray + global-hotkey channels join here in Phase A.5.
+/// Background subscriptions — permission poll + global-hotkey drain.
 pub fn subscription(state: &App) -> Subscription<Message> {
+    let mut subs = Vec::new();
     if state.welcome.should_show() {
         // Polling at 500 ms keeps the UI responsive without burning
         // CPU. The TCC db is already cached in-process so each poll
         // is essentially a no-op syscall.
-        iced::time::every(Duration::from_millis(500)).map(|_| Message::PermissionTick)
-    } else {
-        Subscription::none()
+        subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::PermissionTick));
     }
+    if state.hotkey_manager.is_some() {
+        // 50 ms drain — `try_recv` is a non-blocking peek at the
+        // crossbeam channel `global-hotkey` writes to from its OS
+        // event handler. Cheap when there are no events.
+        subs.push(iced::time::every(Duration::from_millis(50)).map(|_| Message::HotkeyTick));
+    }
+    Subscription::batch(subs)
 }
 
 /// Top-level update fn. Delegates testable transitions to
@@ -113,6 +163,21 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // Reuse the existing synchronous handler — it drives the
             // `WelcomeState` machine without touching iced state.
             state.update_sync(Message::PermissionPoll(status));
+            Task::none()
+        }
+
+        Message::HotkeyTick => {
+            // Drain anything the OS-side handler queued. We collapse
+            // multiple presses into a single capture request so a
+            // mashed hotkey doesn't stack pending captures.
+            let mut fired = false;
+            let receiver = GlobalHotKeyEvent::receiver();
+            while receiver.try_recv().is_ok() {
+                fired = true;
+            }
+            if fired && !state.welcome.should_show() && !state.capture_in_flight {
+                return update(state, Message::CaptureFullPrimaryRequested);
+            }
             Task::none()
         }
 
@@ -382,5 +447,20 @@ mod tests {
     fn permission_blurb_changes_with_state() {
         assert_eq!(permission_blurb(WelcomeState::Granted), "Permission: granted");
         assert_eq!(permission_blurb(WelcomeState::Denied), "Permission: denied");
+    }
+
+    #[test]
+    fn register_default_hotkey_returns_none_for_garbage_string() {
+        let mut prefs = Preferences::default();
+        prefs.capture_hotkey = "not a hotkey at all".into();
+        assert!(register_default_hotkey(&prefs).is_none());
+    }
+
+    #[test]
+    fn hotkey_tick_no_events_is_noop() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        // No manager registered → tick does nothing meaningful.
+        let _ = update(&mut app, Message::HotkeyTick);
+        assert!(!app.capture_in_flight);
     }
 }

@@ -20,6 +20,7 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 directories = { workspace = true }
+global-hotkey = { workspace = true }
 iced = { workspace = true }
 image = { workspace = true }
 readshot-capture = { path = "../readshot-capture" }
