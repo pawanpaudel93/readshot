@@ -7,6 +7,11 @@
 //! The `overlay` module owns the public surface that Task 16's
 //! composition root binds to the iced daemon at runtime.
 
+pub mod editor;
 pub mod overlay;
 
+pub use editor::{
+    ActionMessage, CanvasMessage, EditorCanvas, EditorOutcome, EditorState, History, ToolState,
+    ToolbarMessage,
+};
 pub use overlay::{OverlayResult, SelectionCanvas, SelectionMessage};
