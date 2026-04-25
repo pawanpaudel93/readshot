@@ -100,6 +100,12 @@ pub enum Message {
     GrantPermissionRequested,
     /// User clicked "Open Settings" in the denied state.
     OpenPermissionSettingsRequested,
+    /// User clicked "Quit" — graceful exit so the next launch picks
+    /// up newly-granted TCC permissions.
+    QuitRequested,
+    /// User clicked "Restart" — relaunch the bundle so TCC's cached
+    /// Screen Recording grant becomes visible to the new process.
+    RestartRequested,
     /// User clicked "Capture primary display" in the welcome window.
     CaptureFullPrimaryRequested,
     /// 50 ms drain tick — runtime polls the global-hotkey receiver and

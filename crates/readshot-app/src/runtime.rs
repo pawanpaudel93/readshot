@@ -82,6 +82,15 @@ pub fn start() -> (App, Task<Message>) {
     );
     let mut app = App::new(coordinator, permissions, Preferences::default());
 
+    // Surface the initial permission state in the log so users
+    // (and us, when triaging issues) can see whether macOS TCC is
+    // already returning Granted before the welcome window appears.
+    tracing::info!(
+        target: "readshot::permissions",
+        "initial status: {:?}",
+        app.coordinator.pre_capture_gate(),
+    );
+
     // Register the user's preferred global hotkey. Failures are
     // logged-and-swallowed: the binary remains usable from the GUI
     // button + CLI / MCP surfaces if hotkey registration fails (e.g.
@@ -490,6 +499,23 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
         },
 
+        Message::QuitRequested => iced::exit(),
+
+        Message::RestartRequested => {
+            // macOS Screen Recording's TCC grant is cached per-process
+            // by `CGPreflightScreenCaptureAccess` — once a process has
+            // seen "denied", it can't ever see "granted" without a
+            // restart. We respawn the bundle via Launch Services so
+            // the new process picks up the fresh grant, then exit.
+            #[cfg(target_os = "macos")]
+            {
+                if let Err(e) = relaunch_via_launch_services() {
+                    tracing::warn!(target: "readshot::permissions", "relaunch failed: {e}");
+                }
+            }
+            iced::exit()
+        }
+
         // Synchronous transitions — reuse the existing handler.
         msg @ (Message::PermissionPoll(_)
         | Message::GrantPermissionRequested
@@ -581,25 +607,51 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
             text("Screen Recording is granted. You're all set.").width(Length::Fill),
         ]
         .into(),
-        WelcomeState::Pending => row![
+        WelcomeState::Pending => column![
             text("Readshot needs Screen Recording permission to capture your screen.")
                 .width(Length::Fill),
-            button("Grant access").on_press(Message::GrantPermissionRequested),
+            text(
+                "Click Grant access. After you toggle Readshot ON in \
+                 System Settings → Privacy & Security → Screen \
+                 Recording, click Restart Readshot — macOS won't \
+                 update Screen Recording in a running process."
+            )
+            .size(12)
+            .width(Length::Fill),
+            row![
+                button("Grant access").on_press(Message::GrantPermissionRequested),
+                button("Open Settings").on_press(Message::OpenPermissionSettingsRequested),
+                button("Restart Readshot").on_press(Message::RestartRequested),
+            ]
+            .spacing(8),
         ]
-        .spacing(16)
-        .align_y(Alignment::Center)
+        .spacing(8)
         .into(),
-        WelcomeState::AwaitingGrant => row![
-            text("Waiting for your decision in System Settings…").width(Length::Fill),
-        ]
-        .into(),
-        WelcomeState::Denied => row![
-            text("Permission denied. Open System Settings to flip the toggle.")
+        WelcomeState::AwaitingGrant => column![
+            text("Toggle Readshot on in System Settings → Privacy & \
+                  Security → Screen Recording, then click Restart \
+                  Readshot below to pick up the fresh grant.")
                 .width(Length::Fill),
-            button("Open Settings").on_press(Message::OpenPermissionSettingsRequested),
+            row![
+                button("Open Settings").on_press(Message::OpenPermissionSettingsRequested),
+                button("Restart Readshot").on_press(Message::RestartRequested),
+            ]
+            .spacing(8),
         ]
-        .spacing(16)
-        .align_y(Alignment::Center)
+        .spacing(8)
+        .into(),
+        WelcomeState::Denied => column![
+            text("Permission denied. Open System Settings → Privacy & \
+                  Security → Screen Recording, toggle Readshot on, \
+                  then click Restart Readshot.")
+                .width(Length::Fill),
+            row![
+                button("Open Settings").on_press(Message::OpenPermissionSettingsRequested),
+                button("Restart Readshot").on_press(Message::RestartRequested),
+            ]
+            .spacing(8),
+        ]
+        .spacing(8)
         .into(),
     };
 
@@ -786,6 +838,31 @@ enum CaptureRunError {
     Image(#[from] image::ImageError),
     #[error("no displays available")]
     NoDisplays,
+}
+
+/// Spawn `open <bundle.app>` so Launch Services starts a fresh
+/// copy of Readshot. We use the bundle path discovered via
+/// `CFBundleCopyBundleURL`-equivalent (env-derived from the running
+/// executable) so the user's installed location is honoured.
+#[cfg(target_os = "macos")]
+fn relaunch_via_launch_services() -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    // .../Readshot.app/Contents/MacOS/Readshot → .../Readshot.app
+    let bundle = exe
+        .parent() // MacOS
+        .and_then(|p| p.parent()) // Contents
+        .and_then(|p| p.parent()) // *.app
+        .map(|p| p.to_path_buf())
+        .unwrap_or(exe);
+    // Fully detach the child so it doesn't die when we exit.
+    std::process::Command::new("open")
+        .arg("-n")
+        .arg(&bundle)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    Ok(())
 }
 
 /// Helper for the previous synchronous status check used by tests.
