@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Pawan Paudel <pawanpaudel93@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/pawanpaudel93/readshot"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+async-trait = "0.1"
+directories = "5"
+image = "0.25"
+tiny-skia = "0.11"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+iced = { version = "0.13", features = ["canvas", "multi-window", "tokio"] }
+global-hotkey = "0.6"
+tray-icon = "0.19"
+muda = "0.15"
+arboard = { version = "3", features = ["wayland-data-control"] }
+insta = { version = "1", features = ["yaml"] }

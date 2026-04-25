@@ -1,0 +1,8 @@
+[package]
+name = "readshot-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Iced-based user interface for Readshot — overlay, editor, settings, tray."

@@ -1,0 +1,17 @@
+# autoarchitect-generated specs, plans, journals, and session state — kept locally, not committed.
+docs/superpowers/
+.autoarchitect/
+
+# Rust / Cargo
+target/
+.swiftpm/
+.build/
+
+# OS
+.DS_Store
+
+# Build artefacts
+dist/
+*.dmg
+*.msi
+*.AppImage

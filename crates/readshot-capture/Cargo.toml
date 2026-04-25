@@ -1,0 +1,8 @@
+[package]
+name = "readshot-capture"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Per-OS screen capture for Readshot behind a Capturer trait."

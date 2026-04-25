@@ -1,0 +1,8 @@
+[package]
+name = "readshot-ocr"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Per-OS offline OCR for Readshot behind an OCREngine trait."

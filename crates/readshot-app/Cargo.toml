@@ -1,0 +1,19 @@
+[package]
+name = "readshot-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Readshot binary — composition root wiring all subsystems."
+
+[[bin]]
+name = "readshot"
+path = "src/main.rs"
+
+[dependencies]
+readshot-core = { path = "../readshot-core" }
+readshot-capture = { path = "../readshot-capture" }
+readshot-ocr = { path = "../readshot-ocr" }
+readshot-ui = { path = "../readshot-ui" }
+readshot-test-fixtures = { path = "../readshot-test-fixtures" }

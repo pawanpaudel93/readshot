@@ -1,0 +1,8 @@
+[package]
+name = "readshot-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure-Rust domain core for Readshot — annotation model, traits, persistence schema."
