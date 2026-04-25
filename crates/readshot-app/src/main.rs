@@ -21,6 +21,7 @@ use tracing::Level;
 
 use readshot_app::cli::{exit_code, Cli};
 use readshot_app::runtime;
+use readshot_app::url_scheme;
 
 fn main() -> iced::Result {
     tracing_subscriber::fmt()
@@ -28,10 +29,35 @@ fn main() -> iced::Result {
         .with_target(true)
         .init();
 
-    // Parse CLI first. Bare `readshot` with no subcommand falls
-    // through to the GUI bootstrap below; any subcommand routes to
-    // the headless surface and exits with a stable status code.
-    let cli = Cli::parse();
+    // Phase D (argv path): if the binary is invoked with a
+    // `readshot://...` URL as the first argument (e.g. `open
+    // readshot://new` on macOS or a desktop-handler invocation on
+    // Linux), parse it now and pass the result to the runtime so
+    // start() can dispatch the corresponding action on boot.
+    let argv: Vec<String> = std::env::args().collect();
+    let url_arg = argv
+        .get(1)
+        .filter(|a| a.starts_with("readshot://"))
+        .cloned();
+    if let Some(arg) = url_arg.as_deref() {
+        match url_scheme::parse(arg) {
+            Ok(action) => runtime::set_initial_url_action(action),
+            Err(e) => eprintln!("readshot: ignoring URL `{arg}`: {e}"),
+        }
+    }
+
+    // Parse CLI second. If argv[1] was a readshot:// URL we already
+    // consumed it above; clap won't see it as a subcommand. Any
+    // subcommand routes to the headless surface and exits with a
+    // stable status code.
+    let cli = if url_arg.is_some() {
+        // Skip clap when argv[1] is a URL — clap would reject it.
+        Cli {
+            command: None,
+        }
+    } else {
+        Cli::parse()
+    };
     if cli.command.is_some() {
         let capturer = Arc::from(default_capturer());
         let ocr = Arc::from(default_engine());

@@ -27,7 +27,7 @@
 //! glue the typed state machine into iced and stay thin.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
@@ -38,6 +38,30 @@ use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 use readshot_capture::{CaptureRequest, DisplayInfo};
 use readshot_core::Preferences;
 use readshot_ui::hotkey;
+
+use crate::url_scheme::UrlAction;
+
+/// Initial URL action set from `main.rs` before `iced::daemon` starts.
+/// `start()` consumes this and feeds an extra `Message::UrlActionReceived`
+/// task on boot, before the welcome window even has time to paint.
+static INITIAL_URL_ACTION: OnceLock<Mutex<Option<UrlAction>>> = OnceLock::new();
+
+/// Stash a parsed URL scheme action so the iced runtime sees it when
+/// it boots. Call this from `main.rs` before the daemon takes over.
+/// On macOS, true URL-event delivery via NSAppleEventManager isn't
+/// hooked up here — Phase D part 2. argv-based delivery (e.g.
+/// `open readshot://new` or running the binary with the URL as the
+/// first argument) is supported today.
+pub fn set_initial_url_action(action: UrlAction) {
+    let slot = INITIAL_URL_ACTION.get_or_init(|| Mutex::new(None));
+    *slot.lock().expect("INITIAL_URL_ACTION poisoned") = Some(action);
+}
+
+fn take_initial_url_action() -> Option<UrlAction> {
+    INITIAL_URL_ACTION
+        .get()
+        .and_then(|m| m.lock().ok().and_then(|mut g| g.take()))
+}
 
 use crate::app::{App, Message, WindowKind};
 use crate::coordinator::CaptureCoordinator;
@@ -73,8 +97,11 @@ pub fn start() -> (App, Task<Message>) {
     let (id, open_task) = window::open(welcome_window_settings());
     app.windows.register(id, WindowKind::Welcome);
 
-    let task = open_task.map(|_id| Message::WelcomeWindowReady);
-    (app, task)
+    let mut tasks: Vec<Task<Message>> = vec![open_task.map(|_id| Message::WelcomeWindowReady)];
+    if let Some(action) = take_initial_url_action() {
+        tasks.push(Task::done(Message::UrlActionReceived(action)));
+    }
+    (app, Task::batch(tasks))
 }
 
 fn register_default_hotkey(prefs: &Preferences) -> Option<GlobalHotKeyManager> {
@@ -125,6 +152,20 @@ fn welcome_window_settings() -> window::Settings {
     }
 }
 
+/// Window settings for the annotation / actions editor.
+fn editor_window_settings() -> window::Settings {
+    window::Settings {
+        size: iced::Size::new(720.0, 560.0),
+        min_size: Some(iced::Size::new(360.0, 240.0)),
+        position: window::Position::Centered,
+        resizable: true,
+        decorations: true,
+        transparent: false,
+        visible: true,
+        ..Default::default()
+    }
+}
+
 /// Window settings for the region-capture overlay.
 ///
 /// We open a borderless `AlwaysOnTop` transparent window the size of
@@ -156,6 +197,7 @@ pub fn title(state: &App, id: window::Id) -> String {
     match state.windows.kind(id) {
         Some(WindowKind::Welcome) | None => "Readshot".into(),
         Some(WindowKind::Overlay) => "Readshot — Region capture".into(),
+        Some(WindowKind::Editor) => "Readshot — Editor".into(),
     }
 }
 
@@ -315,9 +357,117 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let coord = state.coordinator.clone();
             state.capture_in_flight = true;
             state.last_capture_status = None;
-            Task::perform(capture_region_to_desktop(coord, rect), |result| {
-                Message::CaptureSaved(result.map_err(|e| e.to_string()))
+            // Region capture lands in the editor instead of saving
+            // directly — the editor decides what to do with it.
+            Task::perform(capture_region_to_image(coord, rect), |result| {
+                Message::RegionCaptureCompleted(result.map_err(|e| e.to_string()))
             })
+        }
+
+        Message::RegionCaptureCompleted(result) => {
+            state.capture_in_flight = false;
+            match result {
+                Ok(image) => {
+                    state.editor = Some(crate::editor::EditorState::new(image));
+                    let (id, open_task) = window::open(editor_window_settings());
+                    state.windows.register(id, WindowKind::Editor);
+                    open_task.map(Message::EditorWindowReady)
+                }
+                Err(e) => {
+                    state.last_capture_status = Some(format!("Capture failed: {e}"));
+                    Task::none()
+                }
+            }
+        }
+
+        Message::EditorWindowReady(id) => {
+            if let Some(ed) = &mut state.editor {
+                ed.window_id = Some(id);
+            }
+            Task::none()
+        }
+
+        Message::EditorSaveRequested => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            ed.busy = true;
+            ed.status = Some("Saving…".into());
+            let img = ed.image.clone();
+            Task::perform(save_image_to_desktop(img), |r| {
+                Message::EditorSaved(r.map_err(|e| e.to_string()))
+            })
+        }
+        Message::EditorSaved(result) => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.busy = false;
+                ed.status = Some(match result {
+                    Ok(p) => format!("Saved to {}", p.display()),
+                    Err(e) => format!("Save failed: {e}"),
+                });
+            }
+            Task::none()
+        }
+
+        Message::EditorCopyImageRequested => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            ed.busy = true;
+            ed.status = Some("Copying…".into());
+            let img = ed.image.clone();
+            Task::perform(copy_image_to_clipboard(img), |r| {
+                Message::EditorCopyImageDone(r.map_err(|e| e.to_string()))
+            })
+        }
+        Message::EditorCopyImageDone(result) => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.busy = false;
+                ed.status = Some(match result {
+                    Ok(()) => "Copied to clipboard.".into(),
+                    Err(e) => format!("Copy failed: {e}"),
+                });
+            }
+            Task::none()
+        }
+
+        Message::EditorCopyTextRequested => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            ed.busy = true;
+            ed.status = Some("Recognising text…".into());
+            let img = ed.image.clone();
+            let coord = state.coordinator.clone();
+            Task::perform(ocr_then_copy(coord, img), |r| {
+                Message::EditorCopyTextDone(r.map_err(|e| e.to_string()))
+            })
+        }
+        Message::EditorCopyTextDone(result) => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.busy = false;
+                ed.status = Some(match result {
+                    Ok(text) if text.is_empty() => "No text recognised.".into(),
+                    Ok(text) => format!(
+                        "Copied {} character{} of text.",
+                        text.chars().count(),
+                        if text.chars().count() == 1 { "" } else { "s" },
+                    ),
+                    Err(e) => format!("Copy text failed: {e}"),
+                });
+            }
+            Task::none()
+        }
+
+        Message::EditorDiscardRequested => {
+            let id = state.editor.as_ref().and_then(|e| e.window_id);
+            state.editor = None;
+            if let Some(id) = id {
+                state.windows.forget(id);
+                window::close(id)
+            } else {
+                Task::none()
+            }
         }
 
         Message::CaptureSaved(result) => {
@@ -328,6 +478,17 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             });
             Task::none()
         }
+
+        Message::UrlActionReceived(action) => match action {
+            UrlAction::NewCapture => {
+                tracing::info!(target: "readshot::url", "readshot:// → opening overlay");
+                update(state, Message::OpenOverlayRequested)
+            }
+            UrlAction::Unknown(path) => {
+                tracing::warn!(target: "readshot::url", "ignoring unknown readshot:// path: {path}");
+                Task::none()
+            }
+        },
 
         // Synchronous transitions — reuse the existing handler.
         msg @ (Message::PermissionPoll(_)
@@ -345,12 +506,54 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
     }
 }
 
-/// Top-level view dispatch. Phase A only owns the welcome window.
+/// Top-level view dispatch.
 pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
     match state.windows.kind(id) {
         Some(WindowKind::Welcome) | None => welcome_view(state),
         Some(WindowKind::Overlay) => overlay_view(),
+        Some(WindowKind::Editor) => editor_view(state),
     }
+}
+
+fn editor_view(state: &App) -> Element<'_, Message> {
+    let Some(ed) = state.editor.as_ref() else {
+        return container(text("(no capture)"))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    };
+    let img = iced::widget::image(ed.handle()).width(Length::Fill);
+
+    let make_btn = |label: &'static str, msg: Message| {
+        let mut b = button(label);
+        if !ed.busy {
+            b = b.on_press(msg);
+        }
+        b
+    };
+
+    let actions = row![
+        make_btn("Save", Message::EditorSaveRequested),
+        make_btn("Copy", Message::EditorCopyImageRequested),
+        make_btn("Copy Text", Message::EditorCopyTextRequested),
+        make_btn("Discard", Message::EditorDiscardRequested),
+    ]
+    .spacing(8);
+
+    let toast: Element<'_, Message> = match &ed.status {
+        Some(s) => text(s).into(),
+        None => Space::new().height(Length::Fixed(0.0)).into(),
+    };
+
+    container(
+        column![img, actions, toast]
+            .spacing(8)
+            .padding(12)
+            .align_x(Alignment::Start),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
 
 fn overlay_view<'a>() -> Element<'a, Message> {
@@ -462,13 +665,20 @@ async fn capture_primary_to_desktop(
     capture_request_to_desktop(coord, req).await
 }
 
-/// Same flow but for an arbitrary rect on the primary display. The
-/// `rect` is expected in primary-display logical pixels (i.e. the
-/// same coordinate space as the overlay window).
-async fn capture_region_to_desktop(
+async fn capture_request_to_desktop(
+    coord: CaptureCoordinator,
+    req: CaptureRequest,
+) -> Result<PathBuf, CaptureRunError> {
+    let img = coord.capture_region(req).await?;
+    save_to_desktop(&img)
+}
+
+/// Returns the captured image instead of saving — the editor flow
+/// uses this so the user can choose what to do with the bytes.
+async fn capture_region_to_image(
     coord: CaptureCoordinator,
     rect: readshot_core::geom::Rect,
-) -> Result<PathBuf, CaptureRunError> {
+) -> Result<image::RgbaImage, CaptureRunError> {
     let displays = coord.list_displays().await?;
     let primary = pick_primary(&displays).ok_or(CaptureRunError::NoDisplays)?;
     let req = CaptureRequest {
@@ -477,14 +687,15 @@ async fn capture_region_to_desktop(
         scale: primary.scale,
         hide_cursor: true,
     };
-    capture_request_to_desktop(coord, req).await
+    Ok(coord.capture_region(req).await?)
 }
 
-async fn capture_request_to_desktop(
-    coord: CaptureCoordinator,
-    req: CaptureRequest,
-) -> Result<PathBuf, CaptureRunError> {
-    let img = coord.capture_region(req).await?;
+/// Save an already-captured image to a timestamped Desktop PNG.
+async fn save_image_to_desktop(img: image::RgbaImage) -> Result<PathBuf, CaptureRunError> {
+    save_to_desktop(&img)
+}
+
+fn save_to_desktop(img: &image::RgbaImage) -> Result<PathBuf, CaptureRunError> {
     let dir = directories::UserDirs::new()
         .and_then(|d| d.desktop_dir().map(PathBuf::from))
         .unwrap_or_else(std::env::temp_dir);
@@ -492,6 +703,69 @@ async fn capture_request_to_desktop(
     let path = dir.join(format!("Readshot-{stamp}.png"));
     img.save_with_format(&path, image::ImageFormat::Png)?;
     Ok(path)
+}
+
+/// Push an RGBA image to the system clipboard. Runs the arboard
+/// init synchronously inside `spawn_blocking` because some platforms
+/// (X11 specifically) hold internal mutexes that don't play well
+/// with reentrant async runtimes.
+async fn copy_image_to_clipboard(img: image::RgbaImage) -> Result<(), ClipboardError> {
+    tokio::task::spawn_blocking(move || {
+        let mut ctx = arboard::Clipboard::new()?;
+        let data = arboard::ImageData {
+            width: img.width() as usize,
+            height: img.height() as usize,
+            bytes: std::borrow::Cow::Borrowed(img.as_raw()),
+        };
+        ctx.set_image(data)?;
+        Ok::<(), ClipboardError>(())
+    })
+    .await
+    .map_err(|e| ClipboardError::Join(e.to_string()))?
+}
+
+/// Run the OCR engine on the captured image and copy the result to
+/// the clipboard. Returns the text (so the editor can show its size
+/// in the toast).
+async fn ocr_then_copy(
+    coord: CaptureCoordinator,
+    img: image::RgbaImage,
+) -> Result<String, OcrCopyError> {
+    let result = coord
+        .recognise(readshot_ocr::OCRRequest {
+            image: img,
+            languages: Vec::new(),
+            use_language_correction: true,
+        })
+        .await?;
+    let text = result;
+    if !text.is_empty() {
+        let to_copy = text.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), ClipboardError> {
+            let mut ctx = arboard::Clipboard::new()?;
+            ctx.set_text(&to_copy)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| OcrCopyError::Clipboard(ClipboardError::Join(e.to_string())))??;
+    }
+    Ok(text)
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ClipboardError {
+    #[error(transparent)]
+    Arboard(#[from] arboard::Error),
+    #[error("clipboard worker join failed: {0}")]
+    Join(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum OcrCopyError {
+    #[error(transparent)]
+    Ocr(#[from] readshot_core::error::OCRError),
+    #[error(transparent)]
+    Clipboard(#[from] ClipboardError),
 }
 
 fn pick_primary(displays: &[DisplayInfo]) -> Option<&DisplayInfo> {

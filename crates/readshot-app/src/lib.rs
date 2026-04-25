@@ -15,6 +15,7 @@
 pub mod app;
 pub mod cli;
 pub mod coordinator;
+pub mod editor;
 pub mod overlay;
 pub mod permissions;
 pub mod runtime;

@@ -37,6 +37,10 @@ pub enum WindowKind {
     /// supports a single overlay (primary display only); the value
     /// is reserved for future per-display indexing.
     Overlay,
+    /// Annotation / actions editor for a freshly-captured image.
+    /// Phase C ships the action row only (Save / Copy / Copy Text /
+    /// Discard); annotation tools land in a follow-up.
+    Editor,
 }
 
 /// Mapping from live `window::Id`s to their kind, so the daemon's
@@ -118,6 +122,27 @@ pub enum Message {
     /// Internal: capture a region of the primary display, save the
     /// PNG, and toast the result. Emitted by the overlay flow.
     CaptureRegionRequested(readshot_core::geom::Rect),
+    /// Async region-capture finished — `Ok(image)` opens an editor
+    /// window with the captured pixels; `Err` toasts the failure on
+    /// the welcome window.
+    RegionCaptureCompleted(Result<image::RgbaImage, String>),
+    /// First view callback for the editor window — used to record
+    /// the `window::Id` so Discard can close the right one.
+    EditorWindowReady(iced::window::Id),
+    /// User clicked Save in the editor.
+    EditorSaveRequested,
+    /// Save task completed.
+    EditorSaved(Result<std::path::PathBuf, String>),
+    /// User clicked Copy (image to clipboard).
+    EditorCopyImageRequested,
+    /// Image-copy task completed.
+    EditorCopyImageDone(Result<(), String>),
+    /// User clicked Copy Text (run OCR + clipboard).
+    EditorCopyTextRequested,
+    /// OCR + clipboard write completed.
+    EditorCopyTextDone(Result<String, String>),
+    /// User clicked Discard. Closes the editor window.
+    EditorDiscardRequested,
     /// Background capture-and-save task finished. Carries the final
     /// PNG path or a stringified error.
     CaptureSaved(Result<PathBuf, String>),
@@ -152,6 +177,9 @@ pub struct App {
     /// Live tray-icon controller. Held to keep the icon visible.
     /// Tests and CLI invocations leave this `None`.
     pub tray: Option<crate::tray::TrayController>,
+    /// Active editor session, if any. Phase C only allows one
+    /// editor at a time; opening a new one replaces the old.
+    pub editor: Option<crate::editor::EditorState>,
 }
 
 impl App {
@@ -171,6 +199,7 @@ impl App {
             last_capture_status: None,
             hotkey_manager: None,
             tray: None,
+            editor: None,
         }
     }
 

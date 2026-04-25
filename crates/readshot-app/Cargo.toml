@@ -16,6 +16,7 @@ name = "readshot"
 path = "src/main.rs"
 
 [dependencies]
+arboard = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
