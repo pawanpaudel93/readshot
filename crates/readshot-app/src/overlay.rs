@@ -98,6 +98,27 @@ impl Program<Message> for OverlayProgram {
                 state.drag_current = None;
                 return Some(Action::publish(Message::OverlayCancelled).and_capture());
             }
+            // Flameshot-style: Enter / Return / Space captures the
+            // entire overlay (i.e. the whole primary display in
+            // logical pixels) without the user needing to drag.
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: Key::Named(Named::Enter | Named::Space),
+                ..
+            }) => {
+                state.drag_start = None;
+                state.drag_current = None;
+                if let Some(domain) = rect_to_domain(Rectangle {
+                    x: 0.0,
+                    y: 0.0,
+                    width: bounds.width,
+                    height: bounds.height,
+                }) {
+                    return Some(
+                        Action::publish(Message::OverlaySelected(domain)).and_capture(),
+                    );
+                }
+                return Some(Action::publish(Message::OverlayCancelled).and_capture());
+            }
             _ => {}
         }
         None

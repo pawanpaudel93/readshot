@@ -584,10 +584,13 @@ fn editor_view(state: &App) -> Element<'_, Message> {
 
 fn overlay_view<'a>() -> Element<'a, Message> {
     use iced::widget::canvas::Canvas;
+    use iced::widget::stack;
+
     let canvas = Canvas::new(crate::overlay::OverlayProgram)
         .width(Length::Fill)
         .height(Length::Fill);
-    container(canvas)
+
+    let canvas_layer = container(canvas)
         .width(Length::Fill)
         .height(Length::Fill)
         .style(|_theme| iced::widget::container::Style {
@@ -596,8 +599,35 @@ fn overlay_view<'a>() -> Element<'a, Message> {
             // background paints over the wgpu transparent layer.
             background: Some(Color::TRANSPARENT.into()),
             ..Default::default()
-        })
-        .into()
+        });
+
+    // Floating hint near the top of the overlay. We give it a
+    // semi-opaque dark capsule so the text reads regardless of the
+    // wallpaper underneath.
+    let hint = container(
+        text("Drag to select a region · Enter to capture all · Esc to cancel")
+            .size(13)
+            .color(Color::WHITE),
+    )
+    .padding(8)
+    .style(|_| iced::widget::container::Style {
+        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.55).into()),
+        text_color: Some(Color::WHITE),
+        border: iced::Border {
+            radius: 6.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let hint_layer = container(hint)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(24)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Start);
+
+    stack![canvas_layer, hint_layer].into()
 }
 
 fn welcome_view(state: &App) -> Element<'_, Message> {
@@ -655,11 +685,11 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
         .into(),
     };
 
-    let mut capture_btn = button("Capture primary display").width(Length::Fill);
-    let mut region_btn = button("Capture region…").width(Length::Fill);
+    // Flameshot-style: one trigger surfaces the overlay; the user
+    // chooses region (drag) or full screen (Enter) once it's open.
+    let mut capture_btn = button("Capture screen").width(Length::Fill);
     if !state.welcome.should_show() && !state.capture_in_flight {
-        capture_btn = capture_btn.on_press(Message::CaptureFullPrimaryRequested);
-        region_btn = region_btn.on_press(Message::OpenOverlayRequested);
+        capture_btn = capture_btn.on_press(Message::OpenOverlayRequested);
     }
 
     let toast: Element<'_, Message> = match &state.last_capture_status {
@@ -675,8 +705,8 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
         action,
         Space::new().height(Length::Fixed(16.0)),
         capture_btn,
-        Space::new().height(Length::Fixed(6.0)),
-        region_btn,
+        text("Drag to select a region · Enter to capture all · Esc to cancel")
+            .size(11),
         Space::new().height(Length::Fixed(8.0)),
         toast,
         Space::new().width(Length::Fill).height(Length::Fill),
