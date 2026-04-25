@@ -22,6 +22,11 @@ image = { workspace = true }
 readshot-core = { path = "../readshot-core" }
 readshot-test-fixtures = { path = "../readshot-test-fixtures" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSString"] }
+objc2-vision = { version = "0.3", features = ["VNError", "VNRequest", "VNRequestHandler", "VNRecognizeTextRequest", "VNObservation", "VNTypes"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 ocrs = "0.12"
 rten = "0.24"
