@@ -6,3 +6,13 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Per-OS screen capture for Readshot behind a Capturer trait."
+
+[dependencies]
+async-trait = { workspace = true }
+image = { workspace = true }
+readshot-core = { path = "../readshot-core" }
+readshot-test-fixtures = { path = "../readshot-test-fixtures" }
+tiny-skia = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
