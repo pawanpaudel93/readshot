@@ -8,10 +8,16 @@
 //! composition root binds to the iced daemon at runtime.
 
 pub mod editor;
+pub mod hotkey;
 pub mod overlay;
+pub mod settings;
+pub mod tray;
 
 pub use editor::{
     ActionMessage, CanvasMessage, EditorCanvas, EditorOutcome, EditorState, History, ToolState,
     ToolbarMessage,
 };
+pub use hotkey::{HotkeyMessage, HotkeyModifiers, HotkeyParseError, HotkeySpec};
 pub use overlay::{OverlayResult, SelectionCanvas, SelectionMessage};
+pub use settings::{SettingsMessage, SettingsTab};
+pub use tray::{TrayMenuRow, TrayMessage};
