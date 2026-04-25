@@ -6,3 +6,11 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Pure-Rust domain core for Readshot — annotation model, traits, persistence schema."
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+tiny-skia = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
