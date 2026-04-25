@@ -6,3 +6,25 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Per-OS offline OCR for Readshot behind an OCREngine trait."
+
+[features]
+default = []
+# Enables real-engine fixture tests. Off by default because they need
+# OS-resident OCR (Apple Vision / Windows.Media.Ocr) or downloaded ocrs
+# `.rten` model files. CI enables this when the runners have what
+# they need.
+integration = []
+
+[dependencies]
+async-trait = { workspace = true }
+directories = { workspace = true }
+image = { workspace = true }
+readshot-core = { path = "../readshot-core" }
+readshot-test-fixtures = { path = "../readshot-test-fixtures" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ocrs = "0.12"
+rten = "0.24"
+
+[dev-dependencies]
+tokio = { workspace = true }
