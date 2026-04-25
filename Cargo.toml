@@ -33,3 +33,4 @@ insta = { version = "1", features = ["yaml"] }
 ab_glyph = "0.2"
 tempfile = "3"
 clap = { version = "4", features = ["derive"] }
+base64 = "0.22"
