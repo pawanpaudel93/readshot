@@ -6,3 +6,13 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Iced-based user interface for Readshot — overlay, editor, settings, tray."
+
+[dependencies]
+iced = { workspace = true }
+image = { workspace = true }
+readshot-capture = { path = "../readshot-capture" }
+readshot-core = { path = "../readshot-core" }
+tiny-skia = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
