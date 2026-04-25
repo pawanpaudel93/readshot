@@ -54,6 +54,6 @@
     <string>https://pawanpaudel93.github.io/readshot/appcast.xml</string>
 
     <key>SUPublicEDKey</key>
-    <string><!-- replaced by build pipeline --></string>
+    <string></string>
 </dict>
 </plist>

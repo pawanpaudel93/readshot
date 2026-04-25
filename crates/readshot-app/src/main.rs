@@ -17,17 +17,13 @@ use std::sync::Arc;
 use clap::Parser;
 use readshot_capture::default_capturer;
 use readshot_ocr::default_engine;
-use tracing::Level;
 
 use readshot_app::cli::{exit_code, Cli};
 use readshot_app::runtime;
 use readshot_app::url_scheme;
 
 fn main() -> iced::Result {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .with_target(true)
-        .init();
+    init_logging();
 
     // Phase D (argv path): if the binary is invoked with a
     // `readshot://...` URL as the first argument (e.g. `open
@@ -83,4 +79,50 @@ fn main() -> iced::Result {
         .theme(runtime::theme)
         .font(readshot_core::render::FONT_DATA)
         .run()
+}
+
+/// Initialise tracing. We always log to stderr, and additionally to
+/// `~/Library/Logs/Readshot/readshot.log` on macOS / equivalent on
+/// other platforms — Launch Services-launched apps lose stderr to
+/// `/dev/null`, so the file fallback is what makes triage possible
+/// when the user double-clicks the bundle from Finder.
+fn init_logging() {
+    use tracing_subscriber::fmt;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::EnvFilter;
+
+    let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let stderr_layer = fmt::layer().with_writer(std::io::stderr).with_target(true);
+
+    let log_path = directories::ProjectDirs::from("dev", "pawanpaudel93", "Readshot")
+        .map(|d| d.data_local_dir().join("readshot.log"))
+        .or_else(|| std::env::temp_dir().join("readshot.log").into());
+
+    let file_appender = log_path.as_ref().and_then(|p| {
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+            .ok()
+    });
+
+    if let (Some(file), Some(path)) = (file_appender, log_path.as_ref()) {
+        let file_layer = fmt::layer().with_writer(std::sync::Mutex::new(file)).with_ansi(false).with_target(true);
+        tracing_subscriber::registry()
+            .with(filter())
+            .with(stderr_layer)
+            .with(file_layer)
+            .init();
+        eprintln!("readshot: logging to {}", path.display());
+    } else {
+        tracing_subscriber::registry()
+            .with(filter())
+            .with(stderr_layer)
+            .init();
+    }
 }
