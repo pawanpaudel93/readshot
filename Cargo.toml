@@ -31,3 +31,4 @@ muda = "0.15"
 arboard = { version = "3", features = ["wayland-data-control"] }
 insta = { version = "1", features = ["yaml"] }
 ab_glyph = "0.2"
+tempfile = "3"

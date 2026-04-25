@@ -11,12 +11,24 @@
 pub mod annotation;
 pub mod arrowhead;
 pub mod error;
+pub mod filename;
 pub mod filters;
 pub mod geom;
+pub mod history;
 pub mod log;
+pub mod preferences;
 pub mod render;
 
 pub use annotation::{Annotation, Rgba};
-pub use error::{CaptureError, CoreError, ExportError, OCRError};
+pub use error::{CaptureError, CoreError, ExportError, HistoryError, OCRError, PreferencesError};
+pub use filename::expand as expand_filename_template;
 pub use geom::{clamp_rect, InvalidRect, Point, PointLike, Rect, RectLike};
+pub use history::{
+    CaptureRecord, FsHistoryStore, HistoryIndex, HistoryIndexEntry, HistoryStore,
+    HISTORY_INDEX_FILENAME, HISTORY_SCHEMA_VERSION,
+};
+pub use preferences::{
+    ExportFormat, HistoryRetention, OcrEngineChoice, Preferences, UpdateChannel,
+    PREFERENCES_SCHEMA_VERSION,
+};
 pub use render::render;

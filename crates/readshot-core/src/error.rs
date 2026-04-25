@@ -73,6 +73,69 @@ pub enum ExportError {
     Format(String),
 }
 
+/// Errors from reading or writing the user's preferences TOML file.
+/// Variants carry stringified causes rather than typed errors so callers
+/// can match without depending on `toml`'s internals.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum PreferencesError {
+    #[error("preferences io: {0}")]
+    Io(String),
+    #[error("preferences parse: {0}")]
+    Parse(String),
+    #[error("preferences serialise: {0}")]
+    Serialize(String),
+}
+
+impl From<std::io::Error> for PreferencesError {
+    fn from(e: std::io::Error) -> Self {
+        PreferencesError::Io(e.to_string())
+    }
+}
+
+impl From<toml::de::Error> for PreferencesError {
+    fn from(e: toml::de::Error) -> Self {
+        PreferencesError::Parse(e.to_string())
+    }
+}
+
+impl From<toml::ser::Error> for PreferencesError {
+    fn from(e: toml::ser::Error) -> Self {
+        PreferencesError::Serialize(e.to_string())
+    }
+}
+
+/// Errors from the capture-history store. Failures here are non-fatal at
+/// the application level — `HistoryStore::save` failing must not block
+/// the user's clipboard or save action — but the typed variants let
+/// callers log informatively.
+#[derive(Debug, Error)]
+pub enum HistoryError {
+    #[error("history io: {0}")]
+    Io(String),
+    #[error("history parse: {0}")]
+    Parse(String),
+    #[error("history serialise: {0}")]
+    Serialize(String),
+}
+
+impl From<std::io::Error> for HistoryError {
+    fn from(e: std::io::Error) -> Self {
+        HistoryError::Io(e.to_string())
+    }
+}
+
+impl From<serde_json::Error> for HistoryError {
+    fn from(e: serde_json::Error) -> Self {
+        if e.is_io() {
+            HistoryError::Io(e.to_string())
+        } else if e.is_data() || e.is_eof() || e.is_syntax() {
+            HistoryError::Parse(e.to_string())
+        } else {
+            HistoryError::Serialize(e.to_string())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

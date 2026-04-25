@@ -1,0 +1,388 @@
+//! Capture history persistence — the on-disk model from spec §3.10.
+//!
+//! When the user opts in via [`HistoryRetention`], every saved capture
+//! produces three things:
+//!
+//! 1. A PNG file at `<root>/YYYY/MM/<uuid>.png`.
+//! 2. A sidecar JSON file at `<root>/YYYY/MM/<uuid>.json` holding the
+//!    [`CaptureRecord`] (annotations, OCR text, metadata).
+//! 3. An entry appended to the master `<root>/history.index.json`.
+//!
+//! The trio is one logical record. A torn write (PNG written, JSON
+//! missing) is recoverable: [`HistoryStore::list`] silently skips records
+//! whose JSON can't be read, and [`HistoryStore::apply_retention`] gladly
+//! deletes orphans.
+
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use chrono::{DateTime, Datelike, Duration, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::annotation::Annotation;
+use crate::error::HistoryError;
+use crate::preferences::HistoryRetention;
+
+pub const HISTORY_SCHEMA_VERSION: u32 = 1;
+pub const HISTORY_INDEX_FILENAME: &str = "history.index.json";
+
+/// One captured screenshot with metadata. The PNG bytes themselves live
+/// alongside the sidecar JSON, not inside the record.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CaptureRecord {
+    pub id: Uuid,
+    pub captured_at: DateTime<Utc>,
+    pub width_px: u32,
+    pub height_px: u32,
+    pub display_id: String,
+    pub ocr_text: Option<String>,
+    pub annotation_model: Vec<Annotation>,
+}
+
+impl CaptureRecord {
+    /// Convenience for tests and call sites that need a fresh record but
+    /// don't care about its uuid or timestamp.
+    pub fn new(
+        captured_at: DateTime<Utc>,
+        width_px: u32,
+        height_px: u32,
+        display_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            captured_at,
+            width_px,
+            height_px,
+            display_id: display_id.into(),
+            ocr_text: None,
+            annotation_model: Vec::new(),
+        }
+    }
+}
+
+/// Master index of every capture in the history directory.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct HistoryIndex {
+    pub schema_version: u32,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub records: Vec<HistoryIndexEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HistoryIndexEntry {
+    pub id: Uuid,
+    pub captured_at: DateTime<Utc>,
+    /// Path to the PNG, relative to the history root.
+    pub png_path: PathBuf,
+    /// Path to the JSON sidecar, relative to the history root.
+    pub json_path: PathBuf,
+}
+
+/// Trait for capture-history backends. The single production
+/// implementation is [`FsHistoryStore`]; tests use a fake.
+pub trait HistoryStore: Send + Sync {
+    fn save(&self, record: &CaptureRecord, png: &[u8]) -> Result<(), HistoryError>;
+    fn list(&self) -> Result<Vec<CaptureRecord>, HistoryError>;
+    fn apply_retention(
+        &self,
+        policy: HistoryRetention,
+        now: DateTime<Utc>,
+    ) -> Result<(), HistoryError>;
+    fn clear_all(&self) -> Result<(), HistoryError>;
+}
+
+/// File-system backed history store. All filesystem state is rooted at
+/// `root`.
+pub struct FsHistoryStore {
+    root: PathBuf,
+}
+
+impl FsHistoryStore {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    fn index_path(&self) -> PathBuf {
+        self.root.join(HISTORY_INDEX_FILENAME)
+    }
+
+    fn read_index(&self) -> Result<HistoryIndex, HistoryError> {
+        let path = self.index_path();
+        if !path.exists() {
+            return Ok(HistoryIndex {
+                schema_version: HISTORY_SCHEMA_VERSION,
+                updated_at: None,
+                records: Vec::new(),
+            });
+        }
+        let content = fs::read_to_string(&path)?;
+        let mut index: HistoryIndex = serde_json::from_str(&content)?;
+        if index.schema_version < HISTORY_SCHEMA_VERSION {
+            index.schema_version = HISTORY_SCHEMA_VERSION;
+        }
+        Ok(index)
+    }
+
+    fn write_index(&self, index: &HistoryIndex) -> Result<(), HistoryError> {
+        fs::create_dir_all(&self.root)?;
+        let content = serde_json::to_string_pretty(index)?;
+        fs::write(self.index_path(), content)?;
+        Ok(())
+    }
+
+    fn record_paths(record: &CaptureRecord) -> (PathBuf, PathBuf) {
+        let year = record.captured_at.year();
+        let month = record.captured_at.month();
+        let dir = PathBuf::from(format!("{year:04}")).join(format!("{month:02}"));
+        let png = dir.join(format!("{}.png", record.id));
+        let json = dir.join(format!("{}.json", record.id));
+        (png, json)
+    }
+}
+
+impl HistoryStore for FsHistoryStore {
+    fn save(&self, record: &CaptureRecord, png: &[u8]) -> Result<(), HistoryError> {
+        let (rel_png, rel_json) = Self::record_paths(record);
+        let abs_png = self.root.join(&rel_png);
+        let abs_json = self.root.join(&rel_json);
+        if let Some(parent) = abs_png.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut f = fs::File::create(&abs_png)?;
+        f.write_all(png)?;
+        f.sync_all()?; // best-effort durability before the index update
+
+        let json_content = serde_json::to_string_pretty(record)?;
+        fs::write(&abs_json, json_content)?;
+
+        let mut index = self.read_index()?;
+        index.records.push(HistoryIndexEntry {
+            id: record.id,
+            captured_at: record.captured_at,
+            png_path: rel_png,
+            json_path: rel_json,
+        });
+        index.updated_at = Some(Utc::now());
+        self.write_index(&index)?;
+        Ok(())
+    }
+
+    fn list(&self) -> Result<Vec<CaptureRecord>, HistoryError> {
+        let index = self.read_index()?;
+        let mut entries = index.records;
+        // Newest first.
+        entries.sort_by_key(|e| std::cmp::Reverse(e.captured_at));
+
+        let mut out = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let path = self.root.join(&entry.json_path);
+            // Skip orphaned index entries — the file was deleted by the
+            // user or a torn write left the index ahead of the data.
+            if !path.exists() {
+                continue;
+            }
+            let content = match fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if let Ok(record) = serde_json::from_str::<CaptureRecord>(&content) {
+                out.push(record);
+            }
+        }
+        Ok(out)
+    }
+
+    fn apply_retention(
+        &self,
+        policy: HistoryRetention,
+        now: DateTime<Utc>,
+    ) -> Result<(), HistoryError> {
+        let mut index = self.read_index()?;
+        // Sort newest first so `take(N)` keeps the freshest captures.
+        index
+            .records
+            .sort_by_key(|e| std::cmp::Reverse(e.captured_at));
+
+        let kept: Vec<HistoryIndexEntry> = match policy {
+            HistoryRetention::Off | HistoryRetention::Unlimited => {
+                // `Off` deliberately keeps existing records (the user
+                // toggled writes off; their old captures aren't deleted).
+                // `Unlimited` keeps everything.
+                index.records.clone()
+            }
+            HistoryRetention::Last50 => index.records.iter().take(50).cloned().collect(),
+            HistoryRetention::Last30Days => {
+                let cutoff = now - Duration::days(30);
+                index
+                    .records
+                    .iter()
+                    .filter(|e| e.captured_at >= cutoff)
+                    .cloned()
+                    .collect()
+            }
+        };
+
+        // Anything not in `kept` is removed from disk. ID-based filtering
+        // tolerates duplicate `captured_at` values.
+        let kept_ids: std::collections::HashSet<Uuid> = kept.iter().map(|e| e.id).collect();
+        for entry in &index.records {
+            if !kept_ids.contains(&entry.id) {
+                let _ = fs::remove_file(self.root.join(&entry.png_path));
+                let _ = fs::remove_file(self.root.join(&entry.json_path));
+            }
+        }
+
+        index.records = kept;
+        index.updated_at = Some(now);
+        self.write_index(&index)?;
+        Ok(())
+    }
+
+    fn clear_all(&self) -> Result<(), HistoryError> {
+        if self.root.exists() {
+            fs::remove_dir_all(&self.root)?;
+        }
+        fs::create_dir_all(&self.root)?;
+        let cleared = HistoryIndex {
+            schema_version: HISTORY_SCHEMA_VERSION,
+            updated_at: Some(Utc::now()),
+            records: Vec::new(),
+        };
+        self.write_index(&cleared)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use tempfile::TempDir;
+
+    fn store() -> (TempDir, FsHistoryStore) {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("history");
+        let s = FsHistoryStore::new(&root);
+        (dir, s)
+    }
+
+    fn record_at(t: DateTime<Utc>) -> CaptureRecord {
+        CaptureRecord::new(t, 64, 64, "display-0")
+    }
+
+    /// 10 fake PNG bytes — the store writes them verbatim.
+    fn fake_png() -> Vec<u8> {
+        b"\x89PNG\r\n\x1a\nXX".to_vec()
+    }
+
+    #[test]
+    fn save_then_list_roundtrip() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &fake_png()).unwrap();
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, r.id);
+    }
+
+    #[test]
+    fn list_orders_newest_first() {
+        let (_dir, s) = store();
+        let older = record_at(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
+        let newer = record_at(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
+        s.save(&older, &fake_png()).unwrap();
+        s.save(&newer, &fake_png()).unwrap();
+        let list = s.list().unwrap();
+        assert_eq!(list[0].id, newer.id);
+        assert_eq!(list[1].id, older.id);
+    }
+
+    #[test]
+    fn list_skips_records_whose_sidecar_was_deleted() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &fake_png()).unwrap();
+        // Manually delete the sidecar JSON to simulate a torn write or
+        // user mistake. The index still lists the entry; `list()` must
+        // skip it rather than fail.
+        let (_png, rel_json) = FsHistoryStore::record_paths(&r);
+        std::fs::remove_file(s.root().join(&rel_json)).unwrap();
+        let list = s.list().unwrap();
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn retention_last50_drops_excess_oldest() {
+        let (_dir, s) = store();
+        for i in 0..55 {
+            let t = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, i as u32).unwrap();
+            s.save(&record_at(t), &fake_png()).unwrap();
+        }
+        s.apply_retention(HistoryRetention::Last50, Utc::now())
+            .unwrap();
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 50);
+        // Newest 50 are kept — oldest captured_at in the kept set must be
+        // strictly later than the dropped 5.
+        let oldest_kept = list.iter().map(|r| r.captured_at).min().unwrap();
+        let expected_threshold = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 5).unwrap();
+        assert!(oldest_kept >= expected_threshold);
+    }
+
+    #[test]
+    fn retention_last30days_drops_old_keeps_recent() {
+        let (_dir, s) = store();
+        let now = Utc::now();
+        let old = now - Duration::days(60);
+        let recent = now - Duration::days(5);
+        s.save(&record_at(old), &fake_png()).unwrap();
+        s.save(&record_at(recent), &fake_png()).unwrap();
+        s.apply_retention(HistoryRetention::Last30Days, now).unwrap();
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].captured_at, recent);
+    }
+
+    #[test]
+    fn retention_off_does_not_delete_existing_records() {
+        let (_dir, s) = store();
+        for i in 0..3 {
+            let t = Utc::now() + Duration::seconds(i);
+            s.save(&record_at(t), &fake_png()).unwrap();
+        }
+        s.apply_retention(HistoryRetention::Off, Utc::now()).unwrap();
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 3);
+    }
+
+    #[test]
+    fn clear_all_empties_directory_and_index() {
+        let (_dir, s) = store();
+        s.save(&record_at(Utc::now()), &fake_png()).unwrap();
+        s.save(&record_at(Utc::now()), &fake_png()).unwrap();
+        s.clear_all().unwrap();
+        let list = s.list().unwrap();
+        assert!(list.is_empty());
+        // Index file still exists but contains no records.
+        let index_content = std::fs::read_to_string(s.index_path()).unwrap();
+        assert!(index_content.contains("\"records\": []"));
+    }
+
+    #[test]
+    fn save_creates_year_month_directories() {
+        let (_dir, s) = store();
+        let t = Utc.with_ymd_and_hms(2026, 4, 25, 14, 30, 0).unwrap();
+        let r = record_at(t);
+        s.save(&r, &fake_png()).unwrap();
+        let png_path = s.root().join("2026").join("04").join(format!("{}.png", r.id));
+        assert!(png_path.exists());
+    }
+}

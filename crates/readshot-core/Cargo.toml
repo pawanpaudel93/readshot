@@ -9,12 +9,16 @@ description = "Pure-Rust domain core for Readshot — annotation model, traits, 
 
 [dependencies]
 ab_glyph = { workspace = true }
+chrono = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tiny-skia = { workspace = true }
+toml = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
 readshot-test-fixtures = { path = "../readshot-test-fixtures" }
-serde_json = { workspace = true }
+tempfile = { workspace = true }
