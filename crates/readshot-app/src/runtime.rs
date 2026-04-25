@@ -65,6 +65,10 @@ pub fn start() -> (App, Task<Message>) {
     if let Some(manager) = register_default_hotkey(&app.preferences) {
         app.hotkey_manager = Some(manager);
     }
+    // Same fail-soft contract for the tray. Linux without an
+    // appindicator daemon, or a Windows session without a Shell_Notify
+    // surface, will simply not see the tray entry.
+    app.tray = crate::tray::install();
 
     let (id, open_task) = window::open(welcome_window_settings());
     app.windows.register(id, WindowKind::Welcome);
@@ -149,6 +153,11 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // event handler. Cheap when there are no events.
         subs.push(iced::time::every(Duration::from_millis(50)).map(|_| Message::HotkeyTick));
     }
+    if state.tray.is_some() {
+        // 100 ms is fine for tray clicks — humans can't tell the
+        // difference between a 50 ms and 100 ms tray menu response.
+        subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::TrayTick));
+    }
     Subscription::batch(subs)
 }
 
@@ -180,6 +189,38 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+
+        Message::TrayTick => {
+            let actions = match &state.tray {
+                Some(t) => t.drain(),
+                None => Vec::new(),
+            };
+            // We chain Tasks for each action — typically a single
+            // click → a single TrayActionPerformed message. Multiple
+            // are fine too (no-op coalescing happens later).
+            let tasks: Vec<Task<Message>> = actions
+                .into_iter()
+                .map(|a| Task::done(Message::TrayActionPerformed(a)))
+                .collect();
+            Task::batch(tasks)
+        }
+
+        Message::TrayActionPerformed(action) => match action {
+            crate::tray::TrayAction::Capture => {
+                if !state.welcome.should_show() && !state.capture_in_flight {
+                    update(state, Message::CaptureFullPrimaryRequested)
+                } else {
+                    Task::none()
+                }
+            }
+            crate::tray::TrayAction::ShowWindow => {
+                // No window-show wiring yet (we always have one). Once
+                // the welcome window can hide to the tray, this
+                // dispatches `window::change_mode` to bring it back.
+                Task::none()
+            }
+            crate::tray::TrayAction::Quit => iced::exit(),
+        },
 
         Message::CaptureFullPrimaryRequested => {
             let coord = state.coordinator.clone();

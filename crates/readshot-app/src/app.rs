@@ -84,6 +84,10 @@ pub enum Message {
     /// 50 ms drain tick — runtime polls the global-hotkey receiver and
     /// emits a `CaptureFullPrimaryRequested` if any events arrived.
     HotkeyTick,
+    /// 100 ms drain tick — runtime polls the tray + menu event channels.
+    TrayTick,
+    /// User selected an item in the tray menu (or left-clicked the icon).
+    TrayActionPerformed(crate::tray::TrayAction),
     /// Background capture-and-save task finished. Carries the final
     /// PNG path or a stringified error.
     CaptureSaved(Result<PathBuf, String>),
@@ -115,6 +119,9 @@ pub struct App {
     /// Held here so it isn't dropped (which unregisters the hotkey).
     /// Tests and CLI invocations leave this `None`.
     pub hotkey_manager: Option<global_hotkey::GlobalHotKeyManager>,
+    /// Live tray-icon controller. Held to keep the icon visible.
+    /// Tests and CLI invocations leave this `None`.
+    pub tray: Option<crate::tray::TrayController>,
 }
 
 impl App {
@@ -133,6 +140,7 @@ impl App {
             capture_in_flight: false,
             last_capture_status: None,
             hotkey_manager: None,
+            tray: None,
         }
     }
 

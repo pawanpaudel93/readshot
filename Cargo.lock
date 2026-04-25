@@ -4410,6 +4410,7 @@ dependencies = [
  "global-hotkey",
  "iced",
  "image",
+ "muda",
  "readshot-capture",
  "readshot-core",
  "readshot-ocr",
@@ -4418,9 +4419,11 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
+ "tiny-skia",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "tray-icon",
 ]
 
 [[package]]

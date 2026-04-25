@@ -23,6 +23,9 @@ directories = { workspace = true }
 global-hotkey = { workspace = true }
 iced = { workspace = true }
 image = { workspace = true }
+muda = { workspace = true }
+tray-icon = { workspace = true }
+tiny-skia = { workspace = true }
 readshot-capture = { path = "../readshot-capture" }
 readshot-core = { path = "../readshot-core" }
 readshot-ocr = { path = "../readshot-ocr" }
