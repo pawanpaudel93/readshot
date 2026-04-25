@@ -6,3 +6,6 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Shared test fixtures and helpers for Readshot."
+
+[dependencies]
+image = { workspace = true }

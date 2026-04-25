@@ -8,9 +8,12 @@ repository.workspace = true
 description = "Pure-Rust domain core for Readshot — annotation model, traits, persistence schema."
 
 [dependencies]
+image = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tiny-skia = { workspace = true }
 
 [dev-dependencies]
+insta = { workspace = true }
+readshot-test-fixtures = { path = "../readshot-test-fixtures" }
 serde_json = { workspace = true }
