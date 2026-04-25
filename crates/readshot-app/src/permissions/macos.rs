@@ -37,11 +37,11 @@ impl PermissionsProvider for MacOsPermissions {
         let granted = access.request();
         // The return tells us whether the OS already considered us
         // granted at call time. It does NOT indicate whether the
-        // prompt was shown (TCC does that asynchronously) or what
-        // the user picked. Logging the value helps users triage:
-        // `true` here while the welcome window still shows Denied
-        // means "you must quit and relaunch — TCC's cache only
-        // refreshes between processes for ScreenCapture grants".
+        // system prompt was shown — for ad-hoc-signed apps on recent
+        // macOS, the call silently *registers* the bundle in
+        // System Settings without ever drawing a prompt, so the user
+        // sees nothing. We surface the value here so the runtime
+        // can drive the user to System Settings if request() fails.
         tracing::info!(
             target: "readshot::permissions",
             "CGRequestScreenCaptureAccess returned {granted}",

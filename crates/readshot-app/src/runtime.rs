@@ -505,20 +505,40 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // macOS Screen Recording's TCC grant is cached per-process
             // by `CGPreflightScreenCaptureAccess` — once a process has
             // seen "denied", it can't ever see "granted" without a
-            // restart. We respawn the bundle via Launch Services so
-            // the new process picks up the fresh grant, then exit.
+            // restart. We spawn a fresh Launch Services launch and
+            // hard-exit so the daemon can't get into a half-shutdown
+            // race (`iced::exit()` returns a Task that may not have
+            // finished by the time the new instance comes up).
             #[cfg(target_os = "macos")]
             {
-                if let Err(e) = relaunch_via_launch_services() {
-                    tracing::warn!(target: "readshot::permissions", "relaunch failed: {e}");
+                match relaunch_via_launch_services() {
+                    Ok(()) => {
+                        tracing::info!(target: "readshot::permissions", "respawned via Launch Services; exiting");
+                        // Tiny sleep so `open -n` definitely got the
+                        // request through before this PID disappears.
+                        std::thread::sleep(Duration::from_millis(150));
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        tracing::warn!(target: "readshot::permissions", "relaunch failed: {e}");
+                    }
                 }
             }
             iced::exit()
         }
 
+        // GrantPermissionRequested: register the bundle with TCC,
+        // then *also* open System Settings on macOS. For ad-hoc
+        // signed apps the system prompt typically doesn't fire, so
+        // chaining the deep-link is what gets users unstuck.
+        Message::GrantPermissionRequested => {
+            state.update_sync(Message::GrantPermissionRequested);
+            state.permissions.open_settings();
+            Task::none()
+        }
+
         // Synchronous transitions — reuse the existing handler.
         msg @ (Message::PermissionPoll(_)
-        | Message::GrantPermissionRequested
         | Message::OpenPermissionSettingsRequested
         | Message::Settings(_)) => {
             state.update_sync(msg);
@@ -638,29 +658,31 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
         ]
         .into(),
         WelcomeState::Pending => column![
-            text("Readshot needs Screen Recording permission to capture your screen.")
+            text("Readshot needs Screen Recording permission. Three steps:")
                 .width(Length::Fill),
             text(
-                "Click Grant access. After you toggle Readshot ON in \
-                 System Settings → Privacy & Security → Screen \
-                 Recording, click Restart Readshot — macOS won't \
-                 update Screen Recording in a running process."
+                "1. Click Grant access — Readshot registers with macOS \
+                 and opens System Settings. (No prompt appears for \
+                 ad-hoc apps; this is normal.)\n\
+                 2. In Privacy & Security → Screen Recording, toggle \
+                 Readshot ON.\n\
+                 3. Click Restart Readshot to pick up the grant."
             )
             .size(12)
             .width(Length::Fill),
             row![
-                button("Grant access").on_press(Message::GrantPermissionRequested),
-                button("Open Settings").on_press(Message::OpenPermissionSettingsRequested),
-                button("Restart Readshot").on_press(Message::RestartRequested),
+                button("1. Grant access").on_press(Message::GrantPermissionRequested),
+                button("2. Open Settings").on_press(Message::OpenPermissionSettingsRequested),
+                button("3. Restart Readshot").on_press(Message::RestartRequested),
             ]
             .spacing(8),
         ]
         .spacing(8)
         .into(),
         WelcomeState::AwaitingGrant => column![
-            text("Toggle Readshot on in System Settings → Privacy & \
-                  Security → Screen Recording, then click Restart \
-                  Readshot below to pick up the fresh grant.")
+            text("Almost there. In System Settings → Privacy & Security \
+                  → Screen Recording, toggle Readshot ON, then click \
+                  Restart Readshot.")
                 .width(Length::Fill),
             row![
                 button("Open Settings").on_press(Message::OpenPermissionSettingsRequested),
@@ -672,7 +694,7 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
         .into(),
         WelcomeState::Denied => column![
             text("Permission denied. Open System Settings → Privacy & \
-                  Security → Screen Recording, toggle Readshot on, \
+                  Security → Screen Recording, toggle Readshot ON, \
                   then click Restart Readshot.")
                 .width(Length::Fill),
             row![

@@ -15,8 +15,10 @@ pub enum WelcomeState {
     /// Not yet shown (first launch, permissions not yet checked).
     #[default]
     Pending,
-    /// Window is visible and the user has clicked "Grant"; we're
-    /// polling the OS for the result.
+    /// Window is visible and the user has clicked "Grant"; on macOS
+    /// the OS prompt may not appear for ad-hoc-signed apps, so the
+    /// runtime auto-opens System Settings and we instruct the user
+    /// to toggle Readshot in the Screen Recording list.
     AwaitingGrant,
     /// User granted; the App will dismiss the window.
     Granted,
