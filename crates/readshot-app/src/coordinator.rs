@@ -1,0 +1,187 @@
+//! Capture coordinator — service-layer orchestration that the iced
+//! App's `update` fn drives.
+//!
+//! The coordinator is *not* the iced state machine itself (that's
+//! `crate::app::App`); it's the bag of async methods the state
+//! machine calls when transitioning between user-visible states.
+//! Splitting service from view keeps every backend interaction
+//! testable with fakes.
+//!
+//! Capture flow (per spec §3.5 and §5.1):
+//!
+//! 1. Permissions check — `pre_capture_gate()`.
+//! 2. List displays — `list_displays()`.
+//! 3. (User confirms a region in the overlay; the App receives an
+//!    `OverlayResult`.)
+//! 4. `capture_region(req)` — produces an `RgbaImage`.
+//! 5. (User edits in the editor; the App tracks `EditorState`.)
+//! 6. On editor outcome:
+//!    * `CopyImage` → write image to clipboard (App calls
+//!      `Exporter`/`ClipboardWriter`; coordinator helps assemble
+//!      bytes).
+//!    * `CopyText` → `recognise(image)` → write text.
+//!    * `Save` → write file.
+//!    * `Pin` → spawn pin window.
+//!    * `Discard` → no-op.
+//! 7. If preferences allow history, call
+//!    `record_history(record, png_bytes)`.
+
+use std::sync::Arc;
+
+use image::RgbaImage;
+use readshot_capture::{CaptureRequest, Capturer, DisplayInfo};
+use readshot_core::error::{CaptureError, OCRError};
+use readshot_core::{CaptureRecord, FsHistoryStore, HistoryRetention, HistoryStore};
+use readshot_ocr::{OCREngine, OCRRequest};
+
+use crate::permissions::{PermissionStatus, PermissionsProvider};
+
+/// Bag of services the coordinator binds against. Owned by the App
+/// state and shared via `Arc` so the capture coordinator can spawn
+/// background tasks that outlive a single iced `update` call.
+pub struct CaptureCoordinator {
+    capturer: Arc<dyn Capturer>,
+    ocr: Arc<dyn OCREngine>,
+    permissions: Arc<dyn PermissionsProvider>,
+    history: Option<Arc<dyn HistoryStore>>,
+}
+
+impl CaptureCoordinator {
+    pub fn new(
+        capturer: Arc<dyn Capturer>,
+        ocr: Arc<dyn OCREngine>,
+        permissions: Arc<dyn PermissionsProvider>,
+        history: Option<Arc<dyn HistoryStore>>,
+    ) -> Self {
+        Self {
+            capturer,
+            ocr,
+            permissions,
+            history,
+        }
+    }
+
+    /// Permission gate. Returns the current status without prompting;
+    /// the App's `update` fn calls `permissions.request()` directly
+    /// when it wants to show the prompt.
+    pub fn pre_capture_gate(&self) -> PermissionStatus {
+        self.permissions.status()
+    }
+
+    pub async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
+        self.capturer.list_displays().await
+    }
+
+    pub async fn capture_region(
+        &self,
+        req: CaptureRequest,
+    ) -> Result<RgbaImage, CaptureError> {
+        self.capturer.capture_region(req).await
+    }
+
+    pub async fn recognise(&self, req: OCRRequest) -> Result<String, OCRError> {
+        let result = self.ocr.recognise(req).await?;
+        Ok(result.text)
+    }
+
+    /// Append a capture to history, respecting the retention policy.
+    /// Off → no-op. Other policies → save and apply retention.
+    pub async fn record_history(
+        &self,
+        record: CaptureRecord,
+        png_bytes: Vec<u8>,
+        policy: HistoryRetention,
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        if matches!(policy, HistoryRetention::Off) {
+            return;
+        }
+        let Some(history) = &self.history else {
+            return;
+        };
+        if let Err(e) = history.save(&record, &png_bytes) {
+            tracing::warn!(target: readshot_core::log::cat::HISTORY, "history save failed: {e}");
+            return;
+        }
+        if let Err(e) = history.apply_retention(policy, now) {
+            tracing::warn!(target: readshot_core::log::cat::HISTORY, "retention apply failed: {e}");
+        }
+    }
+}
+
+/// Convenience constructor used by [`crate::app::App::new`] — wires
+/// the per-OS defaults via the trait factories.
+pub fn default_coordinator(
+    capturer: Arc<dyn Capturer>,
+    ocr: Arc<dyn OCREngine>,
+    permissions: Arc<dyn PermissionsProvider>,
+    history: Option<Arc<FsHistoryStore>>,
+) -> CaptureCoordinator {
+    let history: Option<Arc<dyn HistoryStore>> = history.map(|h| h as Arc<dyn HistoryStore>);
+    CaptureCoordinator::new(capturer, ocr, permissions, history)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::permissions::fake::FakePermissions;
+    use readshot_capture::fake::FakeCapturer;
+    use readshot_capture::DisplayId;
+    use readshot_core::geom::Rect;
+    use readshot_ocr::fake::FakeOcrEngine;
+
+    fn coordinator(perms: Arc<dyn PermissionsProvider>) -> CaptureCoordinator {
+        CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_text("hello")),
+            perms,
+            None,
+        )
+    }
+
+    fn capture_request() -> CaptureRequest {
+        CaptureRequest {
+            display_id: "fake-0".to_string() as DisplayId,
+            rect: Rect::from_xywh(0.0, 0.0, 256.0, 256.0).unwrap(),
+            scale: 1.0,
+            hide_cursor: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn list_displays_delegates_to_capturer() {
+        let coord = coordinator(Arc::new(FakePermissions::granted()));
+        let displays = coord.list_displays().await.unwrap();
+        assert_eq!(displays.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn capture_region_returns_image_via_fake_capturer() {
+        let coord = coordinator(Arc::new(FakePermissions::granted()));
+        let img = coord.capture_region(capture_request()).await.unwrap();
+        assert_eq!(img.width(), 256);
+    }
+
+    #[tokio::test]
+    async fn recognise_returns_fake_text() {
+        let coord = coordinator(Arc::new(FakePermissions::granted()));
+        let img = image::RgbaImage::new(8, 8);
+        let req = OCRRequest {
+            image: img,
+            languages: vec![],
+            use_language_correction: false,
+        };
+        assert_eq!(coord.recognise(req).await.unwrap(), "hello");
+    }
+
+    #[test]
+    fn pre_capture_gate_reflects_permissions_state() {
+        let granted = Arc::new(FakePermissions::granted());
+        let coord = coordinator(granted.clone());
+        assert_eq!(coord.pre_capture_gate(), PermissionStatus::Granted);
+
+        let denied = Arc::new(FakePermissions::denied());
+        let coord = coordinator(denied);
+        assert_eq!(coord.pre_capture_gate(), PermissionStatus::Denied);
+    }
+}

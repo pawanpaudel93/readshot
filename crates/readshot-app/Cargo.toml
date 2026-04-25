@@ -7,13 +7,32 @@ license.workspace = true
 repository.workspace = true
 description = "Readshot binary — composition root wiring all subsystems."
 
+[lib]
+name = "readshot_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "readshot"
 path = "src/main.rs"
 
 [dependencies]
-readshot-core = { path = "../readshot-core" }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+iced = { workspace = true }
+image = { workspace = true }
 readshot-capture = { path = "../readshot-capture" }
+readshot-core = { path = "../readshot-core" }
 readshot-ocr = { path = "../readshot-ocr" }
-readshot-ui = { path = "../readshot-ui" }
 readshot-test-fixtures = { path = "../readshot-test-fixtures" }
+readshot-ui = { path = "../readshot-ui" }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.25"
+
+[dev-dependencies]
+tempfile = { workspace = true }
