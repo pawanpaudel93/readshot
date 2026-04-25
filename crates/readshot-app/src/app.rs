@@ -33,6 +33,10 @@ use crate::welcome::WelcomeState;
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum WindowKind {
     Welcome,
+    /// Transparent fullscreen region-selection overlay. Phase B
+    /// supports a single overlay (primary display only); the value
+    /// is reserved for future per-display indexing.
+    Overlay,
 }
 
 /// Mapping from live `window::Id`s to their kind, so the daemon's
@@ -54,6 +58,19 @@ impl Windows {
 
     pub fn kind(&self, id: window::Id) -> Option<WindowKind> {
         self.by_id.get(&id).copied()
+    }
+
+    /// Iterate every (`Id`, `WindowKind`) pair. Used by the runtime
+    /// to find live overlay/editor windows when the App needs to
+    /// dispatch a close.
+    pub fn iter(&self) -> impl Iterator<Item = (&window::Id, &WindowKind)> {
+        self.by_id.iter()
+    }
+
+    /// Iterate every kind currently mapped. Convenient for "is there
+    /// already an overlay open?" checks.
+    pub fn kinds(&self) -> impl Iterator<Item = WindowKind> + '_ {
+        self.by_id.values().copied()
     }
 }
 
@@ -88,6 +105,19 @@ pub enum Message {
     TrayTick,
     /// User selected an item in the tray menu (or left-clicked the icon).
     TrayActionPerformed(crate::tray::TrayAction),
+    /// User asked for a region capture (welcome button / tray menu).
+    OpenOverlayRequested,
+    /// First view of the overlay window — used by the runtime to
+    /// remember its `window::Id` mapping.
+    OverlayWindowReady(iced::window::Id),
+    /// Drag completed inside the overlay, with the rect in
+    /// window-local logical pixels.
+    OverlaySelected(readshot_core::geom::Rect),
+    /// User cancelled the overlay (ESC, sub-pixel click, etc.).
+    OverlayCancelled,
+    /// Internal: capture a region of the primary display, save the
+    /// PNG, and toast the result. Emitted by the overlay flow.
+    CaptureRegionRequested(readshot_core::geom::Rect),
     /// Background capture-and-save task finished. Carries the final
     /// PNG path or a stringified error.
     CaptureSaved(Result<PathBuf, String>),

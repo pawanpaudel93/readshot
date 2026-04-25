@@ -33,7 +33,7 @@ use std::time::Duration;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
 use iced::widget::{button, column, container, row, text, Space};
 use iced::window;
-use iced::{Alignment, Element, Length, Subscription, Task, Theme};
+use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 
 use readshot_capture::{CaptureRequest, DisplayInfo};
 use readshot_core::Preferences;
@@ -125,11 +125,37 @@ fn welcome_window_settings() -> window::Settings {
     }
 }
 
+/// Window settings for the region-capture overlay.
+///
+/// We open a borderless `AlwaysOnTop` transparent window the size of
+/// the primary display. Resizable=false because the overlay should
+/// always cover the whole display; closeable=false because the user
+/// cancels with ESC, not the missing close button.
+fn overlay_window_settings() -> window::Settings {
+    window::Settings {
+        // 1.0×1.0 placeholder — winit then picks the actual primary
+        // display's size when we set `fullscreen: true`. (For multi-
+        // display in Phase B-ext we'd switch to per-monitor positions
+        // and explicit sizes.)
+        size: iced::Size::new(1.0, 1.0),
+        position: window::Position::Specific(iced::Point::new(0.0, 0.0)),
+        resizable: false,
+        decorations: false,
+        transparent: true,
+        visible: true,
+        fullscreen: true,
+        level: window::Level::AlwaysOnTop,
+        closeable: false,
+        minimizable: false,
+        ..Default::default()
+    }
+}
+
 /// Per-window title.
 pub fn title(state: &App, id: window::Id) -> String {
     match state.windows.kind(id) {
-        Some(WindowKind::Welcome) => "Readshot".into(),
-        None => "Readshot".into(),
+        Some(WindowKind::Welcome) | None => "Readshot".into(),
+        Some(WindowKind::Overlay) => "Readshot — Region capture".into(),
     }
 }
 
@@ -185,7 +211,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 fired = true;
             }
             if fired && !state.welcome.should_show() && !state.capture_in_flight {
-                return update(state, Message::CaptureFullPrimaryRequested);
+                // The hotkey defaults to opening the region overlay.
+                return update(state, Message::OpenOverlayRequested);
             }
             Task::none()
         }
@@ -208,7 +235,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::TrayActionPerformed(action) => match action {
             crate::tray::TrayAction::Capture => {
                 if !state.welcome.should_show() && !state.capture_in_flight {
-                    update(state, Message::CaptureFullPrimaryRequested)
+                    // Tray "Capture" → open the region overlay, same
+                    // as the welcome window's region button.
+                    update(state, Message::OpenOverlayRequested)
                 } else {
                     Task::none()
                 }
@@ -227,6 +256,66 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.capture_in_flight = true;
             state.last_capture_status = None;
             Task::perform(capture_primary_to_desktop(coord), |result| {
+                Message::CaptureSaved(result.map_err(|e| e.to_string()))
+            })
+        }
+
+        Message::OpenOverlayRequested => {
+            if state.welcome.should_show() || state.capture_in_flight {
+                return Task::none();
+            }
+            // Don't stack overlays.
+            if state.windows.kinds().any(|k| k == WindowKind::Overlay) {
+                return Task::none();
+            }
+            let (id, open_task) = window::open(overlay_window_settings());
+            state.windows.register(id, WindowKind::Overlay);
+            open_task.map(Message::OverlayWindowReady)
+        }
+
+        Message::OverlayWindowReady(_id) => Task::none(),
+
+        Message::OverlaySelected(rect) => {
+            // Close the overlay window first (it's the most recently
+            // registered Overlay-kind id) so the capture itself doesn't
+            // include the dimming veil.
+            let mut close_tasks: Vec<Task<Message>> = Vec::new();
+            let overlay_ids: Vec<_> = state
+                .windows
+                .iter()
+                .filter_map(|(id, k)| (*k == WindowKind::Overlay).then_some(*id))
+                .collect();
+            for id in overlay_ids {
+                state.windows.forget(id);
+                close_tasks.push(window::close(id));
+            }
+            // Kick off the region capture once the overlay's been
+            // dismissed. We chain via a discrete Task::done so the
+            // close request lands first.
+            close_tasks
+                .push(Task::done(Message::CaptureRegionRequested(rect)));
+            Task::batch(close_tasks)
+        }
+
+        Message::OverlayCancelled => {
+            let overlay_ids: Vec<_> = state
+                .windows
+                .iter()
+                .filter_map(|(id, k)| (*k == WindowKind::Overlay).then_some(*id))
+                .collect();
+            let mut close_tasks: Vec<Task<Message>> = Vec::new();
+            for id in overlay_ids {
+                state.windows.forget(id);
+                close_tasks.push(window::close(id));
+            }
+            Task::batch(close_tasks)
+        }
+
+        Message::CaptureRegionRequested(rect) => {
+            let coord = state.coordinator.clone();
+            state.capture_in_flight = true;
+            state.last_capture_status = None;
+            Task::perform(capture_region_to_desktop(coord, rect), |result| {
                 Message::CaptureSaved(result.map_err(|e| e.to_string()))
             })
         }
@@ -260,7 +349,26 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
 pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
     match state.windows.kind(id) {
         Some(WindowKind::Welcome) | None => welcome_view(state),
+        Some(WindowKind::Overlay) => overlay_view(),
     }
+}
+
+fn overlay_view<'a>() -> Element<'a, Message> {
+    use iced::widget::canvas::Canvas;
+    let canvas = Canvas::new(crate::overlay::OverlayProgram)
+        .width(Length::Fill)
+        .height(Length::Fill);
+    container(canvas)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|_theme| iced::widget::container::Style {
+            // Fully transparent container so the canvas's veil + selection
+            // is the only thing visible. Without this the iced default
+            // background paints over the wgpu transparent layer.
+            background: Some(Color::TRANSPARENT.into()),
+            ..Default::default()
+        })
+        .into()
 }
 
 fn welcome_view(state: &App) -> Element<'_, Message> {
@@ -293,8 +401,10 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
     };
 
     let mut capture_btn = button("Capture primary display").width(Length::Fill);
+    let mut region_btn = button("Capture region…").width(Length::Fill);
     if !state.welcome.should_show() && !state.capture_in_flight {
         capture_btn = capture_btn.on_press(Message::CaptureFullPrimaryRequested);
+        region_btn = region_btn.on_press(Message::OpenOverlayRequested);
     }
 
     let toast: Element<'_, Message> = match &state.last_capture_status {
@@ -310,6 +420,8 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
         action,
         Space::new().height(Length::Fixed(16.0)),
         capture_btn,
+        Space::new().height(Length::Fixed(6.0)),
+        region_btn,
         Space::new().height(Length::Fixed(8.0)),
         toast,
         Space::new().width(Length::Fill).height(Length::Fill),
@@ -347,8 +459,32 @@ async fn capture_primary_to_desktop(
         scale: primary.scale,
         hide_cursor: true,
     };
-    let img = coord.capture_region(req).await?;
+    capture_request_to_desktop(coord, req).await
+}
 
+/// Same flow but for an arbitrary rect on the primary display. The
+/// `rect` is expected in primary-display logical pixels (i.e. the
+/// same coordinate space as the overlay window).
+async fn capture_region_to_desktop(
+    coord: CaptureCoordinator,
+    rect: readshot_core::geom::Rect,
+) -> Result<PathBuf, CaptureRunError> {
+    let displays = coord.list_displays().await?;
+    let primary = pick_primary(&displays).ok_or(CaptureRunError::NoDisplays)?;
+    let req = CaptureRequest {
+        display_id: primary.id.clone(),
+        rect,
+        scale: primary.scale,
+        hide_cursor: true,
+    };
+    capture_request_to_desktop(coord, req).await
+}
+
+async fn capture_request_to_desktop(
+    coord: CaptureCoordinator,
+    req: CaptureRequest,
+) -> Result<PathBuf, CaptureRunError> {
+    let img = coord.capture_region(req).await?;
     let dir = directories::UserDirs::new()
         .and_then(|d| d.desktop_dir().map(PathBuf::from))
         .unwrap_or_else(std::env::temp_dir);
