@@ -1,9 +1,11 @@
 //! System tray integration (Phase A.5).
 //!
 //! Builds a small icon at runtime, registers it as a tray icon with a
-//! short menu (Capture / Show Window / Quit), and exposes a non-blocking
+//! two-item menu (Capture / Quit), and exposes a non-blocking
 //! [`TrayController::drain`] that the iced runtime polls every few ms
-//! to surface tray + menu events as typed actions.
+//! to surface tray + menu events as typed actions. A left-click on
+//! the icon itself fires Capture too, matching the muscle memory of
+//! every menu-bar capture tool on the platform.
 //!
 //! ## macOS specifics
 //!
@@ -25,13 +27,13 @@ use muda::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
-/// User intent surfaced by the tray. `Capture` and `ShowWindow` map
-/// to existing app messages; `Quit` is handled by the runtime which
-/// closes the welcome window (and thus the daemon, in Phase A).
+/// User intent surfaced by the tray. `Capture` triggers the region
+/// overlay; `Quit` exits the daemon. `LSUIElement=true` means there
+/// is no main window for a "Show window" affordance to surface, so
+/// the menu stays at two real verbs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Capture,
-    ShowWindow,
     Quit,
 }
 
@@ -56,9 +58,10 @@ impl TrayController {
                 out.push(action);
             }
         }
-        // A left-click on the tray icon (without using the menu) is
-        // surfaced as `ShowWindow`. We ignore right-clicks because
-        // they open the menu, which fires its own MenuEvents above.
+        // A left-click on the tray icon is the most common gesture
+        // for menu-bar capture tools (Cleanshot, Shottr, Flameshot
+        // on Linux), so we treat it as a Capture trigger. Right
+        // clicks open the menu, which fires its own MenuEvents above.
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {
             if let TrayIconEvent::Click {
                 button: tray_icon::MouseButton::Left,
@@ -66,7 +69,7 @@ impl TrayController {
                 ..
             } = event
             {
-                out.push(TrayAction::ShowWindow);
+                out.push(TrayAction::Capture);
             }
         }
         out
@@ -87,27 +90,22 @@ pub fn install() -> Option<TrayController> {
 
     let menu = Menu::new();
     let item_capture = MenuItem::new("Capture", true, None);
-    let item_show = MenuItem::new("Show Readshot", true, None);
     let item_quit = MenuItem::new("Quit", true, None);
 
     let mut menu_ids = HashMap::new();
     menu_ids.insert(item_capture.id().clone(), TrayAction::Capture);
-    menu_ids.insert(item_show.id().clone(), TrayAction::ShowWindow);
     menu_ids.insert(item_quit.id().clone(), TrayAction::Quit);
 
-    if let Err(e) = menu.append_items(&[
-        &item_capture,
-        &item_show,
-        &PredefinedMenuItem::separator(),
-        &item_quit,
-    ]) {
+    if let Err(e) =
+        menu.append_items(&[&item_capture, &PredefinedMenuItem::separator(), &item_quit])
+    {
         tracing::warn!(target: "readshot::tray", "menu build failed: {e}");
         return None;
     }
 
     let tray = match TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("Readshot — click to open, right-click for menu")
+        .with_tooltip("Readshot — click to capture, right-click for menu")
         .with_icon(icon)
         .with_icon_as_template(true) // macOS renders the icon monochrome / dark-mode aware.
         .build()

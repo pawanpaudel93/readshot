@@ -389,12 +389,6 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     Task::none()
                 }
             }
-            crate::tray::TrayAction::ShowWindow => {
-                // No window-show wiring yet (we always have one). Once
-                // the welcome window can hide to the tray, this
-                // dispatches `window::change_mode` to bring it back.
-                Task::none()
-            }
             crate::tray::TrayAction::Quit => iced::exit(),
         },
 
