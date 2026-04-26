@@ -66,6 +66,11 @@ pub enum CanvasMessage {
     /// finished a freehand stroke, or single-clicked a point tool;
     /// caller should append the annotation and snapshot history.
     CommitAnnotation(Annotation),
+    /// User clicked while the Text tool was active. The editor
+    /// should open a text-input UI anchored at this image-pixel
+    /// position; the eventual `Annotation::Text` is built from the
+    /// user's typed content.
+    RequestText(PointLike),
     /// User pressed Escape or released a zero-area drag — drop
     /// in-progress preview without committing anything.
     Cancelled,
@@ -144,7 +149,19 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 // user clearly didn't mean to annotate empty
                 // background.
                 let image_point = canvas_to_image(point, bounds, self.image_size)?;
-                // Point tools commit on press, no drag required.
+                // Text is a point tool but doesn't commit immediately
+                // — the runtime opens a text-input UI in response, and
+                // the typed content drives the eventual Annotation::Text.
+                if self.active_tool == ToolState::Text {
+                    return Some(
+                        canvas::Action::publish(CanvasMessage::RequestText(PointLike::new(
+                            image_point.x,
+                            image_point.y,
+                        )))
+                        .and_capture(),
+                    );
+                }
+                // Other point tools commit on press, no drag required.
                 if self.active_tool.is_point_tool() {
                     if let Some(annotation) = annotation_for_point(
                         self.active_tool,

@@ -159,6 +159,15 @@ pub enum Message {
     EditorCopyTextDone(Result<String, String>),
     /// User clicked Discard. Closes the editor window.
     EditorDiscardRequested,
+    /// Text-tool inline input — content typed by the user. Empty
+    /// means the input is cleared.
+    EditorTextChanged(String),
+    /// User pressed Enter / clicked Commit on the text input. Builds
+    /// an `Annotation::Text` from the pending state and commits it.
+    EditorTextCommit,
+    /// User pressed Escape / clicked Cancel on the text input. Drops
+    /// the pending state without committing.
+    EditorTextCancel,
     /// Background capture-and-save task finished. Carries the final
     /// PNG path or a stringified error.
     CaptureSaved(Result<PathBuf, String>),

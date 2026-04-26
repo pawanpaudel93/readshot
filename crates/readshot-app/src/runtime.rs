@@ -302,6 +302,13 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                     (Key::Character(c), true, false) if c.eq_ignore_ascii_case("s") => {
                         Some(Message::EditorSaveRequested)
                     }
+                    // Escape inside the editor cancels a pending
+                    // text input (no-op if none). We deliberately do
+                    // *not* close the editor on Esc — too easy to
+                    // hit by accident.
+                    (Key::Named(iced::keyboard::key::Named::Escape), _, _) => {
+                        Some(Message::EditorTextCancel)
+                    }
                     _ => None,
                 }
             } else {
@@ -625,15 +632,56 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     // Preview-only events. The canvas's own State holds
                     // the drag points; a redraw is automatic.
                 }
+                readshot_ui::CanvasMessage::RequestText(p) => {
+                    // Text tool clicked — open the inline text-input
+                    // banner. The eventual Annotation::Text lands at
+                    // exactly the click point regardless of how long
+                    // the user takes to type.
+                    ed.pending_text = Some(crate::editor::PendingText {
+                        origin: p,
+                        content: String::new(),
+                    });
+                }
                 readshot_ui::CanvasMessage::CommitAnnotation(annotation) => {
-                    let bumps_pin =
-                        matches!(annotation, readshot_core::Annotation::NumberedPin { .. });
+                    handle_commit_annotation(ed, annotation);
+                }
+            }
+            Task::none()
+        }
+
+        Message::EditorTextChanged(content) => {
+            if let Some(ed) = state.editor.as_mut() {
+                if let Some(pending) = ed.pending_text.as_mut() {
+                    pending.content = content;
+                }
+            }
+            Task::none()
+        }
+        Message::EditorTextCommit => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            if let Some(pending) = ed.pending_text.take() {
+                let trimmed = pending.content.trim();
+                if !trimmed.is_empty() {
+                    let annotation = readshot_core::Annotation::Text {
+                        content: trimmed.to_string(),
+                        origin: pending.origin,
+                        color: ed.model.current_color(),
+                        font_family: "system-ui".to_string(),
+                        // Tie text size to the line-width slider so
+                        // it's discoverable without a separate control.
+                        size: text_size_from_line_width(ed.model.current_line_width()),
+                    };
                     ed.model.commit_annotation(annotation);
-                    if bumps_pin {
-                        ed.next_pin_number = ed.next_pin_number.saturating_add(1);
-                    }
                     ed.refresh_image();
                 }
+            }
+            Task::none()
+        }
+        Message::EditorTextCancel => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.pending_text = None;
             }
             Task::none()
         }
@@ -987,10 +1035,59 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     .align_y(Alignment::Center)
     .spacing(4);
 
+    // Text-input banner — only visible while a Text-tool click is
+    // pending. Sits between the image and the action bar so it's
+    // close to where the cursor currently is, with Enter to commit
+    // and Escape to cancel (handled inline + via the existing
+    // editor keyboard subscription).
+    let text_banner: Element<'_, Message> = if let Some(pending) = ed.pending_text.as_ref() {
+        let input = iced::widget::text_input("Type and press Enter…", &pending.content)
+            .on_input(Message::EditorTextChanged)
+            .on_submit(Message::EditorTextCommit)
+            .padding(8)
+            .size(14)
+            .width(Length::Fill);
+        let commit = button(text("Add Text").size(13).color(Color::WHITE))
+            .padding([8, 14])
+            .style(|theme, status| action_button_style(theme, status, ActionKind::Primary))
+            .on_press(Message::EditorTextCommit);
+        let cancel = button(text("Cancel").size(13).color(Color::WHITE))
+            .padding([8, 14])
+            .style(|theme, status| action_button_style(theme, status, ActionKind::Secondary))
+            .on_press(Message::EditorTextCancel);
+        container(
+            row![
+                text("✎ Text").size(12).color(Color::WHITE),
+                input,
+                commit,
+                cancel,
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .padding(8),
+        )
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(palette.background.weak.color.into()),
+                border: iced::Border {
+                    color: palette.primary.base.color,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+    } else {
+        IcedSpace::new().height(Length::Fixed(0.0)).into()
+    };
+
     container(
         column![
             toolbar_row,
             image_area,
+            text_banner,
             row![
                 action_left,
                 IcedSpace::new().width(Length::Fill),
@@ -1136,7 +1233,7 @@ fn tool_hint(tool: readshot_ui::editor::ToolState) -> &'static str {
         T::Arrow => "Arrow — drag from base toward the target.",
         T::Pen => "Pen — drag to free-draw.",
         T::Highlighter => "Highlighter — drag over text; semi-transparent.",
-        T::Text => "Text — coming soon. Use Pen for now.",
+        T::Text => "Text — click to place; type and press Enter to commit.",
         T::Blur => "Blur — drag a region; radius scales with width.",
         T::Pixelate => "Pixelate — drag a region; block size scales with width.",
         T::NumberedPin => "Numbered pin — click to drop the next number.",
@@ -1542,6 +1639,51 @@ fn notify_running_in_menu_bar(hotkey: &str) {
     {
         let _ = hotkey;
     }
+}
+
+/// Map an editor line-width to a text point-size. The Text tool
+/// shares the line-width slider so the user has one knob — small
+/// width = small text, big width = headline. The clamp keeps text
+/// readable on either end.
+fn text_size_from_line_width(line_width: f32) -> f32 {
+    (line_width * 4.0 + 8.0).clamp(12.0, 96.0)
+}
+
+/// Apply a committed annotation to the editor session. Most
+/// annotations just push onto the model's history; `Crop` is a
+/// special case — it rewrites the base image so subsequent edits
+/// happen in the cropped coordinate frame. Without this, the
+/// displayed image and the cursor-mapping math drift apart after a
+/// crop and every subsequent annotation lands at the wrong pixel.
+///
+/// Trade-off: undo can't recover the pre-crop pixels because the
+/// model's `History` only stores annotation snapshots, not base
+/// images. We surface that in the toast so the user isn't surprised.
+fn handle_commit_annotation(
+    ed: &mut crate::editor::EditorSession,
+    annotation: readshot_core::Annotation,
+) {
+    use readshot_core::{render, Annotation};
+    if matches!(annotation, Annotation::NumberedPin { .. }) {
+        ed.next_pin_number = ed.next_pin_number.saturating_add(1);
+    }
+    if matches!(annotation, Annotation::Crop { .. }) {
+        // Bake every previously-committed annotation + the crop
+        // into a fresh base image, then start a clean model on
+        // top of it.
+        let mut full = ed.model.annotations().to_vec();
+        full.push(annotation);
+        let baked = render(ed.model.base(), &full);
+        let (w, h) = (baked.width(), baked.height());
+        ed.model = readshot_ui::editor::EditorState::new(baked);
+        ed.refresh_image();
+        ed.status = Some(format!(
+            "Cropped to {w} × {h} px. Earlier edits are baked in."
+        ));
+        return;
+    }
+    ed.model.commit_annotation(annotation);
+    ed.refresh_image();
 }
 
 /// Helper for the previous synchronous status check used by tests.

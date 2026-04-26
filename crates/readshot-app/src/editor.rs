@@ -43,6 +43,21 @@ pub struct EditorSession {
     /// `&mut`); instead the runtime's `update` rebuilds this handle on
     /// every model mutation via [`refresh_image`].
     pub image_handle: iced::widget::image::Handle,
+    /// In-progress text annotation. `Some` after the user clicks with
+    /// the Text tool active; the editor view renders an inline input
+    /// row letting them type the content. Confirming commits an
+    /// `Annotation::Text`; cancelling drops the pending state.
+    pub pending_text: Option<PendingText>,
+}
+
+/// Captured text-input state for the Text tool. The image-pixel
+/// origin is fixed at the click point so the eventual annotation
+/// lands where the user clicked, regardless of how long they spend
+/// typing or how the editor resizes.
+#[derive(Clone, Debug)]
+pub struct PendingText {
+    pub origin: PointLike,
+    pub content: String,
 }
 
 /// Transient drag preview the canvas emits via `DragMoved` and the
@@ -92,6 +107,7 @@ impl EditorSession {
             preview: None,
             next_pin_number: 1,
             image_handle,
+            pending_text: None,
         }
     }
 
