@@ -340,6 +340,9 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                     (Key::Character(c), true, false) if c.eq_ignore_ascii_case("s") => {
                         return Some(Message::EditorSaveRequested);
                     }
+                    (Key::Character(c), true, false) if c.eq_ignore_ascii_case("w") => {
+                        return Some(Message::EditorDiscardRequested);
+                    }
                     (Key::Named(iced::keyboard::key::Named::Escape), _, _) => {
                         return Some(Message::EditorTextCancel);
                     }
@@ -586,11 +589,20 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             ed.busy = true;
             ed.status = Some("Choose a save location…".into());
             let img = ed.model.flatten();
-            Task::perform(save_image_via_picker(img), |r| {
+            let seed = state.last_save_dir.clone();
+            Task::perform(save_image_via_picker(img, seed), |r| {
                 Message::EditorSaved(r.map_err(|e| e.to_string()))
             })
         }
         Message::EditorSaved(result) => {
+            // Remember the parent directory of any successful save —
+            // next save's picker will seed itself there instead of
+            // bouncing back to ~/Desktop.
+            if let Ok(Some(path)) = &result {
+                if let Some(parent) = path.parent() {
+                    state.last_save_dir = Some(parent.to_path_buf());
+                }
+            }
             if let Some(ed) = state.editor.as_mut() {
                 ed.busy = false;
                 ed.status = Some(match result {
@@ -1253,6 +1265,7 @@ fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
         .content_fit(iced::ContentFit::Contain);
     let drag_layer: Element<'_, Message> = mouse_area(img)
         .on_press(Message::PinDragRequested(id))
+        .on_double_click(Message::PinClosePressed(id))
         .interaction(iced::mouse::Interaction::Grab)
         .into();
     // Close button — sits in the top-right corner with subtle
@@ -1825,15 +1838,20 @@ fn save_to_desktop(img: &image::RgbaImage) -> Result<PathBuf, CaptureRunError> {
     Ok(path)
 }
 
-/// Open a native file-save dialog seeded at `~/Desktop` with a
-/// timestamped default filename, then write the PNG to whatever
-/// the user picks. Returns `Ok(Some(path))` on success,
-/// `Ok(None)` when the user cancels.
-async fn save_image_via_picker(img: image::RgbaImage) -> Result<Option<PathBuf>, CaptureRunError> {
+/// Open a native file-save dialog seeded at `seed_dir` (or
+/// `~/Desktop` if `None` / not a directory) with a timestamped
+/// default filename, then write the PNG to whatever the user
+/// picks. Returns `Ok(Some(path))` on success, `Ok(None)` when
+/// the user cancels.
+async fn save_image_via_picker(
+    img: image::RgbaImage,
+    seed_dir: Option<PathBuf>,
+) -> Result<Option<PathBuf>, CaptureRunError> {
     let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string();
     let default_name = format!("Readshot-{stamp}.png");
-    let initial_dir = directories::UserDirs::new()
-        .and_then(|d| d.desktop_dir().map(PathBuf::from))
+    let initial_dir = seed_dir
+        .filter(|p| p.is_dir())
+        .or_else(|| directories::UserDirs::new().and_then(|d| d.desktop_dir().map(PathBuf::from)))
         .unwrap_or_else(std::env::temp_dir);
     let handle = rfd::AsyncFileDialog::new()
         .add_filter("PNG image", &["png"])

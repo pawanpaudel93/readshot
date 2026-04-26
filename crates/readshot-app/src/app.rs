@@ -254,6 +254,11 @@ pub struct App {
     /// Monotonically-increasing counter the region-overlay reads to
     /// animate its marching-ants stroke. Bumped by `OverlayTick`.
     pub overlay_tick: u32,
+    /// Last directory the user saved into. The editor's save picker
+    /// seeds itself there next time so a burst of related captures
+    /// lands in the same place. Reset whenever the user picks a new
+    /// directory — never written to disk; in-memory only.
+    pub last_save_dir: Option<std::path::PathBuf>,
 }
 
 /// Per-overlay-window record. Tracks which display the window covers
@@ -286,6 +291,7 @@ impl App {
             overlay_displays: HashMap::new(),
             pins: HashMap::new(),
             overlay_tick: 0,
+            last_save_dir: None,
         }
     }
 
