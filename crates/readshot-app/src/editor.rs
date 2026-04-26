@@ -119,12 +119,55 @@ impl EditorSession {
         self.image_handle = build_handle(&mut self.model);
     }
 
-    /// Pixel size of the current flattened image. Used by the editor
-    /// view to size the canvas to match the image so cursor
-    /// coordinates land at the right pixel.
+    /// Pixel size of the *base* image (pre-crop). Useful for hint
+    /// text and not much else; the canvas should use
+    /// [`effective_image_size`] so cursor mapping respects an
+    /// active Crop annotation.
     pub fn image_size(&self) -> (u32, u32) {
         let base = self.model.base();
         (base.width(), base.height())
+    }
+
+    /// Effective displayed-image dimensions — base dimensions, or
+    /// the most recent `Annotation::Crop` rect (clamped to the
+    /// base) if one exists. Mirrors what the renderer outputs and
+    /// what the user actually sees in the editor.
+    pub fn effective_image_size(&self) -> (u32, u32) {
+        let (bw, bh) = self.image_size();
+        if let Some(r) = self.last_crop() {
+            let (rx, ry, rw, rh) = (r.x, r.y, r.width, r.height);
+            let bw_f = bw as f32;
+            let bh_f = bh as f32;
+            let x = rx.max(0.0).min(bw_f);
+            let y = ry.max(0.0).min(bh_f);
+            let w = (rw + rx - x).min(bw_f - x).max(1.0);
+            let h = (rh + ry - y).min(bh_f - y).max(1.0);
+            (w as u32, h as u32)
+        } else {
+            (bw, bh)
+        }
+    }
+
+    /// Offset of the effective displayed image inside the base
+    /// image's coordinate frame — `(0, 0)` if no Crop, else the
+    /// most recent Crop rect's top-left clamped to the base.
+    /// Cursor positions get this added to them before they're
+    /// stored on annotations so the renderer's "translate by crop
+    /// offset" pass produces pixels under the cursor.
+    pub fn crop_offset(&self) -> (f32, f32) {
+        let (bw, bh) = self.image_size();
+        if let Some(r) = self.last_crop() {
+            (r.x.max(0.0).min(bw as f32), r.y.max(0.0).min(bh as f32))
+        } else {
+            (0.0, 0.0)
+        }
+    }
+
+    fn last_crop(&self) -> Option<readshot_core::RectLike> {
+        self.model.annotations().iter().rev().find_map(|a| match a {
+            readshot_core::Annotation::Crop { rect } => Some(*rect),
+            _ => None,
+        })
     }
 }
 

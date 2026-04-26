@@ -943,7 +943,8 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         color: active_color,
         line_width,
         next_pin_number: ed.next_pin_number,
-        image_size: ed.image_size(),
+        image_size: ed.effective_image_size(),
+        image_offset: ed.crop_offset(),
     };
     let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
         .width(Length::Fill)
@@ -1011,7 +1012,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     .spacing(8);
 
     // ===== Status / hint bar =====
-    let (img_w, img_h) = ed.image_size();
+    let (img_w, img_h) = ed.effective_image_size();
     let dims = text(format!("{img_w} × {img_h} px"))
         .size(11)
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55));
@@ -1649,41 +1650,28 @@ fn text_size_from_line_width(line_width: f32) -> f32 {
     (line_width * 4.0 + 8.0).clamp(12.0, 96.0)
 }
 
-/// Apply a committed annotation to the editor session. Most
-/// annotations just push onto the model's history; `Crop` is a
-/// special case — it rewrites the base image so subsequent edits
-/// happen in the cropped coordinate frame. Without this, the
-/// displayed image and the cursor-mapping math drift apart after a
-/// crop and every subsequent annotation lands at the wrong pixel.
-///
-/// Trade-off: undo can't recover the pre-crop pixels because the
-/// model's `History` only stores annotation snapshots, not base
-/// images. We surface that in the toast so the user isn't surprised.
+/// Apply a committed annotation to the editor session. Crop is
+/// stored as a regular `Annotation` rather than baked into the base
+/// image, so undo / redo work uniformly: the renderer translates
+/// every other annotation by the crop offset, and removing the Crop
+/// annotation (via undo) brings the full pre-crop image back. The
+/// canvas's cursor mapping consults `effective_image_size` +
+/// `crop_offset` so clicks after a crop still hit the right base
+/// pixel.
 fn handle_commit_annotation(
     ed: &mut crate::editor::EditorSession,
     annotation: readshot_core::Annotation,
 ) {
-    use readshot_core::{render, Annotation};
-    if matches!(annotation, Annotation::NumberedPin { .. }) {
+    if matches!(annotation, readshot_core::Annotation::NumberedPin { .. }) {
         ed.next_pin_number = ed.next_pin_number.saturating_add(1);
     }
-    if matches!(annotation, Annotation::Crop { .. }) {
-        // Bake every previously-committed annotation + the crop
-        // into a fresh base image, then start a clean model on
-        // top of it.
-        let mut full = ed.model.annotations().to_vec();
-        full.push(annotation);
-        let baked = render(ed.model.base(), &full);
-        let (w, h) = (baked.width(), baked.height());
-        ed.model = readshot_ui::editor::EditorState::new(baked);
-        ed.refresh_image();
-        ed.status = Some(format!(
-            "Cropped to {w} × {h} px. Earlier edits are baked in."
-        ));
-        return;
-    }
+    let cropped = matches!(annotation, readshot_core::Annotation::Crop { .. });
     ed.model.commit_annotation(annotation);
     ed.refresh_image();
+    if cropped {
+        let (w, h) = ed.effective_image_size();
+        ed.status = Some(format!("Cropped to {w} × {h} px. ⌘Z to undo."));
+    }
 }
 
 /// Helper for the previous synchronous status check used by tests.

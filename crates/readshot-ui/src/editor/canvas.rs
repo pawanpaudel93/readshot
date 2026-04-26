@@ -95,10 +95,16 @@ pub struct EditorCanvas {
     /// Number to stamp on the next NumberedPin. The editor session
     /// increments this on commit.
     pub next_pin_number: u32,
-    /// Pixel dimensions of the underlying base image (W, H). Used to
-    /// compute the letterbox transform from canvas-local coords to
-    /// image-pixel coords.
+    /// Effective displayed-image dimensions (post-crop if any). Used
+    /// to compute the letterbox transform from canvas-local coords to
+    /// the displayed image's pixel coords.
     pub image_size: (u32, u32),
+    /// Origin of the displayed image inside the underlying *base*
+    /// image's coordinate frame. Annotations are stored in base
+    /// coords because that's what the renderer expects, so we add
+    /// this offset before publishing CommitAnnotation. `(0, 0)` when
+    /// no Crop annotation is in flight.
+    pub image_offset: (f32, f32),
 }
 
 /// Map a canvas-local point to the underlying image's pixel space
@@ -132,6 +138,24 @@ pub(crate) fn canvas_to_image(
     ))
 }
 
+/// Convert a canvas-local point to *base*-image pixel coordinates,
+/// accounting for any active Crop annotation. The `image_size` is
+/// the displayed (post-crop) size; `image_offset` is the crop's
+/// top-left in base coords. Returns `None` when the click sits in
+/// the letterbox dead band.
+pub(crate) fn canvas_to_base(
+    point: Point,
+    bounds: Rectangle,
+    image_size: (u32, u32),
+    image_offset: (f32, f32),
+) -> Option<Point> {
+    let local = canvas_to_image(point, bounds, image_size)?;
+    Some(Point::new(
+        local.x + image_offset.0,
+        local.y + image_offset.1,
+    ))
+}
+
 impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
     type State = DrawState;
 
@@ -148,7 +172,13 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 // Reject clicks in the letterbox dead band — the
                 // user clearly didn't mean to annotate empty
                 // background.
-                let image_point = canvas_to_image(point, bounds, self.image_size)?;
+                let local = canvas_to_image(point, bounds, self.image_size)?;
+                // Translate from displayed-image pixels to the
+                // underlying base-image pixels so the renderer's
+                // crop-offset translation maps annotations back to
+                // where the user clicked.
+                let image_point =
+                    Point::new(local.x + self.image_offset.0, local.y + self.image_offset.1);
                 // Text is a point tool but doesn't commit immediately
                 // — the runtime opens a text-input UI in response, and
                 // the typed content drives the eventual Annotation::Text.
@@ -251,11 +281,15 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                             );
                         }
                         // Convert canvas-local anchor + cursor into
-                        // image pixels before building the annotation
-                        // — the renderer paints in image coords.
+                        // base-image pixels before building the
+                        // annotation — the renderer paints in base
+                        // coords and translates for the active crop.
                         let anchor_img =
-                            canvas_to_image(anchor, bounds, self.image_size).unwrap_or(anchor);
-                        let cur_img = canvas_to_image(cur, bounds, self.image_size).unwrap_or(cur);
+                            canvas_to_base(anchor, bounds, self.image_size, self.image_offset)
+                                .unwrap_or(anchor);
+                        let cur_img =
+                            canvas_to_base(cur, bounds, self.image_size, self.image_offset)
+                                .unwrap_or(cur);
                         let annotation = annotation_for_drag(
                             tool_at_press,
                             anchor_img,
@@ -283,11 +317,13 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                             );
                         }
                         // Convert each canvas-local polyline node to
-                        // image pixels.
+                        // base-image pixels.
                         let pts: Vec<PointLike> = points
                             .iter()
                             .map(|p| {
-                                let q = canvas_to_image(*p, bounds, self.image_size).unwrap_or(*p);
+                                let q =
+                                    canvas_to_base(*p, bounds, self.image_size, self.image_offset)
+                                        .unwrap_or(*p);
                                 PointLike::new(q.x, q.y)
                             })
                             .collect();
