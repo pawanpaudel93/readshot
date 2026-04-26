@@ -584,9 +584,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 return Task::none();
             };
             ed.busy = true;
-            ed.status = Some("Saving…".into());
+            ed.status = Some("Choose a save location…".into());
             let img = ed.model.flatten();
-            Task::perform(save_image_to_desktop(img), |r| {
+            Task::perform(save_image_via_picker(img), |r| {
                 Message::EditorSaved(r.map_err(|e| e.to_string()))
             })
         }
@@ -594,7 +594,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             if let Some(ed) = state.editor.as_mut() {
                 ed.busy = false;
                 ed.status = Some(match result {
-                    Ok(p) => format!("Saved to {}", p.display()),
+                    Ok(Some(p)) => format!("Saved to {}", p.display()),
+                    Ok(None) => "Save cancelled.".into(),
                     Err(e) => format!("Save failed: {e}"),
                 });
             }
@@ -1801,11 +1802,6 @@ fn close_all_overlays(state: &mut App) -> Vec<Task<Message>> {
     tasks
 }
 
-/// Save an already-captured image to a timestamped Desktop PNG.
-async fn save_image_to_desktop(img: image::RgbaImage) -> Result<PathBuf, CaptureRunError> {
-    save_to_desktop(&img)
-}
-
 fn save_to_desktop(img: &image::RgbaImage) -> Result<PathBuf, CaptureRunError> {
     let dir = directories::UserDirs::new()
         .and_then(|d| d.desktop_dir().map(PathBuf::from))
@@ -1814,6 +1810,38 @@ fn save_to_desktop(img: &image::RgbaImage) -> Result<PathBuf, CaptureRunError> {
     let path = dir.join(format!("Readshot-{stamp}.png"));
     img.save_with_format(&path, image::ImageFormat::Png)?;
     Ok(path)
+}
+
+/// Open a native file-save dialog seeded at `~/Desktop` with a
+/// timestamped default filename, then write the PNG to whatever
+/// the user picks. Returns `Ok(Some(path))` on success,
+/// `Ok(None)` when the user cancels.
+async fn save_image_via_picker(img: image::RgbaImage) -> Result<Option<PathBuf>, CaptureRunError> {
+    let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string();
+    let default_name = format!("Readshot-{stamp}.png");
+    let initial_dir = directories::UserDirs::new()
+        .and_then(|d| d.desktop_dir().map(PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir);
+    let handle = rfd::AsyncFileDialog::new()
+        .add_filter("PNG image", &["png"])
+        .set_directory(&initial_dir)
+        .set_file_name(&default_name)
+        .save_file()
+        .await;
+    let Some(handle) = handle else {
+        return Ok(None);
+    };
+    let mut path = handle.path().to_path_buf();
+    // Force a `.png` extension — rfd doesn't always append the
+    // filter's extension on macOS when the user types a bare name.
+    if path
+        .extension()
+        .is_none_or(|e| !e.eq_ignore_ascii_case("png"))
+    {
+        path.set_extension("png");
+    }
+    img.save_with_format(&path, image::ImageFormat::Png)?;
+    Ok(Some(path))
 }
 
 /// Push an RGBA image to the system clipboard. Runs the arboard

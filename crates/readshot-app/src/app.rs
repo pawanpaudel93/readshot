@@ -157,7 +157,9 @@ pub enum Message {
     /// User clicked Save in the editor.
     EditorSaveRequested,
     /// Save task completed.
-    EditorSaved(Result<std::path::PathBuf, String>),
+    /// Save task completed. `Ok(Some(path))` = written to disk;
+    /// `Ok(None)` = the user cancelled the file picker.
+    EditorSaved(Result<Option<std::path::PathBuf>, String>),
     /// User clicked Copy (image to clipboard).
     EditorCopyImageRequested,
     /// Image-copy task completed.
