@@ -1,79 +1,149 @@
-//! Minimal annotation editor (Phase C — basic actions only).
+//! Annotation editor — runtime integration layer.
 //!
-//! When a region capture finishes, the runtime opens an editor
-//! window with the captured RGBA image and four buttons:
+//! [`EditorSession`] wraps the unit-tested model from
+//! `readshot_ui::editor::EditorState` with the iced-specific bits the
+//! runtime cares about: which `window::Id` the session owns, whether
+//! a save/copy/ocr task is in flight, the toast text under the action
+//! row, and a few transient interaction-state fields the toolbar /
+//! canvas widgets read while the user is mid-drag (live preview rect,
+//! freehand polyline accumulator, pin counter).
 //!
-//! * **Save** — write the PNG to `~/Desktop/Readshot-<timestamp>.png`.
-//! * **Copy** — push the image to the system clipboard via `arboard`.
-//! * **Copy Text** — run OCR via the existing coordinator and push
-//!   the recognised text to the clipboard.
-//! * **Discard** — close the editor window without saving.
-//!
-//! What is *not* in this cut: pen / arrow / rectangle / text
-//! annotation tools, undo/redo, the toolbar/canvas/action-bar
-//! widget split from `readshot-ui::editor`. Those need careful
-//! interactive design and are deferred to their own session.
-//!
-//! For the runtime story this module is dumb data + a single
-//! `view` function. Async work (save, copy, OCR) lives in `runtime`
-//! so the per-message Task wiring stays in one place.
+//! The model itself owns the captured base image, the annotation list
+//! with undo/redo, and the active tool / colour / line-width. Rendering
+//! is delegated to `readshot_core::render` via `model.flatten()` so
+//! Save / Copy bake annotations into the saved PNG instead of emitting
+//! the raw capture.
 
-use image::RgbaImage;
+use iced::Rectangle;
+use readshot_core::PointLike;
+use readshot_ui::editor::EditorState as Model;
 
-/// One editor session — a captured image plus a small status string
-/// for the toast under the action row.
-pub struct EditorState {
-    pub image: RgbaImage,
+/// One open editor window, plus the iced-side state that doesn't
+/// belong inside the pure model.
+pub struct EditorSession {
+    pub model: Model,
     pub status: Option<String>,
-    /// `true` while a save / copy / ocr task is in flight; the
-    /// buttons are disabled in that state to avoid double-firing.
+    /// `true` while a save / copy / ocr task is in flight; the action
+    /// bar buttons disable themselves in that state to avoid double
+    /// firing.
     pub busy: bool,
     /// `Some` after iced has acknowledged the window-open request.
-    /// We need it to know which window to close on Discard.
+    /// Used by Discard so we know which window to close.
     pub window_id: Option<iced::window::Id>,
+    /// Live drag preview — shape / line / polyline being dragged but
+    /// not yet committed. The canvas draw step uses this to paint a
+    /// dashed outline so the user sees what they're about to commit.
+    pub preview: Option<Preview>,
+    /// Counter for the next `NumberedPin` annotation. Starts at 1 and
+    /// monotonically grows; resets when the editor is discarded.
+    pub next_pin_number: u32,
+    /// Cached iced handle for the currently-flattened image (base +
+    /// committed annotations). iced's `view` function only gets `&App`
+    /// so we can't run `model.flatten()` inside it (the renderer needs
+    /// `&mut`); instead the runtime's `update` rebuilds this handle on
+    /// every model mutation via [`refresh_image`].
+    pub image_handle: iced::widget::image::Handle,
 }
 
-impl EditorState {
-    pub fn new(image: RgbaImage) -> Self {
+/// Transient drag preview the canvas emits via `DragMoved` and the
+/// editor view re-paints over the image. Shape variants mirror the
+/// tool classifications in `readshot_ui::editor::tool_state`.
+#[derive(Clone, Debug)]
+pub enum Preview {
+    /// Rectangular tools: Rectangle, Ellipse, Blur, Pixelate, Crop.
+    Rect { tool: PreviewKind, rect: Rectangle },
+    /// Segment tools: Line, Arrow.
+    Segment {
+        tool: PreviewKind,
+        anchor: iced::Point,
+        cursor: iced::Point,
+    },
+    /// Freehand tools: Pen, Highlighter — the accumulated polyline.
+    Freehand {
+        tool: PreviewKind,
+        points: Vec<PointLike>,
+    },
+}
+
+/// Lightweight tag the canvas attaches to a preview so the editor's
+/// draw step knows what shape to outline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreviewKind {
+    Rectangle,
+    Ellipse,
+    Line,
+    Arrow,
+    Blur,
+    Pixelate,
+    Crop,
+    Pen,
+    Highlighter,
+}
+
+impl EditorSession {
+    pub fn new(image: image::RgbaImage) -> Self {
+        let mut model = Model::new(image);
+        let image_handle = build_handle(&mut model);
         Self {
-            image,
+            model,
             status: None,
             busy: false,
             window_id: None,
+            preview: None,
+            next_pin_number: 1,
+            image_handle,
         }
     }
 
-    /// Iced image handle backed by the captured RGBA pixels.
-    pub fn handle(&self) -> iced::widget::image::Handle {
-        iced::widget::image::Handle::from_rgba(
-            self.image.width(),
-            self.image.height(),
-            self.image.as_raw().clone(),
-        )
+    /// Rebuild [`image_handle`] from the model's currently-flattened
+    /// pixels. Call after any mutation that affects the rendered
+    /// output: `commit_annotation`, `undo`, `redo`, `discard`, or
+    /// when the base image changes (Crop replaces it).
+    pub fn refresh_image(&mut self) {
+        self.image_handle = build_handle(&mut self.model);
     }
+
+    /// Pixel size of the current flattened image. Used by the editor
+    /// view to size the canvas to match the image so cursor
+    /// coordinates land at the right pixel.
+    pub fn image_size(&self) -> (u32, u32) {
+        let base = self.model.base();
+        (base.width(), base.height())
+    }
+}
+
+fn build_handle(model: &mut Model) -> iced::widget::image::Handle {
+    let img = model.flatten();
+    iced::widget::image::Handle::from_rgba(img.width(), img.height(), img.as_raw().clone())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn handle_derived_from_image_dimensions() {
-        let img = RgbaImage::new(8, 12);
-        let state = EditorState::new(img);
-        let _h = state.handle();
-        // Just exercises the path — Handle isn't introspectable
-        // beyond identity, but the call must not panic and the size
-        // round-trip via the From impl is verified by the iced
-        // widget in real-app tests.
-        assert!(state.status.is_none());
-        assert!(!state.busy);
+    fn solid(w: u32, h: u32) -> image::RgbaImage {
+        let mut img = image::RgbaImage::new(w, h);
+        for px in img.pixels_mut() {
+            *px = image::Rgba([255, 255, 255, 255]);
+        }
+        img
     }
 
     #[test]
-    fn new_starts_idle() {
-        let state = EditorState::new(RgbaImage::new(2, 2));
-        assert!(!state.busy);
-        assert!(state.window_id.is_none());
+    fn new_session_starts_idle() {
+        let s = EditorSession::new(solid(8, 8));
+        assert!(!s.busy);
+        assert!(s.window_id.is_none());
+        assert!(s.preview.is_none());
+        assert_eq!(s.next_pin_number, 1);
+    }
+
+    #[test]
+    fn handle_reflects_image_size() {
+        let s = EditorSession::new(solid(16, 32));
+        // Just exercises that the eager handle was built — Handle
+        // isn't introspectable beyond identity.
+        let _ = s.image_handle.clone();
+        assert_eq!(s.image_size(), (16, 32));
     }
 }

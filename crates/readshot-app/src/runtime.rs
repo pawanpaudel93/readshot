@@ -248,7 +248,8 @@ pub fn style(_state: &App, theme: &Theme) -> iced::theme::Style {
     }
 }
 
-/// Background subscriptions — permission poll + global-hotkey drain.
+/// Background subscriptions — permission poll + global-hotkey drain
+/// + (when the editor is open) ⌘Z / ⌘⇧Z keyboard shortcuts.
 pub fn subscription(state: &App) -> Subscription<Message> {
     let mut subs = Vec::new();
     if state.welcome.should_show() {
@@ -267,6 +268,34 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // 100 ms is fine for tray clicks — humans can't tell the
         // difference between a 50 ms and 100 ms tray menu response.
         subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::TrayTick));
+    }
+    if state.editor.is_some() {
+        // Keyboard sub: ⌘Z / Ctrl+Z = Undo, ⌘⇧Z / Ctrl+Shift+Z = Redo,
+        // ⌘S / Ctrl+S = Save. Iced 0.14's `event::listen_with` is the
+        // window-agnostic event tap; we filter to KeyPressed events
+        // and only react when the editor window is the focused one
+        // (the canvas captures key presses at the widget level for
+        // Escape; that's why Esc isn't handled here).
+        subs.push(iced::event::listen_with(|event, _status, _window| {
+            use iced::keyboard::{Event as KbEvent, Key};
+            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
+                let cmd = modifiers.command();
+                match (&key, cmd, modifiers.shift()) {
+                    (Key::Character(c), true, false) if c.eq_ignore_ascii_case("z") => {
+                        Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo))
+                    }
+                    (Key::Character(c), true, true) if c.eq_ignore_ascii_case("z") => {
+                        Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo))
+                    }
+                    (Key::Character(c), true, false) if c.eq_ignore_ascii_case("s") => {
+                        Some(Message::EditorSaveRequested)
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }));
     }
     Subscription::batch(subs)
 }
@@ -425,7 +454,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.capture_in_flight = false;
             match result {
                 Ok(image) => {
-                    state.editor = Some(crate::editor::EditorState::new(image));
+                    state.editor = Some(crate::editor::EditorSession::new(image));
                     let (id, open_task) = window::open(editor_window_settings());
                     state.windows.register(id, WindowKind::Editor);
                     open_task.map(Message::EditorWindowReady)
@@ -450,7 +479,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             };
             ed.busy = true;
             ed.status = Some("Saving…".into());
-            let img = ed.image.clone();
+            let img = ed.model.flatten();
             Task::perform(save_image_to_desktop(img), |r| {
                 Message::EditorSaved(r.map_err(|e| e.to_string()))
             })
@@ -472,7 +501,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             };
             ed.busy = true;
             ed.status = Some("Copying…".into());
-            let img = ed.image.clone();
+            let img = ed.model.flatten();
             Task::perform(copy_image_to_clipboard(img), |r| {
                 Message::EditorCopyImageDone(r.map_err(|e| e.to_string()))
             })
@@ -494,7 +523,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             };
             ed.busy = true;
             ed.status = Some("Recognising text…".into());
-            let img = ed.image.clone();
+            let img = ed.model.flatten();
             let coord = state.coordinator.clone();
             Task::perform(ocr_then_copy(coord, img), |r| {
                 Message::EditorCopyTextDone(r.map_err(|e| e.to_string()))
@@ -525,6 +554,60 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             } else {
                 Task::none()
             }
+        }
+
+        // Toolbar selections — tool / colour / line-width changes
+        // and undo/redo. Tool/colour/width changes don't need a
+        // re-render (annotations haven't changed), but undo/redo do.
+        Message::EditorToolbar(msg) => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            match msg {
+                readshot_ui::ToolbarMessage::SelectTool(t) => ed.model.set_tool(t),
+                readshot_ui::ToolbarMessage::SelectColor(c) => ed.model.set_color(c),
+                readshot_ui::ToolbarMessage::SetLineWidth(w) => ed.model.set_line_width(w),
+                readshot_ui::ToolbarMessage::Undo => {
+                    if ed.model.undo() {
+                        ed.refresh_image();
+                    }
+                }
+                readshot_ui::ToolbarMessage::Redo => {
+                    if ed.model.redo() {
+                        ed.refresh_image();
+                    }
+                }
+            }
+            Task::none()
+        }
+
+        // Canvas events — mostly drag previews (which don't need
+        // their own state mutation in this cut; the canvas's internal
+        // DrawState already drives the live painting) and one-shot
+        // commits which mutate the model.
+        Message::EditorCanvas(msg) => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            match msg {
+                readshot_ui::CanvasMessage::DragStarted
+                | readshot_ui::CanvasMessage::DragMoved(_)
+                | readshot_ui::CanvasMessage::PolylineMoved(_)
+                | readshot_ui::CanvasMessage::Cancelled => {
+                    // Preview-only events. The canvas's own State holds
+                    // the drag points; a redraw is automatic.
+                }
+                readshot_ui::CanvasMessage::CommitAnnotation(annotation) => {
+                    let bumps_pin =
+                        matches!(annotation, readshot_core::Annotation::NumberedPin { .. });
+                    ed.model.commit_annotation(annotation);
+                    if bumps_pin {
+                        ed.next_pin_number = ed.next_pin_number.saturating_add(1);
+                    }
+                    ed.refresh_image();
+                }
+            }
+            Task::none()
         }
 
         Message::CaptureSaved(result) => {
@@ -610,44 +693,242 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
 }
 
 fn editor_view(state: &App) -> Element<'_, Message> {
+    use iced::widget::canvas::Canvas;
+    use iced::widget::{stack, Space as IcedSpace};
+    use readshot_ui::editor::{canvas::EditorCanvas, toolbar, ToolState};
+
     let Some(ed) = state.editor.as_ref() else {
         return container(text("(no capture)"))
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
     };
-    let img = iced::widget::image(ed.handle()).width(Length::Fill);
 
-    let make_btn = |label: &'static str, msg: Message| {
-        let mut b = button(label);
-        if !ed.busy {
-            b = b.on_press(msg);
+    let active_tool = ed.model.active_tool();
+    let active_color = ed.model.current_color();
+    let line_width = ed.model.current_line_width();
+    let busy = ed.busy;
+
+    // Top toolbar: tool buttons row, then color palette + width slider.
+    let tool_row = toolbar::TOOL_ORDER
+        .iter()
+        .fold(row![].spacing(4), |row, t| {
+            let label = tool_short_label(*t);
+            let is_active = *t == active_tool;
+            let style: fn(&Theme, button::Status) -> button::Style = if is_active {
+                |theme, status| {
+                    let mut s = button::primary(theme, status);
+                    s.background = Some(theme.extended_palette().primary.strong.color.into());
+                    s
+                }
+            } else {
+                button::secondary
+            };
+            let mut btn = button(text(label).size(12)).padding([6, 8]).style(style);
+            if !busy {
+                btn = btn.on_press(Message::EditorToolbar(
+                    readshot_ui::ToolbarMessage::SelectTool(*t),
+                ));
+            }
+            row.push(btn)
+        });
+
+    let palette_row = toolbar::PALETTE
+        .iter()
+        .fold(row![].spacing(3), |row, swatch| {
+            let is_selected = swatch_eq(*swatch, active_color);
+            let color = Color::from_rgba(swatch.r, swatch.g, swatch.b, swatch.a);
+            let mut btn = button(
+                Space::new()
+                    .width(Length::Fixed(18.0))
+                    .height(Length::Fixed(18.0)),
+            )
+            .padding(2)
+            .style(move |_theme, _status| {
+                let border = if is_selected {
+                    iced::Border {
+                        color: Color::WHITE,
+                        width: 2.0,
+                        radius: 4.0.into(),
+                    }
+                } else {
+                    iced::Border {
+                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.2),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    }
+                };
+                button::Style {
+                    background: Some(color.into()),
+                    text_color: Color::TRANSPARENT,
+                    border,
+                    ..Default::default()
+                }
+            });
+            if !busy {
+                btn = btn.on_press(Message::EditorToolbar(
+                    readshot_ui::ToolbarMessage::SelectColor(*swatch),
+                ));
+            }
+            row.push(btn)
+        });
+    let palette_row = palette_row.align_y(Alignment::Center);
+
+    let width_label = text(format!("{line_width:.0}px"))
+        .size(11)
+        .width(Length::Fixed(40.0));
+    let width_slider = iced::widget::slider(
+        toolbar::MIN_LINE_WIDTH..=toolbar::MAX_LINE_WIDTH,
+        line_width,
+        |v| Message::EditorToolbar(readshot_ui::ToolbarMessage::SetLineWidth(v)),
+    )
+    .step(0.5)
+    .width(Length::Fixed(140.0));
+
+    let undo_btn = {
+        let mut b = button(text("↶ Undo").size(12))
+            .padding([6, 8])
+            .style(button::secondary);
+        if !busy && ed.model.can_undo() {
+            b = b.on_press(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
+        }
+        b
+    };
+    let redo_btn = {
+        let mut b = button(text("↷ Redo").size(12))
+            .padding([6, 8])
+            .style(button::secondary);
+        if !busy && ed.model.can_redo() {
+            b = b.on_press(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo));
         }
         b
     };
 
+    let toolbar_row = container(
+        column![
+            tool_row,
+            row![
+                palette_row,
+                IcedSpace::new().width(Length::Fixed(12.0)),
+                width_label,
+                width_slider,
+                IcedSpace::new().width(Length::Fill),
+                undo_btn,
+                redo_btn,
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(6)
+        .padding(8),
+    )
+    .style(|theme: &Theme| {
+        let palette = theme.extended_palette();
+        container::Style {
+            background: Some(palette.background.weak.color.into()),
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    });
+
+    // Image area: the flattened image with the editor canvas stacked
+    // on top so the user's drag preview overlays the picture. The
+    // canvas Program publishes `CanvasMessage`; we map it through
+    // Element::map onto `Message::EditorCanvas` so the runtime's
+    // update loop can route it.
+    let canvas_program = EditorCanvas {
+        active_tool,
+        color: active_color,
+        line_width,
+        next_pin_number: ed.next_pin_number,
+    };
+    let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into();
+    let canvas: Element<'_, Message> = canvas.map(Message::EditorCanvas);
+    let image_layer = container(
+        iced::widget::image(ed.image_handle.clone())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .content_fit(iced::ContentFit::Contain),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .center_x(Length::Fill)
+    .center_y(Length::Fill);
+    let canvas_layer = container(canvas).width(Length::Fill).height(Length::Fill);
+    let image_area = container(stack![image_layer, canvas_layer])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(4);
+
+    // Bottom action bar — Save / Copy / Copy Text / Pin / Discard.
+    let action_btn = |label: &'static str, msg: Message, primary: bool| {
+        let style: fn(&Theme, button::Status) -> button::Style = if primary {
+            button::primary
+        } else {
+            button::secondary
+        };
+        let mut b = button(text(label).size(13)).padding([8, 14]).style(style);
+        if !busy {
+            b = b.on_press(msg);
+        }
+        b
+    };
     let actions = row![
-        make_btn("Save", Message::EditorSaveRequested),
-        make_btn("Copy", Message::EditorCopyImageRequested),
-        make_btn("Copy Text", Message::EditorCopyTextRequested),
-        make_btn("Discard", Message::EditorDiscardRequested),
+        action_btn("Save", Message::EditorSaveRequested, true),
+        action_btn("Copy", Message::EditorCopyImageRequested, false),
+        action_btn("Copy Text", Message::EditorCopyTextRequested, false),
+        action_btn("Discard", Message::EditorDiscardRequested, false),
     ]
     .spacing(8);
 
     let toast: Element<'_, Message> = match &ed.status {
-        Some(s) => text(s).into(),
+        Some(s) => text(s).size(12).into(),
         None => Space::new().height(Length::Fixed(0.0)).into(),
     };
 
+    let _ = ToolState::Select; // silence unused-import warnings on minor cfgs
     container(
-        column![img, actions, toast]
+        column![toolbar_row, image_area, actions, toast]
             .spacing(8)
-            .padding(12)
+            .padding(10)
             .align_x(Alignment::Start),
     )
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
+}
+
+/// Short readable labels for each tool button. Single glyphs / words
+/// keep the toolbar compact at small window widths.
+fn tool_short_label(tool: readshot_ui::editor::ToolState) -> &'static str {
+    use readshot_ui::editor::ToolState as T;
+    match tool {
+        T::Select => "Select",
+        T::Rectangle => "▭ Rect",
+        T::Ellipse => "◯ Oval",
+        T::Line => "／ Line",
+        T::Arrow => "→ Arrow",
+        T::Pen => "✎ Pen",
+        T::Highlighter => "▰ Mark",
+        T::Text => "T Text",
+        T::Blur => "◈ Blur",
+        T::Pixelate => "▦ Pixel",
+        T::NumberedPin => "① Pin",
+        T::Crop => "⬚ Crop",
+    }
+}
+
+fn swatch_eq(a: readshot_core::Rgba, b: readshot_core::Rgba) -> bool {
+    (a.r - b.r).abs() < 1e-3
+        && (a.g - b.g).abs() < 1e-3
+        && (a.b - b.b).abs() < 1e-3
+        && (a.a - b.a).abs() < 1e-3
 }
 
 fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {

@@ -1,39 +1,51 @@
 //! Editor canvas — the iced widget that lets the user *make* an
 //! annotation by clicking and dragging on the captured image.
 //!
-//! The widget is a thin event-to-message translator: it reduces a
-//! drag into a `CanvasMessage::CommitAnnotation(...)` once the user
-//! releases the mouse button. The composition root (Task 16) routes
-//! that message into [`EditorState::commit_annotation`]. Drawing the
-//! flat image-plus-annotations is done outside this widget — typically
-//! by a sibling `image()` widget showing
-//! [`EditorState::flatten`]'s output — because reusing
-//! `readshot-core`'s renderer is more accurate than redoing the work
-//! in iced primitives.
+//! The widget translates mouse events into [`CanvasMessage`] variants
+//! the runtime maps onto [`EditorState`] mutations. Three interaction
+//! modes are supported, keyed off the active [`ToolState`]:
 //!
-//! The current widget covers the **rect tools** (Rectangle, Ellipse,
-//! Blur, Pixelate, Crop) and **segment tools** (Line, Arrow). Pen,
-//! Highlighter, Text, and NumberedPin land in a follow-up — they need
-//! either a polyline accumulator (pen / highlighter) or a separate
-//! input modality (text dialog) that doesn't fit the same drag model.
+//! * **Rect tools** (Rectangle, Ellipse, Blur, Pixelate, Crop) and
+//!   **segment tools** (Line, Arrow) — drag from anchor to cursor;
+//!   release commits a single annotation.
+//! * **Freehand tools** (Pen, Highlighter) — accumulate a polyline as
+//!   the cursor moves; release commits a `Pen` or `Highlighter`
+//!   annotation with all the recorded points.
+//! * **Point tools** (NumberedPin) — single click commits a pin at
+//!   the click position. Text is handled separately (it needs a text
+//!   input modality the canvas can't host on its own).
+//!
+//! In addition to event translation, the canvas draws a *live preview*
+//! of the in-progress shape using the active tool's colour and line
+//! width — without it the user has no idea what they're about to
+//! commit.
 
-use iced::widget::canvas::{self, Event, Frame, Geometry};
-use iced::{mouse::Cursor, Point, Rectangle, Renderer, Theme};
+use iced::widget::canvas::{self, Event, Frame, Geometry, LineCap, LineJoin, Path, Stroke};
+use iced::{mouse::Cursor, Color, Point, Rectangle, Renderer, Theme};
 
 use readshot_core::{Annotation, PointLike, RectLike, Rgba as CoreRgba};
 
 use super::tool_state::ToolState;
 
-/// Canvas state: which corner the user grabbed, where the cursor is
-/// now, and which tool was active when the drag began (so a tool
-/// change mid-drag doesn't change semantics).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// Canvas state: tracks the kind of in-progress interaction so the
+/// `draw` step can paint the preview and the `update` step knows what
+/// to commit on button-release.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum DrawState {
     #[default]
     Idle,
+    /// Two-point drag — Rectangle, Ellipse, Line, Arrow, Blur,
+    /// Pixelate, Crop.
     Dragging {
         anchor: Point,
         cursor: Point,
+        tool_at_press: ToolState,
+    },
+    /// Polyline accumulator — Pen, Highlighter. Each `CursorMoved` on
+    /// a held button appends a point. The preview renders the entire
+    /// list as a continuous stroke.
+    Drawing {
+        points: Vec<Point>,
         tool_at_press: ToolState,
     },
 }
@@ -43,10 +55,15 @@ pub enum DrawState {
 pub enum CanvasMessage {
     /// User pressed the mouse button — preview drawing begins.
     DragStarted,
-    /// User is dragging — the editor may want to repaint the
-    /// preview overlay.
+    /// User is dragging a rect / segment tool — the editor may want
+    /// to repaint the preview overlay.
     DragMoved(Rectangle),
-    /// User finished a drag with a non-degenerate rect/segment;
+    /// User is freehand-drawing — the preview is a polyline. Carries
+    /// the latest list of points so the editor's redraw loop can
+    /// rebuild the dashed stroke.
+    PolylineMoved(Vec<PointLike>),
+    /// User finished a drag with a non-degenerate rect/segment, or
+    /// finished a freehand stroke, or single-clicked a point tool;
     /// caller should append the annotation and snapshot history.
     CommitAnnotation(Annotation),
     /// User pressed Escape or released a zero-area drag — drop
@@ -56,11 +73,14 @@ pub enum CanvasMessage {
 
 /// `iced::widget::canvas::Program` impl. Holds the styling parameters
 /// (colour + line width) the editor wants to use when an annotation
-/// gets committed.
+/// gets committed, plus the next pin number for `NumberedPin`.
 pub struct EditorCanvas {
     pub active_tool: ToolState,
     pub color: CoreRgba,
     pub line_width: f32,
+    /// Number to stamp on the next NumberedPin. The editor session
+    /// increments this on commit.
+    pub next_pin_number: u32,
 }
 
 impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
@@ -75,23 +95,45 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
     ) -> Option<canvas::Action<CanvasMessage>> {
         match event {
             Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
-                if let Some(point) = cursor.position_in(bounds) {
-                    *state = DrawState::Dragging {
-                        anchor: point,
-                        cursor: point,
+                let point = cursor.position_in(bounds)?;
+                // Point tools commit on press, no drag required.
+                if self.active_tool.is_point_tool() {
+                    if let Some(annotation) = annotation_for_point(
+                        self.active_tool,
+                        point,
+                        self.color,
+                        self.line_width,
+                        self.next_pin_number,
+                    ) {
+                        return Some(
+                            canvas::Action::publish(CanvasMessage::CommitAnnotation(annotation))
+                                .and_capture(),
+                        );
+                    }
+                }
+                // Freehand tools start a polyline. The first point is
+                // the press location; cursor moves append more.
+                if self.active_tool.is_freehand_tool() {
+                    *state = DrawState::Drawing {
+                        points: vec![point],
                         tool_at_press: self.active_tool,
                     };
                     return Some(canvas::Action::publish(CanvasMessage::DragStarted).and_capture());
                 }
-                None
+                // Default: rect / segment drag.
+                *state = DrawState::Dragging {
+                    anchor: point,
+                    cursor: point,
+                    tool_at_press: self.active_tool,
+                };
+                Some(canvas::Action::publish(CanvasMessage::DragStarted).and_capture())
             }
-            Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
-                if let DrawState::Dragging {
+            Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => match state {
+                DrawState::Dragging {
                     anchor,
                     cursor: cur,
                     ..
-                } = state
-                {
+                } => {
                     if let Some(point) = cursor.position_in(bounds) {
                         *cur = point;
                         let preview_rect = rect_from_points(*anchor, point);
@@ -100,67 +142,319 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                                 .and_capture(),
                         );
                     }
+                    None
                 }
-                None
-            }
-            Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
-                if let DrawState::Dragging {
-                    anchor,
-                    cursor: cur,
-                    tool_at_press,
-                } = *state
-                {
-                    *state = DrawState::Idle;
-                    let dx = anchor.x - cur.x;
-                    let dy = anchor.y - cur.y;
-                    let len_sq = dx * dx + dy * dy;
-                    if len_sq < 0.5 {
-                        return Some(
-                            canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
-                        );
-                    }
-
-                    let annotation = annotation_for_drag(
-                        tool_at_press,
-                        anchor,
-                        cur,
-                        self.color,
-                        self.line_width,
-                    );
-                    return match annotation {
-                        Some(a) => Some(
-                            canvas::Action::publish(CanvasMessage::CommitAnnotation(a))
-                                .and_capture(),
-                        ),
-                        None => {
-                            Some(canvas::Action::publish(CanvasMessage::Cancelled).and_capture())
+                DrawState::Drawing { points, .. } => {
+                    if let Some(point) = cursor.position_in(bounds) {
+                        // Drop near-duplicate points so the polyline
+                        // doesn't blow up to thousands of nodes for a
+                        // slow drag — the renderer is fine with sparse
+                        // polylines.
+                        let last = points.last().copied();
+                        let should_keep = match last {
+                            Some(p) => (p.x - point.x).hypot(p.y - point.y) >= 1.5,
+                            None => true,
+                        };
+                        if should_keep {
+                            points.push(point);
+                            let snapshot: Vec<PointLike> =
+                                points.iter().map(|p| PointLike::new(p.x, p.y)).collect();
+                            return Some(
+                                canvas::Action::publish(CanvasMessage::PolylineMoved(snapshot))
+                                    .and_capture(),
+                            );
                         }
-                    };
+                    }
+                    None
                 }
-                None
+                DrawState::Idle => None,
+            },
+            Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                let prev = std::mem::take(state);
+                match prev {
+                    DrawState::Dragging {
+                        anchor,
+                        cursor: cur,
+                        tool_at_press,
+                    } => {
+                        let dx = anchor.x - cur.x;
+                        let dy = anchor.y - cur.y;
+                        let len_sq = dx * dx + dy * dy;
+                        if len_sq < 0.5 {
+                            return Some(
+                                canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
+                            );
+                        }
+                        let annotation = annotation_for_drag(
+                            tool_at_press,
+                            anchor,
+                            cur,
+                            self.color,
+                            self.line_width,
+                        );
+                        match annotation {
+                            Some(a) => Some(
+                                canvas::Action::publish(CanvasMessage::CommitAnnotation(a))
+                                    .and_capture(),
+                            ),
+                            None => Some(
+                                canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
+                            ),
+                        }
+                    }
+                    DrawState::Drawing {
+                        points,
+                        tool_at_press,
+                    } => {
+                        if points.len() < 2 {
+                            return Some(
+                                canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
+                            );
+                        }
+                        let pts: Vec<PointLike> =
+                            points.iter().map(|p| PointLike::new(p.x, p.y)).collect();
+                        let annotation = match tool_at_press {
+                            ToolState::Pen => Some(Annotation::Pen {
+                                points: pts,
+                                color: self.color,
+                                line_width: self.line_width,
+                            }),
+                            ToolState::Highlighter => Some(Annotation::Highlighter {
+                                points: pts,
+                                // Highlighter is semi-transparent so the
+                                // text underneath still reads.
+                                color: CoreRgba::new(
+                                    self.color.r,
+                                    self.color.g,
+                                    self.color.b,
+                                    0.45,
+                                ),
+                                // Highlighter is intentionally fat —
+                                // grow the stroke if the slider is at a
+                                // small value so it actually highlights.
+                                line_width: self.line_width.max(12.0),
+                            }),
+                            _ => None,
+                        };
+                        match annotation {
+                            Some(a) => Some(
+                                canvas::Action::publish(CanvasMessage::CommitAnnotation(a))
+                                    .and_capture(),
+                            ),
+                            None => Some(
+                                canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
+                            ),
+                        }
+                    }
+                    DrawState::Idle => None,
+                }
+            }
+            Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                ..
+            }) => {
+                *state = DrawState::Idle;
+                Some(canvas::Action::publish(CanvasMessage::Cancelled).and_capture())
             }
             _ => None,
         }
     }
 
-    /// No-op draw — the editor renders the *flattened* base+annotations
-    /// image via a sibling `iced::widget::image` widget powered by
-    /// [`crate::editor::EditorState::flatten`]. Reusing
-    /// `readshot-core::render` is more accurate than rebuilding the
-    /// scene in iced canvas primitives, so this widget is event-only.
+    /// Paints a *live preview* of the in-progress shape so the user
+    /// sees what they're about to commit. Committed annotations are
+    /// rendered into the flattened base via `readshot-core::render`
+    /// and shown by a sibling `iced::widget::image`; the canvas only
+    /// draws the transient drag.
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
-        // Allocate an empty frame at the bounds size so the widget
-        // still occupies its layout slot. No paint commands are
-        // issued.
-        let frame = Frame::new(renderer, bounds.size());
+        let mut frame = Frame::new(renderer, bounds.size());
+        let stroke_color = Color::from_rgba(self.color.r, self.color.g, self.color.b, 1.0);
+        let preview_stroke = Stroke::default()
+            .with_color(stroke_color)
+            .with_width(self.line_width.max(1.0))
+            .with_line_cap(LineCap::Round)
+            .with_line_join(LineJoin::Round);
+
+        match state {
+            DrawState::Idle => {}
+            DrawState::Dragging {
+                anchor,
+                cursor: cur,
+                tool_at_press,
+            } => {
+                let rect = rect_from_points(*anchor, *cur);
+                if rect.width.abs() < 0.5 || rect.height.abs() < 0.5 {
+                    // Don't draw anything for sub-pixel drags; iced's
+                    // canvas can't represent them and they'd flash on
+                    // the first cursor-moved tick anyway.
+                } else {
+                    match tool_at_press {
+                        ToolState::Rectangle | ToolState::Crop => {
+                            let path = Path::rectangle(
+                                Point::new(rect.x, rect.y),
+                                iced::Size::new(rect.width, rect.height),
+                            );
+                            frame.stroke(&path, preview_stroke);
+                        }
+                        ToolState::Ellipse => {
+                            let center =
+                                Point::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
+                            let radii = (rect.width * 0.5, rect.height * 0.5);
+                            let path = Path::new(|builder| {
+                                ellipse_path(builder, center, radii);
+                            });
+                            frame.stroke(&path, preview_stroke);
+                        }
+                        ToolState::Line => {
+                            let path = Path::line(*anchor, *cur);
+                            frame.stroke(&path, preview_stroke);
+                        }
+                        ToolState::Arrow => {
+                            // Shaft + simple arrowhead. The committed
+                            // annotation gets a polished arrowhead via
+                            // readshot-core::arrowhead; the preview is
+                            // a hint, not the final stroke.
+                            let path = Path::line(*anchor, *cur);
+                            frame.stroke(&path, preview_stroke);
+                            let head = arrowhead_path(*anchor, *cur, self.line_width.max(2.0));
+                            frame.stroke(&head, preview_stroke);
+                        }
+                        ToolState::Blur | ToolState::Pixelate => {
+                            // Visualise the area that will be blurred /
+                            // pixelated as a translucent rectangle so
+                            // the user sees what they'd hide.
+                            let path = Path::rectangle(
+                                Point::new(rect.x, rect.y),
+                                iced::Size::new(rect.width, rect.height),
+                            );
+                            frame.fill(
+                                &path,
+                                Color::from_rgba(self.color.r, self.color.g, self.color.b, 0.18),
+                            );
+                            frame.stroke(&path, preview_stroke);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            DrawState::Drawing {
+                points,
+                tool_at_press,
+            } => {
+                if points.len() >= 2 {
+                    let path = Path::new(|builder| {
+                        builder.move_to(points[0]);
+                        for p in points.iter().skip(1) {
+                            builder.line_to(*p);
+                        }
+                    });
+                    let stroke = match tool_at_press {
+                        ToolState::Highlighter => {
+                            // Wider, semi-transparent so it reads as a
+                            // highlight even at preview time.
+                            Stroke::default()
+                                .with_color(Color::from_rgba(
+                                    self.color.r,
+                                    self.color.g,
+                                    self.color.b,
+                                    0.45,
+                                ))
+                                .with_width(self.line_width.max(12.0))
+                                .with_line_cap(LineCap::Round)
+                                .with_line_join(LineJoin::Round)
+                        }
+                        _ => preview_stroke,
+                    };
+                    frame.stroke(&path, stroke);
+                }
+            }
+        }
+
         vec![frame.into_geometry()]
+    }
+}
+
+/// Build an ellipse path approximation using cubic beziers — iced's
+/// canvas builder doesn't ship a native ellipse primitive (only
+/// circles), but four arcs reconstruct one cleanly enough for a
+/// preview.
+fn ellipse_path(builder: &mut canvas::path::Builder, center: Point, (rx, ry): (f32, f32)) {
+    let kappa = 0.552_284_8_f32;
+    let cx = center.x;
+    let cy = center.y;
+    let ox = rx * kappa;
+    let oy = ry * kappa;
+    builder.move_to(Point::new(cx - rx, cy));
+    builder.bezier_curve_to(
+        Point::new(cx - rx, cy - oy),
+        Point::new(cx - ox, cy - ry),
+        Point::new(cx, cy - ry),
+    );
+    builder.bezier_curve_to(
+        Point::new(cx + ox, cy - ry),
+        Point::new(cx + rx, cy - oy),
+        Point::new(cx + rx, cy),
+    );
+    builder.bezier_curve_to(
+        Point::new(cx + rx, cy + oy),
+        Point::new(cx + ox, cy + ry),
+        Point::new(cx, cy + ry),
+    );
+    builder.bezier_curve_to(
+        Point::new(cx - ox, cy + ry),
+        Point::new(cx - rx, cy + oy),
+        Point::new(cx - rx, cy),
+    );
+}
+
+/// Two short strokes converging on the arrow tip — a preview-quality
+/// arrowhead. The committed `Annotation::Arrow` gets a more polished
+/// head from `readshot-core::arrowhead`.
+fn arrowhead_path(_from: Point, to: Point, line_width: f32) -> Path {
+    Path::new(|builder| {
+        let dx = to.x - _from.x;
+        let dy = to.y - _from.y;
+        let len = (dx * dx + dy * dy).sqrt().max(1.0);
+        let ux = dx / len;
+        let uy = dy / len;
+        // Perpendicular unit vector.
+        let px = -uy;
+        let py = ux;
+        let head_len = (line_width * 4.0).clamp(8.0, 28.0);
+        let head_w = head_len * 0.55;
+        let base_x = to.x - ux * head_len;
+        let base_y = to.y - uy * head_len;
+        let left = Point::new(base_x + px * head_w, base_y + py * head_w);
+        let right = Point::new(base_x - px * head_w, base_y - py * head_w);
+        builder.move_to(left);
+        builder.line_to(to);
+        builder.line_to(right);
+    })
+}
+
+/// Translate a single click for a point tool into an annotation.
+/// NumberedPin is the only one wired today; Text needs a separate
+/// input modality and is handled outside the canvas.
+pub fn annotation_for_point(
+    tool: ToolState,
+    point: Point,
+    color: CoreRgba,
+    _line_width: f32,
+    next_pin_number: u32,
+) -> Option<Annotation> {
+    match tool {
+        ToolState::NumberedPin => Some(Annotation::NumberedPin {
+            origin: PointLike::new(point.x, point.y),
+            number: next_pin_number,
+            color,
+        }),
+        _ => None,
     }
 }
 

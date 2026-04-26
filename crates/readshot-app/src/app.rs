@@ -195,7 +195,7 @@ pub struct App {
     pub tray: Option<crate::tray::TrayController>,
     /// Active editor session, if any. Phase C only allows one
     /// editor at a time; opening a new one replaces the old.
-    pub editor: Option<crate::editor::EditorState>,
+    pub editor: Option<crate::editor::EditorSession>,
     /// `window::Id` → display info for every live overlay window.
     /// One entry per monitor when the overlay flow is active; empty
     /// otherwise. The runtime uses this to look up the display id for
