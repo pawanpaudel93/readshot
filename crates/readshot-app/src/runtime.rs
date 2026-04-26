@@ -288,32 +288,42 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // and only react when the editor window is the focused one
         // (the canvas captures key presses at the widget level for
         // Escape; that's why Esc isn't handled here).
-        subs.push(iced::event::listen_with(|event, _status, _window| {
+        subs.push(iced::event::listen_with(|event, status, _window| {
+            use iced::event::Status;
             use iced::keyboard::{Event as KbEvent, Key};
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
                 let cmd = modifiers.command();
+                // ⌘-shortcuts are global to the editor — fire even
+                // if a widget already saw the event.
                 match (&key, cmd, modifiers.shift()) {
                     (Key::Character(c), true, false) if c.eq_ignore_ascii_case("z") => {
-                        Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo))
+                        return Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
                     }
                     (Key::Character(c), true, true) if c.eq_ignore_ascii_case("z") => {
-                        Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo))
+                        return Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo));
                     }
                     (Key::Character(c), true, false) if c.eq_ignore_ascii_case("s") => {
-                        Some(Message::EditorSaveRequested)
+                        return Some(Message::EditorSaveRequested);
                     }
-                    // Escape inside the editor cancels a pending
-                    // text input (no-op if none). We deliberately do
-                    // *not* close the editor on Esc — too easy to
-                    // hit by accident.
                     (Key::Named(iced::keyboard::key::Named::Escape), _, _) => {
-                        Some(Message::EditorTextCancel)
+                        return Some(Message::EditorTextCancel);
                     }
-                    _ => None,
+                    _ => {}
                 }
-            } else {
-                None
+                // Single-letter tool shortcuts only fire when no
+                // widget has captured the event — i.e. the user
+                // isn't typing into the text-input banner.
+                if status == Status::Ignored && !cmd && !modifiers.alt() && !modifiers.control() {
+                    if let Key::Character(c) = &key {
+                        if let Some(t) = tool_for_key(c.as_str()) {
+                            return Some(Message::EditorToolbar(
+                                readshot_ui::ToolbarMessage::SelectTool(t),
+                            ));
+                        }
+                    }
+                }
             }
+            None
         }));
     }
     Subscription::batch(subs)
@@ -770,7 +780,7 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
 
 fn editor_view(state: &App) -> Element<'_, Message> {
     use iced::widget::canvas::Canvas;
-    use iced::widget::{stack, Space as IcedSpace};
+    use iced::widget::{stack, tooltip, Space as IcedSpace};
     use readshot_ui::editor::{canvas::EditorCanvas, toolbar, ToolState};
 
     let Some(ed) = state.editor.as_ref() else {
@@ -785,10 +795,11 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let line_width = ed.model.current_line_width();
     let busy = ed.busy;
 
-    // ===== Toolbar =====
-    // Tools are visually grouped so the eye finds them quickly:
-    // Select / shapes / freehand / effects / pin / crop. Thin
-    // dividers separate the groups.
+    // ===== Toolbar — slim, icon-only =====
+    // Tools are grouped: Select | shapes | freehand | effects | pin |
+    // crop. Each button is a 32×32 square wrapped in a tooltip that
+    // shows the long name + keyboard shortcut, so the visible
+    // toolbar can stay compact without losing affordance.
     let tool_groups: &[&[ToolState]] = &[
         &[ToolState::Select],
         &[
@@ -803,61 +814,52 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         &[ToolState::Crop],
     ];
 
-    let mut tool_row = row![].spacing(4).align_y(Alignment::Center);
+    let mut tool_row = row![].spacing(3).align_y(Alignment::Center);
     for (idx, group) in tool_groups.iter().enumerate() {
         if idx > 0 {
             tool_row = tool_row.push(toolbar_divider());
         }
         for t in group.iter() {
-            let label = tool_short_label(*t);
-            let is_active = *t == active_tool;
-            let mut btn = button(text(label).size(12).color(Color::WHITE))
-                .padding([6, 10])
-                .style(move |theme: &Theme, status| toolbar_button_style(theme, status, is_active));
-            if !busy {
-                btn = btn.on_press(Message::EditorToolbar(
-                    readshot_ui::ToolbarMessage::SelectTool(*t),
-                ));
-            }
-            tool_row = tool_row.push(btn);
+            tool_row = tool_row.push(tool_button(*t, active_tool, busy));
         }
     }
 
+    // ===== Color palette — 26×26 swatches =====
     let palette_row = toolbar::PALETTE.iter().fold(
-        row![].spacing(4).align_y(Alignment::Center),
+        row![].spacing(5).align_y(Alignment::Center),
         |row, swatch| {
             let is_selected = swatch_eq(*swatch, active_color);
             let color = Color::from_rgba(swatch.r, swatch.g, swatch.b, swatch.a);
             let mut btn = button(
                 IcedSpace::new()
-                    .width(Length::Fixed(18.0))
-                    .height(Length::Fixed(18.0)),
+                    .width(Length::Fixed(20.0))
+                    .height(Length::Fixed(20.0)),
             )
             .padding(0)
             .style(move |_theme, status| {
-                let outer = if is_selected {
+                let border = if is_selected {
                     iced::Border {
                         color: Color::WHITE,
-                        width: 2.0,
-                        radius: 4.0.into(),
+                        width: 2.5,
+                        radius: 6.0.into(),
                     }
                 } else if matches!(status, button::Status::Hovered) {
                     iced::Border {
-                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.6),
+                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.55),
                         width: 1.5,
-                        radius: 4.0.into(),
+                        radius: 6.0.into(),
                     }
                 } else {
                     iced::Border {
                         color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
                         width: 1.0,
-                        radius: 4.0.into(),
+                        radius: 6.0.into(),
                     }
                 };
                 button::Style {
                     background: Some(color.into()),
                     text_color: Color::TRANSPARENT,
-                    border: outer,
+                    border,
                     ..Default::default()
                 }
             });
@@ -872,37 +874,33 @@ fn editor_view(state: &App) -> Element<'_, Message> {
 
     let width_label = text(format!("{line_width:.0}px"))
         .size(11)
-        .width(Length::Fixed(36.0));
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7))
+        .width(Length::Fixed(34.0));
     let width_slider = iced::widget::slider(
         toolbar::MIN_LINE_WIDTH..=toolbar::MAX_LINE_WIDTH,
         line_width,
         |v| Message::EditorToolbar(readshot_ui::ToolbarMessage::SetLineWidth(v)),
     )
     .step(0.5)
-    .width(Length::Fixed(150.0));
+    .width(Length::Fixed(140.0));
 
-    let undo_btn = {
-        let enabled = !busy && ed.model.can_undo();
-        let mut b = button(text("↶ Undo").size(12).color(Color::WHITE))
-            .padding([6, 10])
-            .style(move |theme: &Theme, status| toolbar_ghost_style(theme, status, enabled));
-        if enabled {
-            b = b.on_press(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
-        }
-        b
-    };
-    let redo_btn = {
-        let enabled = !busy && ed.model.can_redo();
-        let mut b = button(text("↷ Redo").size(12).color(Color::WHITE))
-            .padding([6, 10])
-            .style(move |theme: &Theme, status| toolbar_ghost_style(theme, status, enabled));
-        if enabled {
-            b = b.on_press(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo));
-        }
-        b
-    };
+    let undo_btn = ghost_icon_button("↶", "Undo (⌘Z)", !busy && ed.model.can_undo(), || {
+        Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)
+    });
+    let redo_btn = ghost_icon_button(
+        "↷",
+        "Redo (⌘⇧Z)",
+        !busy && ed.model.can_redo(),
+        || Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
+    );
 
-    let secondary_row = row![
+    // Single combined toolbar: tools | divider | colors | width |
+    // spacer | undo redo. Wraps gracefully if the window narrows by
+    // staying horizontally scrollable in spirit (we let iced handle
+    // overflow; in practice 1100px fits everything).
+    let toolbar_inner = row![
+        tool_row,
+        toolbar_divider(),
         palette_row,
         toolbar_divider(),
         width_label,
@@ -911,23 +909,18 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         undo_btn,
         redo_btn,
     ]
-    .spacing(8)
-    .align_y(Alignment::Center);
+    .spacing(10)
+    .align_y(Alignment::Center)
+    .padding([6, 10]);
 
-    let toolbar_row = container(
-        column![tool_row, secondary_row]
-            .spacing(8)
-            .padding(10)
-            .align_x(Alignment::Start),
-    )
-    .style(|theme: &Theme| {
+    let toolbar_row = container(toolbar_inner).style(|theme: &Theme| {
         let palette = theme.extended_palette();
         container::Style {
             background: Some(palette.background.weak.color.into()),
             border: iced::Border {
                 color: palette.background.strong.color,
                 width: 1.0,
-                radius: 8.0.into(),
+                radius: 10.0.into(),
             },
             ..Default::default()
         }
@@ -935,9 +928,9 @@ fn editor_view(state: &App) -> Element<'_, Message> {
 
     // ===== Image area — letterboxed image with canvas overlay =====
     // Both layers share the same container; the canvas Program knows
-    // the image's pixel dimensions so it can convert cursor positions
-    // into image coordinates regardless of zoom or letterbox. See
-    // `canvas_to_image` in readshot-ui.
+    // the image's effective dimensions + crop offset so cursor maps
+    // to base-image coordinates regardless of zoom / letterbox /
+    // crop. See `canvas_to_base` in readshot-ui.
     let canvas_program = EditorCanvas {
         active_tool,
         color: active_color,
@@ -966,59 +959,44 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let image_area = container(stack![image_layer, canvas_layer])
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding(8)
+        .padding(0)
         .style(|theme: &Theme| {
             let palette = theme.extended_palette();
             container::Style {
-                background: Some(Color::from_rgba(0.08, 0.09, 0.12, 1.0).into()),
+                // Subtle inset rather than the previous near-black
+                // bezel — lets the actual image be the visual focus.
+                background: Some(Color::from_rgba(0.13, 0.14, 0.18, 1.0).into()),
                 border: iced::Border {
                     color: palette.background.strong.color,
                     width: 1.0,
-                    radius: 8.0.into(),
+                    radius: 10.0.into(),
                 },
                 ..Default::default()
             }
         });
 
-    // ===== Action bar =====
+    // ===== Bottom row — dims/hint + actions in one strip =====
     let action_btn = |label: &'static str, msg: Message, kind: ActionKind| {
         let lbl = text(label).size(13).color(Color::WHITE);
         let mut b = button(lbl)
-            .padding([10, 18])
+            .padding([8, 16])
             .style(move |theme, status| action_button_style(theme, status, kind));
         if !busy {
             b = b.on_press(msg);
         }
         b
     };
-    let action_left = row![action_btn(
-        "Discard",
-        Message::EditorDiscardRequested,
-        ActionKind::Danger
-    )];
-    let action_right = row![
-        action_btn(
-            "Copy Text",
-            Message::EditorCopyTextRequested,
-            ActionKind::Secondary
-        ),
-        action_btn(
-            "Copy",
-            Message::EditorCopyImageRequested,
-            ActionKind::Secondary
-        ),
-        action_btn("Save", Message::EditorSaveRequested, ActionKind::Primary),
-    ]
-    .spacing(8);
 
-    // ===== Status / hint bar =====
     let (img_w, img_h) = ed.effective_image_size();
     let dims = text(format!("{img_w} × {img_h} px"))
         .size(11)
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55));
+    let bullet = text("·")
+        .size(11)
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.35));
     let hint = text(tool_hint(active_tool))
         .size(11)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7));
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72));
     let toast: Element<'_, Message> = match ed.status.as_deref() {
         Some(s) => text(s)
             .size(11)
@@ -1026,21 +1004,38 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             .into(),
         None => IcedSpace::new().height(Length::Fixed(0.0)).into(),
     };
-    let status_bar = row![
-        dims,
-        IcedSpace::new().width(Length::Fixed(12.0)),
-        hint,
-        IcedSpace::new().width(Length::Fill),
-        toast,
-    ]
-    .align_y(Alignment::Center)
-    .spacing(4);
 
-    // Text-input banner — only visible while a Text-tool click is
-    // pending. Sits between the image and the action bar so it's
-    // close to where the cursor currently is, with Enter to commit
-    // and Escape to cancel (handled inline + via the existing
-    // editor keyboard subscription).
+    let bottom_row = row![
+        dims,
+        IcedSpace::new().width(Length::Fixed(8.0)),
+        bullet,
+        IcedSpace::new().width(Length::Fixed(8.0)),
+        hint,
+        IcedSpace::new().width(Length::Fixed(8.0)),
+        toast,
+        IcedSpace::new().width(Length::Fill),
+        action_btn(
+            "Discard",
+            Message::EditorDiscardRequested,
+            ActionKind::Danger,
+        ),
+        IcedSpace::new().width(Length::Fixed(8.0)),
+        action_btn(
+            "Copy Text",
+            Message::EditorCopyTextRequested,
+            ActionKind::Secondary,
+        ),
+        action_btn(
+            "Copy",
+            Message::EditorCopyImageRequested,
+            ActionKind::Secondary,
+        ),
+        action_btn("Save", Message::EditorSaveRequested, ActionKind::Primary,),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+
+    // ===== Text-input banner =====
     let text_banner: Element<'_, Message> = if let Some(pending) = ed.pending_text.as_ref() {
         let input = iced::widget::text_input("Type and press Enter…", &pending.content)
             .on_input(Message::EditorTextChanged)
@@ -1058,14 +1053,14 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             .on_press(Message::EditorTextCancel);
         container(
             row![
-                text("✎ Text").size(12).color(Color::WHITE),
+                text("T").size(13).color(Color::WHITE),
                 input,
                 commit,
                 cancel,
             ]
             .spacing(8)
             .align_y(Alignment::Center)
-            .padding(8),
+            .padding(6),
         )
         .style(|theme: &Theme| {
             let palette = theme.extended_palette();
@@ -1073,8 +1068,8 @@ fn editor_view(state: &App) -> Element<'_, Message> {
                 background: Some(palette.background.weak.color.into()),
                 border: iced::Border {
                     color: palette.primary.base.color,
-                    width: 1.0,
-                    radius: 8.0.into(),
+                    width: 1.5,
+                    radius: 10.0.into(),
                 },
                 ..Default::default()
             }
@@ -1084,26 +1079,104 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         IcedSpace::new().height(Length::Fixed(0.0)).into()
     };
 
+    let _ = tooltip::Position::Bottom; // kept for future direct uses
     container(
-        column![
-            toolbar_row,
-            image_area,
-            text_banner,
-            row![
-                action_left,
-                IcedSpace::new().width(Length::Fill),
-                action_right
-            ]
-            .align_y(Alignment::Center),
-            status_bar,
-        ]
-        .spacing(8)
-        .padding(10)
-        .align_x(Alignment::Start),
+        column![toolbar_row, image_area, text_banner, bottom_row]
+            .spacing(8)
+            .padding(10)
+            .align_x(Alignment::Start),
     )
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
+}
+
+/// One toolbar tool button with a hover tooltip + keyboard hint.
+fn tool_button<'a>(
+    t: readshot_ui::editor::ToolState,
+    active: readshot_ui::editor::ToolState,
+    busy: bool,
+) -> Element<'a, Message> {
+    use iced::widget::tooltip;
+    let glyph = tool_glyph(t);
+    let (long, key) = tool_label_and_key(t);
+    let is_active = t == active;
+    let mut b = button(
+        text(glyph)
+            .size(15)
+            .color(Color::WHITE)
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center)
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .padding(0)
+    .width(Length::Fixed(32.0))
+    .height(Length::Fixed(32.0))
+    .style(move |theme: &Theme, status| toolbar_button_style(theme, status, is_active));
+    if !busy {
+        b = b.on_press(Message::EditorToolbar(
+            readshot_ui::ToolbarMessage::SelectTool(t),
+        ));
+    }
+    let tip = container(text(format!("{long}  {key}")).size(11).color(Color::WHITE))
+        .padding([4, 8])
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.15),
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..Default::default()
+        });
+    tooltip::Tooltip::new(b, tip, tooltip::Position::Bottom)
+        .gap(4)
+        .into()
+}
+
+/// Compact ghost-style action button used for Undo / Redo. `gen`
+/// produces the message lazily so we only build it when enabled.
+fn ghost_icon_button<'a, F>(
+    glyph: &'static str,
+    tip: &'static str,
+    enabled: bool,
+    gen: F,
+) -> Element<'a, Message>
+where
+    F: Fn() -> Message + 'a,
+{
+    use iced::widget::tooltip;
+    let mut b = button(
+        text(glyph)
+            .size(15)
+            .color(Color::WHITE)
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center)
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .padding(0)
+    .width(Length::Fixed(32.0))
+    .height(Length::Fixed(32.0))
+    .style(move |theme: &Theme, status| toolbar_ghost_style(theme, status, enabled));
+    if enabled {
+        b = b.on_press(gen());
+    }
+    let pop = container(text(tip).size(11).color(Color::WHITE))
+        .padding([4, 8])
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.15),
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..Default::default()
+        });
+    tooltip::Tooltip::new(b, pop, tooltip::Position::Bottom)
+        .gap(4)
+        .into()
 }
 
 /// 1px vertical divider between toolbar groups.
@@ -1201,23 +1274,66 @@ fn action_button_style(theme: &Theme, status: button::Status, kind: ActionKind) 
     }
 }
 
-/// Short readable labels for each tool button. Single glyphs + word
-/// keep the toolbar compact at small window widths.
-fn tool_short_label(tool: readshot_ui::editor::ToolState) -> &'static str {
+/// One-glyph icon for each tool — used inside the 32×32 square
+/// toolbar buttons. The full name + keyboard shortcut live in the
+/// hover tooltip via [`tool_label_and_key`].
+fn tool_glyph(tool: readshot_ui::editor::ToolState) -> &'static str {
     use readshot_ui::editor::ToolState as T;
     match tool {
-        T::Select => "↖ Select",
-        T::Rectangle => "▭ Rect",
-        T::Ellipse => "◯ Oval",
-        T::Line => "／ Line",
-        T::Arrow => "→ Arrow",
-        T::Pen => "✎ Pen",
-        T::Highlighter => "▰ Mark",
-        T::Text => "T Text",
-        T::Blur => "◈ Blur",
-        T::Pixelate => "▦ Pixel",
-        T::NumberedPin => "① Pin",
-        T::Crop => "⬚ Crop",
+        T::Select => "↖",
+        T::Rectangle => "▭",
+        T::Ellipse => "◯",
+        T::Line => "／",
+        T::Arrow => "→",
+        T::Pen => "✎",
+        T::Highlighter => "▰",
+        T::Text => "T",
+        T::Blur => "◈",
+        T::Pixelate => "▦",
+        T::NumberedPin => "①",
+        T::Crop => "⬚",
+    }
+}
+
+/// Long name + keyboard shortcut shown in the tooltip when the user
+/// hovers a tool button. Keys mirror common screenshot-editor muscle
+/// memory (V/R/O/L/A/P/H/T/B/X/N/C).
+fn tool_label_and_key(tool: readshot_ui::editor::ToolState) -> (&'static str, &'static str) {
+    use readshot_ui::editor::ToolState as T;
+    match tool {
+        T::Select => ("Select", "V"),
+        T::Rectangle => ("Rectangle", "R"),
+        T::Ellipse => ("Ellipse", "O"),
+        T::Line => ("Line", "L"),
+        T::Arrow => ("Arrow", "A"),
+        T::Pen => ("Pen", "P"),
+        T::Highlighter => ("Highlighter", "H"),
+        T::Text => ("Text", "T"),
+        T::Blur => ("Blur", "B"),
+        T::Pixelate => ("Pixelate", "X"),
+        T::NumberedPin => ("Numbered pin", "N"),
+        T::Crop => ("Crop", "C"),
+    }
+}
+
+/// Map a single character to a tool. Used by the editor keyboard
+/// subscription so muscle-memory shortcuts work without modifiers.
+fn tool_for_key(c: &str) -> Option<readshot_ui::editor::ToolState> {
+    use readshot_ui::editor::ToolState as T;
+    match c.to_ascii_lowercase().as_str() {
+        "v" => Some(T::Select),
+        "r" => Some(T::Rectangle),
+        "o" => Some(T::Ellipse),
+        "l" => Some(T::Line),
+        "a" => Some(T::Arrow),
+        "p" => Some(T::Pen),
+        "h" => Some(T::Highlighter),
+        "t" => Some(T::Text),
+        "b" => Some(T::Blur),
+        "x" => Some(T::Pixelate),
+        "n" => Some(T::NumberedPin),
+        "c" => Some(T::Crop),
+        _ => None,
     }
 }
 

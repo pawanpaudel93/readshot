@@ -492,6 +492,24 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
 
         vec![frame.into_geometry()]
     }
+
+    /// Tool-aware cursor — crosshair for shape / line / drag tools,
+    /// text I-beam for the Text tool, and the default arrow for
+    /// Select. Returned cursors only apply while the canvas has the
+    /// pointer; the iced runtime falls back to platform default
+    /// otherwise.
+    fn mouse_interaction(
+        &self,
+        _state: &Self::State,
+        _bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> iced::mouse::Interaction {
+        match self.active_tool {
+            ToolState::Select => iced::mouse::Interaction::default(),
+            ToolState::Text => iced::mouse::Interaction::Text,
+            _ => iced::mouse::Interaction::Crosshair,
+        }
+    }
 }
 
 /// Build an ellipse path approximation using cubic beziers — iced's
