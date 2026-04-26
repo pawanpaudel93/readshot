@@ -41,6 +41,11 @@ pub enum WindowKind {
     /// Phase C ships the action row only (Save / Copy / Copy Text /
     /// Discard); annotation tools land in a follow-up.
     Editor,
+    /// Floating "pin" window — a borderless, always-on-top thumbnail
+    /// of a flattened capture the user can drag around so it stays
+    /// visible while they work in another app. Multiple pins can be
+    /// alive at once.
+    Pin,
 }
 
 /// Mapping from live `window::Id`s to their kind, so the daemon's
@@ -159,6 +164,19 @@ pub enum Message {
     EditorCopyTextDone(Result<String, String>),
     /// User clicked Discard. Closes the editor window.
     EditorDiscardRequested,
+    /// User clicked Pin in the editor — flatten the current state,
+    /// open a borderless always-on-top "pin" window with that
+    /// image, and close the editor.
+    EditorPinRequested,
+    /// First view of a freshly-opened pin window — used to record
+    /// its `window::Id` against its image handle in `App::pins`.
+    PinWindowReady(iced::window::Id, iced::widget::image::Handle),
+    /// User pressed the close `×` on a pin window. Closes the
+    /// window and removes its entry from `App::pins`.
+    PinClosePressed(iced::window::Id),
+    /// User mouse-pressed inside the body of a pin window — kicks
+    /// off a native window-drag so the pin can be repositioned.
+    PinDragRequested(iced::window::Id),
     /// Text-tool inline input — content typed by the user. Empty
     /// means the input is cleared.
     EditorTextChanged(String),
@@ -213,6 +231,10 @@ pub struct App {
     /// returned rect back into a `CaptureRequest` with the right
     /// scale.
     pub overlay_displays: HashMap<iced::window::Id, OverlayDisplay>,
+    /// Live pin windows mapped to their pre-rendered image handle.
+    /// Each pin window's `view` reads its handle from this map. The
+    /// map shrinks as pins close.
+    pub pins: HashMap<iced::window::Id, iced::widget::image::Handle>,
 }
 
 /// Per-overlay-window record. Tracks which display the window covers
@@ -243,6 +265,7 @@ impl App {
             tray: None,
             editor: None,
             overlay_displays: HashMap::new(),
+            pins: HashMap::new(),
         }
     }
 

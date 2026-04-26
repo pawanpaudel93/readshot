@@ -198,6 +198,34 @@ fn editor_window_settings() -> window::Settings {
 /// We avoid `fullscreen: true` here — it lets winit choose a monitor,
 /// which is wrong on multi-display setups. Specific position + size
 /// puts the window exactly where we want.
+/// Window settings for a freshly-opened pin. Borderless,
+/// always-on-top, sized to the captured image (capped at a sane max
+/// so a giant 4K pin doesn't dominate the screen). The user
+/// repositions by dragging anywhere on the body and dismisses via
+/// the small `×` in the corner.
+fn pin_window_settings(image_size: (u32, u32)) -> window::Settings {
+    const MAX_W: f32 = 800.0;
+    const MAX_H: f32 = 600.0;
+    let (iw, ih) = (image_size.0 as f32, image_size.1 as f32);
+    let scale = (MAX_W / iw).min(MAX_H / ih).min(1.0);
+    let w = (iw * scale).max(120.0);
+    let h = (ih * scale).max(80.0);
+    window::Settings {
+        size: iced::Size::new(w, h),
+        min_size: Some(iced::Size::new(120.0, 80.0)),
+        position: window::Position::Default,
+        resizable: true,
+        decorations: false,
+        transparent: false,
+        visible: true,
+        fullscreen: false,
+        level: window::Level::AlwaysOnTop,
+        closeable: false,
+        minimizable: false,
+        ..Default::default()
+    }
+}
+
 fn overlay_window_settings_for(display: &readshot_capture::DisplayInfo) -> window::Settings {
     let bounds = display.bounds;
     window::Settings {
@@ -222,6 +250,7 @@ pub fn title(state: &App, id: window::Id) -> String {
         Some(WindowKind::Welcome) | None => "Readshot".into(),
         Some(WindowKind::Overlay) => "Readshot — Region capture".into(),
         Some(WindowKind::Editor) => "Readshot — Editor".into(),
+        Some(WindowKind::Pin) => "Readshot — Pin".into(),
     }
 }
 
@@ -696,6 +725,53 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::EditorPinRequested => {
+            // Snapshot the editor's currently-flattened image, open
+            // a fresh pin window with that image, then close the
+            // editor. The pin lives independently from there on.
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            let img = ed.model.flatten();
+            let size = (img.width(), img.height());
+            let handle = iced::widget::image::Handle::from_rgba(
+                img.width(),
+                img.height(),
+                img.as_raw().clone(),
+            );
+            // Close the editor window if any.
+            let editor_id = ed.window_id;
+            state.editor = None;
+            let mut tasks: Vec<Task<Message>> = Vec::new();
+            if let Some(id) = editor_id {
+                state.windows.forget(id);
+                tasks.push(window::close(id));
+            }
+            // Open the pin window. We register both kind + image
+            // handle eagerly so the first `view` call paints the
+            // pin instead of the "(no capture)" fallback.
+            let (id, open_task) = window::open(pin_window_settings(size));
+            state.windows.register(id, WindowKind::Pin);
+            state.pins.insert(id, handle.clone());
+            tasks
+                .push(open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone())));
+            Task::batch(tasks)
+        }
+        Message::PinWindowReady(id, handle) => {
+            // The eager insert above already covers most cases; this
+            // re-key handles the (rare) scenario where the iced
+            // runtime hands us a different id than the one returned
+            // by `window::open` synchronously. Idempotent insert.
+            state.pins.entry(id).or_insert(handle);
+            Task::none()
+        }
+        Message::PinClosePressed(id) => {
+            state.windows.forget(id);
+            state.pins.remove(&id);
+            window::close(id)
+        }
+        Message::PinDragRequested(id) => window::drag(id),
+
         Message::CaptureSaved(result) => {
             state.capture_in_flight = false;
             state.last_capture_status = Some(match &result {
@@ -775,6 +851,7 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
         Some(WindowKind::Welcome) | None => welcome_view(state),
         Some(WindowKind::Overlay) => overlay_view(state, id),
         Some(WindowKind::Editor) => editor_view(state),
+        Some(WindowKind::Pin) => pin_view(state, id),
     }
 }
 
@@ -1020,6 +1097,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             ActionKind::Danger,
         ),
         IcedSpace::new().width(Length::Fixed(8.0)),
+        action_btn("Pin", Message::EditorPinRequested, ActionKind::Secondary,),
         action_btn(
             "Copy Text",
             Message::EditorCopyTextRequested,
@@ -1089,6 +1167,77 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
+}
+
+/// Render a pin window — borderless, always-on-top, draggable.
+/// Click anywhere on the image body initiates a native window
+/// drag; a small "×" button in the corner closes it.
+fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
+    use iced::widget::{mouse_area, stack};
+    let Some(handle) = state.pins.get(&id) else {
+        return container(text("(no pin)"))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    };
+    let img = iced::widget::image(handle.clone())
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .content_fit(iced::ContentFit::Contain);
+    let drag_layer: Element<'_, Message> = mouse_area(img)
+        .on_press(Message::PinDragRequested(id))
+        .interaction(iced::mouse::Interaction::Grab)
+        .into();
+    // Close button — sits in the top-right corner with subtle
+    // styling so it's discoverable without dominating the pin.
+    let close = button(
+        text("×")
+            .size(16)
+            .color(Color::WHITE)
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center)
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .padding(0)
+    .width(Length::Fixed(22.0))
+    .height(Length::Fixed(22.0))
+    .style(|_, status| {
+        let bg = match status {
+            button::Status::Hovered => Color::from_rgba(0.85, 0.25, 0.25, 0.95),
+            _ => Color::from_rgba(0.0, 0.0, 0.0, 0.55),
+        };
+        button::Style {
+            background: Some(bg.into()),
+            text_color: Color::WHITE,
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.4),
+                width: 1.0,
+                radius: 11.0.into(),
+            },
+            ..Default::default()
+        }
+    })
+    .on_press(Message::PinClosePressed(id));
+    let close_layer = container(close)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(6)
+        .align_x(Alignment::End)
+        .align_y(Alignment::Start);
+    container(stack![drag_layer, close_layer])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.05, 0.05, 0.06, 1.0).into()),
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
 /// One toolbar tool button with a hover tooltip + keyboard hint.
