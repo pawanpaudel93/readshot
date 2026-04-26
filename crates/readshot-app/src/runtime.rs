@@ -310,6 +310,12 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // difference between a 50 ms and 100 ms tray menu response.
         subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::TrayTick));
     }
+    if !state.overlay_displays.is_empty() {
+        // Marching-ants tick — drives the dash-offset animation on
+        // any open region overlay. 80 ms ≈ 12.5 fps which reads as
+        // smooth motion without burning CPU.
+        subs.push(iced::time::every(Duration::from_millis(80)).map(|_| Message::OverlayTick));
+    }
     if state.editor.is_some() {
         // Keyboard sub: ⌘Z / Ctrl+Z = Undo, ⌘⇧Z / Ctrl+Shift+Z = Redo,
         // ⌘S / Ctrl+S = Save. Iced 0.14's `event::listen_with` is the
@@ -391,6 +397,15 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 }
                 return Task::batch(close_tasks);
             }
+            Task::none()
+        }
+
+        Message::OverlayTick => {
+            // Bump the dash-offset counter and let iced redraw the
+            // overlay window(s) — the canvas's draw step reads
+            // `state.overlay_tick` indirectly via the OverlayProgram
+            // we build in `view`.
+            state.overlay_tick = state.overlay_tick.wrapping_add(2);
             Task::none()
         }
 
@@ -1524,15 +1539,21 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
     // a defence against a view() call before OpenOverlayRequested
     // populated the map — that path won't actually publish a useful
     // message, but it avoids an unwrap.
-    let display_id = state
-        .overlay_displays
-        .get(&id)
+    let overlay_record = state.overlay_displays.get(&id);
+    let display_id = overlay_record
         .map(|d| d.display_id.clone())
         .unwrap_or_default();
+    let scale = overlay_record.map(|d| d.scale).unwrap_or(1.0);
 
-    let canvas = Canvas::new(crate::overlay::OverlayProgram { display_id })
-        .width(Length::Fill)
-        .height(Length::Fill);
+    let canvas = Canvas::new(crate::overlay::OverlayProgram {
+        display_id,
+        // Multiply the runtime tick to advance the dash pattern
+        // smoothly (each dash period is ~10 logical px).
+        dash_offset: state.overlay_tick as usize,
+        scale,
+    })
+    .width(Length::Fill)
+    .height(Length::Fill);
 
     let canvas_layer = container(canvas)
         .width(Length::Fill)

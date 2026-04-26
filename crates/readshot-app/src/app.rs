@@ -116,6 +116,10 @@ pub enum Message {
     /// 50 ms drain tick — runtime polls the global-hotkey receiver and
     /// emits a `CaptureFullPrimaryRequested` if any events arrived.
     HotkeyTick,
+    /// 80 ms tick driving the region-overlay's marching-ants
+    /// animation. Only fires while at least one overlay window is
+    /// open.
+    OverlayTick,
     /// 100 ms drain tick — runtime polls the tray + menu event channels.
     TrayTick,
     /// User selected an item in the tray menu (or left-clicked the icon).
@@ -235,6 +239,9 @@ pub struct App {
     /// Each pin window's `view` reads its handle from this map. The
     /// map shrinks as pins close.
     pub pins: HashMap<iced::window::Id, iced::widget::image::Handle>,
+    /// Monotonically-increasing counter the region-overlay reads to
+    /// animate its marching-ants stroke. Bumped by `OverlayTick`.
+    pub overlay_tick: u32,
 }
 
 /// Per-overlay-window record. Tracks which display the window covers
@@ -266,6 +273,7 @@ impl App {
             editor: None,
             overlay_displays: HashMap::new(),
             pins: HashMap::new(),
+            overlay_tick: 0,
         }
     }
 

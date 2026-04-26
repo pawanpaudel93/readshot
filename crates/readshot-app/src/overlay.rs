@@ -23,7 +23,9 @@
 
 use iced::keyboard::{self, key::Named, Key};
 use iced::mouse;
-use iced::widget::canvas::{Action, Event, Frame, Geometry, Path, Program, Stroke};
+use iced::widget::canvas::{
+    Action, Event, Frame, Geometry, LineDash, Path, Program, Stroke, Text as CanvasText,
+};
 use iced::{Color, Point, Rectangle, Renderer, Theme};
 
 use crate::app::Message;
@@ -38,9 +40,16 @@ use readshot_core::geom::Rect;
 /// canvas only surfaces events when the cursor is in `bounds`, so
 /// the resulting [`Message::OverlaySelected`] always carries the
 /// display id of the screen the drag actually started on.
+///
+/// `dash_offset` is bumped by the runtime's `OverlayTick` subscription
+/// so the selection border animates as marching ants. `scale` is the
+/// display's HiDPI factor — used to render the live size badge in
+/// physical pixels (which is what the captured image will be).
 #[derive(Debug, Default, Clone)]
 pub struct OverlayProgram {
     pub display_id: DisplayId,
+    pub dash_offset: usize,
+    pub scale: f32,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -157,14 +166,66 @@ impl Program<Message> for OverlayProgram {
 
         // If we have a drag in progress, "punch out" the selection
         // by overdrawing it with a near-transparent fill so it
-        // appears brighter than the surrounding veil.
+        // appears brighter than the surrounding veil. Border is a
+        // marching-ants dashed stroke; the runtime's `OverlayTick`
+        // bumps `dash_offset` so the dashes appear to crawl around
+        // the rect.
         if let Some(rect) = state.rect() {
             let path = Path::rectangle(Point::new(rect.x, rect.y), rect.size());
             frame.fill(&path, Color::from_rgba(1.0, 1.0, 1.0, 0.05));
+            // Outer black halo so the white dashes read on any
+            // background.
             frame.stroke(
                 &path,
-                Stroke::default().with_color(Color::WHITE).with_width(2.0),
+                Stroke::default()
+                    .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.7))
+                    .with_width(3.0),
             );
+            // Marching ants. `usize` offset advances as the runtime
+            // ticks so the pattern visibly crawls.
+            const DASH_SEGMENTS: &[f32] = &[6.0, 4.0];
+            frame.stroke(
+                &path,
+                Stroke {
+                    line_dash: LineDash {
+                        segments: DASH_SEGMENTS,
+                        offset: self.dash_offset,
+                    },
+                    ..Stroke::default().with_color(Color::WHITE).with_width(1.5)
+                },
+            );
+
+            // Live size badge — render in physical pixels (what the
+            // captured PNG will be), placed just outside the bottom-
+            // right corner of the selection (or inside if there's no
+            // room). A semi-opaque black pill behind the text keeps
+            // it legible on any wallpaper.
+            let phys_w = ((rect.width * self.scale).round() as i32).max(0);
+            let phys_h = ((rect.height * self.scale).round() as i32).max(0);
+            let label = format!("{phys_w} × {phys_h}");
+            let badge_w = 8.0 + label.chars().count() as f32 * 7.5; // rough text-width estimate
+            let badge_h = 18.0;
+            let pad_x = 4.0;
+            let pad_y = 4.0;
+            // Prefer just below-right; fall back to inside the
+            // selection's bottom-right when off-screen.
+            let mut bx = rect.x + rect.width - badge_w;
+            let mut by = rect.y + rect.height + pad_y;
+            if by + badge_h > bounds.height {
+                by = rect.y + rect.height - badge_h - pad_y;
+            }
+            if bx < 0.0 {
+                bx = rect.x + pad_x;
+            }
+            let badge_path = Path::rectangle(Point::new(bx, by), iced::Size::new(badge_w, badge_h));
+            frame.fill(&badge_path, Color::from_rgba(0.0, 0.0, 0.0, 0.7));
+            frame.fill_text(CanvasText {
+                content: label,
+                position: Point::new(bx + 4.0, by + 2.0),
+                color: Color::WHITE,
+                size: iced::Pixels(11.0),
+                ..Default::default()
+            });
         }
 
         vec![frame.into_geometry()]
