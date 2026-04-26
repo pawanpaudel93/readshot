@@ -73,7 +73,16 @@ pub enum CanvasMessage {
 
 /// `iced::widget::canvas::Program` impl. Holds the styling parameters
 /// (colour + line width) the editor wants to use when an annotation
-/// gets committed, plus the next pin number for `NumberedPin`.
+/// gets committed, plus the next pin number for `NumberedPin`, and
+/// the size of the underlying base image so cursor-in-canvas can be
+/// converted to image-pixel coordinates.
+///
+/// The canvas widget is laid out at the *container* size, not the
+/// image's natural size — it's bigger than the displayed image
+/// whenever the editor window doesn't match the image's aspect
+/// ratio. We translate cursor positions into image-pixel space at
+/// commit time so the renderer paints annotations onto the right
+/// pixels regardless of zoom / letterbox.
 pub struct EditorCanvas {
     pub active_tool: ToolState,
     pub color: CoreRgba,
@@ -81,6 +90,41 @@ pub struct EditorCanvas {
     /// Number to stamp on the next NumberedPin. The editor session
     /// increments this on commit.
     pub next_pin_number: u32,
+    /// Pixel dimensions of the underlying base image (W, H). Used to
+    /// compute the letterbox transform from canvas-local coords to
+    /// image-pixel coords.
+    pub image_size: (u32, u32),
+}
+
+/// Map a canvas-local point to the underlying image's pixel space
+/// using the same `Contain` letterbox the iced image widget uses.
+/// Returns `None` if the click sits in the dead band outside the
+/// displayed image.
+pub(crate) fn canvas_to_image(
+    point: Point,
+    bounds: Rectangle,
+    image_size: (u32, u32),
+) -> Option<Point> {
+    let (iw, ih) = (image_size.0 as f32, image_size.1 as f32);
+    if iw <= 0.0 || ih <= 0.0 {
+        return None;
+    }
+    let scale = (bounds.width / iw)
+        .min(bounds.height / ih)
+        .max(f32::EPSILON);
+    let displayed_w = iw * scale;
+    let displayed_h = ih * scale;
+    let offset_x = (bounds.width - displayed_w) * 0.5;
+    let offset_y = (bounds.height - displayed_h) * 0.5;
+    let dx = point.x - offset_x;
+    let dy = point.y - offset_y;
+    if dx < 0.0 || dy < 0.0 || dx > displayed_w || dy > displayed_h {
+        return None;
+    }
+    Some(Point::new(
+        (dx / scale).clamp(0.0, iw),
+        (dy / scale).clamp(0.0, ih),
+    ))
 }
 
 impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
@@ -96,11 +140,15 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
         match event {
             Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
                 let point = cursor.position_in(bounds)?;
+                // Reject clicks in the letterbox dead band — the
+                // user clearly didn't mean to annotate empty
+                // background.
+                let image_point = canvas_to_image(point, bounds, self.image_size)?;
                 // Point tools commit on press, no drag required.
                 if self.active_tool.is_point_tool() {
                     if let Some(annotation) = annotation_for_point(
                         self.active_tool,
-                        point,
+                        image_point,
                         self.color,
                         self.line_width,
                         self.next_pin_number,
@@ -185,10 +233,16 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                                 canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
                             );
                         }
+                        // Convert canvas-local anchor + cursor into
+                        // image pixels before building the annotation
+                        // — the renderer paints in image coords.
+                        let anchor_img =
+                            canvas_to_image(anchor, bounds, self.image_size).unwrap_or(anchor);
+                        let cur_img = canvas_to_image(cur, bounds, self.image_size).unwrap_or(cur);
                         let annotation = annotation_for_drag(
                             tool_at_press,
-                            anchor,
-                            cur,
+                            anchor_img,
+                            cur_img,
                             self.color,
                             self.line_width,
                         );
@@ -211,8 +265,15 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                                 canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
                             );
                         }
-                        let pts: Vec<PointLike> =
-                            points.iter().map(|p| PointLike::new(p.x, p.y)).collect();
+                        // Convert each canvas-local polyline node to
+                        // image pixels.
+                        let pts: Vec<PointLike> = points
+                            .iter()
+                            .map(|p| {
+                                let q = canvas_to_image(*p, bounds, self.image_size).unwrap_or(*p);
+                                PointLike::new(q.x, q.y)
+                            })
+                            .collect();
                         let annotation = match tool_at_press {
                             ToolState::Pen => Some(Annotation::Pen {
                                 points: pts,

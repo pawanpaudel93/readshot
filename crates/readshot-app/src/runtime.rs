@@ -161,11 +161,14 @@ fn welcome_window_settings() -> window::Settings {
     }
 }
 
-/// Window settings for the annotation / actions editor.
+/// Window settings for the annotation / actions editor. Default size
+/// is wide enough to show the toolbar without wrapping and tall
+/// enough to give a typical 16:9 capture comfortable headroom for
+/// drawing.
 fn editor_window_settings() -> window::Settings {
     window::Settings {
-        size: iced::Size::new(720.0, 560.0),
-        min_size: Some(iced::Size::new(360.0, 240.0)),
+        size: iced::Size::new(1100.0, 760.0),
+        min_size: Some(iced::Size::new(720.0, 480.0)),
         position: window::Position::Centered,
         resizable: true,
         decorations: true,
@@ -709,51 +712,71 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let line_width = ed.model.current_line_width();
     let busy = ed.busy;
 
-    // Top toolbar: tool buttons row, then color palette + width slider.
-    let tool_row = toolbar::TOOL_ORDER
-        .iter()
-        .fold(row![].spacing(4), |row, t| {
+    // ===== Toolbar =====
+    // Tools are visually grouped so the eye finds them quickly:
+    // Select / shapes / freehand / effects / pin / crop. Thin
+    // dividers separate the groups.
+    let tool_groups: &[&[ToolState]] = &[
+        &[ToolState::Select],
+        &[
+            ToolState::Rectangle,
+            ToolState::Ellipse,
+            ToolState::Line,
+            ToolState::Arrow,
+        ],
+        &[ToolState::Pen, ToolState::Highlighter, ToolState::Text],
+        &[ToolState::Blur, ToolState::Pixelate],
+        &[ToolState::NumberedPin],
+        &[ToolState::Crop],
+    ];
+
+    let mut tool_row = row![].spacing(4).align_y(Alignment::Center);
+    for (idx, group) in tool_groups.iter().enumerate() {
+        if idx > 0 {
+            tool_row = tool_row.push(toolbar_divider());
+        }
+        for t in group.iter() {
             let label = tool_short_label(*t);
             let is_active = *t == active_tool;
-            let style: fn(&Theme, button::Status) -> button::Style = if is_active {
-                |theme, status| {
-                    let mut s = button::primary(theme, status);
-                    s.background = Some(theme.extended_palette().primary.strong.color.into());
-                    s
-                }
-            } else {
-                button::secondary
-            };
-            let mut btn = button(text(label).size(12)).padding([6, 8]).style(style);
+            let mut btn = button(text(label).size(12).color(Color::WHITE))
+                .padding([6, 10])
+                .style(move |theme: &Theme, status| toolbar_button_style(theme, status, is_active));
             if !busy {
                 btn = btn.on_press(Message::EditorToolbar(
                     readshot_ui::ToolbarMessage::SelectTool(*t),
                 ));
             }
-            row.push(btn)
-        });
+            tool_row = tool_row.push(btn);
+        }
+    }
 
-    let palette_row = toolbar::PALETTE
-        .iter()
-        .fold(row![].spacing(3), |row, swatch| {
+    let palette_row = toolbar::PALETTE.iter().fold(
+        row![].spacing(4).align_y(Alignment::Center),
+        |row, swatch| {
             let is_selected = swatch_eq(*swatch, active_color);
             let color = Color::from_rgba(swatch.r, swatch.g, swatch.b, swatch.a);
             let mut btn = button(
-                Space::new()
+                IcedSpace::new()
                     .width(Length::Fixed(18.0))
                     .height(Length::Fixed(18.0)),
             )
-            .padding(2)
-            .style(move |_theme, _status| {
-                let border = if is_selected {
+            .padding(0)
+            .style(move |_theme, status| {
+                let outer = if is_selected {
                     iced::Border {
                         color: Color::WHITE,
                         width: 2.0,
                         radius: 4.0.into(),
                     }
+                } else if matches!(status, button::Status::Hovered) {
+                    iced::Border {
+                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.6),
+                        width: 1.5,
+                        radius: 4.0.into(),
+                    }
                 } else {
                     iced::Border {
-                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.2),
+                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
                         width: 1.0,
                         radius: 4.0.into(),
                     }
@@ -761,7 +784,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
                 button::Style {
                     background: Some(color.into()),
                     text_color: Color::TRANSPARENT,
-                    border,
+                    border: outer,
                     ..Default::default()
                 }
             });
@@ -771,85 +794,90 @@ fn editor_view(state: &App) -> Element<'_, Message> {
                 ));
             }
             row.push(btn)
-        });
-    let palette_row = palette_row.align_y(Alignment::Center);
+        },
+    );
 
     let width_label = text(format!("{line_width:.0}px"))
         .size(11)
-        .width(Length::Fixed(40.0));
+        .width(Length::Fixed(36.0));
     let width_slider = iced::widget::slider(
         toolbar::MIN_LINE_WIDTH..=toolbar::MAX_LINE_WIDTH,
         line_width,
         |v| Message::EditorToolbar(readshot_ui::ToolbarMessage::SetLineWidth(v)),
     )
     .step(0.5)
-    .width(Length::Fixed(140.0));
+    .width(Length::Fixed(150.0));
 
     let undo_btn = {
-        let mut b = button(text("↶ Undo").size(12))
-            .padding([6, 8])
-            .style(button::secondary);
-        if !busy && ed.model.can_undo() {
+        let enabled = !busy && ed.model.can_undo();
+        let mut b = button(text("↶ Undo").size(12).color(Color::WHITE))
+            .padding([6, 10])
+            .style(move |theme: &Theme, status| toolbar_ghost_style(theme, status, enabled));
+        if enabled {
             b = b.on_press(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
         }
         b
     };
     let redo_btn = {
-        let mut b = button(text("↷ Redo").size(12))
-            .padding([6, 8])
-            .style(button::secondary);
-        if !busy && ed.model.can_redo() {
+        let enabled = !busy && ed.model.can_redo();
+        let mut b = button(text("↷ Redo").size(12).color(Color::WHITE))
+            .padding([6, 10])
+            .style(move |theme: &Theme, status| toolbar_ghost_style(theme, status, enabled));
+        if enabled {
             b = b.on_press(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo));
         }
         b
     };
 
+    let secondary_row = row![
+        palette_row,
+        toolbar_divider(),
+        width_label,
+        width_slider,
+        IcedSpace::new().width(Length::Fill),
+        undo_btn,
+        redo_btn,
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
     let toolbar_row = container(
-        column![
-            tool_row,
-            row![
-                palette_row,
-                IcedSpace::new().width(Length::Fixed(12.0)),
-                width_label,
-                width_slider,
-                IcedSpace::new().width(Length::Fill),
-                undo_btn,
-                redo_btn,
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center),
-        ]
-        .spacing(6)
-        .padding(8),
+        column![tool_row, secondary_row]
+            .spacing(8)
+            .padding(10)
+            .align_x(Alignment::Start),
     )
     .style(|theme: &Theme| {
         let palette = theme.extended_palette();
         container::Style {
             background: Some(palette.background.weak.color.into()),
             border: iced::Border {
-                radius: 6.0.into(),
-                ..Default::default()
+                color: palette.background.strong.color,
+                width: 1.0,
+                radius: 8.0.into(),
             },
             ..Default::default()
         }
     });
 
-    // Image area: the flattened image with the editor canvas stacked
-    // on top so the user's drag preview overlays the picture. The
-    // canvas Program publishes `CanvasMessage`; we map it through
-    // Element::map onto `Message::EditorCanvas` so the runtime's
-    // update loop can route it.
+    // ===== Image area — letterboxed image with canvas overlay =====
+    // Both layers share the same container; the canvas Program knows
+    // the image's pixel dimensions so it can convert cursor positions
+    // into image coordinates regardless of zoom or letterbox. See
+    // `canvas_to_image` in readshot-ui.
     let canvas_program = EditorCanvas {
         active_tool,
         color: active_color,
         line_width,
         next_pin_number: ed.next_pin_number,
+        image_size: ed.image_size(),
     };
     let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
         .width(Length::Fill)
         .height(Length::Fill)
         .into();
     let canvas: Element<'_, Message> = canvas.map(Message::EditorCanvas);
+
     let image_layer = container(
         iced::widget::image(ed.image_handle.clone())
             .width(Length::Fill)
@@ -864,52 +892,198 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let image_area = container(stack![image_layer, canvas_layer])
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding(4);
+        .padding(8)
+        .style(|theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: Some(Color::from_rgba(0.08, 0.09, 0.12, 1.0).into()),
+                border: iced::Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..Default::default()
+            }
+        });
 
-    // Bottom action bar — Save / Copy / Copy Text / Pin / Discard.
-    let action_btn = |label: &'static str, msg: Message, primary: bool| {
-        let style: fn(&Theme, button::Status) -> button::Style = if primary {
-            button::primary
-        } else {
-            button::secondary
-        };
-        let mut b = button(text(label).size(13)).padding([8, 14]).style(style);
+    // ===== Action bar =====
+    let action_btn = |label: &'static str, msg: Message, kind: ActionKind| {
+        let lbl = text(label).size(13).color(Color::WHITE);
+        let mut b = button(lbl)
+            .padding([10, 18])
+            .style(move |theme, status| action_button_style(theme, status, kind));
         if !busy {
             b = b.on_press(msg);
         }
         b
     };
-    let actions = row![
-        action_btn("Save", Message::EditorSaveRequested, true),
-        action_btn("Copy", Message::EditorCopyImageRequested, false),
-        action_btn("Copy Text", Message::EditorCopyTextRequested, false),
-        action_btn("Discard", Message::EditorDiscardRequested, false),
+    let action_left = row![action_btn(
+        "Discard",
+        Message::EditorDiscardRequested,
+        ActionKind::Danger
+    )];
+    let action_right = row![
+        action_btn(
+            "Copy Text",
+            Message::EditorCopyTextRequested,
+            ActionKind::Secondary
+        ),
+        action_btn(
+            "Copy",
+            Message::EditorCopyImageRequested,
+            ActionKind::Secondary
+        ),
+        action_btn("Save", Message::EditorSaveRequested, ActionKind::Primary),
     ]
     .spacing(8);
 
-    let toast: Element<'_, Message> = match &ed.status {
-        Some(s) => text(s).size(12).into(),
-        None => Space::new().height(Length::Fixed(0.0)).into(),
+    // ===== Status / hint bar =====
+    let (img_w, img_h) = ed.image_size();
+    let dims = text(format!("{img_w} × {img_h} px"))
+        .size(11)
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55));
+    let hint = text(tool_hint(active_tool))
+        .size(11)
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7));
+    let toast: Element<'_, Message> = match ed.status.as_deref() {
+        Some(s) => text(s)
+            .size(11)
+            .color(Color::from_rgba(0.65, 0.95, 0.75, 1.0))
+            .into(),
+        None => IcedSpace::new().height(Length::Fixed(0.0)).into(),
     };
+    let status_bar = row![
+        dims,
+        IcedSpace::new().width(Length::Fixed(12.0)),
+        hint,
+        IcedSpace::new().width(Length::Fill),
+        toast,
+    ]
+    .align_y(Alignment::Center)
+    .spacing(4);
 
-    let _ = ToolState::Select; // silence unused-import warnings on minor cfgs
     container(
-        column![toolbar_row, image_area, actions, toast]
-            .spacing(8)
-            .padding(10)
-            .align_x(Alignment::Start),
+        column![
+            toolbar_row,
+            image_area,
+            row![
+                action_left,
+                IcedSpace::new().width(Length::Fill),
+                action_right
+            ]
+            .align_y(Alignment::Center),
+            status_bar,
+        ]
+        .spacing(8)
+        .padding(10)
+        .align_x(Alignment::Start),
     )
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
 }
 
-/// Short readable labels for each tool button. Single glyphs / words
+/// 1px vertical divider between toolbar groups.
+fn toolbar_divider() -> Element<'static, Message> {
+    container(iced::widget::Space::new())
+        .width(Length::Fixed(1.0))
+        .height(Length::Fixed(20.0))
+        .style(|_theme: &Theme| container::Style {
+            background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.12).into()),
+            ..Default::default()
+        })
+        .into()
+}
+
+fn toolbar_button_style(theme: &Theme, status: button::Status, is_active: bool) -> button::Style {
+    let palette = theme.extended_palette();
+    let base = if is_active {
+        palette.primary.strong.color
+    } else if matches!(status, button::Status::Hovered) {
+        palette.background.strongest.color
+    } else {
+        Color::TRANSPARENT
+    };
+    button::Style {
+        background: Some(base.into()),
+        text_color: Color::WHITE,
+        border: iced::Border {
+            radius: 6.0.into(),
+            width: if is_active { 0.0 } else { 1.0 },
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+        },
+        ..Default::default()
+    }
+}
+
+fn toolbar_ghost_style(_theme: &Theme, status: button::Status, enabled: bool) -> button::Style {
+    let bg = match (enabled, status) {
+        (true, button::Status::Hovered) => Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+        _ => Color::TRANSPARENT,
+    };
+    button::Style {
+        background: Some(bg.into()),
+        text_color: if enabled {
+            Color::WHITE
+        } else {
+            Color::from_rgba(1.0, 1.0, 1.0, 0.35)
+        },
+        border: iced::Border {
+            radius: 6.0.into(),
+            width: 1.0,
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+        },
+        ..Default::default()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ActionKind {
+    Primary,
+    Secondary,
+    Danger,
+}
+
+fn action_button_style(theme: &Theme, status: button::Status, kind: ActionKind) -> button::Style {
+    let palette = theme.extended_palette();
+    let (base, hover, text_color) = match kind {
+        ActionKind::Primary => (
+            palette.primary.base.color,
+            palette.primary.strong.color,
+            palette.primary.base.text,
+        ),
+        ActionKind::Secondary => (
+            palette.background.strong.color,
+            palette.background.strongest.color,
+            Color::WHITE,
+        ),
+        ActionKind::Danger => (
+            Color::from_rgba(0.50, 0.13, 0.16, 1.0),
+            Color::from_rgba(0.65, 0.18, 0.22, 1.0),
+            Color::WHITE,
+        ),
+    };
+    let bg = match status {
+        button::Status::Hovered => hover,
+        _ => base,
+    };
+    button::Style {
+        background: Some(bg.into()),
+        text_color,
+        border: iced::Border {
+            radius: 8.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// Short readable labels for each tool button. Single glyphs + word
 /// keep the toolbar compact at small window widths.
 fn tool_short_label(tool: readshot_ui::editor::ToolState) -> &'static str {
     use readshot_ui::editor::ToolState as T;
     match tool {
-        T::Select => "Select",
+        T::Select => "↖ Select",
         T::Rectangle => "▭ Rect",
         T::Ellipse => "◯ Oval",
         T::Line => "／ Line",
@@ -921,6 +1095,27 @@ fn tool_short_label(tool: readshot_ui::editor::ToolState) -> &'static str {
         T::Pixelate => "▦ Pixel",
         T::NumberedPin => "① Pin",
         T::Crop => "⬚ Crop",
+    }
+}
+
+/// One-line guidance for the currently active tool — replaces the
+/// blank slate the user used to face when they didn't know what
+/// click would do what.
+fn tool_hint(tool: readshot_ui::editor::ToolState) -> &'static str {
+    use readshot_ui::editor::ToolState as T;
+    match tool {
+        T::Select => "Select tool — drag tools commit on release. ⌘Z undoes, ⌘⇧Z redoes.",
+        T::Rectangle => "Rectangle — drag to outline a region.",
+        T::Ellipse => "Ellipse — drag the bounding box.",
+        T::Line => "Line — drag from start to end.",
+        T::Arrow => "Arrow — drag from base toward the target.",
+        T::Pen => "Pen — drag to free-draw.",
+        T::Highlighter => "Highlighter — drag over text; semi-transparent.",
+        T::Text => "Text — coming soon. Use Pen for now.",
+        T::Blur => "Blur — drag a region; radius scales with width.",
+        T::Pixelate => "Pixelate — drag a region; block size scales with width.",
+        T::NumberedPin => "Numbered pin — click to drop the next number.",
+        T::Crop => "Crop — drag to keep only that region.",
     }
 }
 
