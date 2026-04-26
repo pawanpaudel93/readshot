@@ -56,13 +56,38 @@ pub struct OverlayProgram {
 pub struct OverlayState {
     drag_start: Option<Point>,
     drag_current: Option<Point>,
+    /// `true` while the Shift key is held. Mouse events in iced
+    /// 0.14 don't carry modifier state, so the canvas tracks Shift
+    /// itself via `KeyPressed` / `KeyReleased` events. While set
+    /// the live preview rect is forced to a perfect square (drag
+    /// gets constrained to its longer axis).
+    shift_held: bool,
 }
 
 impl OverlayState {
     fn rect(&self) -> Option<Rectangle> {
-        let (a, b) = (self.drag_start?, self.drag_current?);
-        Some(rectangle_from_two_points(a, b))
+        let a = self.drag_start?;
+        let b = self.drag_current?;
+        Some(rectangle_from_two_points(
+            a,
+            constrain_target(a, b, self.shift_held),
+        ))
     }
+}
+
+/// If `shift` is held, snap the drag's far corner so the resulting
+/// rect is a perfect square; the longer axis wins. Otherwise pass
+/// the cursor through unchanged.
+fn constrain_target(anchor: Point, cursor: Point, shift: bool) -> Point {
+    if !shift {
+        return cursor;
+    }
+    let dx = cursor.x - anchor.x;
+    let dy = cursor.y - anchor.y;
+    let size = dx.abs().max(dy.abs());
+    let sx = if dx >= 0.0 { 1.0 } else { -1.0 };
+    let sy = if dy >= 0.0 { 1.0 } else { -1.0 };
+    Point::new(anchor.x + sx * size, anchor.y + sy * size)
 }
 
 impl Program<Message> for OverlayProgram {
@@ -93,7 +118,12 @@ impl Program<Message> for OverlayProgram {
                 if let (Some(start), Some(current)) =
                     (state.drag_start.take(), state.drag_current.take())
                 {
-                    let rect = rectangle_from_two_points(start, current);
+                    // Apply the same Shift-snap to the committed
+                    // rectangle that the live preview uses, so the
+                    // captured PNG matches what the user saw at
+                    // the moment they released.
+                    let target = constrain_target(start, current, state.shift_held);
+                    let rect = rectangle_from_two_points(start, target);
                     // Discard sub-pixel "clicks" — the user almost
                     // certainly didn't mean to capture a 1x1 region.
                     if rect.width >= 4.0 && rect.height >= 4.0 {
@@ -110,6 +140,25 @@ impl Program<Message> for OverlayProgram {
                     return Some(Action::publish(Message::OverlayCancelled).and_capture());
                 }
             }
+            // Track Shift state for the constrain-to-square modifier.
+            // Iced delivers KeyPressed events while a modifier key
+            // is repeated, so this stays correct even on long holds.
+            Event::Keyboard(keyboard::Event::KeyPressed { modifiers, .. })
+            | Event::Keyboard(keyboard::Event::KeyReleased { modifiers, .. }) => {
+                let shift = modifiers.shift();
+                if state.shift_held != shift {
+                    state.shift_held = shift;
+                    if state.drag_start.is_some() {
+                        return Some(Action::request_redraw());
+                    }
+                }
+                // Fall through so other keyboard arms still match.
+            }
+            _ => {}
+        }
+        // Second pass for keyboard arms that still need to match
+        // after the modifier-tracking branch above.
+        match event {
             Event::Keyboard(keyboard::Event::KeyPressed {
                 key: Key::Named(Named::Escape),
                 ..
@@ -299,10 +348,24 @@ mod tests {
         let state = OverlayState {
             drag_start: Some(Point::new(5.0, 5.0)),
             drag_current: Some(Point::new(20.0, 25.0)),
+            shift_held: false,
         };
         let rect = state.rect().unwrap();
         assert_eq!(rect.width, 15.0);
         assert_eq!(rect.height, 20.0);
+    }
+
+    #[test]
+    fn shift_constrains_drag_to_a_square() {
+        let state = OverlayState {
+            drag_start: Some(Point::new(0.0, 0.0)),
+            drag_current: Some(Point::new(60.0, 20.0)),
+            shift_held: true,
+        };
+        let rect = state.rect().unwrap();
+        // Longer axis wins — 60×60 square anchored at (0,0).
+        assert_eq!(rect.width, 60.0);
+        assert_eq!(rect.height, 60.0);
     }
 
     #[test]

@@ -1125,7 +1125,20 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let bullet = text("·")
         .size(11)
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.35));
-    let hint = text(tool_hint(active_tool))
+    // When the user just opened the editor and hasn't drawn anything
+    // yet, show a discoverable "press a key to pick a tool" hint
+    // in place of the per-tool guidance — the keyboard shortcuts
+    // aren't visible anywhere in the chrome until the user hovers
+    // a tool button, so this is the surface that surfaces them.
+    let hint_str = if ed.model.annotations().is_empty()
+        && active_tool == ToolState::Select
+        && ed.status.is_none()
+    {
+        "Press R / O / L / A / P / H / T / B / X / N / C to pick a tool · ⌘Z to undo"
+    } else {
+        tool_hint(active_tool)
+    };
+    let hint = text(hint_str)
         .size(11)
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72));
     let toast: Element<'_, Message> = match ed.status.as_deref() {
@@ -1609,7 +1622,7 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
     // semi-opaque dark capsule so the text reads regardless of the
     // wallpaper underneath.
     let hint = container(
-        text("Drag to select a region · Enter to capture all · Esc to cancel")
+        text("Drag to select · hold Shift for square · Enter for full screen · Esc to cancel")
             .size(13)
             .color(Color::WHITE),
     )
@@ -1711,7 +1724,7 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
         action,
         Space::new().height(Length::Fixed(16.0)),
         capture_btn,
-        text("Drag to select a region · Enter to capture all · Esc to cancel").size(11),
+        text("Drag · hold Shift for square · Enter for full screen · Esc to cancel").size(11),
         Space::new().height(Length::Fixed(8.0)),
         toast,
         Space::new().width(Length::Fill).height(Length::Fill),
