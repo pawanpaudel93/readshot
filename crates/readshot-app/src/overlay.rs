@@ -27,12 +27,21 @@ use iced::widget::canvas::{Action, Event, Frame, Geometry, Path, Program, Stroke
 use iced::{Color, Point, Rectangle, Renderer, Theme};
 
 use crate::app::Message;
+use readshot_capture::DisplayId;
 use readshot_core::geom::Rect;
 
 /// Stateless drawing program. The transient drag state is held in
 /// [`OverlayState`] and owned by the canvas widget.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct OverlayProgram;
+///
+/// Each overlay window gets its own [`OverlayProgram`] instance whose
+/// `display_id` identifies the monitor the user is dragging on. The
+/// canvas only surfaces events when the cursor is in `bounds`, so
+/// the resulting [`Message::OverlaySelected`] always carries the
+/// display id of the screen the drag actually started on.
+#[derive(Debug, Default, Clone)]
+pub struct OverlayProgram {
+    pub display_id: DisplayId,
+}
 
 #[derive(Default, Clone, Debug)]
 pub struct OverlayState {
@@ -81,7 +90,11 @@ impl Program<Message> for OverlayProgram {
                     if rect.width >= 4.0 && rect.height >= 4.0 {
                         if let Some(domain) = rect_to_domain(rect) {
                             return Some(
-                                Action::publish(Message::OverlaySelected(domain)).and_capture(),
+                                Action::publish(Message::OverlaySelected {
+                                    display_id: self.display_id.clone(),
+                                    rect: domain,
+                                })
+                                .and_capture(),
                             );
                         }
                     }
@@ -97,8 +110,9 @@ impl Program<Message> for OverlayProgram {
                 return Some(Action::publish(Message::OverlayCancelled).and_capture());
             }
             // Flameshot-style: Enter / Return / Space captures the
-            // entire overlay (i.e. the whole primary display in
-            // logical pixels) without the user needing to drag.
+            // entire overlay (i.e. the whole display this overlay
+            // covers, in display-local logical pixels) without the
+            // user needing to drag.
             Event::Keyboard(keyboard::Event::KeyPressed {
                 key: Key::Named(Named::Enter | Named::Space),
                 ..
@@ -111,7 +125,13 @@ impl Program<Message> for OverlayProgram {
                     width: bounds.width,
                     height: bounds.height,
                 }) {
-                    return Some(Action::publish(Message::OverlaySelected(domain)).and_capture());
+                    return Some(
+                        Action::publish(Message::OverlaySelected {
+                            display_id: self.display_id.clone(),
+                            rect: domain,
+                        })
+                        .and_capture(),
+                    );
                 }
                 return Some(Action::publish(Message::OverlayCancelled).and_capture());
             }

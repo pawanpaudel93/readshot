@@ -75,6 +75,11 @@ fn main() -> iced::Result {
         .title(runtime::title)
         .subscription(runtime::subscription)
         .theme(runtime::theme)
+        // The style hook is what actually makes overlay windows
+        // see-through: iced uses `Style::background_color` as the
+        // wgpu surface clear color, so a transparent background lets
+        // the desktop show through. See `runtime::style`.
+        .style(runtime::style)
         .font(readshot_core::render::FONT_DATA)
         .run()
 }

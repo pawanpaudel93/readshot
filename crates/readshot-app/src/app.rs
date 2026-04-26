@@ -120,14 +120,24 @@ pub enum Message {
     /// First view of the overlay window — used by the runtime to
     /// remember its `window::Id` mapping.
     OverlayWindowReady(iced::window::Id),
-    /// Drag completed inside the overlay, with the rect in
-    /// window-local logical pixels.
-    OverlaySelected(readshot_core::geom::Rect),
+    /// Drag completed inside the overlay. `display_id` identifies
+    /// the monitor the user dragged on; `rect` is in display-local
+    /// logical pixels.
+    OverlaySelected {
+        display_id: readshot_capture::DisplayId,
+        rect: readshot_core::geom::Rect,
+    },
     /// User cancelled the overlay (ESC, sub-pixel click, etc.).
     OverlayCancelled,
-    /// Internal: capture a region of the primary display, save the
+    /// Async list_displays result that bootstraps the overlay flow:
+    /// the runtime opens one transparent overlay window per display.
+    OverlayDisplaysListed(Result<Vec<readshot_capture::DisplayInfo>, String>),
+    /// Internal: capture a region of the named display, save the
     /// PNG, and toast the result. Emitted by the overlay flow.
-    CaptureRegionRequested(readshot_core::geom::Rect),
+    CaptureRegionRequested {
+        display_id: readshot_capture::DisplayId,
+        rect: readshot_core::geom::Rect,
+    },
     /// Async region-capture finished — `Ok(image)` opens an editor
     /// window with the captured pixels; `Err` toasts the failure on
     /// the welcome window.
@@ -186,6 +196,23 @@ pub struct App {
     /// Active editor session, if any. Phase C only allows one
     /// editor at a time; opening a new one replaces the old.
     pub editor: Option<crate::editor::EditorState>,
+    /// `window::Id` → display info for every live overlay window.
+    /// One entry per monitor when the overlay flow is active; empty
+    /// otherwise. The runtime uses this to look up the display id for
+    /// a `view()` callback (so the canvas knows which display id to
+    /// stamp into `Message::OverlaySelected`) and to convert the
+    /// returned rect back into a `CaptureRequest` with the right
+    /// scale.
+    pub overlay_displays: HashMap<iced::window::Id, OverlayDisplay>,
+}
+
+/// Per-overlay-window record. Tracks which display the window covers
+/// so capture can run against the right monitor.
+#[derive(Clone, Debug)]
+pub struct OverlayDisplay {
+    pub display_id: readshot_capture::DisplayId,
+    /// HiDPI scale factor of the display (physical / logical).
+    pub scale: f32,
 }
 
 impl App {
@@ -206,6 +233,7 @@ impl App {
             hotkey_manager: None,
             tray: None,
             editor: None,
+            overlay_displays: HashMap::new(),
         }
     }
 

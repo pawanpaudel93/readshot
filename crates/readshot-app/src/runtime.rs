@@ -175,25 +175,28 @@ fn editor_window_settings() -> window::Settings {
     }
 }
 
-/// Window settings for the region-capture overlay.
+/// Window settings for one overlay window covering a single display.
 ///
-/// We open a borderless `AlwaysOnTop` transparent window the size of
-/// the primary display. Resizable=false because the overlay should
-/// always cover the whole display; closeable=false because the user
-/// cancels with ESC, not the missing close button.
-fn overlay_window_settings() -> window::Settings {
+/// Borderless transparent `AlwaysOnTop` window positioned at the
+/// display's *global* logical origin and sized to its logical width
+/// and height. Combining this with a transparent theme (see [`style`])
+/// gives us a true see-through overlay so the user can see what they
+/// are about to capture.
+///
+/// We avoid `fullscreen: true` here — it lets winit choose a monitor,
+/// which is wrong on multi-display setups. Specific position + size
+/// puts the window exactly where we want.
+fn overlay_window_settings_for(display: &readshot_capture::DisplayInfo) -> window::Settings {
+    let bounds = display.bounds;
     window::Settings {
-        // 1.0×1.0 placeholder — winit then picks the actual primary
-        // display's size when we set `fullscreen: true`. (For multi-
-        // display in Phase B-ext we'd switch to per-monitor positions
-        // and explicit sizes.)
-        size: iced::Size::new(1.0, 1.0),
-        position: window::Position::Specific(iced::Point::new(0.0, 0.0)),
+        size: iced::Size::new(bounds.width(), bounds.height()),
+        min_size: None,
+        position: window::Position::Specific(iced::Point::new(bounds.x(), bounds.y())),
         resizable: false,
         decorations: false,
         transparent: true,
         visible: true,
-        fullscreen: true,
+        fullscreen: false,
         level: window::Level::AlwaysOnTop,
         closeable: false,
         minimizable: false,
@@ -210,9 +213,39 @@ pub fn title(state: &App, id: window::Id) -> String {
     }
 }
 
-/// Theme: dark by default; preferences could switch this in a later phase.
-pub fn theme(_state: &App, _id: window::Id) -> Theme {
-    Theme::Dark
+/// Sentinel name for the transparent overlay theme — used by [`style`]
+/// to detect overlay windows and return a fully see-through palette.
+const OVERLAY_THEME_NAME: &str = "readshot-overlay-transparent";
+
+/// Theme: dark by default. Overlay windows get a custom theme whose
+/// `name()` is [`OVERLAY_THEME_NAME`] so [`style`] can identify them
+/// and return a transparent base style. The palette colors don't
+/// matter for the canvas-only overlay view, so we copy `Theme::Dark`
+/// to avoid widget surprises if iced ever consults them.
+pub fn theme(state: &App, id: window::Id) -> Theme {
+    if matches!(state.windows.kind(id), Some(WindowKind::Overlay)) {
+        Theme::custom(OVERLAY_THEME_NAME.to_string(), iced::theme::Palette::DARK)
+    } else {
+        Theme::Dark
+    }
+}
+
+/// Per-window appearance. iced's wgpu surface uses
+/// `style.background_color` as the *clear* color, so a transparent
+/// background here is what actually lets the desktop show through
+/// the overlay window. For non-overlay windows we delegate to the
+/// theme's normal `Base::base()` so welcome/editor render with their
+/// usual dark background.
+pub fn style(_state: &App, theme: &Theme) -> iced::theme::Style {
+    use iced::theme::Base;
+    if theme.name() == OVERLAY_THEME_NAME {
+        iced::theme::Style {
+            background_color: Color::TRANSPARENT,
+            text_color: Color::WHITE,
+        }
+    } else {
+        theme.base()
+    }
 }
 
 /// Background subscriptions — permission poll + global-hotkey drain.
@@ -319,55 +352,71 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             if state.windows.kinds().any(|k| k == WindowKind::Overlay) {
                 return Task::none();
             }
-            let (id, open_task) = window::open(overlay_window_settings());
-            state.windows.register(id, WindowKind::Overlay);
-            open_task.map(Message::OverlayWindowReady)
+            // List displays asynchronously; the result drives the
+            // actual window-open work in `OverlayDisplaysListed` so we
+            // can spawn one transparent overlay per monitor.
+            let coord = state.coordinator.clone();
+            Task::perform(async move { coord.list_displays().await }, |result| {
+                Message::OverlayDisplaysListed(result.map_err(|e| e.to_string()))
+            })
+        }
+
+        Message::OverlayDisplaysListed(Err(e)) => {
+            state.last_capture_status =
+                Some(format!("Capture failed: could not list displays — {e}"));
+            Task::none()
+        }
+        Message::OverlayDisplaysListed(Ok(displays)) => {
+            if displays.is_empty() {
+                state.last_capture_status = Some("Capture failed: no displays detected.".into());
+                return Task::none();
+            }
+            // Spawn one borderless transparent overlay per display,
+            // positioned at that display's *global* logical origin.
+            // We register the (window_id, display) mapping eagerly so
+            // `view()` and the OverlaySelected message handler can
+            // both look up which monitor a given overlay covers.
+            let mut tasks: Vec<Task<Message>> = Vec::with_capacity(displays.len());
+            for d in &displays {
+                let settings = overlay_window_settings_for(d);
+                let (id, open_task) = window::open(settings);
+                state.windows.register(id, WindowKind::Overlay);
+                state.overlay_displays.insert(
+                    id,
+                    crate::app::OverlayDisplay {
+                        display_id: d.id.clone(),
+                        scale: d.scale,
+                    },
+                );
+                tasks.push(open_task.map(Message::OverlayWindowReady));
+            }
+            Task::batch(tasks)
         }
 
         Message::OverlayWindowReady(_id) => Task::none(),
 
-        Message::OverlaySelected(rect) => {
-            // Close the overlay window first (it's the most recently
-            // registered Overlay-kind id) so the capture itself doesn't
-            // include the dimming veil.
-            let mut close_tasks: Vec<Task<Message>> = Vec::new();
-            let overlay_ids: Vec<_> = state
-                .windows
-                .iter()
-                .filter_map(|(id, k)| (*k == WindowKind::Overlay).then_some(*id))
-                .collect();
-            for id in overlay_ids {
-                state.windows.forget(id);
-                close_tasks.push(window::close(id));
-            }
-            // Kick off the region capture once the overlay's been
-            // dismissed. We chain via a discrete Task::done so the
-            // close request lands first.
-            close_tasks.push(Task::done(Message::CaptureRegionRequested(rect)));
-            Task::batch(close_tasks)
+        Message::OverlaySelected { display_id, rect } => {
+            // Close every overlay window — selection on any one of
+            // them ends the multi-monitor session — before snapping
+            // the screenshot so the dimming veil doesn't show up in
+            // the captured pixels.
+            let mut tasks = close_all_overlays(state);
+            tasks.push(Task::done(Message::CaptureRegionRequested {
+                display_id,
+                rect,
+            }));
+            Task::batch(tasks)
         }
 
-        Message::OverlayCancelled => {
-            let overlay_ids: Vec<_> = state
-                .windows
-                .iter()
-                .filter_map(|(id, k)| (*k == WindowKind::Overlay).then_some(*id))
-                .collect();
-            let mut close_tasks: Vec<Task<Message>> = Vec::new();
-            for id in overlay_ids {
-                state.windows.forget(id);
-                close_tasks.push(window::close(id));
-            }
-            Task::batch(close_tasks)
-        }
+        Message::OverlayCancelled => Task::batch(close_all_overlays(state)),
 
-        Message::CaptureRegionRequested(rect) => {
+        Message::CaptureRegionRequested { display_id, rect } => {
             let coord = state.coordinator.clone();
             state.capture_in_flight = true;
             state.last_capture_status = None;
             // Region capture lands in the editor instead of saving
             // directly — the editor decides what to do with it.
-            Task::perform(capture_region_to_image(coord, rect), |result| {
+            Task::perform(capture_region_to_image(coord, display_id, rect), |result| {
                 Message::RegionCaptureCompleted(result.map_err(|e| e.to_string()))
             })
         }
@@ -555,7 +604,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
 pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
     match state.windows.kind(id) {
         Some(WindowKind::Welcome) | None => welcome_view(state),
-        Some(WindowKind::Overlay) => overlay_view(),
+        Some(WindowKind::Overlay) => overlay_view(state, id),
         Some(WindowKind::Editor) => editor_view(state),
     }
 }
@@ -601,11 +650,23 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     .into()
 }
 
-fn overlay_view<'a>() -> Element<'a, Message> {
+fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
     use iced::widget::canvas::Canvas;
     use iced::widget::stack;
 
-    let canvas = Canvas::new(crate::overlay::OverlayProgram)
+    // Each overlay window's canvas needs to know which display it
+    // covers so the resulting `OverlaySelected` message routes the
+    // capture to the right monitor. Fall back to an empty id only as
+    // a defence against a view() call before OpenOverlayRequested
+    // populated the map — that path won't actually publish a useful
+    // message, but it avoids an unwrap.
+    let display_id = state
+        .overlay_displays
+        .get(&id)
+        .map(|d| d.display_id.clone())
+        .unwrap_or_default();
+
+    let canvas = Canvas::new(crate::overlay::OverlayProgram { display_id })
         .width(Length::Fill)
         .height(Length::Fill);
 
@@ -775,19 +836,46 @@ async fn capture_request_to_desktop(
 
 /// Returns the captured image instead of saving — the editor flow
 /// uses this so the user can choose what to do with the bytes.
+///
+/// Looks up the named display so the request carries its real HiDPI
+/// scale; without that, the macOS backend would render at half
+/// resolution on Retina monitors.
 async fn capture_region_to_image(
     coord: CaptureCoordinator,
+    display_id: readshot_capture::DisplayId,
     rect: readshot_core::geom::Rect,
 ) -> Result<image::RgbaImage, CaptureRunError> {
     let displays = coord.list_displays().await?;
-    let primary = pick_primary(&displays).ok_or(CaptureRunError::NoDisplays)?;
+    let display = displays
+        .iter()
+        .find(|d| d.id == display_id)
+        .ok_or(CaptureRunError::NoDisplays)?;
     let req = CaptureRequest {
-        display_id: primary.id.clone(),
+        display_id: display.id.clone(),
         rect,
-        scale: primary.scale,
+        scale: display.scale,
         hide_cursor: true,
     };
     Ok(coord.capture_region(req).await?)
+}
+
+/// Walks every registered overlay window, returns close tasks for
+/// each, and clears both the `Windows` registry and the per-overlay
+/// display map. Any subsequent `OverlaySelected` for these ids is a
+/// no-op.
+fn close_all_overlays(state: &mut App) -> Vec<Task<Message>> {
+    let overlay_ids: Vec<_> = state
+        .windows
+        .iter()
+        .filter_map(|(id, k)| (*k == WindowKind::Overlay).then_some(*id))
+        .collect();
+    let mut tasks: Vec<Task<Message>> = Vec::with_capacity(overlay_ids.len());
+    for id in overlay_ids {
+        state.windows.forget(id);
+        state.overlay_displays.remove(&id);
+        tasks.push(window::close(id));
+    }
+    tasks
 }
 
 /// Save an already-captured image to a timestamped Desktop PNG.

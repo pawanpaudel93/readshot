@@ -92,14 +92,31 @@ impl Capturer for ScreenCaptureKitCapturer {
 
 fn display_info_from_sc(display: SCDisplay, primary_id: u32) -> DisplayInfo {
     let id = display.display_id();
-    let w = display.width() as f32;
-    let h = display.height() as f32;
-    let bounds = Rect::from_xywh(0.0, 0.0, w.max(1.0), h.max(1.0))
+    // Use CoreGraphics for global bounds + scale because
+    // ScreenCaptureKit's `SCDisplay` only exposes physical width/height
+    // and no origin. The overlay window needs the *global* logical
+    // origin so it can position itself across a multi-monitor setup,
+    // and the capture needs a real scale so HiDPI displays render at
+    // sharp native resolution.
+    use core_graphics::display::CGDisplay;
+    let cg = CGDisplay::new(id);
+    let cg_bounds = cg.bounds();
+    let logical_w = (cg_bounds.size.width as f32).max(1.0);
+    let logical_h = (cg_bounds.size.height as f32).max(1.0);
+    let origin_x = cg_bounds.origin.x as f32;
+    let origin_y = cg_bounds.origin.y as f32;
+    let pixels_w = cg.pixels_wide() as f32;
+    let scale = if logical_w > 0.5 {
+        (pixels_w / logical_w).max(1.0)
+    } else {
+        1.0
+    };
+    let bounds = Rect::from_xywh(origin_x, origin_y, logical_w, logical_h)
         .unwrap_or_else(|| Rect::from_xywh(0.0, 0.0, 1.0, 1.0).unwrap());
     DisplayInfo {
         id: id.to_string(),
         bounds,
-        scale: 1.0,
+        scale,
         name: format!("Display {id}"),
         is_primary: id == primary_id,
     }
