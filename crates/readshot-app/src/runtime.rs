@@ -103,10 +103,19 @@ pub fn start() -> (App, Task<Message>) {
     // surface, will simply not see the tray entry.
     app.tray = crate::tray::install();
 
-    let (id, open_task) = window::open(welcome_window_settings());
-    app.windows.register(id, WindowKind::Welcome);
-
-    let mut tasks: Vec<Task<Message>> = vec![open_task.map(|_id| Message::WelcomeWindowReady)];
+    // The welcome window is a *first-run permission gate*, not the
+    // app's main UI. Once Screen Recording is granted the user lives
+    // inside the menu-bar tray icon + global hotkey, which is what
+    // `LSUIElement=true` apps are supposed to look like. Skip
+    // opening the welcome at boot if permission is already granted —
+    // we'll only ever show it again to walk the user through a
+    // re-grant.
+    let mut tasks: Vec<Task<Message>> = Vec::new();
+    if app.welcome.should_show() {
+        let (id, open_task) = window::open(welcome_window_settings());
+        app.windows.register(id, WindowKind::Welcome);
+        tasks.push(open_task.map(|_id| Message::WelcomeWindowReady));
+    }
     if let Some(action) = take_initial_url_action() {
         tasks.push(Task::done(Message::UrlActionReceived(action)));
     }
@@ -311,9 +320,31 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
 
         Message::PermissionTick => {
             let status = state.permissions.status();
+            let was_showing = state.welcome.should_show();
             // Reuse the existing synchronous handler — it drives the
             // `WelcomeState` machine without touching iced state.
             state.update_sync(Message::PermissionPoll(status));
+            // If we just transitioned out of the welcome state (i.e.
+            // permission was granted), close every welcome window and
+            // surface a one-time system notification so the user
+            // doesn't think the app vanished — it's now in the menu
+            // bar.
+            if was_showing && !state.welcome.should_show() {
+                let welcome_ids: Vec<_> = state
+                    .windows
+                    .iter()
+                    .filter_map(|(id, k)| (*k == WindowKind::Welcome).then_some(*id))
+                    .collect();
+                let mut close_tasks: Vec<Task<Message>> = Vec::with_capacity(welcome_ids.len());
+                for id in welcome_ids {
+                    state.windows.forget(id);
+                    close_tasks.push(window::close(id));
+                }
+                if !close_tasks.is_empty() {
+                    notify_running_in_menu_bar(&state.preferences.capture_hotkey);
+                }
+                return Task::batch(close_tasks);
+            }
             Task::none()
         }
 
@@ -1475,6 +1506,48 @@ fn relaunch_via_launch_services() -> std::io::Result<()> {
         .stderr(std::process::Stdio::null())
         .spawn()?;
     Ok(())
+}
+
+/// Show a one-line system notification announcing that Readshot is
+/// alive in the menu bar after the welcome window dismisses itself
+/// post-grant. Without this, users who triggered the grant flow
+/// might think the app crashed when the window disappeared.
+///
+/// macOS: `osascript display notification …` is the lowest-friction
+/// way to do this without a third-party crate. The notification
+/// mentions the configured capture hotkey so the user knows how to
+/// trigger a screenshot from anywhere.
+///
+/// Other platforms: no-op for now. Linux libnotify / Windows toast
+/// land when those platform backends do.
+fn notify_running_in_menu_bar(hotkey: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let body = format!(
+            "Readshot is running in the menu bar. Press {hotkey} to capture, or click the icon."
+        );
+        let script = format!(
+            r#"display notification "{}" with title "Readshot is ready""#,
+            body.replace('"', "\\\"")
+        );
+        let spawn = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if let Err(e) = spawn {
+            tracing::warn!(
+                target: "readshot::notify",
+                "osascript spawn failed: {e}"
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = hotkey;
+    }
 }
 
 /// Helper for the previous synchronous status check used by tests.
