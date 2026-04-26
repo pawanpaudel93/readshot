@@ -126,71 +126,93 @@ pub fn install() -> Option<TrayController> {
     })
 }
 
-/// Generate a small RGBA icon using tiny-skia. We draw a stylized
-/// "R" — rounded outer square plus the geometry of an R glyph using
-/// stroke + fill paths. The buffer is exactly `size*size*4` bytes
-/// and `Icon::from_rgba` accepts it directly.
+/// Generate a small RGBA icon for the menu-bar tray.
+///
+/// Drawn as a macOS *template image*: transparent background, solid
+/// opaque black glyph. macOS sees `with_icon_as_template(true)` and
+/// tints the alpha into whatever colour the menu bar wants (white
+/// in dark mode, near-black in light mode), with a nice highlight
+/// when the menu is open. This matches the app-icon's brand language:
+/// four selection-corner brackets framing a centered lens dot.
 fn build_icon(size: u32) -> Result<Icon, IconError> {
     let mut pixmap = Pixmap::new(size, size).ok_or(IconError::Pixmap)?;
     let s = size as f32;
 
-    // Background: dark slate. Slightly transparent so dark-mode menu
-    // bars still show through at the edges.
-    let bg_path = {
+    // Foreground paint — fully opaque black. macOS template tinting
+    // uses the alpha channel only, so the colour itself is moot, but
+    // black + full alpha gives us a sane fallback on platforms that
+    // do *not* honour the template flag (Linux, X11 fallback paths).
+    let mut fg_paint = Paint::default();
+    fg_paint.set_color_rgba8(0x00, 0x00, 0x00, 0xff);
+    fg_paint.anti_alias = true;
+
+    // Selection-bracket geometry. Brackets sit `inset` from each edge;
+    // each arm is `arm` long and the stroke is `stroke_w`. Numbers are
+    // ratios of `size` so this scales linearly from 16 to 64+ without
+    // recomputing pixel offsets.
+    let inset = s * 0.18;
+    let arm = s * 0.28;
+    let stroke_w = (s * 0.13).max(2.0);
+    let stroke = Stroke {
+        width: stroke_w,
+        line_cap: tiny_skia::LineCap::Round,
+        line_join: tiny_skia::LineJoin::Round,
+        ..Stroke::default()
+    };
+
+    let bracket_path = {
         let mut pb = PathBuilder::new();
-        pb.move_to(0.0, 0.0);
-        pb.line_to(s, 0.0);
-        pb.line_to(s, s);
-        pb.line_to(0.0, s);
-        pb.close();
+        let left = inset;
+        let right = s - inset;
+        let top = inset;
+        let bottom = s - inset;
+        // Each bracket is two strokes that share a corner: a small
+        // L-shape. We reuse the same path object to keep things tight.
+        // top-left
+        pb.move_to(left, top + arm);
+        pb.line_to(left, top);
+        pb.line_to(left + arm, top);
+        // top-right
+        pb.move_to(right - arm, top);
+        pb.line_to(right, top);
+        pb.line_to(right, top + arm);
+        // bottom-left
+        pb.move_to(left, bottom - arm);
+        pb.line_to(left, bottom);
+        pb.line_to(left + arm, bottom);
+        // bottom-right
+        pb.move_to(right - arm, bottom);
+        pb.line_to(right, bottom);
+        pb.line_to(right, bottom - arm);
         pb.finish().ok_or(IconError::Path)?
     };
-    let mut bg_paint = Paint::default();
-    bg_paint.set_color_rgba8(0x21, 0x25, 0x2b, 0xff);
+    pixmap.stroke_path(
+        &bracket_path,
+        &fg_paint,
+        &stroke,
+        Transform::identity(),
+        None,
+    );
+
+    // Center lens dot. Filled circle at ~14% of the icon size so it
+    // reads on a 22pt menu bar without colliding with the brackets.
+    let dot_radius = (s * 0.13).max(1.5);
+    let dot_path = {
+        let mut pb = PathBuilder::new();
+        pb.push_circle(s * 0.5, s * 0.5, dot_radius);
+        pb.finish().ok_or(IconError::Path)?
+    };
     pixmap.fill_path(
-        &bg_path,
-        &bg_paint,
+        &dot_path,
+        &fg_paint,
         FillRule::Winding,
         Transform::identity(),
         None,
     );
 
-    // Rounded inner panel (approximated with a stroked rectangle).
-    let mut fg_paint = Paint::default();
-    fg_paint.set_color_rgba8(0xe8, 0xe8, 0xe8, 0xff);
-    fg_paint.anti_alias = true;
-
-    // The "R" silhouette: two strokes — vertical stem + a curved
-    // bowl + a leg. Coordinates are ratios of the icon size so the
-    // shape scales cleanly.
-    let r = |x: f32, y: f32| (s * x, s * y);
-    let r_path = {
-        let mut pb = PathBuilder::new();
-        // Vertical stem.
-        let (x0, y0) = r(0.30, 0.20);
-        pb.move_to(x0, y0);
-        pb.line_to(s * 0.30, s * 0.80);
-        // Bowl: top curve from stem-top right.
-        let (top_r, top_y) = r(0.62, 0.20);
-        pb.move_to(x0, y0);
-        pb.line_to(top_r, top_y);
-        pb.cubic_to(s * 0.78, s * 0.20, s * 0.78, s * 0.50, top_r, s * 0.50);
-        pb.line_to(s * 0.30, s * 0.50);
-        // Diagonal leg.
-        pb.move_to(s * 0.50, s * 0.50);
-        pb.line_to(s * 0.72, s * 0.80);
-        pb.finish().ok_or(IconError::Path)?
-    };
-    let stroke = Stroke {
-        width: s * 0.08,
-        ..Stroke::default()
-    };
-    pixmap.stroke_path(&r_path, &fg_paint, &stroke, Transform::identity(), None);
-
     // Convert tiny-skia's premultiplied RGBA to the straight RGBA
-    // tray-icon expects. Alpha is full so this is effectively a
-    // copy in our case, but we go through the helper to stay safe
-    // if we ever introduce semitransparent fills.
+    // `tray_icon` expects. Anti-aliased edges produce partial alphas
+    // so this conversion is no longer a no-op.
     let raw = pixmap.take();
     let rgba = unpremultiply(raw);
     Icon::from_rgba(rgba, size, size).map_err(IconError::Icon)
