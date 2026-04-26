@@ -345,7 +345,8 @@ mod tests {
         let recent = now - Duration::days(5);
         s.save(&record_at(old), &fake_png()).unwrap();
         s.save(&record_at(recent), &fake_png()).unwrap();
-        s.apply_retention(HistoryRetention::Last30Days, now).unwrap();
+        s.apply_retention(HistoryRetention::Last30Days, now)
+            .unwrap();
         let list = s.list().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].captured_at, recent);
@@ -358,7 +359,8 @@ mod tests {
             let t = Utc::now() + Duration::seconds(i);
             s.save(&record_at(t), &fake_png()).unwrap();
         }
-        s.apply_retention(HistoryRetention::Off, Utc::now()).unwrap();
+        s.apply_retention(HistoryRetention::Off, Utc::now())
+            .unwrap();
         let list = s.list().unwrap();
         assert_eq!(list.len(), 3);
     }
@@ -382,7 +384,11 @@ mod tests {
         let t = Utc.with_ymd_and_hms(2026, 4, 25, 14, 30, 0).unwrap();
         let r = record_at(t);
         s.save(&r, &fake_png()).unwrap();
-        let png_path = s.root().join("2026").join("04").join(format!("{}.png", r.id));
+        let png_path = s
+            .root()
+            .join("2026")
+            .join("04")
+            .join(format!("{}.png", r.id));
         assert!(png_path.exists());
     }
 }

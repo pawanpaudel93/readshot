@@ -48,9 +48,7 @@ fn main() -> iced::Result {
     // stable status code.
     let cli = if url_arg.is_some() {
         // Skip clap when argv[1] is a URL — clap would reject it.
-        Cli {
-            command: None,
-        }
+        Cli { command: None }
     } else {
         Cli::parse()
     };
@@ -112,7 +110,10 @@ fn init_logging() {
     });
 
     if let (Some(file), Some(path)) = (file_appender, log_path.as_ref()) {
-        let file_layer = fmt::layer().with_writer(std::sync::Mutex::new(file)).with_ansi(false).with_target(true);
+        let file_layer = fmt::layer()
+            .with_writer(std::sync::Mutex::new(file))
+            .with_ansi(false)
+            .with_target(true);
         tracing_subscriber::registry()
             .with(filter())
             .with(stderr_layer)

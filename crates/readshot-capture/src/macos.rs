@@ -85,9 +85,7 @@ impl Capturer for ScreenCaptureKitCapturer {
         let height = cg_image.height() as u32;
         let rgba = cg_image.rgba_data().map_err(map_err)?;
         RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
-            CaptureError::Backend(
-                "rgba_data length does not match width × height × 4".to_string(),
-            )
+            CaptureError::Backend("rgba_data length does not match width × height × 4".to_string())
         })
     }
 }

@@ -66,9 +66,7 @@ impl Program<Message> for OverlayProgram {
                 }
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                if let (true, Some(p)) =
-                    (state.drag_start.is_some(), cursor.position_in(bounds))
-                {
+                if let (true, Some(p)) = (state.drag_start.is_some(), cursor.position_in(bounds)) {
                     state.drag_current = Some(p);
                     return Some(Action::request_redraw());
                 }
@@ -113,9 +111,7 @@ impl Program<Message> for OverlayProgram {
                     width: bounds.width,
                     height: bounds.height,
                 }) {
-                    return Some(
-                        Action::publish(Message::OverlaySelected(domain)).and_capture(),
-                    );
+                    return Some(Action::publish(Message::OverlaySelected(domain)).and_capture());
                 }
                 return Some(Action::publish(Message::OverlayCancelled).and_capture());
             }
@@ -147,9 +143,7 @@ impl Program<Message> for OverlayProgram {
             frame.fill(&path, Color::from_rgba(1.0, 1.0, 1.0, 0.05));
             frame.stroke(
                 &path,
-                Stroke::default()
-                    .with_color(Color::WHITE)
-                    .with_width(2.0),
+                Stroke::default().with_color(Color::WHITE).with_width(2.0),
             );
         }
 

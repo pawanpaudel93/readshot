@@ -24,10 +24,7 @@ async fn main() -> std::io::Result<()> {
         .with_target(true)
         .init();
 
-    let server = McpServer::new(
-        Arc::from(default_capturer()),
-        Arc::from(default_engine()),
-    );
+    let server = McpServer::new(Arc::from(default_capturer()), Arc::from(default_engine()));
 
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();

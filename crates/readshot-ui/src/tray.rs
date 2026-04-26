@@ -125,6 +125,9 @@ mod tests {
             .iter()
             .filter(|r| matches!(r, TrayMenuRow::Separator))
             .count();
-        assert_eq!(separators, 2, "expected two separators (capture / app / quit groups)");
+        assert_eq!(
+            separators, 2,
+            "expected two separators (capture / app / quit groups)"
+        );
     }
 }

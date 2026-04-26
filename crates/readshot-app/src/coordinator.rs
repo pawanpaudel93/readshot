@@ -77,10 +77,7 @@ impl CaptureCoordinator {
         self.capturer.list_displays().await
     }
 
-    pub async fn capture_region(
-        &self,
-        req: CaptureRequest,
-    ) -> Result<RgbaImage, CaptureError> {
+    pub async fn capture_region(&self, req: CaptureRequest) -> Result<RgbaImage, CaptureError> {
         self.capturer.capture_region(req).await
     }
 

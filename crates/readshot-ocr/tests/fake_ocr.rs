@@ -62,8 +62,8 @@ async fn supported_languages_defaults_to_english() {
 
 #[tokio::test]
 async fn supported_languages_can_be_customised() {
-    let engine = FakeOcrEngine::no_text()
-        .with_supported_languages(vec!["fr".to_string(), "de".to_string()]);
+    let engine =
+        FakeOcrEngine::no_text().with_supported_languages(vec!["fr".to_string(), "de".to_string()]);
     assert_eq!(
         engine.supported_languages(),
         vec!["fr".to_string(), "de".to_string()]

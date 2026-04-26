@@ -58,14 +58,8 @@ pub fn compute(from: PointLike, to: PointLike, line_width: f32) -> ArrowheadTria
     let base_x = to.x - ux * head_length;
     let base_y = to.y - uy * head_length;
 
-    let left = PointLike::new(
-        base_x + px * head_half_width,
-        base_y + py * head_half_width,
-    );
-    let right = PointLike::new(
-        base_x - px * head_half_width,
-        base_y - py * head_half_width,
-    );
+    let left = PointLike::new(base_x + px * head_half_width, base_y + py * head_half_width);
+    let right = PointLike::new(base_x - px * head_half_width, base_y - py * head_half_width);
 
     ArrowheadTriangle {
         tip: to,

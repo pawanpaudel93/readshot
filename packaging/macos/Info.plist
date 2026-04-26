@@ -14,6 +14,9 @@
     <key>CFBundleExecutable</key>
     <string>readshot</string>
 
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+
     <key>CFBundleVersion</key>
     <string>0.1.0</string>
 

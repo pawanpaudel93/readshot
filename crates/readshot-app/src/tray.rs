@@ -174,14 +174,7 @@ fn build_icon(size: u32) -> Result<Icon, IconError> {
         let (top_r, top_y) = r(0.62, 0.20);
         pb.move_to(x0, y0);
         pb.line_to(top_r, top_y);
-        pb.cubic_to(
-            s * 0.78,
-            s * 0.20,
-            s * 0.78,
-            s * 0.50,
-            top_r,
-            s * 0.50,
-        );
+        pb.cubic_to(s * 0.78, s * 0.20, s * 0.78, s * 0.50, top_r, s * 0.50);
         pb.line_to(s * 0.30, s * 0.50);
         // Diagonal leg.
         pb.move_to(s * 0.50, s * 0.50);

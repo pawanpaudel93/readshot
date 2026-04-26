@@ -147,7 +147,9 @@ impl Preferences {
     pub fn load_or_default(path: &Path) -> Result<Preferences, PreferencesError> {
         match Self::load(path) {
             Ok(p) => Ok(p),
-            Err(PreferencesError::Io(msg)) if msg.contains("(os error 2)") || msg.contains("No such") => {
+            Err(PreferencesError::Io(msg))
+                if msg.contains("(os error 2)") || msg.contains("No such") =>
+            {
                 Ok(Preferences::default())
             }
             Err(e) => Err(e),
@@ -225,11 +227,7 @@ mod tests {
     #[test]
     fn migration_stamps_version_forward() {
         let (_dir, path) = temp_path();
-        std::fs::write(
-            &path,
-            "schema_version = 0\ncapture_hotkey = \"f1\"\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "schema_version = 0\ncapture_hotkey = \"f1\"\n").unwrap();
         let prefs = Preferences::load(&path).unwrap();
         assert_eq!(prefs.schema_version, PREFERENCES_SCHEMA_VERSION);
         assert_eq!(prefs.capture_hotkey, "f1");

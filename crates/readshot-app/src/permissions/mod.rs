@@ -19,12 +19,12 @@
 //! and the editor's "permission denied" toast share a single code
 //! path.
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(target_os = "linux")]
-mod linux;
 
 #[cfg(test)]
 pub mod fake;

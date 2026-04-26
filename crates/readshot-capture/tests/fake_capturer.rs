@@ -3,8 +3,8 @@
 //! These run on every platform (no OS-level capture grant required) and
 //! double as documentation of the trait's expected behaviour.
 
-use readshot_capture::{Capturer, CaptureRequest};
 use readshot_capture::fake::FakeCapturer;
+use readshot_capture::{CaptureRequest, Capturer};
 use readshot_core::geom::Rect;
 
 fn full_rect_request() -> CaptureRequest {

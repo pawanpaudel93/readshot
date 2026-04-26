@@ -81,9 +81,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                         cursor: point,
                         tool_at_press: self.active_tool,
                     };
-                    return Some(
-                        canvas::Action::publish(CanvasMessage::DragStarted).and_capture(),
-                    );
+                    return Some(canvas::Action::publish(CanvasMessage::DragStarted).and_capture());
                 }
                 None
             }
@@ -134,9 +132,9 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                             canvas::Action::publish(CanvasMessage::CommitAnnotation(a))
                                 .and_capture(),
                         ),
-                        None => Some(
-                            canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
-                        ),
+                        None => {
+                            Some(canvas::Action::publish(CanvasMessage::Cancelled).and_capture())
+                        }
                     };
                 }
                 None
@@ -300,7 +298,10 @@ mod tests {
                 CoreRgba::OPAQUE_BLACK,
                 1.0,
             );
-            assert!(r.is_none(), "tool {tool:?} should not produce a drag-annotation");
+            assert!(
+                r.is_none(),
+                "tool {tool:?} should not produce a drag-annotation"
+            );
         }
     }
 

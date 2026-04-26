@@ -73,10 +73,7 @@ fn monitor_to_display_info(m: &Monitor) -> Result<DisplayInfo, CaptureError> {
     let w = m.width().map_err(map_err)? as f32;
     let h = m.height().map_err(map_err)? as f32;
     let scale = m.scale_factor().map_err(map_err)?;
-    let name = m
-        .friendly_name()
-        .or_else(|_| m.name())
-        .map_err(map_err)?;
+    let name = m.friendly_name().or_else(|_| m.name()).map_err(map_err)?;
     let is_primary = m.is_primary().map_err(map_err)?;
     let bounds = Rect::from_xywh(x, y, w.max(1.0), h.max(1.0))
         .unwrap_or_else(|| Rect::from_xywh(0.0, 0.0, 1.0, 1.0).unwrap());

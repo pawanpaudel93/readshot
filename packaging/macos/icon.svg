@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Readshot app icon. 1024x1024 source — the install pipeline
+  rasterises it at every macOS app-icon size and then bundles
+  the iconset into Readshot.icns.
+
+  Visual: a rounded blue tile with white selection-corner brackets
+  framing a centered camera-shutter ring. Reads as "screenshot
+  selection + capture" at every size from 16 to 1024.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5B8DEF"/>
+      <stop offset="100%" stop-color="#2E5BDA"/>
+    </linearGradient>
+    <linearGradient id="lens" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#E0E8F7" stop-opacity="0.95"/>
+    </linearGradient>
+    <filter id="ds" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="14"/>
+      <feOffset dx="0" dy="10"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.35"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- rounded-square tile -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
+
+  <!-- selection corner brackets -->
+  <g stroke="#FFFFFF" stroke-width="44" stroke-linecap="round" fill="none" filter="url(#ds)">
+    <!-- top-left -->
+    <path d="M 280 380 L 280 256 L 404 256"/>
+    <!-- top-right -->
+    <path d="M 744 380 L 744 256 L 620 256"/>
+    <!-- bottom-left -->
+    <path d="M 280 644 L 280 768 L 404 768"/>
+    <!-- bottom-right -->
+    <path d="M 744 644 L 744 768 L 620 768"/>
+  </g>
+
+  <!-- centered shutter / lens -->
+  <g transform="translate(512 512)">
+    <circle r="148" fill="url(#lens)"/>
+    <circle r="148" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-opacity="0.4"/>
+    <circle r="92" fill="#2E5BDA"/>
+    <circle r="92" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-opacity="0.45"/>
+    <circle r="38" fill="#FFFFFF" fill-opacity="0.85"/>
+    <circle cx="-22" cy="-22" r="14" fill="#FFFFFF" fill-opacity="0.8"/>
+  </g>
+</svg>

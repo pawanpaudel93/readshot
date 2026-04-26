@@ -343,8 +343,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // Kick off the region capture once the overlay's been
             // dismissed. We chain via a discrete Task::done so the
             // close request lands first.
-            close_tasks
-                .push(Task::done(Message::CaptureRegionRequested(rect)));
+            close_tasks.push(Task::done(Message::CaptureRegionRequested(rect)));
             Task::batch(close_tasks)
         }
 
@@ -653,57 +652,57 @@ fn overlay_view<'a>() -> Element<'a, Message> {
 fn welcome_view(state: &App) -> Element<'_, Message> {
     let status_line = text(permission_blurb(state.welcome));
     let action: Element<'_, Message> = match state.welcome {
-        WelcomeState::Granted => row![
-            text("Screen Recording is granted. You're all set.").width(Length::Fill),
-        ]
-        .into(),
+        WelcomeState::Granted => {
+            row![text("Screen Recording is granted. You're all set.").width(Length::Fill),].into()
+        }
+        // Pending: user hasn't asked us to register yet. We collapse
+        // CGRequestScreenCaptureAccess + open_settings into a single
+        // primary button so there is only one thing to click. Ad-hoc
+        // builds get no system prompt anyway, so registering and
+        // deep-linking together is the lowest-friction path.
         WelcomeState::Pending => column![
-            text("Readshot needs Screen Recording permission. Three steps:")
+            text("Step 1 of 2 — Enable Readshot in System Settings")
+                .size(15)
                 .width(Length::Fill),
             text(
-                "1. Click Grant access — Readshot registers with macOS \
-                 and opens System Settings. (No prompt appears for \
-                 ad-hoc apps; this is normal.)\n\
-                 2. In Privacy & Security → Screen Recording, toggle \
-                 Readshot ON.\n\
-                 3. Click Restart Readshot to pick up the grant."
+                "Click the button below. macOS will register Readshot \
+                 and open Privacy & Security → Screen Recording. Toggle \
+                 Readshot ON, then come back here for step 2."
+            )
+            .size(12)
+            .width(Length::Fill),
+            button(text("Open System Settings").size(14))
+                .padding(10)
+                .on_press(Message::GrantPermissionRequested),
+        ]
+        .spacing(10)
+        .into(),
+        // After the user clicked the Pending button OR after we
+        // observed Denied (still no grant in this process). Both end
+        // up here so the user sees one consistent next step.
+        WelcomeState::AwaitingGrant | WelcomeState::Denied => column![
+            text("Step 2 of 2 — Restart Readshot")
+                .size(15)
+                .width(Length::Fill),
+            text(
+                "Once Readshot is toggled ON in System Settings, click \
+                 Restart Readshot now. macOS only honours new Screen \
+                 Recording grants on a fresh launch — this app will \
+                 relaunch itself for you."
             )
             .size(12)
             .width(Length::Fill),
             row![
-                button("1. Grant access").on_press(Message::GrantPermissionRequested),
-                button("2. Open Settings").on_press(Message::OpenPermissionSettingsRequested),
-                button("3. Restart Readshot").on_press(Message::RestartRequested),
+                button(text("Restart Readshot now").size(14))
+                    .padding(10)
+                    .on_press(Message::RestartRequested),
+                button(text("Open Settings again").size(14))
+                    .padding(10)
+                    .on_press(Message::OpenPermissionSettingsRequested),
             ]
             .spacing(8),
         ]
-        .spacing(8)
-        .into(),
-        WelcomeState::AwaitingGrant => column![
-            text("Almost there. In System Settings → Privacy & Security \
-                  → Screen Recording, toggle Readshot ON, then click \
-                  Restart Readshot.")
-                .width(Length::Fill),
-            row![
-                button("Open Settings").on_press(Message::OpenPermissionSettingsRequested),
-                button("Restart Readshot").on_press(Message::RestartRequested),
-            ]
-            .spacing(8),
-        ]
-        .spacing(8)
-        .into(),
-        WelcomeState::Denied => column![
-            text("Permission denied. Open System Settings → Privacy & \
-                  Security → Screen Recording, toggle Readshot ON, \
-                  then click Restart Readshot.")
-                .width(Length::Fill),
-            row![
-                button("Open Settings").on_press(Message::OpenPermissionSettingsRequested),
-                button("Restart Readshot").on_press(Message::RestartRequested),
-            ]
-            .spacing(8),
-        ]
-        .spacing(8)
+        .spacing(10)
         .into(),
     };
 
@@ -727,8 +726,7 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
         action,
         Space::new().height(Length::Fixed(16.0)),
         capture_btn,
-        text("Drag to select a region · Enter to capture all · Esc to cancel")
-            .size(11),
+        text("Drag to select a region · Enter to capture all · Esc to cancel").size(11),
         Space::new().height(Length::Fixed(8.0)),
         toast,
         Space::new().width(Length::Fill).height(Length::Fill),
@@ -755,9 +753,7 @@ fn permission_blurb(state: WelcomeState) -> &'static str {
 /// Async helper: capture the primary display's full bounds and write
 /// the PNG to `~/Desktop/Readshot-<timestamp>.png`. Returns the saved
 /// path on success.
-async fn capture_primary_to_desktop(
-    coord: CaptureCoordinator,
-) -> Result<PathBuf, CaptureRunError> {
+async fn capture_primary_to_desktop(coord: CaptureCoordinator) -> Result<PathBuf, CaptureRunError> {
     let displays = coord.list_displays().await?;
     let primary = pick_primary(&displays).ok_or(CaptureRunError::NoDisplays)?;
     let req = CaptureRequest {
@@ -999,7 +995,9 @@ mod tests {
             is_primary: false,
         };
         assert_eq!(
-            pick_primary(&[secondary.clone(), primary.clone()]).unwrap().id,
+            pick_primary(&[secondary.clone(), primary.clone()])
+                .unwrap()
+                .id,
             "p"
         );
         assert_eq!(pick_primary(&[secondary.clone()]).unwrap().id, "s");
@@ -1025,7 +1023,10 @@ mod tests {
 
     #[test]
     fn permission_blurb_changes_with_state() {
-        assert_eq!(permission_blurb(WelcomeState::Granted), "Permission: granted");
+        assert_eq!(
+            permission_blurb(WelcomeState::Granted),
+            "Permission: granted"
+        );
         assert_eq!(permission_blurb(WelcomeState::Denied), "Permission: denied");
     }
 

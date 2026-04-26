@@ -176,11 +176,11 @@ pub enum CliError {
 pub fn exit_code(err: &CliError) -> i32 {
     match err {
         CliError::Capture(CaptureError::PermissionDenied) => 77, // EX_NOPERM
-        CliError::Capture(_) => 71,                                     // EX_OSERR
-        CliError::Ocr(_) => 70,                                         // EX_SOFTWARE
-        CliError::DisplayNotFound(_) | CliError::NoDisplays => 66,      // EX_NOINPUT
-        CliError::InvalidRect { .. } => 64,                             // EX_USAGE
-        CliError::Io(_) | CliError::Image(_) => 74,                     // EX_IOERR
+        CliError::Capture(_) => 71,                              // EX_OSERR
+        CliError::Ocr(_) => 70,                                  // EX_SOFTWARE
+        CliError::DisplayNotFound(_) | CliError::NoDisplays => 66, // EX_NOINPUT
+        CliError::InvalidRect { .. } => 64,                      // EX_USAGE
+        CliError::Io(_) | CliError::Image(_) => 74,              // EX_IOERR
     }
 }
 
@@ -228,14 +228,9 @@ impl Cli {
                 hide_cursor,
                 output,
             } => {
-                let req = build_capture_request(
-                    &*capturer,
-                    display.as_deref(),
-                    rect,
-                    scale,
-                    hide_cursor,
-                )
-                .await?;
+                let req =
+                    build_capture_request(&*capturer, display.as_deref(), rect, scale, hide_cursor)
+                        .await?;
                 let img = capturer.capture_region(req).await?;
                 write_png(&img, &output, stdout)?;
             }
@@ -265,14 +260,9 @@ impl Cli {
                 languages,
                 language_correction,
             } => {
-                let req = build_capture_request(
-                    &*capturer,
-                    display.as_deref(),
-                    rect,
-                    scale,
-                    hide_cursor,
-                )
-                .await?;
+                let req =
+                    build_capture_request(&*capturer, display.as_deref(), rect, scale, hide_cursor)
+                        .await?;
                 let img = capturer.capture_region(req).await?;
                 if let Some(path) = also_image.as_deref() {
                     write_png(&img, path, stdout)?;
@@ -323,7 +313,11 @@ async fn build_capture_request(
 }
 
 fn write_displays_table(out: &mut dyn Write, displays: &[DisplayInfo]) -> std::io::Result<()> {
-    writeln!(out, "{:<24}{:<8}{:<24}{:<6}name", "id", "scale", "bounds (x,y,w,h)", "prim")?;
+    writeln!(
+        out,
+        "{:<24}{:<8}{:<24}{:<6}name",
+        "id", "scale", "bounds (x,y,w,h)", "prim"
+    )?;
     for d in displays {
         writeln!(
             out,
@@ -368,7 +362,11 @@ fn write_displays_json(out: &mut dyn Write, displays: &[DisplayInfo]) -> std::io
     Ok(())
 }
 
-fn write_png(img: &RgbaImage, path: &std::path::Path, stdout: &mut dyn Write) -> Result<(), CliError> {
+fn write_png(
+    img: &RgbaImage,
+    path: &std::path::Path,
+    stdout: &mut dyn Write,
+) -> Result<(), CliError> {
     if path == std::path::Path::new("-") {
         let mut buf = Vec::with_capacity(img.as_raw().len() / 4);
         let mut cursor = std::io::Cursor::new(&mut buf);
@@ -446,22 +444,41 @@ mod tests {
     #[test]
     fn parses_list_displays_subcommand() {
         let cli = Cli::try_parse_from(["readshot", "list-displays"]).unwrap();
-        assert!(matches!(cli.command, Some(Command::ListDisplays { json: false })));
+        assert!(matches!(
+            cli.command,
+            Some(Command::ListDisplays { json: false })
+        ));
     }
 
     #[test]
     fn parses_list_displays_json_flag() {
         let cli = Cli::try_parse_from(["readshot", "list-displays", "--json"]).unwrap();
-        assert!(matches!(cli.command, Some(Command::ListDisplays { json: true })));
+        assert!(matches!(
+            cli.command,
+            Some(Command::ListDisplays { json: true })
+        ));
     }
 
     #[test]
     fn parses_capture_subcommand() {
         let cli = Cli::try_parse_from([
-            "readshot", "capture", "--display", "fake-0", "--rect", "0,0,128,128", "-o", "out.png",
+            "readshot",
+            "capture",
+            "--display",
+            "fake-0",
+            "--rect",
+            "0,0,128,128",
+            "-o",
+            "out.png",
         ])
         .unwrap();
-        let Some(Command::Capture { display, rect, output, .. }) = cli.command else {
+        let Some(Command::Capture {
+            display,
+            rect,
+            output,
+            ..
+        }) = cli.command
+        else {
             panic!("wrong subcommand");
         };
         assert_eq!(display.as_deref(), Some("fake-0"));
@@ -472,10 +489,21 @@ mod tests {
     #[test]
     fn parses_ocr_subcommand_with_languages() {
         let cli = Cli::try_parse_from([
-            "readshot", "ocr", "-i", "in.png", "--languages", "en-US,fr-FR",
+            "readshot",
+            "ocr",
+            "-i",
+            "in.png",
+            "--languages",
+            "en-US,fr-FR",
         ])
         .unwrap();
-        let Some(Command::Ocr { input, languages, output, .. }) = cli.command else {
+        let Some(Command::Ocr {
+            input,
+            languages,
+            output,
+            ..
+        }) = cli.command
+        else {
             panic!("wrong subcommand");
         };
         assert_eq!(input, std::path::PathBuf::from("in.png"));
@@ -553,16 +581,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let png_path = dir.path().join("in.png");
         let img = image::RgbaImage::new(8, 8);
-        img.save_with_format(&png_path, image::ImageFormat::Png).unwrap();
+        img.save_with_format(&png_path, image::ImageFormat::Png)
+            .unwrap();
 
         let (cap, ocr) = fakes();
-        let cli = Cli::try_parse_from([
-            "readshot",
-            "ocr",
-            "-i",
-            png_path.to_str().unwrap(),
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["readshot", "ocr", "-i", png_path.to_str().unwrap()]).unwrap();
         let mut out = Vec::new();
         cli.run(cap, ocr, &mut out).await.unwrap();
         let text = String::from_utf8(out).unwrap();

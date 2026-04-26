@@ -133,7 +133,13 @@ impl McpServer {
 
         let req: RpcRequest = match serde_json::from_str(line) {
             Ok(r) => r,
-            Err(e) => return Some(error_response(Value::Null, codes::PARSE_ERROR, e.to_string())),
+            Err(e) => {
+                return Some(error_response(
+                    Value::Null,
+                    codes::PARSE_ERROR,
+                    e.to_string(),
+                ))
+            }
         };
 
         // Notifications carry no `id`; we still process them but
@@ -142,11 +148,7 @@ impl McpServer {
 
         if req.jsonrpc.as_deref() != Some("2.0") {
             return id.map(|id| {
-                error_response(
-                    id,
-                    codes::INVALID_REQUEST,
-                    "jsonrpc must be \"2.0\"".into(),
-                )
+                error_response(id, codes::INVALID_REQUEST, "jsonrpc must be \"2.0\"".into())
             });
         }
 
@@ -224,19 +226,31 @@ impl McpServer {
     }
 
     async fn tool_list_displays(&self) -> Result<Value, RpcErr> {
-        let displays = self.capturer.list_displays().await.map_err(capture_to_rpc)?;
+        let displays = self
+            .capturer
+            .list_displays()
+            .await
+            .map_err(capture_to_rpc)?;
         Ok(json!({ "displays": displays.iter().map(display_to_json).collect::<Vec<_>>() }))
     }
 
     async fn tool_capture_region(&self, args: &Value) -> Result<Value, RpcErr> {
         let req = self.build_request(args).await?;
-        let img = self.capturer.capture_region(req).await.map_err(capture_to_rpc)?;
+        let img = self
+            .capturer
+            .capture_region(req)
+            .await
+            .map_err(capture_to_rpc)?;
         Ok(json!({ "image_base64": encode_png(&img)? }))
     }
 
     async fn tool_capture_text(&self, args: &Value) -> Result<Value, RpcErr> {
         let req = self.build_request(args).await?;
-        let img = self.capturer.capture_region(req).await.map_err(capture_to_rpc)?;
+        let img = self
+            .capturer
+            .capture_region(req)
+            .await
+            .map_err(capture_to_rpc)?;
         let result = self
             .ocr
             .recognise(ocr_request_from(args, img))
@@ -250,7 +264,11 @@ impl McpServer {
 
     async fn tool_capture_region_and_text(&self, args: &Value) -> Result<Value, RpcErr> {
         let req = self.build_request(args).await?;
-        let img = self.capturer.capture_region(req).await.map_err(capture_to_rpc)?;
+        let img = self
+            .capturer
+            .capture_region(req)
+            .await
+            .map_err(capture_to_rpc)?;
         let png = encode_png(&img)?;
         let result = self
             .ocr
@@ -265,7 +283,11 @@ impl McpServer {
     }
 
     async fn build_request(&self, args: &Value) -> Result<CaptureRequest, RpcErr> {
-        let displays = self.capturer.list_displays().await.map_err(capture_to_rpc)?;
+        let displays = self
+            .capturer
+            .list_displays()
+            .await
+            .map_err(capture_to_rpc)?;
         if displays.is_empty() {
             return Err(RpcErr {
                 code: codes::SERVER_ERROR,
@@ -273,13 +295,10 @@ impl McpServer {
             });
         }
         let chosen = match args.get("display").and_then(Value::as_str) {
-            Some(id) => displays
-                .iter()
-                .find(|d| d.id == id)
-                .ok_or_else(|| RpcErr {
-                    code: codes::INVALID_PARAMS,
-                    message: format!("display `{id}` not found"),
-                })?,
+            Some(id) => displays.iter().find(|d| d.id == id).ok_or_else(|| RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: format!("display `{id}` not found"),
+            })?,
             None => displays
                 .iter()
                 .find(|d| d.is_primary)
@@ -570,10 +589,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"capture_text","arguments":{"rect":{"x":0,"y":0,"width":32,"height":32}}}}"#,
         )
         .await;
-        assert_eq!(
-            resp["result"]["structuredContent"]["text"],
-            "hello mcp",
-        );
+        assert_eq!(resp["result"]["structuredContent"]["text"], "hello mcp",);
     }
 
     #[tokio::test]
@@ -592,11 +608,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_method_returns_method_not_found() {
         let s = server();
-        let resp = call(
-            &s,
-            r#"{"jsonrpc":"2.0","id":7,"method":"nope/unknown"}"#,
-        )
-        .await;
+        let resp = call(&s, r#"{"jsonrpc":"2.0","id":7,"method":"nope/unknown"}"#).await;
         assert_eq!(resp["error"]["code"], codes::METHOD_NOT_FOUND);
     }
 
@@ -657,10 +669,7 @@ mod tests {
     #[tokio::test]
     async fn missing_jsonrpc_field_returns_invalid_request() {
         let s = server();
-        let raw = s
-            .handle(r#"{"id":11,"method":"ping"}"#)
-            .await
-            .unwrap();
+        let raw = s.handle(r#"{"id":11,"method":"ping"}"#).await.unwrap();
         let resp: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(resp["error"]["code"], codes::INVALID_REQUEST);
     }
@@ -668,9 +677,7 @@ mod tests {
     #[tokio::test]
     async fn notification_yields_no_response() {
         let s = server();
-        let resp = s
-            .handle(r#"{"jsonrpc":"2.0","method":"ping"}"#)
-            .await;
+        let resp = s.handle(r#"{"jsonrpc":"2.0","method":"ping"}"#).await;
         assert!(resp.is_none(), "notifications must not produce a reply");
     }
 

@@ -25,12 +25,12 @@ use readshot_core::geom::Rect;
 
 pub mod fake;
 
+#[cfg(target_os = "linux")]
+pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "windows")]
 pub mod windows;
-#[cfg(target_os = "linux")]
-pub mod linux;
 
 /// Opaque OS handle for a display. macOS uses `CGDirectDisplayID` as a
 /// decimal string; Windows uses the monitor's interface id; Linux uses

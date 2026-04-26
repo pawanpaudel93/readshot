@@ -14,7 +14,8 @@
 use ab_glyph::{Font as _, FontRef, PxScale, ScaleFont as _};
 use image::{Rgba as ImgRgba, RgbaImage};
 use tiny_skia::{
-    FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Rect as SkRect, Shader, Stroke, Transform,
+    FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Rect as SkRect, Shader, Stroke,
+    Transform,
 };
 
 use crate::annotation::{Annotation, Rgba};
@@ -134,13 +135,10 @@ fn compute_output_geometry(
 ) -> (u32, u32, (f32, f32)) {
     // The last Crop wins — same as Photoshop's interpretation of a stack of
     // crop instructions.
-    let crop = model
-        .iter()
-        .rev()
-        .find_map(|a| match a {
-            Annotation::Crop { rect } => Some(*rect),
-            _ => None,
-        });
+    let crop = model.iter().rev().find_map(|a| match a {
+        Annotation::Crop { rect } => Some(*rect),
+        _ => None,
+    });
 
     if let Some(rect) = crop {
         // Clamp to base bounds so a crop that falls partially outside the
@@ -266,7 +264,11 @@ fn stroke_paint(color: Rgba) -> Paint<'static> {
 fn make_stroke(line_width: f32, round_caps: bool) -> Stroke {
     Stroke {
         width: line_width.max(0.5),
-        line_cap: if round_caps { LineCap::Round } else { LineCap::Butt },
+        line_cap: if round_caps {
+            LineCap::Round
+        } else {
+            LineCap::Butt
+        },
         line_join: LineJoin::Round,
         ..Stroke::default()
     }
@@ -370,7 +372,13 @@ fn draw_arrow(
         return;
     };
     let paint = solid_paint(color);
-    pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+    pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 }
 
 fn draw_text(
@@ -402,10 +410,8 @@ fn draw_text(
         if let Some(prev) = last_glyph {
             x += scaled.kern(prev, glyph_id);
         }
-        let glyph = glyph_id.with_scale_and_position(
-            PxScale::from(size),
-            ab_glyph::point(x, baseline.y),
-        );
+        let glyph =
+            glyph_id.with_scale_and_position(PxScale::from(size), ab_glyph::point(x, baseline.y));
         if let Some(outlined) = font.outline_glyph(glyph) {
             let bounds = outlined.px_bounds();
             outlined.draw(|gx, gy, alpha| {
@@ -494,7 +500,8 @@ fn draw_numbered_pin(
         if let Some(prev) = last_glyph {
             x += scaled.kern(prev, glyph_id);
         }
-        let glyph = glyph_id.with_scale_and_position(PxScale::from(size), ab_glyph::point(x, baseline_y));
+        let glyph =
+            glyph_id.with_scale_and_position(PxScale::from(size), ab_glyph::point(x, baseline_y));
         if let Some(outlined) = font.outline_glyph(glyph) {
             let bounds = outlined.px_bounds();
             outlined.draw(|gx, gy, alpha| {

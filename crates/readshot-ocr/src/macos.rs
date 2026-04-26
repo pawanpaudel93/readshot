@@ -97,10 +97,8 @@ fn run_request(
         request.setUsesLanguageCorrection(use_language_correction);
 
         if !languages.is_empty() {
-            let lang_strings: Vec<Retained<NSString>> = languages
-                .iter()
-                .map(|s| NSString::from_str(s))
-                .collect();
+            let lang_strings: Vec<Retained<NSString>> =
+                languages.iter().map(|s| NSString::from_str(s)).collect();
             let lang_refs: Vec<&NSString> = lang_strings.iter().map(|s| s.as_ref()).collect();
             let lang_array: Retained<NSArray<NSString>> = NSArray::from_slice(&lang_refs);
             request.setRecognitionLanguages(&lang_array);

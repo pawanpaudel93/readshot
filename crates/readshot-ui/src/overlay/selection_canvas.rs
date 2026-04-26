@@ -22,15 +22,15 @@
 //! `iced::time::every(80ms)` subscription that the daemon owns — the
 //! widget itself just consults the current animation phase.
 
+use iced::keyboard::key::Named;
+use iced::keyboard::Key;
+use iced::mouse::Cursor;
+use iced::widget::canvas::{self, Event, Frame, Geometry, Path, Program, Stroke, Style};
 use iced::Point;
 use iced::Rectangle;
 use iced::Renderer;
 use iced::Theme;
 use iced::Vector;
-use iced::keyboard::Key;
-use iced::keyboard::key::Named;
-use iced::mouse::Cursor;
-use iced::widget::canvas::{self, Event, Frame, Geometry, Path, Program, Stroke, Style};
 use iced::{Color, Size};
 
 use readshot_core::geom::Rect as CoreRect;
@@ -117,23 +117,35 @@ impl Program<SelectionMessage, Theme, Renderer> for SelectionCanvas {
                         anchor: point,
                         cursor: point,
                     };
-                    return Some(canvas::Action::publish(SelectionMessage::DragStarted(point)).and_capture());
+                    return Some(
+                        canvas::Action::publish(SelectionMessage::DragStarted(point)).and_capture(),
+                    );
                 }
                 None
             }
             Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => match state {
-                DragState::Dragging { anchor, cursor: cur } => {
+                DragState::Dragging {
+                    anchor,
+                    cursor: cur,
+                } => {
                     if let Some(point) = cursor.position_in(bounds) {
                         *cur = point;
                         let rect = rect_from_points(*anchor, point);
-                        return Some(canvas::Action::publish(SelectionMessage::DragMoved(rect)).and_capture());
+                        return Some(
+                            canvas::Action::publish(SelectionMessage::DragMoved(rect))
+                                .and_capture(),
+                        );
                     }
                     None
                 }
                 DragState::Idle => None,
             },
             Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
-                if let DragState::Dragging { anchor, cursor: cur } = *state {
+                if let DragState::Dragging {
+                    anchor,
+                    cursor: cur,
+                } = *state
+                {
                     *state = DragState::Idle;
                     let rect = rect_from_points(anchor, cur);
                     let msg = if rect.width > 0.5 && rect.height > 0.5 {

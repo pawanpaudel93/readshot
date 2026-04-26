@@ -45,10 +45,7 @@ pub use undo::History;
 pub enum EditorOutcome {
     CopyImage(RgbaImage),
     CopyText(String),
-    Save {
-        path: PathBuf,
-        format: ExportFormat,
-    },
+    Save { path: PathBuf, format: ExportFormat },
     Pin(RgbaImage),
     Discard,
 }

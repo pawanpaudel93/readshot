@@ -27,7 +27,14 @@ use tiny_skia::Pixmap;
 /// `(rect_x, rect_y, rect_w, rect_h)`. The rectangle is clipped to the
 /// pixmap's bounds; supplying a rect that lies entirely outside the
 /// pixmap is a no-op.
-pub fn blur_rect(pixmap: &mut Pixmap, rect_x: i32, rect_y: i32, rect_w: i32, rect_h: i32, radius: f32) {
+pub fn blur_rect(
+    pixmap: &mut Pixmap,
+    rect_x: i32,
+    rect_y: i32,
+    rect_w: i32,
+    rect_h: i32,
+    radius: f32,
+) {
     let pw = pixmap.width() as i32;
     let ph = pixmap.height() as i32;
     let x0 = rect_x.max(0);
@@ -134,7 +141,14 @@ fn checked_average(acc: [u32; 4], count: u32) -> Option<[u8; 4]> {
 /// inside the rect with the cell's average colour. Cells that overlap the
 /// rect's edge are partially-clipped — the average is taken over only the
 /// pixels actually inside the rect.
-pub fn pixelate_rect(pixmap: &mut Pixmap, rect_x: i32, rect_y: i32, rect_w: i32, rect_h: i32, block: f32) {
+pub fn pixelate_rect(
+    pixmap: &mut Pixmap,
+    rect_x: i32,
+    rect_y: i32,
+    rect_w: i32,
+    rect_h: i32,
+    block: f32,
+) {
     let pw = pixmap.width() as i32;
     let ph = pixmap.height() as i32;
     let x0 = rect_x.max(0);

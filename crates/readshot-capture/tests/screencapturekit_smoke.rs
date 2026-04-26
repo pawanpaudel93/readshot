@@ -40,7 +40,10 @@ async fn lists_at_least_one_display() {
         .list_displays()
         .await
         .expect("ScreenCaptureKit::list_displays succeeds with permission");
-    assert!(!displays.is_empty(), "expected at least one attached display");
+    assert!(
+        !displays.is_empty(),
+        "expected at least one attached display"
+    );
     let primary_count = displays.iter().filter(|d| d.is_primary).count();
     assert!(
         primary_count <= 1,

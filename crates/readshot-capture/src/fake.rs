@@ -21,8 +21,8 @@ pub struct FakeCapturer {
 
 impl FakeCapturer {
     pub fn new() -> Self {
-        let bounds = Rect::from_xywh(0.0, 0.0, 256.0, 256.0)
-            .expect("256x256 bounds is a valid Rect");
+        let bounds =
+            Rect::from_xywh(0.0, 0.0, 256.0, 256.0).expect("256x256 bounds is a valid Rect");
         Self {
             image: base_256(),
             displays: vec![DisplayInfo {
