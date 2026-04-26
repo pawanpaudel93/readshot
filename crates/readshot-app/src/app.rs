@@ -181,6 +181,16 @@ pub enum Message {
     /// User mouse-pressed inside the body of a pin window — kicks
     /// off a native window-drag so the pin can be repositioned.
     PinDragRequested(iced::window::Id),
+    /// Bump the editor's line width by `delta` (positive grows,
+    /// negative shrinks). Triggered by `[` / `]` keyboard
+    /// shortcuts; the runtime resolves the new width against the
+    /// current model state and clamps to the published range.
+    EditorWidthBump(f32),
+    /// Cycle the editor's active palette colour. `+1` moves to the
+    /// next swatch in `PALETTE`, `-1` to the previous; the runtime
+    /// wraps via `rem_euclid` so the cycle is endless. Triggered by
+    /// `,` / `.` keyboard shortcuts.
+    EditorColorCycle(i32),
     /// Text-tool inline input — content typed by the user. Empty
     /// means the input is cleared.
     EditorTextChanged(String),

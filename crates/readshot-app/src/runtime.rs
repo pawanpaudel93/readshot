@@ -345,15 +345,32 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                     }
                     _ => {}
                 }
-                // Single-letter tool shortcuts only fire when no
-                // widget has captured the event — i.e. the user
-                // isn't typing into the text-input banner.
+                // Single-letter shortcuts only fire when no widget
+                // has captured the event — i.e. the user isn't
+                // typing into the text-input banner.
                 if status == Status::Ignored && !cmd && !modifiers.alt() && !modifiers.control() {
                     if let Key::Character(c) = &key {
+                        // Tool selection: V/R/O/L/A/P/H/T/B/X/N/C
                         if let Some(t) = tool_for_key(c.as_str()) {
                             return Some(Message::EditorToolbar(
                                 readshot_ui::ToolbarMessage::SelectTool(t),
                             ));
+                        }
+                        // Numeric width: 1..=9 → 1..=9 logical px.
+                        if let Some(n) = c.chars().next().and_then(|ch| ch.to_digit(10)) {
+                            if (1..=9).contains(&n) {
+                                return Some(Message::EditorToolbar(
+                                    readshot_ui::ToolbarMessage::SetLineWidth(n as f32),
+                                ));
+                            }
+                        }
+                        // [ / ] bump line width by 1 logical px.
+                        match c.as_str() {
+                            "[" => return Some(Message::EditorWidthBump(-1.0)),
+                            "]" => return Some(Message::EditorWidthBump(1.0)),
+                            "," => return Some(Message::EditorColorCycle(-1)),
+                            "." => return Some(Message::EditorColorCycle(1)),
+                            _ => {}
                         }
                     }
                 }
@@ -736,6 +753,27 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::EditorTextCancel => {
             if let Some(ed) = state.editor.as_mut() {
                 ed.pending_text = None;
+            }
+            Task::none()
+        }
+        Message::EditorWidthBump(delta) => {
+            if let Some(ed) = state.editor.as_mut() {
+                let next = ed.model.current_line_width() + delta;
+                ed.model.set_line_width(next);
+            }
+            Task::none()
+        }
+        Message::EditorColorCycle(dir) => {
+            if let Some(ed) = state.editor.as_mut() {
+                let palette = readshot_ui::editor::toolbar::PALETTE;
+                let current = ed.model.current_color();
+                let idx = palette
+                    .iter()
+                    .position(|c| swatch_eq(*c, current))
+                    .unwrap_or(0) as i32;
+                let len = palette.len() as i32;
+                let next = ((idx + dir).rem_euclid(len)) as usize;
+                ed.model.set_color(palette[next]);
             }
             Task::none()
         }
