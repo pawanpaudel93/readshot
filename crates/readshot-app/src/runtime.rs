@@ -422,12 +422,11 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             None
         }));
     }
-    // Watch for the OS X-button closing the history window so we can
-    // forget the dangling `window::Id` and let the next "History"
-    // tray click open a fresh one.
-    if state.history_window_id.is_some() {
-        subs.push(window::close_events().map(Message::HistoryWindowClosed));
-    }
+    // Watch for the OS X-button closing any tracked window. Without
+    // this, `state.windows` accumulates stale ids, and helpers like
+    // `show_or_focus_welcome` end up calling `gain_focus` on dead
+    // windows (silent no-op) instead of opening a fresh one.
+    subs.push(window::close_events().map(Message::WindowClosed));
     Subscription::batch(subs)
 }
 
@@ -794,13 +793,19 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 None => Task::none(),
             }
         }
-        Message::HistoryWindowClosed(id) => {
+        Message::WindowClosed(id) => {
+            // Always drop the id from `Windows` so helpers that
+            // probe the live-window map (e.g. `show_or_focus_welcome`)
+            // don't try to focus a dead window.
+            state.windows.forget(id);
+            // History-browser cleanup is the only kind-specific
+            // teardown today; the other window kinds are stateless
+            // beyond `Windows` itself.
             if state.history_window_id == Some(id) {
                 state.history_window_id = None;
                 state.history_records.clear();
                 state.history_status = None;
                 state.history_search.clear();
-                state.windows.forget(id);
             }
             Task::none()
         }

@@ -189,10 +189,10 @@ pub enum Message {
     HistoryListLoaded(Result<Vec<readshot_core::CaptureRecord>, String>),
     /// User closed the history browser window.
     HistoryClosed,
-    /// OS reports a window was closed (X button or `window::close`).
-    /// We only care about the history browser id; everything else is
-    /// ignored.
-    HistoryWindowClosed(iced::window::Id),
+    /// OS reports a window was closed (X button, `window::close`, …).
+    /// The handler forgets the id from `Windows` and runs any
+    /// kind-specific cleanup (e.g. clearing history-browser state).
+    WindowClosed(iced::window::Id),
     /// User typed in the history browser's search box. Empty string
     /// resets to "show every record".
     HistorySearchChanged(String),
