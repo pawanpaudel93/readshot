@@ -107,6 +107,12 @@ pub enum Message {
     PermissionTick,
     /// User clicked "Grant" in the welcome window.
     GrantPermissionRequested,
+    /// Internal: SCK registration (`SCShareableContent::get()`) has
+    /// finished, deep-link System Settings now. Spawned as a delayed
+    /// follow-up to `GrantPermissionRequested` so macOS gets a moment
+    /// to open the pane on its own — `open_settings` then no-ops via
+    /// the pgrep guard if Settings is already up.
+    DelayedOpenSettings,
     /// User clicked "Open Settings" in the denied state.
     OpenPermissionSettingsRequested,
     /// User clicked "Quit" — graceful exit so the next launch picks

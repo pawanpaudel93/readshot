@@ -33,18 +33,21 @@ impl PermissionsProvider for MacOsPermissions {
     }
 
     fn request(&self) {
-        let access = ScreenCaptureAccess;
-        let granted = access.request();
-        // The return tells us whether the OS already considered us
-        // granted at call time. It does NOT indicate whether the
-        // system prompt was shown — for ad-hoc-signed apps on recent
-        // macOS, the call silently *registers* the bundle in
-        // System Settings without ever drawing a prompt, so the user
-        // sees nothing. We surface the value here so the runtime
-        // can drive the user to System Settings if request() fails.
-        tracing::info!(
+        // Intentional no-op. The actual TCC registration goes through
+        // ScreenCaptureKit's `SCShareableContent::get()`, invoked from
+        // the runtime via the capture coordinator's `list_displays`.
+        //
+        // The previous implementation called
+        // `CGRequestScreenCaptureAccess` (CoreGraphics), which on
+        // macOS 15 Sequoia registers the bundle in the *legacy*
+        // "Screen Recording" pane — separate from the
+        // SCK-driven "Screen & System Audio Recording" pane that
+        // ScreenCaptureKit actually consults. The result was two
+        // privacy panes both showing Readshot, each requiring its
+        // own toggle. SCK-only registration consolidates to one.
+        tracing::debug!(
             target: "readshot::permissions",
-            "CGRequestScreenCaptureAccess returned {granted}",
+            "request() — no-op on macOS; SCK does registration via the coordinator",
         );
     }
 

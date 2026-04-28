@@ -1250,12 +1250,32 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             iced::exit()
         }
 
-        // GrantPermissionRequested: register the bundle with TCC,
-        // then *also* open System Settings on macOS. For ad-hoc
-        // signed apps the system prompt typically doesn't fire, so
-        // chaining the deep-link is what gets users unstuck.
+        // GrantPermissionRequested: register the bundle with TCC by
+        // poking ScreenCaptureKit (`SCShareableContent::get()` runs
+        // inside `list_displays`), then deep-link System Settings.
+        // We do this rather than calling `CGRequestScreenCaptureAccess`
+        // because Sequoia splits the legacy "Screen Recording" pane
+        // from the SCK-driven "Screen & System Audio Recording" pane;
+        // SCK-only registration keeps Readshot in just the SCK pane.
         Message::GrantPermissionRequested => {
             state.update_sync(Message::GrantPermissionRequested);
+            let coord = state.coordinator.clone();
+            Task::perform(
+                async move {
+                    // SCShareableContent::get() may fail (no grant
+                    // yet) — ignore. The side-effect (TCC entry +
+                    // possible system prompt) is what we want.
+                    let _ = coord.list_displays().await;
+                    // Small delay so macOS has a chance to open the
+                    // pane in response to the prompt. If it does,
+                    // the pgrep guard inside open_settings will
+                    // recognise that and skip the explicit `open`.
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                },
+                |()| Message::DelayedOpenSettings,
+            )
+        }
+        Message::DelayedOpenSettings => {
             state.permissions.open_settings();
             Task::none()
         }
