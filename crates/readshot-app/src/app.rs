@@ -163,6 +163,9 @@ pub enum Message {
     /// quick-action. `Ok(Some(path))` = written; `Ok(None)` =
     /// user cancelled the picker.
     OverlaySaveDone(Result<Option<std::path::PathBuf>, String>),
+    /// Direct (no-editor) OCR-text-copy completion. Carries the
+    /// recognised text so the toast can report a character count.
+    OverlayCopyTextDone(Result<String, String>),
     /// Async region-capture finished — `Ok(image)` opens an editor
     /// window with the captured pixels; `Err` toasts the failure on
     /// the welcome window.
@@ -309,6 +312,9 @@ pub enum CaptureIntent {
     Editor,
     /// Write the captured PNG to the system clipboard, no editor.
     CopyToClipboard,
+    /// Run Apple Vision OCR over the captured image and write the
+    /// recognised text to the clipboard, no editor.
+    CopyTextDirect,
     /// Open a native save dialog directly, no editor.
     SaveDirect,
     /// Open a borderless always-on-top pin window, no editor.

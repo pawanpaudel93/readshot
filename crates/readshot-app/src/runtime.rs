@@ -606,6 +606,12 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                             Message::OverlayCopyDone(r.map_err(|e| e.to_string()))
                         })
                     }
+                    crate::app::CaptureIntent::CopyTextDirect => {
+                        let coord = state.coordinator.clone();
+                        Task::perform(ocr_then_copy(coord, image), |r| {
+                            Message::OverlayCopyTextDone(r.map_err(|e| e.to_string()))
+                        })
+                    }
                     crate::app::CaptureIntent::SaveDirect => {
                         let seed = state.last_save_dir.clone();
                         Task::perform(save_image_via_picker(image, seed), |r| {
@@ -649,6 +655,20 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 Ok(Some(p)) => format!("Saved to {}", p.display()),
                 Ok(None) => "Save cancelled.".into(),
                 Err(e) => format!("Save failed: {e}"),
+            });
+            Task::none()
+        }
+        Message::OverlayCopyTextDone(result) => {
+            state.last_capture_status = Some(match result {
+                Ok(text) if text.is_empty() => "No text recognised.".into(),
+                Ok(text) => {
+                    let n = text.chars().count();
+                    format!(
+                        "Copied {n} character{} of text.",
+                        if n == 1 { "" } else { "s" }
+                    )
+                }
+                Err(e) => format!("Copy text failed: {e}"),
             });
             Task::none()
         }
@@ -1808,11 +1828,19 @@ fn overlay_toolbar_layer<'a>(
             },
         ),
         make_btn(
-            "Copy",
+            "Copy Image",
             Message::OverlaySelected {
                 display_id: display_id.clone(),
                 rect: *rect,
                 intent: CaptureIntent::CopyToClipboard,
+            },
+        ),
+        make_btn(
+            "Copy Text",
+            Message::OverlaySelected {
+                display_id: display_id.clone(),
+                rect: *rect,
+                intent: CaptureIntent::CopyTextDirect,
             },
         ),
         make_btn(
