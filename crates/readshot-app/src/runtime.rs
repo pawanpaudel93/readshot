@@ -92,7 +92,9 @@ pub fn start() -> (App, Task<Message>) {
         history_retention: readshot_core::HistoryRetention::Last50,
         ..Preferences::default()
     };
+    let history_root = default_history_root();
     let mut app = App::new(coordinator, permissions, prefs);
+    app.history_root = history_root;
 
     // Surface the initial permission state in the log so users
     // (and us, when triaging issues) can see whether macOS TCC is
@@ -199,6 +201,23 @@ fn editor_window_settings() -> window::Settings {
     }
 }
 
+/// Window settings for the persistent capture browser. Standard
+/// resizable window with native chrome — this isn't a transient
+/// overlay, it's a regular workspace window the user stays inside
+/// while triaging history.
+fn history_window_settings() -> window::Settings {
+    window::Settings {
+        size: iced::Size::new(900.0, 700.0),
+        min_size: Some(iced::Size::new(540.0, 400.0)),
+        position: window::Position::Centered,
+        resizable: true,
+        decorations: true,
+        transparent: false,
+        visible: true,
+        ..Default::default()
+    }
+}
+
 /// Window settings for one overlay window covering a single display.
 ///
 /// Borderless transparent `AlwaysOnTop` window positioned at the
@@ -263,6 +282,7 @@ pub fn title(state: &App, id: window::Id) -> String {
         Some(WindowKind::Overlay) => "Readshot — Region capture".into(),
         Some(WindowKind::Editor) => "Readshot — Editor".into(),
         Some(WindowKind::Pin) => "Readshot — Pin".into(),
+        Some(WindowKind::History) => "Readshot — History".into(),
     }
 }
 
@@ -393,6 +413,12 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             None
         }));
     }
+    // Watch for the OS X-button closing the history window so we can
+    // forget the dangling `window::Id` and let the next "History"
+    // tray click open a fresh one.
+    if state.history_window_id.is_some() {
+        subs.push(window::close_events().map(Message::HistoryWindowClosed));
+    }
     Subscription::batch(subs)
 }
 
@@ -480,6 +506,13 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     update(state, Message::OpenOverlayRequested)
                 } else {
                     Task::none()
+                }
+            }
+            crate::tray::TrayAction::History => {
+                if state.welcome.should_show() {
+                    Task::none()
+                } else {
+                    update(state, Message::OpenHistoryRequested)
                 }
             }
             crate::tray::TrayAction::Quit => iced::exit(),
@@ -670,6 +703,72 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::HistorySaveDone(result) => {
             if let Err(e) = result {
                 tracing::warn!(target: "readshot::history", "save failed: {e}");
+            }
+            Task::none()
+        }
+
+        Message::OpenHistoryRequested => {
+            // Single-instance — if the window already exists just
+            // refocus it and refresh the list.
+            if let Some(id) = state.history_window_id {
+                let coord = state.coordinator.clone();
+                return Task::batch([
+                    window::gain_focus(id),
+                    Task::perform(async move { coord.history_list() }, |r| {
+                        Message::HistoryListLoaded(r.map_err(|e| e.to_string()))
+                    }),
+                ]);
+            }
+            let (id, open_task) = window::open(history_window_settings());
+            state.windows.register(id, WindowKind::History);
+            state.history_window_id = Some(id);
+            state.history_status = None;
+            let coord = state.coordinator.clone();
+            Task::batch([
+                open_task.map(Message::HistoryWindowReady),
+                Task::perform(async move { coord.history_list() }, |r| {
+                    Message::HistoryListLoaded(r.map_err(|e| e.to_string()))
+                }),
+            ])
+        }
+        Message::HistoryWindowReady(id) => {
+            // Window settings already register at open-time; the
+            // ready callback just records the id in case iced hands
+            // back a different one.
+            state.history_window_id = Some(id);
+            Task::none()
+        }
+        Message::HistoryListLoaded(result) => {
+            match result {
+                Ok(records) => {
+                    state.history_records = records;
+                    state.history_status = None;
+                }
+                Err(e) => {
+                    state.history_records.clear();
+                    state.history_status = Some(format!("Couldn't read history: {e}"));
+                }
+            }
+            Task::none()
+        }
+        Message::HistoryClosed => {
+            let id = state.history_window_id.take();
+            state.history_records.clear();
+            state.history_status = None;
+            match id {
+                Some(id) => {
+                    state.windows.forget(id);
+                    window::close(id)
+                }
+                None => Task::none(),
+            }
+        }
+        Message::HistoryWindowClosed(id) => {
+            if state.history_window_id == Some(id) {
+                state.history_window_id = None;
+                state.history_records.clear();
+                state.history_status = None;
+                state.windows.forget(id);
             }
             Task::none()
         }
@@ -1052,7 +1151,125 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
         Some(WindowKind::Overlay) => overlay_view(state, id),
         Some(WindowKind::Editor) => editor_view(state),
         Some(WindowKind::Pin) => pin_view(state, id),
+        Some(WindowKind::History) => history_view(state),
     }
+}
+
+fn history_view(state: &App) -> Element<'_, Message> {
+    use iced::widget::{image as image_widget, scrollable};
+
+    // Header: status line + record count.
+    let header_text = if state.history_records.is_empty() {
+        "No captures yet — take one and it shows up here.".to_string()
+    } else {
+        format!(
+            "{} capture{}",
+            state.history_records.len(),
+            if state.history_records.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        )
+    };
+    let header = container(
+        column![
+            text(header_text).size(14),
+            state
+                .history_status
+                .as_deref()
+                .map(|s| text(s).size(12).color(Color::from_rgb(0.95, 0.55, 0.25)))
+                .unwrap_or_else(|| text(""))
+        ]
+        .spacing(4),
+    )
+    .padding([12, 16]);
+
+    // Records list.
+    let mut col = column![].spacing(8).padding(iced::Padding {
+        top: 0.0,
+        right: 16.0,
+        bottom: 16.0,
+        left: 16.0,
+    });
+    if let Some(root) = state.history_root.as_ref() {
+        for r in &state.history_records {
+            let png_path = history_png_path(root, r);
+            let stamp = r
+                .captured_at
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d  %H:%M:%S")
+                .to_string();
+            let dims = format!("{} × {} px", r.width_px, r.height_px);
+            let snippet = r
+                .ocr_text
+                .as_ref()
+                .map(|t| {
+                    let trimmed = t.chars().take(120).collect::<String>();
+                    if t.chars().count() > 120 {
+                        format!("{trimmed}…")
+                    } else {
+                        trimmed
+                    }
+                })
+                .unwrap_or_else(|| "(no OCR text yet)".to_string());
+
+            let thumb: Element<Message> = if png_path.exists() {
+                image_widget(image_widget::Handle::from_path(&png_path))
+                    .width(Length::Fixed(160.0))
+                    .into()
+            } else {
+                container(text("⚠"))
+                    .width(Length::Fixed(160.0))
+                    .height(Length::Fixed(100.0))
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill)
+                    .into()
+            };
+
+            let meta = column![
+                text(stamp).size(13),
+                text(dims)
+                    .size(11)
+                    .color(Color::from_rgba(1.0, 1.0, 1.0, 0.6)),
+                text(snippet)
+                    .size(11)
+                    .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7)),
+            ]
+            .spacing(4)
+            .width(Length::Fill);
+
+            let row_widget = container(row![thumb, meta].spacing(12).align_y(Alignment::Center))
+                .padding(10)
+                .style(|_| iced::widget::container::Style {
+                    background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.04).into()),
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                });
+            col = col.push(row_widget);
+        }
+    } else {
+        col = col.push(text("History root not configured.").size(12));
+    }
+
+    column![header, scrollable(col).height(Length::Fill)]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+/// Resolve the absolute PNG path for a history record. The on-disk
+/// layout is `<root>/<YYYY>/<MM>/<uuid>.png`; we mirror that here so
+/// the browser can render thumbnails without round-tripping through
+/// the index.
+fn history_png_path(root: &std::path::Path, record: &readshot_core::CaptureRecord) -> PathBuf {
+    use chrono::Datelike;
+    root.join(format!("{:04}", record.captured_at.year()))
+        .join(format!("{:02}", record.captured_at.month()))
+        .join(format!("{}.png", record.id))
 }
 
 fn editor_view(state: &App) -> Element<'_, Message> {

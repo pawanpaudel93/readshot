@@ -28,12 +28,12 @@ use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 /// User intent surfaced by the tray. `Capture` triggers the region
-/// overlay; `Quit` exits the daemon. `LSUIElement=true` means there
-/// is no main window for a "Show window" affordance to surface, so
-/// the menu stays at two real verbs.
+/// overlay; `History` opens the persistent capture browser; `Quit`
+/// exits the daemon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Capture,
+    History,
     Quit,
 }
 
@@ -90,15 +90,20 @@ pub fn install() -> Option<TrayController> {
 
     let menu = Menu::new();
     let item_capture = MenuItem::new("Capture", true, None);
+    let item_history = MenuItem::new("History…", true, None);
     let item_quit = MenuItem::new("Quit", true, None);
 
     let mut menu_ids = HashMap::new();
     menu_ids.insert(item_capture.id().clone(), TrayAction::Capture);
+    menu_ids.insert(item_history.id().clone(), TrayAction::History);
     menu_ids.insert(item_quit.id().clone(), TrayAction::Quit);
 
-    if let Err(e) =
-        menu.append_items(&[&item_capture, &PredefinedMenuItem::separator(), &item_quit])
-    {
+    if let Err(e) = menu.append_items(&[
+        &item_capture,
+        &item_history,
+        &PredefinedMenuItem::separator(),
+        &item_quit,
+    ]) {
         tracing::warn!(target: "readshot::tray", "menu build failed: {e}");
         return None;
     }

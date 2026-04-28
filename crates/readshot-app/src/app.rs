@@ -46,6 +46,10 @@ pub enum WindowKind {
     /// visible while they work in another app. Multiple pins can be
     /// alive at once.
     Pin,
+    /// Persistent capture browser. Reads the on-disk history archive
+    /// and renders a scrollable list. Single instance — re-opening
+    /// while it's already up just refocuses the existing window.
+    History,
 }
 
 /// Mapping from live `window::Id`s to their kind, so the daemon's
@@ -170,6 +174,23 @@ pub enum Message {
     /// logged and otherwise ignored — a failed history write must
     /// not block the user-visible flow.
     HistorySaveDone(Result<(), String>),
+    /// User asked for the history browser (tray menu / future
+    /// hotkey). Either focuses the existing window or opens a new
+    /// one and triggers a fresh `HistoryListLoaded`.
+    OpenHistoryRequested,
+    /// First view of the freshly-opened history window — runtime
+    /// records the `window::Id` so close + focus paths work.
+    HistoryWindowReady(iced::window::Id),
+    /// Async list of persisted captures finished — populates the
+    /// history browser. `Err` toasts an error and leaves the list
+    /// empty.
+    HistoryListLoaded(Result<Vec<readshot_core::CaptureRecord>, String>),
+    /// User closed the history browser window.
+    HistoryClosed,
+    /// OS reports a window was closed (X button or `window::close`).
+    /// We only care about the history browser id; everything else is
+    /// ignored.
+    HistoryWindowClosed(iced::window::Id),
     /// Async region-capture finished — `Ok(image)` opens an editor
     /// window with the captured pixels; `Err` toasts the failure on
     /// the welcome window.
@@ -294,6 +315,21 @@ pub struct App {
     /// lands in the same place. Reset whenever the user picks a new
     /// directory — never written to disk; in-memory only.
     pub last_save_dir: Option<std::path::PathBuf>,
+    /// Root of the persistent capture history on disk. `None` when
+    /// the system can't supply a project dir (rare; some test
+    /// builds). Used by the history browser to resolve relative PNG
+    /// paths into iced `image::Handle`s.
+    pub history_root: Option<std::path::PathBuf>,
+    /// Currently-loaded history records, newest-first. Refreshed
+    /// whenever the history window opens.
+    pub history_records: Vec<readshot_core::CaptureRecord>,
+    /// `window::Id` of the live history browser, if any. The browser
+    /// is single-instance — opening it again focuses the existing
+    /// window instead of spawning a duplicate.
+    pub history_window_id: Option<iced::window::Id>,
+    /// Last error from a history list / load operation. Surfaced as
+    /// a toast inside the browser when set.
+    pub history_status: Option<String>,
 }
 
 /// Per-overlay-window record. Tracks which display the window covers
@@ -354,6 +390,10 @@ impl App {
             pins: HashMap::new(),
             overlay_tick: 0,
             last_save_dir: None,
+            history_root: None,
+            history_records: Vec::new(),
+            history_window_id: None,
+            history_status: None,
         }
     }
 

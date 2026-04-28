@@ -86,6 +86,15 @@ impl CaptureCoordinator {
         Ok(result.text)
     }
 
+    /// List every persisted capture, newest first. `Ok(vec![])` when
+    /// no history store is wired.
+    pub fn history_list(&self) -> Result<Vec<CaptureRecord>, readshot_core::HistoryError> {
+        match &self.history {
+            Some(h) => h.list(),
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Append a capture to history, respecting the retention policy.
     /// Off → no-op. Other policies → save and apply retention.
     pub async fn record_history(
