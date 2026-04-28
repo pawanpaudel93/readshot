@@ -1259,34 +1259,26 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             iced::exit()
         }
 
-        // GrantPermissionRequested: register the bundle with TCC by
-        // poking ScreenCaptureKit (`SCShareableContent::get()` runs
-        // inside `list_displays`), then deep-link System Settings.
-        // We do this rather than calling `CGRequestScreenCaptureAccess`
-        // because Sequoia splits the legacy "Screen Recording" pane
-        // from the SCK-driven "Screen & System Audio Recording" pane;
-        // SCK-only registration keeps Readshot in just the SCK pane.
+        // GrantPermissionRequested: just trigger the macOS permission
+        // prompt by poking ScreenCaptureKit
+        // (`SCShareableContent::get()` runs inside `list_displays`).
+        // The OS prompt itself carries an "Open System Settings"
+        // button — letting macOS drive that flow avoids our app
+        // racing it with a second `open URL` call. The
+        // "Open Settings again" button in the AwaitingGrant state
+        // covers users whose prompt never appears (e.g. previously
+        // denied) by deep-linking directly.
         Message::GrantPermissionRequested => {
             state.update_sync(Message::GrantPermissionRequested);
             let coord = state.coordinator.clone();
             Task::perform(
                 async move {
-                    // SCShareableContent::get() may fail (no grant
-                    // yet) — ignore. The side-effect (TCC entry +
-                    // possible system prompt) is what we want.
+                    // The error case (no grant yet) is exactly when
+                    // macOS shows its prompt — that's what we want.
                     let _ = coord.list_displays().await;
-                    // Small delay so macOS has a chance to open the
-                    // pane in response to the prompt. If it does,
-                    // the pgrep guard inside open_settings will
-                    // recognise that and skip the explicit `open`.
-                    tokio::time::sleep(Duration::from_millis(300)).await;
                 },
-                |()| Message::DelayedOpenSettings,
+                |()| Message::PermissionTick,
             )
-        }
-        Message::DelayedOpenSettings => {
-            state.permissions.open_settings();
-            Task::none()
         }
 
         // Synchronous transitions — reuse the existing handler.
@@ -2459,17 +2451,17 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
         // builds get no system prompt anyway, so registering and
         // deep-linking together is the lowest-friction path.
         WelcomeState::Pending => column![
-            text("Step 1 of 2 — Enable Readshot in System Settings")
+            text("Step 1 of 2 — Allow Screen Recording")
                 .size(15)
                 .width(Length::Fill),
             text(
-                "Click the button below. macOS will register Readshot \
-                 and open Privacy & Security → Screen Recording. Toggle \
-                 Readshot ON, then come back here for step 2."
+                "Click below. macOS will pop a Screen Recording prompt — \
+                 click 'Open System Settings' inside it, toggle Readshot \
+                 ON, then come back here for step 2."
             )
             .size(12)
             .width(Length::Fill),
-            button(text("Open System Settings").size(14))
+            button(text("Allow Screen Recording").size(14))
                 .padding(10)
                 .on_press(Message::GrantPermissionRequested),
         ]
