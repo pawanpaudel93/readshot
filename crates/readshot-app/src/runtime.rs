@@ -129,6 +129,15 @@ pub fn start() -> (App, Task<Message>) {
         let (id, open_task) = window::open(welcome_window_settings());
         app.windows.register(id, WindowKind::Welcome);
         tasks.push(open_task.map(|_id| Message::WelcomeWindowReady));
+    } else {
+        // No welcome window — user is already past the permission
+        // gate. Surface a system notification so a relaunch is
+        // visible: macOS's "Quit & Reopen" or our own "Restart
+        // Readshot now" both bring the app back as an LSUIElement
+        // agent, with no Dock icon and (often) no foregrounded
+        // window. Without the toast the user can't easily tell the
+        // app actually came back.
+        notify_running_in_menu_bar(&app.preferences.capture_hotkey);
     }
     if let Some(action) = take_initial_url_action() {
         tasks.push(Task::done(Message::UrlActionReceived(action)));
@@ -2474,10 +2483,11 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
                 .size(15)
                 .width(Length::Fill),
             text(
-                "Once Readshot is toggled ON in System Settings, click \
-                 Restart Readshot now. macOS only honours new Screen \
-                 Recording grants on a fresh launch — this app will \
-                 relaunch itself for you."
+                "After you toggle Readshot ON in System Settings, macOS \
+                 may show a 'Quit & Reopen' prompt — click it and Readshot \
+                 will relaunch into the menu bar (a system notification \
+                 will confirm). If macOS doesn't ask, click Restart \
+                 Readshot now below — same effect."
             )
             .size(12)
             .width(Length::Fill),
