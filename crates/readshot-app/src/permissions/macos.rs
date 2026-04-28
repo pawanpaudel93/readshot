@@ -49,27 +49,47 @@ impl PermissionsProvider for MacOsPermissions {
     }
 
     fn open_settings(&self) {
-        // Try the modern macOS 13+ URL first; if `open` returns
-        // a non-zero status, fall back to the older form. Either
-        // launches System Settings → Privacy → Screen Recording.
-        let urls = [
-            // Ventura+ ("System Settings.app"): Apple changed the
-            // pane bundle identifier in macOS 13. Both forms are
-            // accepted on macOS 14 / Sonoma; some macOS 15 builds
-            // only accept the new one.
-            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture",
-            // Monterey- ("System Preferences.app").
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-        ];
-        for url in urls {
-            let status = std::process::Command::new("open").arg(url).status();
-            if matches!(status, Ok(s) if s.success()) {
-                return;
-            }
+        // Just the modern macOS 13+ URL. The Monterey / System
+        // Preferences fallback was firing alongside the modern URL
+        // on some Sequoia builds, opening Settings twice. macOS 14+
+        // is our minimum target, so the legacy form isn't needed.
+        const URL: &str =
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture";
+        // If System Settings is already running (e.g. macOS opened it
+        // autonomously in response to CGRequestScreenCaptureAccess on
+        // Sequoia), skip the explicit `open` so we don't navigate
+        // away from whatever pane the user is on or double-stack.
+        if system_settings_is_running() {
+            tracing::info!(
+                target: "readshot::permissions",
+                "System Settings already running — skipping deep-link",
+            );
+            return;
         }
-        tracing::warn!(
-            target: "readshot::permissions",
-            "could not open Screen Recording pane — both deep-links failed",
-        );
+        let status = std::process::Command::new("open").arg(URL).status();
+        if !matches!(status, Ok(s) if s.success()) {
+            tracing::warn!(
+                target: "readshot::permissions",
+                "could not open Screen Recording pane — `open {URL}` failed",
+            );
+        }
     }
+}
+
+fn system_settings_is_running() -> bool {
+    // pgrep is fast and ubiquitous on macOS; -x matches the literal
+    // process name. macOS 13+ is "System Settings"; 12- was "System
+    // Preferences" — checking both keeps this robust if a user is on
+    // an older OS than our minimum.
+    for name in ["System Settings", "System Preferences"] {
+        let ok = std::process::Command::new("pgrep")
+            .args(["-x", name])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok {
+            return true;
+        }
+    }
+    false
 }

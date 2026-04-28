@@ -2475,27 +2475,38 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
         .into(),
     };
 
-    // Flameshot-style: one trigger surfaces the overlay; the user
-    // chooses region (drag) or full screen (Enter) once it's open.
-    let mut capture_btn = button("Capture screen").width(Length::Fill);
-    if !state.welcome.should_show() && !state.capture_in_flight {
-        capture_btn = capture_btn.on_press(Message::OpenOverlayRequested);
-    }
-
     let toast: Element<'_, Message> = match &state.last_capture_status {
         Some(s) => text(s).into(),
         None => Space::new().height(Length::Fixed(0.0)).into(),
     };
 
+    // The "Capture screen" button + its hint only make sense once
+    // we're past the permission gate. Showing them during Pending /
+    // AwaitingGrant gives the user a button they can't actually
+    // click and a hint about overlay shortcuts that don't apply.
+    let post_grant: Element<'_, Message> = if !state.welcome.should_show() {
+        let mut capture_btn = button("Capture screen").width(Length::Fill);
+        if !state.capture_in_flight {
+            capture_btn = capture_btn.on_press(Message::OpenOverlayRequested);
+        }
+        column![
+            capture_btn,
+            text("Drag · hold Shift for square · Enter for full screen · Esc to cancel").size(11),
+        ]
+        .spacing(6)
+        .into()
+    } else {
+        Space::new().height(Length::Fixed(0.0)).into()
+    };
+
     let body = column![
         text("Readshot").size(28),
-        text("Cross-platform screenshot + offline OCR.").size(14),
+        text("macOS screenshot tool with offline OCR.").size(14),
         Space::new().height(Length::Fixed(16.0)),
         status_line,
         action,
         Space::new().height(Length::Fixed(16.0)),
-        capture_btn,
-        text("Drag · hold Shift for square · Enter for full screen · Esc to cancel").size(11),
+        post_grant,
         Space::new().height(Length::Fixed(8.0)),
         toast,
         Space::new().width(Length::Fill).height(Length::Fill),
