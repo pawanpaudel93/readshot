@@ -52,10 +52,16 @@ pub struct OCRRequest {
 /// `text: ""` and `average_confidence: 0.0` rather than an error — the
 /// MCP server relies on this so empty results aren't surfaced as tool
 /// failures.
+///
+/// `lines` carries the same recognised text with normalised bounding
+/// boxes, when the engine exposes them (today: macOS Apple Vision).
+/// Backends without positioned output leave it empty; downstream
+/// callers fall back to `text` when the vector is empty.
 #[derive(Clone, Debug)]
 pub struct OCRResult {
     pub text: String,
     pub average_confidence: f32,
+    pub lines: Vec<readshot_core::ocr_layout::RecognizedLine>,
 }
 
 /// The single trait every Readshot OCR backend implements. `Send + Sync`

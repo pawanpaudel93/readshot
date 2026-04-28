@@ -134,7 +134,10 @@ fn run_request(
 }
 
 unsafe fn extract_text(observations: &NSArray<VNRecognizedTextObservation>) -> OCRResult {
-    let mut lines: Vec<String> = Vec::new();
+    use readshot_core::ocr_layout::RecognizedLine;
+
+    let mut text_lines: Vec<String> = Vec::new();
+    let mut positioned: Vec<RecognizedLine> = Vec::new();
     let mut total_confidence: f64 = 0.0;
     let mut counted: u32 = 0;
 
@@ -145,12 +148,30 @@ unsafe fn extract_text(observations: &NSArray<VNRecognizedTextObservation>) -> O
             if !line.is_empty() {
                 total_confidence += top.confidence() as f64;
                 counted += 1;
-                lines.push(line);
+                text_lines.push(line.clone());
+
+                // Vision's bounding box is normalised [0..1] with the
+                // origin at the *bottom-left* of the image. Flip Y so
+                // every backend feeds top-left-origin boxes into
+                // `RecognizedLine`, which is what `ocr_layout` expects.
+                let bbox = observation.boundingBox();
+                let x = bbox.origin.x as f32;
+                let bottom_y = bbox.origin.y as f32;
+                let w = bbox.size.width as f32;
+                let h = bbox.size.height as f32;
+                let top_y = (1.0 - bottom_y - h).clamp(0.0, 1.0);
+                positioned.push(RecognizedLine {
+                    text: line,
+                    x,
+                    y: top_y,
+                    w,
+                    h,
+                });
             }
         }
     }
 
-    let text = lines.join("\n");
+    let text = text_lines.join("\n");
     let average_confidence = if counted > 0 {
         (total_confidence / counted as f64) as f32
     } else {
@@ -159,6 +180,7 @@ unsafe fn extract_text(observations: &NSArray<VNRecognizedTextObservation>) -> O
     OCRResult {
         text,
         average_confidence,
+        lines: positioned,
     }
 }
 
@@ -174,6 +196,7 @@ impl OCRResult {
         Self {
             text: String::new(),
             average_confidence: 0.0,
+            lines: Vec::new(),
         }
     }
 }

@@ -83,10 +83,20 @@ impl CaptureCoordinator {
 
     pub async fn recognise(&self, req: OCRRequest) -> Result<String, OCRError> {
         let result = self.ocr.recognise(req).await?;
-        // Single chokepoint for OCR cleanup so every consumer
-        // (overlay Copy Text, history sidecar, editor Copy Text)
-        // gets the same trimmed / line-normalised string.
-        Ok(readshot_core::ocr_text::clean(&result.text))
+        // Layout-aware reconstruction when the engine exposes per-line
+        // bounding boxes (Apple Vision today); fall back to the
+        // engine's flat newline-joined text otherwise. Then run the
+        // result through the cleanup pass so trailing whitespace,
+        // line endings, and blank-line runs are normalised.
+        //
+        // This is the single chokepoint — every consumer (overlay /
+        // history sidecar / editor Copy Text) gets the same string.
+        let text = if !result.lines.is_empty() {
+            readshot_core::ocr_layout::reconstruct(&result.lines)
+        } else {
+            result.text
+        };
+        Ok(readshot_core::ocr_text::clean(&text))
     }
 
     /// List every persisted capture, newest first. `Ok(vec![])` when

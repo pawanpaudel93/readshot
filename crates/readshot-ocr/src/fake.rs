@@ -79,10 +79,12 @@ impl OCREngine for FakeOcrEngine {
             Behaviour::Text(text, confidence) => Ok(OCRResult {
                 text: text.clone(),
                 average_confidence: *confidence,
+                lines: Vec::new(),
             }),
             Behaviour::Empty => Ok(OCRResult {
                 text: String::new(),
                 average_confidence: 0.0,
+                lines: Vec::new(),
             }),
             Behaviour::Fail(msg) => Err(OCRError::Backend(msg.clone())),
         }
