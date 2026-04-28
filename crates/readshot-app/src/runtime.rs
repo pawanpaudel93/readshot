@@ -485,9 +485,16 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             while receiver.try_recv().is_ok() {
                 fired = true;
             }
-            if fired && !state.welcome.should_show() && !state.capture_in_flight {
-                // The hotkey defaults to opening the region overlay.
-                return update(state, Message::OpenOverlayRequested);
+            if fired {
+                if state.welcome.should_show() {
+                    // Hotkey works the same as a tray click: when
+                    // permission isn't granted yet, point the user
+                    // back at the welcome window so they can fix it.
+                    return show_or_focus_welcome(state);
+                }
+                if !state.capture_in_flight {
+                    return update(state, Message::OpenOverlayRequested);
+                }
             }
             Task::none()
         }
@@ -509,17 +516,20 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
 
         Message::TrayActionPerformed(action) => match action {
             crate::tray::TrayAction::Capture => {
-                if !state.welcome.should_show() && !state.capture_in_flight {
-                    // Tray "Capture" → open the region overlay, same
-                    // as the welcome window's region button.
-                    update(state, Message::OpenOverlayRequested)
-                } else {
+                if state.welcome.should_show() {
+                    // Permission gate not cleared yet — surface the
+                    // welcome window so the user can grant access
+                    // instead of silently no-opping.
+                    show_or_focus_welcome(state)
+                } else if state.capture_in_flight {
                     Task::none()
+                } else {
+                    update(state, Message::OpenOverlayRequested)
                 }
             }
             crate::tray::TrayAction::History => {
                 if state.welcome.should_show() {
-                    Task::none()
+                    show_or_focus_welcome(state)
                 } else {
                     update(state, Message::OpenHistoryRequested)
                 }
@@ -2439,117 +2449,158 @@ fn overlay_toolbar_layer<'a>(
         .into()
 }
 
+/// Surface the welcome window: if it's already open, focus it;
+/// otherwise spawn a fresh one and register it under
+/// [`WindowKind::Welcome`]. Used when a tray / hotkey click happens
+/// before the permission gate has cleared so the user is never left
+/// staring at a silent no-op.
+fn show_or_focus_welcome(state: &mut App) -> Task<Message> {
+    let existing = state
+        .windows
+        .iter()
+        .find(|(_, k)| matches!(k, WindowKind::Welcome))
+        .map(|(id, _)| *id);
+    if let Some(id) = existing {
+        return window::gain_focus(id);
+    }
+    let (id, open_task) = window::open(welcome_window_settings());
+    state.windows.register(id, WindowKind::Welcome);
+    open_task.map(|_id| Message::WelcomeWindowReady)
+}
+
 fn welcome_view(state: &App) -> Element<'_, Message> {
-    let status_line = text(permission_blurb(state.welcome));
-    let action: Element<'_, Message> = match state.welcome {
-        WelcomeState::Granted => {
-            row![text("Screen Recording is granted. You're all set.").width(Length::Fill),].into()
-        }
-        // Pending: user hasn't asked us to register yet. We collapse
-        // CGRequestScreenCaptureAccess + open_settings into a single
-        // primary button so there is only one thing to click. Ad-hoc
-        // builds get no system prompt anyway, so registering and
-        // deep-linking together is the lowest-friction path.
-        WelcomeState::Pending => column![
-            text("Step 1 of 2 — Allow Screen Recording")
-                .size(15)
-                .width(Length::Fill),
-            text(
-                "Click below. macOS will pop a Screen Recording prompt — \
-                 click 'Open System Settings' inside it, toggle Readshot \
-                 ON, then come back here for step 2."
-            )
-            .size(12)
-            .width(Length::Fill),
-            button(text("Allow Screen Recording").size(14))
-                .padding(10)
-                .on_press(Message::GrantPermissionRequested),
-        ]
-        .spacing(10)
-        .into(),
-        // After the user clicked the Pending button OR after we
-        // observed Denied (still no grant in this process). Both end
-        // up here so the user sees one consistent next step.
-        WelcomeState::AwaitingGrant | WelcomeState::Denied => column![
-            text("Step 2 of 2 — Restart Readshot")
-                .size(15)
-                .width(Length::Fill),
-            text(
-                "After you toggle Readshot ON in System Settings, macOS \
-                 may show a 'Quit & Reopen' prompt — click it and Readshot \
-                 will relaunch into the menu bar (a system notification \
-                 will confirm). If macOS doesn't ask, click Restart \
-                 Readshot now below — same effect."
-            )
-            .size(12)
-            .width(Length::Fill),
-            row![
-                button(text("Restart Readshot now").size(14))
-                    .padding(10)
-                    .on_press(Message::RestartRequested),
-                button(text("Open Settings again").size(14))
-                    .padding(10)
-                    .on_press(Message::OpenPermissionSettingsRequested),
-            ]
-            .spacing(8),
-        ]
-        .spacing(10)
-        .into(),
+    let hero = column![
+        text("Readshot").size(34),
+        text("Capture, search, find again.")
+            .size(14)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+    ]
+    .spacing(4)
+    .align_x(Alignment::Center);
+
+    let card: Element<'_, Message> = match state.welcome {
+        WelcomeState::Pending => welcome_pending_card(),
+        WelcomeState::AwaitingGrant | WelcomeState::Denied => welcome_awaiting_card(),
+        WelcomeState::Granted => welcome_granted_card(state),
     };
 
     let toast: Element<'_, Message> = match &state.last_capture_status {
-        Some(s) => text(s).into(),
+        Some(s) => text(s)
+            .size(11)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55))
+            .into(),
         None => Space::new().height(Length::Fixed(0.0)).into(),
     };
 
-    // The "Capture screen" button + its hint only make sense once
-    // we're past the permission gate. Showing them during Pending /
-    // AwaitingGrant gives the user a button they can't actually
-    // click and a hint about overlay shortcuts that don't apply.
-    let post_grant: Element<'_, Message> = if !state.welcome.should_show() {
-        let mut capture_btn = button("Capture screen").width(Length::Fill);
-        if !state.capture_in_flight {
-            capture_btn = capture_btn.on_press(Message::OpenOverlayRequested);
-        }
-        column![
-            capture_btn,
-            text("Drag · hold Shift for square · Enter for full screen · Esc to cancel").size(11),
-        ]
-        .spacing(6)
-        .into()
-    } else {
-        Space::new().height(Length::Fixed(0.0)).into()
-    };
-
-    let body = column![
-        text("Readshot").size(28),
-        text("macOS screenshot tool with offline OCR.").size(14),
+    let inner = column![
+        hero,
+        Space::new().height(Length::Fixed(24.0)),
+        card,
         Space::new().height(Length::Fixed(16.0)),
-        status_line,
-        action,
-        Space::new().height(Length::Fixed(16.0)),
-        post_grant,
-        Space::new().height(Length::Fixed(8.0)),
         toast,
-        Space::new().width(Length::Fill).height(Length::Fill),
     ]
-    .spacing(8)
-    .padding(20)
-    .align_x(Alignment::Start);
+    .max_width(420)
+    .align_x(Alignment::Center);
 
-    container(body)
+    container(inner)
         .width(Length::Fill)
         .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .padding(28)
         .into()
 }
 
-fn permission_blurb(state: WelcomeState) -> &'static str {
-    match state {
-        WelcomeState::Granted => "Permission: granted",
-        WelcomeState::Pending => "Permission: not requested",
-        WelcomeState::AwaitingGrant => "Permission: prompted, awaiting response",
-        WelcomeState::Denied => "Permission: denied",
+/// Shared chrome for every welcome card — soft semi-transparent
+/// background, subtle border, generous padding so the action button
+/// has room to breathe.
+fn welcome_card<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
+    container(content)
+        .padding(20)
+        .width(Length::Fill)
+        .style(|_| iced::widget::container::Style {
+            background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.04).into()),
+            border: iced::Border {
+                radius: 10.0.into(),
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.08),
+                width: 1.0,
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
+fn welcome_pending_card<'a>() -> Element<'a, Message> {
+    let body = column![
+        text("Allow Screen Recording").size(18),
+        text(
+            "macOS will pop a permission prompt. Click \"Open System Settings\" \
+             inside it and toggle Readshot on — that's all we need."
+        )
+        .size(13)
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7)),
+        Space::new().height(Length::Fixed(6.0)),
+        button(text("Allow Screen Recording").size(14))
+            .padding([10, 18])
+            .style(|t, s| action_button_style(t, s, ActionKind::Primary))
+            .on_press(Message::GrantPermissionRequested),
+    ]
+    .spacing(10)
+    .align_x(Alignment::Center);
+    welcome_card(body.into())
+}
+
+fn welcome_awaiting_card<'a>() -> Element<'a, Message> {
+    let body = column![
+        text("Waiting for permission").size(18),
+        text(
+            "Toggle Readshot on in System Settings — macOS will offer \"Quit & \
+             Reopen\" and Readshot will relaunch into the menu bar (look for \
+             the notification). If it doesn't ask, restart manually below."
+        )
+        .size(13)
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7)),
+        Space::new().height(Length::Fixed(6.0)),
+        row![
+            button(text("Restart Readshot").size(14))
+                .padding([10, 18])
+                .style(|t, s| action_button_style(t, s, ActionKind::Primary))
+                .on_press(Message::RestartRequested),
+            button(text("Open Settings again").size(14))
+                .padding([10, 16])
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(Message::OpenPermissionSettingsRequested),
+        ]
+        .spacing(8),
+    ]
+    .spacing(10)
+    .align_x(Alignment::Center);
+    welcome_card(body.into())
+}
+
+fn welcome_granted_card(state: &App) -> Element<'_, Message> {
+    let mut capture_btn = button(text("Capture screen").size(14))
+        .padding([10, 20])
+        .style(|t, s| action_button_style(t, s, ActionKind::Primary));
+    if !state.capture_in_flight {
+        capture_btn = capture_btn.on_press(Message::OpenOverlayRequested);
     }
+    let hotkey = state.preferences.capture_hotkey.clone();
+    let body = column![
+        text("You're all set.").size(18),
+        text(format!(
+            "Press {hotkey} or click the menu-bar icon to capture. Every \
+             capture lands in History — searchable by anything visible \
+             in the image."
+        ))
+        .size(13)
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7)),
+        Space::new().height(Length::Fixed(6.0)),
+        capture_btn,
+    ]
+    .spacing(10)
+    .align_x(Alignment::Center);
+    welcome_card(body.into())
 }
 
 /// Async helper: capture the primary display's full bounds and write
@@ -3051,15 +3102,6 @@ mod tests {
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
         // Cleanup so we don't litter the dev's Desktop on repeated runs.
         let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn permission_blurb_changes_with_state() {
-        assert_eq!(
-            permission_blurb(WelcomeState::Granted),
-            "Permission: granted"
-        );
-        assert_eq!(permission_blurb(WelcomeState::Denied), "Permission: denied");
     }
 
     #[test]
