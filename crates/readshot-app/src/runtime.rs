@@ -90,6 +90,7 @@ pub fn start() -> (App, Task<Message>) {
     // toggle it off via preferences once that surface lands.
     let prefs = Preferences {
         history_retention: readshot_core::HistoryRetention::Last50,
+        capture_hotkey: default_capture_hotkey().into(),
         ..Preferences::default()
     };
     let history_root = default_history_root();
@@ -115,7 +116,8 @@ pub fn start() -> (App, Task<Message>) {
     // Same fail-soft contract for the tray. Linux without an
     // appindicator daemon, or a Windows session without a Shell_Notify
     // surface, will simply not see the tray entry.
-    app.tray = crate::tray::install();
+    let hotkey_label = pretty_hotkey(&app.preferences.capture_hotkey);
+    app.tray = crate::tray::install(Some(&hotkey_label));
 
     // The welcome window is a *first-run permission gate*, not the
     // app's main UI. Once Screen Recording is granted the user lives
@@ -143,6 +145,49 @@ pub fn start() -> (App, Task<Message>) {
         tasks.push(Task::done(Message::UrlActionReceived(action)));
     }
     (app, Task::batch(tasks))
+}
+
+/// Per-platform suggested default for `Preferences::capture_hotkey`.
+/// macOS users have ⌘ muscle memory; everyone else uses Ctrl.
+#[cfg(target_os = "macos")]
+fn default_capture_hotkey() -> &'static str {
+    "cmd+shift+x"
+}
+#[cfg(not(target_os = "macos"))]
+fn default_capture_hotkey() -> &'static str {
+    "ctrl+shift+x"
+}
+
+/// Render a hotkey string like "cmd+shift+x" as the macOS-native
+/// glyph form "⌘⇧X". Falls back to the input string if there's no
+/// recognisable component (so parse failures still display
+/// *something* instead of an empty label).
+pub fn pretty_hotkey(s: &str) -> String {
+    let lower = s.trim().to_lowercase();
+    if lower.is_empty() {
+        return String::new();
+    }
+    let mut modifiers = String::new();
+    let mut keys: Vec<String> = Vec::new();
+    for raw in lower.split('+') {
+        let p = raw.trim();
+        if p.is_empty() {
+            continue;
+        }
+        match p {
+            "cmd" | "command" | "meta" | "super" | "win" => modifiers.push('\u{2318}'),
+            "ctrl" | "control" => modifiers.push('\u{2303}'),
+            "shift" => modifiers.push('\u{21E7}'),
+            "alt" | "option" | "opt" => modifiers.push('\u{2325}'),
+            other => keys.push(other.to_uppercase()),
+        }
+    }
+    let pretty: String = format!("{modifiers}{}", keys.join(""));
+    if pretty.is_empty() {
+        s.to_string()
+    } else {
+        pretty
+    }
 }
 
 fn register_default_hotkey(prefs: &Preferences) -> Option<GlobalHotKeyManager> {
@@ -2590,7 +2635,7 @@ fn welcome_granted_card(state: &App) -> Element<'_, Message> {
     if !state.capture_in_flight {
         capture_btn = capture_btn.on_press(Message::OpenOverlayRequested);
     }
-    let hotkey = state.preferences.capture_hotkey.clone();
+    let hotkey = pretty_hotkey(&state.preferences.capture_hotkey);
     let body = column![
         text("You're all set.").size(18),
         text(format!(
@@ -3107,6 +3152,20 @@ mod tests {
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
         // Cleanup so we don't litter the dev's Desktop on repeated runs.
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn pretty_hotkey_renders_macos_glyphs() {
+        assert_eq!(pretty_hotkey("cmd+shift+x"), "\u{2318}\u{21E7}X");
+        assert_eq!(pretty_hotkey("ctrl+alt+y"), "\u{2303}\u{2325}Y");
+        assert_eq!(pretty_hotkey("CMD+Shift+Z"), "\u{2318}\u{21E7}Z");
+    }
+
+    #[test]
+    fn pretty_hotkey_falls_back_to_input_when_unparseable() {
+        // Empty stays empty; nonsense single-token is preserved.
+        assert_eq!(pretty_hotkey(""), "");
+        assert_eq!(pretty_hotkey("???"), "???");
     }
 
     #[test]

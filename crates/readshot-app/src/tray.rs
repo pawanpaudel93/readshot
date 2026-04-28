@@ -79,7 +79,11 @@ impl TrayController {
 /// Construct the tray icon + menu. Returns `None` if the OS rejects
 /// the request (most common reason on Linux: no system tray /
 /// libayatana-appindicator missing).
-pub fn install() -> Option<TrayController> {
+///
+/// `hotkey_label` is the already-pretty-printed shortcut (e.g.
+/// `"⌘⇧X"`). When provided, it's appended to the Capture menu item
+/// label so the global hotkey is discoverable at a glance.
+pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
     let icon = match build_icon(32) {
         Ok(i) => i,
         Err(e) => {
@@ -89,7 +93,11 @@ pub fn install() -> Option<TrayController> {
     };
 
     let menu = Menu::new();
-    let item_capture = MenuItem::new("Capture", true, None);
+    let capture_label = match hotkey_label {
+        Some(k) if !k.is_empty() => format!("Capture  ({k})"),
+        _ => "Capture".to_string(),
+    };
+    let item_capture = MenuItem::new(capture_label, true, None);
     let item_history = MenuItem::new("History…", true, None);
     let item_quit = MenuItem::new("Quit", true, None);
 
