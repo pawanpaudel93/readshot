@@ -38,33 +38,112 @@ pub struct RecognizedLine {
 }
 
 /// Reconstruct an indent-preserving plain-text version of the OCR
-/// output. Lines are emitted top-to-bottom (sorted by Y ascending,
-/// then X ascending) with leading spaces proportional to each line's
-/// horizontal offset from the leftmost line.
+/// output.
+///
+/// The algorithm:
+///
+/// 1. Drop empty fragments.
+/// 2. Cluster fragments by Y-centre: any two whose centres lie within
+///    half a median line-height belong to the **same row**. Apple
+///    Vision often returns several observations per visual row
+///    (think tree-branch indented terminals where the branch and the
+///    payload are recognised separately) — without clustering each
+///    fragment becomes its own line and the row layout vanishes.
+/// 3. Within each row, sort fragments by X.
+/// 4. Emit one output line per row. The leftmost fragment's X-offset
+///    becomes leading spaces (relative to the leftmost X across the
+///    whole page); the gap between subsequent fragments becomes
+///    inline whitespace, scaled by the median per-character width.
 ///
 /// Returns the empty string when `lines` is empty.
 pub fn reconstruct(lines: &[RecognizedLine]) -> String {
     if lines.is_empty() {
         return String::new();
     }
-
-    // Sort by Y (top-to-bottom) then X (left-to-right within a row).
-    // We don't mutate the caller's slice; reconstruction is read-only.
-    let mut indexed: Vec<&RecognizedLine> = lines.iter().filter(|l| !l.text.is_empty()).collect();
-    if indexed.is_empty() {
+    let active: Vec<&RecognizedLine> = lines.iter().filter(|l| !l.text.is_empty()).collect();
+    if active.is_empty() {
         return String::new();
     }
-    indexed.sort_by(|a, b| {
-        a.y.partial_cmp(&b.y)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+
+    let em = median_em(&active);
+    let med_h = median_height(&active);
+    // Two fragments are part of the same visual row when their Y
+    // centres are within half a line height of each other. The floor
+    // (0.005 of image height) keeps the heuristic stable when
+    // bounding boxes are unusually thin.
+    let row_tol = (med_h * 0.5).max(0.005);
+
+    // Sort by Y centre so we can walk the page top-to-bottom.
+    let mut sorted = active.clone();
+    sorted.sort_by(|a, b| {
+        let ay = a.y + a.h / 2.0;
+        let by = b.y + b.h / 2.0;
+        ay.partial_cmp(&by).unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Median per-line character width gives us a stable em-unit even
-    // when individual lines are short or noisy. Skip lines with zero
-    // characters to avoid divide-by-zero; if all lines are zero-width
-    // (shouldn't happen) fall back to a sane constant.
-    let mut widths: Vec<f32> = indexed
+    // Walk the sorted list, breaking into rows whenever the Y centre
+    // exceeds the running row's reference centre by more than `row_tol`.
+    let mut rows: Vec<Vec<&RecognizedLine>> = Vec::new();
+    let mut current: Vec<&RecognizedLine> = Vec::new();
+    let mut current_ref_y: Option<f32> = None;
+    for line in &sorted {
+        let y_centre = line.y + line.h / 2.0;
+        match current_ref_y {
+            Some(ref_y) if (y_centre - ref_y).abs() <= row_tol => {
+                current.push(*line);
+            }
+            _ => {
+                if !current.is_empty() {
+                    rows.push(std::mem::take(&mut current));
+                }
+                current.push(*line);
+                current_ref_y = Some(y_centre);
+            }
+        }
+    }
+    if !current.is_empty() {
+        rows.push(current);
+    }
+
+    let min_x = active.iter().map(|l| l.x).fold(f32::INFINITY, f32::min);
+
+    let mut out = String::new();
+    for (i, row) in rows.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let mut row = row.clone();
+        row.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Indent the row by the leftmost fragment's offset.
+        let first = row[0];
+        let indent = ((first.x - min_x) / em).round().max(0.0) as usize;
+        let indent = indent.min(80);
+        for _ in 0..indent {
+            out.push(' ');
+        }
+        out.push_str(&first.text);
+
+        // Subsequent same-row fragments → inline whitespace.
+        let mut prev_end = first.x + first.w;
+        for frag in &row[1..] {
+            let gap = frag.x - prev_end;
+            // Always emit at least one space between fragments,
+            // however small the gap. Cap large gaps the same way as
+            // outer indentation.
+            let spaces = ((gap / em).round().max(1.0) as usize).min(80);
+            for _ in 0..spaces {
+                out.push(' ');
+            }
+            out.push_str(&frag.text);
+            prev_end = frag.x + frag.w;
+        }
+    }
+    out
+}
+
+fn median_em(lines: &[&RecognizedLine]) -> f32 {
+    let mut widths: Vec<f32> = lines
         .iter()
         .filter_map(|l| {
             let chars = l.text.chars().count() as f32;
@@ -75,31 +154,20 @@ pub fn reconstruct(lines: &[RecognizedLine]) -> String {
             }
         })
         .collect();
-    let em = if widths.is_empty() {
-        0.01 // ~1% of image width per character — very rough fallback
-    } else {
-        widths.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        widths[widths.len() / 2]
-    };
-
-    let min_x = indexed.iter().map(|l| l.x).fold(f32::INFINITY, f32::min);
-
-    let mut out = String::new();
-    for (i, line) in indexed.iter().enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        let indent = ((line.x - min_x) / em).round().max(0.0) as usize;
-        // Cap indent so a stray bbox can't blow up the output. 80
-        // columns is a reasonable upper bound for source-code-style
-        // content.
-        let indent = indent.min(80);
-        for _ in 0..indent {
-            out.push(' ');
-        }
-        out.push_str(&line.text);
+    if widths.is_empty() {
+        return 0.01;
     }
-    out
+    widths.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    widths[widths.len() / 2]
+}
+
+fn median_height(lines: &[&RecognizedLine]) -> f32 {
+    let mut heights: Vec<f32> = lines.iter().filter(|l| l.h > 0.0).map(|l| l.h).collect();
+    if heights.is_empty() {
+        return 0.04;
+    }
+    heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    heights[heights.len() / 2]
 }
 
 #[cfg(test)]
@@ -161,6 +229,50 @@ mod tests {
             line("world", 0.0, 0.3, 0.05, 0.04),
         ];
         assert_eq!(reconstruct(&lines), "hello\nworld");
+    }
+
+    #[test]
+    fn fragments_on_the_same_row_merge_into_one_line() {
+        // "3 files changed,"  and  "5 insertions(+), 13 deletions(-)"
+        // are returned by Vision as two observations on the same row.
+        // Without clustering they'd stack vertically; with it they
+        // share one line separated by inline whitespace.
+        // Median height = 0.04, so row tolerance = 0.02.
+        let lines = vec![
+            line("3 files changed,", 0.10, 0.20, 0.16, 0.04), // 16 chars / 0.16 → em 0.01
+            line("5 insertions(+), 13 deletions(-)", 0.30, 0.205, 0.32, 0.04), // same row (Y diff 0.005 < 0.02)
+        ];
+        let out = reconstruct(&lines);
+        assert!(out.starts_with("3 files changed,"));
+        assert!(out.contains("5 insertions(+), 13 deletions(-)"));
+        // No newline should appear — same row.
+        assert!(!out.contains('\n'));
+    }
+
+    #[test]
+    fn rows_separated_by_more_than_a_line_height_become_distinct_lines() {
+        let lines = vec![
+            line("first row", 0.00, 0.10, 0.09, 0.04),
+            line("second row", 0.00, 0.30, 0.10, 0.04),
+        ];
+        let out = reconstruct(&lines);
+        assert_eq!(out.lines().count(), 2);
+    }
+
+    #[test]
+    fn mixed_rows_indent_and_inline_spacing_combine() {
+        // Row 1: one fragment at far-left.
+        // Row 2: two fragments — leftmost indented, second further right.
+        let lines = vec![
+            line("aaaaa", 0.00, 0.10, 0.05, 0.04), // em = 0.01
+            line("bbbbb", 0.04, 0.30, 0.05, 0.04), // 4 chars indent on row 2
+            line("ccccc", 0.20, 0.30, 0.05, 0.04), // gap from b's end (0.09) to c.x (0.20) = 0.11 → 11 spaces
+        ];
+        let out = reconstruct(&lines);
+        let rendered: Vec<&str> = out.lines().collect();
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered[0], "aaaaa");
+        assert_eq!(rendered[1], "    bbbbb           ccccc");
     }
 
     #[test]
