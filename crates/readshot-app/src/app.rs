@@ -166,6 +166,10 @@ pub enum Message {
     /// Direct (no-editor) OCR-text-copy completion. Carries the
     /// recognised text so the toast can report a character count.
     OverlayCopyTextDone(Result<String, String>),
+    /// Fire-and-forget history persistence completion. Errors are
+    /// logged and otherwise ignored — a failed history write must
+    /// not block the user-visible flow.
+    HistorySaveDone(Result<(), String>),
     /// Async region-capture finished — `Ok(image)` opens an editor
     /// window with the captured pixels; `Err` toasts the failure on
     /// the welcome window.
@@ -274,6 +278,10 @@ pub struct App {
     /// overlay quick-actions; consumed in `RegionCaptureCompleted`.
     /// `None` falls back to the editor.
     pub pending_intent: Option<CaptureIntent>,
+    /// Display id for the in-flight capture. Carried alongside
+    /// `pending_intent` so the resulting history record can be
+    /// stamped with the right monitor.
+    pub pending_display_id: Option<readshot_capture::DisplayId>,
     /// Live pin windows mapped to their pre-rendered image handle.
     /// Each pin window's `view` reads its handle from this map. The
     /// map shrinks as pins close.
@@ -342,6 +350,7 @@ impl App {
             overlay_displays: HashMap::new(),
             overlay_selections: HashMap::new(),
             pending_intent: None,
+            pending_display_id: None,
             pins: HashMap::new(),
             overlay_tick: 0,
             last_save_dir: None,

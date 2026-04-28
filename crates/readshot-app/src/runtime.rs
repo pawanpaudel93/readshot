@@ -74,13 +74,25 @@ use crate::welcome::WelcomeState;
 /// can dispatch to the correct widget tree.
 pub fn start() -> (App, Task<Message>) {
     let permissions = Arc::from(default_provider());
+    let history_store: Option<std::sync::Arc<dyn readshot_core::HistoryStore>> =
+        default_history_root().map(|root| {
+            std::sync::Arc::new(readshot_core::FsHistoryStore::new(root))
+                as std::sync::Arc<dyn readshot_core::HistoryStore>
+        });
     let coordinator = CaptureCoordinator::new(
         Arc::from(readshot_capture::default_capturer()),
         Arc::from(readshot_ocr::default_engine()),
         Arc::clone(&permissions),
-        None,
+        history_store,
     );
-    let mut app = App::new(coordinator, permissions, Preferences::default());
+    // History is the foundation for "every screenshot is searchable" —
+    // turn it on by default. Users on a privacy-sensitive setup can
+    // toggle it off via preferences once that surface lands.
+    let prefs = Preferences {
+        history_retention: readshot_core::HistoryRetention::Last50,
+        ..Preferences::default()
+    };
+    let mut app = App::new(coordinator, permissions, prefs);
 
     // Surface the initial permission state in the log so users
     // (and us, when triaging issues) can see whether macOS TCC is
@@ -549,6 +561,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // the screenshot so the dimming veil doesn't show up in
             // the captured pixels.
             state.pending_intent = Some(intent);
+            state.pending_display_id = Some(display_id.clone());
             state.overlay_selections.clear();
             let mut tasks = close_all_overlays(state);
             tasks.push(Task::done(Message::CaptureRegionRequested {
@@ -593,49 +606,72 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 .pending_intent
                 .take()
                 .unwrap_or(crate::app::CaptureIntent::Editor);
+            let display_id = state.pending_display_id.take().unwrap_or_default();
             match result {
-                Ok(image) => match intent {
-                    crate::app::CaptureIntent::Editor => {
-                        state.editor = Some(crate::editor::EditorSession::new(image));
-                        let (id, open_task) = window::open(editor_window_settings());
-                        state.windows.register(id, WindowKind::Editor);
-                        open_task.map(Message::EditorWindowReady)
-                    }
-                    crate::app::CaptureIntent::CopyToClipboard => {
-                        Task::perform(copy_image_to_clipboard(image), |r| {
-                            Message::OverlayCopyDone(r.map_err(|e| e.to_string()))
-                        })
-                    }
-                    crate::app::CaptureIntent::CopyTextDirect => {
-                        let coord = state.coordinator.clone();
-                        Task::perform(ocr_then_copy(coord, image), |r| {
-                            Message::OverlayCopyTextDone(r.map_err(|e| e.to_string()))
-                        })
-                    }
-                    crate::app::CaptureIntent::SaveDirect => {
-                        let seed = state.last_save_dir.clone();
-                        Task::perform(save_image_via_picker(image, seed), |r| {
-                            Message::OverlaySaveDone(r.map_err(|e| e.to_string()))
-                        })
-                    }
-                    crate::app::CaptureIntent::Pin => {
-                        let size = (image.width(), image.height());
-                        let handle = iced::widget::image::Handle::from_rgba(
-                            image.width(),
-                            image.height(),
-                            image.as_raw().clone(),
-                        );
-                        let (id, open_task) = window::open(pin_window_settings(size));
-                        state.windows.register(id, WindowKind::Pin);
-                        state.pins.insert(id, handle.clone());
-                        open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone()))
-                    }
-                },
+                Ok(image) => {
+                    // Persist a history record in parallel with the
+                    // user-visible intent action. The history task is
+                    // gated on `preferences.history_retention` and
+                    // logs internally on failure, so it can never
+                    // block or fail the user-visible flow.
+                    let history_task = persist_history_task(
+                        state.coordinator.clone(),
+                        image.clone(),
+                        display_id,
+                        state.preferences.history_retention,
+                    );
+                    let intent_task = match intent {
+                        crate::app::CaptureIntent::Editor => {
+                            state.editor = Some(crate::editor::EditorSession::new(image));
+                            let (id, open_task) = window::open(editor_window_settings());
+                            state.windows.register(id, WindowKind::Editor);
+                            open_task.map(Message::EditorWindowReady)
+                        }
+                        crate::app::CaptureIntent::CopyToClipboard => {
+                            Task::perform(copy_image_to_clipboard(image), |r| {
+                                Message::OverlayCopyDone(r.map_err(|e| e.to_string()))
+                            })
+                        }
+                        crate::app::CaptureIntent::CopyTextDirect => {
+                            let coord = state.coordinator.clone();
+                            Task::perform(ocr_then_copy(coord, image), |r| {
+                                Message::OverlayCopyTextDone(r.map_err(|e| e.to_string()))
+                            })
+                        }
+                        crate::app::CaptureIntent::SaveDirect => {
+                            let seed = state.last_save_dir.clone();
+                            Task::perform(save_image_via_picker(image, seed), |r| {
+                                Message::OverlaySaveDone(r.map_err(|e| e.to_string()))
+                            })
+                        }
+                        crate::app::CaptureIntent::Pin => {
+                            let size = (image.width(), image.height());
+                            let handle = iced::widget::image::Handle::from_rgba(
+                                image.width(),
+                                image.height(),
+                                image.as_raw().clone(),
+                            );
+                            let (id, open_task) = window::open(pin_window_settings(size));
+                            state.windows.register(id, WindowKind::Pin);
+                            state.pins.insert(id, handle.clone());
+                            open_task
+                                .map(move |opened| Message::PinWindowReady(opened, handle.clone()))
+                        }
+                    };
+                    Task::batch([history_task, intent_task])
+                }
                 Err(e) => {
                     state.last_capture_status = Some(format!("Capture failed: {e}"));
                     Task::none()
                 }
             }
+        }
+
+        Message::HistorySaveDone(result) => {
+            if let Err(e) = result {
+                tracing::warn!(target: "readshot::history", "save failed: {e}");
+            }
+            Task::none()
         }
 
         Message::OverlayCopyDone(result) => {
@@ -2073,6 +2109,48 @@ fn close_all_overlays(state: &mut App) -> Vec<Task<Message>> {
         tasks.push(window::close(id));
     }
     tasks
+}
+
+/// Default per-user history root —
+/// `~/Library/Application Support/dev.pawanpaudel93.Readshot/history/`
+/// on macOS, the equivalent `data_local_dir` on other platforms.
+/// `None` when the system can't supply a project dir (rare; tests fall
+/// back to no history).
+pub fn default_history_root() -> Option<PathBuf> {
+    directories::ProjectDirs::from("dev", "pawanpaudel93", "Readshot")
+        .map(|d| d.data_local_dir().join("history"))
+}
+
+/// Spawn a fire-and-forget history-persistence task. Errors land in
+/// `Message::HistorySaveDone`, where they're logged but otherwise
+/// ignored — failing to record history must not break the user's
+/// visible action.
+fn persist_history_task(
+    coord: CaptureCoordinator,
+    img: image::RgbaImage,
+    display_id: readshot_capture::DisplayId,
+    policy: readshot_core::HistoryRetention,
+) -> Task<Message> {
+    Task::perform(
+        async move {
+            if matches!(policy, readshot_core::HistoryRetention::Off) {
+                return Ok::<(), String>(());
+            }
+            let now = chrono::Utc::now();
+            let record = readshot_core::CaptureRecord::new(
+                now,
+                img.width(),
+                img.height(),
+                display_id.to_string(),
+            );
+            let mut buf: Vec<u8> = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+                .map_err(|e| format!("png encode: {e}"))?;
+            coord.record_history(record, buf, policy, now).await;
+            Ok::<(), String>(())
+        },
+        Message::HistorySaveDone,
+    )
 }
 
 fn save_to_desktop(img: &image::RgbaImage) -> Result<PathBuf, CaptureRunError> {
