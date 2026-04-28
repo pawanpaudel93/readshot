@@ -170,10 +170,12 @@ pub enum Message {
     /// Direct (no-editor) OCR-text-copy completion. Carries the
     /// recognised text so the toast can report a character count.
     OverlayCopyTextDone(Result<String, String>),
-    /// Fire-and-forget history persistence completion. Errors are
-    /// logged and otherwise ignored — a failed history write must
-    /// not block the user-visible flow.
-    HistorySaveDone(Result<(), String>),
+    /// Fire-and-forget history persistence completion. The boolean
+    /// payload is `true` when the chain completed all the way through
+    /// the OCR-and-update step (so the browser should reload to see
+    /// the new text); `false` when history was disabled or OCR
+    /// failed. Errors are logged but never block the user flow.
+    HistoryRecordPersisted(Result<bool, String>),
     /// User asked for the history browser (tray menu / future
     /// hotkey). Either focuses the existing window or opens a new
     /// one and triggers a fresh `HistoryListLoaded`.

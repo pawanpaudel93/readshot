@@ -95,6 +95,19 @@ impl CaptureCoordinator {
         }
     }
 
+    /// Rewrite an existing record's sidecar — typically after a
+    /// background OCR or post-capture annotation pass. No-op when no
+    /// history store is wired.
+    pub fn update_history(
+        &self,
+        record: &CaptureRecord,
+    ) -> Result<(), readshot_core::HistoryError> {
+        match &self.history {
+            Some(h) => h.update(record),
+            None => Ok(()),
+        }
+    }
+
     /// Append a capture to history, respecting the retention policy.
     /// Off → no-op. Other policies → save and apply retention.
     pub async fn record_history(

@@ -700,9 +700,21 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
         }
 
-        Message::HistorySaveDone(result) => {
-            if let Err(e) = result {
-                tracing::warn!(target: "readshot::history", "save failed: {e}");
+        Message::HistoryRecordPersisted(result) => {
+            match result {
+                Ok(true) => {
+                    // OCR completed for the just-saved record. Refresh
+                    // the browser if it's open so the new text is
+                    // searchable / visible.
+                    if state.history_window_id.is_some() {
+                        let coord = state.coordinator.clone();
+                        return Task::perform(async move { coord.history_list() }, |r| {
+                            Message::HistoryListLoaded(r.map_err(|e| e.to_string()))
+                        });
+                    }
+                }
+                Ok(false) => {} // history off or OCR failed (already logged)
+                Err(e) => tracing::warn!(target: "readshot::history", "persist failed: {e}"),
             }
             Task::none()
         }
@@ -2338,10 +2350,14 @@ pub fn default_history_root() -> Option<PathBuf> {
         .map(|d| d.data_local_dir().join("history"))
 }
 
-/// Spawn a fire-and-forget history-persistence task. Errors land in
-/// `Message::HistorySaveDone`, where they're logged but otherwise
-/// ignored — failing to record history must not break the user's
-/// visible action.
+/// Spawn a fire-and-forget history-persistence task. The chain is:
+/// encode PNG → save record (empty OCR) → run Apple Vision OCR →
+/// update sidecar with the recognised text. Each stage logs its own
+/// failures and the user-visible flow never blocks on this work.
+///
+/// Returns `Ok(true)` when the OCR-and-update step completed (the
+/// browser should reload to pick up the new text), `Ok(false)` when
+/// history was disabled or OCR failed.
 fn persist_history_task(
     coord: CaptureCoordinator,
     img: image::RgbaImage,
@@ -2351,10 +2367,10 @@ fn persist_history_task(
     Task::perform(
         async move {
             if matches!(policy, readshot_core::HistoryRetention::Off) {
-                return Ok::<(), String>(());
+                return Ok::<bool, String>(false);
             }
             let now = chrono::Utc::now();
-            let record = readshot_core::CaptureRecord::new(
+            let mut record = readshot_core::CaptureRecord::new(
                 now,
                 img.width(),
                 img.height(),
@@ -2363,10 +2379,34 @@ fn persist_history_task(
             let mut buf: Vec<u8> = Vec::new();
             img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
                 .map_err(|e| format!("png encode: {e}"))?;
-            coord.record_history(record, buf, policy, now).await;
-            Ok::<(), String>(())
+            // Save with empty OCR first so the capture is visible in
+            // the browser immediately (OCR is the slow bit).
+            coord.record_history(record.clone(), buf, policy, now).await;
+
+            // Background OCR — fills `ocr_text` so the search index
+            // has something to match. Failure is logged but
+            // non-fatal: the record is still useful without text.
+            let ocr_req = readshot_ocr::OCRRequest {
+                image: img,
+                languages: Vec::new(),
+                use_language_correction: true,
+            };
+            match coord.recognise(ocr_req).await {
+                Ok(text) => {
+                    record.ocr_text = Some(text);
+                    if let Err(e) = coord.update_history(&record) {
+                        tracing::warn!(target: "readshot::history", "ocr update failed: {e}");
+                        return Ok(false);
+                    }
+                    Ok(true)
+                }
+                Err(e) => {
+                    tracing::warn!(target: "readshot::history", "ocr failed: {e}");
+                    Ok(false)
+                }
+            }
         },
-        Message::HistorySaveDone,
+        Message::HistoryRecordPersisted,
     )
 }
 

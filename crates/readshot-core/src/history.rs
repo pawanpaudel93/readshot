@@ -92,6 +92,17 @@ pub trait HistoryStore: Send + Sync {
         now: DateTime<Utc>,
     ) -> Result<(), HistoryError>;
     fn clear_all(&self) -> Result<(), HistoryError>;
+    /// Rewrite an existing record's sidecar JSON. The PNG is left
+    /// alone — `update` is for filling in OCR text or annotations
+    /// after the original capture has already landed.
+    ///
+    /// Best-effort by default: a record that's been retention-pruned
+    /// before `update` runs is silently ignored. Implementations that
+    /// can do better should override.
+    fn update(&self, record: &CaptureRecord) -> Result<(), HistoryError> {
+        let _ = record;
+        Ok(())
+    }
 }
 
 /// File-system backed history store. All filesystem state is rooted at
@@ -259,6 +270,24 @@ impl HistoryStore for FsHistoryStore {
         self.write_index(&cleared)?;
         Ok(())
     }
+
+    fn update(&self, record: &CaptureRecord) -> Result<(), HistoryError> {
+        let (_rel_png, rel_json) = Self::record_paths(record);
+        let abs_json = self.root.join(&rel_json);
+        // Best-effort: a record that's been retention-pruned between
+        // save and update is not an error, just a no-op.
+        if !abs_json.exists() {
+            return Ok(());
+        }
+        let json_content = serde_json::to_string_pretty(record)?;
+        fs::write(&abs_json, json_content)?;
+        // Bump the index's updated_at so callers can see the archive
+        // has changed; the index entry's captured_at is immutable.
+        let mut index = self.read_index()?;
+        index.updated_at = Some(Utc::now());
+        self.write_index(&index)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -303,6 +332,29 @@ mod tests {
         let list = s.list().unwrap();
         assert_eq!(list[0].id, newer.id);
         assert_eq!(list[1].id, older.id);
+    }
+
+    #[test]
+    fn update_rewrites_sidecar_with_new_ocr_text() {
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        s.save(&r, &fake_png()).unwrap();
+        // List comes back without OCR text by default.
+        assert!(s.list().unwrap()[0].ocr_text.is_none());
+        // Now mutate and update.
+        r.ocr_text = Some("hello world".into());
+        s.update(&r).unwrap();
+        let list = s.list().unwrap();
+        assert_eq!(list[0].ocr_text.as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn update_is_a_noop_when_record_was_pruned() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        // Never saved — `update` must not fail.
+        let res = s.update(&r);
+        assert!(res.is_ok());
     }
 
     #[test]
