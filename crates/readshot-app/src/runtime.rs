@@ -515,6 +515,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // `view()` and the OverlaySelected message handler can
             // both look up which monitor a given overlay covers.
             let mut tasks: Vec<Task<Message>> = Vec::with_capacity(displays.len());
+            // Fresh overlay session — clear any leftover toolbar state
+            // from a previous capture flow.
+            state.overlay_selections.clear();
+            state.pending_intent = None;
             for d in &displays {
                 let settings = overlay_window_settings_for(d);
                 let (id, open_task) = window::open(settings);
@@ -524,6 +528,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     crate::app::OverlayDisplay {
                         display_id: d.id.clone(),
                         scale: d.scale,
+                        width: d.bounds.width(),
+                        height: d.bounds.height(),
                     },
                 );
                 tasks.push(open_task.map(Message::OverlayWindowReady));
@@ -533,11 +539,17 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
 
         Message::OverlayWindowReady(_id) => Task::none(),
 
-        Message::OverlaySelected { display_id, rect } => {
+        Message::OverlaySelected {
+            display_id,
+            rect,
+            intent,
+        } => {
             // Close every overlay window — selection on any one of
             // them ends the multi-monitor session — before snapping
             // the screenshot so the dimming veil doesn't show up in
             // the captured pixels.
+            state.pending_intent = Some(intent);
+            state.overlay_selections.clear();
             let mut tasks = close_all_overlays(state);
             tasks.push(Task::done(Message::CaptureRegionRequested {
                 display_id,
@@ -546,7 +558,23 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::batch(tasks)
         }
 
-        Message::OverlayCancelled => Task::batch(close_all_overlays(state)),
+        Message::OverlaySelectionChanged { display_id, rect } => {
+            match rect {
+                Some(r) => {
+                    state.overlay_selections.insert(display_id, r);
+                }
+                None => {
+                    state.overlay_selections.remove(&display_id);
+                }
+            }
+            Task::none()
+        }
+
+        Message::OverlayCancelled => {
+            state.overlay_selections.clear();
+            state.pending_intent = None;
+            Task::batch(close_all_overlays(state))
+        }
 
         Message::CaptureRegionRequested { display_id, rect } => {
             let coord = state.coordinator.clone();
@@ -561,18 +589,68 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
 
         Message::RegionCaptureCompleted(result) => {
             state.capture_in_flight = false;
+            let intent = state
+                .pending_intent
+                .take()
+                .unwrap_or(crate::app::CaptureIntent::Editor);
             match result {
-                Ok(image) => {
-                    state.editor = Some(crate::editor::EditorSession::new(image));
-                    let (id, open_task) = window::open(editor_window_settings());
-                    state.windows.register(id, WindowKind::Editor);
-                    open_task.map(Message::EditorWindowReady)
-                }
+                Ok(image) => match intent {
+                    crate::app::CaptureIntent::Editor => {
+                        state.editor = Some(crate::editor::EditorSession::new(image));
+                        let (id, open_task) = window::open(editor_window_settings());
+                        state.windows.register(id, WindowKind::Editor);
+                        open_task.map(Message::EditorWindowReady)
+                    }
+                    crate::app::CaptureIntent::CopyToClipboard => {
+                        Task::perform(copy_image_to_clipboard(image), |r| {
+                            Message::OverlayCopyDone(r.map_err(|e| e.to_string()))
+                        })
+                    }
+                    crate::app::CaptureIntent::SaveDirect => {
+                        let seed = state.last_save_dir.clone();
+                        Task::perform(save_image_via_picker(image, seed), |r| {
+                            Message::OverlaySaveDone(r.map_err(|e| e.to_string()))
+                        })
+                    }
+                    crate::app::CaptureIntent::Pin => {
+                        let size = (image.width(), image.height());
+                        let handle = iced::widget::image::Handle::from_rgba(
+                            image.width(),
+                            image.height(),
+                            image.as_raw().clone(),
+                        );
+                        let (id, open_task) = window::open(pin_window_settings(size));
+                        state.windows.register(id, WindowKind::Pin);
+                        state.pins.insert(id, handle.clone());
+                        open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone()))
+                    }
+                },
                 Err(e) => {
                     state.last_capture_status = Some(format!("Capture failed: {e}"));
                     Task::none()
                 }
             }
+        }
+
+        Message::OverlayCopyDone(result) => {
+            state.last_capture_status = Some(match result {
+                Ok(()) => "Copied to clipboard.".into(),
+                Err(e) => format!("Copy failed: {e}"),
+            });
+            Task::none()
+        }
+        Message::OverlaySaveDone(result) => {
+            if let Ok(Some(path)) = &result {
+                if let Some(parent) = path.parent() {
+                    state.last_save_dir = Some(parent.to_path_buf());
+                }
+            }
+            state.last_capture_status = Some(match result {
+                Ok(Some(p)) => format!("Saved to {}", p.display()),
+                Ok(None) => "Save cancelled.".into(),
+                Err(e) => format!("Save failed: {e}"),
+            });
+            Task::none()
         }
 
         Message::EditorWindowReady(id) => {
@@ -1657,7 +1735,148 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
         .align_x(Alignment::Center)
         .align_y(Alignment::Start);
 
-    stack![canvas_layer, hint_layer].into()
+    // Floating action toolbar — only when this display has a
+    // committed selection. Layered above the canvas so its buttons
+    // intercept clicks before the overlay's "click outside =
+    // restart drag" path sees them.
+    let toolbar_layer = overlay_record
+        .and_then(|d| {
+            state
+                .overlay_selections
+                .get(&d.display_id)
+                .map(|rect| (d, rect))
+        })
+        .map(|(d, rect)| overlay_toolbar_layer(&d.display_id, rect, d.width, d.height));
+
+    // Once the toolbar is up the introductory hint is just noise.
+    if let Some(toolbar) = toolbar_layer {
+        stack![canvas_layer, toolbar].into()
+    } else {
+        stack![canvas_layer, hint_layer].into()
+    }
+}
+
+/// Estimated visual size of the floating overlay toolbar. Used for
+/// edge-aware reflow without measuring real layout (which iced
+/// doesn't expose mid-build).
+const OVERLAY_TOOLBAR_HEIGHT: f32 = 44.0;
+const OVERLAY_TOOLBAR_GAP: f32 = 8.0;
+
+/// Build a positioned action toolbar (Capture / Copy / Save / Pin /
+/// Cancel) anchored to the right edge of `rect`. Falls back to
+/// "above" then "inside" if "below" would clip the window.
+fn overlay_toolbar_layer<'a>(
+    display_id: &readshot_capture::DisplayId,
+    rect: &readshot_core::geom::Rect,
+    bounds_w: f32,
+    bounds_h: f32,
+) -> Element<'a, Message> {
+    use crate::app::CaptureIntent;
+
+    let make_btn = |label: &'static str, msg: Message| {
+        button(text(label).size(13).color(Color::WHITE))
+            .padding([6, 10])
+            .style(|_, status| {
+                let base = Color::from_rgba(1.0, 1.0, 1.0, 0.0);
+                let hovered = Color::from_rgba(1.0, 1.0, 1.0, 0.12);
+                let pressed = Color::from_rgba(1.0, 1.0, 1.0, 0.22);
+                let bg = match status {
+                    iced::widget::button::Status::Hovered => hovered,
+                    iced::widget::button::Status::Pressed => pressed,
+                    _ => base,
+                };
+                iced::widget::button::Style {
+                    background: Some(bg.into()),
+                    text_color: Color::WHITE,
+                    border: iced::Border {
+                        radius: 4.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
+            })
+            .on_press(msg)
+    };
+
+    let buttons = row![
+        make_btn(
+            "✓ Capture",
+            Message::OverlaySelected {
+                display_id: display_id.clone(),
+                rect: *rect,
+                intent: CaptureIntent::Editor,
+            },
+        ),
+        make_btn(
+            "Copy",
+            Message::OverlaySelected {
+                display_id: display_id.clone(),
+                rect: *rect,
+                intent: CaptureIntent::CopyToClipboard,
+            },
+        ),
+        make_btn(
+            "Save",
+            Message::OverlaySelected {
+                display_id: display_id.clone(),
+                rect: *rect,
+                intent: CaptureIntent::SaveDirect,
+            },
+        ),
+        make_btn(
+            "Pin",
+            Message::OverlaySelected {
+                display_id: display_id.clone(),
+                rect: *rect,
+                intent: CaptureIntent::Pin,
+            },
+        ),
+        make_btn("✕", Message::OverlayCancelled),
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center);
+
+    let bar = container(buttons)
+        .padding(6)
+        .style(|_| iced::widget::container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.78).into()),
+            border: iced::Border {
+                radius: 8.0.into(),
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
+                width: 1.0,
+            },
+            ..Default::default()
+        });
+
+    let sel_x = rect.x();
+    let sel_y = rect.y();
+    let sel_w = rect.width();
+    let sel_h = rect.height();
+    let below_y = sel_y + sel_h + OVERLAY_TOOLBAR_GAP;
+    let above_y = sel_y - OVERLAY_TOOLBAR_GAP - OVERLAY_TOOLBAR_HEIGHT;
+    let toolbar_y = if below_y + OVERLAY_TOOLBAR_HEIGHT <= bounds_h {
+        below_y
+    } else if above_y >= 0.0 {
+        above_y
+    } else {
+        // Both placements clip — fall back to inside the selection.
+        sel_y + OVERLAY_TOOLBAR_GAP
+    };
+
+    let right_pad = (bounds_w - (sel_x + sel_w)).max(0.0);
+
+    container(bar)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(iced::Padding {
+            top: toolbar_y.max(0.0),
+            right: right_pad,
+            bottom: 0.0,
+            left: 0.0,
+        })
+        .align_x(Alignment::End)
+        .align_y(Alignment::Start)
+        .into()
 }
 
 fn welcome_view(state: &App) -> Element<'_, Message> {

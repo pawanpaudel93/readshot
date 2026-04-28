@@ -31,7 +31,7 @@ use iced::widget::canvas::{
 };
 use iced::{Color, Point, Rectangle, Renderer, Theme};
 
-use crate::app::Message;
+use crate::app::{CaptureIntent, Message};
 use readshot_capture::DisplayId;
 use readshot_core::geom::Rect;
 
@@ -307,9 +307,10 @@ impl Program<Message> for OverlayProgram {
                 Key::Named(Named::Enter | Named::Space) => {
                     // Confirm: existing selection if any, else fall
                     // back to "capture the whole overlay" (the
-                    // original Phase B Enter semantics). This way
-                    // Enter-without-drag still works as a power-user
-                    // shortcut for full-screen capture.
+                    // original Phase B Enter semantics). Enter
+                    // routes through the editor by default — the
+                    // toolbar buttons publish their own
+                    // `OverlaySelected` with a different intent.
                     let r = state.selection.unwrap_or(Rectangle {
                         x: 0.0,
                         y: 0.0,
@@ -323,6 +324,7 @@ impl Program<Message> for OverlayProgram {
                             Action::publish(Message::OverlaySelected {
                                 display_id: self.display_id.clone(),
                                 rect: domain,
+                                intent: CaptureIntent::Editor,
                             })
                             .and_capture(),
                         );
@@ -354,7 +356,19 @@ impl Program<Message> for OverlayProgram {
                     }
                     // Click outside the existing selection — drop it
                     // and start a fresh drag from the click point.
+                    // Tell the runtime the toolbar should disappear.
                     state.selection = None;
+                    state.active = Some(Active::InitialDrag {
+                        anchor: p,
+                        current: p,
+                    });
+                    return Some(
+                        Action::publish(Message::OverlaySelectionChanged {
+                            display_id: self.display_id.clone(),
+                            rect: None,
+                        })
+                        .and_capture(),
+                    );
                 }
                 state.active = Some(Active::InitialDrag {
                     anchor: p,
@@ -364,12 +378,15 @@ impl Program<Message> for OverlayProgram {
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let p = cursor.position_in(bounds)?;
+                let mut updated_selection: Option<Rectangle> = None;
                 match state.active.as_mut()? {
                     Active::InitialDrag { current, .. } => {
                         *current = p;
                     }
                     Active::Resize { handle, original } => {
-                        state.selection = Some(resize_rect(*original, *handle, p));
+                        let new_rect = resize_rect(*original, *handle, p);
+                        state.selection = Some(new_rect);
+                        updated_selection = Some(new_rect);
                     }
                     Active::Move {
                         start_cursor,
@@ -377,8 +394,18 @@ impl Program<Message> for OverlayProgram {
                     } => {
                         let dx = p.x - start_cursor.x;
                         let dy = p.y - start_cursor.y;
-                        state.selection = Some(move_rect(*original, (dx, dy), bounds));
+                        let new_rect = move_rect(*original, (dx, dy), bounds);
+                        state.selection = Some(new_rect);
+                        updated_selection = Some(new_rect);
                     }
+                }
+                if let Some(domain) = updated_selection.and_then(rect_to_domain) {
+                    // `Action::publish` already produces a redraw,
+                    // per iced::widget::canvas::Action docs.
+                    return Some(Action::publish(Message::OverlaySelectionChanged {
+                        display_id: self.display_id.clone(),
+                        rect: Some(domain),
+                    }));
                 }
                 Some(Action::request_redraw())
             }
@@ -391,12 +418,22 @@ impl Program<Message> for OverlayProgram {
                         // certainly didn't mean to commit a 1×1 region.
                         if r.width >= 4.0 && r.height >= 4.0 {
                             state.selection = Some(r);
+                            if let Some(domain) = rect_to_domain(r) {
+                                return Some(
+                                    Action::publish(Message::OverlaySelectionChanged {
+                                        display_id: self.display_id.clone(),
+                                        rect: Some(domain),
+                                    })
+                                    .and_capture(),
+                                );
+                            }
                         }
                         Some(Action::request_redraw().and_capture())
                     }
                     Some(Active::Resize { .. }) | Some(Active::Move { .. }) => {
                         // `state.selection` was kept up to date during
-                        // the drag — nothing more to do.
+                        // the drag and the toolbar already saw it via
+                        // CursorMoved publishes — nothing new to send.
                         Some(Action::request_redraw().and_capture())
                     }
                     None => None,

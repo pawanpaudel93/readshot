@@ -129,12 +129,21 @@ pub enum Message {
     /// First view of the overlay window — used by the runtime to
     /// remember its `window::Id` mapping.
     OverlayWindowReady(iced::window::Id),
-    /// Drag completed inside the overlay. `display_id` identifies
-    /// the monitor the user dragged on; `rect` is in display-local
-    /// logical pixels.
+    /// User confirmed an overlay selection. `display_id` identifies
+    /// the monitor; `rect` is in display-local logical pixels;
+    /// `intent` decides what happens to the captured image
+    /// (open editor, copy to clipboard, save to disk, or pin).
     OverlaySelected {
         display_id: readshot_capture::DisplayId,
         rect: readshot_core::geom::Rect,
+        intent: CaptureIntent,
+    },
+    /// Selection rect inside the overlay changed (committed or
+    /// during resize/move). Drives the floating action toolbar's
+    /// position. `None` means the selection was cleared.
+    OverlaySelectionChanged {
+        display_id: readshot_capture::DisplayId,
+        rect: Option<readshot_core::geom::Rect>,
     },
     /// User cancelled the overlay (ESC, sub-pixel click, etc.).
     OverlayCancelled,
@@ -147,6 +156,13 @@ pub enum Message {
         display_id: readshot_capture::DisplayId,
         rect: readshot_core::geom::Rect,
     },
+    /// Direct (no-editor) clipboard-copy completion for an overlay
+    /// quick-action.
+    OverlayCopyDone(Result<(), String>),
+    /// Direct (no-editor) save-dialog completion for an overlay
+    /// quick-action. `Ok(Some(path))` = written; `Ok(None)` =
+    /// user cancelled the picker.
+    OverlaySaveDone(Result<Option<std::path::PathBuf>, String>),
     /// Async region-capture finished — `Ok(image)` opens an editor
     /// window with the captured pixels; `Err` toasts the failure on
     /// the welcome window.
@@ -247,6 +263,14 @@ pub struct App {
     /// returned rect back into a `CaptureRequest` with the right
     /// scale.
     pub overlay_displays: HashMap<iced::window::Id, OverlayDisplay>,
+    /// Live overlay selections per display. Drives the floating
+    /// action toolbar's position; populated by
+    /// [`Message::OverlaySelectionChanged`] from the canvas.
+    pub overlay_selections: HashMap<readshot_capture::DisplayId, readshot_core::geom::Rect>,
+    /// What to do with the next finished region capture. Set by the
+    /// overlay quick-actions; consumed in `RegionCaptureCompleted`.
+    /// `None` falls back to the editor.
+    pub pending_intent: Option<CaptureIntent>,
     /// Live pin windows mapped to their pre-rendered image handle.
     /// Each pin window's `view` reads its handle from this map. The
     /// map shrinks as pins close.
@@ -262,12 +286,33 @@ pub struct App {
 }
 
 /// Per-overlay-window record. Tracks which display the window covers
-/// so capture can run against the right monitor.
+/// so capture can run against the right monitor, plus the logical
+/// size needed for edge-aware toolbar positioning.
 #[derive(Clone, Debug)]
 pub struct OverlayDisplay {
     pub display_id: readshot_capture::DisplayId,
     /// HiDPI scale factor of the display (physical / logical).
     pub scale: f32,
+    /// Logical width of the overlay window (= display logical width).
+    pub width: f32,
+    /// Logical height of the overlay window.
+    pub height: f32,
+}
+
+/// What happens to the captured image after an overlay confirms.
+/// Selected by the floating action toolbar's buttons; `Editor` is the
+/// default (Enter / Space, click on the primary "Capture" button).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureIntent {
+    /// Open the annotation editor with the captured image. Existing
+    /// default flow.
+    Editor,
+    /// Write the captured PNG to the system clipboard, no editor.
+    CopyToClipboard,
+    /// Open a native save dialog directly, no editor.
+    SaveDirect,
+    /// Open a borderless always-on-top pin window, no editor.
+    Pin,
 }
 
 impl App {
@@ -289,6 +334,8 @@ impl App {
             tray: None,
             editor: None,
             overlay_displays: HashMap::new(),
+            overlay_selections: HashMap::new(),
+            pending_intent: None,
             pins: HashMap::new(),
             overlay_tick: 0,
             last_save_dir: None,
