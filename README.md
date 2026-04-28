@@ -159,10 +159,23 @@ per-task design notes live under `docs/superpowers/` (gitignored).
 
 ## Roadmap
 
-Realistic short list of what isn't done:
+The product wedge is **"every screenshot you've ever taken is
+searchable"** — an on-device, OCR-indexed history archive. Most of
+that loop is built; the items below are what's left.
 
-- **History browser** — sidecar JSON is already written by core but
-  no UI surfaces it.
+### Closing out the history wedge
+
+- **Editor → history sync** — annotations made in the editor after a
+  capture aren't yet written back into the saved record. Original
+  pixels persist; annotations don't.
+- **Settings UI for retention** — `Last50` is hardcoded today; expose
+  the existing `Off / Last50 / Last30Days / Unlimited` choices.
+- **Reveal in Finder + Clear all** affordances on the browser.
+- **Pre-rendered thumbnails** — current thumbs decode the full PNG
+  off-thread on first show; fine for 50, would chug at 500.
+
+### Older roadmap (still real)
+
 - **`readshot://` URL scheme while running** — argv-based delivery
   works at boot; in-process delivery via `NSAppleEventManager` is
   blocked on a shared `objc2` major-version pin across `tray-icon`,
@@ -173,6 +186,18 @@ Realistic short list of what isn't done:
   current build is ad-hoc-signed and only runs on the build
   machine.
 - **Linux + Windows capture / OCR backends** — stubbed.
+
+### Parked (the AI-native wedge)
+
+- **"Send to assistant" intent** — opens Claude / ChatGPT with the
+  capture inline.
+- **Structured OCR output** — markdown for tables, fenced code blocks
+  for code, instead of flat text.
+- **MCP `search_captures` / `recent_captures`** — exposing the
+  history archive to AI agents via the existing companion server.
+
+These layer cleanly on the wedge once it's complete, so they're
+deliberately deferred rather than abandoned.
 
 ## Licence
 
