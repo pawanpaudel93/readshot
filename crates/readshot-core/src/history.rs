@@ -103,6 +103,13 @@ pub trait HistoryStore: Send + Sync {
         let _ = record;
         Ok(())
     }
+    /// Hard-delete a single record by id (PNG + sidecar JSON + index
+    /// entry). Best-effort: deleting a record that's already gone is
+    /// not an error.
+    fn delete(&self, id: Uuid) -> Result<(), HistoryError> {
+        let _ = id;
+        Ok(())
+    }
 }
 
 /// File-system backed history store. All filesystem state is rooted at
@@ -288,6 +295,20 @@ impl HistoryStore for FsHistoryStore {
         self.write_index(&index)?;
         Ok(())
     }
+
+    fn delete(&self, id: Uuid) -> Result<(), HistoryError> {
+        let mut index = self.read_index()?;
+        let Some(pos) = index.records.iter().position(|e| e.id == id) else {
+            // Already gone — not an error.
+            return Ok(());
+        };
+        let entry = index.records.remove(pos);
+        let _ = fs::remove_file(self.root.join(&entry.png_path));
+        let _ = fs::remove_file(self.root.join(&entry.json_path));
+        index.updated_at = Some(Utc::now());
+        self.write_index(&index)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -354,6 +375,27 @@ mod tests {
         let r = record_at(Utc::now());
         // Never saved — `update` must not fail.
         let res = s.update(&r);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn delete_removes_png_json_and_index_entry() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &fake_png()).unwrap();
+        assert_eq!(s.list().unwrap().len(), 1);
+        s.delete(r.id).unwrap();
+        assert!(s.list().unwrap().is_empty());
+        let (rel_png, rel_json) = FsHistoryStore::record_paths(&r);
+        assert!(!s.root().join(&rel_png).exists());
+        assert!(!s.root().join(&rel_json).exists());
+    }
+
+    #[test]
+    fn delete_unknown_id_is_a_noop() {
+        let (_dir, s) = store();
+        // Empty store — delete must not fail.
+        let res = s.delete(Uuid::new_v4());
         assert!(res.is_ok());
     }
 

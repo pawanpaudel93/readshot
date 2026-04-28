@@ -196,6 +196,26 @@ pub enum Message {
     /// User typed in the history browser's search box. Empty string
     /// resets to "show every record".
     HistorySearchChanged(String),
+    /// Per-row "Open" — load the PNG and reopen it as a fresh editor
+    /// session. Annotations made there don't (yet) flow back into
+    /// the history record.
+    HistoryOpenInEditor(readshot_core::Uuid),
+    /// Async PNG-decode finished for the row that asked to open in
+    /// editor. `Ok(image)` opens the editor; `Err` toasts a status.
+    HistoryOpenInEditorReady(Result<image::RgbaImage, String>),
+    /// Per-row "Copy Image" — load PNG, decode, write to clipboard.
+    HistoryCopyImage(readshot_core::Uuid),
+    /// Per-row "Copy Text" — read the cached `ocr_text` and write it
+    /// to the clipboard. Synchronous (no OCR re-run).
+    HistoryCopyText(readshot_core::Uuid),
+    /// Per-row "Pin" — load PNG, decode, open as a borderless
+    /// always-on-top pin window.
+    HistoryPin(readshot_core::Uuid),
+    /// Async PNG-decode finished for the row that asked to pin.
+    HistoryPinReady(Result<image::RgbaImage, String>),
+    /// Per-row "Delete" — remove PNG + sidecar + index entry from
+    /// disk and refresh the list.
+    HistoryDelete(readshot_core::Uuid),
     /// Async region-capture finished — `Ok(image)` opens an editor
     /// window with the captured pixels; `Err` toasts the failure on
     /// the welcome window.

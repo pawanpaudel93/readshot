@@ -27,8 +27,12 @@ pub use history::{
     CaptureRecord, FsHistoryStore, HistoryIndex, HistoryIndexEntry, HistoryStore,
     HISTORY_INDEX_FILENAME, HISTORY_SCHEMA_VERSION,
 };
+// Downstream callers need `Uuid` to address records by id (delete,
+// open-from-history, etc.). Re-export so they don't need a separate
+// dependency on `uuid`.
 pub use preferences::{
     ExportFormat, HistoryRetention, OcrEngineChoice, Preferences, UpdateChannel,
     PREFERENCES_SCHEMA_VERSION,
 };
 pub use render::render;
+pub use uuid::Uuid;

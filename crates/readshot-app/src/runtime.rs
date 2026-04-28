@@ -789,6 +789,120 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.history_search = q;
             Task::none()
         }
+        Message::HistoryOpenInEditor(id) => {
+            let Some(path) = state
+                .history_root
+                .as_ref()
+                .zip(state.history_records.iter().find(|r| r.id == id))
+                .map(|(root, r)| history_png_path(root, r))
+            else {
+                state.history_status = Some("Capture not found.".into());
+                return Task::none();
+            };
+            Task::perform(load_png_async(path), |r| {
+                Message::HistoryOpenInEditorReady(r.map_err(|e| e.to_string()))
+            })
+        }
+        Message::HistoryOpenInEditorReady(result) => match result {
+            Ok(image) => {
+                state.editor = Some(crate::editor::EditorSession::new(image));
+                let (id, open_task) = window::open(editor_window_settings());
+                state.windows.register(id, WindowKind::Editor);
+                open_task.map(Message::EditorWindowReady)
+            }
+            Err(e) => {
+                state.history_status = Some(format!("Open failed: {e}"));
+                Task::none()
+            }
+        },
+        Message::HistoryCopyImage(id) => {
+            let Some(path) = state
+                .history_root
+                .as_ref()
+                .zip(state.history_records.iter().find(|r| r.id == id))
+                .map(|(root, r)| history_png_path(root, r))
+            else {
+                state.history_status = Some("Capture not found.".into());
+                return Task::none();
+            };
+            Task::perform(
+                async move {
+                    let img = load_png_async(path).await.map_err(|e| e.to_string())?;
+                    copy_image_to_clipboard(img)
+                        .await
+                        .map_err(|e| e.to_string())
+                },
+                Message::OverlayCopyDone,
+            )
+        }
+        Message::HistoryCopyText(id) => {
+            match state
+                .history_records
+                .iter()
+                .find(|r| r.id == id)
+                .and_then(|r| r.ocr_text.as_ref())
+            {
+                Some(text) if !text.is_empty() => {
+                    let text = text.clone();
+                    Task::perform(
+                        async move {
+                            use arboard::Clipboard;
+                            let mut cb = Clipboard::new().map_err(|e| e.to_string())?;
+                            cb.set_text(text.clone()).map_err(|e| e.to_string())?;
+                            Ok(text)
+                        },
+                        Message::OverlayCopyTextDone,
+                    )
+                }
+                _ => {
+                    state.history_status = Some("No OCR text on this capture yet.".into());
+                    Task::none()
+                }
+            }
+        }
+        Message::HistoryPin(id) => {
+            let Some(path) = state
+                .history_root
+                .as_ref()
+                .zip(state.history_records.iter().find(|r| r.id == id))
+                .map(|(root, r)| history_png_path(root, r))
+            else {
+                state.history_status = Some("Capture not found.".into());
+                return Task::none();
+            };
+            Task::perform(load_png_async(path), |r| {
+                Message::HistoryPinReady(r.map_err(|e| e.to_string()))
+            })
+        }
+        Message::HistoryPinReady(result) => match result {
+            Ok(image) => {
+                let size = (image.width(), image.height());
+                let handle = iced::widget::image::Handle::from_rgba(
+                    image.width(),
+                    image.height(),
+                    image.as_raw().clone(),
+                );
+                let (wid, open_task) = window::open(pin_window_settings(size));
+                state.windows.register(wid, WindowKind::Pin);
+                state.pins.insert(wid, handle.clone());
+                open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone()))
+            }
+            Err(e) => {
+                state.history_status = Some(format!("Pin failed: {e}"));
+                Task::none()
+            }
+        },
+        Message::HistoryDelete(id) => {
+            if let Err(e) = state.coordinator.delete_history(id) {
+                state.history_status = Some(format!("Delete failed: {e}"));
+                return Task::none();
+            }
+            // Reload the list so the deleted record disappears.
+            let coord = state.coordinator.clone();
+            Task::perform(async move { coord.history_list() }, |r| {
+                Message::HistoryListLoaded(r.map_err(|e| e.to_string()))
+            })
+        }
 
         Message::OverlayCopyDone(result) => {
             state.last_capture_status = Some(match result {
@@ -1271,16 +1385,22 @@ fn history_view(state: &App) -> Element<'_, Message> {
             .spacing(4)
             .width(Length::Fill);
 
-            let row_widget = container(row![thumb, meta].spacing(12).align_y(Alignment::Center))
-                .padding(10)
-                .style(|_| iced::widget::container::Style {
-                    background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.04).into()),
-                    border: iced::Border {
-                        radius: 6.0.into(),
-                        ..Default::default()
-                    },
+            let has_text = r.ocr_text.as_deref().is_some_and(|t| !t.is_empty());
+            let actions = history_row_actions(r.id, has_text);
+            let row_widget = container(
+                row![thumb, meta, actions]
+                    .spacing(12)
+                    .align_y(Alignment::Center),
+            )
+            .padding(10)
+            .style(|_| iced::widget::container::Style {
+                background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.04).into()),
+                border: iced::Border {
+                    radius: 6.0.into(),
                     ..Default::default()
-                });
+                },
+                ..Default::default()
+            });
             col = col.push(row_widget);
         }
     } else {
@@ -1291,6 +1411,74 @@ fn history_view(state: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+}
+
+/// Compact button column for one history row — Open / Copy Image /
+/// Copy Text / Pin / Delete. The Copy-Text button is disabled when
+/// the record's `ocr_text` is empty (background OCR may not have
+/// finished, or returned no text).
+fn history_row_actions<'a>(id: readshot_core::Uuid, has_text: bool) -> Element<'a, Message> {
+    let make_btn = |label: &'static str,
+                    msg: Option<Message>,
+                    danger: bool|
+     -> Element<'a, Message> {
+        let b = button(text(label).size(12))
+            .padding([4, 8])
+            .style(move |_, status| {
+                let base = if danger {
+                    Color::from_rgba(0.8, 0.2, 0.2, 0.18)
+                } else {
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.06)
+                };
+                let hovered = if danger {
+                    Color::from_rgba(0.85, 0.25, 0.25, 0.4)
+                } else {
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.18)
+                };
+                let pressed = if danger {
+                    Color::from_rgba(0.9, 0.3, 0.3, 0.55)
+                } else {
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.28)
+                };
+                let bg = match status {
+                    iced::widget::button::Status::Hovered => hovered,
+                    iced::widget::button::Status::Pressed => pressed,
+                    iced::widget::button::Status::Disabled => Color::from_rgba(1.0, 1.0, 1.0, 0.03),
+                    _ => base,
+                };
+                iced::widget::button::Style {
+                    background: Some(bg.into()),
+                    text_color: Color::WHITE,
+                    border: iced::Border {
+                        radius: 4.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
+            });
+        match msg {
+            Some(m) => b.on_press(m).into(),
+            None => b.into(),
+        }
+    };
+    column![
+        make_btn("Open", Some(Message::HistoryOpenInEditor(id)), false),
+        make_btn("Copy Image", Some(Message::HistoryCopyImage(id)), false),
+        make_btn(
+            "Copy Text",
+            if has_text {
+                Some(Message::HistoryCopyText(id))
+            } else {
+                None
+            },
+            false,
+        ),
+        make_btn("Pin", Some(Message::HistoryPin(id)), false),
+        make_btn("Delete", Some(Message::HistoryDelete(id)), true),
+    ]
+    .spacing(4)
+    .width(Length::Fixed(110.0))
+    .into()
 }
 
 /// True when `record` matches the lowercase search query `q`. Tries
@@ -1309,6 +1497,26 @@ fn record_matches(record: &readshot_core::CaptureRecord, q: &str) -> bool {
         .to_string()
         .to_lowercase();
     stamp.contains(q)
+}
+
+/// Load + decode a PNG file off the main thread so a multi-MB Retina
+/// capture doesn't stall the iced runtime. Returns the decoded image
+/// in the same `RgbaImage` shape the capture pipeline produces.
+async fn load_png_async(path: PathBuf) -> Result<image::RgbaImage, image::ImageError> {
+    tokio::task::spawn_blocking(move || -> Result<image::RgbaImage, image::ImageError> {
+        let dyn_img = image::ImageReader::open(&path)?
+            .with_guessed_format()?
+            .decode()?;
+        Ok(dyn_img.to_rgba8())
+    })
+    .await
+    .unwrap_or_else(|join_err| {
+        // Surface a join failure as an IO error so the caller's
+        // `Result<RgbaImage, ImageError>` handling stays uniform.
+        Err(image::ImageError::IoError(std::io::Error::other(format!(
+            "blocking task panicked: {join_err}"
+        ))))
+    })
 }
 
 /// Resolve the absolute PNG path for a history record. The on-disk

@@ -108,6 +108,18 @@ impl CaptureCoordinator {
         }
     }
 
+    /// Delete a single record (PNG + JSON + index entry). No-op when
+    /// no history store is wired.
+    pub fn delete_history(
+        &self,
+        id: readshot_core::Uuid,
+    ) -> Result<(), readshot_core::HistoryError> {
+        match &self.history {
+            Some(h) => h.delete(id),
+            None => Ok(()),
+        }
+    }
+
     /// Append a capture to history, respecting the retention policy.
     /// Off → no-op. Other policies → save and apply retention.
     pub async fn record_history(
