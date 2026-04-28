@@ -193,6 +193,9 @@ pub enum Message {
     /// We only care about the history browser id; everything else is
     /// ignored.
     HistoryWindowClosed(iced::window::Id),
+    /// User typed in the history browser's search box. Empty string
+    /// resets to "show every record".
+    HistorySearchChanged(String),
     /// Async region-capture finished — `Ok(image)` opens an editor
     /// window with the captured pixels; `Err` toasts the failure on
     /// the welcome window.
@@ -332,6 +335,10 @@ pub struct App {
     /// Last error from a history list / load operation. Surfaced as
     /// a toast inside the browser when set.
     pub history_status: Option<String>,
+    /// Live search query in the history browser. Empty = show every
+    /// record. Substring-matched (case-insensitive) against
+    /// `ocr_text` and the formatted timestamp.
+    pub history_search: String,
 }
 
 /// Per-overlay-window record. Tracks which display the window covers
@@ -396,6 +403,7 @@ impl App {
             history_records: Vec::new(),
             history_window_id: None,
             history_status: None,
+            history_search: String::new(),
         }
     }
 

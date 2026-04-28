@@ -780,8 +780,13 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 state.history_window_id = None;
                 state.history_records.clear();
                 state.history_status = None;
+                state.history_search.clear();
                 state.windows.forget(id);
             }
+            Task::none()
+        }
+        Message::HistorySearchChanged(q) => {
+            state.history_search = q;
             Task::none()
         }
 
@@ -1168,36 +1173,51 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
 }
 
 fn history_view(state: &App) -> Element<'_, Message> {
-    use iced::widget::{image as image_widget, scrollable};
+    use iced::widget::{image as image_widget, scrollable, text_input};
 
-    // Header: status line + record count.
-    let header_text = if state.history_records.is_empty() {
-        "No captures yet — take one and it shows up here.".to_string()
+    let total = state.history_records.len();
+    // Apply the live search filter. Empty query → every record.
+    // Match is case-insensitive substring against `ocr_text` and the
+    // human-readable timestamp (so "april" / "14:32" both work).
+    let q = state.history_search.trim().to_lowercase();
+    let visible: Vec<&readshot_core::CaptureRecord> = if q.is_empty() {
+        state.history_records.iter().collect()
     } else {
-        format!(
-            "{} capture{}",
-            state.history_records.len(),
-            if state.history_records.len() == 1 {
-                ""
-            } else {
-                "s"
-            }
-        )
+        state
+            .history_records
+            .iter()
+            .filter(|r| record_matches(r, &q))
+            .collect()
     };
+    let shown = visible.len();
+
+    // Header: search box + count line + status.
+    let count_line = if total == 0 {
+        "No captures yet — take one and it shows up here.".to_string()
+    } else if q.is_empty() {
+        format!("{total} capture{}", if total == 1 { "" } else { "s" })
+    } else {
+        format!("{shown} of {total} match \u{201C}{q}\u{201D}")
+    };
+    let search_box = text_input("Search OCR text or timestamp…", &state.history_search)
+        .on_input(Message::HistorySearchChanged)
+        .padding(8)
+        .size(13);
     let header = container(
         column![
-            text(header_text).size(14),
+            search_box,
+            text(count_line).size(12),
             state
                 .history_status
                 .as_deref()
                 .map(|s| text(s).size(12).color(Color::from_rgb(0.95, 0.55, 0.25)))
                 .unwrap_or_else(|| text(""))
         ]
-        .spacing(4),
+        .spacing(6),
     )
     .padding([12, 16]);
 
-    // Records list.
+    // Records list — filtered.
     let mut col = column![].spacing(8).padding(iced::Padding {
         top: 0.0,
         right: 16.0,
@@ -1205,7 +1225,7 @@ fn history_view(state: &App) -> Element<'_, Message> {
         left: 16.0,
     });
     if let Some(root) = state.history_root.as_ref() {
-        for r in &state.history_records {
+        for r in &visible {
             let png_path = history_png_path(root, r);
             let stamp = r
                 .captured_at
@@ -1271,6 +1291,24 @@ fn history_view(state: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+}
+
+/// True when `record` matches the lowercase search query `q`. Tries
+/// the OCR text and the timestamp formatted in the local zone — the
+/// latter lets users search "2026-04" or "14:32" naturally.
+fn record_matches(record: &readshot_core::CaptureRecord, q: &str) -> bool {
+    if let Some(ocr) = record.ocr_text.as_deref() {
+        if ocr.to_lowercase().contains(q) {
+            return true;
+        }
+    }
+    let stamp = record
+        .captured_at
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+        .to_lowercase();
+    stamp.contains(q)
 }
 
 /// Resolve the absolute PNG path for a history record. The on-disk
@@ -2664,6 +2702,33 @@ mod tests {
             None,
         );
         App::new(coord, perms, Preferences::default())
+    }
+
+    #[test]
+    fn record_matches_finds_substring_in_ocr_text() {
+        let mut r =
+            readshot_core::CaptureRecord::new(chrono::Utc::now(), 100, 100, "primary".to_string());
+        r.ocr_text = Some("Hello, deploy script ready".into());
+        // The caller (history_view) lowercases the query first; the
+        // matcher's contract is "q is already lowercase".
+        assert!(record_matches(&r, "deploy"));
+        assert!(record_matches(&r, "hello"));
+        assert!(!record_matches(&r, "ship"));
+    }
+
+    #[test]
+    fn record_matches_falls_back_to_timestamp_when_no_ocr() {
+        use chrono::TimeZone;
+        let when = chrono::Utc
+            .with_ymd_and_hms(2026, 4, 28, 14, 32, 5)
+            .unwrap();
+        let r = readshot_core::CaptureRecord::new(when, 100, 100, "primary".to_string());
+        // Local-formatted timestamp lets users search by date / time.
+        let local = when
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m")
+            .to_string();
+        assert!(record_matches(&r, &local.to_lowercase()));
     }
 
     #[test]
