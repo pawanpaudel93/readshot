@@ -1,10 +1,12 @@
 # Readshot
 
-A free, open-source screenshot tool with on-device OCR.
+A free, open-source screenshot tool with on-device OCR — and a
+searchable archive of everything you've captured.
 
-Capture a region of any monitor, annotate it (rectangle, ellipse, line,
-arrow, pen, highlighter, text, blur, pixelate, numbered pin, crop), and
-copy out either the image or the recognised text — entirely offline.
+Capture a region of any monitor, annotate it, copy out the image or
+the recognised text (with indentation preserved), and find it again
+later in a built-in history browser that searches by what's *inside*
+the image. Entirely offline.
 
 > **Status:** macOS 14+ only for now. The capture and OCR backends for
 > Windows / Linux are stubs in the source tree but not wired up; this
@@ -30,11 +32,18 @@ copy out either the image or the recognised text — entirely offline.
   around, double-click to dismiss.
 - **Native Save dialog** — pick where to save; the editor remembers
   the last directory for the rest of the session.
-- **Offline OCR** via Apple Vision (`VNRecognizeTextRequest`). Click
-  **Copy Text** in the editor and the recognised text lands on your
-  clipboard.
+- **Offline OCR** via Apple Vision (`VNRecognizeTextRequest`). Copy
+  Text is layout-aware — same-row fragments stay on one line, indents
+  become leading spaces. Lossy on tables / multi-column docs (see
+  Roadmap), but terminal output, indented code, and YAML round-trip
+  cleanly.
+- **Searchable history** — every capture lands in
+  `~/Library/Application Support/.../history/` as PNG + JSON sidecar,
+  background OCR fills the text, and a **History…** browser lets you
+  fuzzy-search by content. Per-row actions: open in editor, copy
+  image, copy text, pin, delete.
 - **Menu-bar app** (no Dock icon). Click the tray icon to capture, or
-  right-click for the menu.
+  right-click for the menu. Default global hotkey: **⌘⇧X**.
 - **MCP server** companion binary so AI agents can request captures
   and OCR programmatically — see `docs/MCP.md`.
 
@@ -102,14 +111,16 @@ Requirements:
 
 ### First-run permission flow
 
-1. The app opens a small welcome window. Click **Open System
-   Settings** — Readshot registers itself with TCC and opens
-   *Privacy & Security → Screen Recording*.
-2. Toggle **Readshot** on.
-3. Switch back to Readshot and click **Restart Readshot now**. The
-   daemon relaunches, picks up the grant, dismisses the welcome
-   window, and shows a system notification confirming it lives in
-   the menu bar from here on.
+1. The app opens a small welcome window. Click **Allow Screen
+   Recording** — Readshot pokes ScreenCaptureKit, which prompts
+   macOS to register the bundle in *Privacy & Security → Screen &
+   System Audio Recording*.
+2. Click **Open System Settings** in the macOS prompt → toggle
+   **Readshot** on.
+3. macOS will offer **Quit & Reopen** — click it. Readshot relaunches
+   into the menu bar and a system notification confirms it's alive.
+   If macOS doesn't ask, the welcome window's **Restart Readshot
+   now** button does the same thing.
 
 The TCC entry is reset on every install (`tccutil reset
 ScreenCapture dev.pawanpaudel93.readshot`) so a fresh build never
@@ -159,20 +170,30 @@ per-task design notes live under `docs/superpowers/` (gitignored).
 
 ## Roadmap
 
-The product wedge is **"every screenshot you've ever taken is
-searchable"** — an on-device, OCR-indexed history archive. Most of
-that loop is built; the items below are what's left.
+The product wedge — **"every screenshot you've ever taken is
+searchable"** — is shipped end-to-end: capture → background OCR →
+sidecar archive → searchable browser → per-row actions (open / copy
+image / copy text / pin / delete). What's left is polish, parity,
+and the bits we deliberately parked.
 
-### Closing out the history wedge
+### Closing the loop
 
-- **Editor → history sync** — annotations made in the editor after a
-  capture aren't yet written back into the saved record. Original
-  pixels persist; annotations don't.
-- **Settings UI for retention** — `Last50` is hardcoded today; expose
-  the existing `Off / Last50 / Last30Days / Unlimited` choices.
-- **Reveal in Finder + Clear all** affordances on the browser.
-- **Pre-rendered thumbnails** — current thumbs decode the full PNG
-  off-thread on first show; fine for 50, would chug at 500.
+- **Editor → history sync** — annotations made post-capture in the
+  editor don't yet flow back into the saved record. Original pixels
+  persist; annotations vanish on close.
+- **Reveal in Finder** + **Clear all history** affordances on the
+  browser.
+- **Pre-rendered thumbnails** — full PNGs decode off-thread on first
+  show; fine for `Last50`, would chug at 500+.
+
+### Settings (everything user-configurable, today, lives in code)
+
+- **Preferences persistence** — `Preferences::load_or_default` exists
+  in `readshot-core` but `start()` always uses `Preferences::default()`.
+  Wiring this is the prerequisite for the next two items.
+- **Retention picker** — surface `Off / Last50 / Last30Days /
+  Unlimited`; `Last50` is hardcoded today.
+- **Hotkey picker** — `⌘⇧X` is hardcoded too. Expose a chord chooser.
 
 ### Older roadmap (still real)
 
@@ -187,17 +208,24 @@ that loop is built; the items below are what's left.
   machine.
 - **Linux + Windows capture / OCR backends** — stubbed.
 
-### Parked (the AI-native wedge)
+### Parked (the AI-native wedge + structured OCR)
 
 - **"Send to assistant" intent** — opens Claude / ChatGPT with the
   capture inline.
-- **Structured OCR output** — markdown for tables, fenced code blocks
-  for code, instead of flat text.
 - **MCP `search_captures` / `recent_captures`** — exposing the
   history archive to AI agents via the existing companion server.
+- **Structured OCR — tables → Markdown tables.** Today the layout
+  pass keeps same-row fragments together but doesn't recognise
+  column boundaries across rows.
+- **Structured OCR — code blocks → fenced.** Detecting monospace
+  from raster pixels is unreliable; would need a heuristic or a
+  separate model.
+- **Multi-column reading order.** Two-column documents currently
+  read top-down per column instead of zig-zagging across rows. The
+  row-clustering pass would have to detect column boundaries first.
 
-These layer cleanly on the wedge once it's complete, so they're
-deliberately deferred rather than abandoned.
+These layer cleanly on the wedge, so they're deliberately deferred
+rather than abandoned.
 
 ## Licence
 
