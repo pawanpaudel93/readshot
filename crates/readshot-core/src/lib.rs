@@ -16,6 +16,7 @@ pub mod filters;
 pub mod geom;
 pub mod history;
 pub mod log;
+pub mod ocr_text;
 pub mod preferences;
 pub mod render;
 

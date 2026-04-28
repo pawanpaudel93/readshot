@@ -83,7 +83,10 @@ impl CaptureCoordinator {
 
     pub async fn recognise(&self, req: OCRRequest) -> Result<String, OCRError> {
         let result = self.ocr.recognise(req).await?;
-        Ok(result.text)
+        // Single chokepoint for OCR cleanup so every consumer
+        // (overlay Copy Text, history sidecar, editor Copy Text)
+        // gets the same trimmed / line-normalised string.
+        Ok(readshot_core::ocr_text::clean(&result.text))
     }
 
     /// List every persisted capture, newest first. `Ok(vec![])` when
