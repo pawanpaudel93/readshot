@@ -37,7 +37,7 @@ use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 
 use readshot_capture::{CaptureRequest, DisplayInfo};
 use readshot_core::Preferences;
-use readshot_ui::hotkey;
+use readshot_ui::{hotkey, SettingsMessage};
 
 use crate::url_scheme::UrlAction;
 
@@ -270,6 +270,21 @@ fn history_window_settings() -> window::Settings {
     }
 }
 
+/// Window settings for the preferences window. Smaller than history;
+/// just two pickers in v1 with room for a few more rows.
+fn settings_window_settings() -> window::Settings {
+    window::Settings {
+        size: iced::Size::new(540.0, 360.0),
+        min_size: Some(iced::Size::new(420.0, 280.0)),
+        position: window::Position::Centered,
+        resizable: true,
+        decorations: true,
+        transparent: false,
+        visible: true,
+        ..Default::default()
+    }
+}
+
 /// Window settings for one overlay window covering a single display.
 ///
 /// Borderless transparent `AlwaysOnTop` window positioned at the
@@ -335,6 +350,7 @@ pub fn title(state: &App, id: window::Id) -> String {
         Some(WindowKind::Editor) => "Readshot — Editor".into(),
         Some(WindowKind::Pin) => "Readshot — Pin".into(),
         Some(WindowKind::History) => "Readshot — History".into(),
+        Some(WindowKind::Settings) => "Readshot — Settings".into(),
     }
 }
 
@@ -575,6 +591,12 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 } else {
                     update(state, Message::OpenHistoryRequested)
                 }
+            }
+            crate::tray::TrayAction::Settings => {
+                // Settings doesn't gate on permission — the user
+                // might want to flip preferences before granting
+                // Screen Recording.
+                update(state, Message::OpenSettingsRequested)
             }
             crate::tray::TrayAction::Quit => iced::exit(),
         },
@@ -841,14 +863,14 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // probe the live-window map (e.g. `show_or_focus_welcome`)
             // don't try to focus a dead window.
             state.windows.forget(id);
-            // History-browser cleanup is the only kind-specific
-            // teardown today; the other window kinds are stateless
-            // beyond `Windows` itself.
             if state.history_window_id == Some(id) {
                 state.history_window_id = None;
                 state.history_records.clear();
                 state.history_status = None;
                 state.history_search.clear();
+            }
+            if state.settings_window_id == Some(id) {
+                state.settings_window_id = None;
             }
             Task::none()
         }
@@ -1340,10 +1362,46 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
 
         // Synchronous transitions — reuse the existing handler.
-        msg @ (Message::PermissionPoll(_)
-        | Message::OpenPermissionSettingsRequested
-        | Message::Settings(_)) => {
+        msg @ (Message::PermissionPoll(_) | Message::OpenPermissionSettingsRequested) => {
             state.update_sync(msg);
+            Task::none()
+        }
+
+        // Settings mutations are mostly synchronous (the apply fn is
+        // pure on `Preferences`) but a hotkey change has a
+        // side-effect: the OS-level chord registration has to be
+        // re-issued. We branch off the joined arm here so that side-
+        // effect lives next to the state update.
+        Message::Settings(submsg) => {
+            let needs_rehotkey = matches!(submsg, SettingsMessage::SetCaptureHotkey(_));
+            state.update_sync(Message::Settings(submsg));
+            if needs_rehotkey {
+                // Drop the old manager first — that releases the OS-
+                // level chord. Only then try the new one; if the new
+                // chord fails to parse / conflicts with another app,
+                // the field stays `None` and the user keeps the GUI +
+                // CLI surfaces.
+                state.hotkey_manager = None;
+                state.hotkey_manager = register_default_hotkey(&state.preferences);
+            }
+            Task::none()
+        }
+
+        Message::OpenSettingsRequested => {
+            // Single-instance — focus the existing window if one is
+            // already up.
+            if let Some(id) = state.settings_window_id {
+                return window::gain_focus(id);
+            }
+            let (id, open_task) = window::open(settings_window_settings());
+            state.windows.register(id, WindowKind::Settings);
+            state.settings_window_id = Some(id);
+            open_task.map(Message::SettingsWindowReady)
+        }
+        Message::SettingsWindowReady(id) => {
+            // Belt-and-braces: window-open already records the id, but
+            // iced may hand back a different one in some platforms.
+            state.settings_window_id = Some(id);
             Task::none()
         }
 
@@ -1362,6 +1420,7 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
         Some(WindowKind::Editor) => editor_view(state),
         Some(WindowKind::Pin) => pin_view(state, id),
         Some(WindowKind::History) => history_view(state),
+        Some(WindowKind::Settings) => settings_view(state),
     }
 }
 
@@ -2516,6 +2575,82 @@ fn show_or_focus_welcome(state: &mut App) -> Task<Message> {
     open_task.map(|_id| Message::WelcomeWindowReady)
 }
 
+/// Preferences window. v1 = a single General tab with two pickers
+/// (history retention + capture hotkey). The other `SettingsTab`
+/// variants stay on the enum but don't render until they have content
+/// worth showing — empty placeholder tabs would just be UI to
+/// maintain.
+fn settings_view(state: &App) -> Element<'_, Message> {
+    use iced::widget::{pick_list, text_input};
+    use readshot_core::HistoryRetention;
+
+    // `pick_list` borrows its options for the duration of the
+    // returned `Element`, so a `'static` slice keeps the lifetime
+    // story simple.
+    const RETENTION_OPTIONS: [HistoryRetention; 4] = [
+        HistoryRetention::Off,
+        HistoryRetention::Last50,
+        HistoryRetention::Last30Days,
+        HistoryRetention::Unlimited,
+    ];
+
+    let header = column![
+        text("Settings").size(28),
+        text("General")
+            .size(13)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+    ]
+    .spacing(2);
+
+    let retention_row = column![
+        text("History retention").size(13),
+        pick_list(
+            &RETENTION_OPTIONS[..],
+            Some(state.preferences.history_retention),
+            |r| Message::Settings(SettingsMessage::SetHistoryRetention(r)),
+        ),
+        text("Searchable archive of every capture you take. Off keeps everything in-memory only.")
+            .size(11)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+    ]
+    .spacing(6);
+
+    let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
+    let hotkey_hint = if pretty.is_empty() {
+        format!(
+            "Couldn't read `{}` — try `cmd+shift+x` style.",
+            state.preferences.capture_hotkey
+        )
+    } else if state.hotkey_manager.is_none() {
+        // Parsed-OK but registration failed, e.g. another app already
+        // owns the chord. Tell the user so they pick another one.
+        format!("{pretty} — couldn't grab globally; try a different chord.")
+    } else {
+        format!("Currently bound to {pretty}.")
+    };
+
+    let hotkey_row = column![
+        text("Capture hotkey").size(13),
+        text_input("cmd+shift+x", &state.preferences.capture_hotkey)
+            .on_input(|s| Message::Settings(SettingsMessage::SetCaptureHotkey(s)))
+            .padding([6, 10]),
+        text(hotkey_hint)
+            .size(11)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+    ]
+    .spacing(6);
+
+    let body = column![header, retention_row, hotkey_row]
+        .spacing(20)
+        .max_width(440);
+
+    container(body)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(28)
+        .into()
+}
+
 fn welcome_view(state: &App) -> Element<'_, Message> {
     let hero = column![
         text("Readshot").size(34),
@@ -3291,5 +3426,47 @@ mod tests {
             prefs.history_retention,
             readshot_core::HistoryRetention::Last50,
         );
+    }
+
+    #[test]
+    fn update_settings_hotkey_change_persists_value_when_reregister_fails() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        assert!(app.hotkey_manager.is_none());
+        // Garbage input — register_default_hotkey can't parse it,
+        // re-registration fails, but the user's preference still gets
+        // saved in-memory so they can fix the typo and try again.
+        let _ = update(
+            &mut app,
+            Message::Settings(SettingsMessage::SetCaptureHotkey("not-a-real-chord".into())),
+        );
+        assert_eq!(app.preferences.capture_hotkey, "not-a-real-chord");
+        assert!(app.hotkey_manager.is_none());
+    }
+
+    #[test]
+    fn update_settings_non_hotkey_does_not_re_register() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        // Non-hotkey settings (e.g. debug logging) must NOT churn the
+        // hotkey registration — that path only fires for hotkey
+        // changes specifically.
+        let _ = update(
+            &mut app,
+            Message::Settings(SettingsMessage::SetDebugLogging(true)),
+        );
+        assert!(app.preferences.debug_logging);
+        // Manager stays None because we never tried to register, and
+        // the test build had nothing registered to begin with.
+        assert!(app.hotkey_manager.is_none());
+    }
+
+    #[test]
+    fn window_closed_clears_settings_window_id() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = iced::window::Id::unique();
+        app.windows.register(id, WindowKind::Settings);
+        app.settings_window_id = Some(id);
+        let _ = update(&mut app, Message::WindowClosed(id));
+        assert!(app.settings_window_id.is_none());
+        assert!(app.windows.kind(id).is_none());
     }
 }

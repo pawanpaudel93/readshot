@@ -50,6 +50,10 @@ pub enum WindowKind {
     /// and renders a scrollable list. Single instance — re-opening
     /// while it's already up just refocuses the existing window.
     History,
+    /// User-preferences window (retention policy, capture hotkey, …).
+    /// Single instance — re-opening focuses the existing window
+    /// rather than spawning a duplicate.
+    Settings,
 }
 
 /// Mapping from live `window::Id`s to their kind, so the daemon's
@@ -277,6 +281,13 @@ pub enum Message {
     /// First `view` call after the welcome window is opened. Used by
     /// the runtime to detect the window-ready transition.
     WelcomeWindowReady,
+    /// User asked for the settings window — tray "Settings…" entry or
+    /// (future) a "Settings" command from elsewhere. Single-instance:
+    /// focuses the existing window if one is already open.
+    OpenSettingsRequested,
+    /// First `view` call after the settings window is opened. Records
+    /// the `window::Id` so close + focus paths work.
+    SettingsWindowReady(iced::window::Id),
     /// Capture coordinator finished a `capture_region` call.
     CaptureCompleted(Result<image::RgbaImage, String>),
     /// OCR engine finished a `recognise` call.
@@ -364,6 +375,9 @@ pub struct App {
     /// flips a field. `None` in tests and when the OS can't supply a
     /// config dir; in that case settings changes stay in-memory only.
     pub preferences_path: Option<std::path::PathBuf>,
+    /// `window::Id` of the live settings window, if any. Single
+    /// instance — re-opening just refocuses the existing window.
+    pub settings_window_id: Option<iced::window::Id>,
 }
 
 /// Per-overlay-window record. Tracks which display the window covers
@@ -430,6 +444,7 @@ impl App {
             history_status: None,
             history_search: String::new(),
             preferences_path: None,
+            settings_window_id: None,
         }
     }
 

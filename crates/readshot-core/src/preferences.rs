@@ -13,6 +13,7 @@
 //! `#[serde(default)]` on every field, so adding a *new* field is always
 //! safe and never requires a migration.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,21 @@ pub enum HistoryRetention {
     Last50,
     Last30Days,
     Unlimited,
+}
+
+/// User-facing labels for the retention policy. The settings UI's
+/// `pick_list` and the about box both render via this `Display` impl
+/// so the strings stay consistent.
+impl fmt::Display for HistoryRetention {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            HistoryRetention::Off => "Off",
+            HistoryRetention::Last50 => "Last 50 captures",
+            HistoryRetention::Last30Days => "Last 30 days",
+            HistoryRetention::Unlimited => "Unlimited",
+        };
+        f.write_str(label)
+    }
 }
 
 /// Which OCR engine to use. `Native` picks the per-platform default

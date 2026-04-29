@@ -28,12 +28,13 @@ use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 /// User intent surfaced by the tray. `Capture` triggers the region
-/// overlay; `History` opens the persistent capture browser; `Quit`
-/// exits the daemon.
+/// overlay; `History` opens the persistent capture browser;
+/// `Settings` opens the preferences window; `Quit` exits the daemon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Capture,
     History,
+    Settings,
     Quit,
 }
 
@@ -99,16 +100,19 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
     };
     let item_capture = MenuItem::new(capture_label, true, None);
     let item_history = MenuItem::new("History…", true, None);
+    let item_settings = MenuItem::new("Settings…", true, None);
     let item_quit = MenuItem::new("Quit", true, None);
 
     let mut menu_ids = HashMap::new();
     menu_ids.insert(item_capture.id().clone(), TrayAction::Capture);
     menu_ids.insert(item_history.id().clone(), TrayAction::History);
+    menu_ids.insert(item_settings.id().clone(), TrayAction::Settings);
     menu_ids.insert(item_quit.id().clone(), TrayAction::Quit);
 
     if let Err(e) = menu.append_items(&[
         &item_capture,
         &item_history,
+        &item_settings,
         &PredefinedMenuItem::separator(),
         &item_quit,
     ]) {
