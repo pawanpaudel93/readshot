@@ -26,7 +26,7 @@
 //! `app.rs` / `coordinator.rs` / `cli.rs` — this module's job is to
 //! glue the typed state machine into iced and stay thin.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -86,16 +86,14 @@ pub fn start() -> (App, Task<Message>) {
         history_store,
     );
     // History is the foundation for "every screenshot is searchable" —
-    // turn it on by default. Users on a privacy-sensitive setup can
-    // toggle it off via preferences once that surface lands.
-    let prefs = Preferences {
-        history_retention: readshot_core::HistoryRetention::Last50,
-        capture_hotkey: default_capture_hotkey().into(),
-        ..Preferences::default()
-    };
+    // turn it on by default for first-launch users. Returning users
+    // get whatever they previously saved to `preferences.toml`.
+    let preferences_path = default_preferences_path();
+    let prefs = load_preferences(preferences_path.as_deref());
     let history_root = default_history_root();
     let mut app = App::new(coordinator, permissions, prefs);
     app.history_root = history_root;
+    app.preferences_path = preferences_path;
 
     // Surface the initial permission state in the log so users
     // (and us, when triaging issues) can see whether macOS TCC is
@@ -2730,6 +2728,55 @@ pub fn default_history_root() -> Option<PathBuf> {
         .map(|d| d.data_local_dir().join("history"))
 }
 
+/// Default per-user preferences file —
+/// `<config_dir>/dev.pawanpaudel93.Readshot/preferences.toml`. `None`
+/// in the same edge cases [`default_history_root`] returns `None`;
+/// settings changes in that mode stay in-memory only.
+pub fn default_preferences_path() -> Option<PathBuf> {
+    directories::ProjectDirs::from("dev", "pawanpaudel93", "Readshot")
+        .map(|d| d.config_dir().join("preferences.toml"))
+}
+
+/// Load `Preferences` from `path`, falling back to first-launch
+/// defaults when the file is missing, unreadable, or corrupt.
+///
+/// The first-launch fallback overrides two fields from
+/// [`Preferences::default`]: `history_retention` is bumped to `Last50`
+/// (the wedge needs history on, see `project_history_default.md`) and
+/// `capture_hotkey` is set to the platform-native chord. Any value
+/// that round-trips through the on-disk file wins over these
+/// overrides — once the user has a `preferences.toml`, their choices
+/// stick.
+pub fn load_preferences(path: Option<&Path>) -> Preferences {
+    let Some(path) = path else {
+        return first_launch_preferences();
+    };
+    if !path.exists() {
+        return first_launch_preferences();
+    }
+    match Preferences::load(path) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                target: "readshot::preferences",
+                "load failed for {}: {e} — using first-launch defaults",
+                path.display(),
+            );
+            first_launch_preferences()
+        }
+    }
+}
+
+/// First-launch preference set: the `Default` shape with the two
+/// runtime overrides that keep the wedge alive on a fresh install.
+fn first_launch_preferences() -> Preferences {
+    Preferences {
+        history_retention: readshot_core::HistoryRetention::Last50,
+        capture_hotkey: default_capture_hotkey().into(),
+        ..Preferences::default()
+    }
+}
+
 /// Spawn a fire-and-forget history-persistence task. The chain is:
 /// encode PNG → save record (empty OCR) → run Apple Vision OCR →
 /// update sidecar with the recognised text. Each stage logs its own
@@ -3133,7 +3180,10 @@ mod tests {
                 .id,
             "p"
         );
-        assert_eq!(pick_primary(&[secondary.clone()]).unwrap().id, "s");
+        assert_eq!(
+            pick_primary(std::slice::from_ref(&secondary)).unwrap().id,
+            "s"
+        );
         assert!(pick_primary(&[]).is_none());
     }
 
@@ -3170,8 +3220,10 @@ mod tests {
 
     #[test]
     fn register_default_hotkey_returns_none_for_garbage_string() {
-        let mut prefs = Preferences::default();
-        prefs.capture_hotkey = "not a hotkey at all".into();
+        let prefs = Preferences {
+            capture_hotkey: "not a hotkey at all".into(),
+            ..Preferences::default()
+        };
         assert!(register_default_hotkey(&prefs).is_none());
     }
 
@@ -3181,5 +3233,63 @@ mod tests {
         // No manager registered → tick does nothing meaningful.
         let _ = update(&mut app, Message::HotkeyTick);
         assert!(!app.capture_in_flight);
+    }
+
+    #[test]
+    fn load_preferences_first_launch_when_path_is_none() {
+        let prefs = load_preferences(None);
+        // First-launch override: history on (Last50) so the wedge
+        // works the first time the user takes a screenshot.
+        assert_eq!(
+            prefs.history_retention,
+            readshot_core::HistoryRetention::Last50,
+        );
+        assert_eq!(prefs.capture_hotkey, default_capture_hotkey());
+    }
+
+    #[test]
+    fn load_preferences_first_launch_when_file_missing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("preferences.toml");
+        assert!(!path.exists());
+        let prefs = load_preferences(Some(&path));
+        assert_eq!(
+            prefs.history_retention,
+            readshot_core::HistoryRetention::Last50,
+        );
+    }
+
+    #[test]
+    fn load_preferences_round_trips_an_existing_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("preferences.toml");
+        // User explicitly turned history off — that must win over the
+        // first-launch override.
+        let on_disk = Preferences {
+            history_retention: readshot_core::HistoryRetention::Off,
+            capture_hotkey: "ctrl+alt+9".into(),
+            ..Preferences::default()
+        };
+        on_disk.save(&path).unwrap();
+
+        let loaded = load_preferences(Some(&path));
+        assert_eq!(
+            loaded.history_retention,
+            readshot_core::HistoryRetention::Off,
+        );
+        assert_eq!(loaded.capture_hotkey, "ctrl+alt+9");
+    }
+
+    #[test]
+    fn load_preferences_falls_back_when_file_is_corrupt() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("preferences.toml");
+        std::fs::write(&path, "this is not [valid toml").unwrap();
+        let prefs = load_preferences(Some(&path));
+        // Corrupt file → first-launch defaults rather than a panic.
+        assert_eq!(
+            prefs.history_retention,
+            readshot_core::HistoryRetention::Last50,
+        );
     }
 }

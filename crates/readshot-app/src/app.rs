@@ -359,6 +359,11 @@ pub struct App {
     /// record. Substring-matched (case-insensitive) against
     /// `ocr_text` and the formatted timestamp.
     pub history_search: String,
+    /// On-disk path the user's preferences are read from at startup
+    /// and written back to whenever a `Message::Settings` mutation
+    /// flips a field. `None` in tests and when the OS can't supply a
+    /// config dir; in that case settings changes stay in-memory only.
+    pub preferences_path: Option<std::path::PathBuf>,
 }
 
 /// Per-overlay-window record. Tracks which display the window covers
@@ -424,6 +429,24 @@ impl App {
             history_window_id: None,
             history_status: None,
             history_search: String::new(),
+            preferences_path: None,
+        }
+    }
+
+    /// Persist the current `preferences` snapshot to
+    /// [`Self::preferences_path`] if one is configured. Called after
+    /// every settings mutation so a relaunch sees the user's choices.
+    /// IO failures are logged-and-swallowed: a full disk shouldn't
+    /// kill the running app, and the in-memory state remains correct.
+    fn persist_preferences_if_configured(&self) {
+        let Some(path) = self.preferences_path.as_ref() else {
+            return;
+        };
+        if let Err(e) = self.preferences.save(path) {
+            tracing::warn!(
+                target: "readshot::preferences",
+                "save failed: {e}",
+            );
         }
     }
 
@@ -446,7 +469,13 @@ impl App {
                 self.permissions.open_settings();
                 false
             }
-            Message::Settings(msg) => readshot_ui::settings::apply(&mut self.preferences, msg),
+            Message::Settings(msg) => {
+                let changed = readshot_ui::settings::apply(&mut self.preferences, msg);
+                if changed {
+                    self.persist_preferences_if_configured();
+                }
+                changed
+            }
             // The other message variants drive UI flows that need
             // the iced Task machinery (capture, OCR, save, history).
             // They're handled in main.rs once the daemon is running.
@@ -514,6 +543,36 @@ mod tests {
         let (mut app, _) = build_app(Arc::new(FakePermissions::granted()));
         assert!(!app.preferences.debug_logging);
         let changed = app.update_sync(Message::Settings(SettingsMessage::SetDebugLogging(true)));
+        assert!(changed);
+        assert!(app.preferences.debug_logging);
+    }
+
+    #[test]
+    fn settings_mutation_persists_to_disk_when_path_set() {
+        let (mut app, _) = build_app(Arc::new(FakePermissions::granted()));
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("preferences.toml");
+        app.preferences_path = Some(path.clone());
+
+        // Sanity: nothing on disk yet.
+        assert!(!path.exists());
+
+        let changed = app.update_sync(Message::Settings(SettingsMessage::SetDebugLogging(true)));
+        assert!(changed);
+
+        // The mutation should have been written to disk; reading it
+        // back yields the new value.
+        let from_disk = Preferences::load(&path).unwrap();
+        assert!(from_disk.debug_logging);
+    }
+
+    #[test]
+    fn settings_mutation_without_path_stays_in_memory() {
+        let (mut app, _) = build_app(Arc::new(FakePermissions::granted()));
+        // No preferences_path configured (matches CLI / test invocations).
+        assert!(app.preferences_path.is_none());
+        let changed = app.update_sync(Message::Settings(SettingsMessage::SetDebugLogging(true)));
+        // In-memory mutation still works; we just don't write to disk.
         assert!(changed);
         assert!(app.preferences.debug_logging);
     }
