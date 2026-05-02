@@ -16,7 +16,6 @@
 //! What this module deliberately doesn't do (yet):
 //!
 //! * Reflow paragraphs.
-//! * Detect tables and emit Markdown table syntax.
 //! * Detect code blocks (no reliable monospace cue from raster pixels).
 //! * Handle multi-column documents by reading each column top-to-bottom.
 //!
@@ -37,6 +36,19 @@ pub struct RecognizedLine {
     pub h: f32,
 }
 
+#[derive(Clone, Debug)]
+struct Row<'a> {
+    fragments: Vec<&'a RecognizedLine>,
+}
+
+impl<'a> Row<'a> {
+    fn sorted_fragments(&self) -> Vec<&'a RecognizedLine> {
+        let mut fragments = self.fragments.clone();
+        fragments.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+        fragments
+    }
+}
+
 /// Reconstruct an indent-preserving plain-text version of the OCR
 /// output.
 ///
@@ -50,10 +62,12 @@ pub struct RecognizedLine {
 ///    payload are recognised separately) — without clustering each
 ///    fragment becomes its own line and the row layout vanishes.
 /// 3. Within each row, sort fragments by X.
-/// 4. Emit one output line per row. The leftmost fragment's X-offset
-///    becomes leading spaces (relative to the leftmost X across the
-///    whole page); the gap between subsequent fragments becomes
-///    inline whitespace, scaled by the median per-character width.
+/// 4. If repeated column starts form a simple table, emit a Markdown
+///    table. Otherwise emit one plain-text output line per row. The
+///    leftmost fragment's X-offset becomes leading spaces (relative to
+///    the leftmost X across the whole page); the gap between subsequent
+///    fragments becomes inline whitespace, scaled by the median
+///    per-character width.
 ///
 /// Returns the empty string when `lines` is empty.
 pub fn reconstruct(lines: &[RecognizedLine]) -> String {
@@ -73,18 +87,25 @@ pub fn reconstruct(lines: &[RecognizedLine]) -> String {
     // bounding boxes are unusually thin.
     let row_tol = (med_h * 0.5).max(0.005);
 
-    // Sort by Y centre so we can walk the page top-to-bottom.
-    let mut sorted = active.clone();
+    let rows = cluster_rows(&active, row_tol);
+
+    let min_x = active.iter().map(|l| l.x).fold(f32::INFINITY, f32::min);
+    if let Some(table) = render_markdown_table(&rows, em) {
+        return table;
+    }
+    render_plain_text(&rows, min_x, em)
+}
+
+fn cluster_rows<'a>(active: &[&'a RecognizedLine], row_tol: f32) -> Vec<Row<'a>> {
+    let mut sorted = active.to_vec();
     sorted.sort_by(|a, b| {
         let ay = a.y + a.h / 2.0;
         let by = b.y + b.h / 2.0;
         ay.partial_cmp(&by).unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Walk the sorted list, breaking into rows whenever the Y centre
-    // exceeds the running row's reference centre by more than `row_tol`.
-    let mut rows: Vec<Vec<&RecognizedLine>> = Vec::new();
-    let mut current: Vec<&RecognizedLine> = Vec::new();
+    let mut rows: Vec<Row<'a>> = Vec::new();
+    let mut current: Vec<&'a RecognizedLine> = Vec::new();
     let mut current_ref_y: Option<f32> = None;
     for line in &sorted {
         let y_centre = line.y + line.h / 2.0;
@@ -94,7 +115,9 @@ pub fn reconstruct(lines: &[RecognizedLine]) -> String {
             }
             _ => {
                 if !current.is_empty() {
-                    rows.push(std::mem::take(&mut current));
+                    rows.push(Row {
+                        fragments: std::mem::take(&mut current),
+                    });
                 }
                 current.push(*line);
                 current_ref_y = Some(y_centre);
@@ -102,18 +125,19 @@ pub fn reconstruct(lines: &[RecognizedLine]) -> String {
         }
     }
     if !current.is_empty() {
-        rows.push(current);
+        rows.push(Row { fragments: current });
     }
 
-    let min_x = active.iter().map(|l| l.x).fold(f32::INFINITY, f32::min);
+    rows
+}
 
+fn render_plain_text(rows: &[Row<'_>], min_x: f32, em: f32) -> String {
     let mut out = String::new();
     for (i, row) in rows.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        let mut row = row.clone();
-        row.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+        let row = row.sorted_fragments();
 
         // Indent the row by the leftmost fragment's offset.
         let first = row[0];
@@ -140,6 +164,75 @@ pub fn reconstruct(lines: &[RecognizedLine]) -> String {
         }
     }
     out
+}
+
+fn render_markdown_table(rows: &[Row<'_>], em: f32) -> Option<String> {
+    if rows.len() < 2 {
+        return None;
+    }
+
+    let sorted_rows: Vec<Vec<&RecognizedLine>> = rows.iter().map(Row::sorted_fragments).collect();
+    let column_count = sorted_rows.first()?.len();
+    if column_count < 2 {
+        return None;
+    }
+    if sorted_rows.iter().any(|row| row.len() != column_count) {
+        return None;
+    }
+    if looks_like_wrapped_prose(&sorted_rows) {
+        return None;
+    }
+
+    let tolerance = (em * 2.0).max(0.015);
+    for column in 0..column_count {
+        let reference_x = sorted_rows[0][column].x;
+        if sorted_rows
+            .iter()
+            .skip(1)
+            .any(|row| (row[column].x - reference_x).abs() > tolerance)
+        {
+            return None;
+        }
+    }
+
+    let mut out = String::new();
+    write_markdown_row(&mut out, &sorted_rows[0]);
+    out.push('\n');
+    out.push('|');
+    for _ in 0..column_count {
+        out.push_str(" --- |");
+    }
+    for row in sorted_rows.iter().skip(1) {
+        out.push('\n');
+        write_markdown_row(&mut out, row);
+    }
+    Some(out)
+}
+
+fn looks_like_wrapped_prose(rows: &[Vec<&RecognizedLine>]) -> bool {
+    let total_cells = rows.iter().map(Vec::len).sum::<usize>();
+    let long_cells = rows
+        .iter()
+        .flat_map(|row| row.iter())
+        .filter(|cell| cell.text.split_whitespace().count() >= 3)
+        .count();
+    long_cells * 2 >= total_cells
+}
+
+fn write_markdown_row(out: &mut String, row: &[&RecognizedLine]) {
+    out.push('|');
+    for cell in row {
+        out.push(' ');
+        out.push_str(&normalise_markdown_cell(&cell.text));
+        out.push_str(" |");
+    }
+}
+
+fn normalise_markdown_cell(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('|', "\\|")
 }
 
 fn median_em(lines: &[&RecognizedLine]) -> f32 {
@@ -290,5 +383,81 @@ mod tests {
         assert!(last.starts_with(&" ".repeat(80)));
         assert!(last.ends_with("far"));
         assert_eq!(last.len(), 80 + 3);
+    }
+
+    #[test]
+    fn aligned_two_column_rows_emit_markdown_table() {
+        let lines = vec![
+            line("Name", 0.00, 0.10, 0.04, 0.04),
+            line("Status", 0.30, 0.10, 0.06, 0.04),
+            line("Readshot", 0.00, 0.20, 0.08, 0.04),
+            line("Shipped", 0.30, 0.20, 0.07, 0.04),
+        ];
+
+        assert_eq!(
+            reconstruct(&lines),
+            "| Name | Status |\n| --- | --- |\n| Readshot | Shipped |"
+        );
+    }
+
+    #[test]
+    fn column_jitter_still_emits_markdown_table() {
+        let lines = vec![
+            line("Package", 0.00, 0.10, 0.07, 0.04),
+            line("Version", 0.30, 0.10, 0.07, 0.04),
+            line("State", 0.62, 0.10, 0.05, 0.04),
+            line("core", 0.01, 0.20, 0.04, 0.04),
+            line("1.0", 0.305, 0.20, 0.03, 0.04),
+            line("ok", 0.615, 0.20, 0.02, 0.04),
+        ];
+
+        assert_eq!(
+            reconstruct(&lines),
+            "| Package | Version | State |\n| --- | --- | --- |\n| core | 1.0 | ok |"
+        );
+    }
+
+    #[test]
+    fn markdown_table_cells_escape_pipes() {
+        let lines = vec![
+            line("Expr", 0.00, 0.10, 0.04, 0.04),
+            line("Meaning", 0.30, 0.10, 0.07, 0.04),
+            line("a | b", 0.00, 0.20, 0.05, 0.04),
+            line("choice", 0.30, 0.20, 0.06, 0.04),
+        ];
+
+        assert_eq!(
+            reconstruct(&lines),
+            "| Expr | Meaning |\n| --- | --- |\n| a \\| b | choice |"
+        );
+    }
+
+    #[test]
+    fn prose_fragments_do_not_become_a_table() {
+        let lines = vec![
+            line("The product wedge", 0.00, 0.10, 0.16, 0.04),
+            line("is searchable history", 0.24, 0.10, 0.21, 0.04),
+            line("Capture text remains", 0.00, 0.20, 0.20, 0.04),
+            line("plain when it is prose", 0.24, 0.20, 0.22, 0.04),
+        ];
+
+        assert_eq!(
+            reconstruct(&lines),
+            "The product wedge        is searchable history\nCapture text remains    plain when it is prose"
+        );
+    }
+
+    #[test]
+    fn inconsistent_column_counts_remain_plain_text() {
+        let lines = vec![
+            line("Name", 0.00, 0.10, 0.04, 0.04),
+            line("Status", 0.30, 0.10, 0.06, 0.04),
+            line("Readshot shipped today", 0.00, 0.20, 0.23, 0.04),
+        ];
+
+        assert_eq!(
+            reconstruct(&lines),
+            "Name                          Status\nReadshot shipped today"
+        );
     }
 }
