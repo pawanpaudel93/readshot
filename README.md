@@ -34,9 +34,9 @@ the image. Entirely offline.
   the last directory for the rest of the session.
 - **Offline OCR** via Apple Vision (`VNRecognizeTextRequest`). Copy
   Text is layout-aware — same-row fragments stay on one line, indents
-  become leading spaces. Lossy on tables / multi-column docs (see
-  Roadmap), but terminal output, indented code, and YAML round-trip
-  cleanly.
+  become leading spaces, and simple aligned tables become Markdown
+  tables. Lossy on multi-column docs (see Roadmap), but terminal
+  output, indented code, YAML, and basic tables round-trip cleanly.
 - **Searchable history** — every capture lands in
   `~/Library/Application Support/.../history/` as PNG + JSON sidecar,
   pre-rendered thumbnail, background OCR fills the text, and a
@@ -195,9 +195,6 @@ and the bits we deliberately parked.
 
 - **"Send to assistant" intent** — opens Claude / ChatGPT with the
   capture inline.
-- **Structured OCR — tables → Markdown tables.** Today the layout
-  pass keeps same-row fragments together but doesn't recognise
-  column boundaries across rows.
 - **Structured OCR — code blocks → fenced.** Detecting monospace
   from raster pixels is unreliable; would need a heuristic or a
   separate model.
