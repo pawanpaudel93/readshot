@@ -36,8 +36,8 @@ the image. Entirely offline.
   Text is layout-aware — same-row fragments stay on one line, indents
   become leading spaces, and simple aligned tables become Markdown
   tables. Multi-column prose reads each column top-to-bottom.
-  Terminal output, indented code, YAML, basic tables, and two-column
-  articles round-trip cleanly.
+  Terminal output and indented code become fenced blocks; YAML, basic
+  tables, and two-column articles round-trip cleanly.
 - **Searchable history** — every capture lands in
   `~/Library/Application Support/.../history/` as PNG + JSON sidecar,
   pre-rendered thumbnail, background OCR fills the text, and a
@@ -196,9 +196,6 @@ and the bits we deliberately parked.
 
 - **"Send to assistant" intent** — opens Claude / ChatGPT with the
   capture inline.
-- **Structured OCR — code blocks → fenced.** Detecting monospace
-  from raster pixels is unreliable; would need a heuristic or a
-  separate model.
 
 These layer cleanly on the wedge, so they're deliberately deferred
 rather than abandoned.

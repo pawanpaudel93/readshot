@@ -16,7 +16,6 @@
 //! What this module deliberately doesn't do (yet):
 //!
 //! * Reflow paragraphs.
-//! * Detect code blocks (no reliable monospace cue from raster pixels).
 //!
 //! Those belong to the parked "structured OCR" feature.
 
@@ -63,11 +62,13 @@ impl<'a> Row<'a> {
 /// 3. Within each row, sort fragments by X.
 /// 4. If repeated column starts form a simple table, emit a Markdown
 ///    table. If the rows look like a multi-column prose document, read
-///    each column top-to-bottom. Otherwise emit one plain-text output
-///    line per row. The leftmost fragment's X-offset becomes leading
-///    spaces (relative to the leftmost X across the whole page); the gap
-///    between subsequent fragments becomes inline whitespace, scaled by
-///    the median per-character width.
+///    each column top-to-bottom. If the plain-text layout looks like
+///    code or terminal output, wrap it in a fenced block. Otherwise
+///    emit one plain-text output line per row. The leftmost fragment's
+///    X-offset becomes leading spaces (relative to the leftmost X
+///    across the whole page); the gap between subsequent fragments
+///    becomes inline whitespace, scaled by the median per-character
+///    width.
 ///
 /// Returns the empty string when `lines` is empty.
 pub fn reconstruct(lines: &[RecognizedLine]) -> String {
@@ -96,7 +97,11 @@ pub fn reconstruct(lines: &[RecognizedLine]) -> String {
     if let Some(columns) = render_multi_column_text(&rows, em) {
         return columns;
     }
-    render_plain_text(&rows, min_x, em)
+    let plain = render_plain_text(&rows, min_x, em);
+    if looks_like_code_block(&plain) {
+        return fence_code_block(&plain);
+    }
+    plain
 }
 
 fn cluster_rows<'a>(active: &[&'a RecognizedLine], row_tol: f32) -> Vec<Row<'a>> {
@@ -282,6 +287,78 @@ fn normalise_markdown_cell(text: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .replace('|', "\\|")
+}
+
+fn looks_like_code_block(text: &str) -> bool {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() < 2 {
+        return false;
+    }
+
+    let mut score = 0usize;
+    let mut indented_lines = 0usize;
+    let mut prompt_lines = 0usize;
+    let mut symbolic_lines = 0usize;
+    for line in &lines {
+        let trimmed = line.trim_start();
+        if line.len() > trimmed.len() {
+            indented_lines += 1;
+        }
+        if is_shell_prompt(trimmed) {
+            prompt_lines += 1;
+        }
+        let symbol_count = trimmed
+            .chars()
+            .filter(|c| {
+                matches!(
+                    c,
+                    '{' | '}'
+                        | '['
+                        | ']'
+                        | '('
+                        | ')'
+                        | ';'
+                        | '='
+                        | '<'
+                        | '>'
+                        | '!'
+                        | '|'
+                        | '&'
+                        | '*'
+                        | ':'
+                )
+            })
+            .count();
+        if symbol_count >= 2 || trimmed.ends_with('{') || trimmed.ends_with(';') {
+            symbolic_lines += 1;
+        }
+    }
+
+    if indented_lines > 0 && symbolic_lines > 0 {
+        score += 3;
+    }
+    if prompt_lines > 0 {
+        score += 3;
+    }
+    if symbolic_lines >= 2 {
+        score += 2;
+    }
+    if text.contains("=>") || text.contains("->") || text.contains("::") {
+        score += 1;
+    }
+
+    score >= 3
+}
+
+fn is_shell_prompt(trimmed: &str) -> bool {
+    trimmed.starts_with("$ ")
+        || trimmed.starts_with("> ")
+        || trimmed.starts_with("% ")
+        || trimmed.starts_with("λ ")
+}
+
+fn fence_code_block(text: &str) -> String {
+    format!("```\n{}\n```", text.trim_end())
 }
 
 fn median_em(lines: &[&RecognizedLine]) -> f32 {
@@ -523,6 +600,52 @@ mod tests {
         assert_eq!(
             reconstruct(&lines),
             "The product wedge        is searchable history\nCapture text remains    plain when it is prose"
+        );
+    }
+
+    #[test]
+    fn indented_braced_code_emits_fenced_block() {
+        let lines = vec![
+            line("fn main() {", 0.00, 0.10, 0.11, 0.04),
+            line("println!(\"hi\");", 0.04, 0.20, 0.16, 0.04),
+            line("}", 0.00, 0.30, 0.01, 0.04),
+        ];
+
+        assert_eq!(
+            reconstruct(&lines),
+            "```\nfn main() {\n    println!(\"hi\");\n}\n```"
+        );
+    }
+
+    #[test]
+    fn shell_prompt_output_emits_fenced_block() {
+        let lines = vec![
+            line("$ cargo test", 0.00, 0.10, 0.12, 0.04),
+            line("test result: ok. 42 passed", 0.00, 0.20, 0.27, 0.04),
+        ];
+
+        assert_eq!(
+            reconstruct(&lines),
+            "```\n$ cargo test\ntest result: ok. 42 passed\n```"
+        );
+    }
+
+    #[test]
+    fn normal_prose_lines_do_not_become_fenced_code() {
+        let lines = vec![
+            line(
+                "Readshot keeps screenshots searchable",
+                0.00,
+                0.10,
+                0.36,
+                0.04,
+            ),
+            line("The editor preserves annotations", 0.00, 0.20, 0.32, 0.04),
+        ];
+
+        assert_eq!(
+            reconstruct(&lines),
+            "Readshot keeps screenshots searchable\nThe editor preserves annotations"
         );
     }
 
