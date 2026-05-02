@@ -176,8 +176,8 @@ per-task design notes live under `docs/superpowers/` (gitignored).
 The product wedge — **"every screenshot you've ever taken is
 searchable"** — is shipped end-to-end: capture → background OCR →
 sidecar archive → searchable browser → per-row actions (open / copy
-image / copy text / pin / delete). What's left is polish, parity,
-and the bits we deliberately parked.
+image / copy text / pin / delete). What's left is polish and
+cross-platform parity.
 
 ### Older roadmap (still real)
 
@@ -191,14 +191,6 @@ and the bits we deliberately parked.
   current build is ad-hoc-signed and only runs on the build
   machine.
 - **Linux + Windows capture / OCR backends** — stubbed.
-
-### Parked (the AI-native wedge + structured OCR)
-
-- **"Send to assistant" intent** — opens Claude / ChatGPT with the
-  capture inline.
-
-These layer cleanly on the wedge, so they're deliberately deferred
-rather than abandoned.
 
 ## Licence
 
