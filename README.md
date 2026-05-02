@@ -39,10 +39,10 @@ the image. Entirely offline.
   cleanly.
 - **Searchable history** — every capture lands in
   `~/Library/Application Support/.../history/` as PNG + JSON sidecar,
-  background OCR fills the text, and a **History…** browser lets you
-  fuzzy-search by content. Per-row actions: open in editor, copy
-  image, copy text, reveal in Finder, pin, delete; the browser can
-  also clear all history.
+  pre-rendered thumbnail, background OCR fills the text, and a
+  **History…** browser lets you fuzzy-search by content. Per-row
+  actions: open in editor, copy image, copy text, reveal in Finder,
+  pin, delete; the browser can also clear all history.
 - **Menu-bar app** (no Dock icon). Click the tray icon to capture, or
   right-click for the menu. Default global hotkey: **⌘⇧X**.
 - **MCP server** companion binary so AI agents can request captures,
@@ -177,11 +177,6 @@ searchable"** — is shipped end-to-end: capture → background OCR →
 sidecar archive → searchable browser → per-row actions (open / copy
 image / copy text / pin / delete). What's left is polish, parity,
 and the bits we deliberately parked.
-
-### Closing the loop
-
-- **Pre-rendered thumbnails** — full PNGs decode off-thread on first
-  show; fine for `Last50`, would chug at 500+.
 
 ### Older roadmap (still real)
 

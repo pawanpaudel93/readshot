@@ -27,6 +27,8 @@ use crate::preferences::HistoryRetention;
 
 pub const HISTORY_SCHEMA_VERSION: u32 = 1;
 pub const HISTORY_INDEX_FILENAME: &str = "history.index.json";
+const THUMBNAIL_MAX_WIDTH: u32 = 320;
+const THUMBNAIL_MAX_HEIGHT: u32 = 200;
 
 /// One captured screenshot with metadata. The PNG bytes themselves live
 /// alongside the sidecar JSON, not inside the record.
@@ -163,6 +165,41 @@ impl FsHistoryStore {
         let json = dir.join(format!("{}.json", record.id));
         (png, json)
     }
+
+    pub fn thumbnail_path(record: &CaptureRecord) -> PathBuf {
+        let year = record.captured_at.year();
+        let month = record.captured_at.month();
+        PathBuf::from(format!("{year:04}"))
+            .join(format!("{month:02}"))
+            .join(format!("{}.thumb.png", record.id))
+    }
+
+    fn write_thumbnail_from_bytes(&self, record: &CaptureRecord, png: &[u8]) {
+        let Ok(img) = image::load_from_memory(png) else {
+            return;
+        };
+        self.write_thumbnail_image(record, img);
+    }
+
+    fn backfill_thumbnail_from_png_path(&self, record: &CaptureRecord, png_path: &Path) {
+        let thumb_path = self.root.join(Self::thumbnail_path(record));
+        if thumb_path.exists() {
+            return;
+        }
+        let Ok(img) = image::open(png_path) else {
+            return;
+        };
+        self.write_thumbnail_image(record, img);
+    }
+
+    fn write_thumbnail_image(&self, record: &CaptureRecord, img: image::DynamicImage) {
+        let thumb = img.thumbnail(THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT);
+        let abs_thumb = self.root.join(Self::thumbnail_path(record));
+        if let Some(parent) = abs_thumb.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = thumb.save_with_format(abs_thumb, image::ImageFormat::Png);
+    }
 }
 
 impl HistoryStore for FsHistoryStore {
@@ -177,6 +214,7 @@ impl HistoryStore for FsHistoryStore {
         let mut f = fs::File::create(&abs_png)?;
         f.write_all(png)?;
         f.sync_all()?; // best-effort durability before the index update
+        self.write_thumbnail_from_bytes(record, png);
 
         let json_content = serde_json::to_string_pretty(record)?;
         fs::write(&abs_json, json_content)?;
@@ -212,6 +250,7 @@ impl HistoryStore for FsHistoryStore {
                 Err(_) => continue,
             };
             if let Ok(record) = serde_json::from_str::<CaptureRecord>(&content) {
+                self.backfill_thumbnail_from_png_path(&record, &self.root.join(&entry.png_path));
                 out.push(record);
             }
         }
@@ -255,6 +294,16 @@ impl HistoryStore for FsHistoryStore {
             if !kept_ids.contains(&entry.id) {
                 let _ = fs::remove_file(self.root.join(&entry.png_path));
                 let _ = fs::remove_file(self.root.join(&entry.json_path));
+                let record_for_path = CaptureRecord {
+                    id: entry.id,
+                    captured_at: entry.captured_at,
+                    width_px: 0,
+                    height_px: 0,
+                    display_id: String::new(),
+                    ocr_text: None,
+                    annotation_model: Vec::new(),
+                };
+                let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&record_for_path)));
             }
         }
 
@@ -305,6 +354,16 @@ impl HistoryStore for FsHistoryStore {
         let entry = index.records.remove(pos);
         let _ = fs::remove_file(self.root.join(&entry.png_path));
         let _ = fs::remove_file(self.root.join(&entry.json_path));
+        let record_for_path = CaptureRecord {
+            id,
+            captured_at: entry.captured_at,
+            width_px: 0,
+            height_px: 0,
+            display_id: String::new(),
+            ocr_text: None,
+            annotation_model: Vec::new(),
+        };
+        let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&record_for_path)));
         index.updated_at = Some(Utc::now());
         self.write_index(&index)?;
         Ok(())
@@ -331,6 +390,17 @@ mod tests {
     /// 10 fake PNG bytes — the store writes them verbatim.
     fn fake_png() -> Vec<u8> {
         b"\x89PNG\r\n\x1a\nXX".to_vec()
+    }
+
+    fn valid_png(w: u32, h: u32) -> Vec<u8> {
+        let mut img = image::RgbaImage::new(w, h);
+        for px in img.pixels_mut() {
+            *px = image::Rgba([40, 80, 120, 255]);
+        }
+        let mut out = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
     }
 
     #[test]
@@ -484,5 +554,32 @@ mod tests {
             .join("04")
             .join(format!("{}.png", r.id));
         assert!(png_path.exists());
+    }
+
+    #[test]
+    fn save_writes_pre_rendered_thumbnail_for_valid_png() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(800, 600)).unwrap();
+
+        let thumb_path = s.root().join(FsHistoryStore::thumbnail_path(&r));
+        assert!(thumb_path.exists());
+        let thumb = image::open(&thumb_path).unwrap();
+        assert!(thumb.width() <= 320);
+        assert!(thumb.height() <= 200);
+    }
+
+    #[test]
+    fn list_backfills_missing_thumbnail_for_old_record() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(640, 480)).unwrap();
+        let thumb_path = s.root().join(FsHistoryStore::thumbnail_path(&r));
+        std::fs::remove_file(&thumb_path).unwrap();
+        assert!(!thumb_path.exists());
+
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(thumb_path.exists());
     }
 }

@@ -1531,6 +1531,7 @@ fn history_view(state: &App) -> Element<'_, Message> {
     if let Some(root) = state.history_root.as_ref() {
         for r in &visible {
             let png_path = history_png_path(root, r);
+            let preview_path = history_thumbnail_path(root, r);
             let stamp = r
                 .captured_at
                 .with_timezone(&chrono::Local)
@@ -1550,8 +1551,13 @@ fn history_view(state: &App) -> Element<'_, Message> {
                 })
                 .unwrap_or_else(|| "(no OCR text yet)".to_string());
 
-            let thumb: Element<Message> = if png_path.exists() {
-                image_widget(image_widget::Handle::from_path(&png_path))
+            let thumb: Element<Message> = if preview_path.exists() || png_path.exists() {
+                let path = if preview_path.exists() {
+                    preview_path
+                } else {
+                    png_path
+                };
+                image_widget(image_widget::Handle::from_path(path))
                     .width(Length::Fixed(160.0))
                     .into()
             } else {
@@ -1719,6 +1725,16 @@ fn history_png_path(root: &std::path::Path, record: &readshot_core::CaptureRecor
     root.join(format!("{:04}", record.captured_at.year()))
         .join(format!("{:02}", record.captured_at.month()))
         .join(format!("{}.png", record.id))
+}
+
+fn history_thumbnail_path(
+    root: &std::path::Path,
+    record: &readshot_core::CaptureRecord,
+) -> PathBuf {
+    use chrono::Datelike;
+    root.join(format!("{:04}", record.captured_at.year()))
+        .join(format!("{:02}", record.captured_at.month()))
+        .join(format!("{}.thumb.png", record.id))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3459,6 +3475,24 @@ mod tests {
         let command = reveal_command_for_path(std::path::Path::new("/tmp/readshot/capture.png"));
         assert_eq!(command.program, "open");
         assert_eq!(command.args, vec!["-R", "/tmp/readshot/capture.png"]);
+    }
+
+    #[test]
+    fn history_thumbnail_path_matches_core_layout() {
+        use chrono::TimeZone;
+        let record = readshot_core::CaptureRecord::new(
+            chrono::Utc
+                .with_ymd_and_hms(2026, 4, 25, 14, 30, 0)
+                .unwrap(),
+            100,
+            100,
+            "primary",
+        );
+        let root = std::path::Path::new("/history");
+        assert_eq!(
+            history_thumbnail_path(root, &record),
+            root.join(readshot_core::FsHistoryStore::thumbnail_path(&record))
+        );
     }
 
     #[cfg(target_os = "windows")]
