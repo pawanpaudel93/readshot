@@ -133,6 +133,14 @@ impl CaptureCoordinator {
         }
     }
 
+    /// Clear every persisted capture. No-op when no history store is wired.
+    pub fn clear_history(&self) -> Result<(), readshot_core::HistoryError> {
+        match &self.history {
+            Some(h) => h.clear_all(),
+            None => Ok(()),
+        }
+    }
+
     /// Append a capture to history, respecting the retention policy.
     /// Off → no-op. Other policies → save and apply retention.
     pub async fn record_history(

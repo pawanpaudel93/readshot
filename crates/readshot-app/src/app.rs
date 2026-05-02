@@ -200,6 +200,9 @@ pub enum Message {
     /// User typed in the history browser's search box. Empty string
     /// resets to "show every record".
     HistorySearchChanged(String),
+    /// Browser-level "Clear All" — remove every history record from disk
+    /// and clear the visible list.
+    HistoryClearAllRequested,
     /// Per-row "Open" — load the PNG and reopen it as a history-backed
     /// editor session. Annotation edits flow back into the JSON sidecar.
     HistoryOpenInEditor(readshot_core::Uuid),
@@ -209,6 +212,9 @@ pub enum Message {
     HistoryOpenInEditorReady(Result<(image::RgbaImage, readshot_core::CaptureRecord), String>),
     /// Per-row "Copy Image" — load PNG, decode, write to clipboard.
     HistoryCopyImage(readshot_core::Uuid),
+    /// Per-row "Reveal" — ask the OS file manager to select the PNG
+    /// or open its containing folder.
+    HistoryReveal(readshot_core::Uuid),
     /// Per-row "Copy Text" — read the cached `ocr_text` and write it
     /// to the clipboard. Synchronous (no OCR re-run).
     HistoryCopyText(readshot_core::Uuid),

@@ -888,6 +888,16 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.history_search = q;
             Task::none()
         }
+        Message::HistoryClearAllRequested => {
+            if let Err(e) = state.coordinator.clear_history() {
+                state.history_status = Some(format!("Clear history failed: {e}"));
+                return Task::none();
+            }
+            state.history_records.clear();
+            state.history_search.clear();
+            state.history_status = Some("History cleared.".into());
+            Task::none()
+        }
         Message::HistoryOpenInEditor(id) => {
             let Some((path, record)) = state
                 .history_root
@@ -915,6 +925,21 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 Task::none()
             }
         },
+        Message::HistoryReveal(id) => {
+            let Some(path) = state
+                .history_root
+                .as_ref()
+                .zip(state.history_records.iter().find(|r| r.id == id))
+                .map(|(root, r)| history_png_path(root, r))
+            else {
+                state.history_status = Some("Capture not found.".into());
+                return Task::none();
+            };
+            if let Err(e) = reveal_path(&path) {
+                state.history_status = Some(format!("Reveal failed: {e}"));
+            }
+            Task::none()
+        }
         Message::HistoryCopyImage(id) => {
             let Some(path) = state
                 .history_root
@@ -1468,11 +1493,23 @@ fn history_view(state: &App) -> Element<'_, Message> {
     };
     let search_box = text_input("Search OCR text or timestamp…", &state.history_search)
         .on_input(Message::HistorySearchChanged)
+        .width(Length::Fill)
         .padding(8)
         .size(13);
+    let clear_button = {
+        let b = button(text("Clear All").size(12)).padding([8, 10]);
+        if total > 0 {
+            b.on_press(Message::HistoryClearAllRequested)
+        } else {
+            b
+        }
+    };
+    let search_row = row![search_box, clear_button]
+        .spacing(8)
+        .align_y(Alignment::Center);
     let header = container(
         column![
-            search_box,
+            search_row,
             text(count_line).size(12),
             state
                 .history_status
@@ -1616,6 +1653,7 @@ fn history_row_actions<'a>(id: readshot_core::Uuid, has_text: bool) -> Element<'
     };
     column![
         make_btn("Open", Some(Message::HistoryOpenInEditor(id)), false),
+        make_btn("Reveal", Some(Message::HistoryReveal(id)), false),
         make_btn("Copy Image", Some(Message::HistoryCopyImage(id)), false),
         make_btn(
             "Copy Text",
@@ -1681,6 +1719,49 @@ fn history_png_path(root: &std::path::Path, record: &readshot_core::CaptureRecor
     root.join(format!("{:04}", record.captured_at.year()))
         .join(format!("{:02}", record.captured_at.month()))
         .join(format!("{}.png", record.id))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RevealCommand {
+    program: &'static str,
+    args: Vec<String>,
+}
+
+fn reveal_command_for_path(path: &Path) -> RevealCommand {
+    let path_string = path.to_string_lossy().to_string();
+    #[cfg(target_os = "macos")]
+    {
+        RevealCommand {
+            program: "open",
+            args: vec!["-R".into(), path_string],
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        RevealCommand {
+            program: "explorer",
+            args: vec!["/select,".into(), path_string],
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let dir = path
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or(path_string);
+        RevealCommand {
+            program: "xdg-open",
+            args: vec![dir],
+        }
+    }
+}
+
+fn reveal_path(path: &Path) -> Result<(), std::io::Error> {
+    let command = reveal_command_for_path(path);
+    std::process::Command::new(command.program)
+        .args(command.args)
+        .spawn()?;
+    Ok(())
 }
 
 fn editor_view(state: &App) -> Element<'_, Message> {
@@ -3347,6 +3428,53 @@ mod tests {
         let from_disk = store.list().unwrap();
         assert_eq!(from_disk[0].annotation_model.len(), 1);
         assert_eq!(from_disk[0].ocr_text.as_deref(), Some("before"));
+    }
+
+    #[test]
+    fn history_clear_all_removes_records_and_resets_browser_state() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(FsHistoryStore::new(dir.path().join("history")));
+        let older =
+            readshot_core::CaptureRecord::new(chrono::Utc::now(), 100, 100, "primary".to_string());
+        let newer =
+            readshot_core::CaptureRecord::new(chrono::Utc::now(), 120, 90, "primary".to_string());
+        store.save(&older, b"png").unwrap();
+        store.save(&newer, b"png").unwrap();
+
+        let history: Arc<dyn HistoryStore> = store.clone();
+        let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), history);
+        app.history_records = vec![newer, older];
+        app.history_status = Some("stale".into());
+
+        let _ = update(&mut app, Message::HistoryClearAllRequested);
+
+        assert!(store.list().unwrap().is_empty());
+        assert!(app.history_records.is_empty());
+        assert_eq!(app.history_status.as_deref(), Some("History cleared."));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reveal_command_uses_finder_selection_on_macos() {
+        let command = reveal_command_for_path(std::path::Path::new("/tmp/readshot/capture.png"));
+        assert_eq!(command.program, "open");
+        assert_eq!(command.args, vec!["-R", "/tmp/readshot/capture.png"]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn reveal_command_uses_explorer_selection_on_windows() {
+        let command = reveal_command_for_path(std::path::Path::new("C:\\tmp\\capture.png"));
+        assert_eq!(command.program, "explorer");
+        assert_eq!(command.args, vec!["/select,", "C:\\tmp\\capture.png"]);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn reveal_command_opens_parent_directory_on_unix() {
+        let command = reveal_command_for_path(std::path::Path::new("/tmp/readshot/capture.png"));
+        assert_eq!(command.program, "xdg-open");
+        assert_eq!(command.args, vec!["/tmp/readshot"]);
     }
 
     #[test]
