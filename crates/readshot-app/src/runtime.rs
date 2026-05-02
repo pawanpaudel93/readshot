@@ -2921,6 +2921,16 @@ async fn capture_request_to_desktop(
     save_to_desktop(&img)
 }
 
+#[cfg(test)]
+async fn capture_request_to_dir(
+    coord: CaptureCoordinator,
+    req: CaptureRequest,
+    dir: &Path,
+) -> Result<PathBuf, CaptureRunError> {
+    let img = coord.capture_region(req).await?;
+    save_to_dir(&img, dir)
+}
+
 /// Returns the captured image instead of saving — the editor flow
 /// uses this so the user can choose what to do with the bytes.
 ///
@@ -3106,6 +3116,10 @@ fn save_to_desktop(img: &image::RgbaImage) -> Result<PathBuf, CaptureRunError> {
     let dir = directories::UserDirs::new()
         .and_then(|d| d.desktop_dir().map(PathBuf::from))
         .unwrap_or_else(std::env::temp_dir);
+    save_to_dir(img, &dir)
+}
+
+fn save_to_dir(img: &image::RgbaImage, dir: &Path) -> Result<PathBuf, CaptureRunError> {
     let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string();
     let path = dir.join(format!("Readshot-{stamp}.png"));
     img.save_with_format(&path, image::ImageFormat::Png)?;
@@ -3579,7 +3593,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn capture_primary_to_desktop_writes_png() {
+    async fn capture_request_to_dir_writes_png() {
         let perms = Arc::new(FakePermissions::granted());
         let coord = CaptureCoordinator::new(
             Arc::new(FakeCapturer::new()),
@@ -3587,12 +3601,19 @@ mod tests {
             perms,
             None,
         );
-        // The fake capturer reports a 256x256 fake-0 display.
-        let path = capture_primary_to_desktop(coord).await.unwrap();
+        let dir = tempfile::TempDir::new().unwrap();
+        let req = CaptureRequest {
+            display_id: "fake-0".into(),
+            rect: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 256.0, 256.0).unwrap(),
+            scale: 1.0,
+            hide_cursor: true,
+        };
+        let path = capture_request_to_dir(coord, req, dir.path())
+            .await
+            .unwrap();
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
-        // Cleanup so we don't litter the dev's Desktop on repeated runs.
-        let _ = std::fs::remove_file(path);
+        assert!(path.starts_with(dir.path()));
     }
 
     #[test]

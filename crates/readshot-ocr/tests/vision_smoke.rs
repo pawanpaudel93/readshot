@@ -1,16 +1,17 @@
 //! End-to-end smoke test for the macOS Apple Vision OCR engine.
 //!
-//! Apple Vision runs on-device with no permission prompt, so unlike
-//! the capture smoke test we don't gate this behind an env var or the
-//! `integration` feature — it runs as part of `cargo nextest run -p
-//! readshot-ocr` on any macOS host.
+//! Skipped unless the project is built with `--features integration`.
+//! Apple Vision runs on-device with no permission prompt, but it is
+//! still an OS-resident engine whose behaviour depends on the host
+//! macOS runtime, so default workspace tests use fakes and the nightly
+//! integration job enables this file explicitly.
 //!
 //! The fixture is generated programmatically by Readshot's own
 //! annotation renderer (no committed binary blob). The test asserts a
 //! substring match rather than exact equality because Vision's output
 //! varies slightly with macOS minor versions and font rendering nuances.
 
-#![cfg(target_os = "macos")]
+#![cfg(all(target_os = "macos", feature = "integration"))]
 
 use image::{Rgba, RgbaImage};
 use readshot_core::{render, Annotation, PointLike, RectLike, Rgba as CoreRgba};
