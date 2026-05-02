@@ -200,13 +200,13 @@ pub enum Message {
     /// User typed in the history browser's search box. Empty string
     /// resets to "show every record".
     HistorySearchChanged(String),
-    /// Per-row "Open" — load the PNG and reopen it as a fresh editor
-    /// session. Annotations made there don't (yet) flow back into
-    /// the history record.
+    /// Per-row "Open" — load the PNG and reopen it as a history-backed
+    /// editor session. Annotation edits flow back into the JSON sidecar.
     HistoryOpenInEditor(readshot_core::Uuid),
     /// Async PNG-decode finished for the row that asked to open in
-    /// editor. `Ok(image)` opens the editor; `Err` toasts a status.
-    HistoryOpenInEditorReady(Result<image::RgbaImage, String>),
+    /// editor. `Ok((image, record))` opens the editor; `Err` toasts
+    /// a status.
+    HistoryOpenInEditorReady(Result<(image::RgbaImage, readshot_core::CaptureRecord), String>),
     /// Per-row "Copy Image" — load PNG, decode, write to clipboard.
     HistoryCopyImage(readshot_core::Uuid),
     /// Per-row "Copy Text" — read the cached `ocr_text` and write it

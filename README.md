@@ -179,9 +179,6 @@ and the bits we deliberately parked.
 
 ### Closing the loop
 
-- **Editor → history sync** — annotations made post-capture in the
-  editor don't yet flow back into the saved record. Original pixels
-  persist; annotations vanish on close.
 - **Reveal in Finder** + **Clear all history** affordances on the
   browser.
 - **Pre-rendered thumbnails** — full PNGs decode off-thread on first

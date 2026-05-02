@@ -29,6 +29,14 @@ impl History {
         Self::default()
     }
 
+    pub fn from_present(present: Vec<Annotation>) -> Self {
+        Self {
+            past: Vec::new(),
+            present,
+            future: Vec::new(),
+        }
+    }
+
     /// Snapshot accessor — the slice the renderer should render.
     pub fn current(&self) -> &[Annotation] {
         &self.present

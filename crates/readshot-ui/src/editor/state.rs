@@ -43,6 +43,17 @@ impl EditorState {
         }
     }
 
+    pub fn with_annotations(base: RgbaImage, annotations: Vec<Annotation>) -> Self {
+        Self {
+            base,
+            history: History::from_present(annotations),
+            active_tool: ToolState::default(),
+            current_color: Rgba::new(1.0, 0.0, 0.0, 1.0),
+            current_line_width: DEFAULT_LINE_WIDTH,
+            flattened_cache: None,
+        }
+    }
+
     pub fn base(&self) -> &RgbaImage {
         &self.base
     }
@@ -158,6 +169,14 @@ mod tests {
         let s = EditorState::new(solid_base(32, 32));
         assert!(s.annotations().is_empty());
         assert_eq!(s.active_tool(), ToolState::Select);
+    }
+
+    #[test]
+    fn with_annotations_starts_from_existing_present_state() {
+        let s = EditorState::with_annotations(solid_base(32, 32), vec![rect(0.0)]);
+        assert_eq!(s.annotations().len(), 1);
+        assert!(!s.can_undo());
+        assert!(!s.can_redo());
     }
 
     #[test]

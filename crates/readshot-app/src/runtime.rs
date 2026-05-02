@@ -725,6 +725,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let display_id = state.pending_display_id.take().unwrap_or_default();
             match result {
                 Ok(image) => {
+                    let history_record = history_record_for_capture(
+                        &image,
+                        &display_id,
+                        state.preferences.history_retention,
+                    );
                     // Persist a history record in parallel with the
                     // user-visible intent action. The history task is
                     // gated on `preferences.history_retention` and
@@ -733,12 +738,17 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     let history_task = persist_history_task(
                         state.coordinator.clone(),
                         image.clone(),
-                        display_id,
+                        history_record.clone(),
                         state.preferences.history_retention,
                     );
                     let intent_task = match intent {
                         crate::app::CaptureIntent::Editor => {
-                            state.editor = Some(crate::editor::EditorSession::new(image));
+                            state.editor = Some(match history_record {
+                                Some(record) => {
+                                    crate::editor::EditorSession::from_history(image, record)
+                                }
+                                None => crate::editor::EditorSession::new(image),
+                            });
                             let (id, open_task) = window::open(editor_window_settings());
                             state.windows.register(id, WindowKind::Editor);
                             open_task.map(Message::EditorWindowReady)
@@ -879,22 +889,23 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::HistoryOpenInEditor(id) => {
-            let Some(path) = state
+            let Some((path, record)) = state
                 .history_root
                 .as_ref()
                 .zip(state.history_records.iter().find(|r| r.id == id))
-                .map(|(root, r)| history_png_path(root, r))
+                .map(|(root, r)| (history_png_path(root, r), r.clone()))
             else {
                 state.history_status = Some("Capture not found.".into());
                 return Task::none();
             };
-            Task::perform(load_png_async(path), |r| {
-                Message::HistoryOpenInEditorReady(r.map_err(|e| e.to_string()))
-            })
+            Task::perform(
+                async move { load_png_async(path).await.map(|img| (img, record)) },
+                |r| Message::HistoryOpenInEditorReady(r.map_err(|e| e.to_string())),
+            )
         }
         Message::HistoryOpenInEditorReady(result) => match result {
-            Ok(image) => {
-                state.editor = Some(crate::editor::EditorSession::new(image));
+            Ok((image, record)) => {
+                state.editor = Some(crate::editor::EditorSession::from_history(image, record));
                 let (id, open_task) = window::open(editor_window_settings());
                 state.windows.register(id, WindowKind::Editor);
                 open_task.map(Message::EditorWindowReady)
@@ -1142,11 +1153,13 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 readshot_ui::ToolbarMessage::Undo => {
                     if ed.model.undo() {
                         ed.refresh_image();
+                        sync_editor_history(ed, &state.coordinator);
                     }
                 }
                 readshot_ui::ToolbarMessage::Redo => {
                     if ed.model.redo() {
                         ed.refresh_image();
+                        sync_editor_history(ed, &state.coordinator);
                     }
                 }
             }
@@ -1181,6 +1194,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 }
                 readshot_ui::CanvasMessage::CommitAnnotation(annotation) => {
                     handle_commit_annotation(ed, annotation);
+                    sync_editor_history(ed, &state.coordinator);
                 }
             }
             Task::none()
@@ -1212,6 +1226,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     };
                     ed.model.commit_annotation(annotation);
                     ed.refresh_image();
+                    sync_editor_history(ed, &state.coordinator);
                 }
             }
             Task::none()
@@ -2923,7 +2938,7 @@ fn first_launch_preferences() -> Preferences {
 fn persist_history_task(
     coord: CaptureCoordinator,
     img: image::RgbaImage,
-    display_id: readshot_capture::DisplayId,
+    record: Option<readshot_core::CaptureRecord>,
     policy: readshot_core::HistoryRetention,
 ) -> Task<Message> {
     Task::perform(
@@ -2931,13 +2946,10 @@ fn persist_history_task(
             if matches!(policy, readshot_core::HistoryRetention::Off) {
                 return Ok::<bool, String>(false);
             }
-            let now = chrono::Utc::now();
-            let mut record = readshot_core::CaptureRecord::new(
-                now,
-                img.width(),
-                img.height(),
-                display_id.to_string(),
-            );
+            let Some(mut record) = record else {
+                return Ok(false);
+            };
+            let now = record.captured_at;
             let mut buf: Vec<u8> = Vec::new();
             img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
                 .map_err(|e| format!("png encode: {e}"))?;
@@ -2955,6 +2967,11 @@ fn persist_history_task(
             };
             match coord.recognise(ocr_req).await {
                 Ok(text) => {
+                    if let Ok(records) = coord.history_list() {
+                        if let Some(latest) = records.into_iter().find(|r| r.id == record.id) {
+                            record.annotation_model = latest.annotation_model;
+                        }
+                    }
                     record.ocr_text = Some(text);
                     if let Err(e) = coord.update_history(&record) {
                         tracing::warn!(target: "readshot::history", "ocr update failed: {e}");
@@ -2970,6 +2987,22 @@ fn persist_history_task(
         },
         Message::HistoryRecordPersisted,
     )
+}
+
+fn history_record_for_capture(
+    img: &image::RgbaImage,
+    display_id: &readshot_capture::DisplayId,
+    policy: readshot_core::HistoryRetention,
+) -> Option<readshot_core::CaptureRecord> {
+    if matches!(policy, readshot_core::HistoryRetention::Off) {
+        return None;
+    }
+    Some(readshot_core::CaptureRecord::new(
+        chrono::Utc::now(),
+        img.width(),
+        img.height(),
+        display_id.to_string(),
+    ))
 }
 
 fn save_to_desktop(img: &image::RgbaImage) -> Result<PathBuf, CaptureRunError> {
@@ -3201,6 +3234,17 @@ fn handle_commit_annotation(
     }
 }
 
+fn sync_editor_history(ed: &mut crate::editor::EditorSession, coord: &CaptureCoordinator) {
+    let Some(record) = ed.source_record.as_mut() else {
+        return;
+    };
+    record.annotation_model = ed.model.annotations().to_vec();
+    if let Err(e) = coord.update_history(record) {
+        tracing::warn!(target: "readshot::history", "annotation update failed: {e}");
+        ed.status = Some(format!("History sync failed: {e}"));
+    }
+}
+
 /// Helper for the previous synchronous status check used by tests.
 #[allow(dead_code)]
 pub(crate) fn permission_status_blurb(s: PermissionStatus) -> &'static str {
@@ -3216,6 +3260,7 @@ mod tests {
     use super::*;
     use crate::permissions::fake::FakePermissions;
     use readshot_capture::fake::FakeCapturer;
+    use readshot_core::{Annotation, FsHistoryStore, HistoryStore, RectLike, Rgba};
     use readshot_ocr::fake::FakeOcrEngine;
 
     fn build_app(perms: Arc<FakePermissions>) -> App {
@@ -3226,6 +3271,24 @@ mod tests {
             None,
         );
         App::new(coord, perms, Preferences::default())
+    }
+
+    fn build_app_with_history(perms: Arc<FakePermissions>, history: Arc<dyn HistoryStore>) -> App {
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_text("hi")),
+            perms.clone(),
+            Some(history),
+        );
+        App::new(coord, perms, Preferences::default())
+    }
+
+    fn solid(w: u32, h: u32) -> image::RgbaImage {
+        let mut img = image::RgbaImage::new(w, h);
+        for px in img.pixels_mut() {
+            *px = image::Rgba([255, 255, 255, 255]);
+        }
+        img
     }
 
     #[test]
@@ -3253,6 +3316,37 @@ mod tests {
             .format("%Y-%m")
             .to_string();
         assert!(record_matches(&r, &local.to_lowercase()));
+    }
+
+    #[test]
+    fn history_backed_editor_commit_updates_record_annotations() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(FsHistoryStore::new(dir.path().join("history")));
+        let mut record =
+            readshot_core::CaptureRecord::new(chrono::Utc::now(), 100, 100, "primary".to_string());
+        record.ocr_text = Some("before".into());
+        store.save(&record, b"png").unwrap();
+
+        let history: Arc<dyn HistoryStore> = store.clone();
+        let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), history);
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            solid(100, 100),
+            record.clone(),
+        ));
+
+        let annotation = Annotation::Rectangle {
+            rect: RectLike::new(1.0, 2.0, 30.0, 40.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        };
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(annotation)),
+        );
+
+        let from_disk = store.list().unwrap();
+        assert_eq!(from_disk[0].annotation_model.len(), 1);
+        assert_eq!(from_disk[0].ocr_text.as_deref(), Some("before"));
     }
 
     #[test]

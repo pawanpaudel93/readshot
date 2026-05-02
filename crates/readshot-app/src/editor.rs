@@ -15,7 +15,7 @@
 //! the raw capture.
 
 use iced::Rectangle;
-use readshot_core::PointLike;
+use readshot_core::{CaptureRecord, PointLike};
 use readshot_ui::editor::EditorState as Model;
 
 /// One open editor window, plus the iced-side state that doesn't
@@ -48,6 +48,11 @@ pub struct EditorSession {
     /// row letting them type the content. Confirming commits an
     /// `Annotation::Text`; cancelling drops the pending state.
     pub pending_text: Option<PendingText>,
+    /// History record this editor is mutating, if any. Fresh captures
+    /// and history-opened captures both carry this so annotation edits
+    /// can be written back to the JSON sidecar without altering the
+    /// original PNG bytes.
+    pub source_record: Option<CaptureRecord>,
 }
 
 /// Captured text-input state for the Text tool. The image-pixel
@@ -108,6 +113,23 @@ impl EditorSession {
             next_pin_number: 1,
             image_handle,
             pending_text: None,
+            source_record: None,
+        }
+    }
+
+    pub fn from_history(image: image::RgbaImage, record: CaptureRecord) -> Self {
+        let mut model = Model::with_annotations(image, record.annotation_model.clone());
+        let image_handle = build_handle(&mut model);
+        Self {
+            model,
+            status: None,
+            busy: false,
+            window_id: None,
+            preview: None,
+            next_pin_number: 1,
+            image_handle,
+            pending_text: None,
+            source_record: Some(record),
         }
     }
 
