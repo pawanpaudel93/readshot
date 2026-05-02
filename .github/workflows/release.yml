@@ -15,6 +15,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -38,6 +39,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -64,6 +67,12 @@ jobs:
       - name: Build release binaries (macOS)
         if: runner.os == 'macOS'
         run: cargo build --release --bin readshot --bin readshot-mcp --target ${{ matrix.target }}
+
+      - name: Install Sparkle tools (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install --cask sparkle
+          echo "/Applications/Sparkle.app/Contents/SharedSupport/bin" >> "${GITHUB_PATH}"
 
       # ─── macOS DMG (Developer ID + notarised when secrets are present;
       #     otherwise self-signed) ───────────────────────────────────────────
@@ -98,8 +107,21 @@ jobs:
           cargo wix --target ${{ matrix.target }} --no-build --output target/wix/readshot.msi
         shell: pwsh
 
+      - name: Detect SignPath credentials
+        if: runner.os == 'Windows'
+        id: signpath
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          if [ -n "${SIGNPATH_API_TOKEN}" ]; then
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+          fi
+        shell: bash
+
       - name: Sign MSI via SignPath
-        if: runner.os == 'Windows' && env.SIGNPATH_API_TOKEN != ''
+        if: runner.os == 'Windows' && steps.signpath.outputs.enabled == 'true'
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
           SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
@@ -134,6 +156,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -153,7 +177,7 @@ jobs:
             out/*.AppImage
             out/SHA256SUMS
           generate_release_notes: true
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
 
       # ─── Sparkle appcast (macOS) ─────────────────────────────────────────
       - name: Update Sparkle appcast
@@ -173,7 +197,7 @@ jobs:
           git -C pages config user.name "github-actions[bot]"
           git -C pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          TAG_NAME="${{ github.ref_name }}" \
+          TAG_NAME="${RELEASE_TAG}" \
             bash packaging/macos/update-appcast.sh out pages
           touch pages/.nojekyll
 
@@ -181,7 +205,7 @@ jobs:
           if git -C pages diff --cached --quiet; then
             echo "Sparkle appcast unchanged"
           else
-            git -C pages commit -m "chore: publish Sparkle appcast ${{ github.ref_name }}"
+            git -C pages commit -m "chore: publish Sparkle appcast ${RELEASE_TAG}"
             git -C pages push origin HEAD:gh-pages
           fi
 

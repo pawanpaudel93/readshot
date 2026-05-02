@@ -33,6 +33,22 @@ BIN_PATH="target/${TARGET}/release/readshot"
 MCP_BIN_PATH="target/${TARGET}/release/readshot-mcp"
 APP_BUNDLE="target/release/${APP_NAME}.app"
 DMG_PATH="target/release/readshot.dmg"
+KEYCHAIN=""
+CERT_PATH=""
+PREVIOUS_KEYCHAIN="$(security default-keychain | tr -d ' "')"
+
+cleanup() {
+  if [[ -n "${PREVIOUS_KEYCHAIN}" ]]; then
+    security default-keychain -s "${PREVIOUS_KEYCHAIN}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${KEYCHAIN}" ]]; then
+    security delete-keychain "${KEYCHAIN}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${CERT_PATH}" ]]; then
+    rm -f "${CERT_PATH}"
+  fi
+}
+trap cleanup EXIT
 
 if [[ ! -f "${BIN_PATH}" ]]; then
   echo "error: ${BIN_PATH} not found — run 'cargo build --release --target ${TARGET}' first" >&2
@@ -47,9 +63,12 @@ fi
 rm -rf "${APP_BUNDLE}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
-cp "${BIN_PATH}" "${APP_BUNDLE}/Contents/MacOS/readshot"
+cp "${BIN_PATH}" "${APP_BUNDLE}/Contents/MacOS/Readshot"
+ln -s Readshot "${APP_BUNDLE}/Contents/MacOS/readshot"
 cp "${MCP_BIN_PATH}" "${APP_BUNDLE}/Contents/MacOS/readshot-mcp"
 cp packaging/macos/Info.plist "${APP_BUNDLE}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable Readshot" \
+  "${APP_BUNDLE}/Contents/Info.plist"
 
 # 2. Import the signing cert into a temporary keychain.
 KEYCHAIN="readshot-build.keychain-db"
@@ -79,7 +98,14 @@ security set-key-partition-list \
   -S apple-tool:,apple:,codesign: \
   -s -k "${KEYCHAIN_PASS}" "${KEYCHAIN}"
 
-# 3. Sign the bundle. Hardened-runtime is required for notarisation
+# 3. Strip Cargo's build-time ad-hoc signatures before signing the
+# real bundle. Those signatures were generated before the binaries
+# lived inside an app bundle and can otherwise seal stale metadata.
+for bin in Readshot readshot-mcp; do
+  codesign --remove-signature "${APP_BUNDLE}/Contents/MacOS/${bin}" 2>/dev/null || true
+done
+
+# 4. Sign the bundle. Hardened-runtime is required for notarisation
 # and still keeps self-signed builds well-formed.
 codesign --deep --force --options runtime \
   --sign "${SIGNING_IDENTITY}" \
@@ -87,7 +113,7 @@ codesign --deep --force --options runtime \
 
 codesign --verify --deep --strict "${APP_BUNDLE}"
 
-# 4. Build the DMG via `hdiutil`. A plain layout — no fancy
+# 5. Build the DMG via `hdiutil`. A plain layout — no fancy
 # background image; the Homebrew Cask is the recommended install
 # path so DMG aesthetics matter little.
 rm -f "${DMG_PATH}"
@@ -98,7 +124,7 @@ hdiutil create \
   -format UDZO \
   "${DMG_PATH}"
 
-# 5. Notarise and staple when Developer ID notary credentials are
+# 6. Notarise and staple when Developer ID notary credentials are
 # present. Self-signed builds intentionally skip this step.
 if [[ -z "${APPLE_DEVELOPER_ID_P12_BASE64:-}" ]] \
   && [[ -n "${APPLE_ID:-}" || -n "${APPLE_TEAM_ID:-}" || -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]]; then
@@ -120,20 +146,18 @@ if [[ -n "${APPLE_DEVELOPER_ID_P12_BASE64:-}" ]] \
   xcrun stapler staple "${DMG_PATH}"
 fi
 
-# 6. EdDSA signature for Sparkle (skipped if key is absent — keeps
+# 7. EdDSA signature for Sparkle (skipped if key is absent — keeps
 # `workflow_dispatch` runs producing a usable artefact).
 if [[ -n "${SPARKLE_ED_KEY_BASE64:-}" ]]; then
+  if ! command -v sign_update >/dev/null 2>&1; then
+    echo "error: sign_update not found; install Sparkle tools before packaging" >&2
+    exit 1
+  fi
   KEY_PATH="$(mktemp -t readshot-edkey)"
   echo "${SPARKLE_ED_KEY_BASE64}" | base64 -d > "${KEY_PATH}"
-  # `sign_update` ships in Sparkle's `bin/`; the release workflow
-  # downloads it explicitly when needed.
   sign_update "${DMG_PATH}" "${KEY_PATH}" \
     > "${DMG_PATH}.sparkle.eddsa.txt"
   rm -f "${KEY_PATH}"
 fi
-
-# 7. Tear down the temp keychain so the runner doesn't leak state.
-security delete-keychain "${KEYCHAIN}"
-rm -f "${CERT_PATH}"
 
 echo "✓ DMG ready at ${DMG_PATH}"

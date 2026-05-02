@@ -127,14 +127,14 @@ rm -rf "${APP_BUNDLE}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
 cp "${BIN_DIR}/readshot" "${APP_BUNDLE}/Contents/MacOS/Readshot"
+ln -s Readshot "${APP_BUNDLE}/Contents/MacOS/readshot"
 cp "${BIN_DIR}/readshot-mcp" "${APP_BUNDLE}/Contents/MacOS/readshot-mcp"
 cp "${ICON_OUT}" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
-# Rewrite CFBundleExecutable to the capitalised name. We do this
-# in-flight so the source plist stays canonical for the release
-# pipeline; sed -i '' is the macOS-portable form.
-sed 's|<string>readshot</string>|<string>Readshot</string>|' \
-    packaging/macos/Info.plist \
-    > "${APP_BUNDLE}/Contents/Info.plist"
+# Rewrite only CFBundleExecutable to the capitalised name. The
+# lowercase `readshot` URL scheme and CLI symlink must stay lowercase.
+cp packaging/macos/Info.plist "${APP_BUNDLE}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable Readshot" \
+  "${APP_BUNDLE}/Contents/Info.plist"
 plutil -lint "${APP_BUNDLE}/Contents/Info.plist" >/dev/null
 
 # Strip Cargo's build-time ad-hoc signatures from the inner binaries

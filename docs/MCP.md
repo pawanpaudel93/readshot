@@ -14,8 +14,8 @@ common hosts. Every snippet uses the absolute installed binary path
 | OS       | Default install path                                   |
 |----------|--------------------------------------------------------|
 | macOS    | `/Applications/Readshot.app/Contents/MacOS/readshot-mcp` |
-| Windows  | `C:\Program Files\Readshot\readshot-mcp.exe`            |
-| Linux    | `/usr/bin/readshot-mcp` (Flatpak: `flatpak run --command=readshot-mcp dev.pawanpaudel93.readshot`) |
+| Windows  | Not packaged in official releases yet; build from source. |
+| Linux    | Not packaged in official releases yet; build from source. |
 
 If you built from source, it's at
 `./target/release/readshot-mcp` after `cargo build --release -p readshot-mcp`.
@@ -87,19 +87,6 @@ Add a `mcpServers` entry:
   "mcpServers": {
     "readshot": {
       "command": "/Applications/Readshot.app/Contents/MacOS/readshot-mcp"
-    }
-  }
-}
-```
-
-Linux Flatpak:
-
-```json
-{
-  "mcpServers": {
-    "readshot": {
-      "command": "flatpak",
-      "args": ["run", "--command=readshot-mcp", "dev.pawanpaudel93.readshot"]
     }
   }
 }
