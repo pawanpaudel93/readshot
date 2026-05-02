@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use readshot_capture::default_capturer;
+use readshot_core::{FsHistoryStore, HistoryStore};
 use readshot_mcp::McpServer;
 use readshot_ocr::default_engine;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -24,7 +25,17 @@ async fn main() -> std::io::Result<()> {
         .with_target(true)
         .init();
 
-    let server = McpServer::new(Arc::from(default_capturer()), Arc::from(default_engine()));
+    let capturer = Arc::from(default_capturer());
+    let ocr = Arc::from(default_engine());
+    let server = match default_history_root() {
+        Some(root) => McpServer::with_history_root(
+            capturer,
+            ocr,
+            Arc::new(FsHistoryStore::new(&root)) as Arc<dyn HistoryStore>,
+            root,
+        ),
+        None => McpServer::new(capturer, ocr),
+    };
 
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
@@ -45,4 +56,9 @@ async fn main() -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+fn default_history_root() -> Option<std::path::PathBuf> {
+    directories::ProjectDirs::from("dev", "pawanpaudel93", "Readshot")
+        .map(|d| d.data_local_dir().join("history"))
 }

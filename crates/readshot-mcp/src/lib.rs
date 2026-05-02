@@ -15,7 +15,7 @@
 //! | Method            | Purpose                                       |
 //! |-------------------|-----------------------------------------------|
 //! | `initialize`      | Negotiate protocol version + advertise tools  |
-//! | `tools/list`      | Return the four Readshot tools                |
+//! | `tools/list`      | Return the Readshot tool descriptors         |
 //! | `tools/call`      | Dispatch a tool by name                       |
 //! | `ping`            | Health-check (returns `{}`)                   |
 //! | `shutdown`        | Acknowledge an orderly shutdown               |
@@ -31,6 +31,8 @@
 //! | `capture_region`           | display?, rect?, scale?      | `{ image_base64 }` (PNG)        |
 //! | `capture_text`             | display?, rect?, scale?, ... | `{ text }`                      |
 //! | `capture_region_and_text`  | display?, rect?, scale?, ... | `{ image_base64, text }`        |
+//! | `recent_captures`          | limit?                       | recent history records          |
+//! | `search_captures`          | query, limit?                | matching history records        |
 //!
 //! All `capture_*` tools accept an optional `display` (id from
 //! `list_displays`) and an optional `rect = {x,y,width,height}`. If
@@ -46,14 +48,16 @@
 //! as JSON-RPC errors with `code = -32001` (server error) and a
 //! human-readable `message` so the agent can prompt the user.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 use image::RgbaImage;
 use readshot_capture::{CaptureRequest, Capturer, DisplayInfo};
-use readshot_core::error::{CaptureError, OCRError};
+use readshot_core::error::{CaptureError, HistoryError, OCRError};
 use readshot_core::geom::Rect;
+use readshot_core::{CaptureRecord, HistoryStore};
 use readshot_ocr::{OCREngine, OCRRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -114,11 +118,53 @@ mod codes {
 pub struct McpServer {
     capturer: Arc<dyn Capturer>,
     ocr: Arc<dyn OCREngine>,
+    history: Option<HistoryArchive>,
+}
+
+#[derive(Clone)]
+struct HistoryArchive {
+    store: Arc<dyn HistoryStore>,
+    root: Option<PathBuf>,
 }
 
 impl McpServer {
     pub fn new(capturer: Arc<dyn Capturer>, ocr: Arc<dyn OCREngine>) -> Self {
-        Self { capturer, ocr }
+        Self {
+            capturer,
+            ocr,
+            history: None,
+        }
+    }
+
+    pub fn with_history(
+        capturer: Arc<dyn Capturer>,
+        ocr: Arc<dyn OCREngine>,
+        history: Arc<dyn HistoryStore>,
+    ) -> Self {
+        Self {
+            capturer,
+            ocr,
+            history: Some(HistoryArchive {
+                store: history,
+                root: None,
+            }),
+        }
+    }
+
+    pub fn with_history_root(
+        capturer: Arc<dyn Capturer>,
+        ocr: Arc<dyn OCREngine>,
+        history: Arc<dyn HistoryStore>,
+        history_root: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            capturer,
+            ocr,
+            history: Some(HistoryArchive {
+                store: history,
+                root: Some(history_root.into()),
+            }),
+        }
     }
 
     /// Handle one JSON-RPC frame. Returns `Some(response_line)` for
@@ -201,6 +247,8 @@ impl McpServer {
             "capture_region" => self.tool_capture_region(&args).await?,
             "capture_text" => self.tool_capture_text(&args).await?,
             "capture_region_and_text" => self.tool_capture_region_and_text(&args).await?,
+            "recent_captures" => self.tool_recent_captures(&args)?,
+            "search_captures" => self.tool_search_captures(&args)?,
             other => {
                 return Err(RpcErr {
                     code: codes::METHOD_NOT_FOUND,
@@ -222,6 +270,50 @@ impl McpServer {
             // the top level for clients that prefer it. Optional per
             // MCP spec; agents that ignore unknown fields are safe.
             "structuredContent": payload,
+        }))
+    }
+
+    fn history(&self) -> Result<&HistoryArchive, RpcErr> {
+        self.history.as_ref().ok_or_else(|| RpcErr {
+            code: codes::SERVER_ERROR,
+            message: "history store unavailable".into(),
+        })
+    }
+
+    fn tool_recent_captures(&self, args: &Value) -> Result<Value, RpcErr> {
+        let limit = parse_limit(args, 20)?;
+        let history = self.history()?;
+        let records = history.store.list().map_err(history_to_rpc)?;
+        Ok(json!({
+            "captures": records
+                .into_iter()
+                .take(limit)
+                .map(|record| record_to_json(&record, history.root.as_deref()))
+                .collect::<Vec<_>>()
+        }))
+    }
+
+    fn tool_search_captures(&self, args: &Value) -> Result<Value, RpcErr> {
+        let query = args
+            .get("query")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|q| !q.is_empty())
+            .ok_or_else(|| RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: "search_captures requires a non-empty `query`".into(),
+            })?;
+        let needle = query.to_lowercase();
+        let limit = parse_limit(args, 20)?;
+        let history = self.history()?;
+        let records = history.store.list().map_err(history_to_rpc)?;
+        Ok(json!({
+            "captures": records
+                .into_iter()
+                .filter(|record| record_matches(record, &needle))
+                .take(limit)
+                .map(|record| record_to_json(&record, history.root.as_deref()))
+                .collect::<Vec<_>>()
         }))
     }
 
@@ -397,6 +489,58 @@ fn display_to_json(d: &DisplayInfo) -> Value {
     })
 }
 
+fn parse_limit(args: &Value, default: usize) -> Result<usize, RpcErr> {
+    match args.get("limit") {
+        None => Ok(default),
+        Some(v) => {
+            let n = v.as_u64().ok_or_else(|| RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: "limit must be a positive integer".into(),
+            })?;
+            if n == 0 {
+                return Err(RpcErr {
+                    code: codes::INVALID_PARAMS,
+                    message: "limit must be a positive integer".into(),
+                });
+            }
+            Ok((n as usize).min(100))
+        }
+    }
+}
+
+fn record_matches(record: &CaptureRecord, needle: &str) -> bool {
+    if let Some(ocr) = record.ocr_text.as_deref() {
+        if ocr.to_lowercase().contains(needle) {
+            return true;
+        }
+    }
+    record
+        .captured_at
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+        .to_lowercase()
+        .contains(needle)
+}
+
+fn record_to_json(record: &CaptureRecord, history_root: Option<&Path>) -> Value {
+    let image_path = history_root.map(|root| history_png_path(root, record));
+    json!({
+        "id": record.id.to_string(),
+        "captured_at": record.captured_at.to_rfc3339(),
+        "width_px": record.width_px,
+        "height_px": record.height_px,
+        "display_id": record.display_id,
+        "ocr_text": record.ocr_text,
+        "image_path": image_path.map(|p| p.to_string_lossy().to_string()),
+    })
+}
+
+fn history_png_path(root: &Path, record: &CaptureRecord) -> PathBuf {
+    root.join(record.captured_at.format("%Y").to_string())
+        .join(record.captured_at.format("%m").to_string())
+        .join(format!("{}.png", record.id))
+}
+
 fn capture_to_rpc(e: CaptureError) -> RpcErr {
     let code = match e {
         CaptureError::PermissionDenied => codes::SERVER_ERROR,
@@ -412,6 +556,13 @@ fn ocr_to_rpc(e: OCRError) -> RpcErr {
     RpcErr {
         code: codes::SERVER_ERROR,
         message: format!("ocr: {e}"),
+    }
+}
+
+fn history_to_rpc(e: HistoryError) -> RpcErr {
+    RpcErr {
+        code: codes::SERVER_ERROR,
+        message: format!("history: {e}"),
     }
 }
 
@@ -498,6 +649,30 @@ fn tool_descriptors() -> Value {
             "name": "capture_region_and_text",
             "description": "Capture a region and return both the PNG and the OCR text.",
             "inputSchema": capture_text_args
+        },
+        {
+            "name": "recent_captures",
+            "description": "Return recent saved captures from Readshot history, newest first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "search_captures",
+            "description": "Search saved captures by OCR text or capture timestamp.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "minLength": 1 },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -506,6 +681,7 @@ fn tool_descriptors() -> Value {
 mod tests {
     use super::*;
     use readshot_capture::fake::FakeCapturer;
+    use readshot_core::{CaptureRecord, FsHistoryStore, HistoryStore};
     use readshot_ocr::fake::FakeOcrEngine;
     use serde_json::Value;
 
@@ -514,6 +690,51 @@ mod tests {
             Arc::new(FakeCapturer::new()),
             Arc::new(FakeOcrEngine::with_text("hello mcp")),
         )
+    }
+
+    fn server_with_history(records: Vec<CaptureRecord>) -> McpServer {
+        let root = unique_history_root();
+        let store = FsHistoryStore::new(&root);
+        for record in records {
+            store.save(&record, b"png").unwrap();
+        }
+        McpServer::with_history_root(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_text("hello mcp")),
+            Arc::new(store),
+            root,
+        )
+    }
+
+    fn unique_history_root() -> std::path::PathBuf {
+        let mut root = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        root.push(format!("readshot-mcp-test-{}-{nanos}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        root
+    }
+
+    fn record(
+        id: &str,
+        captured_at: &str,
+        width_px: u32,
+        height_px: u32,
+        display_id: &str,
+        ocr_text: Option<&str>,
+    ) -> CaptureRecord {
+        serde_json::from_value(json!({
+            "id": id,
+            "captured_at": captured_at,
+            "width_px": width_px,
+            "height_px": height_px,
+            "display_id": display_id,
+            "ocr_text": ocr_text,
+            "annotation_model": [],
+        }))
+        .unwrap()
     }
 
     async fn call(server: &McpServer, line: &str) -> Value {
@@ -536,7 +757,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_four_tools() {
+    async fn tools_list_returns_readshot_tools() {
         let s = server();
         let resp = call(&s, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#).await;
         let tools = resp["result"]["tools"].as_array().unwrap();
@@ -547,9 +768,101 @@ mod tests {
                 "list_displays",
                 "capture_region",
                 "capture_text",
-                "capture_region_and_text"
+                "capture_region_and_text",
+                "recent_captures",
+                "search_captures"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn tools_call_recent_captures_returns_newest_first_limited_records() {
+        let s = server_with_history(vec![
+            record(
+                "00000000-0000-0000-0000-000000000001",
+                "2026-01-01T00:00:00Z",
+                100,
+                50,
+                "display-a",
+                Some("older receipt"),
+            ),
+            record(
+                "00000000-0000-0000-0000-000000000002",
+                "2026-02-01T00:00:00Z",
+                300,
+                200,
+                "display-b",
+                Some("newer invoice"),
+            ),
+        ]);
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"recent_captures","arguments":{"limit":1}}}"#,
+        )
+        .await;
+
+        let captures = resp["result"]["structuredContent"]["captures"]
+            .as_array()
+            .unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0]["id"], "00000000-0000-0000-0000-000000000002");
+        assert_eq!(captures[0]["ocr_text"], "newer invoice");
+        assert_eq!(captures[0]["width_px"], 300);
+        assert_eq!(captures[0]["height_px"], 200);
+        assert_eq!(captures[0]["display_id"], "display-b");
+        assert!(captures[0]["image_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("2026/02/00000000-0000-0000-0000-000000000002.png"));
+    }
+
+    #[tokio::test]
+    async fn tools_call_search_captures_matches_ocr_text_case_insensitively() {
+        let s = server_with_history(vec![
+            record(
+                "00000000-0000-0000-0000-000000000003",
+                "2026-03-01T00:00:00Z",
+                100,
+                50,
+                "display-a",
+                Some("Quarterly Budget Notes"),
+            ),
+            record(
+                "00000000-0000-0000-0000-000000000004",
+                "2026-04-01T00:00:00Z",
+                100,
+                50,
+                "display-a",
+                Some("unrelated"),
+            ),
+        ]);
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"search_captures","arguments":{"query":"budget","limit":10}}}"#,
+        )
+        .await;
+
+        let captures = resp["result"]["structuredContent"]["captures"]
+            .as_array()
+            .unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0]["id"], "00000000-0000-0000-0000-000000000003");
+        assert_eq!(captures[0]["ocr_text"], "Quarterly Budget Notes");
+    }
+
+    #[tokio::test]
+    async fn tools_call_history_tool_without_store_returns_server_error() {
+        let s = server();
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"recent_captures","arguments":{}}}"#,
+        )
+        .await;
+        assert_eq!(resp["error"]["code"], codes::SERVER_ERROR);
+        assert!(resp["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("history store unavailable"));
     }
 
     #[tokio::test]

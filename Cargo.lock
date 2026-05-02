@@ -4584,6 +4584,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64",
+ "directories",
  "image",
  "readshot-capture",
  "readshot-core",

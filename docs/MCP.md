@@ -28,9 +28,15 @@ If you built from source, it's at
 | `capture_region`           | `display?`, `rect?`, `scale?`, `hide_cursor?`   | `{ image_base64 }` (PNG)          |
 | `capture_text`             | …same plus `languages`, `language_correction`   | `{ text, average_confidence }`    |
 | `capture_region_and_text`  | …same                                           | `{ image_base64, text, … }`       |
+| `recent_captures`          | `limit?`                                        | `{ captures: [...] }`             |
+| `search_captures`          | `query`, `limit?`                               | `{ captures: [...] }`             |
 
 When `display` is omitted, the primary display is used. When `rect`
 is omitted, the chosen display's full bounds are captured.
+
+The history tools read the same local archive as the GUI. Each capture
+result includes metadata, OCR text when available, and the absolute
+PNG path.
 
 A full example tool call from the agent's side:
 
@@ -100,7 +106,7 @@ Linux Flatpak:
 ```
 
 Restart Claude Desktop. The `readshot` MCP server should appear in
-the tool list with the four tools above.
+the tool list with the tools above.
 
 ## Cursor
 

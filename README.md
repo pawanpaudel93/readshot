@@ -44,8 +44,9 @@ the image. Entirely offline.
   image, copy text, pin, delete.
 - **Menu-bar app** (no Dock icon). Click the tray icon to capture, or
   right-click for the menu. Default global hotkey: **⌘⇧X**.
-- **MCP server** companion binary so AI agents can request captures
-  and OCR programmatically — see `docs/MCP.md`.
+- **MCP server** companion binary so AI agents can request captures,
+  OCR, and search/retrieve saved captures programmatically — see
+  `docs/MCP.md`.
 
 ## Keyboard shortcuts
 
@@ -186,15 +187,6 @@ and the bits we deliberately parked.
 - **Pre-rendered thumbnails** — full PNGs decode off-thread on first
   show; fine for `Last50`, would chug at 500+.
 
-### Settings (everything user-configurable, today, lives in code)
-
-- **Preferences persistence** — `Preferences::load_or_default` exists
-  in `readshot-core` but `start()` always uses `Preferences::default()`.
-  Wiring this is the prerequisite for the next two items.
-- **Retention picker** — surface `Off / Last50 / Last30Days /
-  Unlimited`; `Last50` is hardcoded today.
-- **Hotkey picker** — `⌘⇧X` is hardcoded too. Expose a chord chooser.
-
 ### Older roadmap (still real)
 
 - **`readshot://` URL scheme while running** — argv-based delivery
@@ -212,8 +204,6 @@ and the bits we deliberately parked.
 
 - **"Send to assistant" intent** — opens Claude / ChatGPT with the
   capture inline.
-- **MCP `search_captures` / `recent_captures`** — exposing the
-  history archive to AI agents via the existing companion server.
 - **Structured OCR — tables → Markdown tables.** Today the layout
   pass keeps same-row fragments together but doesn't recognise
   column boundaries across rows.
