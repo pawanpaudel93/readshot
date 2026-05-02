@@ -9,6 +9,19 @@ security prompt; subsequent launches are silent.
 
 ## macOS (14 Sonoma and later)
 
+GitHub Release asset:
+
+* `readshot-macos-aarch64.dmg` for Apple Silicon Macs.
+* `readshot-macos-x86_64.dmg` for Intel Macs.
+
+The DMG installs `Readshot.app`. The app bundle includes both
+executables:
+
+* `/Applications/Readshot.app/Contents/MacOS/readshot` — GUI and CLI
+  subcommands.
+* `/Applications/Readshot.app/Contents/MacOS/readshot-mcp` — MCP
+  server for AI hosts.
+
 ### Recommended: Homebrew Cask
 
 ```bash
@@ -71,6 +84,12 @@ restart the app.
 
 ## Windows (10 20H1 and later)
 
+GitHub Release assets:
+
+* `readshot-windows-x86_64.msi` — installer.
+* `readshot-windows-x86_64.zip` — portable fallback containing
+  `readshot.exe` and `readshot-mcp.exe`.
+
 ### Recommended: Winget
 
 ```pwsh
@@ -99,6 +118,10 @@ msiexec /i readshot.msi /quiet
 
 ## Linux
 
+GitHub Release asset:
+
+* `readshot-linux-x86_64.AppImage`
+
 ### Recommended: Flathub
 
 ```bash
@@ -114,6 +137,13 @@ curl -L -o Readshot.AppImage \
   https://github.com/pawanpaudel93/readshot/releases/download/v0.1.0/readshot-linux-x86_64.AppImage
 chmod +x Readshot.AppImage
 ./Readshot.AppImage
+```
+
+CLI subcommands are passed through the AppImage:
+
+```bash
+./Readshot.AppImage capture --output shot.png
+./Readshot.AppImage mcp
 ```
 
 ### Arch Linux (AUR)

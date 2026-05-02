@@ -30,11 +30,16 @@ set -euo pipefail
 TARGET="${TARGET:-aarch64-apple-darwin}"
 APP_NAME="Readshot"
 BIN_PATH="target/${TARGET}/release/readshot"
+MCP_BIN_PATH="target/${TARGET}/release/readshot-mcp"
 APP_BUNDLE="target/release/${APP_NAME}.app"
 DMG_PATH="target/release/readshot.dmg"
 
 if [[ ! -f "${BIN_PATH}" ]]; then
   echo "error: ${BIN_PATH} not found — run 'cargo build --release --target ${TARGET}' first" >&2
+  exit 1
+fi
+if [[ ! -f "${MCP_BIN_PATH}" ]]; then
+  echo "error: ${MCP_BIN_PATH} not found — run 'cargo build --release --target ${TARGET} --bin readshot-mcp' first" >&2
   exit 1
 fi
 
@@ -43,6 +48,7 @@ rm -rf "${APP_BUNDLE}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
 cp "${BIN_PATH}" "${APP_BUNDLE}/Contents/MacOS/readshot"
+cp "${MCP_BIN_PATH}" "${APP_BUNDLE}/Contents/MacOS/readshot-mcp"
 cp packaging/macos/Info.plist "${APP_BUNDLE}/Contents/Info.plist"
 
 # 2. Import the signing cert into a temporary keychain.

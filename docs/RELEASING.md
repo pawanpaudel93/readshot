@@ -107,6 +107,17 @@ The `release.yml` workflow fires on the tag push, builds artefacts on
 all three OSes, creates the GitHub Release, and publishes the Sparkle
 appcast to `gh-pages`.
 
+The GitHub Release is the canonical distribution point. It publishes:
+
+* `readshot-macos-aarch64.dmg` and `readshot-macos-x86_64.dmg`, each
+  containing `Readshot.app` with both `readshot` and `readshot-mcp`.
+* `readshot-windows-x86_64.msi` plus a portable
+  `readshot-windows-x86_64.zip` fallback containing `readshot.exe`
+  and `readshot-mcp.exe`.
+* `readshot-linux-x86_64.AppImage`, containing `readshot` and
+  `readshot-mcp`.
+* `SHA256SUMS`.
+
 ### 3. Verify
 
 * Download the macOS DMG from the GitHub Release on a clean macOS
@@ -118,7 +129,11 @@ appcast to `gh-pages`.
   `sparkle:edSignature`.
 * Download the Windows MSI on a clean Windows VM. SmartScreen → "More
   info" → "Run anyway". Install. Confirm the binary launches.
+* Download the Windows ZIP fallback. Confirm it contains
+  `readshot.exe` and `readshot-mcp.exe`.
 * Download the AppImage on a clean Ubuntu VM. `chmod +x ./readshot.AppImage; ./readshot.AppImage`.
+  Then run `printf '' | ./readshot.AppImage mcp` to confirm the MCP
+  binary starts and exits cleanly on EOF.
 
 ### 4. Update Homebrew Cask
 

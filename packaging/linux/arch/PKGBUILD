@@ -29,7 +29,7 @@ prepare() {
 build() {
   cd "${pkgname}-${pkgver}"
   export RUSTUP_TOOLCHAIN=stable
-  cargo build --release --frozen --bin readshot
+  cargo build --release --frozen --bin readshot --bin readshot-mcp
 }
 
 check() {
@@ -40,6 +40,7 @@ check() {
 package() {
   cd "${pkgname}-${pkgver}"
   install -Dm755 "target/release/readshot" "${pkgdir}/usr/bin/readshot"
+  install -Dm755 "target/release/readshot-mcp" "${pkgdir}/usr/bin/readshot-mcp"
   install -Dm644 "packaging/linux/readshot.desktop" \
     "${pkgdir}/usr/share/applications/${pkgname}.desktop"
   install -Dm644 "LICENSE" \
