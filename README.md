@@ -35,8 +35,9 @@ the image. Entirely offline.
 - **Offline OCR** via Apple Vision (`VNRecognizeTextRequest`). Copy
   Text is layout-aware — same-row fragments stay on one line, indents
   become leading spaces, and simple aligned tables become Markdown
-  tables. Lossy on multi-column docs (see Roadmap), but terminal
-  output, indented code, YAML, and basic tables round-trip cleanly.
+  tables. Multi-column prose reads each column top-to-bottom.
+  Terminal output, indented code, YAML, basic tables, and two-column
+  articles round-trip cleanly.
 - **Searchable history** — every capture lands in
   `~/Library/Application Support/.../history/` as PNG + JSON sidecar,
   pre-rendered thumbnail, background OCR fills the text, and a
@@ -198,9 +199,6 @@ and the bits we deliberately parked.
 - **Structured OCR — code blocks → fenced.** Detecting monospace
   from raster pixels is unreliable; would need a heuristic or a
   separate model.
-- **Multi-column reading order.** Two-column documents currently
-  read top-down per column instead of zig-zagging across rows. The
-  row-clustering pass would have to detect column boundaries first.
 
 These layer cleanly on the wedge, so they're deliberately deferred
 rather than abandoned.

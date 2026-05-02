@@ -17,7 +17,6 @@
 //!
 //! * Reflow paragraphs.
 //! * Detect code blocks (no reliable monospace cue from raster pixels).
-//! * Handle multi-column documents by reading each column top-to-bottom.
 //!
 //! Those belong to the parked "structured OCR" feature.
 
@@ -63,11 +62,12 @@ impl<'a> Row<'a> {
 ///    fragment becomes its own line and the row layout vanishes.
 /// 3. Within each row, sort fragments by X.
 /// 4. If repeated column starts form a simple table, emit a Markdown
-///    table. Otherwise emit one plain-text output line per row. The
-///    leftmost fragment's X-offset becomes leading spaces (relative to
-///    the leftmost X across the whole page); the gap between subsequent
-///    fragments becomes inline whitespace, scaled by the median
-///    per-character width.
+///    table. If the rows look like a multi-column prose document, read
+///    each column top-to-bottom. Otherwise emit one plain-text output
+///    line per row. The leftmost fragment's X-offset becomes leading
+///    spaces (relative to the leftmost X across the whole page); the gap
+///    between subsequent fragments becomes inline whitespace, scaled by
+///    the median per-character width.
 ///
 /// Returns the empty string when `lines` is empty.
 pub fn reconstruct(lines: &[RecognizedLine]) -> String {
@@ -92,6 +92,9 @@ pub fn reconstruct(lines: &[RecognizedLine]) -> String {
     let min_x = active.iter().map(|l| l.x).fold(f32::INFINITY, f32::min);
     if let Some(table) = render_markdown_table(&rows, em) {
         return table;
+    }
+    if let Some(columns) = render_multi_column_text(&rows, em) {
+        return columns;
     }
     render_plain_text(&rows, min_x, em)
 }
@@ -207,6 +210,52 @@ fn render_markdown_table(rows: &[Row<'_>], em: f32) -> Option<String> {
         write_markdown_row(&mut out, row);
     }
     Some(out)
+}
+
+fn render_multi_column_text(rows: &[Row<'_>], em: f32) -> Option<String> {
+    if rows.len() < 2 {
+        return None;
+    }
+
+    let sorted_rows: Vec<Vec<&RecognizedLine>> = rows.iter().map(Row::sorted_fragments).collect();
+    let column_count = sorted_rows.first()?.len();
+    if !(2..=3).contains(&column_count) {
+        return None;
+    }
+    if sorted_rows.iter().any(|row| row.len() != column_count) {
+        return None;
+    }
+    if !looks_like_wrapped_prose(&sorted_rows) {
+        return None;
+    }
+
+    let min_gutter = (em * 12.0).max(0.12);
+    for column in 0..(column_count - 1) {
+        if sorted_rows.iter().any(|row| {
+            let left = row[column];
+            let right = row[column + 1];
+            right.x - (left.x + left.w) < min_gutter
+        }) {
+            return None;
+        }
+    }
+
+    let mut columns = Vec::with_capacity(column_count);
+    for column in 0..column_count {
+        let fragments: Vec<&RecognizedLine> = sorted_rows.iter().map(|row| row[column]).collect();
+        let min_x = fragments
+            .iter()
+            .map(|fragment| fragment.x)
+            .fold(f32::INFINITY, f32::min);
+        let rows: Vec<Row<'_>> = fragments
+            .into_iter()
+            .map(|fragment| Row {
+                fragments: vec![fragment],
+            })
+            .collect();
+        columns.push(render_plain_text(&rows, min_x, em));
+    }
+    Some(columns.join("\n\n"))
 }
 
 fn looks_like_wrapped_prose(rows: &[Vec<&RecognizedLine>]) -> bool {
@@ -434,6 +483,36 @@ mod tests {
 
     #[test]
     fn prose_fragments_do_not_become_a_table() {
+        let lines = vec![
+            line("The product wedge", 0.00, 0.10, 0.16, 0.04),
+            line("is searchable history", 0.24, 0.10, 0.21, 0.04),
+            line("Capture text remains", 0.00, 0.20, 0.20, 0.04),
+            line("plain when it is prose", 0.24, 0.20, 0.22, 0.04),
+        ];
+
+        assert_eq!(
+            reconstruct(&lines),
+            "The product wedge        is searchable history\nCapture text remains    plain when it is prose"
+        );
+    }
+
+    #[test]
+    fn two_column_prose_reads_each_column_top_to_bottom() {
+        let lines = vec![
+            line("Left column starts here", 0.00, 0.10, 0.24, 0.04),
+            line("Right column starts here", 0.58, 0.10, 0.25, 0.04),
+            line("Left column continues", 0.00, 0.20, 0.22, 0.04),
+            line("Right column continues", 0.58, 0.20, 0.24, 0.04),
+        ];
+
+        assert_eq!(
+            reconstruct(&lines),
+            "Left column starts here\nLeft column continues\n\nRight column starts here\nRight column continues"
+        );
+    }
+
+    #[test]
+    fn nearby_same_row_prose_fragments_do_not_become_columns() {
         let lines = vec![
             line("The product wedge", 0.00, 0.10, 0.16, 0.04),
             line("is searchable history", 0.24, 0.10, 0.21, 0.04),
