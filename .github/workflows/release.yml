@@ -57,7 +57,12 @@ jobs:
             libayatana-appindicator3-dev libgtk-3-dev \
             libfuse2
 
-      - name: Build release binaries
+      - name: Build release binary
+        if: runner.os != 'macOS'
+        run: cargo build --release --bin readshot --target ${{ matrix.target }}
+
+      - name: Build release binaries (macOS)
+        if: runner.os == 'macOS'
         run: cargo build --release --bin readshot --bin readshot-mcp --target ${{ matrix.target }}
 
       # ─── macOS DMG (Developer ID + notarised when secrets are present;
@@ -93,15 +98,6 @@ jobs:
           cargo wix --target ${{ matrix.target }} --no-build --output target/wix/readshot.msi
         shell: pwsh
 
-      - name: Package portable ZIP (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          New-Item -ItemType Directory -Force target/release/readshot-windows-x86_64 | Out-Null
-          Copy-Item target/${{ matrix.target }}/release/readshot.exe target/release/readshot-windows-x86_64/
-          Copy-Item target/${{ matrix.target }}/release/readshot-mcp.exe target/release/readshot-windows-x86_64/
-          Compress-Archive -Path target/release/readshot-windows-x86_64/* -DestinationPath target/release/readshot-windows-x86_64.zip -Force
-        shell: pwsh
-
       - name: Sign MSI via SignPath
         if: runner.os == 'Windows' && env.SIGNPATH_API_TOKEN != ''
         env:
@@ -128,7 +124,6 @@ jobs:
           path: |
             target/${{ matrix.target }}/release/readshot*
             target/wix/readshot.msi
-            target/release/readshot-windows-*.zip
             target/release/Readshot-*.AppImage
             target/release/readshot-macos-*.dmg
             target/release/readshot-macos-*.dmg.sparkle.eddsa.txt
@@ -146,8 +141,8 @@ jobs:
       - name: Compute SHA-256 hashes
         run: |
           mkdir -p out
-          find artifacts -type f \( -name "*.dmg" -o -name "*.msi" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.sparkle.eddsa.txt" \) -exec cp {} out/ \;
-          find out -type f \( -name "*.dmg" -o -name "*.msi" -o -name "*.zip" -o -name "*.AppImage" \) -exec sha256sum {} \; > out/SHA256SUMS
+          find artifacts -type f \( -name "*.dmg" -o -name "*.msi" -o -name "*.AppImage" -o -name "*.sparkle.eddsa.txt" \) -exec cp {} out/ \;
+          find out -type f \( -name "*.dmg" -o -name "*.msi" -o -name "*.AppImage" \) -exec sha256sum {} \; > out/SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -155,7 +150,6 @@ jobs:
           files: |
             out/*.dmg
             out/*.msi
-            out/*.zip
             out/*.AppImage
             out/SHA256SUMS
           generate_release_notes: true

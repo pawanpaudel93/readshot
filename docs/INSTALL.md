@@ -87,8 +87,6 @@ restart the app.
 GitHub Release assets:
 
 * `readshot-windows-x86_64.msi` — installer.
-* `readshot-windows-x86_64.zip` — portable fallback containing
-  `readshot.exe` and `readshot-mcp.exe`.
 
 ### Recommended: Winget
 
@@ -137,13 +135,6 @@ curl -L -o Readshot.AppImage \
   https://github.com/pawanpaudel93/readshot/releases/download/v0.1.0/readshot-linux-x86_64.AppImage
 chmod +x Readshot.AppImage
 ./Readshot.AppImage
-```
-
-CLI subcommands are passed through the AppImage:
-
-```bash
-./Readshot.AppImage capture --output shot.png
-./Readshot.AppImage mcp
 ```
 
 ### Arch Linux (AUR)
