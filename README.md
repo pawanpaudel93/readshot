@@ -185,11 +185,9 @@ cross-platform parity.
   works at boot; in-process delivery via `NSAppleEventManager` is
   blocked on a shared `objc2` major-version pin across `tray-icon`,
   `muda`, and `iced_winit`.
-- **Sparkle update plumbing** — `Info.plist` carries the feed URL
-  but the appcast pipeline isn't wired.
-- **Notarised DMG + Developer ID signing** for distribution. The
-  current build is ad-hoc-signed and only runs on the build
-  machine.
+- **Release validation** — Sparkle appcast publication and optional
+  Developer ID notarisation are wired in CI, but still need real
+  release secrets and a clean-machine release smoke.
 - **Linux + Windows capture / OCR backends** — stubbed.
 
 ## Licence

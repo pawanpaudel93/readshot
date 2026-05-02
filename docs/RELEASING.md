@@ -2,8 +2,7 @@
 
 ## One-time setup
 
-Before the first release, the maintainer (single Apple Developer ID
-holder) does this once:
+Before the first release, the maintainer does this once.
 
 ### 1. Generate the macOS self-signed certificate
 
@@ -21,6 +20,23 @@ holder) does this once:
 Export the resulting cert + private key as a `.p12`, base64-encode,
 and save as the `MACOS_SELF_SIGN_CERT_BASE64` GitHub Actions secret
 along with the password as `MACOS_SELF_SIGN_CERT_PASSWORD`.
+
+This is the zero-cost fallback. If the project later uses Apple
+Developer ID distribution, add these GitHub Actions secrets instead:
+
+* `APPLE_DEVELOPER_ID_P12_BASE64`
+* `APPLE_DEVELOPER_ID_P12_PASSWORD`
+* `MACOS_SIGNING_IDENTITY` (for example,
+  `Developer ID Application: Example Name (TEAMID)`)
+* `APPLE_ID`
+* `APPLE_TEAM_ID`
+* `APPLE_APP_SPECIFIC_PASSWORD`
+
+When those Apple secrets are present, `packaging/macos/build-dmg.sh`
+uses the Developer ID certificate, submits the DMG with
+`xcrun notarytool submit --wait`, and staples the ticket with
+`xcrun stapler staple`. Without them, it signs with the stable
+self-signed identity and skips notarisation.
 
 ### 2. Generate the Sparkle EdDSA key pair
 
@@ -51,8 +67,8 @@ joined.
 
 ### 4. Set up the GitHub Pages branch
 
-The release workflow pushes `appcast.xml` and `latest.json` to a
-`gh-pages` branch. Create it once:
+The release workflow pushes `appcast.xml` to a `gh-pages` branch.
+Create it once:
 
 ```bash
 git checkout --orphan gh-pages
@@ -88,12 +104,18 @@ git push origin v0.2.0
 ```
 
 The `release.yml` workflow fires on the tag push, builds artefacts on
-all three OSes, and creates the GitHub Release.
+all three OSes, creates the GitHub Release, and publishes the Sparkle
+appcast to `gh-pages`.
 
 ### 3. Verify
 
 * Download the macOS DMG from the GitHub Release on a clean macOS
-  VM. Right-click → Open. Confirm the welcome window appears.
+  VM. If it was self-signed, right-click → Open. If it was Developer
+  ID signed and notarised, double-click should open normally. Confirm
+  the welcome window appears.
+* Open `https://pawanpaudel93.github.io/readshot/appcast.xml` and
+  confirm it contains the new version, DMG URL, byte length, and
+  `sparkle:edSignature`.
 * Download the Windows MSI on a clean Windows VM. SmartScreen → "More
   info" → "Run anyway". Install. Confirm the binary launches.
 * Download the AppImage on a clean Ubuntu VM. `chmod +x ./readshot.AppImage; ./readshot.AppImage`.
@@ -122,8 +144,7 @@ the newest version. To stop distributing a bad release:
 
 1. Delete the GitHub Release (artefacts + tag).
 2. Remove the bad `<item>` from the Sparkle appcast on `gh-pages`.
-3. Remove the bad version from `latest.json` on `gh-pages`.
-4. Open hotfix issues + cut a patch release (Z+1) with the fix.
+3. Open hotfix issues + cut a patch release (Z+1) with the fix.
 
 Already-updated users stay on the bad version until the patch goes
 out — there is no remote-disable mechanism by design (offline-first

@@ -1,8 +1,11 @@
 # Installing Readshot
 
-Readshot ships **self-signed** on macOS and **SignPath-signed** (or
-unsigned) on Windows. The first launch on each OS shows a
-one-time security prompt; subsequent launches are silent.
+Readshot can ship **Developer ID signed + notarised** on macOS when
+Apple release secrets are configured; otherwise it uses the
+project's stable self-signed certificate. Windows is
+**SignPath-signed** when the OSS signing programme is configured, or
+unsigned as a fallback. Unsigned/self-signed builds show a one-time
+security prompt; subsequent launches are silent.
 
 ## macOS (14 Sonoma and later)
 
@@ -13,13 +16,13 @@ brew install --cask readshot
 ```
 
 Homebrew verifies the DMG's SHA-256 hash automatically — no manual
-verification step needed. After install, the first time you open
-Readshot, macOS Gatekeeper shows:
+verification step needed. If the release is Developer ID signed and
+notarised, double-clicking opens normally. If it is self-signed, the
+first time you open Readshot, macOS Gatekeeper shows:
 
 > "Readshot can't be opened because Apple cannot check it for malicious software."
 
-This is expected — Readshot is OSS and self-signs its DMG rather
-than paying $99/yr for the Apple Developer Program. Bypass:
+This is expected for self-signed builds. Bypass:
 
 1. Open **Finder → Applications**.
 2. **Right-click** `Readshot.app` → **Open**.
@@ -50,7 +53,8 @@ cp -R "/Volumes/Readshot/Readshot.app" /Applications/
 hdiutil detach "/Volumes/Readshot"
 ```
 
-Then follow the right-click → Open step above on first launch.
+Then follow the right-click → Open step above on first launch if the
+release is self-signed.
 
 ### Granting Screen Recording
 
