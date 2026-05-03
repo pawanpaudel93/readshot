@@ -183,8 +183,8 @@ if [[ -n "${SPARKLE_ED_KEY_BASE64:-}" ]]; then
     exit 1
   fi
   KEY_PATH="$(mktemp -t readshot-edkey)"
-  echo "${SPARKLE_ED_KEY_BASE64}" | base64 -d > "${KEY_PATH}"
-  sign_update "${DMG_PATH}" "${KEY_PATH}" \
+  printf '%s' "${SPARKLE_ED_KEY_BASE64}" | base64 -d > "${KEY_PATH}"
+  sign_update --ed-key-file "${KEY_PATH}" "${DMG_PATH}" \
     > "${DMG_PATH}.sparkle.eddsa.txt"
   rm -f "${KEY_PATH}"
 fi

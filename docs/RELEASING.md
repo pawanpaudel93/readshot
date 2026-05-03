@@ -48,7 +48,9 @@ SPARKLE_ROOT="$(brew list --cask sparkle | awk '/\/bin\/generate_keys$/ { sub("/
 "${SPARKLE_ROOT}/bin/generate_keys" -x sparkle_ed_private_key
 ```
 
-* Save the **private** half as `SPARKLE_ED_KEY_BASE64` (base64-encoded).
+* Save the exported private key file as `SPARKLE_ED_KEY_BASE64`
+  (base64-encoded). The packaging script decodes it and passes it to
+  Sparkle's `sign_update --ed-key-file`.
 * Paste the **public** half into `packaging/macos/Info.plist`'s
   `SUPublicEDKey` slot. This commits to the repo — the public key is
   not secret.
