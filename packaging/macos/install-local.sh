@@ -126,6 +126,7 @@ echo "→ assembling ${APP_BUNDLE}"
 rm -rf "${APP_BUNDLE}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
+mkdir -p "${APP_BUNDLE}/Contents/Frameworks"
 cp "${BIN_DIR}/readshot" "${APP_BUNDLE}/Contents/MacOS/Readshot"
 ln -s Readshot "${APP_BUNDLE}/Contents/MacOS/readshot"
 cp "${BIN_DIR}/readshot-mcp" "${APP_BUNDLE}/Contents/MacOS/readshot-mcp"
@@ -136,6 +137,15 @@ cp packaging/macos/Info.plist "${APP_BUNDLE}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable Readshot" \
   "${APP_BUNDLE}/Contents/Info.plist"
 plutil -lint "${APP_BUNDLE}/Contents/Info.plist" >/dev/null
+
+SPARKLE_FRAMEWORK_PATH="${SPARKLE_FRAMEWORK_PATH:-/Applications/Sparkle.app/Contents/SharedSupport/Sparkle.framework}"
+if [[ -d "${SPARKLE_FRAMEWORK_PATH}" ]]; then
+  cp -R "${SPARKLE_FRAMEWORK_PATH}" "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework"
+else
+  echo "warning: Sparkle.framework not found at ${SPARKLE_FRAMEWORK_PATH}" >&2
+  echo "         install Sparkle with: brew install --cask sparkle" >&2
+  echo "         local app will run, but Check for Updates… will be unavailable" >&2
+fi
 
 # Strip Cargo's build-time ad-hoc signatures from the inner binaries
 # before re-signing the bundle. Cargo's inner signatures get sealed

@@ -42,6 +42,9 @@ This is expected for self-signed builds. Bypass:
 3. Click **Open** in the warning dialog.
 
 You only do this once. Future launches and auto-updates run silently.
+The tray menu includes **Check for Updates…**; it uses Sparkle to
+read the appcast published from GitHub Releases and verifies each
+download with the app's compiled-in EdDSA public key.
 
 If you'd rather use the command line:
 

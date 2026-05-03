@@ -29,13 +29,59 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 /// User intent surfaced by the tray. `Capture` triggers the region
 /// overlay; `History` opens the persistent capture browser;
-/// `Settings` opens the preferences window; `Quit` exits the daemon.
+/// `Settings` opens the preferences window; `CheckForUpdates` opens
+/// Sparkle's standard updater UI on macOS; `Quit` exits the daemon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Capture,
     History,
     Settings,
+    CheckForUpdates,
     Quit,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TrayMenuItem {
+    label: String,
+    action: Option<TrayAction>,
+}
+
+#[cfg(test)]
+fn menu_items(hotkey_label: Option<&str>) -> Vec<TrayMenuItem> {
+    vec![
+        TrayMenuItem {
+            label: capture_menu_label(hotkey_label),
+            action: Some(TrayAction::Capture),
+        },
+        TrayMenuItem {
+            label: "History…".to_string(),
+            action: Some(TrayAction::History),
+        },
+        TrayMenuItem {
+            label: "Settings…".to_string(),
+            action: Some(TrayAction::Settings),
+        },
+        TrayMenuItem {
+            label: "Check for Updates…".to_string(),
+            action: Some(TrayAction::CheckForUpdates),
+        },
+        TrayMenuItem {
+            label: String::new(),
+            action: None,
+        },
+        TrayMenuItem {
+            label: "Quit".to_string(),
+            action: Some(TrayAction::Quit),
+        },
+    ]
+}
+
+fn capture_menu_label(hotkey_label: Option<&str>) -> String {
+    match hotkey_label {
+        Some(k) if !k.is_empty() => format!("Capture  ({k})"),
+        _ => "Capture".to_string(),
+    }
 }
 
 /// Holds the live `TrayIcon` plus a map from menu-item id to the
@@ -94,25 +140,25 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
     };
 
     let menu = Menu::new();
-    let capture_label = match hotkey_label {
-        Some(k) if !k.is_empty() => format!("Capture  ({k})"),
-        _ => "Capture".to_string(),
-    };
+    let capture_label = capture_menu_label(hotkey_label);
     let item_capture = MenuItem::new(capture_label, true, None);
     let item_history = MenuItem::new("History…", true, None);
     let item_settings = MenuItem::new("Settings…", true, None);
+    let item_check_updates = MenuItem::new("Check for Updates…", true, None);
     let item_quit = MenuItem::new("Quit", true, None);
 
     let mut menu_ids = HashMap::new();
     menu_ids.insert(item_capture.id().clone(), TrayAction::Capture);
     menu_ids.insert(item_history.id().clone(), TrayAction::History);
     menu_ids.insert(item_settings.id().clone(), TrayAction::Settings);
+    menu_ids.insert(item_check_updates.id().clone(), TrayAction::CheckForUpdates);
     menu_ids.insert(item_quit.id().clone(), TrayAction::Quit);
 
     if let Err(e) = menu.append_items(&[
         &item_capture,
         &item_history,
         &item_settings,
+        &item_check_updates,
         &PredefinedMenuItem::separator(),
         &item_quit,
     ]) {
@@ -259,6 +305,23 @@ enum IconError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menu_contains_check_for_updates_before_quit() {
+        let items = menu_items(None);
+        let actions: Vec<TrayAction> = items.iter().filter_map(|item| item.action).collect();
+
+        assert_eq!(
+            actions,
+            vec![
+                TrayAction::Capture,
+                TrayAction::History,
+                TrayAction::Settings,
+                TrayAction::CheckForUpdates,
+                TrayAction::Quit,
+            ]
+        );
+    }
 
     #[test]
     fn icon_builder_produces_a_valid_buffer() {

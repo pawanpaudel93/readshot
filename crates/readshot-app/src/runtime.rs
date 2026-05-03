@@ -111,6 +111,10 @@ pub fn start() -> (App, Task<Message>) {
     if let Some(manager) = register_default_hotkey(&app.preferences) {
         app.hotkey_manager = Some(manager);
     }
+    #[cfg(target_os = "macos")]
+    if let Err(e) = crate::updater::install() {
+        tracing::warn!(target: "readshot::updater", "Sparkle updater unavailable: {e}");
+    }
     // Same fail-soft contract for the tray. Linux without an
     // appindicator daemon, or a Windows session without a Shell_Notify
     // surface, will simply not see the tray entry.
@@ -597,6 +601,12 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 // might want to flip preferences before granting
                 // Screen Recording.
                 update(state, Message::OpenSettingsRequested)
+            }
+            crate::tray::TrayAction::CheckForUpdates => {
+                if let Err(e) = crate::updater::check_for_updates() {
+                    tracing::warn!(target: "readshot::updater", "manual update check failed: {e}");
+                }
+                Task::none()
             }
             crate::tray::TrayAction::Quit => iced::exit(),
         },
@@ -3628,8 +3638,7 @@ mod tests {
             async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
                 Ok(vec![DisplayInfo {
                     id: "retina".into(),
-                    bounds: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 128.0, 128.0)
-                        .unwrap(),
+                    bounds: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 128.0, 128.0).unwrap(),
                     scale: 2.0,
                     name: "Retina".into(),
                     is_primary: true,

@@ -41,14 +41,20 @@ self-signed identity and skips notarisation.
 ### 2. Generate the Sparkle EdDSA key pair
 
 ```bash
-# Once Sparkle's bin/ tools are available locally:
-./bin/generate_keys
+brew install --cask sparkle
+
+# Sparkle installs its tools under SharedSupport/bin.
+/Applications/Sparkle.app/Contents/SharedSupport/bin/generate_keys
 ```
 
 * Save the **private** half as `SPARKLE_ED_KEY_BASE64` (base64-encoded).
 * Paste the **public** half into `packaging/macos/Info.plist`'s
   `SUPublicEDKey` slot. This commits to the repo — the public key is
   not secret.
+* The packaging scripts copy Sparkle's runtime framework from
+  `/Applications/Sparkle.app/Contents/SharedSupport/Sparkle.framework`.
+  Override with `SPARKLE_FRAMEWORK_PATH` only if your local Sparkle
+  install lives elsewhere.
 
 ### 3. Apply for SignPath OSS programme
 
@@ -120,7 +126,8 @@ The GitHub Release is the canonical distribution point. It publishes:
 * Download the macOS DMG from the GitHub Release on a clean macOS
   VM. If it was self-signed, right-click → Open. If it was Developer
   ID signed and notarised, double-click should open normally. Confirm
-  the welcome window appears.
+  the welcome window appears, then use the tray menu's
+  **Check for Updates…** item to confirm Sparkle can read the appcast.
 * Open `https://pawanpaudel93.github.io/readshot/appcast.xml` and
   confirm it contains the new version, DMG URL, byte length, and
   `sparkle:edSignature`.

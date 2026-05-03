@@ -63,12 +63,21 @@ fi
 rm -rf "${APP_BUNDLE}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
+mkdir -p "${APP_BUNDLE}/Contents/Frameworks"
 cp "${BIN_PATH}" "${APP_BUNDLE}/Contents/MacOS/Readshot"
 ln -s Readshot "${APP_BUNDLE}/Contents/MacOS/readshot"
 cp "${MCP_BIN_PATH}" "${APP_BUNDLE}/Contents/MacOS/readshot-mcp"
 cp packaging/macos/Info.plist "${APP_BUNDLE}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable Readshot" \
   "${APP_BUNDLE}/Contents/Info.plist"
+
+SPARKLE_FRAMEWORK_PATH="${SPARKLE_FRAMEWORK_PATH:-/Applications/Sparkle.app/Contents/SharedSupport/Sparkle.framework}"
+if [[ ! -d "${SPARKLE_FRAMEWORK_PATH}" ]]; then
+  echo "error: Sparkle.framework not found at ${SPARKLE_FRAMEWORK_PATH}" >&2
+  echo "       install Sparkle with: brew install --cask sparkle" >&2
+  exit 1
+fi
+cp -R "${SPARKLE_FRAMEWORK_PATH}" "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework"
 
 # 2. Import the signing cert into a temporary keychain.
 KEYCHAIN="readshot-build.keychain-db"
