@@ -3263,7 +3263,7 @@ enum CaptureRunError {
 #[cfg(target_os = "macos")]
 fn relaunch_via_launch_services() -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
-    // .../Readshot.app/Contents/MacOS/Readshot → .../Readshot.app
+    // .../Readshot.app/Contents/MacOS/readshot → .../Readshot.app
     let bundle = exe
         .parent() // MacOS
         .and_then(|p| p.parent()) // Contents

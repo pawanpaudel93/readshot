@@ -138,24 +138,19 @@ done
 iconutil -c icns "${ICONSET}" -o "${ICON_OUT}"
 rm -rf "${ICON_BUILD_DIR}"
 
-# Assemble the .app bundle layout. The main executable is named
-# `Readshot` (matching the bundle name) — codesign and Launch
-# Services both expect that convention, and trying to keep the
-# binary lowercase here trips codesign --verify on case-insensitive
-# APFS volumes.
+# Assemble the .app bundle layout. The bundle is named `Readshot.app`,
+# but the executable stays lowercase `readshot` so the same binary can
+# act as both GUI entry point and packaged CLI inside Contents/MacOS.
 echo "→ assembling ${APP_BUNDLE}"
 rm -rf "${APP_BUNDLE}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
 mkdir -p "${APP_BUNDLE}/Contents/Frameworks"
-cp "${BIN_DIR}/readshot" "${APP_BUNDLE}/Contents/MacOS/Readshot"
-ln -s Readshot "${APP_BUNDLE}/Contents/MacOS/readshot"
+cp "${BIN_DIR}/readshot" "${APP_BUNDLE}/Contents/MacOS/readshot"
 cp "${BIN_DIR}/readshot-mcp" "${APP_BUNDLE}/Contents/MacOS/readshot-mcp"
 cp "${ICON_OUT}" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
-# Rewrite only CFBundleExecutable to the capitalised name. The
-# lowercase `readshot` URL scheme and CLI symlink must stay lowercase.
 cp packaging/macos/Info.plist "${APP_BUNDLE}/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable Readshot" \
+/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable readshot" \
   "${APP_BUNDLE}/Contents/Info.plist"
 plutil -lint "${APP_BUNDLE}/Contents/Info.plist" >/dev/null
 
@@ -175,7 +170,7 @@ fi
 # `codesign --verify` complain about a "modified Info.plist" the
 # moment we wrap the binaries in a real bundle.
 echo "→ stripping Cargo's build-time signatures"
-for bin in Readshot readshot-mcp; do
+for bin in readshot readshot-mcp; do
   codesign --remove-signature "${APP_BUNDLE}/Contents/MacOS/${bin}" 2>/dev/null || true
 done
 

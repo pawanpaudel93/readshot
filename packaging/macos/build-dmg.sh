@@ -85,11 +85,10 @@ rm -rf "${APP_BUNDLE}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
 mkdir -p "${APP_BUNDLE}/Contents/Frameworks"
-cp "${BIN_PATH}" "${APP_BUNDLE}/Contents/MacOS/Readshot"
-ln -s Readshot "${APP_BUNDLE}/Contents/MacOS/readshot"
+cp "${BIN_PATH}" "${APP_BUNDLE}/Contents/MacOS/readshot"
 cp "${MCP_BIN_PATH}" "${APP_BUNDLE}/Contents/MacOS/readshot-mcp"
 cp packaging/macos/Info.plist "${APP_BUNDLE}/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable Readshot" \
+/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable readshot" \
   "${APP_BUNDLE}/Contents/Info.plist"
 
 SPARKLE_FRAMEWORK_PATH="$(resolve_sparkle_framework_path)"
@@ -131,7 +130,7 @@ security set-key-partition-list \
 # 3. Strip Cargo's build-time ad-hoc signatures before signing the
 # real bundle. Those signatures were generated before the binaries
 # lived inside an app bundle and can otherwise seal stale metadata.
-for bin in Readshot readshot-mcp; do
+for bin in readshot readshot-mcp; do
   codesign --remove-signature "${APP_BUNDLE}/Contents/MacOS/${bin}" 2>/dev/null || true
 done
 

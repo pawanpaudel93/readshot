@@ -65,6 +65,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           SPARKLE_ED_KEY_BASE64: ${{ secrets.SPARKLE_ED_KEY_BASE64 }}
+          TARGET: ${{ matrix.target }}
         run: bash packaging/macos/build-dmg.sh
 
       - name: Rename macOS artifacts
