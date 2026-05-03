@@ -56,10 +56,11 @@ brew install --cask sparkle
   Override with `SPARKLE_FRAMEWORK_PATH` only if your local Sparkle
   install lives elsewhere.
 
-### 3. Apply for SignPath OSS programme
+### 3. Optional future: apply for SignPath OSS programme
 
-For Windows code signing, apply at <https://signpath.io/open-source>.
-Once approved, store the credentials as GitHub Actions secrets:
+Not needed for the macOS-only first release. When Windows packaging is
+re-enabled, apply at <https://signpath.io/open-source>. Once
+approved, store the credentials as GitHub Actions secrets:
 
 * `SIGNPATH_API_TOKEN`
 * `SIGNPATH_ORG_ID`
@@ -109,16 +110,14 @@ git push origin main
 git push origin v0.2.0
 ```
 
-The `release.yml` workflow fires on the tag push, builds artefacts on
-all three OSes, creates the GitHub Release, and publishes the Sparkle
+The `release.yml` workflow fires on the tag push, builds macOS
+artefacts, creates the GitHub Release, and publishes the Sparkle
 appcast to `gh-pages`.
 
 The GitHub Release is the canonical distribution point. It publishes:
 
 * `readshot-macos-aarch64.dmg` and `readshot-macos-x86_64.dmg`, each
   containing `Readshot.app` with both `readshot` and `readshot-mcp`.
-* `readshot-windows-x86_64.msi`.
-* `readshot-linux-x86_64.AppImage`.
 * `SHA256SUMS`.
 
 ### 3. Verify
@@ -131,20 +130,10 @@ The GitHub Release is the canonical distribution point. It publishes:
 * Open `https://pawanpaudel93.github.io/readshot/appcast.xml` and
   confirm it contains the new version, DMG URL, byte length, and
   `sparkle:edSignature`.
-* Download the Windows MSI on a clean Windows VM. SmartScreen → "More
-  info" → "Run anyway". Install. Confirm the binary launches.
-* Download the AppImage on a clean Ubuntu VM. `chmod +x ./readshot.AppImage; ./readshot.AppImage`.
-
 ### 4. Update Homebrew Cask
 
 The release workflow opens a PR against the homebrew-readshot tap
 automatically. Review and merge.
-
-### 5. Update Flathub
-
-Same — the workflow opens a PR against
-`flathub/dev.pawanpaudel93.readshot`. Flathub maintainers may
-request changes; respond and re-push.
 
 ## Hotfix releases
 
