@@ -3370,7 +3370,10 @@ pub(crate) fn permission_status_blurb(s: PermissionStatus) -> &'static str {
 mod tests {
     use super::*;
     use crate::permissions::fake::FakePermissions;
+    use async_trait::async_trait;
     use readshot_capture::fake::FakeCapturer;
+    use readshot_capture::{Capturer, DisplayInfo};
+    use readshot_core::error::CaptureError;
     use readshot_core::{Annotation, FsHistoryStore, HistoryStore, RectLike, Rgba};
     use readshot_ocr::fake::FakeOcrEngine;
 
@@ -3614,6 +3617,56 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
         assert!(path.starts_with(dir.path()));
+    }
+
+    #[tokio::test]
+    async fn capture_request_to_dir_preserves_physical_pixel_dimensions() {
+        struct HiDpiCapturer;
+
+        #[async_trait]
+        impl Capturer for HiDpiCapturer {
+            async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
+                Ok(vec![DisplayInfo {
+                    id: "retina".into(),
+                    bounds: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 128.0, 128.0)
+                        .unwrap(),
+                    scale: 2.0,
+                    name: "Retina".into(),
+                    is_primary: true,
+                }])
+            }
+
+            async fn capture_region(
+                &self,
+                req: CaptureRequest,
+            ) -> Result<image::RgbaImage, CaptureError> {
+                let w = (req.rect.width() * req.scale).round() as u32;
+                let h = (req.rect.height() * req.scale).round() as u32;
+                Ok(solid(w, h))
+            }
+        }
+
+        let perms = Arc::new(FakePermissions::granted());
+        let coord = CaptureCoordinator::new(
+            Arc::new(HiDpiCapturer),
+            Arc::new(FakeOcrEngine::with_text("hi")),
+            perms,
+            None,
+        );
+        let dir = tempfile::TempDir::new().unwrap();
+
+        let img = capture_region_to_image(
+            coord,
+            "retina".into(),
+            readshot_core::geom::Rect::from_xywh(0.0, 0.0, 128.0, 128.0).unwrap(),
+        )
+        .await
+        .unwrap();
+        let path = save_to_dir(&img, dir.path()).unwrap();
+
+        let saved = image::open(&path).unwrap();
+        assert_eq!(saved.width(), 256);
+        assert_eq!(saved.height(), 256);
     }
 
     #[test]
