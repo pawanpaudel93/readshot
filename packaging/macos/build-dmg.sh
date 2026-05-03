@@ -37,6 +37,27 @@ KEYCHAIN=""
 CERT_PATH=""
 PREVIOUS_KEYCHAIN="$(security default-keychain | tr -d ' "')"
 
+resolve_sparkle_framework_path() {
+  if [[ -n "${SPARKLE_FRAMEWORK_PATH:-}" ]]; then
+    echo "${SPARKLE_FRAMEWORK_PATH}"
+    return
+  fi
+  if [[ -d "/Applications/Sparkle.app/Contents/SharedSupport/Sparkle.framework" ]]; then
+    echo "/Applications/Sparkle.app/Contents/SharedSupport/Sparkle.framework"
+    return
+  fi
+  if command -v brew >/dev/null 2>&1; then
+    local framework
+    framework="$(brew list --cask sparkle 2>/dev/null | awk '/\/Sparkle\.framework$/ { print; exit }')"
+    if [[ -n "${framework}" ]]; then
+      echo "${framework}"
+      return
+    fi
+  fi
+  find /opt/homebrew/Caskroom/sparkle /usr/local/Caskroom/sparkle \
+    -path "*/Sparkle.framework" -type d -print -quit 2>/dev/null || true
+}
+
 cleanup() {
   if [[ -n "${PREVIOUS_KEYCHAIN}" ]]; then
     security default-keychain -s "${PREVIOUS_KEYCHAIN}" >/dev/null 2>&1 || true
@@ -71,7 +92,7 @@ cp packaging/macos/Info.plist "${APP_BUNDLE}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable Readshot" \
   "${APP_BUNDLE}/Contents/Info.plist"
 
-SPARKLE_FRAMEWORK_PATH="${SPARKLE_FRAMEWORK_PATH:-/Applications/Sparkle.app/Contents/SharedSupport/Sparkle.framework}"
+SPARKLE_FRAMEWORK_PATH="$(resolve_sparkle_framework_path)"
 if [[ ! -d "${SPARKLE_FRAMEWORK_PATH}" ]]; then
   echo "error: Sparkle.framework not found at ${SPARKLE_FRAMEWORK_PATH}" >&2
   echo "       install Sparkle with: brew install --cask sparkle" >&2

@@ -43,6 +43,27 @@ INSTALLED="/Applications/${APP_NAME}.app"
 ICON_SRC="${REPO_ROOT}/packaging/macos/icon.svg"
 ICON_OUT="${REPO_ROOT}/target/release/AppIcon.icns"
 
+resolve_sparkle_framework_path() {
+  if [[ -n "${SPARKLE_FRAMEWORK_PATH:-}" ]]; then
+    echo "${SPARKLE_FRAMEWORK_PATH}"
+    return
+  fi
+  if [[ -d "/Applications/Sparkle.app/Contents/SharedSupport/Sparkle.framework" ]]; then
+    echo "/Applications/Sparkle.app/Contents/SharedSupport/Sparkle.framework"
+    return
+  fi
+  if command -v brew >/dev/null 2>&1; then
+    local framework
+    framework="$(brew list --cask sparkle 2>/dev/null | awk '/\/Sparkle\.framework$/ { print; exit }')"
+    if [[ -n "${framework}" ]]; then
+      echo "${framework}"
+      return
+    fi
+  fi
+  find /opt/homebrew/Caskroom/sparkle /usr/local/Caskroom/sparkle \
+    -path "*/Sparkle.framework" -type d -print -quit 2>/dev/null || true
+}
+
 reset_tcc() {
   # Reset the Screen Recording grant for our bundle id so a stale
   # cdhash entry can't survive a reinstall. `tccutil reset` is silent
@@ -138,7 +159,7 @@ cp packaging/macos/Info.plist "${APP_BUNDLE}/Contents/Info.plist"
   "${APP_BUNDLE}/Contents/Info.plist"
 plutil -lint "${APP_BUNDLE}/Contents/Info.plist" >/dev/null
 
-SPARKLE_FRAMEWORK_PATH="${SPARKLE_FRAMEWORK_PATH:-/Applications/Sparkle.app/Contents/SharedSupport/Sparkle.framework}"
+SPARKLE_FRAMEWORK_PATH="$(resolve_sparkle_framework_path)"
 if [[ -d "${SPARKLE_FRAMEWORK_PATH}" ]]; then
   cp -R "${SPARKLE_FRAMEWORK_PATH}" "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework"
 else

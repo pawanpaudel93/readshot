@@ -43,18 +43,18 @@ self-signed identity and skips notarisation.
 ```bash
 brew install --cask sparkle
 
-# Sparkle installs its tools under SharedSupport/bin.
-/Applications/Sparkle.app/Contents/SharedSupport/bin/generate_keys
+# Homebrew installs Sparkle under its Caskroom, not always /Applications.
+SPARKLE_ROOT="$(brew list --cask sparkle | awk '/\/bin\/generate_keys$/ { sub("/bin/generate_keys", ""); print; exit }')"
+"${SPARKLE_ROOT}/bin/generate_keys" -x sparkle_ed_private_key
 ```
 
 * Save the **private** half as `SPARKLE_ED_KEY_BASE64` (base64-encoded).
 * Paste the **public** half into `packaging/macos/Info.plist`'s
   `SUPublicEDKey` slot. This commits to the repo — the public key is
   not secret.
-* The packaging scripts copy Sparkle's runtime framework from
-  `/Applications/Sparkle.app/Contents/SharedSupport/Sparkle.framework`.
-  Override with `SPARKLE_FRAMEWORK_PATH` only if your local Sparkle
-  install lives elsewhere.
+* The packaging scripts auto-detect Sparkle's runtime framework from
+  Homebrew's cask install. Override with `SPARKLE_FRAMEWORK_PATH` only
+  if your local Sparkle install lives elsewhere.
 
 ### 3. Optional future: apply for SignPath OSS programme
 
