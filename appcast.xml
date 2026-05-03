@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+    <channel>
+        <title>Readshot</title>
+        <link>https://github.com/pawanpaudel93/readshot</link>
+        <description>Readshot release feed.</description>
+        <language>en</language>
+
+        <item>
+            <title>Readshot 0.1.0 (aarch64)</title>
+            <pubDate>Sun, 03 May 2026 19:29:24 +0000</pubDate>
+            <sparkle:version>0.1.0</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+                <p><a href="https://github.com/pawanpaudel93/readshot/releases/tag/v0.1.0">Release notes for Readshot 0.1.0</a></p>
+            ]]></description>
+            <enclosure
+                url="https://github.com/pawanpaudel93/readshot/releases/download/v0.1.0/readshot-macos-aarch64.dmg"
+                length="15789623"
+                type="application/octet-stream"
+                sparkle:edSignature="8vvBol9Cb+ynN2iEiLvERXl5X91gJXYkfTBub0Sgty7/uZ82nVa/PAiFb+oU6om8ZHr7Bij27bwdPAQKRmSeDw=="
+            />
+        </item>
+        <item>
+            <title>Readshot 0.1.0 (x86_64)</title>
+            <pubDate>Sun, 03 May 2026 19:29:24 +0000</pubDate>
+            <sparkle:version>0.1.0</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+                <p><a href="https://github.com/pawanpaudel93/readshot/releases/tag/v0.1.0">Release notes for Readshot 0.1.0</a></p>
+            ]]></description>
+            <enclosure
+                url="https://github.com/pawanpaudel93/readshot/releases/download/v0.1.0/readshot-macos-x86_64.dmg"
+                length="16924455"
+                type="application/octet-stream"
+                sparkle:edSignature="31sklHtPMUMugJiGRIFn4fUimoe4eDyCOva0Wej1Q8QLRq/pMEo6+8BYtOrtgyQx+UtY3GwUosQ6cQq/AsL8CA=="
+            />
+        </item>
+
+    </channel>
+</rss>
