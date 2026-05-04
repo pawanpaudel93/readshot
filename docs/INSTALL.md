@@ -24,7 +24,13 @@ executables:
 
 To make those commands available as `readshot` and `readshot-mcp` in
 your shell, launch the app and choose **Install Command Line Tools…**
-from the menu-bar icon. Readshot creates symlinks in `/usr/local/bin`.
+from the menu-bar icon. Readshot creates symlinks in `~/bin`.
+
+If your shell does not already include `~/bin`, add this to `~/.zshrc`:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+```
 
 ### Recommended: Homebrew Cask
 

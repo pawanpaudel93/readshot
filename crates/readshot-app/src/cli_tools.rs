@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const COMMANDS: &[&str] = &["readshot", "readshot-mcp"];
-const DEFAULT_BIN_DIR: &str = "/usr/local/bin";
+const USER_BIN_DIR_NAME: &str = "bin";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallReport {
@@ -29,7 +29,8 @@ pub enum CliToolsError {
 
 pub fn install_command_line_tools() -> Result<InstallReport, CliToolsError> {
     let app_bundle = current_app_bundle()?;
-    install_command_line_tools_into(&app_bundle, Path::new(DEFAULT_BIN_DIR))
+    let bin_dir = default_user_bin_dir()?;
+    install_command_line_tools_into(&app_bundle, &bin_dir)
 }
 
 pub fn install_command_line_tools_into(
@@ -120,6 +121,15 @@ fn current_app_bundle() -> Result<PathBuf, CliToolsError> {
     }
 }
 
+fn default_user_bin_dir() -> Result<PathBuf, CliToolsError> {
+    let home = std::env::var_os("HOME").ok_or_else(|| CliToolsError::Io {
+        operation: "locate home directory",
+        path: PathBuf::from("HOME"),
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set"),
+    })?;
+    Ok(PathBuf::from(home).join(USER_BIN_DIR_NAME))
+}
+
 #[cfg(unix)]
 fn symlink(target: &Path, link: &Path) -> Result<(), CliToolsError> {
     std::os::unix::fs::symlink(target, link).map_err(|source| CliToolsError::Io {
@@ -204,5 +214,13 @@ mod tests {
         assert!(
             matches!(err, CliToolsError::ExistingPath { command, .. } if command == "readshot")
         );
+    }
+
+    #[test]
+    fn default_user_bin_dir_uses_home_bin() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", dir.path());
+
+        assert_eq!(default_user_bin_dir().unwrap(), dir.path().join("bin"));
     }
 }

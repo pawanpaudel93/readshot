@@ -3354,12 +3354,12 @@ fn notify_cli_tools_install_failed(error: &str) {
 fn cli_tools_installed_message(report: &crate::cli_tools::InstallReport) -> String {
     if report.created == 0 {
         format!(
-            "readshot and readshot-mcp are already installed in {}.",
+            "readshot and readshot-mcp are already installed in {}. Add it to PATH if your shell cannot find them.",
             report.bin_dir.display()
         )
     } else {
         format!(
-            "Installed readshot and readshot-mcp in {}.",
+            "Installed readshot and readshot-mcp in {}. Add it to PATH if your shell cannot find them.",
             report.bin_dir.display()
         )
     }
@@ -3607,14 +3607,14 @@ mod tests {
     #[test]
     fn cli_tools_notification_mentions_install_location() {
         let report = crate::cli_tools::InstallReport {
-            bin_dir: std::path::PathBuf::from("/usr/local/bin"),
+            bin_dir: std::path::PathBuf::from("/Users/example/bin"),
             created: 2,
             already_installed: 0,
         };
 
         assert_eq!(
             cli_tools_installed_message(&report),
-            "Installed readshot and readshot-mcp in /usr/local/bin."
+            "Installed readshot and readshot-mcp in /Users/example/bin. Add it to PATH if your shell cannot find them."
         );
     }
 
@@ -3622,14 +3622,14 @@ mod tests {
     #[test]
     fn cli_tools_notification_handles_already_installed() {
         let report = crate::cli_tools::InstallReport {
-            bin_dir: std::path::PathBuf::from("/usr/local/bin"),
+            bin_dir: std::path::PathBuf::from("/Users/example/bin"),
             created: 0,
             already_installed: 2,
         };
 
         assert_eq!(
             cli_tools_installed_message(&report),
-            "readshot and readshot-mcp are already installed in /usr/local/bin."
+            "readshot and readshot-mcp are already installed in /Users/example/bin. Add it to PATH if your shell cannot find them."
         );
     }
 

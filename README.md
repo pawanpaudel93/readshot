@@ -61,7 +61,7 @@ the default global hotkey **⌘⇧X** to start a capture.
 
 The installed app also includes a scriptable CLI. From the menu-bar
 icon, choose **Install Command Line Tools…** once to expose `readshot`
-and `readshot-mcp` in `/usr/local/bin`.
+and `readshot-mcp` in `~/bin`.
 
 ```bash
 readshot list-displays
@@ -134,7 +134,12 @@ The app bundle includes both command-line entry points:
   server for AI hosts. See [docs/MCP.md](docs/MCP.md).
 
 Use **Install Command Line Tools…** from the menu-bar icon to create
-`/usr/local/bin/readshot` and `/usr/local/bin/readshot-mcp` symlinks.
+`~/bin/readshot` and `~/bin/readshot-mcp` symlinks. If your shell does
+not already include `~/bin`, add this to `~/.zshrc`:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+```
 
 Current releases are self-signed, not Apple-notarised. If macOS shows
 the Gatekeeper warning, use either Finder's one-time bypass:
