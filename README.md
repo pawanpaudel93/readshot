@@ -85,12 +85,46 @@ In the region overlay:
 | `Enter` / `Space` | Capture the full screen |
 | `Esc` | Cancel |
 
-## Install (macOS, dev build)
+## Install (macOS)
 
-There's no notarised release yet. The repo ships a script that
-builds the binary, assembles a `.app` bundle with the proper icon,
-ad-hoc codesigns it, installs it to `/Applications`, and resets
-the TCC entry so Screen Recording grants apply cleanly:
+Download the latest Apple Silicon or Intel DMG from
+[GitHub Releases](https://github.com/pawanpaudel93/readshot/releases):
+
+- `readshot-macos-aarch64.dmg` for Apple Silicon Macs.
+- `readshot-macos-x86_64.dmg` for Intel Macs.
+
+Open the DMG and drag `Readshot.app` to `Applications`.
+
+The app bundle includes both command-line entry points:
+
+- `/Applications/Readshot.app/Contents/MacOS/readshot` — GUI plus
+  CLI subcommands.
+- `/Applications/Readshot.app/Contents/MacOS/readshot-mcp` — MCP
+  server for AI hosts. See `docs/MCP.md`.
+
+Current releases are self-signed, not Apple-notarised. If macOS shows
+the Gatekeeper warning, use either Finder's one-time bypass:
+
+1. Open **Finder → Applications**.
+2. Right-click `Readshot.app` → **Open**.
+3. Click **Open** in the warning dialog.
+
+Or clear quarantine from Terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Readshot.app
+open /Applications/Readshot.app
+```
+
+Readshot includes Sparkle update checks backed by GitHub Releases.
+Use the menu-bar item **Check for Updates…** after installing.
+
+### Build and install locally
+
+For development, the repo ships a script that builds the binary,
+assembles a `.app` bundle with the proper icon, ad-hoc codesigns it,
+installs it to `/Applications`, and resets the TCC entry so Screen
+Recording grants apply cleanly:
 
 ```bash
 git clone https://github.com/pawanpaudel93/readshot
@@ -122,14 +156,22 @@ Requirements:
    **Readshot** on.
 3. macOS will offer **Quit & Reopen** — click it. Readshot relaunches
    into the menu bar and a system notification confirms it's alive.
-   If macOS doesn't ask, the welcome window's **Restart Readshot
-   now** button does the same thing.
+   If macOS doesn't ask, the welcome window's **Restart Readshot**
+   button does the same thing.
 
-The TCC entry is reset on every install (`tccutil reset
-ScreenCapture dev.pawanpaudel93.readshot`) so a fresh build never
-inherits a stale grant from an earlier ad-hoc-signed cdhash.
+The local install script resets the TCC entry (`tccutil reset
+ScreenCapture dev.pawanpaudel93.readshot`) so a fresh development
+build never inherits a stale grant from an earlier ad-hoc-signed
+cdhash.
 
 ### Uninstall
+
+For a GitHub Release install, quit Readshot and remove:
+
+- `/Applications/Readshot.app`
+- `~/Library/Application Support/dev.pawanpaudel93.Readshot`
+
+For a local development install from a repo checkout:
 
 ```bash
 packaging/macos/install-local.sh --uninstall
@@ -168,27 +210,31 @@ The source is a Cargo workspace under `crates/`:
   together. The binary entry-point.
 - `readshot-mcp` — the companion MCP server binary.
 
-`AGENTS.md` is the high-level orientation for any contributor; the
-per-task design notes live under `docs/superpowers/` (gitignored).
+`AGENTS.md` is the high-level orientation for contributors.
+`docs/MCP.md` explains how to wire the packaged `readshot-mcp` binary
+into AI-agent hosts.
 
 ## Roadmap
 
 The product wedge — **"every screenshot you've ever taken is
 searchable"** — is shipped end-to-end: capture → background OCR →
 sidecar archive → searchable browser → per-row actions (open / copy
-image / copy text / pin / delete). What's left is polish and
-cross-platform parity.
+image / copy text / pin / delete).
 
-### Older roadmap (still real)
+### Remaining, in order
 
-- **`readshot://` URL scheme while running** — argv-based delivery
-  works at boot; in-process delivery via `NSAppleEventManager` is
-  blocked on a shared `objc2` major-version pin across `tray-icon`,
-  `muda`, and `iced_winit`.
-- **Release validation** — Sparkle appcast publication and optional
-  Developer ID notarisation are wired in CI, but still need real
-  release secrets and a clean-machine release smoke.
-- **Linux + Windows capture / OCR backends** — stubbed.
+- **macOS release polish** — keep the GitHub Release DMG, Sparkle
+  appcast, first-launch permission flow, and install docs smoke-tested
+  on a clean Mac before each public release.
+- **`readshot://` delivery to a running app** — opening the URL already
+  works at app boot; forwarding URLs to an already-running menu-bar
+  process still needs a stable AppKit event bridge.
+- **Optional Developer ID notarisation** — only if the project later
+  joins the paid Apple Developer Program. Current releases intentionally
+  remain self-signed.
+- **Linux + Windows capture / OCR backends** — source stubs exist, but
+  public releases are macOS-only until those backends are wired and
+  tested.
 
 ## Licence
 
