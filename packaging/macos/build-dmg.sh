@@ -32,6 +32,7 @@ APP_NAME="Readshot"
 BIN_PATH="target/${TARGET}/release/readshot"
 MCP_BIN_PATH="target/${TARGET}/release/readshot-mcp"
 APP_BUNDLE="target/release/${APP_NAME}.app"
+DMG_STAGING="target/release/dmg-root"
 DMG_PATH="target/release/readshot.dmg"
 KEYCHAIN=""
 CERT_PATH=""
@@ -67,6 +68,9 @@ cleanup() {
   fi
   if [[ -n "${CERT_PATH}" ]]; then
     rm -f "${CERT_PATH}"
+  fi
+  if [[ -d "${DMG_STAGING}" ]]; then
+    rm -rf "${DMG_STAGING}"
   fi
 }
 trap cleanup EXIT
@@ -142,16 +146,32 @@ codesign --deep --force --options runtime \
 
 codesign --verify --deep --strict "${APP_BUNDLE}"
 
-# 5. Build the DMG via `hdiutil`. A plain layout — no fancy
-# background image; the Homebrew Cask is the recommended install
-# path so DMG aesthetics matter little.
+# 5. Build a standard drag-to-Applications DMG.
 rm -f "${DMG_PATH}"
-hdiutil create \
-  -volname "${APP_NAME}" \
-  -srcfolder "${APP_BUNDLE}" \
-  -ov \
-  -format UDZO \
-  "${DMG_PATH}"
+rm -rf "${DMG_STAGING}"
+mkdir -p "${DMG_STAGING}"
+cp -R "${APP_BUNDLE}" "${DMG_STAGING}/${APP_NAME}.app"
+ln -s /Applications "${DMG_STAGING}/Applications"
+
+if command -v create-dmg >/dev/null 2>&1; then
+  create-dmg \
+    --volname "${APP_NAME}" \
+    --window-pos 200 120 \
+    --window-size 640 360 \
+    --icon-size 96 \
+    --icon "${APP_NAME}.app" 160 170 \
+    --app-drop-link 480 170 \
+    --no-internet-enable \
+    "${DMG_PATH}" \
+    "${DMG_STAGING}"
+else
+  hdiutil create \
+    -volname "${APP_NAME}" \
+    -srcfolder "${DMG_STAGING}" \
+    -ov \
+    -format UDZO \
+    "${DMG_PATH}"
+fi
 
 # 6. Notarise and staple when Developer ID notary credentials are
 # present. Self-signed builds intentionally skip this step.

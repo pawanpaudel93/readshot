@@ -48,6 +48,7 @@ jobs:
       - name: Install Sparkle tools (macOS)
         run: |
           brew install --cask sparkle
+          brew install create-dmg
           SPARKLE_ROOT="$(brew list --cask sparkle | awk '/\/bin\/sign_update$/ { sub("/bin/sign_update", ""); print; exit }')"
           echo "${SPARKLE_ROOT}/bin" >> "${GITHUB_PATH}"
           echo "SPARKLE_FRAMEWORK_PATH=${SPARKLE_ROOT}/Sparkle.framework" >> "${GITHUB_ENV}"
