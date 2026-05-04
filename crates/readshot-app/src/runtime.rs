@@ -603,8 +603,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 update(state, Message::OpenSettingsRequested)
             }
             crate::tray::TrayAction::CheckForUpdates => {
+                notify_update_check_started();
                 if let Err(e) = crate::updater::check_for_updates() {
                     tracing::warn!(target: "readshot::updater", "manual update check failed: {e}");
+                    notify_update_check_failed(&e.to_string());
                 }
                 Task::none()
             }
@@ -3299,28 +3301,66 @@ fn notify_running_in_menu_bar(hotkey: &str) {
         let body = format!(
             "Readshot is running in the menu bar. Press {hotkey} to capture, or click the icon."
         );
-        let script = format!(
-            r#"display notification "{}" with title "Readshot is ready""#,
-            body.replace('"', "\\\"")
-        );
-        let spawn = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        if let Err(e) = spawn {
-            tracing::warn!(
-                target: "readshot::notify",
-                "osascript spawn failed: {e}"
-            );
-        }
+        show_macos_notification("Readshot is ready", &body);
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = hotkey;
     }
+}
+
+fn notify_update_check_started() {
+    #[cfg(target_os = "macos")]
+    {
+        show_macos_notification("Readshot updates", "Checking for updates...");
+    }
+}
+
+/// Surface manual updater failures to the user. The tray action is a
+/// user-initiated command; silently logging here makes the menu item
+/// look broken when Sparkle is missing or cannot load.
+fn notify_update_check_failed(error: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let body = format!("Could not check for updates: {error}");
+        show_macos_notification("Readshot updates", &body);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = error;
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn show_macos_notification(title: &str, body: &str) {
+    let script = macos_notification_script(title, body);
+    let spawn = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Err(e) = spawn {
+        tracing::warn!(
+            target: "readshot::notify",
+            "osascript spawn failed: {e}"
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_notification_script(title: &str, body: &str) -> String {
+    format!(
+        r#"display notification "{}" with title "{}""#,
+        applescript_escape(body),
+        applescript_escape(title)
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn applescript_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Map an editor line-width to a text point-size. The Text tool
@@ -3502,6 +3542,16 @@ mod tests {
         let command = reveal_command_for_path(std::path::Path::new("/tmp/readshot/capture.png"));
         assert_eq!(command.program, "open");
         assert_eq!(command.args, vec!["-R", "/tmp/readshot/capture.png"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_notification_script_escapes_title_and_body() {
+        let script = macos_notification_script("Readshot \"updates\"", "Path C:\\tmp\\\"x\"");
+        assert_eq!(
+            script,
+            r#"display notification "Path C:\\tmp\\\"x\"" with title "Readshot \"updates\"""#
+        );
     }
 
     #[test]
