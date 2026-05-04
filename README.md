@@ -60,14 +60,41 @@ Launch the menu-bar app from Applications, then use the tray icon or
 the default global hotkey **⌘⇧X** to start a capture.
 
 The installed app also includes a scriptable CLI. To expose `readshot`
-and `readshot-mcp` in your shell, run:
+and `readshot-mcp` in your shell, first create the symlinks:
 
 ```bash
 mkdir -p "$HOME/bin"
 ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot" "$HOME/bin/readshot"
 ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/bin/readshot-mcp"
-grep -q 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc"
-source "$HOME/.zshrc"
+```
+
+Then add `~/bin` to the shell you use.
+
+For zsh:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc"
+```
+
+For bash:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
+```
+
+For fish:
+
+```fish
+fish_add_path "$HOME/bin"
+mkdir -p "$HOME/.config/fish"
+grep -qxF 'fish_add_path "$HOME/bin"' "$HOME/.config/fish/config.fish" 2>/dev/null || echo 'fish_add_path "$HOME/bin"' >> "$HOME/.config/fish/config.fish"
+```
+
+Verify:
+
+```bash
 readshot --help
 ```
 
@@ -145,16 +172,7 @@ The app bundle includes both command-line entry points:
 
 The menu-bar item **Install Command Line Tools…** points users back to
 these copy-pasteable setup commands. Readshot does not write shell
-symlinks automatically.
-
-```bash
-mkdir -p "$HOME/bin"
-ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot" "$HOME/bin/readshot"
-ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/bin/readshot-mcp"
-grep -q 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc"
-source "$HOME/.zshrc"
-readshot --help
-```
+symlinks automatically. Use the setup block in **Usage** above.
 
 Current releases are self-signed, not Apple-notarised. If macOS shows
 the Gatekeeper warning, use either Finder's one-time bypass:

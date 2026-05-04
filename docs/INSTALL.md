@@ -23,14 +23,41 @@ executables:
   server for AI hosts.
 
 To make those commands available as `readshot` and `readshot-mcp`,
-run:
+first create the symlinks:
 
 ```bash
 mkdir -p "$HOME/bin"
 ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot" "$HOME/bin/readshot"
 ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/bin/readshot-mcp"
-grep -q 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc"
-source "$HOME/.zshrc"
+```
+
+Then add `~/bin` to the shell you use.
+
+For zsh:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc"
+```
+
+For bash:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
+```
+
+For fish:
+
+```fish
+fish_add_path "$HOME/bin"
+mkdir -p "$HOME/.config/fish"
+grep -qxF 'fish_add_path "$HOME/bin"' "$HOME/.config/fish/config.fish" 2>/dev/null || echo 'fish_add_path "$HOME/bin"' >> "$HOME/.config/fish/config.fish"
+```
+
+Verify:
+
+```bash
 readshot --help
 ```
 
