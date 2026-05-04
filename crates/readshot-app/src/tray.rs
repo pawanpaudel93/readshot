@@ -194,7 +194,7 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
 /// tints the alpha into whatever colour the menu bar wants (white
 /// in dark mode, near-black in light mode), with a nice highlight
 /// when the menu is open. This matches the app-icon's brand language:
-/// four selection-corner brackets framing a centered lens dot.
+/// four selection-corner brackets framing a centered lens ring.
 fn build_icon(size: u32) -> Result<Icon, IconError> {
     let mut pixmap = Pixmap::new(size, size).ok_or(IconError::Pixmap)?;
     let s = size as f32;
@@ -211,9 +211,9 @@ fn build_icon(size: u32) -> Result<Icon, IconError> {
     // each arm is `arm` long and the stroke is `stroke_w`. Numbers are
     // ratios of `size` so this scales linearly from 16 to 64+ without
     // recomputing pixel offsets.
-    let inset = s * 0.18;
-    let arm = s * 0.28;
-    let stroke_w = (s * 0.13).max(2.0);
+    let inset = s * 0.17;
+    let arm = s * 0.29;
+    let stroke_w = (s * 0.12).max(2.0);
     let stroke = Stroke {
         width: stroke_w,
         line_cap: tiny_skia::LineCap::Round,
@@ -255,18 +255,19 @@ fn build_icon(size: u32) -> Result<Icon, IconError> {
         None,
     );
 
-    // Center lens dot. Filled circle at ~14% of the icon size so it
-    // reads on a 22pt menu bar without colliding with the brackets.
-    let dot_radius = (s * 0.13).max(1.5);
-    let dot_path = {
+    // Center lens ring. The ring echoes the full-colour app icon but
+    // remains a single-colour template glyph for menu-bar readability.
+    let lens_radius = (s * 0.15).max(2.0);
+    let lens_path = {
         let mut pb = PathBuilder::new();
-        pb.push_circle(s * 0.5, s * 0.5, dot_radius);
+        pb.push_circle(s * 0.5, s * 0.5, lens_radius);
+        pb.push_circle(s * 0.5, s * 0.5, (s * 0.07).max(1.0));
         pb.finish().ok_or(IconError::Path)?
     };
     pixmap.fill_path(
-        &dot_path,
+        &lens_path,
         &fg_paint,
-        FillRule::Winding,
+        FillRule::EvenOdd,
         Transform::identity(),
         None,
     );

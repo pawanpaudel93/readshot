@@ -42,6 +42,7 @@ APP_BUNDLE="${REPO_ROOT}/target/release/${APP_NAME}.app"
 INSTALLED="/Applications/${APP_NAME}.app"
 ICON_SRC="${REPO_ROOT}/packaging/macos/icon.svg"
 ICON_OUT="${REPO_ROOT}/target/release/AppIcon.icns"
+RENDER_ICON="${REPO_ROOT}/packaging/macos/render-app-icon.sh"
 
 resolve_sparkle_framework_path() {
   if [[ -n "${SPARKLE_FRAMEWORK_PATH:-}" ]]; then
@@ -99,44 +100,14 @@ if [[ ! -x "${BIN_DIR}/readshot" ]]; then
   exit 1
 fi
 
-# Generate AppIcon.icns from the SVG. We rasterise to all the macOS
-# AppIcon sizes via rsvg-convert (16, 32, 64, 128, 256, 512, 1024 —
-# both 1x and 2x for sizes < 1024), assemble an .iconset directory,
-# and let `iconutil` produce the final binary plist .icns. This pipe
-# only runs on macOS so requiring `rsvg-convert` here is fine; ship
-# `brew install librsvg` in `docs/INSTALL.md` if a contributor lands
-# without it.
+# Generate AppIcon.icns from the canonical SVG. The release package
+# uses the same renderer so Finder, the Dock, and the DMG all see the
+# same app icon.
 if [[ ! -f "${ICON_SRC}" ]]; then
   echo "error: ${ICON_SRC} missing" >&2
   exit 1
 fi
-if ! command -v rsvg-convert >/dev/null 2>&1; then
-  echo "error: rsvg-convert not found (brew install librsvg)" >&2
-  exit 1
-fi
-ICON_BUILD_DIR="$(mktemp -d -t readshot-iconset)"
-ICONSET="${ICON_BUILD_DIR}/AppIcon.iconset"
-mkdir -p "${ICONSET}"
-echo "→ rasterising ${ICON_SRC} into AppIcon.iconset"
-# (size, suffix) pairs per Apple's iconset convention.
-for entry in \
-  "16 icon_16x16.png"        \
-  "32 icon_16x16@2x.png"     \
-  "32 icon_32x32.png"        \
-  "64 icon_32x32@2x.png"     \
-  "128 icon_128x128.png"     \
-  "256 icon_128x128@2x.png"  \
-  "256 icon_256x256.png"     \
-  "512 icon_256x256@2x.png"  \
-  "512 icon_512x512.png"     \
-  "1024 icon_512x512@2x.png" \
-; do
-  size="${entry%% *}"
-  name="${entry#* }"
-  rsvg-convert -w "${size}" -h "${size}" "${ICON_SRC}" -o "${ICONSET}/${name}"
-done
-iconutil -c icns "${ICONSET}" -o "${ICON_OUT}"
-rm -rf "${ICON_BUILD_DIR}"
+"${RENDER_ICON}" "${ICON_OUT}" --png-512 "${REPO_ROOT}/packaging/linux/readshot.png"
 
 # Assemble the .app bundle layout. The bundle is named `Readshot.app`,
 # but the executable stays lowercase `readshot` so the same binary can
