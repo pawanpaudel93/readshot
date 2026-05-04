@@ -1,5 +1,9 @@
 # Readshot
 
+[![test](https://github.com/pawanpaudel93/readshot/actions/workflows/test.yml/badge.svg)](https://github.com/pawanpaudel93/readshot/actions/workflows/test.yml)
+[![release](https://github.com/pawanpaudel93/readshot/actions/workflows/release.yml/badge.svg)](https://github.com/pawanpaudel93/readshot/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A free, open-source screenshot tool with on-device OCR — and a
 searchable archive of everything you've captured.
 
@@ -48,7 +52,30 @@ the image. Entirely offline.
   right-click for the menu. Default global hotkey: **⌘⇧X**.
 - **MCP server** companion binary so AI agents can request captures,
   OCR, and search/retrieve saved captures programmatically — see
-  `docs/MCP.md`.
+  [docs/MCP.md](docs/MCP.md).
+
+## Usage
+
+Launch the menu-bar app from Applications, then use the tray icon or
+the default global hotkey **⌘⇧X** to start a capture.
+
+The installed app also includes a scriptable CLI:
+
+```bash
+/Applications/Readshot.app/Contents/MacOS/readshot list-displays
+/Applications/Readshot.app/Contents/MacOS/readshot capture --output capture.png
+/Applications/Readshot.app/Contents/MacOS/readshot ocr --input capture.png
+/Applications/Readshot.app/Contents/MacOS/readshot capture-and-ocr --also-image capture.png
+```
+
+For AI-agent hosts, configure the packaged MCP server at:
+
+```text
+/Applications/Readshot.app/Contents/MacOS/readshot-mcp
+```
+
+See [docs/MCP.md](docs/MCP.md) for Claude Desktop, Cursor, OpenAI
+desktop, Codex CLI, and custom-client examples.
 
 ## Keyboard shortcuts
 
@@ -100,7 +127,7 @@ The app bundle includes both command-line entry points:
 - `/Applications/Readshot.app/Contents/MacOS/readshot` — GUI plus
   CLI subcommands.
 - `/Applications/Readshot.app/Contents/MacOS/readshot-mcp` — MCP
-  server for AI hosts. See `docs/MCP.md`.
+  server for AI hosts. See [docs/MCP.md](docs/MCP.md).
 
 Current releases are self-signed, not Apple-notarised. If macOS shows
 the Gatekeeper warning, use either Finder's one-time bypass:
@@ -190,6 +217,7 @@ for unit tests; not useful for actual capture.
 ## Tests
 
 ```bash
+cargo fmt --all -- --check
 cargo nextest run --workspace
 cargo clippy --workspace -- -D warnings
 ```
@@ -210,9 +238,9 @@ The source is a Cargo workspace under `crates/`:
   together. The binary entry-point.
 - `readshot-mcp` — the companion MCP server binary.
 
-`AGENTS.md` is the high-level orientation for contributors.
-`docs/MCP.md` explains how to wire the packaged `readshot-mcp` binary
-into AI-agent hosts.
+[AGENTS.md](AGENTS.md) is the high-level orientation for contributors.
+[docs/MCP.md](docs/MCP.md) explains how to wire the packaged
+`readshot-mcp` binary into AI-agent hosts.
 
 ## Roadmap
 
@@ -236,6 +264,6 @@ image / copy text / pin / delete).
   public releases are macOS-only until those backends are wired and
   tested.
 
-## Licence
+## License
 
 [MIT](LICENSE).
