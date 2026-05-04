@@ -7,6 +7,38 @@
         <language>en</language>
 
         <item>
+            <title>Readshot 0.1.2 (aarch64)</title>
+            <pubDate>Mon, 04 May 2026 06:56:34 +0000</pubDate>
+            <sparkle:version>0.1.2</sparkle:version>
+            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+                <p><a href="https://github.com/pawanpaudel93/readshot/releases/tag/v0.1.2">Release notes for Readshot 0.1.2</a></p>
+            ]]></description>
+            <enclosure
+                url="https://github.com/pawanpaudel93/readshot/releases/download/v0.1.2/readshot-macos-aarch64.dmg"
+                length="15062612"
+                type="application/octet-stream"
+                sparkle:edSignature="F3687c76oomwVbIZK/HDWGwuBoFTscQXvcG6PYnzYhmZvzv6S1MKjHyb3nMQE6ylLDbKpKo5IV/uGQadiKtaCA=="
+            />
+        </item>
+        <item>
+            <title>Readshot 0.1.2 (x86_64)</title>
+            <pubDate>Mon, 04 May 2026 06:56:34 +0000</pubDate>
+            <sparkle:version>0.1.2</sparkle:version>
+            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+                <p><a href="https://github.com/pawanpaudel93/readshot/releases/tag/v0.1.2">Release notes for Readshot 0.1.2</a></p>
+            ]]></description>
+            <enclosure
+                url="https://github.com/pawanpaudel93/readshot/releases/download/v0.1.2/readshot-macos-x86_64.dmg"
+                length="15940047"
+                type="application/octet-stream"
+                sparkle:edSignature="AcbuMifDEzFaZxbJo2BfkgoRCuINB/uFO1zSfJxT47MSYDhIUogYerk+Jx1xQzCdk6cphfYp+fTLsnmacvMVAA=="
+            />
+        </item>
+        <item>
             <title>Readshot 0.1.1 (aarch64)</title>
             <pubDate>Mon, 04 May 2026 05:26:46 +0000</pubDate>
             <sparkle:version>0.1.1</sparkle:version>
