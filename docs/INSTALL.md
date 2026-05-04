@@ -22,15 +22,20 @@ executables:
 * `/Applications/Readshot.app/Contents/MacOS/readshot-mcp` — MCP
   server for AI hosts.
 
-To make those commands available as `readshot` and `readshot-mcp` in
-your shell, launch the app and choose **Install Command Line Tools…**
-from the menu-bar icon. Readshot creates symlinks in `~/bin`.
-
-If your shell does not already include `~/bin`, add this to `~/.zshrc`:
+To make those commands available as `readshot` and `readshot-mcp`,
+run:
 
 ```bash
-export PATH="$HOME/bin:$PATH"
+mkdir -p "$HOME/bin"
+ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot" "$HOME/bin/readshot"
+ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/bin/readshot-mcp"
+grep -q 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc"
+source "$HOME/.zshrc"
+readshot --help
 ```
+
+The menu-bar item **Install Command Line Tools…** points users back to
+these commands. Readshot does not write shell symlinks automatically.
 
 ### Recommended: Homebrew Cask
 

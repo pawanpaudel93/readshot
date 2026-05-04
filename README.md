@@ -59,9 +59,19 @@ the image. Entirely offline.
 Launch the menu-bar app from Applications, then use the tray icon or
 the default global hotkey **⌘⇧X** to start a capture.
 
-The installed app also includes a scriptable CLI. From the menu-bar
-icon, choose **Install Command Line Tools…** once to expose `readshot`
-and `readshot-mcp` in `~/bin`.
+The installed app also includes a scriptable CLI. To expose `readshot`
+and `readshot-mcp` in your shell, run:
+
+```bash
+mkdir -p "$HOME/bin"
+ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot" "$HOME/bin/readshot"
+ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/bin/readshot-mcp"
+grep -q 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc"
+source "$HOME/.zshrc"
+readshot --help
+```
+
+Then use:
 
 ```bash
 readshot list-displays
@@ -133,12 +143,17 @@ The app bundle includes both command-line entry points:
 - `/Applications/Readshot.app/Contents/MacOS/readshot-mcp` — MCP
   server for AI hosts. See [docs/MCP.md](docs/MCP.md).
 
-Use **Install Command Line Tools…** from the menu-bar icon to create
-`~/bin/readshot` and `~/bin/readshot-mcp` symlinks. If your shell does
-not already include `~/bin`, add this to `~/.zshrc`:
+The menu-bar item **Install Command Line Tools…** points users back to
+these copy-pasteable setup commands. Readshot does not write shell
+symlinks automatically.
 
 ```bash
-export PATH="$HOME/bin:$PATH"
+mkdir -p "$HOME/bin"
+ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot" "$HOME/bin/readshot"
+ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/bin/readshot-mcp"
+grep -q 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc"
+source "$HOME/.zshrc"
+readshot --help
 ```
 
 Current releases are self-signed, not Apple-notarised. If macOS shows

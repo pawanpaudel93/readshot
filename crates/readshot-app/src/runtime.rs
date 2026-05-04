@@ -603,13 +603,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 update(state, Message::OpenSettingsRequested)
             }
             crate::tray::TrayAction::InstallCommandLineTools => {
-                match crate::cli_tools::install_command_line_tools() {
-                    Ok(report) => notify_cli_tools_installed(&report),
-                    Err(e) => {
-                        tracing::warn!(target: "readshot::cli_tools", "install failed: {e}");
-                        notify_cli_tools_install_failed(&e.to_string());
-                    }
-                }
+                notify_cli_tools_instructions();
                 Task::none()
             }
             crate::tray::TrayAction::CheckForUpdates => {
@@ -3326,42 +3320,14 @@ fn notify_update_check_started() {
     }
 }
 
-fn notify_cli_tools_installed(report: &crate::cli_tools::InstallReport) {
+fn notify_cli_tools_instructions() {
     #[cfg(target_os = "macos")]
     {
-        let body = cli_tools_installed_message(report);
-        show_macos_notification("Readshot command line tools", &body);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = report;
-    }
-}
-
-fn notify_cli_tools_install_failed(error: &str) {
-    #[cfg(target_os = "macos")]
-    {
-        let body = format!("Could not install command line tools: {error}");
-        show_macos_notification("Readshot command line tools", &body);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = error;
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn cli_tools_installed_message(report: &crate::cli_tools::InstallReport) -> String {
-    if report.created == 0 {
-        format!(
-            "readshot and readshot-mcp are already installed in {}. Add it to PATH if your shell cannot find them.",
-            report.bin_dir.display()
-        )
-    } else {
-        format!(
-            "Installed readshot and readshot-mcp in {}. Add it to PATH if your shell cannot find them.",
-            report.bin_dir.display()
-        )
+        let _ = crate::cli_tools::command_line_tools_instructions();
+        show_macos_notification(
+            "Readshot command line tools",
+            "Copy the command-line setup block from README.md or docs/INSTALL.md.",
+        );
     }
 }
 
@@ -3600,36 +3566,6 @@ mod tests {
         assert_eq!(
             script,
             r#"display notification "Path C:\\tmp\\\"x\"" with title "Readshot \"updates\"""#
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn cli_tools_notification_mentions_install_location() {
-        let report = crate::cli_tools::InstallReport {
-            bin_dir: std::path::PathBuf::from("/Users/example/bin"),
-            created: 2,
-            already_installed: 0,
-        };
-
-        assert_eq!(
-            cli_tools_installed_message(&report),
-            "Installed readshot and readshot-mcp in /Users/example/bin. Add it to PATH if your shell cannot find them."
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn cli_tools_notification_handles_already_installed() {
-        let report = crate::cli_tools::InstallReport {
-            bin_dir: std::path::PathBuf::from("/Users/example/bin"),
-            created: 0,
-            already_installed: 2,
-        };
-
-        assert_eq!(
-            cli_tools_installed_message(&report),
-            "readshot and readshot-mcp are already installed in /Users/example/bin. Add it to PATH if your shell cannot find them."
         );
     }
 

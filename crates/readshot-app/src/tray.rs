@@ -31,7 +31,8 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 /// overlay; `History` opens the persistent capture browser;
 /// `Settings` opens the preferences window; `CheckForUpdates` opens
 /// Sparkle's standard updater UI on macOS; `InstallCommandLineTools`
-/// creates shell-friendly CLI symlinks; `Quit` exits the daemon.
+/// points users at copy-pasteable CLI setup commands; `Quit` exits
+/// the daemon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Capture,
