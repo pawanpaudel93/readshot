@@ -154,8 +154,6 @@ rm -f "${DMG_PATH}"
 rm -rf "${DMG_STAGING}"
 mkdir -p "${DMG_STAGING}"
 cp -R "${APP_BUNDLE}" "${DMG_STAGING}/${APP_NAME}.app"
-cp "packaging/macos/Install Readshot.command" "${DMG_STAGING}/Install Readshot.command"
-chmod +x "${DMG_STAGING}/Install Readshot.command"
 ln -s /Applications "${DMG_STAGING}/Applications"
 
 if command -v create-dmg >/dev/null 2>&1; then
@@ -165,7 +163,6 @@ if command -v create-dmg >/dev/null 2>&1; then
     --window-size 640 360 \
     --icon-size 96 \
     --icon "${APP_NAME}.app" 160 170 \
-    --icon "Install Readshot.command" 320 170 \
     --app-drop-link 480 170 \
     --no-internet-enable \
     "${DMG_PATH}" \
