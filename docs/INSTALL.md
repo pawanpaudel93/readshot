@@ -22,6 +22,10 @@ executables:
 * `/Applications/Readshot.app/Contents/MacOS/readshot-mcp` — MCP
   server for AI hosts.
 
+To make those commands available as `readshot` and `readshot-mcp` in
+your shell, launch the app and choose **Install Command Line Tools…**
+from the menu-bar icon. Readshot creates symlinks in `/usr/local/bin`.
+
 ### Recommended: Homebrew Cask
 
 ```bash

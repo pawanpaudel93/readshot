@@ -14,6 +14,7 @@
 
 pub mod app;
 pub mod cli;
+pub mod cli_tools;
 pub mod coordinator;
 pub mod editor;
 pub mod overlay;

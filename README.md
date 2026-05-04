@@ -59,23 +59,27 @@ the image. Entirely offline.
 Launch the menu-bar app from Applications, then use the tray icon or
 the default global hotkey **⌘⇧X** to start a capture.
 
-The installed app also includes a scriptable CLI:
+The installed app also includes a scriptable CLI. From the menu-bar
+icon, choose **Install Command Line Tools…** once to expose `readshot`
+and `readshot-mcp` in `/usr/local/bin`.
 
 ```bash
-/Applications/Readshot.app/Contents/MacOS/readshot list-displays
-/Applications/Readshot.app/Contents/MacOS/readshot capture --output capture.png
-/Applications/Readshot.app/Contents/MacOS/readshot ocr --input capture.png
-/Applications/Readshot.app/Contents/MacOS/readshot capture-and-ocr --also-image capture.png
+readshot list-displays
+readshot capture --output capture.png
+readshot ocr --input capture.png
+readshot capture-and-ocr --also-image capture.png
 ```
 
-For AI-agent hosts, configure the packaged MCP server at:
+For AI-agent hosts, use the installed MCP command:
 
 ```text
-/Applications/Readshot.app/Contents/MacOS/readshot-mcp
+readshot-mcp
 ```
 
 See [docs/MCP.md](docs/MCP.md) for Claude Desktop, Cursor, OpenAI
-desktop, Codex CLI, and custom-client examples.
+desktop, Codex CLI, and custom-client examples. Those examples use the
+absolute app-bundle path, which is also valid and does not require
+installing the command-line symlinks first.
 
 ## Keyboard shortcuts
 
@@ -128,6 +132,9 @@ The app bundle includes both command-line entry points:
   CLI subcommands.
 - `/Applications/Readshot.app/Contents/MacOS/readshot-mcp` — MCP
   server for AI hosts. See [docs/MCP.md](docs/MCP.md).
+
+Use **Install Command Line Tools…** from the menu-bar icon to create
+`/usr/local/bin/readshot` and `/usr/local/bin/readshot-mcp` symlinks.
 
 Current releases are self-signed, not Apple-notarised. If macOS shows
 the Gatekeeper warning, use either Finder's one-time bypass:
