@@ -7,6 +7,38 @@
         <language>en</language>
 
         <item>
+            <title>Readshot 0.1.1 (aarch64)</title>
+            <pubDate>Mon, 04 May 2026 05:26:46 +0000</pubDate>
+            <sparkle:version>0.1.1</sparkle:version>
+            <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+                <p><a href="https://github.com/pawanpaudel93/readshot/releases/tag/v0.1.1">Release notes for Readshot 0.1.1</a></p>
+            ]]></description>
+            <enclosure
+                url="https://github.com/pawanpaudel93/readshot/releases/download/v0.1.1/readshot-macos-aarch64.dmg"
+                length="15062641"
+                type="application/octet-stream"
+                sparkle:edSignature="yL5f0rBTnaUUs4IKfF1QJmwHICHAotDEavANwtfEgSvugE9cA/29ny7D4JFB59DKstgnORH2drEgWwAh3FnACw=="
+            />
+        </item>
+        <item>
+            <title>Readshot 0.1.1 (x86_64)</title>
+            <pubDate>Mon, 04 May 2026 05:26:46 +0000</pubDate>
+            <sparkle:version>0.1.1</sparkle:version>
+            <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+                <p><a href="https://github.com/pawanpaudel93/readshot/releases/tag/v0.1.1">Release notes for Readshot 0.1.1</a></p>
+            ]]></description>
+            <enclosure
+                url="https://github.com/pawanpaudel93/readshot/releases/download/v0.1.1/readshot-macos-x86_64.dmg"
+                length="15942286"
+                type="application/octet-stream"
+                sparkle:edSignature="n02Y9GHBKpCT8yuE2g0BIFG4xV0wcalGAZ9WnZXXm1brBm3Jdv+sK/h7uJtt9eIuy19Y8Y3zKBdIigbdE1j9Ag=="
+            />
+        </item>
+        <item>
             <title>Readshot 0.1.0 (aarch64)</title>
             <pubDate>Sun, 03 May 2026 19:29:24 +0000</pubDate>
             <sparkle:version>0.1.0</sparkle:version>
@@ -38,6 +70,5 @@
                 sparkle:edSignature="31sklHtPMUMugJiGRIFn4fUimoe4eDyCOva0Wej1Q8QLRq/pMEo6+8BYtOrtgyQx+UtY3GwUosQ6cQq/AsL8CA=="
             />
         </item>
-
     </channel>
 </rss>
