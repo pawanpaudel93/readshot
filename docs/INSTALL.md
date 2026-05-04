@@ -46,10 +46,15 @@ The tray menu includes **Check for Updates…**; it uses Sparkle to
 read the appcast published from GitHub Releases and verifies each
 download with the app's compiled-in EdDSA public key.
 
+If the DMG contains `Install Readshot.command`, you can run that
+helper instead of dragging manually. It copies `Readshot.app` to
+`/Applications`, removes quarantine from the installed app, resets
+Readshot's Screen Recording grant, and opens the app.
+
 If you'd rather use the command line:
 
 ```bash
-xattr -d com.apple.quarantine /Applications/Readshot.app
+xattr -dr com.apple.quarantine /Applications/Readshot.app
 open /Applications/Readshot.app
 ```
 
