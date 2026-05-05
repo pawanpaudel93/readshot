@@ -5,6 +5,7 @@
 //! toolbar's active/hover state remains responsible for emphasis.
 
 use iced::widget::canvas::{self, Frame, Path, Stroke, Text as CanvasText};
+use iced::widget::container;
 use iced::{Color, Element, Length, Point, Rectangle, Renderer, Theme};
 
 use crate::app::Message;
@@ -28,9 +29,15 @@ pub fn editor_icon<'a>(icon: EditorIcon, enabled: bool) -> Element<'a, Message> 
     } else {
         Color::from_rgba(1.0, 1.0, 1.0, 0.35)
     };
-    canvas::Canvas::new(EditorIconProgram { icon, color })
+    let canvas = canvas::Canvas::new(EditorIconProgram { icon, color })
         .width(Length::Fixed(22.0))
-        .height(Length::Fixed(22.0))
+        .height(Length::Fixed(22.0));
+
+    container(canvas)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
         .into()
 }
 
