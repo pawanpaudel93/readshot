@@ -62,9 +62,11 @@ impl Capturer for ScreenCaptureKitCapturer {
             .with_excluding_windows(&[])
             .build();
 
+        let (capture_w, capture_h) =
+            native_capture_size(display.display_id(), display.width(), display.height());
         let config = SCStreamConfiguration::new()
-            .with_width(display.width())
-            .with_height(display.height())
+            .with_width(capture_w)
+            .with_height(capture_h)
             .with_shows_cursor(!req.hide_cursor);
 
         let cg_image = SCScreenshotManager::capture_image(&filter, &config).map_err(map_err)?;
@@ -87,6 +89,30 @@ fn crop_rgba(full: RgbaImage, rect_logical: Rect, scale: f32) -> RgbaImage {
     let w = w_target.min(full.width().saturating_sub(x0));
     let h = h_target.min(full.height().saturating_sub(y0));
     image::imageops::crop_imm(&full, x0, y0, w, h).to_image()
+}
+
+fn native_capture_size(display_id: u32, fallback_w: u32, fallback_h: u32) -> (u32, u32) {
+    use core_graphics::display::CGDisplay;
+    let cg = CGDisplay::new(display_id);
+    native_capture_size_from_values(
+        fallback_w,
+        fallback_h,
+        cg.pixels_wide() as u32,
+        cg.pixels_high() as u32,
+    )
+}
+
+fn native_capture_size_from_values(
+    fallback_w: u32,
+    fallback_h: u32,
+    cg_w: u32,
+    cg_h: u32,
+) -> (u32, u32) {
+    if cg_w > 0 && cg_h > 0 {
+        (cg_w, cg_h)
+    } else {
+        (fallback_w.max(1), fallback_h.max(1))
+    }
 }
 
 fn display_info_from_sc(display: SCDisplay, primary_id: u32) -> DisplayInfo {
@@ -188,5 +214,21 @@ mod tests {
 
         assert_eq!(cropped.width(), 0);
         assert_eq!(cropped.height(), 0);
+    }
+
+    #[test]
+    fn native_capture_size_prefers_coregraphics_pixels_over_logical_scdisplay_size() {
+        assert_eq!(
+            native_capture_size_from_values(1512, 982, 3024, 1964),
+            (3024, 1964)
+        );
+    }
+
+    #[test]
+    fn native_capture_size_falls_back_when_coregraphics_pixels_are_unavailable() {
+        assert_eq!(
+            native_capture_size_from_values(1512, 982, 0, 0),
+            (1512, 982)
+        );
     }
 }
