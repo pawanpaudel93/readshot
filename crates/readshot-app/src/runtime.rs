@@ -2190,11 +2190,6 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let dims = text(format!("{img_w} × {img_h} px"))
         .size(11)
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55));
-    let zoom_label = text(ed.zoom.label())
-        .size(11)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
-        .width(Length::Fixed(42.0))
-        .align_x(iced::alignment::Horizontal::Center);
     let zoom_btn = |label: &'static str, msg: Message, enabled: bool, selected: bool| {
         let mut b = button(text(label).size(11).color(Color::WHITE))
             .padding([5, 9])
@@ -2204,24 +2199,43 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         }
         b
     };
-    let zoom_controls = container(
-        row![
-            text("Zoom")
+    let mut zoom_row = row![
+        text("Zoom")
+            .size(11)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+        zoom_btn("-", Message::EditorZoomOut, ed.zoom.can_zoom_out(), false,),
+    ];
+    if !ed.zoom.is_fit() && !ed.zoom.is_actual_size() {
+        zoom_row = zoom_row.push(
+            text(ed.zoom.label())
                 .size(11)
-                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
-            zoom_btn("-", Message::EditorZoomOut, ed.zoom.can_zoom_out(), false,),
-            zoom_label,
-            zoom_btn("+", Message::EditorZoomIn, ed.zoom.can_zoom_in(), false),
-            zoom_btn(
+                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
+                .width(Length::Fixed(42.0))
+                .align_x(iced::alignment::Horizontal::Center),
+        );
+    }
+    let zoom_controls = container(
+        zoom_row
+            .push(zoom_btn(
+                "+",
+                Message::EditorZoomIn,
+                ed.zoom.can_zoom_in(),
+                false,
+            ))
+            .push(zoom_btn(
                 "100%",
                 Message::EditorZoomActual,
                 true,
                 ed.zoom.is_actual_size(),
-            ),
-            zoom_btn("Fit", Message::EditorZoomFit, true, ed.zoom.is_fit()),
-        ]
-        .spacing(4)
-        .align_y(Alignment::Center),
+            ))
+            .push(zoom_btn(
+                "Fit",
+                Message::EditorZoomFit,
+                true,
+                ed.zoom.is_fit(),
+            ))
+            .spacing(4)
+            .align_y(Alignment::Center),
     )
     .padding([3, 6])
     .style(|_theme: &Theme| container::Style {
@@ -2251,24 +2265,34 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     };
     let hint = text(hint_str)
         .size(11)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72));
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
+        .wrapping(iced::widget::text::Wrapping::None);
     let toast: Element<'_, Message> = match ed.status.as_deref() {
         Some(s) => text(s)
             .size(11)
             .color(Color::from_rgba(0.65, 0.95, 0.75, 1.0))
+            .wrapping(iced::widget::text::Wrapping::None)
             .into(),
         None => IcedSpace::new().height(Length::Fixed(0.0)).into(),
     };
 
-    let bottom_row = row![
-        dims,
-        IcedSpace::new().width(Length::Fixed(8.0)),
-        bullet,
-        IcedSpace::new().width(Length::Fixed(8.0)),
-        hint,
-        IcedSpace::new().width(Length::Fixed(8.0)),
-        toast,
-        IcedSpace::new().width(Length::Fill),
+    let status_area = container(
+        row![
+            dims,
+            IcedSpace::new().width(Length::Fixed(8.0)),
+            bullet,
+            IcedSpace::new().width(Length::Fixed(8.0)),
+            hint,
+            IcedSpace::new().width(Length::Fixed(8.0)),
+            toast,
+        ]
+        .spacing(0)
+        .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .clip(true);
+
+    let controls = row![
         zoom_controls,
         IcedSpace::new().width(Length::Fixed(8.0)),
         action_btn(
@@ -2292,6 +2316,10 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     ]
     .spacing(6)
     .align_y(Alignment::Center);
+
+    let bottom_row = row![status_area, controls]
+        .spacing(8)
+        .align_y(Alignment::Center);
 
     // ===== Text-input banner =====
     let text_banner: Element<'_, Message> = if let Some(pending) = ed.pending_text.as_ref() {
