@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
-use iced::widget::{button, column, container, row, scrollable, text, Space};
+use iced::widget::{button, column, container, responsive, row, scrollable, text, Space};
 use iced::window;
 use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 
@@ -2074,16 +2074,34 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         .into();
     let canvas: Element<'_, Message> = canvas.map(Message::EditorCanvas);
 
-    let image_layer = container(
-        iced::widget::image(ed.image_handle.clone())
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .content_fit(iced::ContentFit::Contain),
-    )
+    let image_handle = ed.image_handle.clone();
+    let (image_w, image_h) = ed.effective_image_size();
+    let image_layer = responsive(move |available| {
+        let iw = image_w as f32;
+        let ih = image_h as f32;
+        let scale = if iw > 0.0 && ih > 0.0 {
+            (available.width / iw)
+                .min(available.height / ih)
+                .clamp(f32::EPSILON, 1.0)
+        } else {
+            1.0
+        };
+        let displayed_w = iw * scale;
+        let displayed_h = ih * scale;
+        container(
+            iced::widget::image(image_handle.clone())
+                .width(Length::Fixed(displayed_w))
+                .height(Length::Fixed(displayed_h))
+                .content_fit(iced::ContentFit::Contain),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
+    })
     .width(Length::Fill)
-    .height(Length::Fill)
-    .center_x(Length::Fill)
-    .center_y(Length::Fill);
+    .height(Length::Fill);
     let canvas_layer = container(canvas).width(Length::Fill).height(Length::Fill);
     let image_area = container(stack![image_layer, canvas_layer])
         .width(Length::Fill)

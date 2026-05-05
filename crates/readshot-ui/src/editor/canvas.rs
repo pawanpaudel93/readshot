@@ -107,8 +107,22 @@ pub struct EditorCanvas {
     pub image_offset: (f32, f32),
 }
 
+/// Display scale for the editor image. The editor fits large images
+/// down into the viewport but does not upscale small captures.
+fn display_scale_for_bounds(bounds: Rectangle, image_size: (u32, u32)) -> Option<f32> {
+    let (iw, ih) = (image_size.0 as f32, image_size.1 as f32);
+    if iw <= 0.0 || ih <= 0.0 {
+        return None;
+    }
+    Some(
+        (bounds.width / iw)
+            .min(bounds.height / ih)
+            .clamp(f32::EPSILON, 1.0),
+    )
+}
+
 /// Map a canvas-local point to the underlying image's pixel space
-/// using the same `Contain` letterbox the iced image widget uses.
+/// using the editor display rule: fit down when needed, never upscale.
 /// Returns `None` if the click sits in the dead band outside the
 /// displayed image.
 pub(crate) fn canvas_to_image(
@@ -117,12 +131,7 @@ pub(crate) fn canvas_to_image(
     image_size: (u32, u32),
 ) -> Option<Point> {
     let (iw, ih) = (image_size.0 as f32, image_size.1 as f32);
-    if iw <= 0.0 || ih <= 0.0 {
-        return None;
-    }
-    let scale = (bounds.width / iw)
-        .min(bounds.height / ih)
-        .max(f32::EPSILON);
+    let scale = display_scale_for_bounds(bounds, image_size)?;
     let displayed_w = iw * scale;
     let displayed_h = ih * scale;
     let offset_x = (bounds.width - displayed_w) * 0.5;
@@ -750,5 +759,44 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn canvas_mapping_does_not_upscale_small_images() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+
+        // A 200x100 capture should be centered at original size, not
+        // enlarged to 800x400.
+        assert_eq!(
+            canvas_to_image(pt(300.0, 250.0), bounds, (200, 100)),
+            Some(pt(0.0, 0.0))
+        );
+        assert_eq!(
+            canvas_to_image(pt(500.0, 350.0), bounds, (200, 100)),
+            Some(pt(200.0, 100.0))
+        );
+        assert_eq!(canvas_to_image(pt(250.0, 250.0), bounds, (200, 100)), None);
+    }
+
+    #[test]
+    fn canvas_mapping_still_fits_down_large_images() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 500.0,
+            height: 400.0,
+        };
+
+        // A 1000x400 capture scales down to 500x200 and is vertically centered.
+        assert_eq!(
+            canvas_to_image(pt(250.0, 200.0), bounds, (1000, 400)),
+            Some(pt(500.0, 200.0))
+        );
+        assert_eq!(canvas_to_image(pt(250.0, 90.0), bounds, (1000, 400)), None);
     }
 }
