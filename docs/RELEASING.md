@@ -95,12 +95,16 @@ In repository settings, point GitHub Pages at the `gh-pages` branch.
 
 ### 1. Bump the version
 
-Edit `[workspace.package].version` in `Cargo.toml` to the next
-SemVer. Touch every relevant module if a feature changed.
+Run the version bump helper with the next SemVer. It updates
+`Cargo.toml`, `Cargo.lock`, macOS bundle metadata, and packaging
+fallbacks.
 
 ```bash
-sed -i '' 's/^version = "0\.1\.0"/version = "0.2.0"/' Cargo.toml
-cargo build --release --workspace  # confirm it still builds
+scripts/bump-version.sh 0.2.0
+cargo test -p readshot-capture -p readshot-core -p readshot-app -p readshot-mcp -p readshot-ocr
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+git diff --check
 git commit -am "chore: bump version to 0.2.0"
 ```
 
