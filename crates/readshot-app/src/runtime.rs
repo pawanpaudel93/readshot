@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::window;
 use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 
@@ -289,6 +289,19 @@ fn settings_window_settings() -> window::Settings {
     }
 }
 
+fn cli_tools_window_settings() -> window::Settings {
+    window::Settings {
+        size: iced::Size::new(760.0, 620.0),
+        min_size: Some(iced::Size::new(560.0, 420.0)),
+        position: window::Position::Centered,
+        resizable: true,
+        decorations: true,
+        transparent: false,
+        visible: true,
+        ..Default::default()
+    }
+}
+
 /// Window settings for one overlay window covering a single display.
 ///
 /// Borderless transparent `AlwaysOnTop` window positioned at the
@@ -355,6 +368,7 @@ pub fn title(state: &App, id: window::Id) -> String {
         Some(WindowKind::Pin) => "Readshot — Pin".into(),
         Some(WindowKind::History) => "Readshot — History".into(),
         Some(WindowKind::Settings) => "Readshot — Settings".into(),
+        Some(WindowKind::CliTools) => "Readshot — Command Line Tools".into(),
     }
 }
 
@@ -603,8 +617,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 update(state, Message::OpenSettingsRequested)
             }
             crate::tray::TrayAction::InstallCommandLineTools => {
-                notify_cli_tools_instructions();
-                Task::none()
+                update(state, Message::OpenCliToolsRequested)
             }
             crate::tray::TrayAction::CheckForUpdates => {
                 notify_update_check_started();
@@ -897,6 +910,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             if state.settings_window_id == Some(id) {
                 state.settings_window_id = None;
+            }
+            if state.cli_tools_window_id == Some(id) {
+                state.cli_tools_window_id = None;
+                state.cli_tools_status = None;
             }
             Task::none()
         }
@@ -1460,6 +1477,31 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.settings_window_id = Some(id);
             Task::none()
         }
+        Message::OpenCliToolsRequested => {
+            if let Some(id) = state.cli_tools_window_id {
+                return window::gain_focus(id);
+            }
+            state.cli_tools_status = None;
+            let (id, open_task) = window::open(cli_tools_window_settings());
+            state.windows.register(id, WindowKind::CliTools);
+            state.cli_tools_window_id = Some(id);
+            open_task.map(Message::CliToolsWindowReady)
+        }
+        Message::CliToolsWindowReady(id) => {
+            state.cli_tools_window_id = Some(id);
+            Task::none()
+        }
+        Message::CliToolsCopyRequested => Task::perform(
+            copy_text_to_clipboard(cli_tools_setup_commands()),
+            |result| Message::CliToolsCopyDone(result.map_err(|e| e.to_string())),
+        ),
+        Message::CliToolsCopyDone(result) => {
+            state.cli_tools_status = Some(match result {
+                Ok(()) => "Commands copied. Paste them into Terminal.".into(),
+                Err(e) => format!("Copy failed: {e}"),
+            });
+            Task::none()
+        }
 
         // Phase B+ (overlay, editor, tray, hotkey, URL scheme) —
         // ignore for now so the daemon is well-behaved if a stray
@@ -1477,11 +1519,42 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
         Some(WindowKind::Pin) => pin_view(state, id),
         Some(WindowKind::History) => history_view(state),
         Some(WindowKind::Settings) => settings_view(state),
+        Some(WindowKind::CliTools) => cli_tools_view(state),
     }
 }
 
+fn cli_tools_view(state: &App) -> Element<'_, Message> {
+    let instructions = crate::cli_tools::command_line_tools_instructions();
+    let status = state.cli_tools_status.as_deref().unwrap_or("");
+
+    let copy = button(text("Copy Commands").size(14)).on_press(Message::CliToolsCopyRequested);
+
+    container(
+        column![
+            text("Command Line Tools").size(28),
+            text("Copy these commands into Terminal to expose readshot and readshot-mcp in your shell.")
+                .size(14),
+            copy,
+            text(status).size(13),
+            scrollable(
+                container(text(instructions).size(13))
+                    .padding(14)
+                    .width(Length::Fill)
+            )
+            .height(Length::Fill),
+        ]
+        .spacing(14)
+        .padding(24)
+        .width(Length::Fill)
+        .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
+}
+
 fn history_view(state: &App) -> Element<'_, Message> {
-    use iced::widget::{image as image_widget, scrollable, text_input};
+    use iced::widget::{image as image_widget, text_input};
 
     let total = state.history_records.len();
     // Apply the live search filter. Empty query → every record.
@@ -3198,6 +3271,16 @@ async fn copy_image_to_clipboard(img: image::RgbaImage) -> Result<(), ClipboardE
     .map_err(|e| ClipboardError::Join(e.to_string()))?
 }
 
+async fn copy_text_to_clipboard(text: String) -> Result<(), ClipboardError> {
+    tokio::task::spawn_blocking(move || {
+        let mut ctx = arboard::Clipboard::new()?;
+        ctx.set_text(text)?;
+        Ok::<(), ClipboardError>(())
+    })
+    .await
+    .map_err(|e| ClipboardError::Join(e.to_string()))?
+}
+
 /// Run the OCR engine on the captured image and copy the result to
 /// the clipboard. Returns the text (so the editor can show its size
 /// in the toast).
@@ -3214,16 +3297,13 @@ async fn ocr_then_copy(
         .await?;
     let text = result;
     if !text.is_empty() {
-        let to_copy = text.clone();
-        tokio::task::spawn_blocking(move || -> Result<(), ClipboardError> {
-            let mut ctx = arboard::Clipboard::new()?;
-            ctx.set_text(&to_copy)?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| OcrCopyError::Clipboard(ClipboardError::Join(e.to_string())))??;
+        copy_text_to_clipboard(text.clone()).await?;
     }
     Ok(text)
+}
+
+fn cli_tools_setup_commands() -> String {
+    crate::cli_tools::command_line_tools_instructions().to_string()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -3317,17 +3397,6 @@ fn notify_update_check_started() {
     #[cfg(target_os = "macos")]
     {
         show_macos_notification("Readshot updates", "Checking for updates...");
-    }
-}
-
-fn notify_cli_tools_instructions() {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = crate::cli_tools::command_line_tools_instructions();
-        show_macos_notification(
-            "Readshot command line tools",
-            "Copy the command-line setup block from README.md or docs/INSTALL.md.",
-        );
     }
 }
 

@@ -54,6 +54,8 @@ pub enum WindowKind {
     /// Single instance — re-opening focuses the existing window
     /// rather than spawning a duplicate.
     Settings,
+    /// Command-line setup instructions window.
+    CliTools,
 }
 
 /// Mapping from live `window::Id`s to their kind, so the daemon's
@@ -294,6 +296,14 @@ pub enum Message {
     /// First `view` call after the settings window is opened. Records
     /// the `window::Id` so close + focus paths work.
     SettingsWindowReady(iced::window::Id),
+    /// User asked for the command-line setup instructions window.
+    OpenCliToolsRequested,
+    /// First `view` call after the command-line setup window opens.
+    CliToolsWindowReady(iced::window::Id),
+    /// User clicked Copy Commands in the command-line setup window.
+    CliToolsCopyRequested,
+    /// Command-line setup instructions were copied, or failed to copy.
+    CliToolsCopyDone(Result<(), String>),
     /// Capture coordinator finished a `capture_region` call.
     CaptureCompleted(Result<image::RgbaImage, String>),
     /// OCR engine finished a `recognise` call.
@@ -384,6 +394,10 @@ pub struct App {
     /// `window::Id` of the live settings window, if any. Single
     /// instance — re-opening just refocuses the existing window.
     pub settings_window_id: Option<iced::window::Id>,
+    /// `window::Id` of the live command-line setup instructions window.
+    pub cli_tools_window_id: Option<iced::window::Id>,
+    /// Copy-status text shown in the command-line setup window.
+    pub cli_tools_status: Option<String>,
 }
 
 /// Per-overlay-window record. Tracks which display the window covers
@@ -451,6 +465,8 @@ impl App {
             history_search: String::new(),
             preferences_path: None,
             settings_window_id: None,
+            cli_tools_window_id: None,
+            cli_tools_status: None,
         }
     }
 
