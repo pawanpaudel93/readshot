@@ -17,6 +17,7 @@ pub mod cli;
 pub mod cli_tools;
 pub mod coordinator;
 pub mod editor;
+mod editor_icons;
 pub mod overlay;
 pub mod permissions;
 pub mod runtime;

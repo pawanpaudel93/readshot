@@ -2010,11 +2010,14 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     .step(0.5)
     .width(Length::Fixed(140.0));
 
-    let undo_btn = ghost_icon_button("↶", "Undo (⌘Z)", !busy && ed.model.can_undo(), || {
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)
-    });
+    let undo_btn = ghost_icon_button(
+        crate::editor_icons::EditorIcon::Undo,
+        "Undo (⌘Z)",
+        !busy && ed.model.can_undo(),
+        || Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+    );
     let redo_btn = ghost_icon_button(
-        "↷",
+        crate::editor_icons::EditorIcon::Redo,
         "Redo (⌘⇧Z)",
         !busy && ed.model.can_redo(),
         || Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
@@ -2310,22 +2313,14 @@ fn tool_button<'a>(
     busy: bool,
 ) -> Element<'a, Message> {
     use iced::widget::tooltip;
-    let glyph = tool_glyph(t);
     let (long, key) = tool_label_and_key(t);
     let is_active = t == active;
-    let mut b = button(
-        text(glyph)
-            .size(15)
-            .color(Color::WHITE)
-            .align_x(iced::alignment::Horizontal::Center)
-            .align_y(iced::alignment::Vertical::Center)
-            .width(Length::Fill)
-            .height(Length::Fill),
-    )
-    .padding(0)
-    .width(Length::Fixed(32.0))
-    .height(Length::Fixed(32.0))
-    .style(move |theme: &Theme, status| toolbar_button_style(theme, status, is_active));
+    let icon = crate::editor_icons::editor_icon(crate::editor_icons::EditorIcon::Tool(t), !busy);
+    let mut b = button(icon)
+        .padding(0)
+        .width(Length::Fixed(32.0))
+        .height(Length::Fixed(32.0))
+        .style(move |theme: &Theme, status| toolbar_button_style(theme, status, is_active));
     if !busy {
         b = b.on_press(Message::EditorToolbar(
             readshot_ui::ToolbarMessage::SelectTool(t),
@@ -2350,7 +2345,7 @@ fn tool_button<'a>(
 /// Compact ghost-style action button used for Undo / Redo. `gen`
 /// produces the message lazily so we only build it when enabled.
 fn ghost_icon_button<'a, F>(
-    glyph: &'static str,
+    icon: crate::editor_icons::EditorIcon,
     tip: &'static str,
     enabled: bool,
     gen: F,
@@ -2359,19 +2354,11 @@ where
     F: Fn() -> Message + 'a,
 {
     use iced::widget::tooltip;
-    let mut b = button(
-        text(glyph)
-            .size(15)
-            .color(Color::WHITE)
-            .align_x(iced::alignment::Horizontal::Center)
-            .align_y(iced::alignment::Vertical::Center)
-            .width(Length::Fill)
-            .height(Length::Fill),
-    )
-    .padding(0)
-    .width(Length::Fixed(32.0))
-    .height(Length::Fixed(32.0))
-    .style(move |theme: &Theme, status| toolbar_ghost_style(theme, status, enabled));
+    let mut b = button(crate::editor_icons::editor_icon(icon, enabled))
+        .padding(0)
+        .width(Length::Fixed(32.0))
+        .height(Length::Fixed(32.0))
+        .style(move |theme: &Theme, status| toolbar_ghost_style(theme, status, enabled));
     if enabled {
         b = b.on_press(gen());
     }
@@ -2483,27 +2470,6 @@ fn action_button_style(theme: &Theme, status: button::Status, kind: ActionKind) 
             ..Default::default()
         },
         ..Default::default()
-    }
-}
-
-/// One-glyph icon for each tool — used inside the 32×32 square
-/// toolbar buttons. The full name + keyboard shortcut live in the
-/// hover tooltip via [`tool_label_and_key`].
-fn tool_glyph(tool: readshot_ui::editor::ToolState) -> &'static str {
-    use readshot_ui::editor::ToolState as T;
-    match tool {
-        T::Select => "↖",
-        T::Rectangle => "▭",
-        T::Ellipse => "◯",
-        T::Line => "／",
-        T::Arrow => "→",
-        T::Pen => "✎",
-        T::Highlighter => "▰",
-        T::Text => "T",
-        T::Blur => "◈",
-        T::Pixelate => "▦",
-        T::NumberedPin => "①",
-        T::Crop => "⬚",
     }
 }
 
