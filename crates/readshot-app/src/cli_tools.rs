@@ -1,25 +1,86 @@
-pub fn command_line_tools_instructions() -> &'static str {
-    r#"Common symlink commands:
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shell {
+    Zsh,
+    Bash,
+    Fish,
+}
 
-mkdir -p "$HOME/bin"
+impl Shell {
+    pub const ALL: [Shell; 3] = [Shell::Zsh, Shell::Bash, Shell::Fish];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Shell::Zsh => "zsh",
+            Shell::Bash => "bash",
+            Shell::Fish => "fish",
+        }
+    }
+}
+
+const COMMON_COMMANDS: &str = r#"mkdir -p "$HOME/bin"
 ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot" "$HOME/bin/readshot"
-ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/bin/readshot-mcp"
+ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/bin/readshot-mcp""#;
+
+const ZSH_COMMANDS: &str = r#"export PATH="$HOME/bin:$PATH"
+grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc""#;
+
+const BASH_COMMANDS: &str = r#"export PATH="$HOME/bin:$PATH"
+grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc""#;
+
+const FISH_COMMANDS: &str = r#"fish_add_path "$HOME/bin"
+mkdir -p "$HOME/.config/fish"
+grep -qxF 'fish_add_path "$HOME/bin"' "$HOME/.config/fish/config.fish" 2>/dev/null || echo 'fish_add_path "$HOME/bin"' >> "$HOME/.config/fish/config.fish""#;
+
+const VERIFY_COMMANDS: &str = r#"readshot --help"#;
+
+pub fn common_commands() -> &'static str {
+    COMMON_COMMANDS
+}
+
+pub fn shell_commands(shell: Shell) -> &'static str {
+    match shell {
+        Shell::Zsh => ZSH_COMMANDS,
+        Shell::Bash => BASH_COMMANDS,
+        Shell::Fish => FISH_COMMANDS,
+    }
+}
+
+pub fn verify_commands() -> &'static str {
+    VERIFY_COMMANDS
+}
+
+pub fn setup_commands(shell: Shell) -> String {
+    format!(
+        "{}\n\n{}\n\n{}",
+        common_commands(),
+        shell_commands(shell),
+        verify_commands()
+    )
+}
+
+pub fn command_line_tools_instructions() -> String {
+    format!(
+        r#"Common symlink commands:
+
+{}
 
 For zsh:
-export PATH="$HOME/bin:$PATH"
-grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc"
+{}
 
 For bash:
-export PATH="$HOME/bin:$PATH"
-grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
+{}
 
 For fish:
-fish_add_path "$HOME/bin"
-mkdir -p "$HOME/.config/fish"
-grep -qxF 'fish_add_path "$HOME/bin"' "$HOME/.config/fish/config.fish" 2>/dev/null || echo 'fish_add_path "$HOME/bin"' >> "$HOME/.config/fish/config.fish"
+{}
 
 Verify:
-readshot --help"#
+{}"#,
+        common_commands(),
+        shell_commands(Shell::Zsh),
+        shell_commands(Shell::Bash),
+        shell_commands(Shell::Fish),
+        verify_commands()
+    )
 }
 
 #[cfg(test)]
@@ -43,5 +104,23 @@ mod tests {
         assert!(instructions.contains("fish_add_path \"$HOME/bin\""));
         assert!(instructions.contains("config.fish"));
         assert!(instructions.contains("readshot --help"));
+    }
+
+    #[test]
+    fn setup_commands_include_only_selected_shell() {
+        let zsh = setup_commands(Shell::Zsh);
+        assert!(zsh.contains(".zshrc"));
+        assert!(!zsh.contains(".bashrc"));
+        assert!(!zsh.contains("config.fish"));
+
+        let bash = setup_commands(Shell::Bash);
+        assert!(bash.contains(".bashrc"));
+        assert!(!bash.contains(".zshrc"));
+        assert!(!bash.contains("config.fish"));
+
+        let fish = setup_commands(Shell::Fish);
+        assert!(fish.contains("config.fish"));
+        assert!(!fish.contains(".zshrc"));
+        assert!(!fish.contains(".bashrc"));
     }
 }

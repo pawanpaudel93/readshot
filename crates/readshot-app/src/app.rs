@@ -300,10 +300,10 @@ pub enum Message {
     OpenCliToolsRequested,
     /// First `view` call after the command-line setup window opens.
     CliToolsWindowReady(iced::window::Id),
-    /// User clicked Copy Commands in the command-line setup window.
-    CliToolsCopyRequested,
+    /// User clicked Copy Commands for one shell in the command-line setup window.
+    CliToolsCopyRequested(crate::cli_tools::Shell),
     /// Command-line setup instructions were copied, or failed to copy.
-    CliToolsCopyDone(Result<(), String>),
+    CliToolsCopyDone(crate::cli_tools::Shell, Result<(), String>),
     /// Capture coordinator finished a `capture_region` call.
     CaptureCompleted(Result<image::RgbaImage, String>),
     /// OCR engine finished a `recognise` call.

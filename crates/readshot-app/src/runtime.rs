@@ -1491,13 +1491,16 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.cli_tools_window_id = Some(id);
             Task::none()
         }
-        Message::CliToolsCopyRequested => Task::perform(
-            copy_text_to_clipboard(cli_tools_setup_commands()),
-            |result| Message::CliToolsCopyDone(result.map_err(|e| e.to_string())),
+        Message::CliToolsCopyRequested(shell) => Task::perform(
+            copy_text_to_clipboard(cli_tools_setup_commands(shell)),
+            move |result| Message::CliToolsCopyDone(shell, result.map_err(|e| e.to_string())),
         ),
-        Message::CliToolsCopyDone(result) => {
+        Message::CliToolsCopyDone(shell, result) => {
             state.cli_tools_status = Some(match result {
-                Ok(()) => "Commands copied. Paste them into Terminal.".into(),
+                Ok(()) => format!(
+                    "{} commands copied. Paste them into Terminal.",
+                    shell.label()
+                ),
                 Err(e) => format!("Copy failed: {e}"),
             });
             Task::none()
@@ -1524,22 +1527,54 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
 }
 
 fn cli_tools_view(state: &App) -> Element<'_, Message> {
-    let instructions = crate::cli_tools::command_line_tools_instructions();
+    let common = crate::cli_tools::common_commands();
+    let verify = crate::cli_tools::verify_commands();
     let status = state.cli_tools_status.as_deref().unwrap_or("");
 
-    let copy = button(text("Copy Commands").size(14)).on_press(Message::CliToolsCopyRequested);
+    let shell_sections =
+        crate::cli_tools::Shell::ALL
+            .into_iter()
+            .fold(column![].spacing(12), |sections, shell| {
+                sections.push(
+                    container(
+                        column![
+                            row![
+                                text(format!("For {}", shell.label())).size(18),
+                                Space::new().width(Length::Fill),
+                                button(text(format!("Copy {} Commands", shell.label())).size(13))
+                                    .on_press(Message::CliToolsCopyRequested(shell)),
+                            ]
+                            .spacing(12)
+                            .align_y(Alignment::Center),
+                            container(text(crate::cli_tools::shell_commands(shell)).size(13))
+                                .padding(12)
+                                .width(Length::Fill),
+                        ]
+                        .spacing(8),
+                    )
+                    .padding(10)
+                    .width(Length::Fill),
+                )
+            });
 
     container(
         column![
             text("Command Line Tools").size(28),
-            text("Copy these commands into Terminal to expose readshot and readshot-mcp in your shell.")
-                .size(14),
-            copy,
+            text("Choose your shell and copy only that command block into Terminal.").size(14),
             text(status).size(13),
             scrollable(
-                container(text(instructions).size(13))
-                    .padding(14)
-                    .width(Length::Fill)
+                column![
+                    text("Run for every shell").size(18),
+                    container(text(common).size(13))
+                        .padding(12)
+                        .width(Length::Fill),
+                    shell_sections,
+                    text("Verify").size(18),
+                    container(text(verify).size(13))
+                        .padding(12)
+                        .width(Length::Fill),
+                ]
+                .spacing(12)
             )
             .height(Length::Fill),
         ]
@@ -3302,8 +3337,8 @@ async fn ocr_then_copy(
     Ok(text)
 }
 
-fn cli_tools_setup_commands() -> String {
-    crate::cli_tools::command_line_tools_instructions().to_string()
+fn cli_tools_setup_commands(shell: crate::cli_tools::Shell) -> String {
+    crate::cli_tools::setup_commands(shell)
 }
 
 #[derive(Debug, thiserror::Error)]
