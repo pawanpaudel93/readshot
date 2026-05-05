@@ -274,6 +274,14 @@ pub enum Message {
     /// wraps via `rem_euclid` so the cycle is endless. Triggered by
     /// `,` / `.` keyboard shortcuts.
     EditorColorCycle(i32),
+    /// Zoom editor preview in one step.
+    EditorZoomIn,
+    /// Zoom editor preview out one step.
+    EditorZoomOut,
+    /// Reset editor preview to exact image pixels.
+    EditorZoomActual,
+    /// Reset editor preview to fit-down mode.
+    EditorZoomFit,
     /// Text-tool inline input — content typed by the user. Empty
     /// means the input is cleared.
     EditorTextChanged(String),

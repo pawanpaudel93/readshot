@@ -105,14 +105,24 @@ pub struct EditorCanvas {
     /// this offset before publishing CommitAnnotation. `(0, 0)` when
     /// no Crop annotation is in flight.
     pub image_offset: (f32, f32),
+    /// Explicit display scale supplied by the app. `None` means fit
+    /// large images down and never upscale small captures.
+    pub display_scale: Option<f32>,
 }
 
 /// Display scale for the editor image. The editor fits large images
 /// down into the viewport but does not upscale small captures.
-fn display_scale_for_bounds(bounds: Rectangle, image_size: (u32, u32)) -> Option<f32> {
+fn display_scale_for_bounds(
+    bounds: Rectangle,
+    image_size: (u32, u32),
+    explicit_scale: Option<f32>,
+) -> Option<f32> {
     let (iw, ih) = (image_size.0 as f32, image_size.1 as f32);
     if iw <= 0.0 || ih <= 0.0 {
         return None;
+    }
+    if let Some(scale) = explicit_scale {
+        return Some(scale.max(f32::EPSILON));
     }
     Some(
         (bounds.width / iw)
@@ -129,9 +139,10 @@ pub(crate) fn canvas_to_image(
     point: Point,
     bounds: Rectangle,
     image_size: (u32, u32),
+    explicit_scale: Option<f32>,
 ) -> Option<Point> {
     let (iw, ih) = (image_size.0 as f32, image_size.1 as f32);
-    let scale = display_scale_for_bounds(bounds, image_size)?;
+    let scale = display_scale_for_bounds(bounds, image_size, explicit_scale)?;
     let displayed_w = iw * scale;
     let displayed_h = ih * scale;
     let offset_x = (bounds.width - displayed_w) * 0.5;
@@ -157,8 +168,9 @@ pub(crate) fn canvas_to_base(
     bounds: Rectangle,
     image_size: (u32, u32),
     image_offset: (f32, f32),
+    explicit_scale: Option<f32>,
 ) -> Option<Point> {
-    let local = canvas_to_image(point, bounds, image_size)?;
+    let local = canvas_to_image(point, bounds, image_size, explicit_scale)?;
     Some(Point::new(
         local.x + image_offset.0,
         local.y + image_offset.1,
@@ -181,7 +193,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 // Reject clicks in the letterbox dead band — the
                 // user clearly didn't mean to annotate empty
                 // background.
-                let local = canvas_to_image(point, bounds, self.image_size)?;
+                let local = canvas_to_image(point, bounds, self.image_size, self.display_scale)?;
                 // Translate from displayed-image pixels to the
                 // underlying base-image pixels so the renderer's
                 // crop-offset translation maps annotations back to
@@ -293,12 +305,22 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                         // base-image pixels before building the
                         // annotation — the renderer paints in base
                         // coords and translates for the active crop.
-                        let anchor_img =
-                            canvas_to_base(anchor, bounds, self.image_size, self.image_offset)
-                                .unwrap_or(anchor);
-                        let cur_img =
-                            canvas_to_base(cur, bounds, self.image_size, self.image_offset)
-                                .unwrap_or(cur);
+                        let anchor_img = canvas_to_base(
+                            anchor,
+                            bounds,
+                            self.image_size,
+                            self.image_offset,
+                            self.display_scale,
+                        )
+                        .unwrap_or(anchor);
+                        let cur_img = canvas_to_base(
+                            cur,
+                            bounds,
+                            self.image_size,
+                            self.image_offset,
+                            self.display_scale,
+                        )
+                        .unwrap_or(cur);
                         let annotation = annotation_for_drag(
                             tool_at_press,
                             anchor_img,
@@ -330,9 +352,14 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                         let pts: Vec<PointLike> = points
                             .iter()
                             .map(|p| {
-                                let q =
-                                    canvas_to_base(*p, bounds, self.image_size, self.image_offset)
-                                        .unwrap_or(*p);
+                                let q = canvas_to_base(
+                                    *p,
+                                    bounds,
+                                    self.image_size,
+                                    self.image_offset,
+                                    self.display_scale,
+                                )
+                                .unwrap_or(*p);
                                 PointLike::new(q.x, q.y)
                             })
                             .collect();
@@ -773,14 +800,17 @@ mod tests {
         // A 200x100 capture should be centered at original size, not
         // enlarged to 800x400.
         assert_eq!(
-            canvas_to_image(pt(300.0, 250.0), bounds, (200, 100)),
+            canvas_to_image(pt(300.0, 250.0), bounds, (200, 100), None),
             Some(pt(0.0, 0.0))
         );
         assert_eq!(
-            canvas_to_image(pt(500.0, 350.0), bounds, (200, 100)),
+            canvas_to_image(pt(500.0, 350.0), bounds, (200, 100), None),
             Some(pt(200.0, 100.0))
         );
-        assert_eq!(canvas_to_image(pt(250.0, 250.0), bounds, (200, 100)), None);
+        assert_eq!(
+            canvas_to_image(pt(250.0, 250.0), bounds, (200, 100), None),
+            None
+        );
     }
 
     #[test]
@@ -794,9 +824,32 @@ mod tests {
 
         // A 1000x400 capture scales down to 500x200 and is vertically centered.
         assert_eq!(
-            canvas_to_image(pt(250.0, 200.0), bounds, (1000, 400)),
+            canvas_to_image(pt(250.0, 200.0), bounds, (1000, 400), None),
             Some(pt(500.0, 200.0))
         );
-        assert_eq!(canvas_to_image(pt(250.0, 90.0), bounds, (1000, 400)), None);
+        assert_eq!(
+            canvas_to_image(pt(250.0, 90.0), bounds, (1000, 400), None),
+            None
+        );
+    }
+
+    #[test]
+    fn canvas_mapping_uses_explicit_zoom_scale() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+
+        // A 200x100 capture at 200% displays as 400x200 and is centered.
+        assert_eq!(
+            canvas_to_image(pt(200.0, 200.0), bounds, (200, 100), Some(2.0)),
+            Some(pt(0.0, 0.0))
+        );
+        assert_eq!(
+            canvas_to_image(pt(600.0, 400.0), bounds, (200, 100), Some(2.0)),
+            Some(pt(200.0, 100.0))
+        );
     }
 }

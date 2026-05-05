@@ -53,6 +53,43 @@ pub struct EditorSession {
     /// can be written back to the JSON sidecar without altering the
     /// original PNG bytes.
     pub source_record: Option<CaptureRecord>,
+    /// Editor preview zoom. `Fit` scales large captures down and keeps
+    /// small captures at 100%; `Percent` is an explicit user zoom.
+    pub zoom: EditorZoom,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EditorZoom {
+    Fit,
+    Percent(f32),
+}
+
+impl EditorZoom {
+    pub const MIN: f32 = 0.25;
+    pub const MAX: f32 = 4.0;
+    pub const STEP: f32 = 1.25;
+
+    pub fn label(self) -> String {
+        match self {
+            Self::Fit => "Fit".into(),
+            Self::Percent(scale) => format!("{:.0}%", scale * 100.0),
+        }
+    }
+
+    pub fn explicit_scale(self) -> Option<f32> {
+        match self {
+            Self::Fit => None,
+            Self::Percent(scale) => Some(scale),
+        }
+    }
+
+    pub fn zoom_in(self) -> Self {
+        Self::Percent((self.explicit_scale().unwrap_or(1.0) * Self::STEP).min(Self::MAX))
+    }
+
+    pub fn zoom_out(self) -> Self {
+        Self::Percent((self.explicit_scale().unwrap_or(1.0) / Self::STEP).max(Self::MIN))
+    }
 }
 
 /// Captured text-input state for the Text tool. The image-pixel
@@ -114,6 +151,7 @@ impl EditorSession {
             image_handle,
             pending_text: None,
             source_record: None,
+            zoom: EditorZoom::Fit,
         }
     }
 
@@ -130,6 +168,7 @@ impl EditorSession {
             image_handle,
             pending_text: None,
             source_record: Some(record),
+            zoom: EditorZoom::Fit,
         }
     }
 
@@ -217,6 +256,7 @@ mod tests {
         assert!(s.window_id.is_none());
         assert!(s.preview.is_none());
         assert_eq!(s.next_pin_number, 1);
+        assert_eq!(s.zoom, EditorZoom::Fit);
     }
 
     #[test]
@@ -226,5 +266,19 @@ mod tests {
         // isn't introspectable beyond identity.
         let _ = s.image_handle.clone();
         assert_eq!(s.image_size(), (16, 32));
+    }
+
+    #[test]
+    fn editor_zoom_steps_from_fit_via_actual_size() {
+        assert_eq!(EditorZoom::Fit.zoom_in(), EditorZoom::Percent(1.25));
+        assert_eq!(EditorZoom::Fit.zoom_out(), EditorZoom::Percent(0.8));
+        assert_eq!(
+            EditorZoom::Percent(10.0).zoom_in(),
+            EditorZoom::Percent(EditorZoom::MAX)
+        );
+        assert_eq!(
+            EditorZoom::Percent(0.01).zoom_out(),
+            EditorZoom::Percent(EditorZoom::MIN)
+        );
     }
 }

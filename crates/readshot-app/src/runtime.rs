@@ -461,6 +461,15 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                     (Key::Character(c), true, false) if c.eq_ignore_ascii_case("w") => {
                         return Some(Message::EditorDiscardRequested);
                     }
+                    (Key::Character(c), true, false) if c == "+" || c == "=" => {
+                        return Some(Message::EditorZoomIn);
+                    }
+                    (Key::Character(c), true, false) if c == "-" => {
+                        return Some(Message::EditorZoomOut);
+                    }
+                    (Key::Character(c), true, false) if c == "0" => {
+                        return Some(Message::EditorZoomActual);
+                    }
                     (Key::Named(iced::keyboard::key::Named::Escape), _, _) => {
                         return Some(Message::EditorTextCancel);
                     }
@@ -1316,6 +1325,30 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::EditorZoomIn => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.zoom = ed.zoom.zoom_in();
+            }
+            Task::none()
+        }
+        Message::EditorZoomOut => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.zoom = ed.zoom.zoom_out();
+            }
+            Task::none()
+        }
+        Message::EditorZoomActual => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.zoom = crate::editor::EditorZoom::Percent(1.0);
+            }
+            Task::none()
+        }
+        Message::EditorZoomFit => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.zoom = crate::editor::EditorZoom::Fit;
+            }
+            Task::none()
+        }
 
         Message::EditorPinRequested => {
             // Snapshot the editor's currently-flattened image, open
@@ -2060,50 +2093,73 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     // the image's effective dimensions + crop offset so cursor maps
     // to base-image coordinates regardless of zoom / letterbox /
     // crop. See `canvas_to_base` in readshot-ui.
-    let canvas_program = EditorCanvas {
-        active_tool,
-        color: active_color,
-        line_width,
-        next_pin_number: ed.next_pin_number,
-        image_size: ed.effective_image_size(),
-        image_offset: ed.crop_offset(),
-    };
-    let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into();
-    let canvas: Element<'_, Message> = canvas.map(Message::EditorCanvas);
-
     let image_handle = ed.image_handle.clone();
     let (image_w, image_h) = ed.effective_image_size();
-    let image_layer = responsive(move |available| {
+    let image_offset = ed.crop_offset();
+    let zoom = ed.zoom;
+    let next_pin_number = ed.next_pin_number;
+    let image_area_content = responsive(move |available| {
         let iw = image_w as f32;
         let ih = image_h as f32;
-        let scale = if iw > 0.0 && ih > 0.0 {
-            (available.width / iw)
-                .min(available.height / ih)
-                .clamp(f32::EPSILON, 1.0)
+        let fit_scale = editor_fit_scale(available, image_w, image_h);
+        let scale = zoom.explicit_scale().unwrap_or(fit_scale);
+        let displayed_w = (iw * scale).max(1.0);
+        let displayed_h = (ih * scale).max(1.0);
+        let content_w = displayed_w.max(available.width);
+        let content_h = displayed_h.max(available.height);
+
+        let filter = if scale >= 1.0 {
+            iced::widget::image::FilterMethod::Nearest
         } else {
-            1.0
+            iced::widget::image::FilterMethod::Linear
         };
-        let displayed_w = iw * scale;
-        let displayed_h = ih * scale;
-        container(
+
+        let image_layer = container(
             iced::widget::image(image_handle.clone())
                 .width(Length::Fixed(displayed_w))
                 .height(Length::Fixed(displayed_h))
-                .content_fit(iced::ContentFit::Contain),
+                .content_fit(iced::ContentFit::Contain)
+                .filter_method(filter),
         )
-        .width(Length::Fill)
-        .height(Length::Fill)
+        .width(Length::Fixed(content_w))
+        .height(Length::Fixed(content_h))
         .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .into()
+        .center_y(Length::Fill);
+
+        let canvas_program = EditorCanvas {
+            active_tool,
+            color: active_color,
+            line_width,
+            next_pin_number,
+            image_size: (image_w, image_h),
+            image_offset,
+            display_scale: Some(scale),
+        };
+        let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
+            .width(Length::Fixed(content_w))
+            .height(Length::Fixed(content_h))
+            .into();
+        let canvas: Element<'_, Message> = canvas.map(Message::EditorCanvas);
+        let canvas_layer = container(canvas)
+            .width(Length::Fixed(content_w))
+            .height(Length::Fixed(content_h));
+
+        let content = container(stack![image_layer, canvas_layer])
+            .width(Length::Fixed(content_w))
+            .height(Length::Fixed(content_h));
+
+        scrollable(content)
+            .direction(iced::widget::scrollable::Direction::Both {
+                vertical: iced::widget::scrollable::Scrollbar::default(),
+                horizontal: iced::widget::scrollable::Scrollbar::default(),
+            })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     })
     .width(Length::Fill)
     .height(Length::Fill);
-    let canvas_layer = container(canvas).width(Length::Fill).height(Length::Fill);
-    let image_area = container(stack![image_layer, canvas_layer])
+    let image_area = container(image_area_content)
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(0)
@@ -2138,6 +2194,19 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let dims = text(format!("{img_w} × {img_h} px"))
         .size(11)
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55));
+    let zoom_label = text(ed.zoom.label())
+        .size(11)
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.62))
+        .width(Length::Fixed(38.0));
+    let zoom_btn = |label: &'static str, msg: Message| {
+        let mut b = button(text(label).size(11).color(Color::WHITE))
+            .padding([5, 8])
+            .style(move |theme, status| action_button_style(theme, status, ActionKind::Secondary));
+        if !busy {
+            b = b.on_press(msg);
+        }
+        b
+    };
     let bullet = text("·")
         .size(11)
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.35));
@@ -2174,6 +2243,12 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         IcedSpace::new().width(Length::Fixed(8.0)),
         toast,
         IcedSpace::new().width(Length::Fill),
+        zoom_btn("-", Message::EditorZoomOut),
+        zoom_label,
+        zoom_btn("+", Message::EditorZoomIn),
+        zoom_btn("100%", Message::EditorZoomActual),
+        zoom_btn("Fit", Message::EditorZoomFit),
+        IcedSpace::new().width(Length::Fixed(8.0)),
         action_btn(
             "Discard",
             Message::EditorDiscardRequested,
@@ -2559,6 +2634,17 @@ fn swatch_eq(a: readshot_core::Rgba, b: readshot_core::Rgba) -> bool {
         && (a.g - b.g).abs() < 1e-3
         && (a.b - b.b).abs() < 1e-3
         && (a.a - b.a).abs() < 1e-3
+}
+
+fn editor_fit_scale(available: iced::Size, image_w: u32, image_h: u32) -> f32 {
+    let iw = image_w as f32;
+    let ih = image_h as f32;
+    if iw <= 0.0 || ih <= 0.0 {
+        return 1.0;
+    }
+    (available.width / iw)
+        .min(available.height / ih)
+        .clamp(f32::EPSILON, 1.0)
 }
 
 fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
