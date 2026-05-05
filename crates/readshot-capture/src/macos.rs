@@ -94,6 +94,14 @@ fn crop_rgba(full: RgbaImage, rect_logical: Rect, scale: f32) -> RgbaImage {
 fn native_capture_size(display_id: u32, fallback_w: u32, fallback_h: u32) -> (u32, u32) {
     use core_graphics::display::CGDisplay;
     let cg = CGDisplay::new(display_id);
+    if let Some(mode) = cg.display_mode() {
+        return native_capture_size_from_values(
+            fallback_w,
+            fallback_h,
+            mode.pixel_width() as u32,
+            mode.pixel_height() as u32,
+        );
+    }
     native_capture_size_from_values(
         fallback_w,
         fallback_h,
@@ -130,12 +138,8 @@ fn display_info_from_sc(display: SCDisplay, primary_id: u32) -> DisplayInfo {
     let logical_h = (cg_bounds.size.height as f32).max(1.0);
     let origin_x = cg_bounds.origin.x as f32;
     let origin_y = cg_bounds.origin.y as f32;
-    let pixels_w = cg.pixels_wide() as f32;
-    let scale = if logical_w > 0.5 {
-        (pixels_w / logical_w).max(1.0)
-    } else {
-        1.0
-    };
+    let (native_w, _) = native_capture_size(id, display.width(), display.height());
+    let scale = display_scale_from_values(logical_w, native_w);
     let bounds = Rect::from_xywh(origin_x, origin_y, logical_w, logical_h)
         .unwrap_or_else(|| Rect::from_xywh(0.0, 0.0, 1.0, 1.0).unwrap());
     DisplayInfo {
@@ -144,6 +148,14 @@ fn display_info_from_sc(display: SCDisplay, primary_id: u32) -> DisplayInfo {
         scale,
         name: format!("Display {id}"),
         is_primary: id == primary_id,
+    }
+}
+
+fn display_scale_from_values(logical_w: f32, native_w: u32) -> f32 {
+    if logical_w > 0.5 && native_w > 0 {
+        (native_w as f32 / logical_w).max(1.0)
+    } else {
+        1.0
     }
 }
 
@@ -230,5 +242,17 @@ mod tests {
             native_capture_size_from_values(1512, 982, 0, 0),
             (1512, 982)
         );
+    }
+
+    #[test]
+    fn display_scale_uses_native_pixels_over_logical_width() {
+        assert_eq!(display_scale_from_values(1512.0, 3024), 2.0);
+        assert_eq!(display_scale_from_values(1920.0, 3840), 2.0);
+    }
+
+    #[test]
+    fn display_scale_never_reports_less_than_one() {
+        assert_eq!(display_scale_from_values(1920.0, 1920), 1.0);
+        assert_eq!(display_scale_from_values(1920.0, 0), 1.0);
     }
 }
