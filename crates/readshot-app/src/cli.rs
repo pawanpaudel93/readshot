@@ -368,12 +368,10 @@ fn write_png(
     stdout: &mut dyn Write,
 ) -> Result<(), CliError> {
     if path == std::path::Path::new("-") {
-        let mut buf = Vec::with_capacity(img.as_raw().len() / 4);
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        img.write_to(&mut cursor, image::ImageFormat::Png)?;
+        let buf = readshot_core::encode_png(img)?;
         stdout.write_all(&buf)?;
     } else {
-        img.save_with_format(path, image::ImageFormat::Png)?;
+        readshot_core::save_png(img, path)?;
     }
     Ok(())
 }
@@ -581,8 +579,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let png_path = dir.path().join("in.png");
         let img = image::RgbaImage::new(8, 8);
-        img.save_with_format(&png_path, image::ImageFormat::Png)
-            .unwrap();
+        readshot_core::save_png(&img, &png_path).unwrap();
 
         let (cap, ocr) = fakes();
         let cli =

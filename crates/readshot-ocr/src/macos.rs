@@ -21,10 +21,8 @@
 //! `confidence` (0.0…1.0), and average across the lines that contained
 //! recognised text. Empty observations don't contribute to the average.
 
-use std::io::Cursor;
-
 use async_trait::async_trait;
-use image::{ImageFormat, RgbaImage};
+use image::RgbaImage;
 use objc2::rc::Retained;
 use objc2::AnyThread;
 use objc2_foundation::{NSArray, NSData, NSDictionary, NSString};
@@ -185,10 +183,8 @@ unsafe fn extract_text(observations: &NSArray<VNRecognizedTextObservation>) -> O
 }
 
 fn encode_png(img: &RgbaImage) -> Result<Vec<u8>, OCRError> {
-    let mut buf = Vec::with_capacity((img.width() * img.height() * 4) as usize);
-    img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Png)
-        .map_err(|e| OCRError::Backend(format!("PNG encode for Vision: {e}")))?;
-    Ok(buf)
+    readshot_core::encode_png(img)
+        .map_err(|e| OCRError::Backend(format!("PNG encode for Vision: {e}")))
 }
 
 impl OCRResult {

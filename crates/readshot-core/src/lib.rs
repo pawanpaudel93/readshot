@@ -18,6 +18,7 @@ pub mod history;
 pub mod log;
 pub mod ocr_layout;
 pub mod ocr_text;
+pub mod png;
 pub mod preferences;
 pub mod render;
 
@@ -29,6 +30,7 @@ pub use history::{
     CaptureRecord, FsHistoryStore, HistoryIndex, HistoryIndexEntry, HistoryStore,
     HISTORY_INDEX_FILENAME, HISTORY_SCHEMA_VERSION,
 };
+pub use png::{encode as encode_png, save as save_png, write as write_png};
 // Downstream callers need `Uuid` to address records by id (delete,
 // open-from-history, etc.). Re-export so they don't need a separate
 // dependency on `uuid`.

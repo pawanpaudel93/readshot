@@ -198,7 +198,7 @@ impl FsHistoryStore {
         if let Some(parent) = abs_thumb.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let _ = thumb.save_with_format(abs_thumb, image::ImageFormat::Png);
+        let _ = crate::save_png(&thumb.to_rgba8(), &abs_thumb);
     }
 }
 

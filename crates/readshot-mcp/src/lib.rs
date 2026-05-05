@@ -464,13 +464,10 @@ fn parse_rect_value(v: &Value) -> Result<Rect, RpcErr> {
 }
 
 fn encode_png(img: &RgbaImage) -> Result<String, RpcErr> {
-    let mut buf = Vec::with_capacity(img.as_raw().len() / 4);
-    let mut cursor = std::io::Cursor::new(&mut buf);
-    img.write_to(&mut cursor, image::ImageFormat::Png)
-        .map_err(|e| RpcErr {
-            code: codes::SERVER_ERROR,
-            message: format!("PNG encode failed: {e}"),
-        })?;
+    let buf = readshot_core::encode_png(img).map_err(|e| RpcErr {
+        code: codes::SERVER_ERROR,
+        message: format!("PNG encode failed: {e}"),
+    })?;
     Ok(B64.encode(&buf))
 }
 

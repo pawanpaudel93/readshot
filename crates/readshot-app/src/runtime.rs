@@ -2108,11 +2108,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         let content_w = displayed_w.max(available.width);
         let content_h = displayed_h.max(available.height);
 
-        let filter = if scale >= 1.0 {
-            iced::widget::image::FilterMethod::Nearest
-        } else {
-            iced::widget::image::FilterMethod::Linear
-        };
+        let filter = editor_image_filter(scale);
 
         let image_layer = container(
             iced::widget::image(image_handle.clone())
@@ -2702,6 +2698,14 @@ fn editor_fit_scale(available: iced::Size, image_w: u32, image_h: u32) -> f32 {
     (available.width / iw)
         .min(available.height / ih)
         .clamp(f32::EPSILON, 1.0)
+}
+
+fn editor_image_filter(scale: f32) -> iced::widget::image::FilterMethod {
+    if (scale - 1.0).abs() < 0.001 {
+        iced::widget::image::FilterMethod::Nearest
+    } else {
+        iced::widget::image::FilterMethod::Linear
+    }
 }
 
 fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
@@ -3308,9 +3312,7 @@ fn persist_history_task(
                 return Ok(false);
             };
             let now = record.captured_at;
-            let mut buf: Vec<u8> = Vec::new();
-            img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
-                .map_err(|e| format!("png encode: {e}"))?;
+            let buf = readshot_core::encode_png(&img).map_err(|e| format!("png encode: {e}"))?;
             // Save with empty OCR first so the capture is visible in
             // the browser immediately (OCR is the slow bit).
             coord.record_history(record.clone(), buf, policy, now).await;
@@ -3373,7 +3375,7 @@ fn save_to_desktop(img: &image::RgbaImage) -> Result<PathBuf, CaptureRunError> {
 fn save_to_dir(img: &image::RgbaImage, dir: &Path) -> Result<PathBuf, CaptureRunError> {
     let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string();
     let path = dir.join(format!("Readshot-{stamp}.png"));
-    img.save_with_format(&path, image::ImageFormat::Png)?;
+    readshot_core::save_png(img, &path)?;
     Ok(path)
 }
 
@@ -3410,7 +3412,7 @@ async fn save_image_via_picker(
     {
         path.set_extension("png");
     }
-    img.save_with_format(&path, image::ImageFormat::Png)?;
+    readshot_core::save_png(&img, &path)?;
     Ok(Some(path))
 }
 
@@ -3699,6 +3701,22 @@ mod tests {
             *px = image::Rgba([255, 255, 255, 255]);
         }
         img
+    }
+
+    #[test]
+    fn editor_image_filter_is_crisp_at_actual_size_and_smooth_otherwise() {
+        assert_eq!(
+            editor_image_filter(1.0),
+            iced::widget::image::FilterMethod::Nearest
+        );
+        assert_eq!(
+            editor_image_filter(0.75),
+            iced::widget::image::FilterMethod::Linear
+        );
+        assert_eq!(
+            editor_image_filter(1.25),
+            iced::widget::image::FilterMethod::Linear
+        );
     }
 
     #[test]
