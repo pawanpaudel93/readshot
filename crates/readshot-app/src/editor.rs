@@ -90,6 +90,22 @@ impl EditorZoom {
     pub fn zoom_out(self) -> Self {
         Self::Percent((self.explicit_scale().unwrap_or(1.0) / Self::STEP).max(Self::MIN))
     }
+
+    pub fn can_zoom_in(self) -> bool {
+        self.explicit_scale().unwrap_or(1.0) < Self::MAX
+    }
+
+    pub fn can_zoom_out(self) -> bool {
+        self.explicit_scale().unwrap_or(1.0) > Self::MIN
+    }
+
+    pub fn is_fit(self) -> bool {
+        matches!(self, Self::Fit)
+    }
+
+    pub fn is_actual_size(self) -> bool {
+        matches!(self, Self::Percent(scale) if (scale - 1.0).abs() < f32::EPSILON)
+    }
 }
 
 /// Captured text-input state for the Text tool. The image-pixel
@@ -280,5 +296,9 @@ mod tests {
             EditorZoom::Percent(0.01).zoom_out(),
             EditorZoom::Percent(EditorZoom::MIN)
         );
+        assert!(EditorZoom::Fit.is_fit());
+        assert!(EditorZoom::Percent(1.0).is_actual_size());
+        assert!(!EditorZoom::Percent(EditorZoom::MAX).can_zoom_in());
+        assert!(!EditorZoom::Percent(EditorZoom::MIN).can_zoom_out());
     }
 }

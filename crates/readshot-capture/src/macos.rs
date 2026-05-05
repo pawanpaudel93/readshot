@@ -24,7 +24,6 @@ use async_trait::async_trait;
 use image::RgbaImage;
 use readshot_core::error::CaptureError;
 use readshot_core::geom::Rect;
-use screencapturekit::cg::CGRect as SkCgRect;
 use screencapturekit::error::SCError;
 use screencapturekit::screenshot_manager::SCScreenshotManager;
 use screencapturekit::shareable_content::{SCDisplay, SCShareableContent};
@@ -58,25 +57,14 @@ impl Capturer for ScreenCaptureKitCapturer {
         let display = find_display(&displays, &req.display_id)
             .ok_or_else(|| CaptureError::DisplayNotFound(req.display_id.clone()))?;
 
-        let physical_w = ((req.rect.width() * req.scale).round() as u32).max(1);
-        let physical_h = ((req.rect.height() * req.scale).round() as u32).max(1);
-
         let filter = SCContentFilter::create()
             .with_display(display)
             .with_excluding_windows(&[])
             .build();
 
-        let source_rect = SkCgRect::new(
-            req.rect.x() as f64,
-            req.rect.y() as f64,
-            req.rect.width() as f64,
-            req.rect.height() as f64,
-        );
-
         let config = SCStreamConfiguration::new()
-            .with_width(physical_w)
-            .with_height(physical_h)
-            .with_source_rect(source_rect)
+            .with_width(display.width())
+            .with_height(display.height())
             .with_shows_cursor(!req.hide_cursor);
 
         let cg_image = SCScreenshotManager::capture_image(&filter, &config).map_err(map_err)?;
@@ -84,10 +72,21 @@ impl Capturer for ScreenCaptureKitCapturer {
         let width = cg_image.width() as u32;
         let height = cg_image.height() as u32;
         let rgba = cg_image.rgba_data().map_err(map_err)?;
-        RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
+        let full = RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
             CaptureError::Backend("rgba_data length does not match width × height × 4".to_string())
-        })
+        })?;
+        Ok(crop_rgba(full, req.rect, req.scale))
     }
+}
+
+fn crop_rgba(full: RgbaImage, rect_logical: Rect, scale: f32) -> RgbaImage {
+    let x0 = ((rect_logical.x() * scale).round().max(0.0) as u32).min(full.width());
+    let y0 = ((rect_logical.y() * scale).round().max(0.0) as u32).min(full.height());
+    let w_target = (rect_logical.width() * scale).round().max(1.0) as u32;
+    let h_target = (rect_logical.height() * scale).round().max(1.0) as u32;
+    let w = w_target.min(full.width().saturating_sub(x0));
+    let h = h_target.min(full.height().saturating_sub(y0));
+    image::imageops::crop_imm(&full, x0, y0, w, h).to_image()
 }
 
 fn display_info_from_sc(display: SCDisplay, primary_id: u32) -> DisplayInfo {
@@ -143,5 +142,51 @@ fn map_err(e: SCError) -> CaptureError {
         CaptureError::PermissionDenied
     } else {
         CaptureError::Backend(msg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn solid(w: u32, h: u32) -> RgbaImage {
+        RgbaImage::from_fn(w, h, |x, y| image::Rgba([x as u8, y as u8, 0, 255]))
+    }
+
+    #[test]
+    fn crop_rgba_scales_logical_rect_to_physical_pixels() {
+        let cropped = crop_rgba(
+            solid(400, 300),
+            Rect::from_xywh(10.0, 20.0, 30.0, 40.0).unwrap(),
+            2.0,
+        );
+
+        assert_eq!(cropped.width(), 60);
+        assert_eq!(cropped.height(), 80);
+        assert_eq!(cropped.get_pixel(0, 0), &image::Rgba([20, 40, 0, 255]));
+    }
+
+    #[test]
+    fn crop_rgba_clamps_to_full_image_bounds() {
+        let cropped = crop_rgba(
+            solid(100, 100),
+            Rect::from_xywh(40.0, 40.0, 20.0, 20.0).unwrap(),
+            2.0,
+        );
+
+        assert_eq!(cropped.width(), 20);
+        assert_eq!(cropped.height(), 20);
+    }
+
+    #[test]
+    fn crop_rgba_handles_edge_rounding_outside_bounds() {
+        let cropped = crop_rgba(
+            solid(100, 100),
+            Rect::from_xywh(51.0, 51.0, 10.0, 10.0).unwrap(),
+            2.0,
+        );
+
+        assert_eq!(cropped.width(), 0);
+        assert_eq!(cropped.height(), 0);
     }
 }

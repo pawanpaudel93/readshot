@@ -2196,17 +2196,47 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55));
     let zoom_label = text(ed.zoom.label())
         .size(11)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.62))
-        .width(Length::Fixed(38.0));
-    let zoom_btn = |label: &'static str, msg: Message| {
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
+        .width(Length::Fixed(42.0))
+        .align_x(iced::alignment::Horizontal::Center);
+    let zoom_btn = |label: &'static str, msg: Message, enabled: bool, selected: bool| {
         let mut b = button(text(label).size(11).color(Color::WHITE))
-            .padding([5, 8])
-            .style(move |theme, status| action_button_style(theme, status, ActionKind::Secondary));
-        if !busy {
+            .padding([5, 9])
+            .style(move |theme, status| zoom_button_style(theme, status, enabled, selected));
+        if !busy && enabled {
             b = b.on_press(msg);
         }
         b
     };
+    let zoom_controls = container(
+        row![
+            text("Zoom")
+                .size(11)
+                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+            zoom_btn("-", Message::EditorZoomOut, ed.zoom.can_zoom_out(), false,),
+            zoom_label,
+            zoom_btn("+", Message::EditorZoomIn, ed.zoom.can_zoom_in(), false),
+            zoom_btn(
+                "100%",
+                Message::EditorZoomActual,
+                true,
+                ed.zoom.is_actual_size(),
+            ),
+            zoom_btn("Fit", Message::EditorZoomFit, true, ed.zoom.is_fit()),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center),
+    )
+    .padding([3, 6])
+    .style(|_theme: &Theme| container::Style {
+        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.045).into()),
+        border: iced::Border {
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.09),
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..Default::default()
+    });
     let bullet = text("·")
         .size(11)
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.35));
@@ -2243,11 +2273,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         IcedSpace::new().width(Length::Fixed(8.0)),
         toast,
         IcedSpace::new().width(Length::Fill),
-        zoom_btn("-", Message::EditorZoomOut),
-        zoom_label,
-        zoom_btn("+", Message::EditorZoomIn),
-        zoom_btn("100%", Message::EditorZoomActual),
-        zoom_btn("Fit", Message::EditorZoomFit),
+        zoom_controls,
         IcedSpace::new().width(Length::Fixed(8.0)),
         action_btn(
             "Discard",
@@ -2520,6 +2546,37 @@ fn toolbar_ghost_style(_theme: &Theme, status: button::Status, enabled: bool) ->
             radius: 6.0.into(),
             width: 1.0,
             color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+        },
+        ..Default::default()
+    }
+}
+
+fn zoom_button_style(
+    _theme: &Theme,
+    status: button::Status,
+    enabled: bool,
+    selected: bool,
+) -> button::Style {
+    let background = if selected {
+        Color::from_rgba(0.16, 0.44, 0.92, 1.0)
+    } else if !enabled {
+        Color::from_rgba(1.0, 1.0, 1.0, 0.03)
+    } else if matches!(status, button::Status::Hovered) {
+        Color::from_rgba(1.0, 1.0, 1.0, 0.14)
+    } else {
+        Color::from_rgba(1.0, 1.0, 1.0, 0.07)
+    };
+    button::Style {
+        background: Some(background.into()),
+        text_color: if enabled {
+            Color::WHITE
+        } else {
+            Color::from_rgba(1.0, 1.0, 1.0, 0.35)
+        },
+        border: iced::Border {
+            radius: 6.0.into(),
+            width: if selected { 1.0 } else { 0.0 },
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.20),
         },
         ..Default::default()
     }
