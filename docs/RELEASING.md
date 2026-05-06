@@ -96,17 +96,24 @@ In repository settings, point GitHub Pages at the `gh-pages` branch.
 ### 1. Bump the version
 
 Run the version bump helper with the next SemVer. It updates
-`Cargo.toml`, `Cargo.lock`, macOS bundle metadata, and packaging
-fallbacks.
+`Cargo.toml`, `Cargo.lock`, macOS bundle metadata, packaging
+fallbacks, and creates `docs/releases/vX.Y.Z.md` as the repo-local
+release summary.
 
 ```bash
-scripts/bump-version.sh 0.2.0
+scripts/bump-version.sh 0.2.0 "One-sentence user-facing release summary."
 cargo test -p readshot-capture -p readshot-core -p readshot-app -p readshot-mcp -p readshot-ocr
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 git diff --check
-git commit -am "chore: bump version to 0.2.0"
+git add Cargo.toml Cargo.lock packaging/macos/Info.plist packaging/linux/build-appimage.sh docs/releases/v0.2.0.md
+git commit -m "chore: bump version to 0.2.0"
 ```
+
+Before tagging, edit `docs/releases/v0.2.0.md` so the `Summary`
+section says what changed in user terms. The release workflow uses
+that file as the GitHub Release body and asks GitHub to append its
+generated commit notes.
 
 ### 2. Tag and push
 

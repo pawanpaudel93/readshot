@@ -7,25 +7,27 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: scripts/bump-version.sh <major.minor.patch>
+Usage: scripts/bump-version.sh <major.minor.patch> [release-summary]
 
 Updates:
   - Cargo.toml workspace package version
   - Cargo.lock workspace crate versions
   - packaging/macos/Info.plist bundle versions
   - packaging/linux/build-appimage.sh fallback VERSION
+  - docs/releases/v<major.minor.patch>.md release summary draft
 
 Then run release verification, commit, tag, and push.
 EOF
 }
 
-if [[ $# -ne 1 ]]; then
+if [[ $# -lt 1 || $# -gt 2 ]]; then
   usage
   exit 64
 fi
 
 VERSION="$1"
 TAG="v${VERSION}"
+SUMMARY="${2:-TODO: Write the user-facing release summary before tagging.}"
 
 if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "error: version must be SemVer major.minor.patch, got '${VERSION}'" >&2
@@ -52,23 +54,66 @@ if [[ -z "${CURRENT_VERSION}" ]]; then
   echo "error: could not read current workspace version from Cargo.toml" >&2
   exit 1
 fi
+PREVIOUS_TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || true)"
+if [[ -n "${PREVIOUS_TAG}" ]]; then
+  COMMIT_RANGE="${PREVIOUS_TAG}..HEAD"
+else
+  COMMIT_RANGE="HEAD"
+fi
 
 perl -0pi -e "s/(\\[workspace\\.package\\]\\nversion = \")[^\"]+(\")/\${1}${VERSION}\${2}/" Cargo.toml
 perl -0pi -e "s/(<key>CFBundleShortVersionString<\\/key>\\s*<string>)[^<]+(<\\/string>)/\${1}${VERSION}\${2}/" packaging/macos/Info.plist
 perl -0pi -e "s/(<key>CFBundleVersion<\\/key>\\s*<string>)[^<]+(<\\/string>)/\${1}${VERSION}\${2}/" packaging/macos/Info.plist
 perl -0pi -e "s/VERSION=\"\\\${VERSION:-[0-9]+\\.[0-9]+\\.[0-9]+}\"/VERSION=\"\\\${VERSION:-${VERSION}}\"/" packaging/linux/build-appimage.sh
 
+mkdir -p docs/releases
+RELEASE_NOTES="docs/releases/${TAG}.md"
+if [[ -e "${RELEASE_NOTES}" ]]; then
+  echo "error: ${RELEASE_NOTES} already exists" >&2
+  exit 1
+fi
+
+{
+  echo "# Readshot ${TAG}"
+  echo
+  echo "Release date: TBD"
+  if [[ -n "${PREVIOUS_TAG}" ]]; then
+    echo "Previous release: ${PREVIOUS_TAG}"
+  else
+    echo "Previous release: none"
+  fi
+  echo
+  echo "## Summary"
+  echo
+  echo "- ${SUMMARY}"
+  echo
+  echo "## Changes"
+  echo
+  git log --reverse --pretty=format:'- %s (%h)' "${COMMIT_RANGE}" || true
+  echo
+  echo
+  echo "## Verification"
+  echo
+  echo "- [ ] cargo test -p readshot-capture -p readshot-core -p readshot-app -p readshot-mcp -p readshot-ocr"
+  echo "- [ ] cargo clippy --workspace --all-targets -- -D warnings"
+  echo "- [ ] cargo fmt --all -- --check"
+  echo "- [ ] git diff --check"
+  echo "- [ ] scripts/smoke-macos-release.sh ${TAG} /path/to/release-artifacts"
+} > "${RELEASE_NOTES}"
+
 cargo check --workspace >/dev/null
 
 cat <<EOF
 Bumped Readshot from ${CURRENT_VERSION} to ${VERSION}.
+Created ${RELEASE_NOTES}.
 
 Next:
   cargo test -p readshot-capture -p readshot-core -p readshot-app -p readshot-mcp -p readshot-ocr
   cargo clippy --workspace --all-targets -- -D warnings
   cargo fmt --all -- --check
   git diff --check
-  git commit -am "chore: bump version to ${VERSION}"
+  git add Cargo.toml Cargo.lock packaging/macos/Info.plist packaging/linux/build-appimage.sh ${RELEASE_NOTES}
+  git commit -m "chore: bump version to ${VERSION}"
   git tag ${TAG}
   git push origin main
   git push origin ${TAG}

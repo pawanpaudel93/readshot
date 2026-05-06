@@ -103,12 +103,26 @@ jobs:
           find artifacts -type f \( -name "*.dmg" -o -name "*.sparkle.eddsa.txt" \) -exec cp {} out/ \;
           find out -type f -name "*.dmg" -exec sha256sum {} \; > out/SHA256SUMS
 
+      - name: Prepare release notes
+        run: |
+          NOTES_PATH="docs/releases/${RELEASE_TAG}.md"
+          if [ -f "${NOTES_PATH}" ]; then
+            cp "${NOTES_PATH}" out/RELEASE_NOTES.md
+          else
+            {
+              echo "# Readshot ${RELEASE_TAG}"
+              echo
+              echo "No repo-local release summary was found for ${RELEASE_TAG}."
+            } > out/RELEASE_NOTES.md
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             out/*.dmg
             out/SHA256SUMS
+          body_path: out/RELEASE_NOTES.md
           generate_release_notes: true
           tag_name: ${{ env.RELEASE_TAG }}
 
