@@ -65,6 +65,32 @@ resolve_sparkle_framework_path() {
     -path "*/Sparkle.framework" -type d -print -quit 2>/dev/null || true
 }
 
+sign_sparkle_framework() {
+  local framework="$1"
+  local identity="$2"
+  local version_dir="${framework}/Versions/B"
+
+  if [[ ! -d "${version_dir}" ]]; then
+    version_dir="$(cd "${framework}/Versions/Current" && pwd -P)"
+  fi
+
+  codesign --force --sign "${identity}" --options runtime \
+    "${version_dir}/XPCServices/Installer.xpc"
+
+  if [[ -d "${version_dir}/XPCServices/Downloader.xpc" ]]; then
+    codesign --force --sign "${identity}" --options runtime \
+      --preserve-metadata=entitlements \
+      "${version_dir}/XPCServices/Downloader.xpc"
+  fi
+
+  codesign --force --sign "${identity}" --options runtime \
+    "${version_dir}/Autoupdate"
+  codesign --force --sign "${identity}" --options runtime \
+    "${version_dir}/Updater.app"
+  codesign --force --sign "${identity}" --options runtime \
+    "${framework}"
+}
+
 reset_tcc() {
   # Reset the Screen Recording grant for our bundle id so a stale
   # cdhash entry can't survive a reinstall. `tccutil reset` is silent
@@ -146,7 +172,14 @@ for bin in readshot readshot-mcp; do
 done
 
 echo "→ ad-hoc codesigning bundle"
-codesign --force --deep --sign - "${APP_BUNDLE}"
+if [[ -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
+  sign_sparkle_framework "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" -
+fi
+for bin in readshot-mcp readshot; do
+  codesign --force --options runtime --sign - \
+    "${APP_BUNDLE}/Contents/MacOS/${bin}"
+done
+codesign --force --options runtime --sign - "${APP_BUNDLE}"
 codesign --verify --deep "${APP_BUNDLE}"
 
 if [[ "${INSTALL}" -eq 0 ]]; then

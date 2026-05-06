@@ -60,6 +60,32 @@ resolve_sparkle_framework_path() {
     -path "*/Sparkle.framework" -type d -print -quit 2>/dev/null || true
 }
 
+sign_sparkle_framework() {
+  local framework="$1"
+  local identity="$2"
+  local version_dir="${framework}/Versions/B"
+
+  if [[ ! -d "${version_dir}" ]]; then
+    version_dir="$(cd "${framework}/Versions/Current" && pwd -P)"
+  fi
+
+  codesign --force --sign "${identity}" --options runtime \
+    "${version_dir}/XPCServices/Installer.xpc"
+
+  if [[ -d "${version_dir}/XPCServices/Downloader.xpc" ]]; then
+    codesign --force --sign "${identity}" --options runtime \
+      --preserve-metadata=entitlements \
+      "${version_dir}/XPCServices/Downloader.xpc"
+  fi
+
+  codesign --force --sign "${identity}" --options runtime \
+    "${version_dir}/Autoupdate"
+  codesign --force --sign "${identity}" --options runtime \
+    "${version_dir}/Updater.app"
+  codesign --force --sign "${identity}" --options runtime \
+    "${framework}"
+}
+
 cleanup() {
   if [[ -n "${PREVIOUS_KEYCHAIN}" ]]; then
     security default-keychain -s "${PREVIOUS_KEYCHAIN}" >/dev/null 2>&1 || true
@@ -141,9 +167,19 @@ for bin in readshot readshot-mcp; do
   codesign --remove-signature "${APP_BUNDLE}/Contents/MacOS/${bin}" 2>/dev/null || true
 done
 
-# 4. Sign the bundle. Hardened-runtime is required for notarisation
-# and still keeps self-signed builds well-formed.
-codesign --deep --force --options runtime \
+# 4. Sign nested code first, then the app bundle. This avoids
+# hardened-runtime library validation rejecting Sparkle because it was
+# still signed by Sparkle's release identity instead of Readshot's.
+sign_sparkle_framework "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" \
+  "${SIGNING_IDENTITY}"
+
+for bin in readshot-mcp readshot; do
+  codesign --force --options runtime \
+    --sign "${SIGNING_IDENTITY}" \
+    "${APP_BUNDLE}/Contents/MacOS/${bin}"
+done
+
+codesign --force --options runtime \
   --sign "${SIGNING_IDENTITY}" \
   "${APP_BUNDLE}"
 
