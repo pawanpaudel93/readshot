@@ -112,6 +112,10 @@ pub fn start() -> (App, Task<Message>) {
         app.hotkey_manager = Some(manager);
     }
     #[cfg(target_os = "macos")]
+    if let Err(e) = crate::url_events::install_platform_handler() {
+        tracing::warn!(target: "readshot::url", "running-app URL handler unavailable: {e}");
+    }
+    #[cfg(target_os = "macos")]
     if let Err(e) = crate::updater::install() {
         tracing::warn!(target: "readshot::updater", "Sparkle updater unavailable: {e}");
     }
@@ -428,6 +432,13 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // difference between a 50 ms and 100 ms tray menu response.
         subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::TrayTick));
     }
+    #[cfg(target_os = "macos")]
+    {
+        // macOS delivers `readshot://` opens to an AppKit AppleEvent
+        // callback while the app is already running. That callback
+        // queues parsed actions; this tick drains them back into iced.
+        subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::UrlTick));
+    }
     if !state.overlay_displays.is_empty() {
         // Marching-ants tick — drives the dash-offset animation on
         // any open region overlay. 80 ms ≈ 12.5 fps which reads as
@@ -595,6 +606,14 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let tasks: Vec<Task<Message>> = actions
                 .into_iter()
                 .map(|a| Task::done(Message::TrayActionPerformed(a)))
+                .collect();
+            Task::batch(tasks)
+        }
+
+        Message::UrlTick => {
+            let tasks: Vec<Task<Message>> = crate::url_events::drain_actions()
+                .into_iter()
+                .map(|action| Task::done(Message::UrlActionReceived(action)))
                 .collect();
             Task::batch(tasks)
         }
@@ -4049,6 +4068,17 @@ mod tests {
         // No manager registered → tick does nothing meaningful.
         let _ = update(&mut app, Message::HotkeyTick);
         assert!(!app.capture_in_flight);
+    }
+
+    #[test]
+    fn url_tick_drains_delivered_url_actions() {
+        crate::url_events::clear_for_tests();
+        crate::url_events::deliver_url_string("readshot://new").unwrap();
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+
+        let _ = update(&mut app, Message::UrlTick);
+
+        assert_eq!(crate::url_events::drain_actions(), Vec::new());
     }
 
     #[test]

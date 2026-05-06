@@ -23,5 +23,6 @@ pub mod permissions;
 pub mod runtime;
 pub mod tray;
 pub mod updater;
+pub mod url_events;
 pub mod url_scheme;
 pub mod welcome;

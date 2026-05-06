@@ -132,6 +132,8 @@ pub enum Message {
     OverlayTick,
     /// 100 ms drain tick — runtime polls the tray + menu event channels.
     TrayTick,
+    /// 100 ms drain tick — runtime polls queued `readshot://` URL events.
+    UrlTick,
     /// User selected an item in the tray menu (or left-clicked the icon).
     TrayActionPerformed(crate::tray::TrayAction),
     /// User asked for a region capture (welcome button / tray menu).

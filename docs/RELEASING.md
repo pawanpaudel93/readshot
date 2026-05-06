@@ -126,17 +126,52 @@ The GitHub Release is the canonical distribution point. It publishes:
   containing `Readshot.app` with both `readshot` and `readshot-mcp`.
 * `SHA256SUMS`.
 
-### 3. Verify
+### 3. Verify release artifacts
 
-* Download the macOS DMG from the GitHub Release on a clean macOS
-  VM. If it was self-signed, right-click → Open. If it was Developer
-  ID signed and notarised, double-click should open normally. Confirm
-  the welcome window appears, then use the tray menu's
-  **Check for Updates…** item to confirm Sparkle can read the appcast.
-* Open `https://pawanpaudel93.github.io/readshot/appcast.xml` and
-  confirm it contains the new version, DMG URL, byte length, and
-  `sparkle:edSignature`.
-### 4. Update Homebrew Cask
+Download the GitHub Release artifacts into a clean directory on a
+macOS VM and run:
+
+```bash
+scripts/smoke-macos-release.sh v0.2.0 /path/to/release-artifacts
+```
+
+This checks `SHA256SUMS`, mounts both DMGs, verifies the bundle
+shape, confirms the `readshot://` URL scheme and Sparkle feed in
+`Info.plist`, runs `codesign --verify`, and checks the published
+appcast for the new version, DMG URLs, byte lengths, and
+`sparkle:edSignature`.
+
+### 4. Clean-machine smoke test
+
+Use the same clean macOS VM. Resetting the VM snapshot between
+releases is best; otherwise remove `/Applications/Readshot.app` and
+run `tccutil reset ScreenCapture dev.pawanpaudel93.readshot` before
+installing.
+
+1. Open the architecture-matching DMG and drag `Readshot.app` to
+   `/Applications`.
+2. Launch from `/Applications`. If the release is self-signed,
+   right-click -> **Open**. If it is Developer ID signed and
+   notarised, double-click should open normally.
+3. Confirm the welcome window appears and the app can navigate the
+   user to **Privacy & Security -> Screen & System Audio Recording**.
+4. Grant permission, quit, and relaunch. Confirm the welcome window
+   is gone and the menu-bar icon is present.
+5. Trigger a region capture from the tray menu and from the default
+   hotkey. Confirm the editor opens and **Copy Text** returns either
+   recognised text or the empty-text status.
+6. Run `open readshot://new` while Readshot is already running.
+   Confirm it opens the same interactive overlay instead of launching
+   a second unusable process.
+7. Open **History...** from the tray menu. Confirm the latest capture
+   appears, can copy image/text, can open in the editor, and can be
+   deleted.
+8. Use the tray menu's **Check for Updates...** item. Confirm Sparkle
+   opens its standard update UI and reads the production appcast.
+9. Compare the tested behaviour with `docs/INSTALL.md`, especially
+   the self-signed warning, permission flow, and update-check wording.
+
+### 5. Update Homebrew Cask
 
 The release workflow opens a PR against the homebrew-readshot tap
 automatically. Review and merge.

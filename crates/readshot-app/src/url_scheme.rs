@@ -64,6 +64,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn delivered_urls_are_drained_in_order_once() {
+        crate::url_events::clear_for_tests();
+
+        crate::url_events::deliver_url_string("readshot://new").unwrap();
+        crate::url_events::deliver_url_string("readshot://history").unwrap();
+
+        assert_eq!(
+            crate::url_events::drain_actions(),
+            vec![UrlAction::NewCapture, UrlAction::Unknown("history".into())]
+        );
+        assert_eq!(crate::url_events::drain_actions(), Vec::new());
+    }
+
+    #[test]
+    fn rejected_delivered_urls_are_not_queued() {
+        crate::url_events::clear_for_tests();
+
+        assert_eq!(
+            crate::url_events::deliver_url_string("file:///tmp/nope"),
+            Err(UrlParseError::WrongScheme("file".into()))
+        );
+        assert_eq!(crate::url_events::drain_actions(), Vec::new());
+    }
+
+    #[test]
     fn parses_canonical_new_capture() {
         assert_eq!(parse("readshot://new"), Ok(UrlAction::NewCapture));
     }

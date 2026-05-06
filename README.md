@@ -296,12 +296,9 @@ image / copy text / pin / delete).
 
 ### Remaining, in order
 
-- **macOS release polish** — keep the GitHub Release DMG, Sparkle
-  appcast, first-launch permission flow, and install docs smoke-tested
-  on a clean Mac before each public release.
-- **`readshot://` delivery to a running app** — opening the URL already
-  works at app boot; forwarding URLs to an already-running menu-bar
-  process still needs a stable AppKit event bridge.
+- **Per-release macOS smoke testing** — the artifact script and
+  clean-machine checklist live in `docs/RELEASING.md`; run them before
+  each public release.
 - **Optional Developer ID notarisation** — only if the project later
   joins the paid Apple Developer Program. Current releases intentionally
   remain self-signed.
