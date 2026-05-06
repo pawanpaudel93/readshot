@@ -76,13 +76,6 @@ fi
 {
   echo "# Readshot ${TAG}"
   echo
-  echo "Release date: TBD"
-  if [[ -n "${PREVIOUS_TAG}" ]]; then
-    echo "Previous release: ${PREVIOUS_TAG}"
-  else
-    echo "Previous release: none"
-  fi
-  echo
   echo "## Summary"
   echo
   echo "- ${SUMMARY}"
@@ -90,15 +83,6 @@ fi
   echo "## Changes"
   echo
   git log --reverse --pretty=format:'- %s (%h)' "${COMMIT_RANGE}" || true
-  echo
-  echo
-  echo "## Verification"
-  echo
-  echo "- [ ] cargo test -p readshot-capture -p readshot-core -p readshot-app -p readshot-mcp -p readshot-ocr"
-  echo "- [ ] cargo clippy --workspace --all-targets -- -D warnings"
-  echo "- [ ] cargo fmt --all -- --check"
-  echo "- [ ] git diff --check"
-  echo "- [ ] scripts/smoke-macos-release.sh ${TAG} /path/to/release-artifacts"
 } > "${RELEASE_NOTES}"
 
 cargo check --workspace >/dev/null
