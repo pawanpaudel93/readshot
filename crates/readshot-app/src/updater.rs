@@ -6,7 +6,7 @@
 //! Objective-C boundary isolated here so the rest of the app stays
 //! ordinary Rust.
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum UpdaterError {
     #[error("Sparkle updates are only available in the macOS app bundle")]
     Unsupported,
@@ -27,7 +27,7 @@ pub enum UpdaterError {
 #[cfg(target_os = "macos")]
 mod platform {
     use std::ffi::{CStr, CString};
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, OnceLock};
 
     use objc2::msg_send;
     use objc2::rc::Retained;
@@ -36,6 +36,7 @@ mod platform {
     use super::UpdaterError;
 
     static CONTROLLER: OnceLock<usize> = OnceLock::new();
+    static LAST_INSTALL_ERROR: OnceLock<Mutex<Option<UpdaterError>>> = OnceLock::new();
 
     const SPARKLE_CONTROLLER_CLASS: &CStr = c"SPUStandardUpdaterController";
     const FRAMEWORK_CANDIDATES: &[&str] = &[
@@ -44,6 +45,12 @@ mod platform {
     ];
 
     pub fn install() -> Result<(), UpdaterError> {
+        let result = install_controller();
+        record_install_result(&result);
+        result
+    }
+
+    fn install_controller() -> Result<(), UpdaterError> {
         if CONTROLLER.get().is_some() {
             return Ok(());
         }
@@ -84,6 +91,15 @@ mod platform {
     }
 
     pub fn check_for_updates() -> Result<(), UpdaterError> {
+        check_or_install(
+            || CONTROLLER.get().is_some(),
+            install,
+            invoke_check_for_updates,
+            stored_install_error_or_not_installed(),
+        )
+    }
+
+    fn invoke_check_for_updates() -> Result<(), UpdaterError> {
         let raw = *CONTROLLER.get().ok_or(UpdaterError::NotInstalled)?;
 
         // SAFETY: `raw` is a process-lifetime +1 retained
@@ -96,6 +112,46 @@ mod platform {
         }
 
         Ok(())
+    }
+
+    fn check_or_install<HasController, InstallController, CheckController>(
+        has_controller: HasController,
+        mut install_controller: InstallController,
+        check_controller: CheckController,
+        missing_controller_error: UpdaterError,
+    ) -> Result<(), UpdaterError>
+    where
+        HasController: Fn() -> bool,
+        InstallController: FnMut() -> Result<(), UpdaterError>,
+        CheckController: FnOnce() -> Result<(), UpdaterError>,
+    {
+        if !has_controller() {
+            install_controller()?;
+        }
+        if has_controller() {
+            check_controller()
+        } else {
+            Err(missing_controller_error)
+        }
+    }
+
+    fn record_install_result(result: &Result<(), UpdaterError>) {
+        let mut guard = last_install_error()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = result.as_ref().err().cloned();
+    }
+
+    fn stored_install_error_or_not_installed() -> UpdaterError {
+        last_install_error()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .unwrap_or(UpdaterError::NotInstalled)
+    }
+
+    fn last_install_error() -> &'static Mutex<Option<UpdaterError>> {
+        LAST_INSTALL_ERROR.get_or_init(|| Mutex::new(None))
     }
 
     fn load_sparkle_framework() -> Result<(), UpdaterError> {
@@ -134,6 +190,70 @@ mod platform {
             } else {
                 CStr::from_ptr(err).to_string_lossy().into_owned()
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::cell::Cell;
+
+        use super::*;
+
+        #[test]
+        fn manual_check_retries_install_when_controller_is_missing() {
+            let installed = Cell::new(false);
+            let install_attempts = Cell::new(0);
+            let checks = Cell::new(0);
+
+            let result = check_or_install(
+                || installed.get(),
+                || {
+                    install_attempts.set(install_attempts.get() + 1);
+                    installed.set(true);
+                    Ok(())
+                },
+                || {
+                    checks.set(checks.get() + 1);
+                    Ok(())
+                },
+                UpdaterError::NotInstalled,
+            );
+
+            assert_eq!(result, Ok(()));
+            assert_eq!(install_attempts.get(), 1);
+            assert_eq!(checks.get(), 1);
+        }
+
+        #[test]
+        fn manual_check_surfaces_retry_install_error() {
+            let result = check_or_install(
+                || false,
+                || Err(UpdaterError::FrameworkLoad("missing Sparkle".to_string())),
+                || panic!("check should not run without a controller"),
+                UpdaterError::NotInstalled,
+            );
+
+            assert_eq!(
+                result,
+                Err(UpdaterError::FrameworkLoad("missing Sparkle".to_string()))
+            );
+        }
+
+        #[test]
+        fn manual_check_surfaces_previous_install_error_if_retry_does_not_install_controller() {
+            let result = check_or_install(
+                || false,
+                || Ok(()),
+                || panic!("check should not run without a controller"),
+                UpdaterError::FrameworkLoad("startup dlopen failure".to_string()),
+            );
+
+            assert_eq!(
+                result,
+                Err(UpdaterError::FrameworkLoad(
+                    "startup dlopen failure".to_string()
+                ))
+            );
         }
     }
 }
