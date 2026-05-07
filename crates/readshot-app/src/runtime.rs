@@ -631,6 +631,17 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 } else if state.capture_in_flight {
                     Task::none()
                 } else {
+                    state.pending_intent = Some(crate::app::CaptureIntent::Editor);
+                    update(state, Message::OpenOverlayRequested)
+                }
+            }
+            crate::tray::TrayAction::CaptureText => {
+                if state.welcome.should_show() {
+                    show_or_focus_welcome(state)
+                } else if state.capture_in_flight {
+                    Task::none()
+                } else {
+                    state.pending_intent = Some(crate::app::CaptureIntent::CopyTextDirect);
                     update(state, Message::OpenOverlayRequested)
                 }
             }
@@ -706,7 +717,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // Fresh overlay session — clear any leftover toolbar state
             // from a previous capture flow.
             state.overlay_selections.clear();
-            state.pending_intent = None;
+            state
+                .pending_intent
+                .get_or_insert(crate::app::CaptureIntent::Editor);
             for d in &displays {
                 let settings = overlay_window_settings_for(d);
                 let (id, open_task) = window::open(settings);
@@ -3800,6 +3813,21 @@ mod tests {
             *px = image::Rgba([255, 255, 255, 255]);
         }
         img
+    }
+
+    #[test]
+    fn tray_capture_text_opens_overlay_with_copy_text_intent() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+
+        let _ = update(
+            &mut app,
+            Message::TrayActionPerformed(crate::tray::TrayAction::CaptureText),
+        );
+
+        assert_eq!(
+            app.pending_intent,
+            Some(crate::app::CaptureIntent::CopyTextDirect)
+        );
     }
 
     #[test]
