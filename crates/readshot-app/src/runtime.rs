@@ -699,13 +699,21 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             if state.capture_in_flight {
                 return Task::none();
             }
-            let Some((display_id, last)) = state
-                .last_regions
-                .iter()
-                .next()
-                .map(|(display_id, last)| (display_id.clone(), *last))
+            let Some((display_id, last)) =
+                state
+                    .last_region_display_id
+                    .as_ref()
+                    .and_then(|display_id| {
+                        state
+                            .last_regions
+                            .get(display_id)
+                            .map(|last| (display_id.clone(), *last))
+                    })
             else {
-                state.last_capture_status = Some("No previous region to retake.".into());
+                state.last_capture_status = Some(
+                    "No previous region to retake. Capture a region first, then use Retake Last Region."
+                        .into(),
+                );
                 return Task::none();
             };
 
@@ -787,6 +795,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     display_scale,
                 },
             );
+            state.last_region_display_id = Some(display_id.clone());
             state.pending_intent = Some(intent);
             state.pending_display_id = Some(display_id.clone());
             state.pending_display_scale = Some(display_scale);
@@ -3937,6 +3946,32 @@ mod tests {
     }
 
     #[test]
+    fn overlay_selection_tracks_most_recent_region_display() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let first = readshot_core::geom::Rect::from_xywh(10.0, 20.0, 120.0, 80.0).unwrap();
+        let second = readshot_core::geom::Rect::from_xywh(30.0, 40.0, 160.0, 90.0).unwrap();
+
+        let _ = update(
+            &mut app,
+            Message::OverlaySelected {
+                display_id: "display-a".to_string(),
+                rect: first,
+                intent: crate::app::CaptureIntent::Editor,
+            },
+        );
+        let _ = update(
+            &mut app,
+            Message::OverlaySelected {
+                display_id: "display-b".to_string(),
+                rect: second,
+                intent: crate::app::CaptureIntent::Editor,
+            },
+        );
+
+        assert_eq!(app.last_region_display_id.as_deref(), Some("display-b"));
+    }
+
+    #[test]
     fn retake_last_region_without_previous_region_sets_status() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
 
@@ -3944,7 +3979,7 @@ mod tests {
 
         assert_eq!(
             app.last_capture_status.as_deref(),
-            Some("No previous region to retake.")
+            Some("No previous region to retake. Capture a region first, then use Retake Last Region.")
         );
     }
 

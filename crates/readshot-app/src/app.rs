@@ -375,6 +375,10 @@ pub struct App {
     /// the "Retake Last Region" flow to avoid re-drawing the same
     /// rectangle during repetitive capture work.
     pub last_regions: HashMap<readshot_capture::DisplayId, LastRegion>,
+    /// Display id for the most recent committed overlay selection.
+    /// `last_regions` stores one rectangle per display; this pointer
+    /// makes "last" deterministic across multi-monitor captures.
+    pub last_region_display_id: Option<readshot_capture::DisplayId>,
     /// What to do with the next finished region capture. Set by the
     /// overlay quick-actions; consumed in `RegionCaptureCompleted`.
     /// `None` falls back to the editor.
@@ -511,6 +515,7 @@ impl App {
             overlay_displays: HashMap::new(),
             overlay_selections: HashMap::new(),
             last_regions: HashMap::new(),
+            last_region_display_id: None,
             pending_intent: None,
             pending_display_id: None,
             pending_display_scale: None,
