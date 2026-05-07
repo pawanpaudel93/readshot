@@ -32,6 +32,8 @@
 //! | `capture_text`             | display?, rect?, scale?, ... | `{ text }`                      |
 //! | `capture_region_and_text`  | display?, rect?, scale?, ... | `{ image_base64, text }`        |
 //! | `recent_captures`          | limit?                       | recent history records          |
+//! | `latest_capture`           | (none)                       | newest history record           |
+//! | `get_capture`              | id                           | one history record              |
 //! | `search_captures`          | query, limit?                | matching history records        |
 //!
 //! All `capture_*` tools accept an optional `display` (id from
@@ -248,6 +250,8 @@ impl McpServer {
             "capture_text" => self.tool_capture_text(&args).await?,
             "capture_region_and_text" => self.tool_capture_region_and_text(&args).await?,
             "recent_captures" => self.tool_recent_captures(&args)?,
+            "latest_capture" => self.tool_latest_capture()?,
+            "get_capture" => self.tool_get_capture(&args)?,
             "search_captures" => self.tool_search_captures(&args)?,
             other => {
                 return Err(RpcErr {
@@ -290,6 +294,42 @@ impl McpServer {
                 .take(limit)
                 .map(|record| record_to_json(&record, history.root.as_deref()))
                 .collect::<Vec<_>>()
+        }))
+    }
+
+    fn tool_latest_capture(&self) -> Result<Value, RpcErr> {
+        let history = self.history()?;
+        let mut records = history.store.list().map_err(history_to_rpc)?;
+        let record = records.drain(..).next().ok_or_else(|| RpcErr {
+            code: codes::SERVER_ERROR,
+            message: "history is empty".into(),
+        })?;
+        Ok(json!({
+            "capture": record_to_json(&record, history.root.as_deref())
+        }))
+    }
+
+    fn tool_get_capture(&self, args: &Value) -> Result<Value, RpcErr> {
+        let id = args
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: "get_capture requires a non-empty `id`".into(),
+            })?;
+        let history = self.history()?;
+        let records = history.store.list().map_err(history_to_rpc)?;
+        let record = records
+            .into_iter()
+            .find(|record| record.id.to_string() == id)
+            .ok_or_else(|| RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: format!("capture `{id}` not found"),
+            })?;
+        Ok(json!({
+            "capture": record_to_json(&record, history.root.as_deref())
         }))
     }
 
@@ -659,6 +699,23 @@ fn tool_descriptors() -> Value {
             }
         },
         {
+            "name": "latest_capture",
+            "description": "Return the newest saved capture from Readshot history.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
+            "name": "get_capture",
+            "description": "Return one saved capture by history id.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "minLength": 1 }
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "search_captures",
             "description": "Search saved captures by OCR text or capture timestamp.",
             "inputSchema": {
@@ -767,6 +824,8 @@ mod tests {
                 "capture_text",
                 "capture_region_and_text",
                 "recent_captures",
+                "latest_capture",
+                "get_capture",
                 "search_captures"
             ]
         );
@@ -811,6 +870,80 @@ mod tests {
             .as_str()
             .unwrap()
             .ends_with("2026/02/00000000-0000-0000-0000-000000000002.png"));
+    }
+
+    #[tokio::test]
+    async fn tools_call_latest_capture_returns_newest_record() {
+        let s = server_with_history(vec![
+            record(
+                "00000000-0000-0000-0000-000000000005",
+                "2026-05-01T00:00:00Z",
+                100,
+                50,
+                "display-a",
+                Some("alpha older"),
+            ),
+            record(
+                "00000000-0000-0000-0000-000000000006",
+                "2026-06-01T00:00:00Z",
+                300,
+                200,
+                "display-b",
+                Some("beta newest"),
+            ),
+        ]);
+
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"latest_capture","arguments":{}}}"#,
+        )
+        .await;
+
+        assert_eq!(
+            resp["result"]["structuredContent"]["capture"]["ocr_text"],
+            "beta newest"
+        );
+        assert!(resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("beta newest"));
+    }
+
+    #[tokio::test]
+    async fn tools_call_get_capture_returns_record_by_id() {
+        let wanted_id = "00000000-0000-0000-0000-000000000007";
+        let s = server_with_history(vec![
+            record(
+                wanted_id,
+                "2026-07-01T00:00:00Z",
+                100,
+                50,
+                "display-a",
+                Some("needle capture"),
+            ),
+            record(
+                "00000000-0000-0000-0000-000000000008",
+                "2026-08-01T00:00:00Z",
+                300,
+                200,
+                "display-b",
+                Some("other capture"),
+            ),
+        ]);
+        let req = format!(
+            r#"{{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{{"name":"get_capture","arguments":{{"id":"{wanted_id}"}}}}}}"#
+        );
+
+        let resp = call(&s, &req).await;
+
+        assert_eq!(
+            resp["result"]["structuredContent"]["capture"]["id"],
+            wanted_id
+        );
+        assert!(resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("needle capture"));
     }
 
     #[tokio::test]
