@@ -100,9 +100,9 @@ open /Applications/Readshot.app
 ### Alternative: download the DMG manually
 
 ```bash
-# Replace v0.2.0 with the version you want.
+# Replace v0.3.0 with the version you want.
 curl -L -o readshot.dmg \
-  https://github.com/pawanpaudel93/readshot/releases/download/v0.2.0/readshot-macos-aarch64.dmg
+  https://github.com/pawanpaudel93/readshot/releases/download/v0.3.0/readshot-macos-aarch64.dmg
 
 # Verify the hash against the value in the GitHub Release notes.
 shasum -a 256 readshot.dmg
