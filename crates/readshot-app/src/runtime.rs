@@ -796,6 +796,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 },
             );
             state.last_region_display_id = Some(display_id.clone());
+            if let Some(tray) = state.tray.as_ref() {
+                tray.set_retake_last_region_enabled(true);
+            }
             state.pending_intent = Some(intent);
             state.pending_display_id = Some(display_id.clone());
             state.pending_display_scale = Some(display_scale);

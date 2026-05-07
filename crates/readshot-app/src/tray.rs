@@ -49,42 +49,51 @@ pub enum TrayAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TrayMenuItem {
     label: String,
+    enabled: bool,
     action: Option<TrayAction>,
 }
 
 #[cfg(test)]
-fn menu_items(hotkey_label: Option<&str>) -> Vec<TrayMenuItem> {
+fn menu_items(hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<TrayMenuItem> {
     vec![
         TrayMenuItem {
             label: capture_menu_label(hotkey_label),
+            enabled: true,
             action: Some(TrayAction::Capture),
         },
         TrayMenuItem {
             label: "Retake Last Region".to_string(),
+            enabled: can_retake_last_region,
             action: Some(TrayAction::RetakeLastRegion),
         },
         TrayMenuItem {
             label: "History…".to_string(),
+            enabled: true,
             action: Some(TrayAction::History),
         },
         TrayMenuItem {
             label: "Settings…".to_string(),
+            enabled: true,
             action: Some(TrayAction::Settings),
         },
         TrayMenuItem {
             label: "Install Command Line Tools…".to_string(),
+            enabled: true,
             action: Some(TrayAction::InstallCommandLineTools),
         },
         TrayMenuItem {
             label: "Check for Updates…".to_string(),
+            enabled: true,
             action: Some(TrayAction::CheckForUpdates),
         },
         TrayMenuItem {
             label: String::new(),
+            enabled: true,
             action: None,
         },
         TrayMenuItem {
             label: "Quit".to_string(),
+            enabled: true,
             action: Some(TrayAction::Quit),
         },
     ]
@@ -102,10 +111,15 @@ fn capture_menu_label(hotkey_label: Option<&str>) -> String {
 /// system tray entry disappears.
 pub struct TrayController {
     _tray: TrayIcon,
+    item_retake_last_region: MenuItem,
     menu_ids: HashMap<MenuId, TrayAction>,
 }
 
 impl TrayController {
+    pub fn set_retake_last_region_enabled(&self, enabled: bool) {
+        self.item_retake_last_region.set_enabled(enabled);
+    }
+
     /// Pop any pending tray + menu events off the static crossbeam
     /// receivers. Cheap — a non-blocking `try_recv` loop. Caller
     /// passes the result list straight into `runtime::update`.
@@ -155,7 +169,7 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
     let menu = Menu::new();
     let capture_label = capture_menu_label(hotkey_label);
     let item_capture = MenuItem::new(capture_label, true, None);
-    let item_retake_last_region = MenuItem::new("Retake Last Region", true, None);
+    let item_retake_last_region = MenuItem::new("Retake Last Region", false, None);
     let item_history = MenuItem::new("History…", true, None);
     let item_settings = MenuItem::new("Settings…", true, None);
     let item_install_cli = MenuItem::new("Install Command Line Tools…", true, None);
@@ -208,6 +222,7 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
     tracing::info!(target: "readshot::tray", "tray icon installed");
     Some(TrayController {
         _tray: tray,
+        item_retake_last_region,
         menu_ids,
     })
 }
@@ -334,7 +349,7 @@ mod tests {
 
     #[test]
     fn menu_contains_check_for_updates_before_quit() {
-        let items = menu_items(None);
+        let items = menu_items(None, false);
         let actions: Vec<TrayAction> = items.iter().filter_map(|item| item.action).collect();
 
         assert_eq!(
@@ -353,7 +368,7 @@ mod tests {
 
     #[test]
     fn menu_contains_install_command_line_tools_before_updates() {
-        let items = menu_items(None);
+        let items = menu_items(None, false);
         let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
 
         assert!(labels
@@ -366,7 +381,7 @@ mod tests {
 
     #[test]
     fn menu_contains_retake_last_region_after_capture() {
-        let items = menu_items(Some("⌘⇧X"));
+        let items = menu_items(Some("⌘⇧X"), true);
         let capture = items
             .iter()
             .position(|item| item.action == Some(TrayAction::Capture))
@@ -377,7 +392,20 @@ mod tests {
             .unwrap();
 
         assert_eq!(items[retake].label, "Retake Last Region");
+        assert!(items[retake].enabled);
         assert_eq!(retake, capture + 1);
+    }
+
+    #[test]
+    fn menu_disables_retake_last_region_until_region_exists() {
+        let items = menu_items(Some("⌘⇧X"), false);
+        let retake = items
+            .iter()
+            .find(|item| item.action == Some(TrayAction::RetakeLastRegion))
+            .unwrap();
+
+        assert_eq!(retake.label, "Retake Last Region");
+        assert!(!retake.enabled);
     }
 
     #[test]
