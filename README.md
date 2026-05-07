@@ -33,7 +33,11 @@ the image. Entirely offline.
   undo/redo. Crop is non-destructive — ⌘Z brings the image back.
 - **Pin to desktop**: click Pin in the editor and the flattened
   capture becomes a borderless always-on-top window you can drag
-  around, double-click to dismiss.
+  around, adjust opacity, lock in place, or double-click to dismiss.
+- **Workflow shortcuts**: the menu-bar menu includes Capture Text
+  for a no-editor OCR copy flow, Retake Last Region for repetitive
+  captures, and a Capture Window entry point for the window-capture
+  foundation.
 - **Native Save dialog** — pick where to save; the editor remembers
   the last directory for the rest of the session.
 - **Offline OCR** via Apple Vision (`VNRecognizeTextRequest`). Copy
@@ -51,7 +55,8 @@ the image. Entirely offline.
 - **Menu-bar app** (no Dock icon). Click the tray icon to capture, or
   right-click for the menu. Default global hotkey: **⌘⇧X**.
 - **MCP server** companion binary so AI agents can request captures,
-  OCR, and search/retrieve saved captures programmatically — see
+  OCR, list recent captures, retrieve the latest or a specific saved
+  capture, and search history programmatically — see
   [docs/MCP.md](docs/MCP.md).
 
 ## Usage
@@ -103,9 +108,14 @@ Then use:
 ```bash
 readshot list-displays
 readshot capture --output capture.png
+readshot capture-text
 readshot ocr --input capture.png
 readshot capture-and-ocr --also-image capture.png
 ```
+
+`readshot capture --last-region` is parsed for workflow parity with
+the GUI but returns a usage error in the CLI process because the last
+interactive region currently lives in the running menu-bar session.
 
 For AI-agent hosts, use the installed MCP command:
 

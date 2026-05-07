@@ -29,6 +29,8 @@ If you built from source, it's at
 | `capture_text`             | …same plus `languages`, `language_correction`   | `{ text, average_confidence }`    |
 | `capture_region_and_text`  | …same                                           | `{ image_base64, text, … }`       |
 | `recent_captures`          | `limit?`                                        | `{ captures: [...] }`             |
+| `latest_capture`           | (none)                                          | `{ capture: {...} }`              |
+| `get_capture`              | `id`                                            | `{ capture: {...} }`              |
 | `search_captures`          | `query`, `limit?`                               | `{ captures: [...] }`             |
 
 When `display` is omitted, the primary display is used. When `rect`
@@ -37,6 +39,11 @@ is omitted, the chosen display's full bounds are captured.
 The history tools read the same local archive as the GUI. Each capture
 result includes metadata, OCR text when available, and the absolute
 PNG path.
+
+Use `latest_capture` when an agent needs the newest saved capture
+without guessing a limit. Use `get_capture` after `recent_captures` or
+`search_captures` when the agent already has a capture id and needs
+the full metadata again.
 
 A full example tool call from the agent's side:
 
@@ -177,7 +184,7 @@ printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' \
   | python3 -m json.tool
 ```
 
-You should see the four tool descriptors with their JSON Schemas. If
+You should see the tool descriptors with their JSON Schemas. If
 the binary errors out with `Library not loaded: @rpath/libswift_Concurrency.dylib`,
 it was built against a Swift toolchain that isn't installed; reinstall
 Readshot from the official DMG or rebuild from source on the target
