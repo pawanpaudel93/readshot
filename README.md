@@ -110,14 +110,17 @@ readshot list-displays
 readshot list-windows
 readshot capture --output capture.png
 readshot capture-window --window <id> --output window.png
+readshot capture-window --window <id> --rect 100,100,800,500 --output window-region.png
 readshot capture-text
 readshot ocr --input capture.png
 readshot capture-and-ocr --also-image capture.png
 ```
 
 Use `readshot list-windows` to find a capturable window id, then pass
-that id to `readshot capture-window --window <id>`. Window capture is a
-CLI-first workflow; the tray and GUI do not expose a window picker yet.
+that id to `readshot capture-window --window <id>`. Add `--rect
+x,y,width,height` to crop a region relative to the window's top-left.
+Window capture is a CLI-first workflow; the tray and GUI do not expose
+a window picker yet.
 
 `readshot capture-text` is the scriptable text-only capture path: it
 captures a region, runs OCR, and prints the recognised text to stdout

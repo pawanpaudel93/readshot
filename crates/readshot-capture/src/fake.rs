@@ -39,7 +39,7 @@ impl FakeCapturer {
                 title: "Fake Window".to_string(),
                 app_name: "Readshot Test".to_string(),
                 display_id,
-                bounds: Rect::from_xywh(10.0, 20.0, 120.0, 80.0)
+                bounds: Rect::from_xywh(0.0, 0.0, 256.0, 256.0)
                     .expect("fake window bounds are valid"),
             }],
         }

@@ -31,7 +31,8 @@
 //! ## Output formats
 //!
 //! * `capture` writes a PNG to `--output` (or `stdout` by default / `-`).
-//! * `capture-window` captures one window by id and writes a PNG.
+//! * `capture-window` captures one window by id and writes a PNG. Add
+//!   `--rect x,y,w,h` to crop a region relative to the window's top-left.
 //! * `capture-text` captures a region, runs OCR, and writes recognised text
 //!   to stdout. In the GUI, the equivalent no-editor flow is the overlay
 //!   toolbar's Copy Text button.
@@ -126,6 +127,11 @@ pub enum Command {
         /// Target window id, as printed by `list-windows`.
         #[arg(long)]
         window: String,
+
+        /// Window-relative region in logical pixels: `x,y,width,height`.
+        /// Default: the full window.
+        #[arg(long, value_parser = parse_rect)]
+        rect: Option<Rect>,
 
         /// Output PNG path. Use `-` for stdout.
         #[arg(long, short = 'o', default_value = "-")]
@@ -308,12 +314,22 @@ impl Cli {
                 let img = capturer.capture_region(req).await?;
                 write_png(&img, &output, stdout)?;
             }
-            Command::CaptureWindow { window, output } => {
-                let img = capturer
+            Command::CaptureWindow {
+                window,
+                rect,
+                output,
+            } => {
+                let window_id = WindowId(window);
+                let mut img = capturer
                     .capture_window(WindowCaptureRequest {
-                        window_id: WindowId(window),
+                        window_id: window_id.clone(),
                     })
                     .await?;
+                if let Some(rect) = rect {
+                    let (scale_x, scale_y) =
+                        window_capture_scale(&*capturer, &window_id, &img).await;
+                    img = crop_window_relative_rect(img, rect, scale_x, scale_y)?;
+                }
                 write_png(&img, &output, stdout)?;
             }
             Command::CaptureText {
@@ -414,6 +430,66 @@ async fn build_capture_request(
         scale,
         hide_cursor,
     })
+}
+
+async fn window_capture_scale(
+    capturer: &dyn Capturer,
+    window_id: &WindowId,
+    img: &RgbaImage,
+) -> (f32, f32) {
+    let Ok(windows) = capturer.list_windows().await else {
+        return (1.0, 1.0);
+    };
+    let Some(window) = windows.iter().find(|window| &window.id == window_id) else {
+        return (1.0, 1.0);
+    };
+    let width = window.bounds.width();
+    let height = window.bounds.height();
+    if width <= 0.0 || height <= 0.0 || !width.is_finite() || !height.is_finite() {
+        return (1.0, 1.0);
+    }
+    (img.width() as f32 / width, img.height() as f32 / height)
+}
+
+fn crop_window_relative_rect(
+    full: RgbaImage,
+    rect_logical: Rect,
+    scale_x: f32,
+    scale_y: f32,
+) -> Result<RgbaImage, CliError> {
+    let scale_x = finite_positive_or_one(scale_x);
+    let scale_y = finite_positive_or_one(scale_y);
+    let x0 = ((rect_logical.x() * scale_x).round().max(0.0) as u32).min(full.width());
+    let y0 = ((rect_logical.y() * scale_y).round().max(0.0) as u32).min(full.height());
+    let w_target = (rect_logical.width() * scale_x).round().max(1.0) as u32;
+    let h_target = (rect_logical.height() * scale_y).round().max(1.0) as u32;
+    let w = w_target.min(full.width().saturating_sub(x0));
+    let h = h_target.min(full.height().saturating_sub(y0));
+    if w == 0 || h == 0 {
+        return Err(CliError::InvalidRect {
+            got: format_rect(rect_logical),
+            reason: "rect is outside the captured window bounds".to_string(),
+        });
+    }
+    Ok(image::imageops::crop_imm(&full, x0, y0, w, h).to_image())
+}
+
+fn finite_positive_or_one(value: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        1.0
+    }
+}
+
+fn format_rect(rect: Rect) -> String {
+    format!(
+        "{},{},{},{}",
+        rect.x(),
+        rect.y(),
+        rect.width(),
+        rect.height()
+    )
 }
 
 fn write_displays_table(out: &mut dyn Write, displays: &[DisplayInfo]) -> std::io::Result<()> {
@@ -654,14 +730,26 @@ mod tests {
             "capture-window",
             "--window",
             "fake-window-0",
+            "--rect",
+            "8,12,32,24",
             "-o",
             "window.png",
         ])
         .unwrap();
-        let Some(Command::CaptureWindow { window, output }) = cli.command else {
+        let Some(Command::CaptureWindow {
+            window,
+            rect,
+            output,
+        }) = cli.command
+        else {
             panic!("wrong subcommand");
         };
         assert_eq!(window, "fake-window-0");
+        let rect = rect.expect("window-relative rect should parse");
+        assert_eq!(rect.x(), 8.0);
+        assert_eq!(rect.y(), 12.0);
+        assert_eq!(rect.width(), 32.0);
+        assert_eq!(rect.height(), 24.0);
         assert_eq!(output, std::path::PathBuf::from("window.png"));
     }
 
@@ -843,6 +931,30 @@ mod tests {
 
         let bytes = std::fs::read(&png_path).unwrap();
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[tokio::test]
+    async fn run_capture_window_with_rect_crops_relative_to_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let png_path = dir.path().join("window-region.png");
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture-window",
+            "--window",
+            "fake-window-0",
+            "--rect",
+            "8,12,32,24",
+            "-o",
+            png_path.to_str().unwrap(),
+        ])
+        .unwrap();
+        let mut out = Vec::new();
+        cli.run(cap, ocr, &mut out).await.unwrap();
+
+        let img = image::open(&png_path).unwrap().to_rgba8();
+        assert_eq!(img.width(), 32);
+        assert_eq!(img.height(), 24);
     }
 
     #[tokio::test]
