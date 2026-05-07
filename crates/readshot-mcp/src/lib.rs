@@ -28,7 +28,9 @@
 //! | Tool                       | Inputs                       | Output                          |
 //! |----------------------------|------------------------------|---------------------------------|
 //! | `list_displays`            | (none)                       | `[{ id, name, bounds, ... }]`   |
+//! | `list_windows`             | (none)                       | `[{ id, app_name, bounds, ... }]` |
 //! | `capture_region`           | display?, rect?, scale?      | `{ image_base64 }` (PNG)        |
+//! | `capture_window`           | window, rect?                | `{ image_base64 }` (PNG)        |
 //! | `capture_text`             | display?, rect?, scale?, ... | `{ text }`                      |
 //! | `capture_region_and_text`  | display?, rect?, scale?, ... | `{ image_base64, text }`        |
 //! | `recent_captures`          | limit?                       | recent history records          |
@@ -56,7 +58,9 @@ use std::sync::Arc;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 use image::RgbaImage;
-use readshot_capture::{CaptureRequest, Capturer, DisplayInfo};
+use readshot_capture::{
+    CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest, WindowId, WindowInfo,
+};
 use readshot_core::error::{CaptureError, HistoryError, OCRError};
 use readshot_core::geom::Rect;
 use readshot_core::{CaptureRecord, HistoryStore};
@@ -246,7 +250,9 @@ impl McpServer {
 
         let payload = match name {
             "list_displays" => self.tool_list_displays().await?,
+            "list_windows" => self.tool_list_windows().await?,
             "capture_region" => self.tool_capture_region(&args).await?,
+            "capture_window" => self.tool_capture_window(&args).await?,
             "capture_text" => self.tool_capture_text(&args).await?,
             "capture_region_and_text" => self.tool_capture_region_and_text(&args).await?,
             "recent_captures" => self.tool_recent_captures(&args)?,
@@ -366,6 +372,11 @@ impl McpServer {
         Ok(json!({ "displays": displays.iter().map(display_to_json).collect::<Vec<_>>() }))
     }
 
+    async fn tool_list_windows(&self) -> Result<Value, RpcErr> {
+        let windows = self.capturer.list_windows().await.map_err(capture_to_rpc)?;
+        Ok(json!({ "windows": windows.iter().map(window_to_json).collect::<Vec<_>>() }))
+    }
+
     async fn tool_capture_region(&self, args: &Value) -> Result<Value, RpcErr> {
         let req = self.build_request(args).await?;
         let img = self
@@ -373,6 +384,32 @@ impl McpServer {
             .capture_region(req)
             .await
             .map_err(capture_to_rpc)?;
+        Ok(json!({ "image_base64": encode_png(&img)? }))
+    }
+
+    async fn tool_capture_window(&self, args: &Value) -> Result<Value, RpcErr> {
+        let window_id = args
+            .get("window")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: "capture_window requires a non-empty `window` id".into(),
+            })?;
+        let window_id = WindowId(window_id.to_string());
+        let mut img = self
+            .capturer
+            .capture_window(WindowCaptureRequest {
+                window_id: window_id.clone(),
+            })
+            .await
+            .map_err(capture_to_rpc)?;
+        if let Some(rect_value) = args.get("rect") {
+            let rect = parse_rect_value(rect_value)?;
+            let (scale_x, scale_y) = self.window_capture_scale(&window_id, &img).await;
+            img = crop_window_relative_rect(img, rect, scale_x, scale_y)?;
+        }
         Ok(json!({ "image_base64": encode_png(&img)? }))
     }
 
@@ -458,6 +495,21 @@ impl McpServer {
             hide_cursor,
         })
     }
+
+    async fn window_capture_scale(&self, window_id: &WindowId, img: &RgbaImage) -> (f32, f32) {
+        let Ok(windows) = self.capturer.list_windows().await else {
+            return (1.0, 1.0);
+        };
+        let Some(window) = windows.iter().find(|window| &window.id == window_id) else {
+            return (1.0, 1.0);
+        };
+        let width = window.bounds.width();
+        let height = window.bounds.height();
+        if width <= 0.0 || height <= 0.0 || !width.is_finite() || !height.is_finite() {
+            return (1.0, 1.0);
+        }
+        (img.width() as f32 / width, img.height() as f32 / height)
+    }
 }
 
 fn ocr_request_from(args: &Value, image: RgbaImage) -> OCRRequest {
@@ -511,6 +563,37 @@ fn encode_png(img: &RgbaImage) -> Result<String, RpcErr> {
     Ok(B64.encode(&buf))
 }
 
+fn crop_window_relative_rect(
+    full: RgbaImage,
+    rect_logical: Rect,
+    scale_x: f32,
+    scale_y: f32,
+) -> Result<RgbaImage, RpcErr> {
+    let scale_x = finite_positive_or_one(scale_x);
+    let scale_y = finite_positive_or_one(scale_y);
+    let x0 = ((rect_logical.x() * scale_x).round().max(0.0) as u32).min(full.width());
+    let y0 = ((rect_logical.y() * scale_y).round().max(0.0) as u32).min(full.height());
+    let w_target = (rect_logical.width() * scale_x).round().max(1.0) as u32;
+    let h_target = (rect_logical.height() * scale_y).round().max(1.0) as u32;
+    let w = w_target.min(full.width().saturating_sub(x0));
+    let h = h_target.min(full.height().saturating_sub(y0));
+    if w == 0 || h == 0 {
+        return Err(RpcErr {
+            code: codes::INVALID_PARAMS,
+            message: "rect is outside the captured window bounds".into(),
+        });
+    }
+    Ok(image::imageops::crop_imm(&full, x0, y0, w, h).to_image())
+}
+
+fn finite_positive_or_one(value: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        1.0
+    }
+}
+
 fn display_to_json(d: &DisplayInfo) -> Value {
     json!({
         "id": d.id,
@@ -522,6 +605,21 @@ fn display_to_json(d: &DisplayInfo) -> Value {
             "y": d.bounds.y(),
             "width": d.bounds.width(),
             "height": d.bounds.height(),
+        }
+    })
+}
+
+fn window_to_json(window: &WindowInfo) -> Value {
+    json!({
+        "id": window.id.0,
+        "title": window.title,
+        "app_name": window.app_name,
+        "display_id": window.display_id,
+        "bounds": {
+            "x": window.bounds.x(),
+            "y": window.bounds.y(),
+            "width": window.bounds.width(),
+            "height": window.bounds.height(),
         }
     })
 }
@@ -658,12 +756,31 @@ fn tool_descriptors() -> Value {
         "type": "object",
         "properties": {
             "display": { "type": "string" },
-            "rect": rect_schema,
+            "rect": rect_schema.clone(),
             "scale": { "type": "number" },
             "hide_cursor": { "type": "boolean", "default": true },
             "languages": { "type": "array", "items": { "type": "string" }, "description": "BCP-47 codes" },
             "language_correction": { "type": "boolean", "default": true },
         },
+        "additionalProperties": false
+    });
+    let capture_window_args = json!({
+        "type": "object",
+        "properties": {
+            "window": { "type": "string", "minLength": 1, "description": "Window id from list_windows." },
+            "rect": {
+                "type": "object",
+                "description": "Window-relative region in logical pixels. Defaults to the full window.",
+                "properties": {
+                    "x": { "type": "number" },
+                    "y": { "type": "number" },
+                    "width": { "type": "number" },
+                    "height": { "type": "number" }
+                },
+                "required": ["x", "y", "width", "height"]
+            },
+        },
+        "required": ["window"],
         "additionalProperties": false
     });
     json!([
@@ -673,9 +790,19 @@ fn tool_descriptors() -> Value {
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
+            "name": "list_windows",
+            "description": "List capturable app windows with id, app name, title, display id, and bounds.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
             "name": "capture_region",
             "description": "Capture a region (or full display) and return a base64-encoded PNG.",
             "inputSchema": capture_args
+        },
+        {
+            "name": "capture_window",
+            "description": "Capture a full window or a window-relative region and return a base64-encoded PNG.",
+            "inputSchema": capture_window_args
         },
         {
             "name": "capture_text",
@@ -820,7 +947,9 @@ mod tests {
             names,
             vec![
                 "list_displays",
+                "list_windows",
                 "capture_region",
+                "capture_window",
                 "capture_text",
                 "capture_region_and_text",
                 "recent_captures",
@@ -1010,6 +1139,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tools_call_list_windows_returns_fake_window() {
+        let s = server();
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"list_windows","arguments":{}}}"#,
+        )
+        .await;
+        let windows = resp["result"]["structuredContent"]["windows"]
+            .as_array()
+            .unwrap();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0]["id"], "fake-window-0");
+        assert_eq!(windows[0]["app_name"], "Readshot Test");
+    }
+
+    #[tokio::test]
     async fn tools_call_capture_region_returns_base64_png() {
         let s = server();
         let resp = call(
@@ -1022,6 +1167,53 @@ mod tests {
             .unwrap();
         let bytes = B64.decode(b64).unwrap();
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[tokio::test]
+    async fn tools_call_capture_window_returns_base64_png() {
+        let s = server();
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"capture_window","arguments":{"window":"fake-window-0"}}}"#,
+        )
+        .await;
+        let b64 = resp["result"]["structuredContent"]["image_base64"]
+            .as_str()
+            .unwrap();
+        let bytes = B64.decode(b64).unwrap();
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[tokio::test]
+    async fn tools_call_capture_window_with_rect_crops_relative_to_window() {
+        let s = server();
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"capture_window","arguments":{"window":"fake-window-0","rect":{"x":8,"y":12,"width":32,"height":24}}}}"#,
+        )
+        .await;
+        let b64 = resp["result"]["structuredContent"]["image_base64"]
+            .as_str()
+            .unwrap();
+        let bytes = B64.decode(b64).unwrap();
+        let img = image::load_from_memory(&bytes).unwrap().to_rgba8();
+        assert_eq!(img.width(), 32);
+        assert_eq!(img.height(), 24);
+    }
+
+    #[tokio::test]
+    async fn tools_call_capture_window_with_unknown_window_returns_server_error() {
+        let s = server();
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"capture_window","arguments":{"window":"missing-window"}}}"#,
+        )
+        .await;
+        assert_eq!(resp["error"]["code"], codes::SERVER_ERROR);
+        assert!(resp["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("window not found: missing-window"));
     }
 
     #[tokio::test]

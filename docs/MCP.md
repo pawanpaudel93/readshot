@@ -25,7 +25,9 @@ If you built from source, it's at
 | Tool                       | Inputs                                          | Output                            |
 |----------------------------|-------------------------------------------------|-----------------------------------|
 | `list_displays`            | (none)                                          | `{ displays: [...] }`             |
+| `list_windows`             | (none)                                          | `{ windows: [...] }`              |
 | `capture_region`           | `display?`, `rect?`, `scale?`, `hide_cursor?`   | `{ image_base64 }` (PNG)          |
+| `capture_window`           | `window`, `rect?`                               | `{ image_base64 }` (PNG)          |
 | `capture_text`             | …same plus `languages`, `language_correction`   | `{ text, average_confidence }`    |
 | `capture_region_and_text`  | …same                                           | `{ image_base64, text, … }`       |
 | `recent_captures`          | `limit?`                                        | `{ captures: [...] }`             |
@@ -35,6 +37,10 @@ If you built from source, it's at
 
 When `display` is omitted, the primary display is used. When `rect`
 is omitted, the chosen display's full bounds are captured.
+
+Use `list_windows` to find capturable app windows. Pass the returned
+`id` as `window` to `capture_window`. A `capture_window.rect` is
+relative to that window's top-left, not to the full display.
 
 The history tools read the same local archive as the GUI. Each capture
 result includes metadata, OCR text when available, and the absolute
@@ -63,6 +69,23 @@ A full example tool call from the agent's side:
     "arguments": {
       "rect": { "x": 100, "y": 100, "width": 800, "height": 600 },
       "languages": ["en-US"]
+    }
+  }
+}
+```
+
+Capture one window:
+
+```jsonc
+{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "method": "tools/call",
+  "params": {
+    "name": "capture_window",
+    "arguments": {
+      "window": "11474",
+      "rect": { "x": 100, "y": 100, "width": 800, "height": 500 }
     }
   }
 }
