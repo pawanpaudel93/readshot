@@ -40,6 +40,12 @@ The history tools read the same local archive as the GUI. Each capture
 result includes metadata, OCR text when available, and the absolute
 PNG path.
 
+For agents that only need text, use `capture_text`: it captures the
+requested region, runs OCR, and returns text without an image payload.
+For agents that need both pixels and OCR, use `capture_region_and_text`.
+The GUI equivalent of text-only capture is the overlay toolbar's
+**Copy Text** button.
+
 Use `latest_capture` when an agent needs the newest saved capture
 without guessing a limit. Use `get_capture` after `recent_captures` or
 `search_captures` when the agent already has a capture id and needs

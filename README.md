@@ -36,7 +36,8 @@ the image. Entirely offline.
   around, adjust opacity, lock in place, or double-click to dismiss.
 - **Workflow shortcuts**: the menu-bar menu includes Retake Last
   Region for repetitive captures. The overlay toolbar includes Copy
-  Text for a no-editor OCR copy flow.
+  Text for a no-editor OCR copy flow; there is no separate tray menu
+  item for text-only capture.
 - **Native Save dialog** — pick where to save; the editor remembers
   the last directory for the rest of the session.
 - **Offline OCR** via Apple Vision (`VNRecognizeTextRequest`). Copy
@@ -111,6 +112,11 @@ readshot capture-text
 readshot ocr --input capture.png
 readshot capture-and-ocr --also-image capture.png
 ```
+
+`readshot capture-text` is the scriptable text-only capture path: it
+captures a region, runs OCR, and prints the recognised text to stdout
+by default. In the GUI, use the overlay toolbar's **Copy Text** button
+for the same no-editor OCR flow.
 
 `readshot capture --last-region` is parsed for workflow parity with
 the GUI but returns a usage error in the CLI process because the last

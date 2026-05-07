@@ -31,7 +31,9 @@
 //! ## Output formats
 //!
 //! * `capture` writes a PNG to `--output` (or `stdout` by default / `-`).
-//! * `capture-text` captures a region and writes recognised text to stdout.
+//! * `capture-text` captures a region, runs OCR, and writes recognised text
+//!   to stdout. In the GUI, the equivalent no-editor flow is the overlay
+//!   toolbar's Copy Text button.
 //! * `ocr` reads a PNG from `--input` and writes the recognised text
 //!   to `--output` or `stdout`.
 //! * `capture-and-ocr` writes the recognised text to `--output` or
@@ -108,7 +110,7 @@ pub enum Command {
         output: PathBuf,
     },
 
-    /// Capture a region and write recognised text to stdout.
+    /// Capture a region, run OCR, and write recognised text to stdout.
     CaptureText {
         #[arg(long)]
         display: Option<String>,
@@ -465,7 +467,7 @@ fn write_text(text: &str, path: &std::path::Path, stdout: &mut dyn Write) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
     use readshot_capture::fake::FakeCapturer;
     use readshot_ocr::fake::FakeOcrEngine;
 
@@ -550,6 +552,19 @@ mod tests {
     fn parses_capture_text_subcommand() {
         let cli = Cli::try_parse_from(["readshot", "capture-text"]).unwrap();
         assert!(matches!(cli.command, Some(Command::CaptureText { .. })));
+    }
+
+    #[test]
+    fn capture_text_help_describes_cli_ocr_flow() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("capture-text")
+            .expect("capture-text subcommand exists")
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("Capture a region, run OCR"));
+        assert!(help.contains("write recognised text to stdout"));
     }
 
     #[test]
