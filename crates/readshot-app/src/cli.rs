@@ -99,10 +99,10 @@ pub enum Command {
         #[arg(long, default_value_t = true)]
         hide_cursor: bool,
 
-        /// Repeat the last GUI-selected region. Only available in the
-        /// interactive GUI session because the CLI process has no shared
-        /// in-memory overlay state.
-        #[arg(long)]
+        /// Hidden compatibility flag for the GUI-only Retake Last
+        /// Region workflow. The CLI process has no shared in-memory
+        /// overlay state, so this always returns a usage error.
+        #[arg(long, hide = true)]
         last_region: bool,
 
         /// Output PNG path. Use `-` for stdout.
@@ -577,6 +577,18 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn capture_help_hides_gui_only_last_region_flag() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("capture")
+            .expect("capture subcommand exists")
+            .render_long_help()
+            .to_string();
+
+        assert!(!help.contains("--last-region"));
     }
 
     #[test]

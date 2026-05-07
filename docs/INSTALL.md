@@ -1,11 +1,13 @@
 # Installing Readshot
 
-Readshot can ship **Developer ID signed + notarised** on macOS when
-Apple release secrets are configured; otherwise it uses the
-project's stable self-signed certificate. Windows is
-**SignPath-signed** when the OSS signing programme is configured, or
-unsigned as a fallback. Unsigned/self-signed builds show a one-time
-security prompt; subsequent launches are silent.
+Readshot's official packaged releases are **macOS-only** right now.
+Windows and Linux source modules exist in the repository, but they are
+not wired into public release artifacts yet.
+
+macOS releases can ship **Developer ID signed + notarised** when Apple
+release secrets are configured; otherwise they use the project's
+stable self-signed certificate. Unsigned/self-signed builds show a
+one-time security prompt; subsequent launches are silent.
 
 ## macOS (14 Sonoma and later)
 
@@ -98,9 +100,9 @@ open /Applications/Readshot.app
 ### Alternative: download the DMG manually
 
 ```bash
-# Replace v0.1.0 with the version you want.
+# Replace v0.2.0 with the version you want.
 curl -L -o readshot.dmg \
-  https://github.com/pawanpaudel93/readshot/releases/download/v0.1.0/readshot-macos-aarch64.dmg
+  https://github.com/pawanpaudel93/readshot/releases/download/v0.2.0/readshot-macos-aarch64.dmg
 
 # Verify the hash against the value in the GitHub Release notes.
 shasum -a 256 readshot.dmg
@@ -127,80 +129,15 @@ If you accidentally denied: open **System Settings → Privacy &
 Security → Screen Recording**, find Readshot, toggle it on, and
 restart the app.
 
-## Windows (10 20H1 and later)
+## Windows and Linux
 
-GitHub Release assets:
+There are no official Windows or Linux packages yet. Do not expect a
+published MSI, Winget package, Flatpak, AppImage, or AUR package for
+the current public release.
 
-* `readshot-windows-x86_64.msi` — installer.
-
-### Recommended: Winget
-
-```pwsh
-winget install Readshot.Readshot
-```
-
-If the MSI is signed (SignPath OSS programme), Windows installs
-silently. If the SignPath programme application is still pending,
-you'll see SmartScreen on first launch:
-
-> "Windows protected your PC."
-
-Bypass: click **More info** → **Run anyway**. One-time only.
-
-### Alternative: download the MSI manually
-
-```pwsh
-# Replace v0.1.0 with the version you want.
-Invoke-WebRequest `
-  -Uri https://github.com/pawanpaudel93/readshot/releases/download/v0.1.0/readshot-windows-x86_64.msi `
-  -OutFile readshot.msi
-
-# Install.
-msiexec /i readshot.msi /quiet
-```
-
-## Linux
-
-GitHub Release asset:
-
-* `readshot-linux-x86_64.AppImage`
-
-### Recommended: Flathub
-
-```bash
-flatpak install flathub dev.pawanpaudel93.readshot
-flatpak run dev.pawanpaudel93.readshot
-```
-
-### AppImage (universal Linux)
-
-```bash
-# Replace v0.1.0 with the version you want.
-curl -L -o Readshot.AppImage \
-  https://github.com/pawanpaudel93/readshot/releases/download/v0.1.0/readshot-linux-x86_64.AppImage
-chmod +x Readshot.AppImage
-./Readshot.AppImage
-```
-
-### Arch Linux (AUR)
-
-```bash
-paru -S readshot
-# or `yay -S readshot`
-```
-
-### Granting Screen Recording
-
-On Wayland, the first capture triggers the
-`xdg-desktop-portal-screencast` consent dialog. Click **Allow** to
-proceed. On X11, no consent step — capture starts immediately.
-
-If `libayatana-appindicator` is missing the tray icon won't appear;
-the global hotkey still works. Install the package via your distro:
-
-* Debian / Ubuntu: `sudo apt install libayatana-appindicator3-1`
-* Arch: `sudo pacman -S libayatana-appindicator`
-* Fedora: `sudo dnf install libayatana-appindicator-gtk3`
+Developers can still build from source on those platforms, but the
+end-user install path is macOS until the platform capture and OCR
+backends are wired and tested.
 
 ## Building from source
 

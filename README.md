@@ -118,10 +118,6 @@ captures a region, runs OCR, and prints the recognised text to stdout
 by default. In the GUI, use the overlay toolbar's **Copy Text** button
 for the same no-editor OCR flow.
 
-`readshot capture --last-region` is parsed for workflow parity with
-the GUI but returns a usage error in the CLI process because the last
-interactive region currently lives in the running menu-bar session.
-
 For AI-agent hosts, use the installed MCP command:
 
 ```text
