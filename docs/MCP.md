@@ -205,15 +205,54 @@ The server advertises protocol version `2024-11-05` and a single
 
 ## Verifying it works
 
-A one-shot smoke test that doesn't need an agent:
+Set the binary path once:
+
+```bash
+READSHOT_MCP=/Applications/Readshot.app/Contents/MacOS/readshot-mcp
+```
+
+If you built from source:
+
+```bash
+READSHOT_MCP=./target/release/readshot-mcp
+```
+
+List the advertised tools:
 
 ```bash
 printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' \
-  | /Applications/Readshot.app/Contents/MacOS/readshot-mcp \
+  | "$READSHOT_MCP" \
   | python3 -m json.tool
 ```
 
-You should see the tool descriptors with their JSON Schemas. If
+List capturable windows:
+
+```bash
+printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_windows","arguments":{}}}\n' \
+  | "$READSHOT_MCP" \
+  | python3 -m json.tool
+```
+
+Capture a full window. Replace `WINDOW_ID` with an `id` from
+`list_windows`:
+
+```bash
+printf '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"capture_window","arguments":{"window":"WINDOW_ID"}}}\n' \
+  | "$READSHOT_MCP" \
+  | python3 -m json.tool
+```
+
+Capture a window-relative region:
+
+```bash
+printf '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"capture_window","arguments":{"window":"WINDOW_ID","rect":{"x":100,"y":100,"width":800,"height":500}}}}\n' \
+  | "$READSHOT_MCP" \
+  | python3 -m json.tool
+```
+
+These capture calls return a base64-encoded PNG in
+`result.structuredContent.image_base64`. You should see the tool
+descriptors with their JSON Schemas in the first command. If
 the binary errors out with `Library not loaded: @rpath/libswift_Concurrency.dylib`,
 it was built against a Swift toolchain that isn't installed; reinstall
 Readshot from the official DMG or rebuild from source on the target
