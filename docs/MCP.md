@@ -99,11 +99,13 @@ inherits the launching agent's TCC / portal grants.
 * **macOS:** the agent app (Claude Desktop, Cursor, …) must have
   Screen Recording permission in *System Settings → Privacy &
   Security → Screen Recording*.
-* **Linux/Wayland:** the first capture pops the
-  `xdg-desktop-portal-screencast` consent dialog inside the agent's
-  process. Click *Allow*.
-* **Windows:** no permission prompt — captures work as soon as the
-  agent launches the binary.
+* **Linux/Wayland source builds:** once the Linux backend is wired for
+  public use, the first capture is expected to go through the
+  `xdg-desktop-portal-screencast` consent flow inside the agent's
+  process.
+* **Windows source builds:** no packaged public release exists yet.
+  The Windows capture/OCR backend is not part of the supported
+  end-user surface today.
 
 If a capture fails for permission reasons, the server returns a
 JSON-RPC error with `code = -32001` and a `message` you can show to
