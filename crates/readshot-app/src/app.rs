@@ -138,6 +138,8 @@ pub enum Message {
     TrayActionPerformed(crate::tray::TrayAction),
     /// User asked for a region capture (welcome button / tray menu).
     OpenOverlayRequested,
+    /// User asked to repeat the most recent overlay selection.
+    RetakeLastRegionRequested,
     /// First view of the overlay window — used by the runtime to
     /// remember its `window::Id` mapping.
     OverlayWindowReady(iced::window::Id),
@@ -365,6 +367,10 @@ pub struct App {
     /// action toolbar's position; populated by
     /// [`Message::OverlaySelectionChanged`] from the canvas.
     pub overlay_selections: HashMap<readshot_capture::DisplayId, readshot_core::geom::Rect>,
+    /// Most recent committed overlay selection per display. Used by
+    /// the "Retake Last Region" flow to avoid re-drawing the same
+    /// rectangle during repetitive capture work.
+    pub last_regions: HashMap<readshot_capture::DisplayId, LastRegion>,
     /// What to do with the next finished region capture. Set by the
     /// overlay quick-actions; consumed in `RegionCaptureCompleted`.
     /// `None` falls back to the editor.
@@ -436,6 +442,13 @@ pub struct OverlayDisplay {
     pub height: f32,
 }
 
+/// Last committed overlay region for a display.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LastRegion {
+    pub rect: readshot_core::geom::Rect,
+    pub display_scale: f32,
+}
+
 /// What happens to the captured image after an overlay confirms.
 /// Selected by the floating action toolbar's buttons; `Editor` is the
 /// default (Enter / Space, click on the primary "Capture" button).
@@ -475,6 +488,7 @@ impl App {
             editor: None,
             overlay_displays: HashMap::new(),
             overlay_selections: HashMap::new(),
+            last_regions: HashMap::new(),
             pending_intent: None,
             pending_display_id: None,
             pending_display_scale: None,

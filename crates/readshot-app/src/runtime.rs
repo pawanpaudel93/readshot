@@ -645,6 +645,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     update(state, Message::OpenOverlayRequested)
                 }
             }
+            crate::tray::TrayAction::RetakeLastRegion => {
+                state.pending_intent = Some(crate::app::CaptureIntent::Editor);
+                update(state, Message::RetakeLastRegionRequested)
+            }
             crate::tray::TrayAction::History => {
                 if state.welcome.should_show() {
                     show_or_focus_welcome(state)
@@ -696,6 +700,37 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::perform(async move { coord.list_displays().await }, |result| {
                 Message::OverlayDisplaysListed(result.map_err(|e| e.to_string()))
             })
+        }
+
+        Message::RetakeLastRegionRequested => {
+            if state.welcome.should_show() {
+                return show_or_focus_welcome(state);
+            }
+            if state.capture_in_flight {
+                return Task::none();
+            }
+            let Some((display_id, last)) = state
+                .last_regions
+                .iter()
+                .next()
+                .map(|(display_id, last)| (display_id.clone(), *last))
+            else {
+                state.last_capture_status = Some("No previous region to retake.".into());
+                return Task::none();
+            };
+
+            state
+                .pending_intent
+                .get_or_insert(crate::app::CaptureIntent::Editor);
+            state.pending_display_id = Some(display_id.clone());
+            state.pending_display_scale = Some(last.display_scale);
+            update(
+                state,
+                Message::CaptureRegionRequested {
+                    display_id,
+                    rect: last.rect,
+                },
+            )
         }
 
         Message::OverlayDisplaysListed(Err(e)) => {
@@ -755,6 +790,13 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 .find(|d| d.display_id == display_id)
                 .map(|d| d.scale)
                 .unwrap_or(1.0);
+            state.last_regions.insert(
+                display_id.clone(),
+                crate::app::LastRegion {
+                    rect,
+                    display_scale,
+                },
+            );
             state.pending_intent = Some(intent);
             state.pending_display_id = Some(display_id.clone());
             state.pending_display_scale = Some(display_scale);
@@ -3827,6 +3869,39 @@ mod tests {
         assert_eq!(
             app.pending_intent,
             Some(crate::app::CaptureIntent::CopyTextDirect)
+        );
+    }
+
+    #[test]
+    fn overlay_selection_stores_last_region_per_display() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let display_id = "primary".to_string();
+        let rect = readshot_core::geom::Rect::from_xywh(10.0, 20.0, 120.0, 80.0).unwrap();
+
+        let _ = update(
+            &mut app,
+            Message::OverlaySelected {
+                display_id: display_id.clone(),
+                rect,
+                intent: crate::app::CaptureIntent::Editor,
+            },
+        );
+
+        assert_eq!(
+            app.last_regions.get(&display_id).map(|r| r.rect),
+            Some(rect)
+        );
+    }
+
+    #[test]
+    fn retake_last_region_without_previous_region_sets_status() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+
+        let _ = update(&mut app, Message::RetakeLastRegionRequested);
+
+        assert_eq!(
+            app.last_capture_status.as_deref(),
+            Some("No previous region to retake.")
         );
     }
 
