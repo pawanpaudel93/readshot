@@ -2077,7 +2077,7 @@ fn reveal_path(path: &Path) -> Result<(), std::io::Error> {
 
 fn editor_view(state: &App) -> Element<'_, Message> {
     use iced::widget::canvas::Canvas;
-    use iced::widget::{stack, tooltip, Space as IcedSpace};
+    use iced::widget::{stack, Space as IcedSpace};
     use readshot_ui::editor::{canvas::EditorCanvas, toolbar, ToolState};
 
     let Some(ed) = state.editor.as_ref() else {
@@ -2283,50 +2283,50 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             .width(Length::Fixed(content_w))
             .height(Length::Fixed(content_h));
 
-        let zoom_btn = |label: &'static str, msg: Message, enabled: bool, selected: bool| {
-            let mut b = button(text(label).size(11).color(Color::WHITE))
-                .padding([5, 9])
-                .style(move |theme, status| zoom_button_style(theme, status, enabled, selected));
-            if !busy && enabled {
-                b = b.on_press(msg);
-            }
-            b
-        };
-        let mut zoom_row = row![
+        let zoom_row = row![
             text("Zoom")
                 .size(11)
                 .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
-            zoom_btn(
+            zoom_button(
                 "-",
+                "Zoom out",
                 Message::EditorZoomOutFromDisplayScale(scale),
                 zoom.can_zoom_out_from_display_scale(scale),
                 false,
+                busy,
             ),
+            text(zoom.label_for_display_scale(display_scale))
+                .size(11)
+                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
+                .width(Length::Fixed(50.0))
+                .align_x(iced::alignment::Horizontal::Center),
         ];
-        if !zoom.is_fit() && !zoom.is_actual_size_for_display_scale(display_scale) {
-            zoom_row = zoom_row.push(
-                text(zoom.label_for_display_scale(display_scale))
-                    .size(11)
-                    .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
-                    .width(Length::Fixed(42.0))
-                    .align_x(iced::alignment::Horizontal::Center),
-            );
-        }
         let zoom_controls = container(
             zoom_row
-                .push(zoom_btn(
+                .push(zoom_button(
                     "+",
+                    "Zoom in",
                     Message::EditorZoomInFromDisplayScale(scale),
                     zoom.can_zoom_in_from_display_scale(scale),
                     false,
+                    busy,
                 ))
-                .push(zoom_btn(
+                .push(zoom_button(
                     "1:1",
+                    "Actual pixels (100%)",
                     Message::EditorZoomActual,
                     true,
                     zoom.is_actual_size_for_display_scale(display_scale),
+                    busy,
                 ))
-                .push(zoom_btn("Fit", Message::EditorZoomFit, true, zoom.is_fit()))
+                .push(zoom_button(
+                    "Fit",
+                    "Fit to view",
+                    Message::EditorZoomFit,
+                    true,
+                    zoom.is_fit(),
+                    busy,
+                ))
                 .spacing(4)
                 .align_y(Alignment::Center),
         )
@@ -2510,7 +2510,6 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         IcedSpace::new().height(Length::Fixed(0.0)).into()
     };
 
-    let _ = tooltip::Position::Bottom; // kept for future direct uses
     container(
         column![toolbar_row, image_area, text_banner, bottom_row]
             .spacing(8)
@@ -2765,6 +2764,38 @@ fn toolbar_ghost_style(_theme: &Theme, status: button::Status, enabled: bool) ->
         },
         ..Default::default()
     }
+}
+
+fn zoom_button<'a>(
+    label: &'static str,
+    tip: &'static str,
+    msg: Message,
+    enabled: bool,
+    selected: bool,
+    busy: bool,
+) -> Element<'a, Message> {
+    use iced::widget::tooltip;
+
+    let mut b = button(text(label).size(11).color(Color::WHITE))
+        .padding([5, 9])
+        .style(move |theme, status| zoom_button_style(theme, status, enabled, selected));
+    if !busy && enabled {
+        b = b.on_press(msg);
+    }
+    let pop = container(text(tip).size(11).color(Color::WHITE))
+        .padding([4, 8])
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.15),
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..Default::default()
+        });
+    tooltip::Tooltip::new(b, pop, tooltip::Position::Bottom)
+        .gap(4)
+        .into()
 }
 
 fn zoom_button_style(

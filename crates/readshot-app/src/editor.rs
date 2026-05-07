@@ -400,4 +400,16 @@ mod tests {
         let s = EditorSession::new_with_display_scale(solid(8, 8), 2.0);
         assert_eq!(s.actual_size_zoom(), EditorZoom::Percent(0.5));
     }
+
+    #[test]
+    fn editor_zoom_label_distinguishes_fit_actual_and_custom_zoom() {
+        let mut s = EditorSession::new_with_display_scale(solid(8, 8), 2.0);
+        assert_eq!(s.zoom_label(), "Fit");
+
+        s.zoom = s.actual_size_zoom();
+        assert_eq!(s.zoom_label(), "100%");
+
+        s.zoom = EditorZoom::Percent(1.0);
+        assert_eq!(s.zoom_label(), "200%");
+    }
 }
