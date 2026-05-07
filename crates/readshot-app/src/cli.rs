@@ -4,8 +4,9 @@
 //!
 //! 1. `readshot://` URL scheme → opens the *interactive* overlay
 //!    (handled by [`crate::url_scheme`]).
-//! 2. `readshot capture | ocr | capture-and-ocr | list-displays` →
-//!    silent, scriptable subcommands (this module).
+//! 2. `readshot capture | capture-window | ocr | capture-and-ocr |
+//!    list-displays | list-windows` → silent, scriptable subcommands
+//!    (this module).
 //! 3. The MCP server (Task 19) — wraps the same coordinator.
 //!
 //! The CLI deliberately bypasses the iced GUI: it constructs the
@@ -21,16 +22,16 @@
 //!
 //! ## Region selection
 //!
-//! All three capture-driven subcommands take `--display`, `--rect`
-//! (a `x,y,w,h` quadruple in logical pixels) and `--scale` (default
-//! 1.0). When `--display` is omitted, the first display reported by
-//! [`readshot_capture::Capturer::list_displays`] is used. When
-//! `--rect` is omitted, the full bounds of the chosen display are
-//! captured.
+//! The region-capture subcommands take `--display`, `--rect` (a
+//! `x,y,w,h` quadruple in logical pixels) and `--scale` (default 1.0).
+//! When `--display` is omitted, the first display reported by
+//! [`readshot_capture::Capturer::list_displays`] is used. When `--rect`
+//! is omitted, the full bounds of the chosen display are captured.
 //!
 //! ## Output formats
 //!
 //! * `capture` writes a PNG to `--output` (or `stdout` by default / `-`).
+//! * `capture-window` captures one window by id and writes a PNG.
 //! * `capture-text` captures a region, runs OCR, and writes recognised text
 //!   to stdout. In the GUI, the equivalent no-editor flow is the overlay
 //!   toolbar's Copy Text button.
@@ -38,8 +39,9 @@
 //!   to `--output` or `stdout`.
 //! * `capture-and-ocr` writes the recognised text to `--output` or
 //!   `stdout`. Add `--also-image PATH` to additionally save the PNG.
-//! * `list-displays` prints a human-readable table by default, or
-//!   JSON when `--json` is set — useful for scripts and MCP wiring.
+//! * `list-displays` and `list-windows` print human-readable tables by
+//!   default, or JSON when `--json` is set — useful for scripts and MCP
+//!   wiring.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -47,7 +49,9 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use image::RgbaImage;
-use readshot_capture::{CaptureRequest, Capturer, DisplayInfo};
+use readshot_capture::{
+    CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest, WindowId, WindowInfo,
+};
 use readshot_core::error::{CaptureError, OCRError};
 use readshot_core::geom::Rect;
 use readshot_ocr::{OCREngine, OCRRequest};
@@ -73,6 +77,13 @@ pub struct Cli {
 pub enum Command {
     /// List attached displays.
     ListDisplays {
+        /// Emit machine-readable JSON instead of a human-readable table.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// List capturable windows.
+    ListWindows {
         /// Emit machine-readable JSON instead of a human-readable table.
         #[arg(long)]
         json: bool,
@@ -104,6 +115,17 @@ pub enum Command {
         /// overlay state, so this always returns a usage error.
         #[arg(long, hide = true)]
         last_region: bool,
+
+        /// Output PNG path. Use `-` for stdout.
+        #[arg(long, short = 'o', default_value = "-")]
+        output: PathBuf,
+    },
+
+    /// Capture one window and write the PNG to a file.
+    CaptureWindow {
+        /// Target window id, as printed by `list-windows`.
+        #[arg(long)]
+        window: String,
 
         /// Output PNG path. Use `-` for stdout.
         #[arg(long, short = 'o', default_value = "-")]
@@ -212,6 +234,8 @@ pub enum CliError {
 pub fn exit_code(err: &CliError) -> i32 {
     match err {
         CliError::Capture(CaptureError::PermissionDenied) => 77, // EX_NOPERM
+        CliError::Capture(CaptureError::DisplayNotFound(_))
+        | CliError::Capture(CaptureError::WindowNotFound(_)) => 66, // EX_NOINPUT
         CliError::Capture(_) => 71,                              // EX_OSERR
         CliError::Ocr(_) => 70,                                  // EX_SOFTWARE
         CliError::DisplayNotFound(_) | CliError::NoDisplays => 66, // EX_NOINPUT
@@ -257,6 +281,14 @@ impl Cli {
                     write_displays_table(stdout, &displays)?;
                 }
             }
+            Command::ListWindows { json } => {
+                let windows = capturer.list_windows().await?;
+                if json {
+                    write_windows_json(stdout, &windows)?;
+                } else {
+                    write_windows_table(stdout, &windows)?;
+                }
+            }
             Command::Capture {
                 display,
                 rect,
@@ -274,6 +306,14 @@ impl Cli {
                     build_capture_request(&*capturer, display.as_deref(), rect, scale, hide_cursor)
                         .await?;
                 let img = capturer.capture_region(req).await?;
+                write_png(&img, &output, stdout)?;
+            }
+            Command::CaptureWindow { window, output } => {
+                let img = capturer
+                    .capture_window(WindowCaptureRequest {
+                        window_id: WindowId(window),
+                    })
+                    .await?;
                 write_png(&img, &output, stdout)?;
             }
             Command::CaptureText {
@@ -426,6 +466,56 @@ fn write_displays_json(out: &mut dyn Write, displays: &[DisplayInfo]) -> std::io
     Ok(())
 }
 
+fn write_windows_table(out: &mut dyn Write, windows: &[WindowInfo]) -> std::io::Result<()> {
+    writeln!(
+        out,
+        "{:<18}{:<18}{:<18}{:<22}title",
+        "id", "display", "bounds (x,y,w,h)", "app"
+    )?;
+    for window in windows {
+        writeln!(
+            out,
+            "{:<18}{:<18}{:<18}{:<22}{}",
+            window.id.0,
+            window.display_id,
+            format!(
+                "{},{},{},{}",
+                window.bounds.x() as i32,
+                window.bounds.y() as i32,
+                window.bounds.width() as i32,
+                window.bounds.height() as i32,
+            ),
+            window.app_name,
+            window.title,
+        )?;
+    }
+    Ok(())
+}
+
+fn write_windows_json(out: &mut dyn Write, windows: &[WindowInfo]) -> std::io::Result<()> {
+    let payload: Vec<_> = windows
+        .iter()
+        .map(|window| {
+            serde_json::json!({
+                "id": window.id.0,
+                "title": window.title,
+                "app_name": window.app_name,
+                "display_id": window.display_id,
+                "bounds": {
+                    "x": window.bounds.x(),
+                    "y": window.bounds.y(),
+                    "width": window.bounds.width(),
+                    "height": window.bounds.height(),
+                },
+            })
+        })
+        .collect();
+    let s = serde_json::to_string_pretty(&payload).expect("serde_json on a Vec cannot fail");
+    out.write_all(s.as_bytes())?;
+    out.write_all(b"\n")?;
+    Ok(())
+}
+
 fn write_png(
     img: &RgbaImage,
     path: &std::path::Path,
@@ -522,6 +612,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_list_windows_subcommand() {
+        let cli = Cli::try_parse_from(["readshot", "list-windows"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::ListWindows { json: false })
+        ));
+    }
+
+    #[test]
     fn parses_capture_subcommand() {
         let cli = Cli::try_parse_from([
             "readshot",
@@ -546,6 +645,24 @@ mod tests {
         assert_eq!(display.as_deref(), Some("fake-0"));
         assert_eq!(rect.unwrap().width(), 128.0);
         assert_eq!(output, std::path::PathBuf::from("out.png"));
+    }
+
+    #[test]
+    fn parses_capture_window_subcommand() {
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture-window",
+            "--window",
+            "fake-window-0",
+            "-o",
+            "window.png",
+        ])
+        .unwrap();
+        let Some(Command::CaptureWindow { window, output }) = cli.command else {
+            panic!("wrong subcommand");
+        };
+        assert_eq!(window, "fake-window-0");
+        assert_eq!(output, std::path::PathBuf::from("window.png"));
     }
 
     #[test]
@@ -661,6 +778,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_list_windows_table_writes_fake_window() {
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from(["readshot", "list-windows"]).unwrap();
+        let mut out = Vec::new();
+        cli.run(cap, ocr, &mut out).await.unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("fake-window-0"));
+        assert!(text.contains("Fake Window"));
+        assert!(text.contains("Readshot Test"));
+    }
+
+    #[tokio::test]
+    async fn run_list_windows_json_emits_valid_json() {
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from(["readshot", "list-windows", "--json"]).unwrap();
+        let mut out = Vec::new();
+        cli.run(cap, ocr, &mut out).await.unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let arr = value.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["id"], "fake-window-0");
+        assert_eq!(arr[0]["app_name"], "Readshot Test");
+    }
+
+    #[tokio::test]
     async fn run_capture_writes_png_to_file() {
         let dir = tempfile::tempdir().unwrap();
         let png_path = dir.path().join("out.png");
@@ -670,6 +813,27 @@ mod tests {
             "capture",
             "--rect",
             "0,0,64,64",
+            "-o",
+            png_path.to_str().unwrap(),
+        ])
+        .unwrap();
+        let mut out = Vec::new();
+        cli.run(cap, ocr, &mut out).await.unwrap();
+
+        let bytes = std::fs::read(&png_path).unwrap();
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[tokio::test]
+    async fn run_capture_window_writes_png_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let png_path = dir.path().join("window.png");
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture-window",
+            "--window",
+            "fake-window-0",
             "-o",
             png_path.to_str().unwrap(),
         ])
@@ -756,6 +920,28 @@ mod tests {
         let mut out = Vec::new();
         let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
         assert!(matches!(err, CliError::DisplayNotFound(ref s) if s == "no-such-display"));
+        assert_eq!(exit_code(&err), 66);
+    }
+
+    #[tokio::test]
+    async fn run_capture_window_with_unknown_window_returns_window_not_found() {
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture-window",
+            "--window",
+            "no-such-window",
+            "-o",
+            "/tmp/ignored.png",
+        ])
+        .unwrap();
+        let mut out = Vec::new();
+        let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
+
+        assert!(matches!(
+            err,
+            CliError::Capture(CaptureError::WindowNotFound(ref s)) if s == "no-such-window"
+        ));
         assert_eq!(exit_code(&err), 66);
     }
 

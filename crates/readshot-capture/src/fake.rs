@@ -12,25 +12,35 @@ use readshot_core::error::CaptureError;
 use readshot_core::geom::Rect;
 use readshot_test_fixtures::base_256;
 
-use crate::{CaptureRequest, Capturer, DisplayInfo};
+use crate::{CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest, WindowId, WindowInfo};
 
 pub struct FakeCapturer {
     image: RgbaImage,
     displays: Vec<DisplayInfo>,
+    windows: Vec<WindowInfo>,
 }
 
 impl FakeCapturer {
     pub fn new() -> Self {
         let bounds =
             Rect::from_xywh(0.0, 0.0, 256.0, 256.0).expect("256x256 bounds is a valid Rect");
+        let display_id = "fake-0".to_string();
         Self {
             image: base_256(),
             displays: vec![DisplayInfo {
-                id: "fake-0".to_string(),
+                id: display_id.clone(),
                 bounds,
                 scale: 1.0,
                 name: "Fake Display".to_string(),
                 is_primary: true,
+            }],
+            windows: vec![WindowInfo {
+                id: WindowId("fake-window-0".to_string()),
+                title: "Fake Window".to_string(),
+                app_name: "Readshot Test".to_string(),
+                display_id,
+                bounds: Rect::from_xywh(10.0, 20.0, 120.0, 80.0)
+                    .expect("fake window bounds are valid"),
             }],
         }
     }
@@ -50,5 +60,17 @@ impl Capturer for FakeCapturer {
 
     async fn capture_region(&self, _req: CaptureRequest) -> Result<RgbaImage, CaptureError> {
         Ok(self.image.clone())
+    }
+
+    async fn list_windows(&self) -> Result<Vec<WindowInfo>, CaptureError> {
+        Ok(self.windows.clone())
+    }
+
+    async fn capture_window(&self, req: WindowCaptureRequest) -> Result<RgbaImage, CaptureError> {
+        if self.windows.iter().any(|window| window.id == req.window_id) {
+            Ok(self.image.clone())
+        } else {
+            Err(CaptureError::WindowNotFound(req.window_id.0))
+        }
     }
 }

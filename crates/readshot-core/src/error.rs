@@ -33,6 +33,12 @@ pub enum CaptureError {
     #[error("display not found: {0}")]
     DisplayNotFound(String),
 
+    /// The supplied `window_id` does not match any currently-capturable
+    /// window. Common cause: caller cached a window id and the window
+    /// closed before capture.
+    #[error("window not found: {0}")]
+    WindowNotFound(String),
+
     /// Any other failure from the underlying OS API. The string is the
     /// platform's error message (already localised by the OS); the CLI emits
     /// it on stderr verbatim. Maps to CLI exit code `2` and MCP error code
@@ -150,6 +156,13 @@ mod tests {
         let e = CaptureError::DisplayNotFound("CGDirectDisplay-42".into());
         let s = format!("{e}");
         assert_eq!(s, "display not found: CGDirectDisplay-42");
+    }
+
+    #[test]
+    fn window_capture_error_displays_human_readable() {
+        let e = CaptureError::WindowNotFound("12345".into());
+        let s = format!("{e}");
+        assert_eq!(s, "window not found: 12345");
     }
 
     #[test]

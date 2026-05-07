@@ -146,12 +146,36 @@ pub fn default_capturer() -> Box<dyn Capturer> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fake::FakeCapturer;
+
+    struct RegionOnlyCapturer;
+
+    #[async_trait]
+    impl Capturer for RegionOnlyCapturer {
+        async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
+            Ok(Vec::new())
+        }
+
+        async fn capture_region(&self, _req: CaptureRequest) -> Result<RgbaImage, CaptureError> {
+            Ok(RgbaImage::new(1, 1))
+        }
+    }
 
     #[tokio::test]
     async fn default_window_capture_is_unsupported() {
-        let capturer = FakeCapturer::new();
+        let capturer = RegionOnlyCapturer;
         let result = capturer.list_windows().await;
+
+        assert!(matches!(result, Err(CaptureError::Unsupported(_))));
+    }
+
+    #[tokio::test]
+    async fn default_window_image_capture_is_unsupported() {
+        let capturer = RegionOnlyCapturer;
+        let result = capturer
+            .capture_window(WindowCaptureRequest {
+                window_id: WindowId("missing".to_string()),
+            })
+            .await;
 
         assert!(matches!(result, Err(CaptureError::Unsupported(_))));
     }

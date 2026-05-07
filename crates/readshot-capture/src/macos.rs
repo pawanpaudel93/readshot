@@ -30,7 +30,7 @@ use screencapturekit::shareable_content::{SCDisplay, SCShareableContent, SCWindo
 use screencapturekit::stream::configuration::SCStreamConfiguration;
 use screencapturekit::stream::content_filter::SCContentFilter;
 
-use crate::{CaptureRequest, Capturer, DisplayInfo, WindowId, WindowInfo};
+use crate::{CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest, WindowId, WindowInfo};
 
 /// Production macOS Capturer.
 pub struct ScreenCaptureKitCapturer;
@@ -94,6 +94,50 @@ impl Capturer for ScreenCaptureKitCapturer {
             .filter(|window| window.is_on_screen() && window.window_layer() == 0)
             .filter_map(|window| window_info_from_sc(&window, &displays))
             .collect())
+    }
+
+    async fn capture_window(&self, req: WindowCaptureRequest) -> Result<RgbaImage, CaptureError> {
+        let content = SCShareableContent::get().map_err(map_err)?;
+        let windows = content.windows();
+        let window = find_window(&windows, &req.window_id)
+            .ok_or_else(|| CaptureError::WindowNotFound(req.window_id.0.clone()))?;
+
+        let primary = primary_display_id();
+        let displays = content
+            .displays()
+            .into_iter()
+            .map(|d| display_info_from_sc(d, primary))
+            .collect::<Vec<_>>();
+        let display = window_info_from_sc(window, &displays)
+            .and_then(|info| {
+                displays
+                    .iter()
+                    .find(|display| display.id == info.display_id)
+                    .cloned()
+            })
+            .or_else(|| displays.iter().find(|display| display.is_primary).cloned())
+            .or_else(|| displays.first().cloned());
+        let scale = display.map(|display| display.scale).unwrap_or(1.0);
+        let frame = window.frame();
+        let size = frame.size();
+        let capture_w = (size.width as f32 * scale).round().max(1.0) as u32;
+        let capture_h = (size.height as f32 * scale).round().max(1.0) as u32;
+
+        let filter = SCContentFilter::create().with_window(window).build();
+        let config = SCStreamConfiguration::new()
+            .with_width(capture_w)
+            .with_height(capture_h)
+            .with_shows_cursor(false)
+            .with_ignore_global_clip_single_window(true);
+
+        let cg_image = SCScreenshotManager::capture_image(&filter, &config).map_err(map_err)?;
+
+        let width = cg_image.width() as u32;
+        let height = cg_image.height() as u32;
+        let rgba = cg_image.rgba_data().map_err(map_err)?;
+        RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
+            CaptureError::Backend("rgba_data length does not match width × height × 4".to_string())
+        })
     }
 }
 
@@ -218,6 +262,11 @@ fn intersection_area(a: Rect, b: Rect) -> f32 {
 fn find_display<'a>(displays: &'a [SCDisplay], requested_id: &str) -> Option<&'a SCDisplay> {
     let id_num: u32 = requested_id.parse().ok()?;
     displays.iter().find(|d| d.display_id() == id_num)
+}
+
+fn find_window<'a>(windows: &'a [SCWindow], requested_id: &WindowId) -> Option<&'a SCWindow> {
+    let id_num: u32 = requested_id.0.parse().ok()?;
+    windows.iter().find(|w| w.window_id() == id_num)
 }
 
 /// `CGMainDisplayID` returns the system's primary display id. If the
