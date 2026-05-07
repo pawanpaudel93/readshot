@@ -278,12 +278,20 @@ pub enum Message {
     EditorColorCycle(i32),
     /// Zoom editor preview in one step.
     EditorZoomIn,
+    /// Zoom editor preview in one step from the currently displayed
+    /// scale. Used by the on-screen controls when `Fit` is active.
+    EditorZoomInFromDisplayScale(f32),
     /// Zoom editor preview out one step.
     EditorZoomOut,
+    /// Zoom editor preview out one step from the currently displayed
+    /// scale. Used by the on-screen controls when `Fit` is active.
+    EditorZoomOutFromDisplayScale(f32),
     /// Reset editor preview to exact image pixels.
     EditorZoomActual,
     /// Reset editor preview to fit-down mode.
     EditorZoomFit,
+    /// The OS reported a new scale factor for a tracked window.
+    WindowRescaled(iced::window::Id, f32),
     /// Text-tool inline input — content typed by the user. Empty
     /// means the input is cleared.
     EditorTextChanged(String),
@@ -365,6 +373,10 @@ pub struct App {
     /// `pending_intent` so the resulting history record can be
     /// stamped with the right monitor.
     pub pending_display_id: Option<readshot_capture::DisplayId>,
+    /// Screen scale factor for the in-flight capture display. The
+    /// editor uses this to make actual-pixels zoom mean physical
+    /// pixels instead of logical UI points.
+    pub pending_display_scale: Option<f32>,
     /// Live pin windows mapped to their pre-rendered image handle.
     /// Each pin window's `view` reads its handle from this map. The
     /// map shrinks as pins close.
@@ -465,6 +477,7 @@ impl App {
             overlay_selections: HashMap::new(),
             pending_intent: None,
             pending_display_id: None,
+            pending_display_scale: None,
             pins: HashMap::new(),
             overlay_tick: 0,
             last_save_dir: None,

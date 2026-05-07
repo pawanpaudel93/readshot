@@ -452,9 +452,12 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // and only react when the editor window is the focused one
         // (the canvas captures key presses at the widget level for
         // Escape; that's why Esc isn't handled here).
-        subs.push(iced::event::listen_with(|event, status, _window| {
+        subs.push(iced::event::listen_with(|event, status, window| {
             use iced::event::Status;
             use iced::keyboard::{Event as KbEvent, Key};
+            if let iced::Event::Window(iced::window::Event::Rescaled(scale)) = event {
+                return Some(Message::WindowRescaled(window, scale));
+            }
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
                 let cmd = modifiers.command();
                 // ⌘-shortcuts are global to the editor — fire even
@@ -733,8 +736,15 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // them ends the multi-monitor session — before snapping
             // the screenshot so the dimming veil doesn't show up in
             // the captured pixels.
+            let display_scale = state
+                .overlay_displays
+                .values()
+                .find(|d| d.display_id == display_id)
+                .map(|d| d.scale)
+                .unwrap_or(1.0);
             state.pending_intent = Some(intent);
             state.pending_display_id = Some(display_id.clone());
+            state.pending_display_scale = Some(display_scale);
             state.overlay_selections.clear();
             let mut tasks = close_all_overlays(state);
             tasks.push(Task::done(Message::CaptureRegionRequested {
@@ -759,6 +769,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::OverlayCancelled => {
             state.overlay_selections.clear();
             state.pending_intent = None;
+            state.pending_display_id = None;
+            state.pending_display_scale = None;
             Task::batch(close_all_overlays(state))
         }
 
@@ -780,6 +792,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 .take()
                 .unwrap_or(crate::app::CaptureIntent::Editor);
             let display_id = state.pending_display_id.take().unwrap_or_default();
+            let display_scale = state.pending_display_scale.take().unwrap_or(1.0);
             match result {
                 Ok(image) => {
                     let history_record = history_record_for_capture(
@@ -802,9 +815,16 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         crate::app::CaptureIntent::Editor => {
                             state.editor = Some(match history_record {
                                 Some(record) => {
-                                    crate::editor::EditorSession::from_history(image, record)
+                                    crate::editor::EditorSession::from_history_with_display_scale(
+                                        image,
+                                        record,
+                                        display_scale,
+                                    )
                                 }
-                                None => crate::editor::EditorSession::new(image),
+                                None => crate::editor::EditorSession::new_with_display_scale(
+                                    image,
+                                    display_scale,
+                                ),
                             });
                             let (id, open_task) = window::open(editor_window_settings());
                             state.windows.register(id, WindowKind::Editor);
@@ -942,6 +962,18 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             if state.cli_tools_window_id == Some(id) {
                 state.cli_tools_window_id = None;
                 state.cli_tools_status = None;
+            }
+            Task::none()
+        }
+        Message::WindowRescaled(id, scale) => {
+            if matches!(state.windows.kind(id), Some(WindowKind::Editor)) {
+                if let Some(ed) = state.editor.as_mut() {
+                    let was_actual = ed.zoom_is_actual_size();
+                    ed.display_scale = scale.max(f32::EPSILON);
+                    if was_actual {
+                        ed.zoom = ed.actual_size_zoom();
+                    }
+                }
             }
             Task::none()
         }
@@ -1350,15 +1382,27 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::EditorZoomInFromDisplayScale(scale) => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.zoom = ed.zoom.zoom_in_from_display_scale(scale);
+            }
+            Task::none()
+        }
         Message::EditorZoomOut => {
             if let Some(ed) = state.editor.as_mut() {
                 ed.zoom = ed.zoom.zoom_out();
             }
             Task::none()
         }
+        Message::EditorZoomOutFromDisplayScale(scale) => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.zoom = ed.zoom.zoom_out_from_display_scale(scale);
+            }
+            Task::none()
+        }
         Message::EditorZoomActual => {
             if let Some(ed) = state.editor.as_mut() {
-                ed.zoom = crate::editor::EditorZoom::Percent(1.0);
+                ed.zoom = ed.actual_size_zoom();
             }
             Task::none()
         }
@@ -2116,6 +2160,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let (image_w, image_h) = ed.effective_image_size();
     let image_offset = ed.crop_offset();
     let zoom = ed.zoom;
+    let display_scale = ed.display_scale;
     let next_pin_number = ed.next_pin_number;
     let image_area_content = responsive(move |available| {
         let iw = image_w as f32;
@@ -2127,7 +2172,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         let content_w = displayed_w.max(available.width);
         let content_h = displayed_h.max(available.height);
 
-        let filter = editor_image_filter(scale);
+        let filter = editor_image_filter(scale, display_scale);
 
         let image_layer = container(
             iced::widget::image(image_handle.clone())
@@ -2163,14 +2208,79 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             .width(Length::Fixed(content_w))
             .height(Length::Fixed(content_h));
 
-        scrollable(content)
+        let zoom_btn = |label: &'static str, msg: Message, enabled: bool, selected: bool| {
+            let mut b = button(text(label).size(11).color(Color::WHITE))
+                .padding([5, 9])
+                .style(move |theme, status| zoom_button_style(theme, status, enabled, selected));
+            if !busy && enabled {
+                b = b.on_press(msg);
+            }
+            b
+        };
+        let mut zoom_row = row![
+            text("Zoom")
+                .size(11)
+                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+            zoom_btn(
+                "-",
+                Message::EditorZoomOutFromDisplayScale(scale),
+                zoom.can_zoom_out_from_display_scale(scale),
+                false,
+            ),
+        ];
+        if !zoom.is_fit() && !zoom.is_actual_size_for_display_scale(display_scale) {
+            zoom_row = zoom_row.push(
+                text(zoom.label_for_display_scale(display_scale))
+                    .size(11)
+                    .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
+                    .width(Length::Fixed(42.0))
+                    .align_x(iced::alignment::Horizontal::Center),
+            );
+        }
+        let zoom_controls = container(
+            zoom_row
+                .push(zoom_btn(
+                    "+",
+                    Message::EditorZoomInFromDisplayScale(scale),
+                    zoom.can_zoom_in_from_display_scale(scale),
+                    false,
+                ))
+                .push(zoom_btn(
+                    "1:1",
+                    Message::EditorZoomActual,
+                    true,
+                    zoom.is_actual_size_for_display_scale(display_scale),
+                ))
+                .push(zoom_btn("Fit", Message::EditorZoomFit, true, zoom.is_fit()))
+                .spacing(4)
+                .align_y(Alignment::Center),
+        )
+        .padding([3, 6])
+        .style(|_theme: &Theme| container::Style {
+            background: Some(Color::from_rgba(0.03, 0.035, 0.045, 0.82).into()),
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.14),
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        });
+        let zoom_layer = container(zoom_controls)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(10)
+            .align_x(Alignment::Start)
+            .align_y(Alignment::End);
+
+        let scroll_layer = scrollable(content)
             .direction(iced::widget::scrollable::Direction::Both {
                 vertical: iced::widget::scrollable::Scrollbar::default(),
                 horizontal: iced::widget::scrollable::Scrollbar::default(),
             })
             .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+            .height(Length::Fill);
+
+        stack![scroll_layer, zoom_layer].into()
     })
     .width(Length::Fill)
     .height(Length::Fill);
@@ -2209,63 +2319,6 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let dims = text(format!("{img_w} × {img_h} px"))
         .size(11)
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55));
-    let zoom_btn = |label: &'static str, msg: Message, enabled: bool, selected: bool| {
-        let mut b = button(text(label).size(11).color(Color::WHITE))
-            .padding([5, 9])
-            .style(move |theme, status| zoom_button_style(theme, status, enabled, selected));
-        if !busy && enabled {
-            b = b.on_press(msg);
-        }
-        b
-    };
-    let mut zoom_row = row![
-        text("Zoom")
-            .size(11)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
-        zoom_btn("-", Message::EditorZoomOut, ed.zoom.can_zoom_out(), false,),
-    ];
-    if !ed.zoom.is_fit() && !ed.zoom.is_actual_size() {
-        zoom_row = zoom_row.push(
-            text(ed.zoom.label())
-                .size(11)
-                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
-                .width(Length::Fixed(42.0))
-                .align_x(iced::alignment::Horizontal::Center),
-        );
-    }
-    let zoom_controls = container(
-        zoom_row
-            .push(zoom_btn(
-                "+",
-                Message::EditorZoomIn,
-                ed.zoom.can_zoom_in(),
-                false,
-            ))
-            .push(zoom_btn(
-                "100%",
-                Message::EditorZoomActual,
-                true,
-                ed.zoom.is_actual_size(),
-            ))
-            .push(zoom_btn(
-                "Fit",
-                Message::EditorZoomFit,
-                true,
-                ed.zoom.is_fit(),
-            ))
-            .spacing(4)
-            .align_y(Alignment::Center),
-    )
-    .padding([3, 6])
-    .style(|_theme: &Theme| container::Style {
-        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.045).into()),
-        border: iced::Border {
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.09),
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        ..Default::default()
-    });
     let bullet = text("·")
         .size(11)
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.35));
@@ -2312,8 +2365,6 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     .clip(true);
 
     let controls = row![
-        zoom_controls,
-        IcedSpace::new().width(Length::Fixed(8.0)),
         action_btn(
             "Discard",
             Message::EditorDiscardRequested,
@@ -2744,11 +2795,12 @@ fn editor_fit_scale(available: iced::Size, image_w: u32, image_h: u32) -> f32 {
     }
     (available.width / iw)
         .min(available.height / ih)
-        .clamp(f32::EPSILON, 1.0)
+        .max(f32::EPSILON)
 }
 
-fn editor_image_filter(scale: f32) -> iced::widget::image::FilterMethod {
-    if (scale - 1.0).abs() < 0.001 {
+fn editor_image_filter(scale: f32, display_scale: f32) -> iced::widget::image::FilterMethod {
+    let physical_scale = scale * display_scale.max(f32::EPSILON);
+    if (physical_scale - 1.0).abs() < 0.001 {
         iced::widget::image::FilterMethod::Nearest
     } else {
         iced::widget::image::FilterMethod::Linear
@@ -3753,16 +3805,32 @@ mod tests {
     #[test]
     fn editor_image_filter_is_crisp_at_actual_size_and_smooth_otherwise() {
         assert_eq!(
-            editor_image_filter(1.0),
+            editor_image_filter(1.0, 1.0),
             iced::widget::image::FilterMethod::Nearest
         );
         assert_eq!(
-            editor_image_filter(0.75),
+            editor_image_filter(0.5, 2.0),
+            iced::widget::image::FilterMethod::Nearest
+        );
+        assert_eq!(
+            editor_image_filter(0.75, 1.0),
             iced::widget::image::FilterMethod::Linear
         );
         assert_eq!(
-            editor_image_filter(1.25),
+            editor_image_filter(1.25, 1.0),
             iced::widget::image::FilterMethod::Linear
+        );
+    }
+
+    #[test]
+    fn editor_fit_scale_fills_available_viewport() {
+        assert_eq!(
+            editor_fit_scale(iced::Size::new(800.0, 600.0), 200, 100),
+            4.0
+        );
+        assert_eq!(
+            editor_fit_scale(iced::Size::new(500.0, 400.0), 1000, 400),
+            0.5
         );
     }
 

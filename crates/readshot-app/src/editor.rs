@@ -53,9 +53,13 @@ pub struct EditorSession {
     /// can be written back to the JSON sidecar without altering the
     /// original PNG bytes.
     pub source_record: Option<CaptureRecord>,
-    /// Editor preview zoom. `Fit` scales large captures down and keeps
-    /// small captures at 100%; `Percent` is an explicit user zoom.
+    /// Editor preview zoom. `Fit` scales captures to the available
+    /// viewport; `Percent` is an explicit user zoom.
     pub zoom: EditorZoom,
+    /// Screen scale factor for the editor window. Actual-pixels mode
+    /// uses this so one image pixel maps to one physical screen pixel
+    /// on HiDPI displays.
+    pub display_scale: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,9 +74,15 @@ impl EditorZoom {
     pub const STEP: f32 = 1.25;
 
     pub fn label(self) -> String {
+        self.label_for_display_scale(1.0)
+    }
+
+    pub fn label_for_display_scale(self, display_scale: f32) -> String {
         match self {
             Self::Fit => "Fit".into(),
-            Self::Percent(scale) => format!("{:.0}%", scale * 100.0),
+            Self::Percent(scale) => {
+                format!("{:.0}%", scale * display_scale.max(f32::EPSILON) * 100.0)
+            }
         }
     }
 
@@ -84,19 +94,37 @@ impl EditorZoom {
     }
 
     pub fn zoom_in(self) -> Self {
-        Self::Percent((self.explicit_scale().unwrap_or(1.0) * Self::STEP).min(Self::MAX))
+        self.zoom_in_from_display_scale(1.0)
     }
 
     pub fn zoom_out(self) -> Self {
-        Self::Percent((self.explicit_scale().unwrap_or(1.0) / Self::STEP).max(Self::MIN))
+        self.zoom_out_from_display_scale(1.0)
+    }
+
+    pub fn zoom_in_from_display_scale(self, display_scale: f32) -> Self {
+        let current = self.current_display_scale(display_scale);
+        Self::Percent((current * Self::STEP).clamp(Self::MIN, Self::MAX))
+    }
+
+    pub fn zoom_out_from_display_scale(self, display_scale: f32) -> Self {
+        let current = self.current_display_scale(display_scale);
+        Self::Percent((current / Self::STEP).clamp(Self::MIN, Self::MAX))
     }
 
     pub fn can_zoom_in(self) -> bool {
-        self.explicit_scale().unwrap_or(1.0) < Self::MAX
+        self.can_zoom_in_from_display_scale(1.0)
     }
 
     pub fn can_zoom_out(self) -> bool {
-        self.explicit_scale().unwrap_or(1.0) > Self::MIN
+        self.can_zoom_out_from_display_scale(1.0)
+    }
+
+    pub fn can_zoom_in_from_display_scale(self, display_scale: f32) -> bool {
+        self.current_display_scale(display_scale) < Self::MAX
+    }
+
+    pub fn can_zoom_out_from_display_scale(self, display_scale: f32) -> bool {
+        self.current_display_scale(display_scale) > Self::MIN
     }
 
     pub fn is_fit(self) -> bool {
@@ -104,7 +132,24 @@ impl EditorZoom {
     }
 
     pub fn is_actual_size(self) -> bool {
-        matches!(self, Self::Percent(scale) if (scale - 1.0).abs() < f32::EPSILON)
+        self.is_actual_size_for_display_scale(1.0)
+    }
+
+    pub fn is_actual_size_for_display_scale(self, display_scale: f32) -> bool {
+        matches!(self, Self::Percent(scale) if (scale - Self::actual_scale(display_scale)).abs() < f32::EPSILON)
+    }
+
+    pub fn actual_size(display_scale: f32) -> Self {
+        Self::Percent(Self::actual_scale(display_scale))
+    }
+
+    fn current_display_scale(self, display_scale: f32) -> f32 {
+        self.explicit_scale()
+            .unwrap_or_else(|| display_scale.max(f32::EPSILON))
+    }
+
+    fn actual_scale(display_scale: f32) -> f32 {
+        1.0 / display_scale.max(f32::EPSILON)
     }
 }
 
@@ -155,6 +200,10 @@ pub enum PreviewKind {
 
 impl EditorSession {
     pub fn new(image: image::RgbaImage) -> Self {
+        Self::new_with_display_scale(image, 1.0)
+    }
+
+    pub fn new_with_display_scale(image: image::RgbaImage, display_scale: f32) -> Self {
         let mut model = Model::new(image);
         let image_handle = build_handle(&mut model);
         Self {
@@ -168,10 +217,19 @@ impl EditorSession {
             pending_text: None,
             source_record: None,
             zoom: EditorZoom::Fit,
+            display_scale: display_scale.max(f32::EPSILON),
         }
     }
 
     pub fn from_history(image: image::RgbaImage, record: CaptureRecord) -> Self {
+        Self::from_history_with_display_scale(image, record, 1.0)
+    }
+
+    pub fn from_history_with_display_scale(
+        image: image::RgbaImage,
+        record: CaptureRecord,
+        display_scale: f32,
+    ) -> Self {
         let mut model = Model::with_annotations(image, record.annotation_model.clone());
         let image_handle = build_handle(&mut model);
         Self {
@@ -185,7 +243,21 @@ impl EditorSession {
             pending_text: None,
             source_record: Some(record),
             zoom: EditorZoom::Fit,
+            display_scale: display_scale.max(f32::EPSILON),
         }
+    }
+
+    pub fn actual_size_zoom(&self) -> EditorZoom {
+        EditorZoom::actual_size(self.display_scale)
+    }
+
+    pub fn zoom_label(&self) -> String {
+        self.zoom.label_for_display_scale(self.display_scale)
+    }
+
+    pub fn zoom_is_actual_size(&self) -> bool {
+        self.zoom
+            .is_actual_size_for_display_scale(self.display_scale)
     }
 
     /// Rebuild [`image_handle`] from the model's currently-flattened
@@ -300,5 +372,32 @@ mod tests {
         assert!(EditorZoom::Percent(1.0).is_actual_size());
         assert!(!EditorZoom::Percent(EditorZoom::MAX).can_zoom_in());
         assert!(!EditorZoom::Percent(EditorZoom::MIN).can_zoom_out());
+    }
+
+    #[test]
+    fn editor_zoom_steps_from_fit_use_visible_fit_scale() {
+        assert_eq!(
+            EditorZoom::Fit.zoom_in_from_display_scale(0.5),
+            EditorZoom::Percent(0.625)
+        );
+        assert_eq!(
+            EditorZoom::Fit.zoom_out_from_display_scale(0.5),
+            EditorZoom::Percent(0.4)
+        );
+        assert!(!EditorZoom::Fit.can_zoom_out_from_display_scale(0.2));
+        assert!(EditorZoom::Fit.can_zoom_in_from_display_scale(0.2));
+    }
+
+    #[test]
+    fn editor_actual_size_accounts_for_hidpi_display_scale() {
+        assert_eq!(EditorZoom::actual_size(2.0), EditorZoom::Percent(0.5));
+        assert!(EditorZoom::Percent(0.5).is_actual_size_for_display_scale(2.0));
+        assert_eq!(
+            EditorZoom::Percent(0.5).label_for_display_scale(2.0),
+            "100%"
+        );
+
+        let s = EditorSession::new_with_display_scale(solid(8, 8), 2.0);
+        assert_eq!(s.actual_size_zoom(), EditorZoom::Percent(0.5));
     }
 }

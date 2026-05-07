@@ -110,8 +110,8 @@ pub struct EditorCanvas {
     pub display_scale: Option<f32>,
 }
 
-/// Display scale for the editor image. The editor fits large images
-/// down into the viewport but does not upscale small captures.
+/// Display scale for the editor image. Fit mode scales the image to
+/// the viewport in either direction.
 fn display_scale_for_bounds(
     bounds: Rectangle,
     image_size: (u32, u32),
@@ -127,12 +127,12 @@ fn display_scale_for_bounds(
     Some(
         (bounds.width / iw)
             .min(bounds.height / ih)
-            .clamp(f32::EPSILON, 1.0),
+            .max(f32::EPSILON),
     )
 }
 
 /// Map a canvas-local point to the underlying image's pixel space
-/// using the editor display rule: fit down when needed, never upscale.
+/// using the editor display rule.
 /// Returns `None` if the click sits in the dead band outside the
 /// displayed image.
 pub(crate) fn canvas_to_image(
@@ -789,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    fn canvas_mapping_does_not_upscale_small_images() {
+    fn canvas_mapping_fits_small_images_up_to_bounds() {
         let bounds = Rectangle {
             x: 0.0,
             y: 0.0,
@@ -797,18 +797,17 @@ mod tests {
             height: 600.0,
         };
 
-        // A 200x100 capture should be centered at original size, not
-        // enlarged to 800x400.
+        // A 200x100 capture should enlarge to 800x400 and center vertically.
         assert_eq!(
-            canvas_to_image(pt(300.0, 250.0), bounds, (200, 100), None),
+            canvas_to_image(pt(0.0, 100.0), bounds, (200, 100), None),
             Some(pt(0.0, 0.0))
         );
         assert_eq!(
-            canvas_to_image(pt(500.0, 350.0), bounds, (200, 100), None),
+            canvas_to_image(pt(800.0, 500.0), bounds, (200, 100), None),
             Some(pt(200.0, 100.0))
         );
         assert_eq!(
-            canvas_to_image(pt(250.0, 250.0), bounds, (200, 100), None),
+            canvas_to_image(pt(400.0, 50.0), bounds, (200, 100), None),
             None
         );
     }
