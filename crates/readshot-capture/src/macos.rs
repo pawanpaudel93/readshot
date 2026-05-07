@@ -26,11 +26,11 @@ use readshot_core::error::CaptureError;
 use readshot_core::geom::Rect;
 use screencapturekit::error::SCError;
 use screencapturekit::screenshot_manager::SCScreenshotManager;
-use screencapturekit::shareable_content::{SCDisplay, SCShareableContent};
+use screencapturekit::shareable_content::{SCDisplay, SCShareableContent, SCWindow};
 use screencapturekit::stream::configuration::SCStreamConfiguration;
 use screencapturekit::stream::content_filter::SCContentFilter;
 
-use crate::{CaptureRequest, Capturer, DisplayInfo};
+use crate::{CaptureRequest, Capturer, DisplayInfo, WindowId, WindowInfo};
 
 /// Production macOS Capturer.
 pub struct ScreenCaptureKitCapturer;
@@ -78,6 +78,22 @@ impl Capturer for ScreenCaptureKitCapturer {
             CaptureError::Backend("rgba_data length does not match width × height × 4".to_string())
         })?;
         Ok(crop_rgba(full, req.rect, req.scale))
+    }
+
+    async fn list_windows(&self) -> Result<Vec<WindowInfo>, CaptureError> {
+        let content = SCShareableContent::get().map_err(map_err)?;
+        let primary = primary_display_id();
+        let displays = content
+            .displays()
+            .into_iter()
+            .map(|d| display_info_from_sc(d, primary))
+            .collect::<Vec<_>>();
+        Ok(content
+            .windows()
+            .into_iter()
+            .filter(|window| window.is_on_screen() && window.window_layer() == 0)
+            .filter_map(|window| window_info_from_sc(&window, &displays))
+            .collect())
     }
 }
 
@@ -157,6 +173,46 @@ fn display_scale_from_values(logical_w: f32, native_w: u32) -> f32 {
     } else {
         1.0
     }
+}
+
+fn window_info_from_sc(window: &SCWindow, displays: &[DisplayInfo]) -> Option<WindowInfo> {
+    let frame = window.frame();
+    let origin = frame.origin();
+    let size = frame.size();
+    let bounds = Rect::from_xywh(
+        origin.x as f32,
+        origin.y as f32,
+        size.width as f32,
+        size.height as f32,
+    )?;
+    let display_id = best_display_for_rect(bounds, displays)?.id.clone();
+    let app_name = window
+        .owning_application()
+        .map(|app| app.application_name())
+        .unwrap_or_default();
+    Some(WindowInfo {
+        id: WindowId(window.window_id().to_string()),
+        title: window.title().unwrap_or_default(),
+        app_name,
+        display_id,
+        bounds,
+    })
+}
+
+fn best_display_for_rect(rect: Rect, displays: &[DisplayInfo]) -> Option<&DisplayInfo> {
+    displays.iter().max_by(|a, b| {
+        intersection_area(rect, a.bounds)
+            .partial_cmp(&intersection_area(rect, b.bounds))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
+}
+
+fn intersection_area(a: Rect, b: Rect) -> f32 {
+    let x0 = a.x().max(b.x());
+    let y0 = a.y().max(b.y());
+    let x1 = a.right().min(b.right());
+    let y1 = a.bottom().min(b.bottom());
+    ((x1 - x0).max(0.0)) * ((y1 - y0).max(0.0))
 }
 
 fn find_display<'a>(displays: &'a [SCDisplay], requested_id: &str) -> Option<&'a SCDisplay> {

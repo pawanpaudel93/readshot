@@ -138,6 +138,9 @@ pub enum Message {
     TrayActionPerformed(crate::tray::TrayAction),
     /// User asked for a region capture (welcome button / tray menu).
     OpenOverlayRequested,
+    /// User asked for window capture. The runtime currently surfaces a
+    /// typed unsupported status until a platform picker lands.
+    CaptureWindowRequested,
     /// User asked to repeat the most recent overlay selection.
     RetakeLastRegionRequested,
     /// First view of the overlay window — used by the runtime to

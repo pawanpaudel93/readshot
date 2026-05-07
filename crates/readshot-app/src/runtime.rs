@@ -649,6 +649,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 state.pending_intent = Some(crate::app::CaptureIntent::Editor);
                 update(state, Message::RetakeLastRegionRequested)
             }
+            crate::tray::TrayAction::CaptureWindow => {
+                update(state, Message::CaptureWindowRequested)
+            }
             crate::tray::TrayAction::History => {
                 if state.welcome.should_show() {
                     show_or_focus_welcome(state)
@@ -700,6 +703,12 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::perform(async move { coord.list_displays().await }, |result| {
                 Message::OverlayDisplaysListed(result.map_err(|e| e.to_string()))
             })
+        }
+
+        Message::CaptureWindowRequested => {
+            state.last_capture_status =
+                Some("Window capture is not available yet on this platform.".into());
+            Task::none()
         }
 
         Message::RetakeLastRegionRequested => {
@@ -3989,6 +3998,18 @@ mod tests {
         let _ = update(&mut app, Message::PinOpacityChanged(id, 0.4));
 
         assert_eq!(app.pins.get(&id).unwrap().opacity, 0.4);
+    }
+
+    #[test]
+    fn capture_window_request_sets_unsupported_status() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+
+        let _ = update(&mut app, Message::CaptureWindowRequested);
+
+        assert_eq!(
+            app.last_capture_status.as_deref(),
+            Some("Window capture is not available yet on this platform.")
+        );
     }
 
     #[test]

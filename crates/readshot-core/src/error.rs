@@ -39,6 +39,11 @@ pub enum CaptureError {
     /// `capture_backend`.
     #[error("capture backend failure: {0}")]
     Backend(String),
+
+    /// The requested capture feature is not available on this platform or
+    /// backend yet.
+    #[error("capture unsupported: {0}")]
+    Unsupported(String),
 }
 
 /// Errors from any [`crate::OCREngine`] implementation. `NoText` is the only

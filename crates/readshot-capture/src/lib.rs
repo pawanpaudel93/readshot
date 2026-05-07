@@ -53,6 +53,27 @@ pub struct CaptureRequest {
     pub hide_cursor: bool,
 }
 
+/// Opaque OS handle for a capturable window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowId(pub String);
+
+/// Information about a capturable window.
+#[derive(Clone, Debug)]
+pub struct WindowInfo {
+    pub id: WindowId,
+    pub title: String,
+    pub app_name: String,
+    pub display_id: DisplayId,
+    /// Window bounds in logical pixels.
+    pub bounds: Rect,
+}
+
+/// One window capture request from coordinator to capturer.
+#[derive(Clone, Debug)]
+pub struct WindowCaptureRequest {
+    pub window_id: WindowId,
+}
+
 /// Information about an attached display, returned by
 /// [`Capturer::list_displays`].
 #[derive(Clone, Debug)]
@@ -74,6 +95,21 @@ pub struct DisplayInfo {
 pub trait Capturer: Send + Sync {
     async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError>;
     async fn capture_region(&self, req: CaptureRequest) -> Result<RgbaImage, CaptureError>;
+
+    async fn list_windows(&self) -> Result<Vec<WindowInfo>, CaptureError> {
+        Err(CaptureError::Unsupported(
+            "window capture is not supported on this platform".into(),
+        ))
+    }
+
+    async fn capture_window(
+        &self,
+        _request: WindowCaptureRequest,
+    ) -> Result<RgbaImage, CaptureError> {
+        Err(CaptureError::Unsupported(
+            "window capture is not supported on this platform".into(),
+        ))
+    }
 }
 
 /// Construct the platform-default Capturer for the current target. The
@@ -104,5 +140,19 @@ pub fn default_capturer() -> Box<dyn Capturer> {
         compile_error!(
             "readshot-capture: unsupported target_os; only macOS, Windows, and Linux are supported"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake::FakeCapturer;
+
+    #[tokio::test]
+    async fn default_window_capture_is_unsupported() {
+        let capturer = FakeCapturer::new();
+        let result = capturer.list_windows().await;
+
+        assert!(matches!(result, Err(CaptureError::Unsupported(_))));
     }
 }

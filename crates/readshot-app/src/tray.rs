@@ -30,7 +30,8 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 /// User intent surfaced by the tray. `Capture` triggers the region
 /// overlay; `CaptureText` captures a region and copies recognised
 /// text directly; `RetakeLastRegion` repeats the last confirmed
-/// overlay rectangle; `History` opens the persistent capture browser;
+/// overlay rectangle; `CaptureWindow` is the stable entry point for
+/// window capture; `History` opens the persistent capture browser;
 /// `Settings` opens the preferences window; `CheckForUpdates` opens
 /// Sparkle's standard updater UI on macOS; `InstallCommandLineTools`
 /// points users at copy-pasteable CLI setup commands; `Quit` exits
@@ -40,6 +41,7 @@ pub enum TrayAction {
     Capture,
     CaptureText,
     RetakeLastRegion,
+    CaptureWindow,
     History,
     Settings,
     InstallCommandLineTools,
@@ -68,6 +70,10 @@ fn menu_items(hotkey_label: Option<&str>) -> Vec<TrayMenuItem> {
         TrayMenuItem {
             label: "Retake Last Region".to_string(),
             action: Some(TrayAction::RetakeLastRegion),
+        },
+        TrayMenuItem {
+            label: "Capture Window".to_string(),
+            action: Some(TrayAction::CaptureWindow),
         },
         TrayMenuItem {
             label: "History…".to_string(),
@@ -163,6 +169,7 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
     let item_capture = MenuItem::new(capture_label, true, None);
     let item_capture_text = MenuItem::new("Capture Text", true, None);
     let item_retake_last_region = MenuItem::new("Retake Last Region", true, None);
+    let item_capture_window = MenuItem::new("Capture Window", true, None);
     let item_history = MenuItem::new("History…", true, None);
     let item_settings = MenuItem::new("Settings…", true, None);
     let item_install_cli = MenuItem::new("Install Command Line Tools…", true, None);
@@ -176,6 +183,7 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
         item_retake_last_region.id().clone(),
         TrayAction::RetakeLastRegion,
     );
+    menu_ids.insert(item_capture_window.id().clone(), TrayAction::CaptureWindow);
     menu_ids.insert(item_history.id().clone(), TrayAction::History);
     menu_ids.insert(item_settings.id().clone(), TrayAction::Settings);
     menu_ids.insert(
@@ -189,6 +197,7 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
         &item_capture,
         &item_capture_text,
         &item_retake_last_region,
+        &item_capture_window,
         &item_history,
         &item_settings,
         &item_install_cli,
@@ -352,6 +361,7 @@ mod tests {
                 TrayAction::Capture,
                 TrayAction::CaptureText,
                 TrayAction::RetakeLastRegion,
+                TrayAction::CaptureWindow,
                 TrayAction::History,
                 TrayAction::Settings,
                 TrayAction::InstallCommandLineTools,
@@ -404,6 +414,22 @@ mod tests {
 
         assert_eq!(items[retake].label, "Retake Last Region");
         assert_eq!(retake, capture_text + 1);
+    }
+
+    #[test]
+    fn menu_contains_capture_window_after_retake_last_region() {
+        let items = menu_items(None);
+        let retake = items
+            .iter()
+            .position(|item| item.action == Some(TrayAction::RetakeLastRegion))
+            .unwrap();
+        let capture_window = items
+            .iter()
+            .position(|item| item.action == Some(TrayAction::CaptureWindow))
+            .unwrap();
+
+        assert_eq!(items[capture_window].label, "Capture Window");
+        assert_eq!(capture_window, retake + 1);
     }
 
     #[test]
