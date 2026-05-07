@@ -30,7 +30,8 @@
 //!
 //! ## Output formats
 //!
-//! * `capture` writes a PNG to `--output` (or `stdout` if `--output -`).
+//! * `capture` writes a PNG to `--output` (or `stdout` by default / `-`).
+//! * `capture-text` captures a region and writes recognised text to stdout.
 //! * `ocr` reads a PNG from `--input` and writes the recognised text
 //!   to `--output` or `stdout`.
 //! * `capture-and-ocr` writes the recognised text to `--output` or
@@ -96,9 +97,40 @@ pub enum Command {
         #[arg(long, default_value_t = true)]
         hide_cursor: bool,
 
+        /// Repeat the last GUI-selected region. Only available in the
+        /// interactive GUI session because the CLI process has no shared
+        /// in-memory overlay state.
+        #[arg(long)]
+        last_region: bool,
+
         /// Output PNG path. Use `-` for stdout.
-        #[arg(long, short = 'o')]
+        #[arg(long, short = 'o', default_value = "-")]
         output: PathBuf,
+    },
+
+    /// Capture a region and write recognised text to stdout.
+    CaptureText {
+        #[arg(long)]
+        display: Option<String>,
+
+        #[arg(long, value_parser = parse_rect)]
+        rect: Option<Rect>,
+
+        #[arg(long)]
+        scale: Option<f32>,
+
+        #[arg(long, default_value_t = true)]
+        hide_cursor: bool,
+
+        /// Output text path. Use `-` for stdout (the default).
+        #[arg(long, short = 'o', default_value = "-")]
+        output: PathBuf,
+
+        #[arg(long, value_delimiter = ',')]
+        languages: Vec<String>,
+
+        #[arg(long, default_value_t = true)]
+        language_correction: bool,
     },
 
     /// Recognise text in an existing PNG.
@@ -167,6 +199,8 @@ pub enum CliError {
     DisplayNotFound(String),
     #[error("no displays reported by capture backend")]
     NoDisplays,
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
     #[error("invalid rect `{got}`: {reason}")]
     InvalidRect { got: String, reason: String },
 }
@@ -179,7 +213,7 @@ pub fn exit_code(err: &CliError) -> i32 {
         CliError::Capture(_) => 71,                              // EX_OSERR
         CliError::Ocr(_) => 70,                                  // EX_SOFTWARE
         CliError::DisplayNotFound(_) | CliError::NoDisplays => 66, // EX_NOINPUT
-        CliError::InvalidRect { .. } => 64,                      // EX_USAGE
+        CliError::InvalidInput(_) | CliError::InvalidRect { .. } => 64, // EX_USAGE
         CliError::Io(_) | CliError::Image(_) => 74,              // EX_IOERR
     }
 }
@@ -226,13 +260,41 @@ impl Cli {
                 rect,
                 scale,
                 hide_cursor,
+                last_region,
                 output,
             } => {
+                if last_region {
+                    return Err(CliError::InvalidInput(
+                        "--last-region is only available in the GUI session".into(),
+                    ));
+                }
                 let req =
                     build_capture_request(&*capturer, display.as_deref(), rect, scale, hide_cursor)
                         .await?;
                 let img = capturer.capture_region(req).await?;
                 write_png(&img, &output, stdout)?;
+            }
+            Command::CaptureText {
+                display,
+                rect,
+                scale,
+                hide_cursor,
+                output,
+                languages,
+                language_correction,
+            } => {
+                let req =
+                    build_capture_request(&*capturer, display.as_deref(), rect, scale, hide_cursor)
+                        .await?;
+                let img = capturer.capture_region(req).await?;
+                let result = ocr
+                    .recognise(OCRRequest {
+                        image: img,
+                        languages,
+                        use_language_correction: language_correction,
+                    })
+                    .await?;
+                write_text(&result.text, &output, stdout)?;
             }
             Command::Ocr {
                 input,
@@ -485,6 +547,24 @@ mod tests {
     }
 
     #[test]
+    fn parses_capture_text_subcommand() {
+        let cli = Cli::try_parse_from(["readshot", "capture-text"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::CaptureText { .. })));
+    }
+
+    #[test]
+    fn parses_capture_last_region_flag() {
+        let cli = Cli::try_parse_from(["readshot", "capture", "--last-region"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Capture {
+                last_region: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn parses_ocr_subcommand_with_languages() {
         let cli = Cli::try_parse_from([
             "readshot",
@@ -610,6 +690,28 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("hello world"));
         assert!(png_path.exists());
+    }
+
+    #[tokio::test]
+    async fn run_capture_text_emits_recognised_text() {
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from(["readshot", "capture-text", "--rect", "0,0,64,64"]).unwrap();
+        let mut out = Vec::new();
+        cli.run(cap, ocr, &mut out).await.unwrap();
+
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("hello world"));
+    }
+
+    #[tokio::test]
+    async fn run_capture_last_region_returns_invalid_input() {
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from(["readshot", "capture", "--last-region"]).unwrap();
+        let mut out = Vec::new();
+        let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
+
+        assert!(matches!(err, CliError::InvalidInput(ref s) if s.contains("--last-region")));
+        assert_eq!(exit_code(&err), 64);
     }
 
     #[tokio::test]
