@@ -34,10 +34,9 @@ the image. Entirely offline.
 - **Pin to desktop**: click Pin in the editor and the flattened
   capture becomes a borderless always-on-top window you can drag
   around, adjust opacity, lock in place, or double-click to dismiss.
-- **Workflow shortcuts**: the menu-bar menu includes Capture Text
-  for a no-editor OCR copy flow, Retake Last Region for repetitive
-  captures, and a Capture Window entry point for the window-capture
-  foundation.
+- **Workflow shortcuts**: the menu-bar menu includes Retake Last
+  Region for repetitive captures. The overlay toolbar includes Copy
+  Text for a no-editor OCR copy flow.
 - **Native Save dialog** — pick where to save; the editor remembers
   the last directory for the rest of the session.
 - **Offline OCR** via Apple Vision (`VNRecognizeTextRequest`). Copy
