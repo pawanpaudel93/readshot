@@ -50,6 +50,11 @@ pub enum CaptureError {
     /// backend yet.
     #[error("capture unsupported: {0}")]
     Unsupported(String),
+
+    /// The requested region is valid syntax but does not overlap the
+    /// selected capture target.
+    #[error("invalid capture region: {0}")]
+    InvalidRegion(String),
 }
 
 /// Errors from any [`crate::OCREngine`] implementation. `NoText` is the only

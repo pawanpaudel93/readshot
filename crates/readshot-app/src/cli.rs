@@ -51,7 +51,8 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use image::RgbaImage;
 use readshot_capture::{
-    CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest, WindowId, WindowInfo,
+    crop_window_relative_rect, CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest,
+    WindowId, WindowInfo,
 };
 use readshot_core::error::{CaptureError, OCRError};
 use readshot_core::geom::Rect;
@@ -242,6 +243,7 @@ pub fn exit_code(err: &CliError) -> i32 {
         CliError::Capture(CaptureError::PermissionDenied) => 77, // EX_NOPERM
         CliError::Capture(CaptureError::DisplayNotFound(_))
         | CliError::Capture(CaptureError::WindowNotFound(_)) => 66, // EX_NOINPUT
+        CliError::Capture(CaptureError::InvalidRegion(_)) => 64, // EX_USAGE
         CliError::Capture(_) => 71,                              // EX_OSERR
         CliError::Ocr(_) => 70,                                  // EX_SOFTWARE
         CliError::DisplayNotFound(_) | CliError::NoDisplays => 66, // EX_NOINPUT
@@ -326,9 +328,8 @@ impl Cli {
                     })
                     .await?;
                 if let Some(rect) = rect {
-                    let (scale_x, scale_y) =
-                        window_capture_scale(&*capturer, &window_id, &img).await;
-                    img = crop_window_relative_rect(img, rect, scale_x, scale_y)?;
+                    let window_bounds = lookup_window_bounds(&*capturer, &window_id).await?;
+                    img = crop_window_relative_rect(img, window_bounds, rect)?;
                 }
                 write_png(&img, &output, stdout)?;
             }
@@ -432,64 +433,16 @@ async fn build_capture_request(
     })
 }
 
-async fn window_capture_scale(
+async fn lookup_window_bounds(
     capturer: &dyn Capturer,
     window_id: &WindowId,
-    img: &RgbaImage,
-) -> (f32, f32) {
-    let Ok(windows) = capturer.list_windows().await else {
-        return (1.0, 1.0);
-    };
-    let Some(window) = windows.iter().find(|window| &window.id == window_id) else {
-        return (1.0, 1.0);
-    };
-    let width = window.bounds.width();
-    let height = window.bounds.height();
-    if width <= 0.0 || height <= 0.0 || !width.is_finite() || !height.is_finite() {
-        return (1.0, 1.0);
-    }
-    (img.width() as f32 / width, img.height() as f32 / height)
-}
-
-fn crop_window_relative_rect(
-    full: RgbaImage,
-    rect_logical: Rect,
-    scale_x: f32,
-    scale_y: f32,
-) -> Result<RgbaImage, CliError> {
-    let scale_x = finite_positive_or_one(scale_x);
-    let scale_y = finite_positive_or_one(scale_y);
-    let x0 = ((rect_logical.x() * scale_x).round().max(0.0) as u32).min(full.width());
-    let y0 = ((rect_logical.y() * scale_y).round().max(0.0) as u32).min(full.height());
-    let w_target = (rect_logical.width() * scale_x).round().max(1.0) as u32;
-    let h_target = (rect_logical.height() * scale_y).round().max(1.0) as u32;
-    let w = w_target.min(full.width().saturating_sub(x0));
-    let h = h_target.min(full.height().saturating_sub(y0));
-    if w == 0 || h == 0 {
-        return Err(CliError::InvalidRect {
-            got: format_rect(rect_logical),
-            reason: "rect is outside the captured window bounds".to_string(),
-        });
-    }
-    Ok(image::imageops::crop_imm(&full, x0, y0, w, h).to_image())
-}
-
-fn finite_positive_or_one(value: f32) -> f32 {
-    if value.is_finite() && value > 0.0 {
-        value
-    } else {
-        1.0
-    }
-}
-
-fn format_rect(rect: Rect) -> String {
-    format!(
-        "{},{},{},{}",
-        rect.x(),
-        rect.y(),
-        rect.width(),
-        rect.height()
-    )
+) -> Result<Rect, CliError> {
+    let windows = capturer.list_windows().await?;
+    windows
+        .into_iter()
+        .find(|window| window.id == *window_id)
+        .map(|window| window.bounds)
+        .ok_or_else(|| CliError::Capture(CaptureError::WindowNotFound(window_id.0.clone())))
 }
 
 fn write_displays_table(out: &mut dyn Write, displays: &[DisplayInfo]) -> std::io::Result<()> {

@@ -74,6 +74,43 @@ pub struct WindowCaptureRequest {
     pub window_id: WindowId,
 }
 
+/// Crop a captured window image using a rectangle relative to the
+/// window's top-left logical coordinate space.
+///
+/// Window capture backends return physical pixels, while window metadata is
+/// reported in logical pixels. This helper derives the x/y scale from the
+/// captured image size and the reported window bounds, then crops and clamps
+/// the requested rect to the captured image. A rect fully outside the image is
+/// rejected as a typed invalid-region error.
+pub fn crop_window_relative_rect(
+    full: RgbaImage,
+    window_bounds: Rect,
+    rect_logical: Rect,
+) -> Result<RgbaImage, CaptureError> {
+    let scale_x = capture_axis_scale(full.width(), window_bounds.width());
+    let scale_y = capture_axis_scale(full.height(), window_bounds.height());
+    let x0 = ((rect_logical.x() * scale_x).round().max(0.0) as u32).min(full.width());
+    let y0 = ((rect_logical.y() * scale_y).round().max(0.0) as u32).min(full.height());
+    let w_target = (rect_logical.width() * scale_x).round().max(1.0) as u32;
+    let h_target = (rect_logical.height() * scale_y).round().max(1.0) as u32;
+    let w = w_target.min(full.width().saturating_sub(x0));
+    let h = h_target.min(full.height().saturating_sub(y0));
+    if w == 0 || h == 0 {
+        return Err(CaptureError::InvalidRegion(
+            "window-relative rect is outside the captured window bounds".to_string(),
+        ));
+    }
+    Ok(image::imageops::crop_imm(&full, x0, y0, w, h).to_image())
+}
+
+fn capture_axis_scale(image_pixels: u32, logical_extent: f32) -> f32 {
+    if logical_extent.is_finite() && logical_extent > 0.0 {
+        image_pixels as f32 / logical_extent
+    } else {
+        1.0
+    }
+}
+
 /// Information about an attached display, returned by
 /// [`Capturer::list_displays`].
 #[derive(Clone, Debug)]
@@ -178,5 +215,67 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(CaptureError::Unsupported(_))));
+    }
+
+    fn solid(w: u32, h: u32) -> RgbaImage {
+        RgbaImage::from_fn(w, h, |x, y| image::Rgba([x as u8, y as u8, 0, 255]))
+    }
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect::from_xywh(x, y, w, h).expect("test rect must be valid")
+    }
+
+    #[test]
+    fn crop_window_relative_rect_crops_inside_region() {
+        let cropped = crop_window_relative_rect(
+            solid(100, 80),
+            rect(0.0, 0.0, 100.0, 80.0),
+            rect(10.0, 20.0, 30.0, 25.0),
+        )
+        .unwrap();
+
+        assert_eq!(cropped.width(), 30);
+        assert_eq!(cropped.height(), 25);
+        assert_eq!(cropped.get_pixel(0, 0), &image::Rgba([10, 20, 0, 255]));
+    }
+
+    #[test]
+    fn crop_window_relative_rect_scales_logical_rect_to_physical_pixels() {
+        let cropped = crop_window_relative_rect(
+            solid(200, 160),
+            rect(0.0, 0.0, 100.0, 80.0),
+            rect(10.0, 20.0, 30.0, 25.0),
+        )
+        .unwrap();
+
+        assert_eq!(cropped.width(), 60);
+        assert_eq!(cropped.height(), 50);
+        assert_eq!(cropped.get_pixel(0, 0), &image::Rgba([20, 40, 0, 255]));
+    }
+
+    #[test]
+    fn crop_window_relative_rect_clamps_partial_overlap() {
+        let cropped = crop_window_relative_rect(
+            solid(100, 80),
+            rect(0.0, 0.0, 100.0, 80.0),
+            rect(90.0, 70.0, 30.0, 25.0),
+        )
+        .unwrap();
+
+        assert_eq!(cropped.width(), 10);
+        assert_eq!(cropped.height(), 10);
+    }
+
+    #[test]
+    fn crop_window_relative_rect_rejects_fully_outside_rect() {
+        let result = crop_window_relative_rect(
+            solid(100, 80),
+            rect(0.0, 0.0, 100.0, 80.0),
+            rect(120.0, 90.0, 30.0, 25.0),
+        );
+
+        assert!(
+            matches!(result, Err(CaptureError::InvalidRegion(message)) if message.contains("outside"))
+        );
     }
 }

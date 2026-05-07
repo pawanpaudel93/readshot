@@ -59,7 +59,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 use image::RgbaImage;
 use readshot_capture::{
-    CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest, WindowId, WindowInfo,
+    crop_window_relative_rect, CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest,
+    WindowId, WindowInfo,
 };
 use readshot_core::error::{CaptureError, HistoryError, OCRError};
 use readshot_core::geom::Rect;
@@ -407,8 +408,8 @@ impl McpServer {
             .map_err(capture_to_rpc)?;
         if let Some(rect_value) = args.get("rect") {
             let rect = parse_rect_value(rect_value)?;
-            let (scale_x, scale_y) = self.window_capture_scale(&window_id, &img).await;
-            img = crop_window_relative_rect(img, rect, scale_x, scale_y)?;
+            let window_bounds = self.lookup_window_bounds(&window_id).await?;
+            img = crop_window_relative_rect(img, window_bounds, rect).map_err(capture_to_rpc)?;
         }
         Ok(json!({ "image_base64": encode_png(&img)? }))
     }
@@ -496,19 +497,13 @@ impl McpServer {
         })
     }
 
-    async fn window_capture_scale(&self, window_id: &WindowId, img: &RgbaImage) -> (f32, f32) {
-        let Ok(windows) = self.capturer.list_windows().await else {
-            return (1.0, 1.0);
-        };
-        let Some(window) = windows.iter().find(|window| &window.id == window_id) else {
-            return (1.0, 1.0);
-        };
-        let width = window.bounds.width();
-        let height = window.bounds.height();
-        if width <= 0.0 || height <= 0.0 || !width.is_finite() || !height.is_finite() {
-            return (1.0, 1.0);
-        }
-        (img.width() as f32 / width, img.height() as f32 / height)
+    async fn lookup_window_bounds(&self, window_id: &WindowId) -> Result<Rect, RpcErr> {
+        let windows = self.capturer.list_windows().await.map_err(capture_to_rpc)?;
+        windows
+            .into_iter()
+            .find(|window| window.id == *window_id)
+            .map(|window| window.bounds)
+            .ok_or_else(|| capture_to_rpc(CaptureError::WindowNotFound(window_id.0.clone())))
     }
 }
 
@@ -561,37 +556,6 @@ fn encode_png(img: &RgbaImage) -> Result<String, RpcErr> {
         message: format!("PNG encode failed: {e}"),
     })?;
     Ok(B64.encode(&buf))
-}
-
-fn crop_window_relative_rect(
-    full: RgbaImage,
-    rect_logical: Rect,
-    scale_x: f32,
-    scale_y: f32,
-) -> Result<RgbaImage, RpcErr> {
-    let scale_x = finite_positive_or_one(scale_x);
-    let scale_y = finite_positive_or_one(scale_y);
-    let x0 = ((rect_logical.x() * scale_x).round().max(0.0) as u32).min(full.width());
-    let y0 = ((rect_logical.y() * scale_y).round().max(0.0) as u32).min(full.height());
-    let w_target = (rect_logical.width() * scale_x).round().max(1.0) as u32;
-    let h_target = (rect_logical.height() * scale_y).round().max(1.0) as u32;
-    let w = w_target.min(full.width().saturating_sub(x0));
-    let h = h_target.min(full.height().saturating_sub(y0));
-    if w == 0 || h == 0 {
-        return Err(RpcErr {
-            code: codes::INVALID_PARAMS,
-            message: "rect is outside the captured window bounds".into(),
-        });
-    }
-    Ok(image::imageops::crop_imm(&full, x0, y0, w, h).to_image())
-}
-
-fn finite_positive_or_one(value: f32) -> f32 {
-    if value.is_finite() && value > 0.0 {
-        value
-    } else {
-        1.0
-    }
 }
 
 fn display_to_json(d: &DisplayInfo) -> Value {
@@ -678,6 +642,7 @@ fn history_png_path(root: &Path, record: &CaptureRecord) -> PathBuf {
 
 fn capture_to_rpc(e: CaptureError) -> RpcErr {
     let code = match e {
+        CaptureError::InvalidRegion(_) => codes::INVALID_PARAMS,
         CaptureError::PermissionDenied => codes::SERVER_ERROR,
         _ => codes::SERVER_ERROR,
     };
