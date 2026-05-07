@@ -911,7 +911,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                             );
                             let (id, open_task) = window::open(pin_window_settings(size));
                             state.windows.register(id, WindowKind::Pin);
-                            state.pins.insert(id, handle.clone());
+                            state
+                                .pins
+                                .insert(id, crate::app::PinState::new(handle.clone()));
                             open_task
                                 .map(move |opened| Message::PinWindowReady(opened, handle.clone()))
                         }
@@ -1157,7 +1159,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 );
                 let (wid, open_task) = window::open(pin_window_settings(size));
                 state.windows.register(wid, WindowKind::Pin);
-                state.pins.insert(wid, handle.clone());
+                state
+                    .pins
+                    .insert(wid, crate::app::PinState::new(handle.clone()));
                 open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone()))
             }
             Err(e) => {
@@ -1495,7 +1499,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // pin instead of the "(no capture)" fallback.
             let (id, open_task) = window::open(pin_window_settings(size));
             state.windows.register(id, WindowKind::Pin);
-            state.pins.insert(id, handle.clone());
+            state
+                .pins
+                .insert(id, crate::app::PinState::new(handle.clone()));
             tasks
                 .push(open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone())));
             Task::batch(tasks)
@@ -1505,7 +1511,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // re-key handles the (rare) scenario where the iced
             // runtime hands us a different id than the one returned
             // by `window::open` synchronously. Idempotent insert.
-            state.pins.entry(id).or_insert(handle);
+            state
+                .pins
+                .entry(id)
+                .or_insert_with(|| crate::app::PinState::new(handle));
             Task::none()
         }
         Message::PinClosePressed(id) => {
@@ -1514,6 +1523,18 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             window::close(id)
         }
         Message::PinDragRequested(id) => window::drag(id),
+        Message::PinOpacityChanged(id, opacity) => {
+            if let Some(pin) = state.pins.get_mut(&id) {
+                pin.opacity = opacity.clamp(0.2, 1.0);
+            }
+            Task::none()
+        }
+        Message::PinLockToggled(id) => {
+            if let Some(pin) = state.pins.get_mut(&id) {
+                pin.locked = !pin.locked;
+            }
+            Task::none()
+        }
 
         Message::CaptureSaved(result) => {
             state.capture_in_flight = false;
@@ -2507,21 +2528,68 @@ fn editor_view(state: &App) -> Element<'_, Message> {
 /// drag; a small "×" button in the corner closes it.
 fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
     use iced::widget::{mouse_area, stack};
-    let Some(handle) = state.pins.get(&id) else {
+    let Some(pin) = state.pins.get(&id) else {
         return container(text("(no pin)"))
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
     };
-    let img = iced::widget::image(handle.clone())
+    let handle = pin.handle.clone();
+    let opacity = pin.opacity;
+    let locked = pin.locked;
+    let img = iced::widget::image(handle)
         .width(Length::Fill)
         .height(Length::Fill)
-        .content_fit(iced::ContentFit::Contain);
-    let drag_layer: Element<'_, Message> = mouse_area(img)
-        .on_press(Message::PinDragRequested(id))
-        .on_double_click(Message::PinClosePressed(id))
-        .interaction(iced::mouse::Interaction::Grab)
-        .into();
+        .content_fit(iced::ContentFit::Contain)
+        .opacity(opacity);
+    let drag_area = mouse_area(img).on_double_click(Message::PinClosePressed(id));
+    let drag_layer: Element<'_, Message> = if locked {
+        drag_area.into()
+    } else {
+        drag_area
+            .on_press(Message::PinDragRequested(id))
+            .interaction(iced::mouse::Interaction::Grab)
+            .into()
+    };
+
+    let lock = button(text(if locked { "Unlock" } else { "Lock" }).size(11))
+        .padding([4, 8])
+        .style(|_, status| {
+            let bg = match status {
+                button::Status::Hovered => Color::from_rgba(0.0, 0.0, 0.0, 0.72),
+                _ => Color::from_rgba(0.0, 0.0, 0.0, 0.55),
+            };
+            button::Style {
+                background: Some(bg.into()),
+                text_color: Color::WHITE,
+                border: iced::Border {
+                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.28),
+                    width: 1.0,
+                    radius: 5.0.into(),
+                },
+                ..Default::default()
+            }
+        })
+        .on_press(Message::PinLockToggled(id));
+    let opacity_label = text(format!("{:.0}%", opacity * 100.0))
+        .size(11)
+        .color(Color::WHITE)
+        .width(Length::Fixed(34.0));
+    let opacity_slider = iced::widget::slider(0.2..=1.0, opacity, move |value| {
+        Message::PinOpacityChanged(id, value)
+    })
+    .step(0.05)
+    .width(Length::Fixed(92.0));
+    let controls = row![lock, opacity_slider, opacity_label]
+        .spacing(6)
+        .align_y(Alignment::Center);
+    let controls_layer = container(controls)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(6)
+        .align_x(Alignment::Start)
+        .align_y(Alignment::End);
+
     // Close button — sits in the top-right corner with subtle
     // styling so it's discoverable without dominating the pin.
     let close = button(
@@ -2559,7 +2627,7 @@ fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
         .padding(6)
         .align_x(Alignment::End)
         .align_y(Alignment::Start);
-    container(stack![drag_layer, close_layer])
+    container(stack![drag_layer, close_layer, controls_layer])
         .width(Length::Fill)
         .height(Length::Fill)
         .style(|_| container::Style {
@@ -3903,6 +3971,24 @@ mod tests {
             app.last_capture_status.as_deref(),
             Some("No previous region to retake.")
         );
+    }
+
+    #[test]
+    fn pin_opacity_message_updates_pin_state() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = iced::window::Id::unique();
+        app.pins.insert(
+            id,
+            crate::app::PinState {
+                handle: iced::widget::image::Handle::from_rgba(1, 1, vec![255, 255, 255, 255]),
+                opacity: 1.0,
+                locked: false,
+            },
+        );
+
+        let _ = update(&mut app, Message::PinOpacityChanged(id, 0.4));
+
+        assert_eq!(app.pins.get(&id).unwrap().opacity, 0.4);
     }
 
     #[test]

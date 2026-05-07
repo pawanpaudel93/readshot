@@ -260,7 +260,7 @@ pub enum Message {
     /// image, and close the editor.
     EditorPinRequested,
     /// First view of a freshly-opened pin window — used to record
-    /// its `window::Id` against its image handle in `App::pins`.
+    /// its `window::Id` against its image state in `App::pins`.
     PinWindowReady(iced::window::Id, iced::widget::image::Handle),
     /// User pressed the close `×` on a pin window. Closes the
     /// window and removes its entry from `App::pins`.
@@ -268,6 +268,10 @@ pub enum Message {
     /// User mouse-pressed inside the body of a pin window — kicks
     /// off a native window-drag so the pin can be repositioned.
     PinDragRequested(iced::window::Id),
+    /// User adjusted a pin's image opacity.
+    PinOpacityChanged(iced::window::Id, f32),
+    /// User toggled whether a pin should stay put when clicked.
+    PinLockToggled(iced::window::Id),
     /// Bump the editor's line width by `delta` (positive grows,
     /// negative shrinks). Triggered by `[` / `]` keyboard
     /// shortcuts; the runtime resolves the new width against the
@@ -383,10 +387,10 @@ pub struct App {
     /// editor uses this to make actual-pixels zoom mean physical
     /// pixels instead of logical UI points.
     pub pending_display_scale: Option<f32>,
-    /// Live pin windows mapped to their pre-rendered image handle.
-    /// Each pin window's `view` reads its handle from this map. The
+    /// Live pin windows mapped to their pre-rendered image state.
+    /// Each pin window's `view` reads its state from this map. The
     /// map shrinks as pins close.
-    pub pins: HashMap<iced::window::Id, iced::widget::image::Handle>,
+    pub pins: HashMap<iced::window::Id, PinState>,
     /// Monotonically-increasing counter the region-overlay reads to
     /// animate its marching-ants stroke. Bumped by `OverlayTick`.
     pub overlay_tick: u32,
@@ -447,6 +451,24 @@ pub struct OverlayDisplay {
 pub struct LastRegion {
     pub rect: readshot_core::geom::Rect,
     pub display_scale: f32,
+}
+
+/// Runtime state for one pinned capture window.
+#[derive(Clone, Debug)]
+pub struct PinState {
+    pub handle: iced::widget::image::Handle,
+    pub opacity: f32,
+    pub locked: bool,
+}
+
+impl PinState {
+    pub fn new(handle: iced::widget::image::Handle) -> Self {
+        Self {
+            handle,
+            opacity: 1.0,
+            locked: false,
+        }
+    }
 }
 
 /// What happens to the captured image after an overlay confirms.
