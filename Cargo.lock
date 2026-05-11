@@ -4516,7 +4516,7 @@ dependencies = [
 
 [[package]]
 name = "readshot-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -4548,7 +4548,7 @@ dependencies = [
 
 [[package]]
 name = "readshot-capture"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "core-foundation 0.10.1",
@@ -4564,7 +4564,7 @@ dependencies = [
 
 [[package]]
 name = "readshot-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ab_glyph",
  "chrono",
@@ -4582,7 +4582,7 @@ dependencies = [
 
 [[package]]
 name = "readshot-mcp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -4601,7 +4601,7 @@ dependencies = [
 
 [[package]]
 name = "readshot-ocr"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "directories",
@@ -4619,14 +4619,14 @@ dependencies = [
 
 [[package]]
 name = "readshot-test-fixtures"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "image",
 ]
 
 [[package]]
 name = "readshot-ui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "global-hotkey",
  "iced",
