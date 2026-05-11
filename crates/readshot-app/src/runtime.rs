@@ -111,6 +111,11 @@ pub fn start() -> (App, Task<Message>) {
     if let Some(manager) = register_default_hotkey(&app.preferences) {
         app.hotkey_manager = Some(manager);
     }
+    if app.preferences.launch_at_login {
+        if let Err(e) = crate::startup::set_launch_at_login(true) {
+            tracing::warn!(target: "readshot::startup", "launch-at-login setup failed: {e}");
+        }
+    }
     #[cfg(target_os = "macos")]
     if let Err(e) = crate::url_events::install_platform_handler() {
         tracing::warn!(target: "readshot::url", "running-app URL handler unavailable: {e}");
@@ -1621,6 +1626,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         // effect lives next to the state update.
         Message::Settings(submsg) => {
             let needs_rehotkey = matches!(submsg, SettingsMessage::SetCaptureHotkey(_));
+            let launch_at_login = match &submsg {
+                SettingsMessage::SetLaunchAtLogin(v) => Some(*v),
+                _ => None,
+            };
             state.update_sync(Message::Settings(submsg));
             if needs_rehotkey {
                 // Drop the old manager first — that releases the OS-
@@ -1630,6 +1639,17 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 // CLI surfaces.
                 state.hotkey_manager = None;
                 state.hotkey_manager = register_default_hotkey(&state.preferences);
+            }
+            if let Some(enabled) = launch_at_login {
+                if let Err(e) = crate::startup::set_launch_at_login(enabled) {
+                    tracing::warn!(
+                        target: "readshot::startup",
+                        "launch-at-login update failed: {e}",
+                    );
+                    state.update_sync(Message::Settings(SettingsMessage::SetLaunchAtLogin(
+                        !enabled,
+                    )));
+                }
             }
             Task::none()
         }
@@ -3197,13 +3217,11 @@ fn show_or_focus_welcome(state: &mut App) -> Task<Message> {
     open_task.map(|_id| Message::WelcomeWindowReady)
 }
 
-/// Preferences window. v1 = a single General tab with two pickers
-/// (history retention + capture hotkey). The other `SettingsTab`
-/// variants stay on the enum but don't render until they have content
-/// worth showing — empty placeholder tabs would just be UI to
-/// maintain.
+/// Preferences window. v1 = a single General tab with the controls
+/// users need regularly. The other `SettingsTab` variants stay on the
+/// enum but don't render until they have content worth showing.
 fn settings_view(state: &App) -> Element<'_, Message> {
-    use iced::widget::{pick_list, text_input};
+    use iced::widget::{pick_list, text_input, toggler};
     use readshot_core::HistoryRetention;
 
     // `pick_list` borrows its options for the duration of the
@@ -3262,7 +3280,11 @@ fn settings_view(state: &App) -> Element<'_, Message> {
     ]
     .spacing(6);
 
-    let body = column![header, retention_row, hotkey_row]
+    let startup_row = toggler(state.preferences.launch_at_login)
+        .label("Open Readshot at login")
+        .on_toggle(|v| Message::Settings(SettingsMessage::SetLaunchAtLogin(v)));
+
+    let body = column![header, retention_row, hotkey_row, startup_row]
         .spacing(20)
         .max_width(440);
 

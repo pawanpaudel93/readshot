@@ -193,6 +193,20 @@ mod tests {
     }
 
     #[test]
+    fn launch_at_login_can_be_enabled_and_disabled() {
+        let mut p = defaults();
+        assert!(!p.launch_at_login);
+
+        let changed = apply(&mut p, SettingsMessage::SetLaunchAtLogin(true));
+        assert!(changed);
+        assert!(p.launch_at_login);
+
+        let changed = apply(&mut p, SettingsMessage::SetLaunchAtLogin(false));
+        assert!(changed);
+        assert!(!p.launch_at_login);
+    }
+
+    #[test]
     fn ocr_language_list_persists_and_compares_ordered() {
         let mut p = defaults();
         let new_list = vec!["fr".to_string(), "en".to_string()];
