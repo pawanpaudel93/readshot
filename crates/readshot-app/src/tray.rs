@@ -111,11 +111,16 @@ fn capture_menu_label(hotkey_label: Option<&str>) -> String {
 /// system tray entry disappears.
 pub struct TrayController {
     _tray: TrayIcon,
+    item_capture: MenuItem,
     item_retake_last_region: MenuItem,
     menu_ids: HashMap<MenuId, TrayAction>,
 }
 
 impl TrayController {
+    pub fn set_capture_hotkey_label(&self, hotkey_label: Option<&str>) {
+        self.item_capture.set_text(capture_menu_label(hotkey_label));
+    }
+
     pub fn set_retake_last_region_enabled(&self, enabled: bool) {
         self.item_retake_last_region.set_enabled(enabled);
     }
@@ -222,6 +227,7 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
     tracing::info!(target: "readshot::tray", "tray icon installed");
     Some(TrayController {
         _tray: tray,
+        item_capture,
         item_retake_last_region,
         menu_ids,
     })
@@ -394,6 +400,13 @@ mod tests {
         assert_eq!(items[retake].label, "Retake Last Region");
         assert!(items[retake].enabled);
         assert_eq!(retake, capture + 1);
+    }
+
+    #[test]
+    fn capture_menu_label_includes_hotkey_when_known() {
+        assert_eq!(capture_menu_label(Some("⌘⇧X")), "Capture  (⌘⇧X)");
+        assert_eq!(capture_menu_label(Some("")), "Capture");
+        assert_eq!(capture_menu_label(None), "Capture");
     }
 
     #[test]

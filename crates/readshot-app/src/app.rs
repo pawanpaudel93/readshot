@@ -321,6 +321,10 @@ pub enum Message {
     SettingsChooseSaveFolderRequested,
     /// Native folder picker completed. `Ok(None)` means cancelled.
     SettingsSaveFolderPicked(Result<Option<std::path::PathBuf>, String>),
+    /// User clicked "Open" for the configured save folder in Settings.
+    SettingsOpenSaveFolderRequested,
+    /// Opening the configured save folder completed.
+    SettingsOpenSaveFolderDone(Result<(), String>),
     /// User clicked "Record shortcut" in Settings.
     SettingsStartHotkeyRecording,
     /// Settings shortcut recorder captured a valid key combination.
@@ -330,6 +334,12 @@ pub enum Message {
     SettingsHotkeyRecordingInvalid,
     /// Settings shortcut recorder was cancelled or captured an invalid key.
     SettingsHotkeyRecordingCancelled,
+    /// User clicked the reset-all-settings button.
+    SettingsResetAllRequested,
+    /// User confirmed reset-all-settings.
+    SettingsResetAllConfirmed,
+    /// User cancelled reset-all-settings.
+    SettingsResetAllCancelled,
     /// First `view` call after the settings window is opened. Records
     /// the `window::Id` so close + focus paths work.
     SettingsWindowReady(iced::window::Id),
@@ -449,6 +459,15 @@ pub struct App {
     /// Short validation message for the current hotkey recording
     /// attempt, shown inline in Settings.
     pub settings_hotkey_error: Option<String>,
+    /// Short success message for the current hotkey registration,
+    /// shown inline in Settings.
+    pub settings_hotkey_status: Option<String>,
+    /// Short general-purpose status text shown at the bottom of
+    /// Settings.
+    pub settings_status: Option<String>,
+    /// True after the user asks to reset settings and before they
+    /// confirm or cancel.
+    pub settings_reset_all_pending: bool,
     /// `window::Id` of the live command-line setup instructions window.
     pub cli_tools_window_id: Option<iced::window::Id>,
     /// Copy-status text shown in the command-line setup window.
@@ -550,6 +569,9 @@ impl App {
             settings_window_id: None,
             settings_recording_hotkey: false,
             settings_hotkey_error: None,
+            settings_hotkey_status: None,
+            settings_status: None,
+            settings_reset_all_pending: false,
             cli_tools_window_id: None,
             cli_tools_status: None,
         }

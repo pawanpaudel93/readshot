@@ -236,6 +236,39 @@ fn register_default_hotkey(prefs: &Preferences) -> Option<GlobalHotKeyManager> {
     Some(manager)
 }
 
+fn refresh_hotkey_registration(state: &mut App) {
+    // Drop the old manager first — that releases the OS-level chord.
+    // Only then try the new one; if the new chord fails to parse or
+    // conflicts with another app, the field stays `None`.
+    state.hotkey_manager = None;
+    state.hotkey_manager = register_default_hotkey(&state.preferences);
+}
+
+fn set_hotkey_registration_notice(state: &mut App) {
+    let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
+    state.settings_hotkey_error = None;
+    state.settings_hotkey_status = None;
+    if pretty.is_empty() {
+        state.settings_hotkey_error = Some("That shortcut could not be read.".to_string());
+    } else if state.hotkey_manager.is_some() {
+        state.settings_hotkey_status = Some(format!("{pretty} is ready."));
+    } else {
+        state.settings_hotkey_error = Some(format!("{pretty} could not be registered globally."));
+    }
+}
+
+fn sync_tray_capture_hotkey_label(state: &App) {
+    let Some(tray) = state.tray.as_ref() else {
+        return;
+    };
+    let label = pretty_hotkey(&state.preferences.capture_hotkey);
+    if label.is_empty() {
+        tray.set_capture_hotkey_label(None);
+    } else {
+        tray.set_capture_hotkey_label(Some(&label));
+    }
+}
+
 fn welcome_window_settings() -> window::Settings {
     window::Settings {
         size: iced::Size::new(520.0, 380.0),
@@ -1043,6 +1076,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 state.settings_window_id = None;
                 state.settings_recording_hotkey = false;
                 state.settings_hotkey_error = None;
+                state.settings_hotkey_status = None;
+                state.settings_status = None;
+                state.settings_reset_all_pending = false;
             }
             if state.cli_tools_window_id == Some(id) {
                 state.cli_tools_window_id = None;
@@ -1653,15 +1689,15 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 SettingsMessage::SetLaunchAtLogin(v) => Some(*v),
                 _ => None,
             };
+            if !matches!(submsg, SettingsMessage::SetCaptureHotkey(_)) {
+                state.settings_hotkey_status = None;
+            }
+            state.settings_reset_all_pending = false;
             state.update_sync(Message::Settings(submsg));
             if needs_rehotkey {
-                // Drop the old manager first — that releases the OS-
-                // level chord. Only then try the new one; if the new
-                // chord fails to parse / conflicts with another app,
-                // the field stays `None` and the user keeps the GUI +
-                // CLI surfaces.
-                state.hotkey_manager = None;
-                state.hotkey_manager = register_default_hotkey(&state.preferences);
+                refresh_hotkey_registration(state);
+                set_hotkey_registration_notice(state);
+                sync_tray_capture_hotkey_label(state);
             }
             if let Some(enabled) = launch_at_login {
                 if let Err(e) = crate::startup::set_launch_at_login(enabled) {
@@ -1702,9 +1738,26 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::SettingsOpenSaveFolderRequested => {
+            let folder = settings_save_folder_to_open(&state.preferences);
+            Task::perform(
+                async move { open_folder_path(&folder).map_err(|e| e.to_string()) },
+                Message::SettingsOpenSaveFolderDone,
+            )
+        }
+        Message::SettingsOpenSaveFolderDone(result) => {
+            state.settings_status = Some(match result {
+                Ok(()) => "Opened save folder.".to_string(),
+                Err(e) => format!("Could not open save folder: {e}"),
+            });
+            Task::none()
+        }
         Message::SettingsStartHotkeyRecording => {
             state.settings_recording_hotkey = true;
             state.settings_hotkey_error = None;
+            state.settings_hotkey_status = None;
+            state.settings_status = None;
+            state.settings_reset_all_pending = false;
             Task::none()
         }
         Message::SettingsHotkeyRecorded(shortcut) => {
@@ -1717,6 +1770,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::SettingsHotkeyRecordingInvalid => {
             state.settings_recording_hotkey = true;
+            state.settings_hotkey_status = None;
             state.settings_hotkey_error = Some(
                 "Use at least one modifier, such as Command, Control, Option, or Shift."
                     .to_string(),
@@ -1726,6 +1780,40 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::SettingsHotkeyRecordingCancelled => {
             state.settings_recording_hotkey = false;
             state.settings_hotkey_error = None;
+            state.settings_hotkey_status = None;
+            Task::none()
+        }
+        Message::SettingsResetAllRequested => {
+            state.settings_reset_all_pending = true;
+            state.settings_hotkey_error = None;
+            state.settings_hotkey_status = None;
+            state.settings_status = None;
+            Task::none()
+        }
+        Message::SettingsResetAllCancelled => {
+            state.settings_reset_all_pending = false;
+            Task::none()
+        }
+        Message::SettingsResetAllConfirmed => {
+            state.settings_reset_all_pending = false;
+            state.settings_recording_hotkey = false;
+            state.settings_hotkey_error = None;
+            state.settings_hotkey_status = None;
+            state.settings_status = Some("Settings reset to defaults.".to_string());
+            let old_launch_at_login = state.preferences.launch_at_login;
+            reset_settings_to_defaults(state);
+            refresh_hotkey_registration(state);
+            set_hotkey_registration_notice(state);
+            sync_tray_capture_hotkey_label(state);
+            if old_launch_at_login {
+                if let Err(e) = crate::startup::set_launch_at_login(false) {
+                    tracing::warn!(
+                        target: "readshot::startup",
+                        "launch-at-login reset failed: {e}",
+                    );
+                    state.update_sync(Message::Settings(SettingsMessage::SetLaunchAtLogin(true)));
+                }
+            }
             Task::none()
         }
         Message::SettingsWindowReady(id) => {
@@ -2167,6 +2255,45 @@ fn reveal_command_for_path(path: &Path) -> RevealCommand {
 
 fn reveal_path(path: &Path) -> Result<(), std::io::Error> {
     let command = reveal_command_for_path(path);
+    std::process::Command::new(command.program)
+        .args(command.args)
+        .spawn()?;
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OpenFolderCommand {
+    program: &'static str,
+    args: Vec<String>,
+}
+
+fn open_folder_command_for_path(path: &Path) -> OpenFolderCommand {
+    let path_string = path.to_string_lossy().to_string();
+    #[cfg(target_os = "macos")]
+    {
+        OpenFolderCommand {
+            program: "open",
+            args: vec![path_string],
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        OpenFolderCommand {
+            program: "explorer",
+            args: vec![path_string],
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        OpenFolderCommand {
+            program: "xdg-open",
+            args: vec![path_string],
+        }
+    }
+}
+
+fn open_folder_path(path: &Path) -> Result<(), std::io::Error> {
+    let command = open_folder_command_for_path(path);
     std::process::Command::new(command.program)
         .args(command.args)
         .spawn()?;
@@ -3296,7 +3423,7 @@ fn show_or_focus_welcome(state: &mut App) -> Task<Message> {
 /// users need regularly. The other `SettingsTab` variants stay on the
 /// enum but don't render until they have content worth showing.
 fn settings_view(state: &App) -> Element<'_, Message> {
-    use iced::widget::{button, pick_list, text_input, toggler, Column};
+    use iced::widget::{button, pick_list, text_input, toggler};
     use readshot_core::HistoryRetention;
 
     // `pick_list` borrows its options for the duration of the
@@ -3321,24 +3448,14 @@ fn settings_view(state: &App) -> Element<'_, Message> {
     ]
     .align_y(Alignment::Center);
 
-    let retention_control: Element<'_, Message> = pick_list(
-        &RETENTION_OPTIONS[..],
-        Some(state.preferences.history_retention),
-        |r| Message::Settings(SettingsMessage::SetHistoryRetention(r)),
-    )
-    .into();
-    let retention_row = settings_field(
-        "History retention",
-        "Searchable archive of captures. Off keeps everything in-memory only.",
-        retention_control,
-    );
-
     let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
     let hotkey_hint = if state.settings_recording_hotkey {
         state
             .settings_hotkey_error
             .clone()
             .unwrap_or_else(|| "Press a modifier shortcut now. Escape cancels.".to_string())
+    } else if let Some(status) = &state.settings_hotkey_status {
+        status.clone()
     } else if pretty.is_empty() {
         format!(
             "Couldn't read `{}` — try `cmd+shift+x` style.",
@@ -3351,28 +3468,11 @@ fn settings_view(state: &App) -> Element<'_, Message> {
     } else {
         format!("Currently bound to {pretty}.")
     };
-
     let hotkey_label = if state.settings_recording_hotkey {
         "Press shortcut…".to_string()
     } else {
         pretty_hotkey(&state.preferences.capture_hotkey)
     };
-    let hotkey_control: Element<'_, Message> = row![
-        setting_value_box(hotkey_label, state.settings_recording_hotkey),
-        button(text(if state.settings_recording_hotkey {
-            "Recording"
-        } else {
-            "Record"
-        }))
-        .on_press(Message::SettingsStartHotkeyRecording),
-        button(text("Reset")).on_press(Message::Settings(SettingsMessage::SetCaptureHotkey(
-            default_capture_hotkey().into(),
-        ))),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center)
-    .into();
-    let hotkey_row = settings_field("Capture hotkey", hotkey_hint, hotkey_control);
 
     let startup_row: Element<'_, Message> = toggler(state.preferences.launch_at_login)
         .label("Open Readshot at login")
@@ -3384,132 +3484,143 @@ fn settings_view(state: &App) -> Element<'_, Message> {
     } else {
         state.preferences.save_folder.display().to_string()
     };
-    let save_folder_control: Element<'_, Message> = row![
-        setting_value_box(save_folder_value, false),
-        button(text("Choose")).on_press(Message::SettingsChooseSaveFolderRequested),
-        button(text("Reset")).on_press(Message::Settings(SettingsMessage::SetSaveFolder(
-            PathBuf::new(),
-        ))),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center)
-    .into();
-    let save_folder_row = settings_field(
-        "Default save folder",
-        "Starting folder for Save. Platform default uses your system screenshots location.",
-        save_folder_control,
-    );
+    let filename_template = state.preferences.filename_template.clone();
 
-    let filename_control: Element<'_, Message> = text_input(
-        "Screenshot {YYYY-MM-DD at HH.mm.ss}",
-        &state.preferences.filename_template,
-    )
-    .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
-    .padding([8, 10])
-    .into();
-    let filename_row = settings_field(
-        "Filename template",
-        "Supports date, time, year, and timestamp tokens.",
-        filename_control,
-    );
-
-    let supported_languages = state.coordinator.supported_languages();
-    let ocr_language_hint = if state.preferences.ocr_languages.is_empty() {
-        "Automatic language detection is active.".to_string()
-    } else {
-        format!(
-            "Preferred languages: {}",
-            format_ocr_languages_input(&state.preferences.ocr_languages)
-        )
-    };
-    let mut language_controls = column![row![
-        text(ocr_language_hint)
-            .size(12)
-            .color(settings_muted_text()),
-        Space::new().width(Length::Fill),
-        button(text("Use automatic")).on_press(Message::Settings(
-            SettingsMessage::SetOcrLanguages(Vec::new()),
-        )),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center)]
-    .spacing(10);
-    if supported_languages.is_empty() {
-        language_controls = language_controls.push(
-            text("This OCR engine did not report selectable languages.")
-                .size(12)
-                .color(settings_muted_text()),
-        );
-    } else {
-        let mut left = Column::new().spacing(8);
-        let mut right = Column::new().spacing(8);
-        for (index, language) in supported_languages.into_iter().take(24).enumerate() {
-            let selected = state.preferences.ocr_languages.contains(&language);
-            let current = state.preferences.ocr_languages.clone();
-            let control = toggler(selected)
-                .label(language.clone())
-                .on_toggle(move |enabled| {
-                    Message::Settings(SettingsMessage::SetOcrLanguages(toggle_ocr_language(
-                        &current, &language, enabled,
-                    )))
-                });
-            if index % 2 == 0 {
-                left = left.push(control);
-            } else {
-                right = right.push(control);
-            }
-        }
-        language_controls = language_controls.push(
-            row![left.width(Length::Fill), right.width(Length::Fill)]
-                .spacing(18)
-                .align_y(Alignment::Start),
-        );
-    }
-    let ocr_languages_row =
-        column![text("Preferred OCR languages").size(13), language_controls,].spacing(8);
-
+    let history_retention = state.preferences.history_retention;
+    let settings_recording_hotkey = state.settings_recording_hotkey;
     let capture_section = settings_section(
         "Capture",
         "Shortcut and history",
-        row![
-            column![hotkey_row].width(Length::FillPortion(3)),
-            column![retention_row].width(Length::FillPortion(2)),
-        ]
-        .spacing(18)
-        .align_y(Alignment::Start)
+        responsive(move |available| {
+            let hotkey_control: Element<'_, Message> = row![
+                setting_value_box(hotkey_label.clone(), settings_recording_hotkey),
+                button(text(if settings_recording_hotkey {
+                    "Recording"
+                } else {
+                    "Record"
+                }))
+                .on_press(Message::SettingsStartHotkeyRecording),
+                button(text("Reset")).on_press(Message::Settings(
+                    SettingsMessage::SetCaptureHotkey(default_capture_hotkey().into()),
+                )),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into();
+            let hotkey_row = settings_field("Capture hotkey", hotkey_hint.clone(), hotkey_control);
+            let retention_control: Element<'_, Message> =
+                pick_list(&RETENTION_OPTIONS[..], Some(history_retention), |r| {
+                    Message::Settings(SettingsMessage::SetHistoryRetention(r))
+                })
+                .into();
+            let retention_row = settings_field(
+                "History retention",
+                "Searchable archive of captures. Off keeps everything in-memory only.",
+                retention_control,
+            );
+
+            if available.width < 560.0 {
+                column![hotkey_row, retention_row].spacing(14).into()
+            } else {
+                row![
+                    column![hotkey_row].width(Length::FillPortion(3)),
+                    column![retention_row].width(Length::FillPortion(2)),
+                ]
+                .spacing(18)
+                .align_y(Alignment::Start)
+                .into()
+            }
+        })
+        .height(Length::Shrink)
         .into(),
     );
     let files_section = settings_section(
         "Files",
         "Save location and naming",
-        row![
-            column![save_folder_row].width(Length::FillPortion(3)),
-            column![filename_row].width(Length::FillPortion(2)),
-        ]
-        .spacing(18)
-        .align_y(Alignment::Start)
+        responsive(move |available| {
+            let save_folder_control: Element<'_, Message> = column![
+                setting_value_box(save_folder_value.clone(), false),
+                row![
+                    button(text("Choose")).on_press(Message::SettingsChooseSaveFolderRequested),
+                    button(text("Open")).on_press(Message::SettingsOpenSaveFolderRequested),
+                    button(text("Reset")).on_press(Message::Settings(
+                        SettingsMessage::SetSaveFolder(PathBuf::new()),
+                    )),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(8)
+            .into();
+            let save_folder_row = settings_field(
+                "Default save folder",
+                "Starting folder for Save. Platform default uses your system screenshots location.",
+                save_folder_control,
+            );
+            let filename_control: Element<'_, Message> =
+                text_input("Screenshot {YYYY-MM-DD at HH.mm.ss}", &filename_template)
+                    .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
+                    .padding([8, 10])
+                    .into();
+            let filename_row = settings_field(
+                "Filename template",
+                "Supports date, time, year, and timestamp tokens.",
+                filename_control,
+            );
+
+            if available.width < 620.0 {
+                column![save_folder_row, filename_row].spacing(14).into()
+            } else {
+                row![
+                    column![save_folder_row].width(Length::FillPortion(3)),
+                    column![filename_row].width(Length::FillPortion(2)),
+                ]
+                .spacing(18)
+                .align_y(Alignment::Start)
+                .into()
+            }
+        })
+        .height(Length::Shrink)
         .into(),
     );
-    let recognition_section = settings_section(
-        "Recognition",
-        "OCR language preference",
-        ocr_languages_row.into(),
-    );
+    let reset_controls: Element<'_, Message> = if state.settings_reset_all_pending {
+        row![
+            text("Reset every setting to the app defaults?")
+                .size(12)
+                .color(settings_muted_text()),
+            Space::new().width(Length::Fill),
+            button(text("Reset all")).on_press(Message::SettingsResetAllConfirmed),
+            button(text("Cancel")).on_press(Message::SettingsResetAllCancelled),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        row![
+            text(
+                state
+                    .settings_status
+                    .as_deref()
+                    .unwrap_or("Return all preferences to the shipped defaults."),
+            )
+            .size(12)
+            .color(settings_muted_text()),
+            Space::new().width(Length::Fill),
+            button(text("Reset all settings")).on_press(Message::SettingsResetAllRequested),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into()
+    };
     let app_section = settings_section(
         "App",
         "Startup behavior",
-        column![startup_row].spacing(10).into(),
+        column![startup_row, reset_controls].spacing(12).into(),
     );
 
-    let body = column![
-        header,
-        capture_section,
-        files_section,
-        recognition_section,
-        app_section,
-    ]
-    .spacing(16)
-    .max_width(660);
+    let body = column![header, capture_section, files_section, app_section,]
+        .spacing(16)
+        .max_width(660);
 
     container(
         scrollable(body)
@@ -3617,22 +3728,6 @@ fn slim_scrollbar() -> iced::widget::scrollable::Scrollbar {
         .width(7.0)
         .scroller_width(4.0)
         .margin(2.0)
-}
-
-fn format_ocr_languages_input(languages: &[String]) -> String {
-    languages.join(", ")
-}
-
-fn toggle_ocr_language(current: &[String], language: &str, enabled: bool) -> Vec<String> {
-    let mut next = current.to_vec();
-    if enabled {
-        if !next.iter().any(|l| l == language) {
-            next.push(language.to_string());
-        }
-    } else {
-        next.retain(|l| l != language);
-    }
-    next
 }
 
 fn welcome_view(state: &App) -> Element<'_, Message> {
@@ -3906,6 +4001,40 @@ fn first_launch_preferences() -> Preferences {
     }
 }
 
+fn reset_settings_to_defaults(state: &mut App) {
+    let defaults = first_launch_preferences();
+    state.update_sync(Message::Settings(SettingsMessage::SetCaptureHotkey(
+        defaults.capture_hotkey,
+    )));
+    state.update_sync(Message::Settings(SettingsMessage::SetSaveFolder(
+        defaults.save_folder,
+    )));
+    state.update_sync(Message::Settings(SettingsMessage::SetFilenameTemplate(
+        defaults.filename_template,
+    )));
+    state.update_sync(Message::Settings(SettingsMessage::SetDefaultFormat(
+        defaults.default_format,
+    )));
+    state.update_sync(Message::Settings(SettingsMessage::SetHistoryRetention(
+        defaults.history_retention,
+    )));
+    state.update_sync(Message::Settings(SettingsMessage::SetOcrLanguages(
+        defaults.ocr_languages,
+    )));
+    state.update_sync(Message::Settings(SettingsMessage::SetOcrEngine(
+        defaults.ocr_engine_choice,
+    )));
+    state.update_sync(Message::Settings(SettingsMessage::SetLaunchAtLogin(
+        defaults.launch_at_login,
+    )));
+    state.update_sync(Message::Settings(SettingsMessage::SetUpdateChannel(
+        defaults.update_channel,
+    )));
+    state.update_sync(Message::Settings(SettingsMessage::SetDebugLogging(
+        defaults.debug_logging,
+    )));
+}
+
 /// Spawn a fire-and-forget history-persistence task. The chain is:
 /// encode PNG → save record (empty OCR) → run Apple Vision OCR →
 /// update sidecar with the recognised text. Each stage logs its own
@@ -4033,6 +4162,29 @@ async fn save_image_via_picker(
 async fn pick_settings_save_folder() -> Result<Option<PathBuf>, CaptureRunError> {
     let handle = rfd::AsyncFileDialog::new().pick_folder().await;
     Ok(handle.map(|folder| folder.path().to_path_buf()))
+}
+
+fn settings_save_folder_to_open(prefs: &Preferences) -> PathBuf {
+    if prefs.save_folder.as_os_str().is_empty() {
+        default_platform_save_folder()
+    } else {
+        prefs.save_folder.clone()
+    }
+}
+
+fn default_platform_save_folder() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        directories::UserDirs::new()
+            .and_then(|d| d.desktop_dir().map(PathBuf::from))
+            .unwrap_or_else(std::env::temp_dir)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        directories::UserDirs::new()
+            .and_then(|d| d.picture_dir().map(|p| p.join("Screenshots")))
+            .unwrap_or_else(std::env::temp_dir)
+    }
 }
 
 fn preferred_save_seed_dir(
@@ -4656,6 +4808,14 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn open_folder_command_uses_plain_open_on_macos() {
+        let command = open_folder_command_for_path(std::path::Path::new("/tmp/readshot"));
+        assert_eq!(command.program, "open");
+        assert_eq!(command.args, vec!["/tmp/readshot"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn macos_notification_script_escapes_title_and_body() {
         let script = macos_notification_script("Readshot \"updates\"", "Path C:\\tmp\\\"x\"");
         assert_eq!(
@@ -4929,17 +5089,16 @@ mod tests {
     }
 
     #[test]
-    fn toggle_ocr_language_adds_and_removes_codes() {
-        let current = vec!["en-US".to_string()];
+    fn settings_save_folder_to_open_prefers_configured_folder() {
+        let prefs = Preferences {
+            save_folder: PathBuf::from("/configured"),
+            ..Preferences::default()
+        };
 
-        let added = toggle_ocr_language(&current, "ja-JP", true);
-        assert_eq!(added, vec!["en-US", "ja-JP"]);
-
-        let unchanged = toggle_ocr_language(&added, "ja-JP", true);
-        assert_eq!(unchanged, added);
-
-        let removed = toggle_ocr_language(&unchanged, "en-US", false);
-        assert_eq!(removed, vec!["ja-JP"]);
+        assert_eq!(
+            settings_save_folder_to_open(&prefs),
+            PathBuf::from("/configured")
+        );
     }
 
     #[test]
