@@ -526,6 +526,22 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             None
         }));
     }
+    if state.settings_recording_hotkey {
+        subs.push(iced::event::listen_with(|event, _status, _window| {
+            use iced::keyboard::Event as KbEvent;
+            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
+                if shortcut_cancelled_by_keypress(&key, modifiers) {
+                    return Some(Message::SettingsHotkeyRecordingCancelled);
+                }
+                return Some(
+                    shortcut_string_from_keypress(&key, modifiers)
+                        .map(Message::SettingsHotkeyRecorded)
+                        .unwrap_or(Message::SettingsHotkeyRecordingInvalid),
+                );
+            }
+            None
+        }));
+    }
     // Watch for the OS X-button closing any tracked window. Without
     // this, `state.windows` accumulates stale ids, and helpers like
     // `show_or_focus_welcome` end up calling `gain_focus` on dead
@@ -1025,6 +1041,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             if state.settings_window_id == Some(id) {
                 state.settings_window_id = None;
+                state.settings_recording_hotkey = false;
+                state.settings_hotkey_error = None;
             }
             if state.cli_tools_window_id == Some(id) {
                 state.cli_tools_window_id = None;
@@ -1670,6 +1688,46 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.settings_window_id = Some(id);
             open_task.map(Message::SettingsWindowReady)
         }
+        Message::SettingsChooseSaveFolderRequested => {
+            Task::perform(pick_settings_save_folder(), |r| {
+                Message::SettingsSaveFolderPicked(r.map_err(|e| e.to_string()))
+            })
+        }
+        Message::SettingsSaveFolderPicked(result) => {
+            if let Ok(Some(path)) = result {
+                return update(
+                    state,
+                    Message::Settings(SettingsMessage::SetSaveFolder(path)),
+                );
+            }
+            Task::none()
+        }
+        Message::SettingsStartHotkeyRecording => {
+            state.settings_recording_hotkey = true;
+            state.settings_hotkey_error = None;
+            Task::none()
+        }
+        Message::SettingsHotkeyRecorded(shortcut) => {
+            state.settings_recording_hotkey = false;
+            state.settings_hotkey_error = None;
+            update(
+                state,
+                Message::Settings(SettingsMessage::SetCaptureHotkey(shortcut)),
+            )
+        }
+        Message::SettingsHotkeyRecordingInvalid => {
+            state.settings_recording_hotkey = true;
+            state.settings_hotkey_error = Some(
+                "Use at least one modifier, such as Command, Control, Option, or Shift."
+                    .to_string(),
+            );
+            Task::none()
+        }
+        Message::SettingsHotkeyRecordingCancelled => {
+            state.settings_recording_hotkey = false;
+            state.settings_hotkey_error = None;
+            Task::none()
+        }
         Message::SettingsWindowReady(id) => {
             // Belt-and-braces: window-open already records the id, but
             // iced may hand back a different one in some platforms.
@@ -1775,6 +1833,10 @@ fn cli_tools_view(state: &App) -> Element<'_, Message> {
                 ]
                 .spacing(12)
             )
+            .direction(iced::widget::scrollable::Direction::Vertical(
+                slim_scrollbar(),
+            ))
+            .spacing(10.0)
             .height(Length::Fill),
         ]
         .spacing(14)
@@ -1926,10 +1988,18 @@ fn history_view(state: &App) -> Element<'_, Message> {
         col = col.push(text("History root not configured.").size(12));
     }
 
-    column![header, scrollable(col).height(Length::Fill)]
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    column![
+        header,
+        scrollable(col)
+            .direction(iced::widget::scrollable::Direction::Vertical(
+                slim_scrollbar(),
+            ))
+            .spacing(10.0)
+            .height(Length::Fill)
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
 
 /// Compact button column for one history row — Open / Copy Image /
@@ -2377,8 +2447,8 @@ fn editor_view(state: &App) -> Element<'_, Message> {
 
         let scroll_layer = scrollable(content)
             .direction(iced::widget::scrollable::Direction::Both {
-                vertical: iced::widget::scrollable::Scrollbar::default(),
-                horizontal: iced::widget::scrollable::Scrollbar::default(),
+                vertical: slim_scrollbar(),
+                horizontal: slim_scrollbar(),
             })
             .width(Length::Fill)
             .height(Length::Fill);
@@ -3226,7 +3296,7 @@ fn show_or_focus_welcome(state: &mut App) -> Task<Message> {
 /// users need regularly. The other `SettingsTab` variants stay on the
 /// enum but don't render until they have content worth showing.
 fn settings_view(state: &App) -> Element<'_, Message> {
-    use iced::widget::{pick_list, text_input, toggler};
+    use iced::widget::{button, pick_list, text_input, toggler, Column};
     use readshot_core::HistoryRetention;
 
     // `pick_list` borrows its options for the duration of the
@@ -3239,29 +3309,37 @@ fn settings_view(state: &App) -> Element<'_, Message> {
         HistoryRetention::Unlimited,
     ];
 
-    let header = column![
-        text("Settings").size(28),
-        text("General")
-            .size(13)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+    let header = row![
+        column![
+            text("Settings").size(30),
+            text("Capture, files, OCR, and startup")
+                .size(13)
+                .color(settings_muted_text()),
+        ]
+        .spacing(3),
+        Space::new().width(Length::Fill),
     ]
-    .spacing(2);
+    .align_y(Alignment::Center);
 
-    let retention_row = column![
-        text("History retention").size(13),
-        pick_list(
-            &RETENTION_OPTIONS[..],
-            Some(state.preferences.history_retention),
-            |r| Message::Settings(SettingsMessage::SetHistoryRetention(r)),
-        ),
-        text("Searchable archive of every capture you take. Off keeps everything in-memory only.")
-            .size(11)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
-    ]
-    .spacing(6);
+    let retention_control: Element<'_, Message> = pick_list(
+        &RETENTION_OPTIONS[..],
+        Some(state.preferences.history_retention),
+        |r| Message::Settings(SettingsMessage::SetHistoryRetention(r)),
+    )
+    .into();
+    let retention_row = settings_field(
+        "History retention",
+        "Searchable archive of captures. Off keeps everything in-memory only.",
+        retention_control,
+    );
 
     let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
-    let hotkey_hint = if pretty.is_empty() {
+    let hotkey_hint = if state.settings_recording_hotkey {
+        state
+            .settings_hotkey_error
+            .clone()
+            .unwrap_or_else(|| "Press a modifier shortcut now. Escape cancels.".to_string())
+    } else if pretty.is_empty() {
         format!(
             "Couldn't read `{}` — try `cmd+shift+x` style.",
             state.preferences.capture_hotkey
@@ -3274,119 +3352,287 @@ fn settings_view(state: &App) -> Element<'_, Message> {
         format!("Currently bound to {pretty}.")
     };
 
-    let hotkey_row = column![
-        text("Capture hotkey").size(13),
-        text_input("cmd+shift+x", &state.preferences.capture_hotkey)
-            .on_input(|s| Message::Settings(SettingsMessage::SetCaptureHotkey(s)))
-            .padding([6, 10]),
-        text(hotkey_hint)
-            .size(11)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+    let hotkey_label = if state.settings_recording_hotkey {
+        "Press shortcut…".to_string()
+    } else {
+        pretty_hotkey(&state.preferences.capture_hotkey)
+    };
+    let hotkey_control: Element<'_, Message> = row![
+        setting_value_box(hotkey_label, state.settings_recording_hotkey),
+        button(text(if state.settings_recording_hotkey {
+            "Recording"
+        } else {
+            "Record"
+        }))
+        .on_press(Message::SettingsStartHotkeyRecording),
+        button(text("Reset")).on_press(Message::Settings(SettingsMessage::SetCaptureHotkey(
+            default_capture_hotkey().into(),
+        ))),
     ]
-    .spacing(6);
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into();
+    let hotkey_row = settings_field("Capture hotkey", hotkey_hint, hotkey_control);
 
-    let startup_row = toggler(state.preferences.launch_at_login)
+    let startup_row: Element<'_, Message> = toggler(state.preferences.launch_at_login)
         .label("Open Readshot at login")
-        .on_toggle(|v| Message::Settings(SettingsMessage::SetLaunchAtLogin(v)));
+        .on_toggle(|v| Message::Settings(SettingsMessage::SetLaunchAtLogin(v)))
+        .into();
 
-    let save_folder_value = state.preferences.save_folder.to_string_lossy().to_string();
-    let save_folder_row = column![
-        text("Default save folder").size(13),
-        text_input("Use system default", &save_folder_value)
-            .on_input(|s| Message::Settings(SettingsMessage::SetSaveFolder(PathBuf::from(s))))
-            .padding([6, 10]),
-        text("Used as the starting folder for Save. Leave empty for the platform default.")
-            .size(11)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+    let save_folder_value = if state.preferences.save_folder.as_os_str().is_empty() {
+        "Platform default".to_string()
+    } else {
+        state.preferences.save_folder.display().to_string()
+    };
+    let save_folder_control: Element<'_, Message> = row![
+        setting_value_box(save_folder_value, false),
+        button(text("Choose")).on_press(Message::SettingsChooseSaveFolderRequested),
+        button(text("Reset")).on_press(Message::Settings(SettingsMessage::SetSaveFolder(
+            PathBuf::new(),
+        ))),
     ]
-    .spacing(6);
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into();
+    let save_folder_row = settings_field(
+        "Default save folder",
+        "Starting folder for Save. Platform default uses your system screenshots location.",
+        save_folder_control,
+    );
 
-    let filename_row = column![
-        text("Filename template").size(13),
-        text_input(
-            "Screenshot {YYYY-MM-DD at HH.mm.ss}",
-            &state.preferences.filename_template,
-        )
-        .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
-        .padding([6, 10]),
-        text(
-            "Supports {YYYY-MM-DD at HH.mm.ss}, {YYYY-MM-DD}, {HH.mm.ss}, {YYYY}, and {timestamp}."
-        )
-        .size(11)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
-    ]
-    .spacing(6);
+    let filename_control: Element<'_, Message> = text_input(
+        "Screenshot {YYYY-MM-DD at HH.mm.ss}",
+        &state.preferences.filename_template,
+    )
+    .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
+    .padding([8, 10])
+    .into();
+    let filename_row = settings_field(
+        "Filename template",
+        "Supports date, time, year, and timestamp tokens.",
+        filename_control,
+    );
 
-    let ocr_language_value = format_ocr_languages_input(&state.preferences.ocr_languages);
     let supported_languages = state.coordinator.supported_languages();
-    let supported_language_hint = if supported_languages.is_empty() {
-        "Automatic language detection. Preferred languages are optional.".to_string()
+    let ocr_language_hint = if state.preferences.ocr_languages.is_empty() {
+        "Automatic language detection is active.".to_string()
     } else {
         format!(
-            "Leave empty for automatic detection. Supported here: {}",
-            supported_languages_preview(&supported_languages)
+            "Preferred languages: {}",
+            format_ocr_languages_input(&state.preferences.ocr_languages)
         )
     };
-    let ocr_languages_row = column![
-        text("Preferred OCR languages").size(13),
-        text_input("Automatic", &ocr_language_value)
-            .on_input(|s| {
-                Message::Settings(SettingsMessage::SetOcrLanguages(parse_ocr_languages_input(
-                    &s,
-                )))
-            })
-            .padding([6, 10]),
-        text(supported_language_hint)
-            .size(11)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+    let mut language_controls = column![row![
+        text(ocr_language_hint)
+            .size(12)
+            .color(settings_muted_text()),
+        Space::new().width(Length::Fill),
+        button(text("Use automatic")).on_press(Message::Settings(
+            SettingsMessage::SetOcrLanguages(Vec::new()),
+        )),
     ]
-    .spacing(6);
+    .spacing(8)
+    .align_y(Alignment::Center)]
+    .spacing(10);
+    if supported_languages.is_empty() {
+        language_controls = language_controls.push(
+            text("This OCR engine did not report selectable languages.")
+                .size(12)
+                .color(settings_muted_text()),
+        );
+    } else {
+        let mut left = Column::new().spacing(8);
+        let mut right = Column::new().spacing(8);
+        for (index, language) in supported_languages.into_iter().take(24).enumerate() {
+            let selected = state.preferences.ocr_languages.contains(&language);
+            let current = state.preferences.ocr_languages.clone();
+            let control = toggler(selected)
+                .label(language.clone())
+                .on_toggle(move |enabled| {
+                    Message::Settings(SettingsMessage::SetOcrLanguages(toggle_ocr_language(
+                        &current, &language, enabled,
+                    )))
+                });
+            if index % 2 == 0 {
+                left = left.push(control);
+            } else {
+                right = right.push(control);
+            }
+        }
+        language_controls = language_controls.push(
+            row![left.width(Length::Fill), right.width(Length::Fill)]
+                .spacing(18)
+                .align_y(Alignment::Start),
+        );
+    }
+    let ocr_languages_row =
+        column![text("Preferred OCR languages").size(13), language_controls,].spacing(8);
+
+    let capture_section = settings_section(
+        "Capture",
+        "Shortcut and history",
+        row![
+            column![hotkey_row].width(Length::FillPortion(3)),
+            column![retention_row].width(Length::FillPortion(2)),
+        ]
+        .spacing(18)
+        .align_y(Alignment::Start)
+        .into(),
+    );
+    let files_section = settings_section(
+        "Files",
+        "Save location and naming",
+        row![
+            column![save_folder_row].width(Length::FillPortion(3)),
+            column![filename_row].width(Length::FillPortion(2)),
+        ]
+        .spacing(18)
+        .align_y(Alignment::Start)
+        .into(),
+    );
+    let recognition_section = settings_section(
+        "Recognition",
+        "OCR language preference",
+        ocr_languages_row.into(),
+    );
+    let app_section = settings_section(
+        "App",
+        "Startup behavior",
+        column![startup_row].spacing(10).into(),
+    );
 
     let body = column![
         header,
-        retention_row,
-        hotkey_row,
-        save_folder_row,
-        filename_row,
-        ocr_languages_row,
-        startup_row
+        capture_section,
+        files_section,
+        recognition_section,
+        app_section,
     ]
-    .spacing(20)
-    .max_width(440);
+    .spacing(16)
+    .max_width(660);
 
-    container(scrollable(body).height(Length::Fill))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(28)
-        .into()
+    container(
+        scrollable(body)
+            .direction(iced::widget::scrollable::Direction::Vertical(
+                slim_scrollbar(),
+            ))
+            .spacing(10.0)
+            .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .padding([24, 30])
+    .into()
 }
 
-fn parse_ocr_languages_input(input: &str) -> Vec<String> {
-    input
-        .split(',')
-        .map(str::trim)
-        .filter(|language| !language.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+fn settings_section<'a>(
+    title: &'a str,
+    subtitle: &'a str,
+    content: Element<'a, Message>,
+) -> Element<'a, Message> {
+    container(
+        column![
+            row![
+                text(title).size(16),
+                Space::new().width(Length::Fill),
+                text(subtitle).size(11).color(settings_muted_text()),
+            ]
+            .align_y(Alignment::Center),
+            content,
+        ]
+        .spacing(14),
+    )
+    .width(Length::Fill)
+    .padding(16)
+    .style(settings_section_style)
+    .into()
+}
+
+fn settings_field<'a>(
+    label: &'a str,
+    hint: impl Into<String>,
+    control: Element<'a, Message>,
+) -> Element<'a, Message> {
+    column![
+        text(label).size(13),
+        control,
+        text(hint.into()).size(11).color(settings_muted_text()),
+    ]
+    .spacing(7)
+    .into()
+}
+
+fn setting_value_box(value: String, active: bool) -> Element<'static, Message> {
+    container(
+        text(value)
+            .size(14)
+            .color(if active {
+                Color::from_rgb(0.83, 0.86, 1.0)
+            } else {
+                Color::from_rgba(1.0, 1.0, 1.0, 0.82)
+            })
+            .width(Length::Fill),
+    )
+    .width(Length::Fill)
+    .padding([9, 12])
+    .style(move |theme: &Theme| {
+        let palette = theme.extended_palette();
+        let border_color = if active {
+            palette.primary.base.color
+        } else {
+            palette.background.strong.color
+        };
+        iced::widget::container::Style {
+            background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.045).into()),
+            border: iced::Border {
+                color: border_color,
+                width: 1.0,
+                radius: 7.0.into(),
+            },
+            ..Default::default()
+        }
+    })
+    .into()
+}
+
+fn settings_section_style(theme: &Theme) -> iced::widget::container::Style {
+    let palette = theme.extended_palette();
+    iced::widget::container::Style {
+        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.035).into()),
+        border: iced::Border {
+            color: palette.background.strong.color,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn settings_muted_text() -> Color {
+    Color::from_rgba(1.0, 1.0, 1.0, 0.56)
+}
+
+fn slim_scrollbar() -> iced::widget::scrollable::Scrollbar {
+    iced::widget::scrollable::Scrollbar::new()
+        .width(7.0)
+        .scroller_width(4.0)
+        .margin(2.0)
 }
 
 fn format_ocr_languages_input(languages: &[String]) -> String {
     languages.join(", ")
 }
 
-fn supported_languages_preview(languages: &[String]) -> String {
-    const MAX_LANGUAGES: usize = 8;
-    let shown = languages
-        .iter()
-        .take(MAX_LANGUAGES)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
-    if languages.len() > MAX_LANGUAGES {
-        format!("{shown}, …")
+fn toggle_ocr_language(current: &[String], language: &str, enabled: bool) -> Vec<String> {
+    let mut next = current.to_vec();
+    if enabled {
+        if !next.iter().any(|l| l == language) {
+            next.push(language.to_string());
+        }
     } else {
-        shown
+        next.retain(|l| l != language);
     }
+    next
 }
 
 fn welcome_view(state: &App) -> Element<'_, Message> {
@@ -3784,6 +4030,11 @@ async fn save_image_via_picker(
     Ok(Some(path))
 }
 
+async fn pick_settings_save_folder() -> Result<Option<PathBuf>, CaptureRunError> {
+    let handle = rfd::AsyncFileDialog::new().pick_folder().await;
+    Ok(handle.map(|folder| folder.path().to_path_buf()))
+}
+
 fn preferred_save_seed_dir(
     prefs: &Preferences,
     last_save_dir: &Option<PathBuf>,
@@ -3854,6 +4105,117 @@ fn ocr_request_for_image(
         image,
         languages: preferences.ocr_languages.clone(),
         use_language_correction: true,
+    }
+}
+
+fn shortcut_string_from_keypress(
+    key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+) -> Option<String> {
+    if !(modifiers.command() || modifiers.control() || modifiers.alt() || modifiers.shift()) {
+        return None;
+    }
+    let key = hotkey_token_for_key(key)?;
+    let mut parts: Vec<&str> = Vec::new();
+    if modifiers.command() {
+        parts.push("cmd");
+    }
+    if modifiers.control() {
+        parts.push("ctrl");
+    }
+    if modifiers.alt() {
+        parts.push("alt");
+    }
+    if modifiers.shift() {
+        parts.push("shift");
+    }
+    parts.push(key);
+    Some(parts.join("+"))
+}
+
+fn shortcut_cancelled_by_keypress(
+    key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+) -> bool {
+    matches!(
+        key,
+        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+    ) && !modifiers.command()
+        && !modifiers.control()
+        && !modifiers.alt()
+        && !modifiers.shift()
+}
+
+fn hotkey_token_for_key(key: &iced::keyboard::Key) -> Option<&'static str> {
+    use iced::keyboard::key::Named;
+    use iced::keyboard::Key;
+
+    match key {
+        Key::Character(c) => {
+            let mut chars = c.chars();
+            let ch = chars.next()?;
+            if chars.next().is_none() && ch.is_ascii_alphanumeric() {
+                Some(match ch.to_ascii_lowercase() {
+                    'a' => "a",
+                    'b' => "b",
+                    'c' => "c",
+                    'd' => "d",
+                    'e' => "e",
+                    'f' => "f",
+                    'g' => "g",
+                    'h' => "h",
+                    'i' => "i",
+                    'j' => "j",
+                    'k' => "k",
+                    'l' => "l",
+                    'm' => "m",
+                    'n' => "n",
+                    'o' => "o",
+                    'p' => "p",
+                    'q' => "q",
+                    'r' => "r",
+                    's' => "s",
+                    't' => "t",
+                    'u' => "u",
+                    'v' => "v",
+                    'w' => "w",
+                    'x' => "x",
+                    'y' => "y",
+                    'z' => "z",
+                    '0' => "0",
+                    '1' => "1",
+                    '2' => "2",
+                    '3' => "3",
+                    '4' => "4",
+                    '5' => "5",
+                    '6' => "6",
+                    '7' => "7",
+                    '8' => "8",
+                    '9' => "9",
+                    _ => return None,
+                })
+            } else {
+                None
+            }
+        }
+        Key::Named(Named::Enter) => Some("enter"),
+        Key::Named(Named::Escape) => Some("escape"),
+        Key::Named(Named::Tab) => Some("tab"),
+        Key::Named(Named::Space) => Some("space"),
+        Key::Named(Named::Backspace) => Some("backspace"),
+        Key::Named(Named::F1) => Some("f1"),
+        Key::Named(Named::F2) => Some("f2"),
+        Key::Named(Named::F3) => Some("f3"),
+        Key::Named(Named::F4) => Some("f4"),
+        Key::Named(Named::F5) => Some("f5"),
+        Key::Named(Named::F6) => Some("f6"),
+        Key::Named(Named::F7) => Some("f7"),
+        Key::Named(Named::F8) => Some("f8"),
+        Key::Named(Named::F9) => Some("f9"),
+        Key::Named(Named::F10) => Some("f10"),
+        Key::Named(Named::F11) => Some("f11"),
+        Key::Named(Named::F12) => Some("f12"),
+        _ => None,
     }
 }
 
@@ -4567,11 +4929,52 @@ mod tests {
     }
 
     #[test]
-    fn ocr_language_input_round_trips_comma_separated_codes() {
-        let parsed = parse_ocr_languages_input("ja-JP, en-US,  fr-FR ,,");
+    fn toggle_ocr_language_adds_and_removes_codes() {
+        let current = vec!["en-US".to_string()];
 
-        assert_eq!(parsed, vec!["ja-JP", "en-US", "fr-FR"]);
-        assert_eq!(format_ocr_languages_input(&parsed), "ja-JP, en-US, fr-FR");
+        let added = toggle_ocr_language(&current, "ja-JP", true);
+        assert_eq!(added, vec!["en-US", "ja-JP"]);
+
+        let unchanged = toggle_ocr_language(&added, "ja-JP", true);
+        assert_eq!(unchanged, added);
+
+        let removed = toggle_ocr_language(&unchanged, "en-US", false);
+        assert_eq!(removed, vec!["ja-JP"]);
+    }
+
+    #[test]
+    fn shortcut_recorder_requires_a_modifier() {
+        let shortcut = shortcut_string_from_keypress(
+            &iced::keyboard::Key::Character("x".into()),
+            iced::keyboard::Modifiers::default(),
+        );
+
+        assert_eq!(shortcut, None);
+    }
+
+    #[test]
+    fn shortcut_recorder_formats_command_shift_character() {
+        let mut modifiers = iced::keyboard::Modifiers::default();
+        modifiers.insert(iced::keyboard::Modifiers::SHIFT);
+        modifiers.insert(iced::keyboard::Modifiers::LOGO);
+
+        let shortcut =
+            shortcut_string_from_keypress(&iced::keyboard::Key::Character("X".into()), modifiers);
+
+        assert_eq!(shortcut.as_deref(), Some("cmd+shift+x"));
+    }
+
+    #[test]
+    fn shortcut_recorder_cancels_on_plain_escape_only() {
+        let escape = iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape);
+        assert!(shortcut_cancelled_by_keypress(
+            &escape,
+            iced::keyboard::Modifiers::default()
+        ));
+
+        let mut modifiers = iced::keyboard::Modifiers::default();
+        modifiers.insert(iced::keyboard::Modifiers::SHIFT);
+        assert!(!shortcut_cancelled_by_keypress(&escape, modifiers));
     }
 
     #[test]
@@ -4688,8 +5091,12 @@ mod tests {
         let id = iced::window::Id::unique();
         app.windows.register(id, WindowKind::Settings);
         app.settings_window_id = Some(id);
+        app.settings_recording_hotkey = true;
+        app.settings_hotkey_error = Some("bad shortcut".into());
         let _ = update(&mut app, Message::WindowClosed(id));
         assert!(app.settings_window_id.is_none());
+        assert!(!app.settings_recording_hotkey);
+        assert!(app.settings_hotkey_error.is_none());
         assert!(app.windows.kind(id).is_none());
     }
 }

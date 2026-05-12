@@ -317,6 +317,19 @@ pub enum Message {
     /// (future) a "Settings" command from elsewhere. Single-instance:
     /// focuses the existing window if one is already open.
     OpenSettingsRequested,
+    /// User clicked the native folder picker button in Settings.
+    SettingsChooseSaveFolderRequested,
+    /// Native folder picker completed. `Ok(None)` means cancelled.
+    SettingsSaveFolderPicked(Result<Option<std::path::PathBuf>, String>),
+    /// User clicked "Record shortcut" in Settings.
+    SettingsStartHotkeyRecording,
+    /// Settings shortcut recorder captured a valid key combination.
+    SettingsHotkeyRecorded(String),
+    /// Settings shortcut recorder captured a key that is not valid as
+    /// a global shortcut.
+    SettingsHotkeyRecordingInvalid,
+    /// Settings shortcut recorder was cancelled or captured an invalid key.
+    SettingsHotkeyRecordingCancelled,
     /// First `view` call after the settings window is opened. Records
     /// the `window::Id` so close + focus paths work.
     SettingsWindowReady(iced::window::Id),
@@ -430,6 +443,12 @@ pub struct App {
     /// `window::Id` of the live settings window, if any. Single
     /// instance — re-opening just refocuses the existing window.
     pub settings_window_id: Option<iced::window::Id>,
+    /// True while Settings is waiting for the next keyboard chord to
+    /// become the global capture hotkey.
+    pub settings_recording_hotkey: bool,
+    /// Short validation message for the current hotkey recording
+    /// attempt, shown inline in Settings.
+    pub settings_hotkey_error: Option<String>,
     /// `window::Id` of the live command-line setup instructions window.
     pub cli_tools_window_id: Option<iced::window::Id>,
     /// Copy-status text shown in the command-line setup window.
@@ -529,6 +548,8 @@ impl App {
             history_search: String::new(),
             preferences_path: None,
             settings_window_id: None,
+            settings_recording_hotkey: false,
+            settings_hotkey_error: None,
             cli_tools_window_id: None,
             cli_tools_status: None,
         }
