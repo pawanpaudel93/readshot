@@ -283,12 +283,11 @@ fn history_window_settings() -> window::Settings {
     }
 }
 
-/// Window settings for the preferences window. Smaller than history;
-/// just two pickers in v1 with room for a few more rows.
+/// Window settings for the preferences window.
 fn settings_window_settings() -> window::Settings {
     window::Settings {
-        size: iced::Size::new(540.0, 360.0),
-        min_size: Some(iced::Size::new(420.0, 280.0)),
+        size: iced::Size::new(720.0, 640.0),
+        min_size: Some(iced::Size::new(520.0, 480.0)),
         position: window::Position::Centered,
         resizable: true,
         decorations: true,
@@ -3355,7 +3354,7 @@ fn settings_view(state: &App) -> Element<'_, Message> {
     .spacing(20)
     .max_width(440);
 
-    container(body)
+    container(scrollable(body).height(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(28)
