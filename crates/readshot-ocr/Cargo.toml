@@ -21,6 +21,8 @@ directories = { workspace = true }
 image = { workspace = true }
 readshot-core = { path = "../readshot-core" }
 readshot-test-fixtures = { path = "../readshot-test-fixtures" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

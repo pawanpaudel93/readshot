@@ -1,18 +1,20 @@
 //! macOS OCR — Apple Vision via `objc2-vision`.
 //!
 //! `VNRecognizeTextRequest` is Apple's primary text-recognition API on
-//! macOS 14+. We feed it the captured image as PNG-encoded bytes
-//! through `VNImageRequestHandler::initWithData:options:`, which lets
-//! Vision pick whichever pixel format it prefers internally and avoids
-//! us hand-rolling a `CGImageRef` from raw RGBA pointers.
+//! macOS 14+. Rust still owns the public backend contract, but the
+//! request execution goes through a small Swift shim so Vision receives
+//! the same native overlay call shape as Apple's working examples.
 //!
 //! ## Recognition tuning
 //!
 //! * `recognitionLevel = .accurate` — the user explicitly invoked OCR;
 //!   speed-over-accuracy isn't the right trade.
 //! * `usesLanguageCorrection` — driven by [`OCRRequest::use_language_correction`].
+//! * `automaticallyDetectsLanguage` — enabled when no preferred languages
+//!   are supplied, so multilingual screenshots use Vision's language model
+//!   selection instead of the default Latin-biased behavior.
 //! * `recognitionLanguages` — set from [`OCRRequest::languages`] when
-//!   non-empty; otherwise Vision's default ordering applies.
+//!   non-empty; explicit languages are treated as a user override.
 //!
 //! ## Confidence
 //!
@@ -23,20 +25,15 @@
 
 use async_trait::async_trait;
 use image::RgbaImage;
-use objc2::rc::Retained;
-use objc2::AnyThread;
-use objc2_foundation::{NSArray, NSData, NSDictionary, NSString};
-use objc2_vision::{
-    VNImageOption, VNImageRequestHandler, VNRecognizeTextRequest, VNRecognizedTextObservation,
-    VNRequest, VNRequestTextRecognitionLevel,
-};
+use objc2_vision::{VNRecognizeTextRequest, VNRequestTextRecognitionLevel};
 use readshot_core::error::OCRError;
+use readshot_core::ocr_layout::RecognizedLine;
+use serde::Deserialize;
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_int};
+use std::ptr;
 
 use crate::{OCREngine, OCRRequest, OCRResult};
-
-/// We only ever need the highest-confidence candidate per observation.
-/// Vision allows up to 10; asking for 1 keeps the call cheap.
-const TOP_CANDIDATES_PER_LINE: usize = 1;
 
 pub struct AppleVisionEngine;
 
@@ -80,119 +77,120 @@ fn run_request(
     languages: &[String],
     use_language_correction: bool,
 ) -> Result<OCRResult, OCRError> {
-    // SAFETY: we live inside one synchronous function, hold no shared
-    // state across `await` points, and only call APIs documented as
-    // thread-safe by Apple (Vision's request + handler can be created
-    // and used off the main thread).
-    unsafe {
-        let ns_data = NSData::dataWithBytes_length(
-            png_bytes.as_ptr() as *mut std::ffi::c_void,
-            png_bytes.len(),
-        );
+    recognise_with_native_vision(&png_bytes, languages, use_language_correction)
+}
 
-        let request = VNRecognizeTextRequest::new();
-        request.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
-        request.setUsesLanguageCorrection(use_language_correction);
+#[derive(Deserialize)]
+struct VisionPayload {
+    text: String,
+    average_confidence: f32,
+    lines: Vec<VisionLine>,
+}
 
-        if !languages.is_empty() {
-            let lang_strings: Vec<Retained<NSString>> =
-                languages.iter().map(|s| NSString::from_str(s)).collect();
-            let lang_refs: Vec<&NSString> = lang_strings.iter().map(|s| s.as_ref()).collect();
-            let lang_array: Retained<NSArray<NSString>> = NSArray::from_slice(&lang_refs);
-            request.setRecognitionLanguages(&lang_array);
+#[derive(Deserialize)]
+struct VisionLine {
+    text: String,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+impl From<VisionPayload> for OCRResult {
+    fn from(payload: VisionPayload) -> Self {
+        OCRResult {
+            text: payload.text,
+            average_confidence: payload.average_confidence,
+            lines: payload
+                .lines
+                .into_iter()
+                .map(|line| RecognizedLine {
+                    text: line.text,
+                    x: line.x,
+                    y: line.y,
+                    w: line.w,
+                    h: line.h,
+                })
+                .collect(),
         }
-
-        // Vision's handler initWithData:options: requires an options
-        // dictionary; an empty one is fine for our use case.
-        let empty_options: Retained<NSDictionary<VNImageOption, objc2::runtime::AnyObject>> =
-            NSDictionary::new();
-        let handler = VNImageRequestHandler::initWithData_options(
-            VNImageRequestHandler::alloc(),
-            &ns_data,
-            &empty_options,
-        );
-
-        // The performRequests:error: API takes NSArray<VNRequest>. Our
-        // request is a subclass; cast through the supertype.
-        let request_super: Retained<VNRequest> = Retained::cast_unchecked(request.clone());
-        let request_refs: Vec<&VNRequest> = vec![&*request_super];
-        let request_array: Retained<NSArray<VNRequest>> = NSArray::from_slice(&request_refs);
-
-        handler
-            .performRequests_error(&request_array)
-            .map_err(|e| OCRError::Backend(format!("Vision performRequests: {e:?}")))?;
-
-        let observations = match request.results() {
-            Some(r) => r,
-            None => return Ok(OCRResult::empty()),
-        };
-
-        Ok(extract_text(&observations))
     }
 }
 
-unsafe fn extract_text(observations: &NSArray<VNRecognizedTextObservation>) -> OCRResult {
-    use readshot_core::ocr_layout::RecognizedLine;
+unsafe extern "C" {
+    fn readshot_vision_recognize_png(
+        png_bytes: *const u8,
+        png_len: usize,
+        languages: *const *const c_char,
+        language_count: usize,
+        use_language_correction: bool,
+        out_json: *mut *mut c_char,
+        out_error: *mut *mut c_char,
+    ) -> c_int;
 
-    let mut text_lines: Vec<String> = Vec::new();
-    let mut positioned: Vec<RecognizedLine> = Vec::new();
-    let mut total_confidence: f64 = 0.0;
-    let mut counted: u32 = 0;
+    fn readshot_vision_free_string(string: *mut c_char);
+}
 
-    for observation in observations.iter() {
-        let candidates = observation.topCandidates(TOP_CANDIDATES_PER_LINE as _);
-        if let Some(top) = candidates.iter().next() {
-            let line = top.string().to_string();
-            if !line.is_empty() {
-                total_confidence += top.confidence() as f64;
-                counted += 1;
-                text_lines.push(line.clone());
+fn recognise_with_native_vision(
+    png_bytes: &[u8],
+    languages: &[String],
+    use_language_correction: bool,
+) -> Result<OCRResult, OCRError> {
+    let language_strings: Vec<CString> = languages
+        .iter()
+        .map(|language| {
+            CString::new(language.as_str()).map_err(|_| {
+                OCRError::Backend(format!("invalid OCR language contains NUL: {language:?}"))
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    let language_ptrs: Vec<*const c_char> = language_strings
+        .iter()
+        .map(|language| language.as_ptr())
+        .collect();
 
-                // Vision's bounding box is normalised [0..1] with the
-                // origin at the *bottom-left* of the image. Flip Y so
-                // every backend feeds top-left-origin boxes into
-                // `RecognizedLine`, which is what `ocr_layout` expects.
-                let bbox = observation.boundingBox();
-                let x = bbox.origin.x as f32;
-                let bottom_y = bbox.origin.y as f32;
-                let w = bbox.size.width as f32;
-                let h = bbox.size.height as f32;
-                let top_y = (1.0 - bottom_y - h).clamp(0.0, 1.0);
-                positioned.push(RecognizedLine {
-                    text: line,
-                    x,
-                    y: top_y,
-                    w,
-                    h,
-                });
-            }
-        }
-    }
-
-    let text = text_lines.join("\n");
-    let average_confidence = if counted > 0 {
-        (total_confidence / counted as f64) as f32
+    let mut out_json: *mut c_char = ptr::null_mut();
+    let mut out_error: *mut c_char = ptr::null_mut();
+    let language_ptr = if language_ptrs.is_empty() {
+        ptr::null()
     } else {
-        0.0
+        language_ptrs.as_ptr()
     };
-    OCRResult {
-        text,
-        average_confidence,
-        lines: positioned,
+
+    let status = unsafe {
+        readshot_vision_recognize_png(
+            png_bytes.as_ptr(),
+            png_bytes.len(),
+            language_ptr,
+            language_ptrs.len(),
+            use_language_correction,
+            &mut out_json,
+            &mut out_error,
+        )
+    };
+
+    if status != 0 {
+        let message = unsafe { take_vision_string(out_error) }
+            .unwrap_or_else(|| "Vision OCR failed without an error message".to_string());
+        return Err(OCRError::Backend(message));
     }
+
+    let json = unsafe { take_vision_string(out_json) }
+        .ok_or_else(|| OCRError::Backend("Vision OCR returned no result payload".to_string()))?;
+    let payload: VisionPayload = serde_json::from_str(&json)
+        .map_err(|e| OCRError::Backend(format!("Vision OCR result parse: {e}")))?;
+    Ok(payload.into())
+}
+
+unsafe fn take_vision_string(ptr: *mut c_char) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let value = CStr::from_ptr(ptr).to_string_lossy().into_owned();
+    readshot_vision_free_string(ptr);
+    Some(value)
 }
 
 fn encode_png(img: &RgbaImage) -> Result<Vec<u8>, OCRError> {
     readshot_core::encode_png(img)
         .map_err(|e| OCRError::Backend(format!("PNG encode for Vision: {e}")))
-}
-
-impl OCRResult {
-    fn empty() -> Self {
-        Self {
-            text: String::new(),
-            average_confidence: 0.0,
-            lines: Vec::new(),
-        }
-    }
 }

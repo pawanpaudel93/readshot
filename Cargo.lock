@@ -4613,6 +4613,8 @@ dependencies = [
  "readshot-core",
  "readshot-test-fixtures",
  "rten",
+ "serde",
+ "serde_json",
  "tokio",
  "windows 0.62.2",
 ]

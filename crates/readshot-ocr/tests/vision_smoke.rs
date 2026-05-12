@@ -88,6 +88,27 @@ async fn recognises_rendered_text() {
 }
 
 #[tokio::test]
+async fn recognises_rendered_text_with_automatic_language_detection() {
+    let img = render_test_image("Hello, Readshot");
+    let engine = AppleVisionEngine::new();
+    let result = engine
+        .recognise(OCRRequest {
+            image: img,
+            languages: Vec::new(),
+            use_language_correction: true,
+        })
+        .await
+        .expect("Vision recognise should succeed with automatic language detection");
+
+    let recognised = result.text.to_lowercase();
+    assert!(
+        recognised.contains("hello") || recognised.contains("readshot"),
+        "expected recognised text to mention `hello` or `readshot`, got: {:?}",
+        result.text,
+    );
+}
+
+#[tokio::test]
 async fn empty_white_image_returns_empty_text_not_error() {
     // Spec §3.16 requires no-text to be a *successful* result, not an
     // error, so the MCP server can return `{ text: "" }` to agents.
