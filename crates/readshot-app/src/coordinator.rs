@@ -99,6 +99,10 @@ impl CaptureCoordinator {
         Ok(readshot_core::ocr_text::clean(&text))
     }
 
+    pub fn supported_languages(&self) -> Vec<String> {
+        self.ocr.supported_languages()
+    }
+
     /// List every persisted capture, newest first. `Ok(vec![])` when
     /// no history store is wired.
     pub fn history_list(&self) -> Result<Vec<CaptureRecord>, readshot_core::HistoryError> {

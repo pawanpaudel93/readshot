@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::PreferencesError;
 
 /// Bumped on every breaking schema change.
-pub const PREFERENCES_SCHEMA_VERSION: u32 = 1;
+pub const PREFERENCES_SCHEMA_VERSION: u32 = 2;
 
 /// Image format chosen when the user invokes Save.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,7 +136,7 @@ impl Default for Preferences {
             filename_template: "Screenshot {YYYY-MM-DD at HH.mm.ss}".to_string(),
             default_format: ExportFormat::Png,
             history_retention: HistoryRetention::Off,
-            ocr_languages: vec!["en".to_string()],
+            ocr_languages: Vec::new(),
             ocr_engine_choice: OcrEngineChoice::Native,
             launch_at_login: false,
             update_channel: UpdateChannel::Stable,
@@ -183,10 +183,12 @@ impl Preferences {
         Ok(())
     }
 
-    /// Apply schema migrations in place. Currently a no-op beyond
-    /// stamping the version forward; future migrations land here as
-    /// `match` arms on the incoming `schema_version`.
+    /// Apply schema migrations in place.
     fn migrate(&mut self) {
+        let original_version = self.schema_version;
+        if original_version < 2 && self.ocr_languages == ["en"] {
+            self.ocr_languages.clear();
+        }
         if self.schema_version < PREFERENCES_SCHEMA_VERSION {
             self.schema_version = PREFERENCES_SCHEMA_VERSION;
         }
@@ -247,6 +249,30 @@ mod tests {
         let prefs = Preferences::load(&path).unwrap();
         assert_eq!(prefs.schema_version, PREFERENCES_SCHEMA_VERSION);
         assert_eq!(prefs.capture_hotkey, "f1");
+    }
+
+    #[test]
+    fn default_ocr_languages_uses_engine_automatic_detection() {
+        let prefs = Preferences::default();
+        assert!(prefs.ocr_languages.is_empty());
+    }
+
+    #[test]
+    fn migration_clears_legacy_english_ocr_default() {
+        let (_dir, path) = temp_path();
+        std::fs::write(
+            &path,
+            r#"
+schema_version = 1
+ocr_languages = ["en"]
+"#,
+        )
+        .unwrap();
+
+        let prefs = Preferences::load(&path).unwrap();
+
+        assert_eq!(prefs.schema_version, PREFERENCES_SCHEMA_VERSION);
+        assert!(prefs.ocr_languages.is_empty());
     }
 
     #[test]

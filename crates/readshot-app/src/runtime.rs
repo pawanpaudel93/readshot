@@ -872,6 +872,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         image.clone(),
                         history_record.clone(),
                         state.preferences.history_retention,
+                        state.preferences.clone(),
                     );
                     let intent_task = match intent {
                         crate::app::CaptureIntent::Editor => {
@@ -899,13 +900,16 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         }
                         crate::app::CaptureIntent::CopyTextDirect => {
                             let coord = state.coordinator.clone();
-                            Task::perform(ocr_then_copy(coord, image), |r| {
+                            let prefs = state.preferences.clone();
+                            Task::perform(ocr_then_copy(coord, image, prefs), |r| {
                                 Message::OverlayCopyTextDone(r.map_err(|e| e.to_string()))
                             })
                         }
                         crate::app::CaptureIntent::SaveDirect => {
-                            let seed = state.last_save_dir.clone();
-                            Task::perform(save_image_via_picker(image, seed), |r| {
+                            let seed =
+                                preferred_save_seed_dir(&state.preferences, &state.last_save_dir);
+                            let template = state.preferences.filename_template.clone();
+                            Task::perform(save_image_via_picker(image, seed, template), |r| {
                                 Message::OverlaySaveDone(r.map_err(|e| e.to_string()))
                             })
                         }
@@ -1237,8 +1241,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             ed.busy = true;
             ed.status = Some("Choose a save location…".into());
             let img = ed.model.flatten();
-            let seed = state.last_save_dir.clone();
-            Task::perform(save_image_via_picker(img, seed), |r| {
+            let seed = preferred_save_seed_dir(&state.preferences, &state.last_save_dir);
+            let template = state.preferences.filename_template.clone();
+            Task::perform(save_image_via_picker(img, seed, template), |r| {
                 Message::EditorSaved(r.map_err(|e| e.to_string()))
             })
         }
@@ -1292,7 +1297,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             ed.status = Some("Recognising text…".into());
             let img = ed.model.flatten();
             let coord = state.coordinator.clone();
-            Task::perform(ocr_then_copy(coord, img), |r| {
+            let prefs = state.preferences.clone();
+            Task::perform(ocr_then_copy(coord, img, prefs), |r| {
                 Message::EditorCopyTextDone(r.map_err(|e| e.to_string()))
             })
         }
@@ -3284,15 +3290,104 @@ fn settings_view(state: &App) -> Element<'_, Message> {
         .label("Open Readshot at login")
         .on_toggle(|v| Message::Settings(SettingsMessage::SetLaunchAtLogin(v)));
 
-    let body = column![header, retention_row, hotkey_row, startup_row]
-        .spacing(20)
-        .max_width(440);
+    let save_folder_value = state.preferences.save_folder.to_string_lossy().to_string();
+    let save_folder_row = column![
+        text("Default save folder").size(13),
+        text_input("Use system default", &save_folder_value)
+            .on_input(|s| Message::Settings(SettingsMessage::SetSaveFolder(PathBuf::from(s))))
+            .padding([6, 10]),
+        text("Used as the starting folder for Save. Leave empty for the platform default.")
+            .size(11)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+    ]
+    .spacing(6);
+
+    let filename_row = column![
+        text("Filename template").size(13),
+        text_input(
+            "Screenshot {YYYY-MM-DD at HH.mm.ss}",
+            &state.preferences.filename_template,
+        )
+        .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
+        .padding([6, 10]),
+        text(
+            "Supports {YYYY-MM-DD at HH.mm.ss}, {YYYY-MM-DD}, {HH.mm.ss}, {YYYY}, and {timestamp}."
+        )
+        .size(11)
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+    ]
+    .spacing(6);
+
+    let ocr_language_value = format_ocr_languages_input(&state.preferences.ocr_languages);
+    let supported_languages = state.coordinator.supported_languages();
+    let supported_language_hint = if supported_languages.is_empty() {
+        "Automatic language detection. Preferred languages are optional.".to_string()
+    } else {
+        format!(
+            "Leave empty for automatic detection. Supported here: {}",
+            supported_languages_preview(&supported_languages)
+        )
+    };
+    let ocr_languages_row = column![
+        text("Preferred OCR languages").size(13),
+        text_input("Automatic", &ocr_language_value)
+            .on_input(|s| {
+                Message::Settings(SettingsMessage::SetOcrLanguages(parse_ocr_languages_input(
+                    &s,
+                )))
+            })
+            .padding([6, 10]),
+        text(supported_language_hint)
+            .size(11)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+    ]
+    .spacing(6);
+
+    let body = column![
+        header,
+        retention_row,
+        hotkey_row,
+        save_folder_row,
+        filename_row,
+        ocr_languages_row,
+        startup_row
+    ]
+    .spacing(20)
+    .max_width(440);
 
     container(body)
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(28)
         .into()
+}
+
+fn parse_ocr_languages_input(input: &str) -> Vec<String> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|language| !language.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn format_ocr_languages_input(languages: &[String]) -> String {
+    languages.join(", ")
+}
+
+fn supported_languages_preview(languages: &[String]) -> String {
+    const MAX_LANGUAGES: usize = 8;
+    let shown = languages
+        .iter()
+        .take(MAX_LANGUAGES)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if languages.len() > MAX_LANGUAGES {
+        format!("{shown}, …")
+    } else {
+        shown
+    }
 }
 
 fn welcome_view(state: &App) -> Element<'_, Message> {
@@ -3579,6 +3674,7 @@ fn persist_history_task(
     img: image::RgbaImage,
     record: Option<readshot_core::CaptureRecord>,
     policy: readshot_core::HistoryRetention,
+    preferences: Preferences,
 ) -> Task<Message> {
     Task::perform(
         async move {
@@ -3597,11 +3693,7 @@ fn persist_history_task(
             // Background OCR — fills `ocr_text` so the search index
             // has something to match. Failure is logged but
             // non-fatal: the record is still useful without text.
-            let ocr_req = readshot_ocr::OCRRequest {
-                image: img,
-                languages: Vec::new(),
-                use_language_correction: true,
-            };
+            let ocr_req = ocr_request_for_image(img, &preferences);
             match coord.recognise(ocr_req).await {
                 Ok(text) => {
                     if let Ok(records) = coord.history_list() {
@@ -3664,9 +3756,9 @@ fn save_to_dir(img: &image::RgbaImage, dir: &Path) -> Result<PathBuf, CaptureRun
 async fn save_image_via_picker(
     img: image::RgbaImage,
     seed_dir: Option<PathBuf>,
+    filename_template: String,
 ) -> Result<Option<PathBuf>, CaptureRunError> {
-    let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string();
-    let default_name = format!("Readshot-{stamp}.png");
+    let default_name = default_save_filename(&filename_template, chrono::Utc::now());
     let initial_dir = seed_dir
         .filter(|p| p.is_dir())
         .or_else(|| directories::UserDirs::new().and_then(|d| d.desktop_dir().map(PathBuf::from)))
@@ -3691,6 +3783,21 @@ async fn save_image_via_picker(
     }
     readshot_core::save_png(&img, &path)?;
     Ok(Some(path))
+}
+
+fn preferred_save_seed_dir(
+    prefs: &Preferences,
+    last_save_dir: &Option<PathBuf>,
+) -> Option<PathBuf> {
+    last_save_dir
+        .clone()
+        .or_else(|| (!prefs.save_folder.as_os_str().is_empty()).then(|| prefs.save_folder.clone()))
+}
+
+fn default_save_filename(template: &str, when: chrono::DateTime<chrono::Utc>) -> String {
+    let mut filename = readshot_core::expand_filename_template(template, when);
+    filename.push_str(".png");
+    filename
 }
 
 /// Push an RGBA image to the system clipboard. Runs the arboard
@@ -3728,19 +3835,27 @@ async fn copy_text_to_clipboard(text: String) -> Result<(), ClipboardError> {
 async fn ocr_then_copy(
     coord: CaptureCoordinator,
     img: image::RgbaImage,
+    preferences: Preferences,
 ) -> Result<String, OcrCopyError> {
     let result = coord
-        .recognise(readshot_ocr::OCRRequest {
-            image: img,
-            languages: Vec::new(),
-            use_language_correction: true,
-        })
+        .recognise(ocr_request_for_image(img, &preferences))
         .await?;
     let text = result;
     if !text.is_empty() {
         copy_text_to_clipboard(text.clone()).await?;
     }
     Ok(text)
+}
+
+fn ocr_request_for_image(
+    image: image::RgbaImage,
+    preferences: &Preferences,
+) -> readshot_ocr::OCRRequest {
+    readshot_ocr::OCRRequest {
+        image,
+        languages: preferences.ocr_languages.clone(),
+        use_language_correction: true,
+    }
 }
 
 fn cli_tools_setup_commands(shell: crate::cli_tools::Shell) -> String {
@@ -4383,6 +4498,81 @@ mod tests {
             ..Preferences::default()
         };
         assert!(register_default_hotkey(&prefs).is_none());
+    }
+
+    #[test]
+    fn ocr_request_uses_preferred_languages_from_preferences() {
+        let prefs = Preferences {
+            ocr_languages: vec!["ja-JP".into(), "en-US".into()],
+            ..Preferences::default()
+        };
+        let img = image::RgbaImage::new(1, 1);
+
+        let req = ocr_request_for_image(img, &prefs);
+
+        assert_eq!(req.languages, vec!["ja-JP", "en-US"]);
+        assert!(req.use_language_correction);
+    }
+
+    #[test]
+    fn ocr_request_keeps_empty_languages_for_automatic_detection() {
+        let prefs = Preferences::default();
+        let img = image::RgbaImage::new(1, 1);
+
+        let req = ocr_request_for_image(img, &prefs);
+
+        assert!(req.languages.is_empty());
+    }
+
+    #[test]
+    fn default_save_filename_expands_template_as_png() {
+        let when = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+
+        let filename = default_save_filename("Capture {YYYY}-{timestamp}", when);
+
+        assert_eq!(filename, "Capture 2023-1700000000.png");
+    }
+
+    #[test]
+    fn preferred_save_seed_uses_recent_directory_before_saved_preference() {
+        let prefs = Preferences {
+            save_folder: PathBuf::from("/configured"),
+            ..Preferences::default()
+        };
+        let last = Some(PathBuf::from("/recent"));
+
+        let seed = preferred_save_seed_dir(&prefs, &last);
+
+        assert_eq!(seed, Some(PathBuf::from("/recent")));
+    }
+
+    #[test]
+    fn preferred_save_seed_falls_back_to_configured_folder() {
+        let prefs = Preferences {
+            save_folder: PathBuf::from("/configured"),
+            ..Preferences::default()
+        };
+
+        let seed = preferred_save_seed_dir(&prefs, &None);
+
+        assert_eq!(seed, Some(PathBuf::from("/configured")));
+    }
+
+    #[test]
+    fn preferred_save_seed_ignores_empty_configured_folder() {
+        let prefs = Preferences::default();
+
+        let seed = preferred_save_seed_dir(&prefs, &None);
+
+        assert_eq!(seed, None);
+    }
+
+    #[test]
+    fn ocr_language_input_round_trips_comma_separated_codes() {
+        let parsed = parse_ocr_languages_input("ja-JP, en-US,  fr-FR ,,");
+
+        assert_eq!(parsed, vec!["ja-JP", "en-US", "fr-FR"]);
+        assert_eq!(format_ocr_languages_input(&parsed), "ja-JP, en-US, fr-FR");
     }
 
     #[test]
