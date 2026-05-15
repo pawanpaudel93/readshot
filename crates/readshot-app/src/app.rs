@@ -218,12 +218,20 @@ pub enum Message {
     HistoryOpenInEditorReady(Result<(image::RgbaImage, readshot_core::CaptureRecord), String>),
     /// Per-row "Copy Image" — load PNG, decode, write to clipboard.
     HistoryCopyImage(readshot_core::Uuid),
+    /// Per-row image clipboard write completed.
+    HistoryCopyImageDone(Result<(), String>),
     /// Per-row "Reveal" — ask the OS file manager to select the PNG
     /// or open its containing folder.
     HistoryReveal(readshot_core::Uuid),
     /// Per-row "Copy Text" — read the cached `ocr_text` and write it
     /// to the clipboard. Synchronous (no OCR re-run).
     HistoryCopyText(readshot_core::Uuid),
+    /// Per-row OCR-text clipboard write completed.
+    HistoryCopyTextDone(Result<String, String>),
+    /// Copy OCR text from every currently visible history row.
+    HistoryCopyVisibleTextRequested,
+    /// Bulk OCR-text clipboard write completed.
+    HistoryCopyVisibleTextDone(Result<usize, String>),
     /// Per-row "Pin" — load PNG, decode, open as a borderless
     /// always-on-top pin window.
     HistoryPin(readshot_core::Uuid),

@@ -1171,8 +1171,15 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         .await
                         .map_err(|e| e.to_string())
                 },
-                Message::OverlayCopyDone,
+                Message::HistoryCopyImageDone,
             )
+        }
+        Message::HistoryCopyImageDone(result) => {
+            state.history_status = Some(match result {
+                Ok(()) => "Copied image to clipboard.".into(),
+                Err(e) => format!("Copy image failed: {e}"),
+            });
+            Task::none()
         }
         Message::HistoryCopyText(id) => {
             match state
@@ -1185,12 +1192,12 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     let text = text.clone();
                     Task::perform(
                         async move {
-                            use arboard::Clipboard;
-                            let mut cb = Clipboard::new().map_err(|e| e.to_string())?;
-                            cb.set_text(text.clone()).map_err(|e| e.to_string())?;
+                            copy_text_to_clipboard(text.clone())
+                                .await
+                                .map_err(|e| e.to_string())?;
                             Ok(text)
                         },
-                        Message::OverlayCopyTextDone,
+                        Message::HistoryCopyTextDone,
                     )
                 }
                 _ => {
@@ -1198,6 +1205,47 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     Task::none()
                 }
             }
+        }
+        Message::HistoryCopyTextDone(result) => {
+            state.history_status = Some(match result {
+                Ok(text) if text.is_empty() => "No OCR text on this capture yet.".into(),
+                Ok(text) => {
+                    let n = text.chars().count();
+                    format!(
+                        "Copied {n} character{} of text.",
+                        if n == 1 { "" } else { "s" }
+                    )
+                }
+                Err(e) => format!("Copy text failed: {e}"),
+            });
+            Task::none()
+        }
+        Message::HistoryCopyVisibleTextRequested => {
+            let text = visible_history_text(&state.history_records, &state.history_search);
+            if text.trim().is_empty() {
+                state.history_status = Some("No OCR text in the visible captures.".into());
+                return Task::none();
+            }
+            let count = visible_history_text_count(&state.history_records, &state.history_search);
+            Task::perform(
+                async move {
+                    copy_text_to_clipboard(text)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(count)
+                },
+                Message::HistoryCopyVisibleTextDone,
+            )
+        }
+        Message::HistoryCopyVisibleTextDone(result) => {
+            state.history_status = Some(match result {
+                Ok(count) => format!(
+                    "Copied OCR text from {count} capture{}.",
+                    if count == 1 { "" } else { "s" }
+                ),
+                Err(e) => format!("Copy visible text failed: {e}"),
+            });
+            Task::none()
         }
         Message::HistoryPin(id) => {
             let Some(path) = state
@@ -1977,7 +2025,20 @@ fn history_view(state: &App) -> Element<'_, Message> {
             b
         }
     };
-    let search_row = row![search_box, clear_button]
+    let has_visible_text = visible.iter().any(|r| {
+        r.ocr_text
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+    });
+    let copy_visible_button = {
+        let b = button(text("Copy Visible Text").size(12)).padding([8, 10]);
+        if has_visible_text {
+            b.on_press(Message::HistoryCopyVisibleTextRequested)
+        } else {
+            b
+        }
+    };
+    let search_row = row![search_box, copy_visible_button, clear_button]
         .spacing(8)
         .align_y(Alignment::Center);
     let header = container(
@@ -2168,6 +2229,16 @@ fn record_matches(record: &readshot_core::CaptureRecord, q: &str) -> bool {
             return true;
         }
     }
+    if record.display_id.to_lowercase().contains(q) {
+        return true;
+    }
+    let dims = format!(
+        "{}x{} {} {}",
+        record.width_px, record.height_px, record.width_px, record.height_px
+    );
+    if dims.contains(q) {
+        return true;
+    }
     let stamp = record
         .captured_at
         .with_timezone(&chrono::Local)
@@ -2175,6 +2246,31 @@ fn record_matches(record: &readshot_core::CaptureRecord, q: &str) -> bool {
         .to_string()
         .to_lowercase();
     stamp.contains(q)
+}
+
+fn visible_history_text(records: &[readshot_core::CaptureRecord], query: &str) -> String {
+    let q = query.trim().to_lowercase();
+    records
+        .iter()
+        .filter(|r| q.is_empty() || record_matches(r, &q))
+        .filter_map(|r| r.ocr_text.as_deref())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn visible_history_text_count(records: &[readshot_core::CaptureRecord], query: &str) -> usize {
+    let q = query.trim().to_lowercase();
+    records
+        .iter()
+        .filter(|r| q.is_empty() || record_matches(r, &q))
+        .filter(|r| {
+            r.ocr_text
+                .as_deref()
+                .is_some_and(|text| !text.trim().is_empty())
+        })
+        .count()
 }
 
 /// Load + decode a PNG file off the main thread so a multi-MB Retina
@@ -3485,9 +3581,27 @@ fn settings_view(state: &App) -> Element<'_, Message> {
         state.preferences.save_folder.display().to_string()
     };
     let filename_template = state.preferences.filename_template.clone();
+    let permission_status = state.coordinator.pre_capture_gate();
+    let (permission_title, permission_hint) = permission_settings_summary(permission_status);
 
     let history_retention = state.preferences.history_retention;
     let settings_recording_hotkey = state.settings_recording_hotkey;
+    let permission_control: Element<'_, Message> = {
+        let status = column![
+            text(permission_title).size(13),
+            text(permission_hint).size(11).color(settings_muted_text()),
+        ]
+        .spacing(6)
+        .width(Length::Fill);
+        let mut content = row![status].spacing(10).align_y(Alignment::Center);
+        if !matches!(permission_status, PermissionStatus::NotApplicable) {
+            content = content.push(
+                button(text("Open Settings")).on_press(Message::OpenPermissionSettingsRequested),
+            );
+        }
+        content.into()
+    };
+    let permission_section = settings_section("Permissions", "Capture access", permission_control);
     let capture_section = settings_section(
         "Capture",
         "Shortcut and history",
@@ -3618,9 +3732,15 @@ fn settings_view(state: &App) -> Element<'_, Message> {
         column![startup_row, reset_controls].spacing(12).into(),
     );
 
-    let body = column![header, capture_section, files_section, app_section,]
-        .spacing(16)
-        .max_width(660);
+    let body = column![
+        header,
+        permission_section,
+        capture_section,
+        files_section,
+        app_section,
+    ]
+    .spacing(16)
+    .max_width(660);
 
     container(
         scrollable(body)
@@ -3643,12 +3763,24 @@ fn settings_section<'a>(
 ) -> Element<'a, Message> {
     container(
         column![
-            row![
-                text(title).size(16),
-                Space::new().width(Length::Fill),
-                text(subtitle).size(11).color(settings_muted_text()),
-            ]
-            .align_y(Alignment::Center),
+            responsive(move |available| {
+                if available.width < 420.0 {
+                    column![
+                        text(title).size(16),
+                        text(subtitle).size(11).color(settings_muted_text()),
+                    ]
+                    .spacing(3)
+                    .into()
+                } else {
+                    row![
+                        text(title).size(16),
+                        Space::new().width(Length::Fill),
+                        text(subtitle).size(11).color(settings_muted_text()),
+                    ]
+                    .align_y(Alignment::Center)
+                    .into()
+                }
+            }),
             content,
         ]
         .spacing(14),
@@ -3721,6 +3853,23 @@ fn settings_section_style(theme: &Theme) -> iced::widget::container::Style {
 
 fn settings_muted_text() -> Color {
     Color::from_rgba(1.0, 1.0, 1.0, 0.56)
+}
+
+fn permission_settings_summary(status: PermissionStatus) -> (&'static str, &'static str) {
+    match status {
+        PermissionStatus::Granted => (
+            "Screen Recording is allowed",
+            "Readshot can open the capture overlay and recognise text from screenshots.",
+        ),
+        PermissionStatus::Denied => (
+            "Screen Recording needs attention",
+            "Enable Readshot in macOS System Settings, then restart the app if macOS asks.",
+        ),
+        PermissionStatus::NotApplicable => (
+            "No extra capture permission required",
+            "This platform does not need a separate Screen Recording grant.",
+        ),
+    }
 }
 
 fn slim_scrollbar() -> iced::widget::scrollable::Scrollbar {
@@ -4742,6 +4891,61 @@ mod tests {
             .format("%Y-%m")
             .to_string();
         assert!(record_matches(&r, &local.to_lowercase()));
+    }
+
+    #[test]
+    fn record_matches_finds_display_id_and_dimensions() {
+        let r = readshot_core::CaptureRecord::new(chrono::Utc::now(), 1440, 900, "built-in-retina");
+
+        assert!(record_matches(&r, "retina"));
+        assert!(record_matches(&r, "1440x900"));
+        assert!(record_matches(&r, "900"));
+        assert!(!record_matches(&r, "external"));
+    }
+
+    #[test]
+    fn visible_history_text_uses_current_search_filter() {
+        let mut first = readshot_core::CaptureRecord::new(chrono::Utc::now(), 100, 100, "primary");
+        first.ocr_text = Some("alpha receipt".into());
+        let mut second =
+            readshot_core::CaptureRecord::new(chrono::Utc::now(), 100, 100, "secondary");
+        second.ocr_text = Some("beta invoice".into());
+
+        let records = vec![first, second];
+
+        assert_eq!(visible_history_text(&records, "invoice"), "beta invoice");
+        assert_eq!(visible_history_text_count(&records, "invoice"), 1);
+        assert_eq!(
+            visible_history_text(&records, ""),
+            "alpha receipt\n\nbeta invoice"
+        );
+    }
+
+    #[test]
+    fn history_copy_completion_updates_history_status() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+
+        let _ = update(&mut app, Message::HistoryCopyImageDone(Ok(())));
+
+        assert_eq!(
+            app.history_status.as_deref(),
+            Some("Copied image to clipboard.")
+        );
+
+        let _ = update(&mut app, Message::HistoryCopyTextDone(Ok("hello".into())));
+
+        assert_eq!(
+            app.history_status.as_deref(),
+            Some("Copied 5 characters of text.")
+        );
+    }
+
+    #[test]
+    fn permission_settings_summary_explains_denied_state() {
+        let (title, hint) = permission_settings_summary(PermissionStatus::Denied);
+
+        assert!(title.contains("needs attention"));
+        assert!(hint.contains("System Settings"));
     }
 
     #[test]
