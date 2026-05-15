@@ -20,7 +20,9 @@
 //! width — without it the user has no idea what they're about to
 //! commit.
 
-use iced::widget::canvas::{self, Event, Frame, Geometry, LineCap, LineJoin, Path, Stroke};
+use iced::widget::canvas::{
+    self, Event, Frame, Geometry, LineCap, LineJoin, Path, Stroke, Text as CanvasText,
+};
 use iced::{mouse::Cursor, Color, Point, Rectangle, Renderer, Theme};
 
 use readshot_core::{Annotation, PointLike, RectLike, Rgba as CoreRgba};
@@ -450,6 +452,9 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                                 Point::new(rect.x, rect.y),
                                 iced::Size::new(rect.width, rect.height),
                             );
+                            if *tool_at_press == ToolState::Crop {
+                                shade_crop_outside(&mut frame, bounds, rect);
+                            }
                             frame.stroke(&path, preview_stroke);
                         }
                         ToolState::Ellipse => {
@@ -490,6 +495,16 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                             frame.stroke(&path, preview_stroke);
                         }
                         _ => {}
+                    }
+                    if let Some(label) = preview_drag_label(
+                        *tool_at_press,
+                        *anchor,
+                        *cur,
+                        bounds,
+                        self.image_size,
+                        self.display_scale,
+                    ) {
+                        draw_preview_badge(&mut frame, bounds, rect, label);
                     }
                 }
             }
@@ -604,6 +619,94 @@ fn arrowhead_path(_from: Point, to: Point, line_width: f32) -> Path {
         builder.line_to(to);
         builder.line_to(right);
     })
+}
+
+fn shade_crop_outside(frame: &mut Frame, bounds: Rectangle, rect: Rectangle) {
+    let shade = Color::from_rgba(0.0, 0.0, 0.0, 0.38);
+    for r in [
+        Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: bounds.width,
+            height: rect.y.max(0.0),
+        },
+        Rectangle {
+            x: 0.0,
+            y: rect.y + rect.height,
+            width: bounds.width,
+            height: (bounds.height - rect.y - rect.height).max(0.0),
+        },
+        Rectangle {
+            x: 0.0,
+            y: rect.y.max(0.0),
+            width: rect.x.max(0.0),
+            height: rect.height,
+        },
+        Rectangle {
+            x: rect.x + rect.width,
+            y: rect.y.max(0.0),
+            width: (bounds.width - rect.x - rect.width).max(0.0),
+            height: rect.height,
+        },
+    ] {
+        if r.width > 0.0 && r.height > 0.0 {
+            let path = Path::rectangle(Point::new(r.x, r.y), iced::Size::new(r.width, r.height));
+            frame.fill(&path, shade);
+        }
+    }
+}
+
+fn preview_drag_label(
+    tool: ToolState,
+    anchor: Point,
+    cursor: Point,
+    bounds: Rectangle,
+    image_size: (u32, u32),
+    display_scale: Option<f32>,
+) -> Option<String> {
+    let label_prefix = match tool {
+        ToolState::Crop => "Crop ",
+        ToolState::Blur => "Blur ",
+        ToolState::Pixelate => "Pixelate ",
+        ToolState::Rectangle | ToolState::Ellipse | ToolState::Line | ToolState::Arrow => "",
+        _ => return None,
+    };
+    let a = canvas_to_image(anchor, bounds, image_size, display_scale).unwrap_or(anchor);
+    let b = canvas_to_image(cursor, bounds, image_size, display_scale).unwrap_or(cursor);
+    let width = (a.x - b.x).abs().round().max(1.0) as u32;
+    let height = (a.y - b.y).abs().round().max(1.0) as u32;
+    Some(format!("{label_prefix}{width} × {height}px"))
+}
+
+fn draw_preview_badge(frame: &mut Frame, bounds: Rectangle, rect: Rectangle, label: String) {
+    let badge_w = 14.0 + label.chars().count() as f32 * 7.0;
+    let badge_h = 20.0;
+    let pad = 6.0;
+    let mut x = rect.x + rect.width - badge_w;
+    let mut y = rect.y + rect.height + pad;
+    if y + badge_h > bounds.height {
+        y = rect.y - badge_h - pad;
+    }
+    if y < 0.0 {
+        y = rect.y + pad;
+    }
+    x = x.clamp(0.0, (bounds.width - badge_w).max(0.0));
+
+    let path = Path::rectangle(Point::new(x, y), iced::Size::new(badge_w, badge_h));
+    frame.fill(&path, Color::from_rgba(0.02, 0.025, 0.035, 0.82));
+    frame.stroke(
+        &path,
+        Stroke::default()
+            .with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.22))
+            .with_width(1.0),
+    );
+    frame.fill_text(CanvasText {
+        content: label,
+        position: Point::new(x + 7.0, y + 3.0),
+        color: Color::WHITE,
+        size: iced::Pixels(11.0),
+        ..Default::default()
+    });
 }
 
 /// Translate a single click for a point tool into an annotation.
@@ -786,6 +889,39 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn preview_drag_label_reports_image_pixel_size() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 200.0,
+        };
+
+        assert_eq!(
+            preview_drag_label(
+                ToolState::Crop,
+                pt(20.0, 20.0),
+                pt(220.0, 120.0),
+                bounds,
+                (800, 400),
+                None,
+            ),
+            Some("Crop 400 × 200px".into())
+        );
+        assert_eq!(
+            preview_drag_label(
+                ToolState::Text,
+                pt(20.0, 20.0),
+                pt(220.0, 120.0),
+                bounds,
+                (800, 400),
+                None,
+            ),
+            None
+        );
     }
 
     #[test]

@@ -255,6 +255,20 @@ fn resize_rect(orig: Rectangle, handle: Handle, cursor: Point) -> Rectangle {
     rectangle_from_two_points(Point::new(left, top), Point::new(right, bottom))
 }
 
+fn size_badge_origin(
+    bounds: Rectangle,
+    selection: Rectangle,
+    badge_w: f32,
+    badge_h: f32,
+) -> (f32, f32) {
+    let pad = 4.0;
+    let max_x = (bounds.width - badge_w).max(0.0);
+    let max_y = (bounds.height - badge_h).max(0.0);
+    let x = (selection.x + selection.width - badge_w - pad).clamp(0.0, max_x);
+    let y = (selection.y + pad).clamp(0.0, max_y);
+    (x, y)
+}
+
 /// Translate `orig` by `delta`, clamped so the rect stays inside
 /// `bounds`. When the rect is larger than `bounds` (shouldn't happen
 /// in practice but the math has to be safe) we clamp the available
@@ -486,23 +500,14 @@ impl Program<Message> for OverlayProgram {
         );
 
         // Live size badge in physical pixels (what the captured PNG
-        // will be), placed just outside the bottom-right corner of the
-        // selection (or inside if there's no room).
+        // will be). Keep it inside the top edge of the selection so
+        // it never competes with the quick-action toolbar.
         let phys_w = ((rect.width * self.scale).round() as i32).max(0);
         let phys_h = ((rect.height * self.scale).round() as i32).max(0);
-        let label = format!("{phys_w} × {phys_h}");
+        let label = format!("{phys_w} × {phys_h}px");
         let badge_w = 8.0 + label.chars().count() as f32 * 7.5;
         let badge_h = 18.0;
-        let pad_x = 4.0;
-        let pad_y = 4.0;
-        let mut bx = rect.x + rect.width - badge_w;
-        let mut by = rect.y + rect.height + pad_y;
-        if by + badge_h > bounds.height {
-            by = rect.y + rect.height - badge_h - pad_y;
-        }
-        if bx < 0.0 {
-            bx = rect.x + pad_x;
-        }
+        let (bx, by) = size_badge_origin(bounds, rect, badge_w, badge_h);
         let badge_path = Path::rectangle(Point::new(bx, by), iced::Size::new(badge_w, badge_h));
         frame.fill(&badge_path, Color::from_rgba(0.0, 0.0, 0.0, 0.7));
         frame.fill_text(CanvasText {
@@ -729,6 +734,27 @@ mod tests {
         assert_eq!(new.y, 0.0);
         assert_eq!(new.width, 10.0);
         assert_eq!(new.height, 20.0);
+    }
+
+    #[test]
+    fn size_badge_stays_at_selection_top() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 500.0,
+            height: 400.0,
+        };
+        let selection = Rectangle {
+            x: 100.0,
+            y: 80.0,
+            width: 220.0,
+            height: 120.0,
+        };
+
+        let (x, y) = size_badge_origin(bounds, selection, 80.0, 18.0);
+
+        assert_eq!(x, 236.0);
+        assert_eq!(y, 84.0);
     }
 
     #[test]

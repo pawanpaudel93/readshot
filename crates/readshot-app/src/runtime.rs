@@ -585,7 +585,21 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event else {
                 return None;
             };
-            if modifiers.command() || modifiers.alt() || modifiers.control() {
+            if modifiers.command() && !modifiers.alt() && !modifiers.control() {
+                if let Key::Character(c) = &key {
+                    if c.eq_ignore_ascii_case("c") {
+                        return Some(Message::HistoryKeyboardShortcut(
+                            window,
+                            if modifiers.shift() {
+                                HistoryKeyboardAction::CopyImage
+                            } else {
+                                HistoryKeyboardAction::CopyText
+                            },
+                        ));
+                    }
+                }
+            }
+            if modifiers.command() || modifiers.alt() || modifiers.control() || modifiers.shift() {
                 return None;
             }
             match key {
@@ -1196,6 +1210,20 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 HistoryKeyboardAction::Next => update(state, Message::HistorySelectNext),
                 HistoryKeyboardAction::Open => update(state, Message::HistoryOpenSelected),
                 HistoryKeyboardAction::Delete => update(state, Message::HistoryDeleteSelected),
+                HistoryKeyboardAction::CopyText => match state.history_selected_id {
+                    Some(id) => update(state, Message::HistoryCopyText(id)),
+                    None => {
+                        state.history_status = Some("No history capture selected.".into());
+                        Task::none()
+                    }
+                },
+                HistoryKeyboardAction::CopyImage => match state.history_selected_id {
+                    Some(id) => update(state, Message::HistoryCopyImage(id)),
+                    None => {
+                        state.history_status = Some("No history capture selected.".into());
+                        Task::none()
+                    }
+                },
             }
         }
         Message::HistoryClearAllRequested => {
@@ -2083,7 +2111,7 @@ fn cli_tools_view(state: &App) -> Element<'_, Message> {
 }
 
 fn history_view(state: &App) -> Element<'_, Message> {
-    use iced::widget::{image as image_widget, text_input};
+    use iced::widget::{image as image_widget, mouse_area, text_input};
 
     let total = state.history_records.len();
     // Apply the live search filter. Empty query → every record.
@@ -2267,7 +2295,12 @@ fn history_view(state: &App) -> Element<'_, Message> {
                 },
                 ..Default::default()
             });
-            col = col.push(row_widget);
+            col = col.push(
+                mouse_area(row_widget)
+                    .on_press(Message::HistorySelect(r.id))
+                    .on_double_click(Message::HistoryOpenInEditor(r.id))
+                    .interaction(iced::mouse::Interaction::Pointer),
+            );
         }
     } else {
         col = col.push(container(empty_state_card(
@@ -3761,7 +3794,7 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
                 .get(&d.display_id)
                 .map(|rect| (d, rect))
         })
-        .map(|(d, rect)| overlay_toolbar_layer(&d.display_id, rect, d.scale, d.width, d.height));
+        .map(|(d, rect)| overlay_toolbar_layer(&d.display_id, rect, d.width, d.height));
 
     // Once the toolbar is up the introductory hint is just noise.
     if let Some(toolbar) = toolbar_layer {
@@ -3774,7 +3807,7 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
 /// Estimated visual size of the floating overlay toolbar. Used for
 /// edge-aware reflow without measuring real layout (which iced
 /// doesn't expose mid-build).
-const OVERLAY_TOOLBAR_HEIGHT: f32 = 68.0;
+const OVERLAY_TOOLBAR_HEIGHT: f32 = 44.0;
 const OVERLAY_TOOLBAR_GAP: f32 = 8.0;
 
 /// Build a positioned action toolbar (Capture / Copy / Save / Pin /
@@ -3783,7 +3816,6 @@ const OVERLAY_TOOLBAR_GAP: f32 = 8.0;
 fn overlay_toolbar_layer<'a>(
     display_id: &readshot_capture::DisplayId,
     rect: &readshot_core::geom::Rect,
-    scale: f32,
     bounds_w: f32,
     bounds_h: f32,
 ) -> Element<'a, Message> {
@@ -3860,25 +3892,17 @@ fn overlay_toolbar_layer<'a>(
     .spacing(4)
     .align_y(Alignment::Center);
 
-    let size_label = text(overlay_size_label(rect, scale))
-        .size(11)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72));
-
-    let bar = container(
-        column![size_label, buttons]
-            .spacing(4)
-            .align_x(Alignment::End),
-    )
-    .padding(6)
-    .style(|_| iced::widget::container::Style {
-        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.78).into()),
-        border: iced::Border {
-            radius: 8.0.into(),
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
-            width: 1.0,
-        },
-        ..Default::default()
-    });
+    let bar = container(buttons)
+        .padding(6)
+        .style(|_| iced::widget::container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.78).into()),
+            border: iced::Border {
+                radius: 8.0.into(),
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
+                width: 1.0,
+            },
+            ..Default::default()
+        });
 
     let sel_x = rect.x();
     let sel_y = rect.y();
@@ -3909,13 +3933,6 @@ fn overlay_toolbar_layer<'a>(
         .align_x(Alignment::End)
         .align_y(Alignment::Start)
         .into()
-}
-
-fn overlay_size_label(rect: &readshot_core::geom::Rect, scale: f32) -> String {
-    let scale = scale.max(f32::EPSILON);
-    let width = (rect.width() * scale).round().max(1.0) as u32;
-    let height = (rect.height() * scale).round().max(1.0) as u32;
-    format!("{width} x {height} px")
 }
 
 /// Surface the welcome window: if it's already open, focus it;
@@ -5486,6 +5503,23 @@ mod tests {
     }
 
     #[test]
+    fn history_copy_shortcut_requires_selected_capture() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = iced::window::Id::unique();
+        app.history_window_id = Some(id);
+
+        let _ = update(
+            &mut app,
+            Message::HistoryKeyboardShortcut(id, HistoryKeyboardAction::CopyText),
+        );
+
+        assert_eq!(
+            app.history_status.as_deref(),
+            Some("No history capture selected.")
+        );
+    }
+
+    #[test]
     fn history_copy_completion_updates_history_status() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
 
@@ -5520,13 +5554,6 @@ mod tests {
         assert!(title.contains("blocked"));
         assert!(hint.contains("restart"));
         assert!(hint.contains("System Settings"));
-    }
-
-    #[test]
-    fn overlay_size_label_uses_physical_pixels() {
-        let rect = readshot_core::geom::Rect::from_xywh(0.0, 0.0, 320.2, 180.4).unwrap();
-
-        assert_eq!(overlay_size_label(&rect, 2.0), "640 x 361 px");
     }
 
     #[test]

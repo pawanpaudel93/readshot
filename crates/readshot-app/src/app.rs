@@ -64,6 +64,8 @@ pub enum HistoryKeyboardAction {
     Next,
     Open,
     Delete,
+    CopyText,
+    CopyImage,
 }
 
 /// Mapping from live `window::Id`s to their kind, so the daemon's
