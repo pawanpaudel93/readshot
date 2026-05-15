@@ -63,7 +63,7 @@ fn take_initial_url_action() -> Option<UrlAction> {
         .and_then(|m| m.lock().ok().and_then(|mut g| g.take()))
 }
 
-use crate::app::{App, Message, WindowKind};
+use crate::app::{App, HistoryKeyboardAction, Message, WindowKind};
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::{default_provider, PermissionStatus};
 use crate::welcome::WelcomeState;
@@ -575,6 +575,39 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             None
         }));
     }
+    if state.history_window_id.is_some() {
+        subs.push(iced::event::listen_with(|event, status, window| {
+            use iced::event::Status;
+            use iced::keyboard::{key::Named, Event as KbEvent, Key};
+            if status != Status::Ignored {
+                return None;
+            }
+            let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event else {
+                return None;
+            };
+            if modifiers.command() || modifiers.alt() || modifiers.control() {
+                return None;
+            }
+            match key {
+                Key::Named(Named::ArrowUp) => Some(Message::HistoryKeyboardShortcut(
+                    window,
+                    HistoryKeyboardAction::Previous,
+                )),
+                Key::Named(Named::ArrowDown) => Some(Message::HistoryKeyboardShortcut(
+                    window,
+                    HistoryKeyboardAction::Next,
+                )),
+                Key::Named(Named::Enter) => Some(Message::HistoryKeyboardShortcut(
+                    window,
+                    HistoryKeyboardAction::Open,
+                )),
+                Key::Named(Named::Delete) | Key::Named(Named::Backspace) => Some(
+                    Message::HistoryKeyboardShortcut(window, HistoryKeyboardAction::Delete),
+                ),
+                _ => None,
+            }
+        }));
+    }
     // Watch for the OS X-button closing any tracked window. Without
     // this, `state.windows` accumulates stale ids, and helpers like
     // `show_or_focus_welcome` end up calling `gain_focus` on dead
@@ -1039,11 +1072,18 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::HistoryListLoaded(result) => {
             match result {
                 Ok(records) => {
+                    let previous = state.history_selected_id;
                     state.history_records = records;
+                    state.history_selected_id = preferred_history_selection(
+                        &state.history_records,
+                        &state.history_search,
+                        previous,
+                    );
                     state.history_status = None;
                 }
                 Err(e) => {
                     state.history_records.clear();
+                    state.history_selected_id = None;
                     state.history_status = Some(format!("Couldn't read history: {e}"));
                 }
             }
@@ -1053,6 +1093,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let id = state.history_window_id.take();
             state.history_records.clear();
             state.history_status = None;
+            state.history_selected_id = None;
             match id {
                 Some(id) => {
                     state.windows.forget(id);
@@ -1071,6 +1112,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 state.history_records.clear();
                 state.history_status = None;
                 state.history_search.clear();
+                state.history_selected_id = None;
             }
             if state.settings_window_id == Some(id) {
                 state.settings_window_id = None;
@@ -1100,7 +1142,61 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::HistorySearchChanged(q) => {
             state.history_search = q;
+            state.history_selected_id = preferred_history_selection(
+                &state.history_records,
+                &state.history_search,
+                state.history_selected_id,
+            );
             Task::none()
+        }
+        Message::HistorySelect(id) => {
+            if history_record_visible(&state.history_records, &state.history_search, id) {
+                state.history_selected_id = Some(id);
+            }
+            Task::none()
+        }
+        Message::HistorySelectPrevious => {
+            state.history_selected_id = adjacent_history_selection(
+                &state.history_records,
+                &state.history_search,
+                state.history_selected_id,
+                -1,
+            );
+            Task::none()
+        }
+        Message::HistorySelectNext => {
+            state.history_selected_id = adjacent_history_selection(
+                &state.history_records,
+                &state.history_search,
+                state.history_selected_id,
+                1,
+            );
+            Task::none()
+        }
+        Message::HistoryOpenSelected => match state.history_selected_id {
+            Some(id) => update(state, Message::HistoryOpenInEditor(id)),
+            None => {
+                state.history_status = Some("No history capture selected.".into());
+                Task::none()
+            }
+        },
+        Message::HistoryDeleteSelected => match state.history_selected_id {
+            Some(id) => update(state, Message::HistoryDelete(id)),
+            None => {
+                state.history_status = Some("No history capture selected.".into());
+                Task::none()
+            }
+        },
+        Message::HistoryKeyboardShortcut(window_id, action) => {
+            if state.history_window_id != Some(window_id) {
+                return Task::none();
+            }
+            match action {
+                HistoryKeyboardAction::Previous => update(state, Message::HistorySelectPrevious),
+                HistoryKeyboardAction::Next => update(state, Message::HistorySelectNext),
+                HistoryKeyboardAction::Open => update(state, Message::HistoryOpenSelected),
+                HistoryKeyboardAction::Delete => update(state, Message::HistoryDeleteSelected),
+            }
         }
         Message::HistoryClearAllRequested => {
             if let Err(e) = state.coordinator.clear_history() {
@@ -1109,6 +1205,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             state.history_records.clear();
             state.history_search.clear();
+            state.history_selected_id = None;
             state.history_status = Some("History cleared.".into());
             Task::none()
         }
@@ -2041,6 +2138,10 @@ fn history_view(state: &App) -> Element<'_, Message> {
     let search_row = row![search_box, copy_visible_button, clear_button]
         .spacing(8)
         .align_y(Alignment::Center);
+    let selected = state
+        .history_selected_id
+        .and_then(|id| visible.iter().copied().find(|record| record.id == id));
+    let selected_panel = history_selected_panel(selected);
     let header = container(
         column![
             search_row,
@@ -2049,7 +2150,8 @@ fn history_view(state: &App) -> Element<'_, Message> {
                 .history_status
                 .as_deref()
                 .map(|s| text(s).size(12).color(Color::from_rgb(0.95, 0.55, 0.25)))
-                .unwrap_or_else(|| text(""))
+                .unwrap_or_else(|| text("")),
+            selected_panel,
         ]
         .spacing(6),
     )
@@ -2092,12 +2194,14 @@ fn history_view(state: &App) -> Element<'_, Message> {
                     png_path
                 };
                 image_widget(image_widget::Handle::from_path(path))
-                    .width(Length::Fixed(160.0))
+                    .width(Length::Fixed(132.0))
+                    .height(Length::Fixed(92.0))
+                    .content_fit(iced::ContentFit::Contain)
                     .into()
             } else {
-                container(text("⚠"))
-                    .width(Length::Fixed(160.0))
-                    .height(Length::Fixed(100.0))
+                container(text("Missing"))
+                    .width(Length::Fixed(132.0))
+                    .height(Length::Fixed(92.0))
                     .center_x(Length::Fill)
                     .center_y(Length::Fill)
                     .into()
@@ -2115,19 +2219,31 @@ fn history_view(state: &App) -> Element<'_, Message> {
             .spacing(4)
             .width(Length::Fill);
 
-            let has_text = r.ocr_text.as_deref().is_some_and(|t| !t.is_empty());
-            let actions = history_row_actions(r.id, has_text);
+            let is_selected = state.history_selected_id == Some(r.id);
+            let actions = history_row_actions(r.id, is_selected);
             let row_widget = container(
                 row![thumb, meta, actions]
                     .spacing(12)
                     .align_y(Alignment::Center),
             )
             .padding(10)
-            .style(|_| iced::widget::container::Style {
-                background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.04).into()),
+            .style(move |_| iced::widget::container::Style {
+                background: Some(
+                    if is_selected {
+                        Color::from_rgba(0.32, 0.38, 1.0, 0.16)
+                    } else {
+                        Color::from_rgba(1.0, 1.0, 1.0, 0.04)
+                    }
+                    .into(),
+                ),
                 border: iced::Border {
+                    color: if is_selected {
+                        Color::from_rgba(0.65, 0.7, 1.0, 0.6)
+                    } else {
+                        Color::TRANSPARENT
+                    },
+                    width: if is_selected { 1.0 } else { 0.0 },
                     radius: 6.0.into(),
-                    ..Default::default()
                 },
                 ..Default::default()
             });
@@ -2151,37 +2267,156 @@ fn history_view(state: &App) -> Element<'_, Message> {
     .into()
 }
 
-/// Compact button column for one history row — Open / Copy Image /
-/// Copy Text / Pin / Delete. The Copy-Text button is disabled when
-/// the record's `ocr_text` is empty (background OCR may not have
-/// finished, or returned no text).
-fn history_row_actions<'a>(id: readshot_core::Uuid, has_text: bool) -> Element<'a, Message> {
-    let make_btn = |label: &'static str,
-                    msg: Option<Message>,
-                    danger: bool|
-     -> Element<'a, Message> {
+fn history_selected_panel<'a>(
+    record: Option<&'a readshot_core::CaptureRecord>,
+) -> Element<'a, Message> {
+    let Some(record) = record else {
+        return container(
+            text("Select a capture to preview details. Use ↑/↓, Enter, and Delete in this window.")
+                .size(11)
+                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+        )
+        .padding([8, 10])
+        .width(Length::Fill)
+        .style(history_selected_panel_style)
+        .into();
+    };
+
+    let stamp = record
+        .captured_at
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    let text_count = record
+        .ocr_text
+        .as_deref()
+        .map(|text| text.trim().chars().count())
+        .unwrap_or(0);
+    let has_text = text_count > 0;
+    let id = record.id;
+
+    container(responsive(move |available| {
+        let summary = column![
+            text("Selected capture")
+                .size(11)
+                .color(settings_muted_text()),
+            text(format!(
+                "{} · {} x {} px · {} OCR chars",
+                stamp, record.width_px, record.height_px, text_count
+            ))
+            .size(12),
+        ]
+        .spacing(3);
+        let copy_text_button: Element<'_, Message> = if has_text {
+            button(text("Copy Text").size(12))
+                .padding([6, 9])
+                .on_press(Message::HistoryCopyText(id))
+                .into()
+        } else {
+            button(text("Copy Text").size(12)).padding([6, 9]).into()
+        };
+        let primary_actions = row![
+            button(text("Open").size(12))
+                .padding([6, 9])
+                .on_press(Message::HistoryOpenInEditor(id)),
+            button(text("Reveal").size(12))
+                .padding([6, 9])
+                .on_press(Message::HistoryReveal(id)),
+            copy_text_button,
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+        let secondary_actions = row![
+            button(text("Copy Image").size(12))
+                .padding([6, 9])
+                .on_press(Message::HistoryCopyImage(id)),
+            button(text("Pin").size(12))
+                .padding([6, 9])
+                .on_press(Message::HistoryPin(id)),
+            button(
+                text("Delete")
+                    .size(12)
+                    .color(Color::from_rgb(1.0, 0.86, 0.86))
+            )
+            .padding([6, 9])
+            .on_press(Message::HistoryDelete(id)),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+        if available.width < 600.0 {
+            column![summary, primary_actions, secondary_actions]
+                .spacing(8)
+                .into()
+        } else if available.width < 820.0 {
+            row![
+                summary.width(Length::Fill),
+                column![primary_actions, secondary_actions].spacing(6)
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into()
+        } else {
+            row![
+                summary.width(Length::Fill),
+                primary_actions,
+                secondary_actions
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into()
+        }
+    }))
+    .height(Length::Shrink)
+    .padding([8, 10])
+    .width(Length::Fill)
+    .style(history_selected_panel_style)
+    .into()
+}
+
+fn history_selected_panel_style(_theme: &Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.045).into()),
+        border: iced::Border {
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.08),
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Compact row-level selection affordance. The real commands live in
+/// the selected-capture panel above the list, which keeps each row
+/// readable and prevents a tall command stack from dominating the UI.
+fn history_row_actions<'a>(id: readshot_core::Uuid, is_selected: bool) -> Element<'a, Message> {
+    if is_selected {
+        return container(
+            text("Selected")
+                .size(12)
+                .color(Color::from_rgb(0.88, 0.9, 1.0)),
+        )
+        .padding([6, 10])
+        .style(|_| iced::widget::container::Style {
+            background: Some(Color::from_rgba(0.45, 0.5, 1.0, 0.18).into()),
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into();
+    }
+
+    let make_btn = |label: &'static str, msg: Message| -> Element<'a, Message> {
         let b = button(text(label).size(12))
-            .padding([4, 8])
-            .style(move |_, status| {
-                let base = if danger {
-                    Color::from_rgba(0.8, 0.2, 0.2, 0.18)
-                } else {
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.06)
-                };
-                let hovered = if danger {
-                    Color::from_rgba(0.85, 0.25, 0.25, 0.4)
-                } else {
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.18)
-                };
-                let pressed = if danger {
-                    Color::from_rgba(0.9, 0.3, 0.3, 0.55)
-                } else {
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.28)
-                };
+            .padding([6, 10])
+            .style(|_, status| {
+                let base = Color::from_rgba(1.0, 1.0, 1.0, 0.055);
+                let hovered = Color::from_rgba(1.0, 1.0, 1.0, 0.15);
+                let pressed = Color::from_rgba(1.0, 1.0, 1.0, 0.24);
                 let bg = match status {
                     iced::widget::button::Status::Hovered => hovered,
                     iced::widget::button::Status::Pressed => pressed,
-                    iced::widget::button::Status::Disabled => Color::from_rgba(1.0, 1.0, 1.0, 0.03),
                     _ => base,
                 };
                 iced::widget::button::Style {
@@ -2193,31 +2428,11 @@ fn history_row_actions<'a>(id: readshot_core::Uuid, has_text: bool) -> Element<'
                     },
                     ..Default::default()
                 }
-            });
-        match msg {
-            Some(m) => b.on_press(m).into(),
-            None => b.into(),
-        }
+            })
+            .on_press(msg);
+        b.into()
     };
-    column![
-        make_btn("Open", Some(Message::HistoryOpenInEditor(id)), false),
-        make_btn("Reveal", Some(Message::HistoryReveal(id)), false),
-        make_btn("Copy Image", Some(Message::HistoryCopyImage(id)), false),
-        make_btn(
-            "Copy Text",
-            if has_text {
-                Some(Message::HistoryCopyText(id))
-            } else {
-                None
-            },
-            false,
-        ),
-        make_btn("Pin", Some(Message::HistoryPin(id)), false),
-        make_btn("Delete", Some(Message::HistoryDelete(id)), true),
-    ]
-    .spacing(4)
-    .width(Length::Fixed(110.0))
-    .into()
+    make_btn("Select", Message::HistorySelect(id))
 }
 
 /// True when `record` matches the lowercase search query `q`. Tries
@@ -2246,6 +2461,55 @@ fn record_matches(record: &readshot_core::CaptureRecord, q: &str) -> bool {
         .to_string()
         .to_lowercase();
     stamp.contains(q)
+}
+
+fn visible_history_ids(
+    records: &[readshot_core::CaptureRecord],
+    query: &str,
+) -> Vec<readshot_core::Uuid> {
+    let q = query.trim().to_lowercase();
+    records
+        .iter()
+        .filter(|r| q.is_empty() || record_matches(r, &q))
+        .map(|r| r.id)
+        .collect()
+}
+
+fn history_record_visible(
+    records: &[readshot_core::CaptureRecord],
+    query: &str,
+    id: readshot_core::Uuid,
+) -> bool {
+    visible_history_ids(records, query).contains(&id)
+}
+
+fn preferred_history_selection(
+    records: &[readshot_core::CaptureRecord],
+    query: &str,
+    current: Option<readshot_core::Uuid>,
+) -> Option<readshot_core::Uuid> {
+    let visible = visible_history_ids(records, query);
+    current
+        .filter(|id| visible.contains(id))
+        .or_else(|| visible.first().copied())
+}
+
+fn adjacent_history_selection(
+    records: &[readshot_core::CaptureRecord],
+    query: &str,
+    current: Option<readshot_core::Uuid>,
+    delta: isize,
+) -> Option<readshot_core::Uuid> {
+    let visible = visible_history_ids(records, query);
+    if visible.is_empty() {
+        return None;
+    }
+    let current_idx = current
+        .and_then(|id| visible.iter().position(|candidate| *candidate == id))
+        .unwrap_or(0);
+    let max = visible.len() as isize - 1;
+    let next_idx = (current_idx as isize + delta).clamp(0, max) as usize;
+    visible.get(next_idx).copied()
 }
 
 fn visible_history_text(records: &[readshot_core::CaptureRecord], query: &str) -> String {
@@ -2516,9 +2780,8 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     );
 
     // Single combined toolbar: tools | divider | colors | width |
-    // spacer | undo redo. Wraps gracefully if the window narrows by
-    // staying horizontally scrollable in spirit (we let iced handle
-    // overflow; in practice 1100px fits everything).
+    // spacer | undo redo. Keep it horizontally scrollable so narrow
+    // editor windows do not crush the controls into the image area.
     let toolbar_inner = row![
         tool_row,
         toolbar_divider(),
@@ -2534,14 +2797,22 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     .align_y(Alignment::Center)
     .padding([6, 10]);
 
-    let toolbar_row = container(toolbar_inner).style(|theme: &Theme| {
+    let toolbar_row = container(
+        scrollable(toolbar_inner)
+            .direction(iced::widget::scrollable::Direction::Horizontal(
+                slim_scrollbar(),
+            ))
+            .height(Length::Shrink)
+            .width(Length::Fill),
+    )
+    .style(|theme: &Theme| {
         let palette = theme.extended_palette();
         container::Style {
             background: Some(palette.background.weak.color.into()),
             border: iced::Border {
                 color: palette.background.strong.color,
                 width: 1.0,
-                radius: 10.0.into(),
+                radius: 8.0.into(),
             },
             ..Default::default()
         }
@@ -2774,7 +3045,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             ActionKind::Secondary,
         ),
         action_btn(
-            "Copy",
+            "Copy Image",
             Message::EditorCopyImageRequested,
             ActionKind::Secondary,
         ),
@@ -3355,7 +3626,7 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
                 .get(&d.display_id)
                 .map(|rect| (d, rect))
         })
-        .map(|(d, rect)| overlay_toolbar_layer(&d.display_id, rect, d.width, d.height));
+        .map(|(d, rect)| overlay_toolbar_layer(&d.display_id, rect, d.scale, d.width, d.height));
 
     // Once the toolbar is up the introductory hint is just noise.
     if let Some(toolbar) = toolbar_layer {
@@ -3368,7 +3639,7 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
 /// Estimated visual size of the floating overlay toolbar. Used for
 /// edge-aware reflow without measuring real layout (which iced
 /// doesn't expose mid-build).
-const OVERLAY_TOOLBAR_HEIGHT: f32 = 44.0;
+const OVERLAY_TOOLBAR_HEIGHT: f32 = 68.0;
 const OVERLAY_TOOLBAR_GAP: f32 = 8.0;
 
 /// Build a positioned action toolbar (Capture / Copy / Save / Pin /
@@ -3377,6 +3648,7 @@ const OVERLAY_TOOLBAR_GAP: f32 = 8.0;
 fn overlay_toolbar_layer<'a>(
     display_id: &readshot_capture::DisplayId,
     rect: &readshot_core::geom::Rect,
+    scale: f32,
     bounds_w: f32,
     bounds_h: f32,
 ) -> Element<'a, Message> {
@@ -3453,17 +3725,25 @@ fn overlay_toolbar_layer<'a>(
     .spacing(4)
     .align_y(Alignment::Center);
 
-    let bar = container(buttons)
-        .padding(6)
-        .style(|_| iced::widget::container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.78).into()),
-            border: iced::Border {
-                radius: 8.0.into(),
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
-                width: 1.0,
-            },
-            ..Default::default()
-        });
+    let size_label = text(overlay_size_label(rect, scale))
+        .size(11)
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72));
+
+    let bar = container(
+        column![size_label, buttons]
+            .spacing(4)
+            .align_x(Alignment::End),
+    )
+    .padding(6)
+    .style(|_| iced::widget::container::Style {
+        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.78).into()),
+        border: iced::Border {
+            radius: 8.0.into(),
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
+            width: 1.0,
+        },
+        ..Default::default()
+    });
 
     let sel_x = rect.x();
     let sel_y = rect.y();
@@ -3494,6 +3774,13 @@ fn overlay_toolbar_layer<'a>(
         .align_x(Alignment::End)
         .align_y(Alignment::Start)
         .into()
+}
+
+fn overlay_size_label(rect: &readshot_core::geom::Rect, scale: f32) -> String {
+    let scale = scale.max(f32::EPSILON);
+    let width = (rect.width() * scale).round().max(1.0) as u32;
+    let height = (rect.height() * scale).round().max(1.0) as u32;
+    format!("{width} x {height} px")
 }
 
 /// Surface the welcome window: if it's already open, focus it;
@@ -3535,7 +3822,7 @@ fn settings_view(state: &App) -> Element<'_, Message> {
     let header = row![
         column![
             text("Settings").size(30),
-            text("Capture, files, OCR, and startup")
+            text("Capture, files, permissions, and startup")
                 .size(13)
                 .color(settings_muted_text()),
         ]
@@ -3586,40 +3873,65 @@ fn settings_view(state: &App) -> Element<'_, Message> {
 
     let history_retention = state.preferences.history_retention;
     let settings_recording_hotkey = state.settings_recording_hotkey;
-    let permission_control: Element<'_, Message> = {
+    let permission_control: Element<'_, Message> = responsive(move |available| {
         let status = column![
             text(permission_title).size(13),
             text(permission_hint).size(11).color(settings_muted_text()),
         ]
         .spacing(6)
         .width(Length::Fill);
-        let mut content = row![status].spacing(10).align_y(Alignment::Center);
-        if !matches!(permission_status, PermissionStatus::NotApplicable) {
-            content = content.push(
-                button(text("Open Settings")).on_press(Message::OpenPermissionSettingsRequested),
-            );
+
+        if matches!(permission_status, PermissionStatus::NotApplicable) {
+            return status.into();
         }
-        content.into()
-    };
+
+        let open_button =
+            button(text("Open Settings")).on_press(Message::OpenPermissionSettingsRequested);
+        if available.width < 460.0 {
+            column![status, open_button].spacing(10).into()
+        } else {
+            row![status, open_button]
+                .spacing(10)
+                .align_y(Alignment::Center)
+                .into()
+        }
+    })
+    .height(Length::Shrink)
+    .into();
     let permission_section = settings_section("Permissions", "Capture access", permission_control);
     let capture_section = settings_section(
         "Capture",
         "Shortcut and history",
         responsive(move |available| {
-            let hotkey_control: Element<'_, Message> = row![
-                setting_value_box(hotkey_label.clone(), settings_recording_hotkey),
-                button(text(if settings_recording_hotkey {
-                    "Recording"
-                } else {
-                    "Record"
-                }))
-                .on_press(Message::SettingsStartHotkeyRecording),
-                button(text("Reset")).on_press(Message::Settings(
-                    SettingsMessage::SetCaptureHotkey(default_capture_hotkey().into()),
-                )),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
+            let hotkey_control: Element<'_, Message> = responsive({
+                let hotkey_label = hotkey_label.clone();
+                move |available| {
+                    let value = setting_value_box(hotkey_label.clone(), settings_recording_hotkey);
+                    let actions = row![
+                        button(text(if settings_recording_hotkey {
+                            "Recording"
+                        } else {
+                            "Record"
+                        }))
+                        .on_press(Message::SettingsStartHotkeyRecording),
+                        button(text("Reset")).on_press(Message::Settings(
+                            SettingsMessage::SetCaptureHotkey(default_capture_hotkey().into()),
+                        )),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center);
+
+                    if available.width < 360.0 {
+                        column![value, actions].spacing(8).into()
+                    } else {
+                        row![value, actions]
+                            .spacing(8)
+                            .align_y(Alignment::Center)
+                            .into()
+                    }
+                }
+            })
+            .height(Length::Shrink)
             .into();
             let hotkey_row = settings_field("Capture hotkey", hotkey_hint.clone(), hotkey_control);
             let retention_control: Element<'_, Message> =
@@ -3697,35 +4009,51 @@ fn settings_view(state: &App) -> Element<'_, Message> {
         .height(Length::Shrink)
         .into(),
     );
-    let reset_controls: Element<'_, Message> = if state.settings_reset_all_pending {
-        row![
-            text("Reset every setting to the app defaults?")
-                .size(12)
-                .color(settings_muted_text()),
-            Space::new().width(Length::Fill),
-            button(text("Reset all")).on_press(Message::SettingsResetAllConfirmed),
-            button(text("Cancel")).on_press(Message::SettingsResetAllCancelled),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .into()
-    } else {
-        row![
-            text(
-                state
-                    .settings_status
-                    .as_deref()
-                    .unwrap_or("Return all preferences to the shipped defaults."),
-            )
-            .size(12)
-            .color(settings_muted_text()),
-            Space::new().width(Length::Fill),
-            button(text("Reset all settings")).on_press(Message::SettingsResetAllRequested),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .into()
-    };
+    let reset_pending = state.settings_reset_all_pending;
+    let reset_status = state
+        .settings_status
+        .as_deref()
+        .unwrap_or("Return all preferences to the shipped defaults.")
+        .to_string();
+    let reset_controls: Element<'_, Message> = responsive(move |available| {
+        let copy = if reset_pending {
+            "Reset every setting to the app defaults?".to_string()
+        } else {
+            reset_status.clone()
+        };
+        let label = text(copy).size(12).color(settings_muted_text());
+
+        if reset_pending {
+            let actions = row![
+                button(text("Reset all")).on_press(Message::SettingsResetAllConfirmed),
+                button(text("Cancel")).on_press(Message::SettingsResetAllCancelled),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center);
+
+            if available.width < 460.0 {
+                column![label, actions].spacing(8).into()
+            } else {
+                row![label, Space::new().width(Length::Fill), actions]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .into()
+            }
+        } else {
+            let action =
+                button(text("Reset all settings")).on_press(Message::SettingsResetAllRequested);
+            if available.width < 460.0 {
+                column![label, action].spacing(8).into()
+            } else {
+                row![label, Space::new().width(Length::Fill), action]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .into()
+            }
+        }
+    })
+    .height(Length::Shrink)
+    .into();
     let app_section = settings_section(
         "App",
         "Startup behavior",
@@ -3863,7 +4191,7 @@ fn permission_settings_summary(status: PermissionStatus) -> (&'static str, &'sta
         ),
         PermissionStatus::Denied => (
             "Screen Recording needs attention",
-            "Enable Readshot in macOS System Settings, then restart the app if macOS asks.",
+            "Enable Readshot in macOS System Settings. If it is already enabled, restart Readshot so macOS refreshes the grant.",
         ),
         PermissionStatus::NotApplicable => (
             "No extra capture permission required",
@@ -3891,7 +4219,7 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
 
     let card: Element<'_, Message> = match state.welcome {
         WelcomeState::Pending => welcome_pending_card(),
-        WelcomeState::AwaitingGrant | WelcomeState::Denied => welcome_awaiting_card(),
+        WelcomeState::AwaitingGrant | WelcomeState::Denied => welcome_awaiting_card(state.welcome),
         WelcomeState::Granted => welcome_granted_card(state),
     };
 
@@ -3961,32 +4289,42 @@ fn welcome_pending_card<'a>() -> Element<'a, Message> {
     welcome_card(body.into())
 }
 
-fn welcome_awaiting_card<'a>() -> Element<'a, Message> {
+fn welcome_awaiting_card<'a>(state: WelcomeState) -> Element<'a, Message> {
+    let (title, body_copy) = welcome_permission_guidance(state);
     let body = column![
-        text("Waiting for permission").size(18),
-        text(
-            "Toggle Readshot on in System Settings — macOS will offer \"Quit & \
-             Reopen\" and Readshot will relaunch into the menu bar (look for \
-             the notification). If it doesn't ask, restart manually below."
-        )
-        .size(13)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7)),
+        text(title).size(18),
+        text(body_copy)
+            .size(13)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7)),
         Space::new().height(Length::Fixed(6.0)),
         row![
-            button(text("Restart Readshot").size(14))
+            button(text("Open System Settings").size(14))
                 .padding([10, 18])
                 .style(|t, s| action_button_style(t, s, ActionKind::Primary))
-                .on_press(Message::RestartRequested),
-            button(text("Open Settings again").size(14))
+                .on_press(Message::OpenPermissionSettingsRequested),
+            button(text("Restart Readshot").size(14))
                 .padding([10, 16])
                 .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::OpenPermissionSettingsRequested),
+                .on_press(Message::RestartRequested),
         ]
         .spacing(8),
     ]
     .spacing(10)
     .align_x(Alignment::Center);
     welcome_card(body.into())
+}
+
+fn welcome_permission_guidance(state: WelcomeState) -> (&'static str, &'static str) {
+    match state {
+        WelcomeState::Denied => (
+            "Permission still blocked",
+            "If Readshot is already toggled on in System Settings, restart now so macOS gives this process the new Screen Recording grant. Otherwise open System Settings and enable Readshot first.",
+        ),
+        _ => (
+            "Waiting for permission",
+            "Enable Readshot in System Settings. If macOS offers Quit & Reopen, accept it; otherwise use Restart Readshot after toggling the permission on.",
+        ),
+    }
 }
 
 fn welcome_granted_card(state: &App) -> Element<'_, Message> {
@@ -4922,6 +5260,59 @@ mod tests {
     }
 
     #[test]
+    fn history_list_load_selects_first_visible_capture() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let first = readshot_core::CaptureRecord::new(chrono::Utc::now(), 100, 100, "primary");
+        let second = readshot_core::CaptureRecord::new(chrono::Utc::now(), 120, 90, "secondary");
+
+        let _ = update(
+            &mut app,
+            Message::HistoryListLoaded(Ok(vec![first.clone(), second])),
+        );
+
+        assert_eq!(app.history_selected_id, Some(first.id));
+    }
+
+    #[test]
+    fn history_search_keeps_selection_inside_filtered_results() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut first = readshot_core::CaptureRecord::new(chrono::Utc::now(), 100, 100, "primary");
+        first.ocr_text = Some("alpha receipt".into());
+        let mut second =
+            readshot_core::CaptureRecord::new(chrono::Utc::now(), 120, 90, "secondary");
+        second.ocr_text = Some("beta invoice".into());
+        let second_id = second.id;
+        app.history_records = vec![first, second];
+        app.history_selected_id = app.history_records.first().map(|r| r.id);
+
+        let _ = update(&mut app, Message::HistorySearchChanged("invoice".into()));
+
+        assert_eq!(app.history_selected_id, Some(second_id));
+    }
+
+    #[test]
+    fn history_keyboard_selection_moves_through_visible_rows() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let first = readshot_core::CaptureRecord::new(chrono::Utc::now(), 100, 100, "primary");
+        let second = readshot_core::CaptureRecord::new(chrono::Utc::now(), 120, 90, "secondary");
+        let second_id = second.id;
+        app.history_records = vec![first, second];
+        app.history_selected_id = app.history_records.first().map(|r| r.id);
+
+        let _ = update(&mut app, Message::HistorySelectNext);
+        assert_eq!(app.history_selected_id, Some(second_id));
+
+        let _ = update(&mut app, Message::HistorySelectNext);
+        assert_eq!(app.history_selected_id, Some(second_id));
+
+        let _ = update(&mut app, Message::HistorySelectPrevious);
+        assert_eq!(
+            app.history_selected_id,
+            app.history_records.first().map(|r| r.id)
+        );
+    }
+
+    #[test]
     fn history_copy_completion_updates_history_status() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
 
@@ -4946,6 +5337,23 @@ mod tests {
 
         assert!(title.contains("needs attention"));
         assert!(hint.contains("System Settings"));
+        assert!(hint.contains("restart"));
+    }
+
+    #[test]
+    fn welcome_permission_guidance_explains_restart_after_denied_poll() {
+        let (title, hint) = welcome_permission_guidance(WelcomeState::Denied);
+
+        assert!(title.contains("blocked"));
+        assert!(hint.contains("restart"));
+        assert!(hint.contains("System Settings"));
+    }
+
+    #[test]
+    fn overlay_size_label_uses_physical_pixels() {
+        let rect = readshot_core::geom::Rect::from_xywh(0.0, 0.0, 320.2, 180.4).unwrap();
+
+        assert_eq!(overlay_size_label(&rect, 2.0), "640 x 361 px");
     }
 
     #[test]

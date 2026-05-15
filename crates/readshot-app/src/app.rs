@@ -58,6 +58,14 @@ pub enum WindowKind {
     CliTools,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryKeyboardAction {
+    Previous,
+    Next,
+    Open,
+    Delete,
+}
+
 /// Mapping from live `window::Id`s to their kind, so the daemon's
 /// per-window callbacks know what tree to render. Phase A only ever
 /// has a single Welcome window; the structure is built to grow.
@@ -206,6 +214,20 @@ pub enum Message {
     /// User typed in the history browser's search box. Empty string
     /// resets to "show every record".
     HistorySearchChanged(String),
+    /// User selected a capture in the history browser.
+    HistorySelect(readshot_core::Uuid),
+    /// Move selection to the previous visible history capture.
+    HistorySelectPrevious,
+    /// Move selection to the next visible history capture.
+    HistorySelectNext,
+    /// Open the selected history capture in the editor.
+    HistoryOpenSelected,
+    /// Delete the selected history capture.
+    HistoryDeleteSelected,
+    /// Keyboard shortcut from a history window. The runtime validates
+    /// the window id before applying the action, because iced event
+    /// subscriptions are global to the daemon.
+    HistoryKeyboardShortcut(iced::window::Id, HistoryKeyboardAction),
     /// Browser-level "Clear All" — remove every history record from disk
     /// and clear the visible list.
     HistoryClearAllRequested,
@@ -453,6 +475,10 @@ pub struct App {
     /// record. Substring-matched (case-insensitive) against
     /// `ocr_text` and the formatted timestamp.
     pub history_search: String,
+    /// Selected history row. The browser keeps this inside the
+    /// currently-visible filtered list, so keyboard navigation and
+    /// selected-row actions have a deterministic target.
+    pub history_selected_id: Option<readshot_core::Uuid>,
     /// On-disk path the user's preferences are read from at startup
     /// and written back to whenever a `Message::Settings` mutation
     /// flips a field. `None` in tests and when the OS can't supply a
@@ -573,6 +599,7 @@ impl App {
             history_window_id: None,
             history_status: None,
             history_search: String::new(),
+            history_selected_id: None,
             preferences_path: None,
             settings_window_id: None,
             settings_recording_hotkey: false,
