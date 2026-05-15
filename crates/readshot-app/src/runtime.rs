@@ -2141,7 +2141,11 @@ fn history_view(state: &App) -> Element<'_, Message> {
     let selected = state
         .history_selected_id
         .and_then(|id| visible.iter().copied().find(|record| record.id == id));
-    let selected_panel = history_selected_panel(selected);
+    let selected_panel: Element<'_, Message> = if visible.is_empty() {
+        Space::new().height(Length::Fixed(0.0)).into()
+    } else {
+        history_selected_panel(selected)
+    };
     let header = container(
         column![
             search_row,
@@ -2165,6 +2169,22 @@ fn history_view(state: &App) -> Element<'_, Message> {
         left: 16.0,
     });
     if let Some(root) = state.history_root.as_ref() {
+        if visible.is_empty() {
+            let empty = if total == 0 {
+                empty_state_card(
+                    "No captures yet",
+                    "Take a screenshot and it will appear here with its image, OCR text, and quick actions.",
+                    Some(("Capture", Message::OpenOverlayRequested)),
+                )
+            } else {
+                empty_state_card(
+                    "No matching captures",
+                    "Try a different search or clear the filter to see the full history.",
+                    Some(("Clear Search", Message::HistorySearchChanged(String::new()))),
+                )
+            };
+            col = col.push(container(empty).padding([28, 0]));
+        }
         for r in &visible {
             let png_path = history_png_path(root, r);
             let preview_path = history_thumbnail_path(root, r);
@@ -2250,7 +2270,11 @@ fn history_view(state: &App) -> Element<'_, Message> {
             col = col.push(row_widget);
         }
     } else {
-        col = col.push(text("History root not configured.").size(12));
+        col = col.push(container(empty_state_card(
+            "History unavailable",
+            "Readshot could not resolve the history folder for this session.",
+            None,
+        )));
     }
 
     column![
@@ -2666,10 +2690,16 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     use readshot_ui::editor::{canvas::EditorCanvas, toolbar, ToolState};
 
     let Some(ed) = state.editor.as_ref() else {
-        return container(text("(no capture)"))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into();
+        return container(empty_state_card(
+            "No capture open",
+            "Start a capture to annotate, copy, save, pin, or extract text.",
+            Some(("Capture", Message::OpenOverlayRequested)),
+        ))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into();
     };
 
     let active_tool = ed.model.active_tool();
@@ -2970,25 +3000,8 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             }
         });
 
-    // ===== Bottom row — dims/hint + actions in one strip =====
-    let action_btn = |label: &'static str, msg: Message, kind: ActionKind| {
-        let lbl = text(label).size(13).color(Color::WHITE);
-        let mut b = button(lbl)
-            .padding([8, 16])
-            .style(move |theme, status| action_button_style(theme, status, kind));
-        if !busy {
-            b = b.on_press(msg);
-        }
-        b
-    };
-
+    // ===== Bottom row — dims/hint + actions =====
     let (img_w, img_h) = ed.effective_image_size();
-    let dims = text(format!("{img_w} × {img_h} px"))
-        .size(11)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55));
-    let bullet = text("·")
-        .size(11)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.35));
     // When the user just opened the editor and hasn't drawn anything
     // yet, show a discoverable "press a key to pick a tool" hint
     // in place of the per-tool guidance — the keyboard shortcuts
@@ -3002,61 +3015,132 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     } else {
         tool_hint(active_tool)
     };
-    let hint = text(hint_str)
-        .size(11)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
-        .wrapping(iced::widget::text::Wrapping::None);
-    let toast: Element<'_, Message> = match ed.status.as_deref() {
-        Some(s) => text(s)
+    let hint_text = hint_str.to_string();
+    let status_text = ed.status.clone();
+    let bottom_row: Element<'_, Message> = responsive(move |available| {
+        let layout = editor_bottom_layout(available.width);
+        let compact = layout == EditorBottomLayout::Compact;
+        let dims = text(format!("{img_w} × {img_h} px"))
             .size(11)
-            .color(Color::from_rgba(0.65, 0.95, 0.75, 1.0))
-            .wrapping(iced::widget::text::Wrapping::None)
-            .into(),
-        None => IcedSpace::new().height(Length::Fixed(0.0)).into(),
-    };
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55));
+        let hint_copy = if compact {
+            editor_compact_hint(active_tool).to_string()
+        } else {
+            hint_text.clone()
+        };
+        let hint = text(hint_copy)
+            .size(11)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
+            .width(Length::Fill)
+            .wrapping(if compact {
+                iced::widget::text::Wrapping::Word
+            } else {
+                iced::widget::text::Wrapping::None
+            });
+        let toast: Element<'_, Message> = match status_text.clone() {
+            Some(s) => text(s)
+                .size(11)
+                .color(Color::from_rgba(0.65, 0.95, 0.75, 1.0))
+                .wrapping(iced::widget::text::Wrapping::Word)
+                .into(),
+            None => IcedSpace::new().height(Length::Fixed(0.0)).into(),
+        };
+        let status_area = if compact {
+            container(column![dims, hint, toast].spacing(3))
+                .width(Length::Fill)
+                .clip(true)
+        } else {
+            let bullet = text("·")
+                .size(11)
+                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.35));
+            container(
+                row![
+                    dims,
+                    IcedSpace::new().width(Length::Fixed(8.0)),
+                    bullet,
+                    IcedSpace::new().width(Length::Fixed(8.0)),
+                    hint,
+                    IcedSpace::new().width(Length::Fixed(8.0)),
+                    toast,
+                ]
+                .spacing(0)
+                .align_y(Alignment::Center),
+            )
+            .width(Length::Fill)
+            .clip(true)
+        };
 
-    let status_area = container(
-        row![
-            dims,
-            IcedSpace::new().width(Length::Fixed(8.0)),
-            bullet,
-            IcedSpace::new().width(Length::Fixed(8.0)),
-            hint,
-            IcedSpace::new().width(Length::Fixed(8.0)),
-            toast,
-        ]
-        .spacing(0)
-        .align_y(Alignment::Center),
-    )
-    .width(Length::Fill)
-    .clip(true);
-
-    let controls = row![
-        action_btn(
+        let discard = editor_action_button(
             "Discard",
             Message::EditorDiscardRequested,
             ActionKind::Danger,
-        ),
-        IcedSpace::new().width(Length::Fixed(8.0)),
-        action_btn("Pin", Message::EditorPinRequested, ActionKind::Secondary,),
-        action_btn(
+            busy,
+        );
+        let pin = editor_action_button(
+            "Pin",
+            Message::EditorPinRequested,
+            ActionKind::Secondary,
+            busy,
+        );
+        let copy_text = editor_action_button(
             "Copy Text",
             Message::EditorCopyTextRequested,
             ActionKind::Secondary,
-        ),
-        action_btn(
+            busy,
+        );
+        let copy_image = editor_action_button(
             "Copy Image",
             Message::EditorCopyImageRequested,
             ActionKind::Secondary,
-        ),
-        action_btn("Save", Message::EditorSaveRequested, ActionKind::Primary,),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center);
+            busy,
+        );
+        let save = editor_action_button(
+            "Save",
+            Message::EditorSaveRequested,
+            ActionKind::Primary,
+            busy,
+        );
 
-    let bottom_row = row![status_area, controls]
-        .spacing(8)
-        .align_y(Alignment::Center);
+        match layout {
+            EditorBottomLayout::Wide => row![
+                status_area,
+                row![
+                    discard,
+                    IcedSpace::new().width(Length::Fixed(8.0)),
+                    pin,
+                    copy_text,
+                    copy_image,
+                    save,
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .into(),
+            EditorBottomLayout::Stacked => column![
+                status_area,
+                row![discard, pin, copy_text, copy_image, save]
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+            ]
+            .spacing(8)
+            .into(),
+            EditorBottomLayout::Compact => column![
+                status_area,
+                row![discard, pin, save]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+                row![copy_text, copy_image]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+            ]
+            .spacing(8)
+            .into(),
+        }
+    })
+    .height(Length::Shrink)
+    .into();
 
     // ===== Text-input banner =====
     let text_banner: Element<'_, Message> = if let Some(pending) = ed.pending_text.as_ref() {
@@ -3428,6 +3512,39 @@ enum ActionKind {
     Danger,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditorBottomLayout {
+    Wide,
+    Stacked,
+    Compact,
+}
+
+fn editor_bottom_layout(width: f32) -> EditorBottomLayout {
+    if width < 520.0 {
+        EditorBottomLayout::Compact
+    } else if width < 860.0 {
+        EditorBottomLayout::Stacked
+    } else {
+        EditorBottomLayout::Wide
+    }
+}
+
+fn editor_action_button<'a>(
+    label: &'static str,
+    msg: Message,
+    kind: ActionKind,
+    busy: bool,
+) -> Element<'a, Message> {
+    let lbl = text(label).size(13).color(Color::WHITE);
+    let mut b = button(lbl)
+        .padding([8, 16])
+        .style(move |theme, status| action_button_style(theme, status, kind));
+    if !busy {
+        b = b.on_press(msg);
+    }
+    b.into()
+}
+
 fn action_button_style(theme: &Theme, status: button::Status, kind: ActionKind) -> button::Style {
     let palette = theme.extended_palette();
     let (base, hover, text_color) = match kind {
@@ -3522,6 +3639,24 @@ fn tool_hint(tool: readshot_ui::editor::ToolState) -> &'static str {
         T::Pixelate => "Pixelate — drag a region; block size scales with width.",
         T::NumberedPin => "Numbered pin — click to drop the next number.",
         T::Crop => "Crop — drag to keep only that region.",
+    }
+}
+
+fn editor_compact_hint(tool: readshot_ui::editor::ToolState) -> &'static str {
+    use readshot_ui::editor::ToolState as T;
+    match tool {
+        T::Select => "Tools: R/O/L/A/P/H/T/B/X/N/C · Undo: ⌘Z",
+        T::Rectangle => "Drag to draw a rectangle.",
+        T::Ellipse => "Drag to draw an ellipse.",
+        T::Line => "Drag start to end.",
+        T::Arrow => "Drag base to target.",
+        T::Pen => "Drag to free-draw.",
+        T::Highlighter => "Drag over text.",
+        T::Text => "Click, type, Enter.",
+        T::Blur => "Drag a region to blur.",
+        T::Pixelate => "Drag a region to pixelate.",
+        T::NumberedPin => "Click to drop a number.",
+        T::Crop => "Drag the region to keep.",
     }
 }
 
@@ -4164,6 +4299,37 @@ fn setting_value_box(value: String, active: bool) -> Element<'static, Message> {
         }
     })
     .into()
+}
+
+fn empty_state_card<'a>(
+    title: &'static str,
+    body: &'static str,
+    action: Option<(&'static str, Message)>,
+) -> Element<'a, Message> {
+    let mut content = column![
+        text(title).size(18),
+        text(body)
+            .size(12)
+            .color(settings_muted_text())
+            .width(Length::Fill),
+    ]
+    .spacing(8)
+    .max_width(420);
+
+    if let Some((label, msg)) = action {
+        content = content.push(
+            button(text(label).size(13).color(Color::WHITE))
+                .padding([8, 16])
+                .style(|theme, status| action_button_style(theme, status, ActionKind::Primary))
+                .on_press(msg),
+        );
+    }
+
+    container(content)
+        .padding(18)
+        .width(Length::Fill)
+        .style(settings_section_style)
+        .into()
 }
 
 fn settings_section_style(theme: &Theme) -> iced::widget::container::Style {
@@ -5202,6 +5368,13 @@ mod tests {
             editor_fit_scale(iced::Size::new(500.0, 400.0), 1000, 400),
             0.5
         );
+    }
+
+    #[test]
+    fn editor_bottom_layout_stacks_before_controls_crowd() {
+        assert_eq!(editor_bottom_layout(1000.0), EditorBottomLayout::Wide);
+        assert_eq!(editor_bottom_layout(700.0), EditorBottomLayout::Stacked);
+        assert_eq!(editor_bottom_layout(420.0), EditorBottomLayout::Compact);
     }
 
     #[test]
