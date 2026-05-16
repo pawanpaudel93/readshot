@@ -44,6 +44,10 @@ ICON_SRC="${REPO_ROOT}/packaging/macos/icon.svg"
 ICON_OUT="${REPO_ROOT}/target/release/AppIcon.icns"
 RENDER_ICON="${REPO_ROOT}/packaging/macos/render-app-icon.sh"
 
+workspace_version() {
+  sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1
+}
+
 resolve_sparkle_framework_path() {
   if [[ -n "${SPARKLE_FRAMEWORK_PATH:-}" ]]; then
     echo "${SPARKLE_FRAMEWORK_PATH}"
@@ -69,26 +73,30 @@ sign_sparkle_framework() {
   local framework="$1"
   local identity="$2"
   local version_dir="${framework}/Versions/B"
+  local sign_args=(--force --sign "${identity}" --options runtime)
 
   if [[ ! -d "${version_dir}" ]]; then
     version_dir="$(cd "${framework}/Versions/Current" && pwd -P)"
   fi
 
-  codesign --force --sign "${identity}" --options runtime \
-    "${version_dir}/XPCServices/Installer.xpc"
+  sign_existing() {
+    local path="$1"
+    shift
+    if [[ -e "${path}" ]]; then
+      codesign "${sign_args[@]}" "$@" "${path}"
+    fi
+  }
 
-  if [[ -d "${version_dir}/XPCServices/Downloader.xpc" ]]; then
-    codesign --force --sign "${identity}" --options runtime \
-      --preserve-metadata=entitlements \
-      "${version_dir}/XPCServices/Downloader.xpc"
-  fi
-
-  codesign --force --sign "${identity}" --options runtime \
-    "${version_dir}/Autoupdate"
-  codesign --force --sign "${identity}" --options runtime \
-    "${version_dir}/Updater.app"
-  codesign --force --sign "${identity}" --options runtime \
-    "${framework}"
+  sign_existing "${version_dir}/Sparkle"
+  sign_existing "${version_dir}/Autoupdate"
+  sign_existing "${version_dir}/Updater.app/Contents/MacOS/Updater"
+  sign_existing "${version_dir}/Updater.app"
+  sign_existing "${version_dir}/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
+  sign_existing "${version_dir}/XPCServices/Downloader.xpc" --preserve-metadata=entitlements
+  sign_existing "${version_dir}/XPCServices/Installer.xpc/Contents/MacOS/Installer"
+  sign_existing "${version_dir}/XPCServices/Installer.xpc"
+  sign_existing "${version_dir}"
+  sign_existing "${framework}"
 }
 
 reset_tcc() {
@@ -149,6 +157,15 @@ cp "${ICON_OUT}" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
 cp packaging/macos/Info.plist "${APP_BUNDLE}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable readshot" \
   "${APP_BUNDLE}/Contents/Info.plist"
+BUNDLE_VERSION="$(workspace_version)"
+if [[ -z "${BUNDLE_VERSION}" ]]; then
+  echo "error: could not read workspace version from Cargo.toml" >&2
+  exit 1
+fi
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${BUNDLE_VERSION}" \
+  "${APP_BUNDLE}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUNDLE_VERSION}" \
+  "${APP_BUNDLE}/Contents/Info.plist"
 plutil -lint "${APP_BUNDLE}/Contents/Info.plist" >/dev/null
 
 SPARKLE_FRAMEWORK_PATH="$(resolve_sparkle_framework_path)"
@@ -170,6 +187,8 @@ echo "→ stripping Cargo's build-time signatures"
 for bin in readshot readshot-mcp; do
   codesign --remove-signature "${APP_BUNDLE}/Contents/MacOS/${bin}" 2>/dev/null || true
 done
+xattr -cr "${APP_BUNDLE}" 2>/dev/null || true
+find "${APP_BUNDLE}" -name '._*' -delete
 
 echo "→ ad-hoc codesigning bundle"
 if [[ -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then

@@ -68,6 +68,14 @@ for dmg in "${dmgs[@]}"; do
   file_name="$(basename "${dmg}")"
   arch="${file_name#readshot-macos-}"
   arch="${arch%.dmg}"
+  hardware_requirement=""
+  if [[ "${arch}" == "aarch64" ]]; then
+    # Readshot publishes separate Apple Silicon and Intel DMGs. Sparkle
+    # needs the Apple Silicon item marked explicitly so Intel clients
+    # skip it and then fall through to the x86_64 item for the same
+    # version.
+    hardware_requirement="            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>"$'\n'
+  fi
   sig_file="${dmg}.sparkle.eddsa.txt"
   if [[ ! -f "${sig_file}" ]]; then
     echo "error: missing Sparkle signature file for ${file_name}: ${sig_file}" >&2
@@ -87,6 +95,7 @@ for dmg in "${dmgs[@]}"; do
             <pubDate>${PUB_DATE}</pubDate>
             <sparkle:version>${VERSION}</sparkle:version>
             <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+${hardware_requirement}\
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <description><![CDATA[
                 <p><a href="${RELEASE_URL}">Release notes for Readshot ${VERSION}</a></p>

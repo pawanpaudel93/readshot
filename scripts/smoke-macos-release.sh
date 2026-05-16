@@ -123,6 +123,10 @@ for arch in aarch64 x86_64; do
     echo "error: ${arch} bundle SUFeedURL is not the production appcast" >&2
     exit 1
   fi
+  if [[ "$(plutil -extract SUEnableAutomaticChecks raw -o - "${plist}")" != "true" ]]; then
+    echo "error: ${arch} bundle does not enable Sparkle automatic checks" >&2
+    exit 1
+  fi
   if ! /usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes:0:CFBundleURLSchemes:0" "${plist}" | grep -qx "readshot"; then
     echo "error: ${arch} bundle does not register readshot:// URL scheme" >&2
     exit 1
@@ -155,6 +159,16 @@ for arch in aarch64 x86_64; do
     exit 1
   fi
 done
+if ! awk '/Readshot .* \(aarch64\)/,/<\/item>/' "${APPCAST_PATH}" \
+  | grep -q "<sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>"; then
+  echo "error: appcast Apple Silicon item is missing arm64 hardware requirements" >&2
+  exit 1
+fi
+if awk '/Readshot .* \(x86_64\)/,/<\/item>/' "${APPCAST_PATH}" \
+  | grep -q "<sparkle:hardwareRequirements>"; then
+  echo "error: appcast Intel item should not have arm64 hardware requirements" >&2
+  exit 1
+fi
 if ! grep -q "sparkle:edSignature=" "${APPCAST_PATH}"; then
   echo "error: appcast is missing Sparkle EdDSA signatures" >&2
   exit 1
