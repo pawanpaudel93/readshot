@@ -140,7 +140,7 @@ release is self-signed.
 Readshot's overlay needs the macOS Screen Recording permission. The
 welcome window walks you through it on first launch:
 
-1. Click **Grant Screen Recording Access**.
+1. Click **Allow Screen Recording**.
 2. The system prompt opens; click **Allow**.
 3. The welcome window dismisses automatically.
 

@@ -61,6 +61,8 @@ the image. Entirely offline.
 
 ## Install (macOS)
 
+Requires macOS 14 Sonoma or newer.
+
 Fast install:
 
 ```bash
@@ -70,73 +72,15 @@ curl -fsSL https://raw.githubusercontent.com/pawanpaudel93/readshot/main/install
 The installer downloads the latest architecture-matching DMG, verifies
 it against the release `SHA256SUMS`, installs `Readshot.app` into
 `/Applications`, creates `readshot` and `readshot-mcp` symlinks in
-`~/.local/bin`, and runs
-`xattr -dr com.apple.quarantine /Applications/Readshot.app`.
+`~/.local/bin`, and clears macOS quarantine from the installed app.
 
-Download the latest Apple Silicon or Intel DMG from
-[GitHub Releases](https://github.com/pawanpaudel93/readshot/releases):
-
-- `readshot-macos-aarch64.dmg` for Apple Silicon Macs.
-- `readshot-macos-x86_64.dmg` for Intel Macs.
-
-Open the DMG and drag `Readshot.app` to `Applications`.
-
-The app bundle includes both command-line entry points:
-
-- `/Applications/Readshot.app/Contents/MacOS/readshot` — GUI plus
-  CLI subcommands.
-- `/Applications/Readshot.app/Contents/MacOS/readshot-mcp` — MCP
-  server for AI hosts. See [docs/MCP.md](docs/MCP.md).
-
-The menu-bar item **Install Command Line Tools…** points users back to
-these copy-pasteable setup commands. Readshot does not write shell
-symlinks automatically. Use the setup block in **Usage** above.
-
-Current releases are self-signed, not Apple-notarised. If macOS shows
-the Gatekeeper warning, use either Finder's one-time bypass:
-
-1. Open **Finder → Applications**.
-2. Right-click `Readshot.app` → **Open**.
-3. Click **Open** in the warning dialog.
-
-Or clear quarantine from Terminal:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/Readshot.app
-open /Applications/Readshot.app
-```
+Manual DMG, Homebrew, and first-launch permission details are in
+[docs/INSTALL.md](docs/INSTALL.md).
 
 Readshot includes Sparkle update checks backed by GitHub Releases.
 Use the menu-bar item **Check for Updates…** after installing.
 
-### Build and install locally
-
-For development, the repo ships a script that builds the binary,
-assembles a `.app` bundle with the proper icon, ad-hoc codesigns it,
-installs it to `/Applications`, and resets the TCC entry so Screen
-Recording grants apply cleanly:
-
-```bash
-git clone https://github.com/pawanpaudel93/readshot
-cd readshot
-packaging/macos/install-local.sh
-```
-
-Then open the app:
-
-```bash
-open /Applications/Readshot.app
-```
-
-Requirements:
-
-- macOS 14 (Sonoma) or newer.
-- A stable Rust toolchain — `rust-toolchain.toml` pins it via
-  `rustup`.
-- Homebrew `librsvg` (for icon rasterisation):
-  `brew install librsvg`.
-
-### First-run permission flow
+### Screen Recording
 
 1. The app opens a small welcome window. Click **Allow Screen
    Recording** — Readshot pokes ScreenCaptureKit, which prompts
@@ -149,61 +93,23 @@ Requirements:
    If macOS doesn't ask, the welcome window's **Restart Readshot**
    button does the same thing.
 
-The local install script resets the TCC entry (`tccutil reset
-ScreenCapture dev.pawanpaudel93.readshot`) so a fresh development
-build never inherits a stale grant from an earlier ad-hoc-signed
-cdhash.
-
 ### Uninstall
 
-For a GitHub Release install, quit Readshot and remove:
+Quit Readshot and remove:
 
 - `/Applications/Readshot.app`
 - `~/Library/Application Support/dev.pawanpaudel93.Readshot`
-
-For a local development install from a repo checkout:
-
-```bash
-packaging/macos/install-local.sh --uninstall
-```
 
 ## Usage
 
 Launch the menu-bar app from Applications, then use the tray icon or
 the default global hotkey **⌘⇧X** to start a capture.
 
-The installed app also includes a scriptable CLI. To expose `readshot`
-and `readshot-mcp` in your shell, first create the symlinks:
-
-```bash
-mkdir -p "$HOME/bin"
-ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot" "$HOME/bin/readshot"
-ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/bin/readshot-mcp"
-```
-
-Then add `~/bin` to the shell you use.
-
-For zsh:
-
-```bash
-export PATH="$HOME/bin:$PATH"
-grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc"
-```
-
-For bash:
-
-```bash
-export PATH="$HOME/bin:$PATH"
-grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
-```
-
-For fish:
-
-```fish
-fish_add_path "$HOME/bin"
-mkdir -p "$HOME/.config/fish"
-grep -qxF 'fish_add_path "$HOME/bin"' "$HOME/.config/fish/config.fish" 2>/dev/null || echo 'fish_add_path "$HOME/bin"' >> "$HOME/.config/fish/config.fish"
-```
+The installed app also includes a scriptable CLI. The one-line
+installer links `readshot` and `readshot-mcp` into `~/.local/bin`; add
+that directory to your `PATH` if your shell does not already include
+it. Manual DMG users can run the binaries from
+`/Applications/Readshot.app/Contents/MacOS/`.
 
 Verify:
 
@@ -281,7 +187,9 @@ In the region overlay:
 | `Enter` / `Space` | Capture the full screen |
 | `Esc` | Cancel |
 
-## Build from source (no install)
+## Development
+
+Build from source without installing:
 
 ```bash
 cargo run --bin readshot
@@ -290,6 +198,21 @@ cargo run --bin readshot
 This skips the bundle assembly, so macOS won't apply the
 `Info.plist` (no Screen Recording grant, no menu-bar agent). Useful
 for unit tests; not useful for actual capture.
+
+For local app testing, the repo ships a script that builds the
+release binaries, assembles `Readshot.app`, installs it to
+`/Applications`, and resets the Screen Recording TCC entry:
+
+```bash
+packaging/macos/install-local.sh
+```
+
+Requirements:
+
+- macOS 14 Sonoma or newer.
+- A stable Rust toolchain; `rust-toolchain.toml` pins it via `rustup`.
+- Homebrew `librsvg` for icon rasterisation:
+  `brew install librsvg`.
 
 ## Tests
 
