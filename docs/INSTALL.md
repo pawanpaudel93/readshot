@@ -11,6 +11,25 @@ one-time security prompt; subsequent launches are silent.
 
 ## macOS (14 Sonoma and later)
 
+### Recommended: one-line installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pawanpaudel93/readshot/main/install.sh | bash
+```
+
+The installer detects Apple Silicon vs Intel, downloads the matching
+GitHub Release DMG, verifies it against `SHA256SUMS`, installs
+`Readshot.app` into `/Applications`, creates `readshot` and
+`readshot-mcp` symlinks in `~/.local/bin`, and removes macOS
+quarantine from the installed app by running
+`xattr -dr com.apple.quarantine /Applications/Readshot.app`.
+
+To install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pawanpaudel93/readshot/main/install.sh | bash -s -- 0.4.1
+```
+
 GitHub Release asset:
 
 * `readshot-macos-aarch64.dmg` for Apple Silicon Macs.
@@ -66,7 +85,7 @@ readshot --help
 The menu-bar item **Install Command Line Tools…** points users back to
 these commands. Readshot does not write shell symlinks automatically.
 
-### Recommended: Homebrew Cask
+### Alternative: Homebrew Cask
 
 ```bash
 brew install --cask readshot

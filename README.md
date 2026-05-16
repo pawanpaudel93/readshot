@@ -59,6 +59,114 @@ the image. Entirely offline.
   capture, and search history programmatically — see
   [docs/MCP.md](docs/MCP.md).
 
+## Install (macOS)
+
+Fast install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pawanpaudel93/readshot/main/install.sh | bash
+```
+
+The installer downloads the latest architecture-matching DMG, verifies
+it against the release `SHA256SUMS`, installs `Readshot.app` into
+`/Applications`, creates `readshot` and `readshot-mcp` symlinks in
+`~/.local/bin`, and runs
+`xattr -dr com.apple.quarantine /Applications/Readshot.app`.
+
+Download the latest Apple Silicon or Intel DMG from
+[GitHub Releases](https://github.com/pawanpaudel93/readshot/releases):
+
+- `readshot-macos-aarch64.dmg` for Apple Silicon Macs.
+- `readshot-macos-x86_64.dmg` for Intel Macs.
+
+Open the DMG and drag `Readshot.app` to `Applications`.
+
+The app bundle includes both command-line entry points:
+
+- `/Applications/Readshot.app/Contents/MacOS/readshot` — GUI plus
+  CLI subcommands.
+- `/Applications/Readshot.app/Contents/MacOS/readshot-mcp` — MCP
+  server for AI hosts. See [docs/MCP.md](docs/MCP.md).
+
+The menu-bar item **Install Command Line Tools…** points users back to
+these copy-pasteable setup commands. Readshot does not write shell
+symlinks automatically. Use the setup block in **Usage** above.
+
+Current releases are self-signed, not Apple-notarised. If macOS shows
+the Gatekeeper warning, use either Finder's one-time bypass:
+
+1. Open **Finder → Applications**.
+2. Right-click `Readshot.app` → **Open**.
+3. Click **Open** in the warning dialog.
+
+Or clear quarantine from Terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Readshot.app
+open /Applications/Readshot.app
+```
+
+Readshot includes Sparkle update checks backed by GitHub Releases.
+Use the menu-bar item **Check for Updates…** after installing.
+
+### Build and install locally
+
+For development, the repo ships a script that builds the binary,
+assembles a `.app` bundle with the proper icon, ad-hoc codesigns it,
+installs it to `/Applications`, and resets the TCC entry so Screen
+Recording grants apply cleanly:
+
+```bash
+git clone https://github.com/pawanpaudel93/readshot
+cd readshot
+packaging/macos/install-local.sh
+```
+
+Then open the app:
+
+```bash
+open /Applications/Readshot.app
+```
+
+Requirements:
+
+- macOS 14 (Sonoma) or newer.
+- A stable Rust toolchain — `rust-toolchain.toml` pins it via
+  `rustup`.
+- Homebrew `librsvg` (for icon rasterisation):
+  `brew install librsvg`.
+
+### First-run permission flow
+
+1. The app opens a small welcome window. Click **Allow Screen
+   Recording** — Readshot pokes ScreenCaptureKit, which prompts
+   macOS to register the bundle in *Privacy & Security → Screen &
+   System Audio Recording*.
+2. Click **Open System Settings** in the macOS prompt → toggle
+   **Readshot** on.
+3. macOS will offer **Quit & Reopen** — click it. Readshot relaunches
+   into the menu bar and a system notification confirms it's alive.
+   If macOS doesn't ask, the welcome window's **Restart Readshot**
+   button does the same thing.
+
+The local install script resets the TCC entry (`tccutil reset
+ScreenCapture dev.pawanpaudel93.readshot`) so a fresh development
+build never inherits a stale grant from an earlier ad-hoc-signed
+cdhash.
+
+### Uninstall
+
+For a GitHub Release install, quit Readshot and remove:
+
+- `/Applications/Readshot.app`
+- `~/Library/Application Support/dev.pawanpaudel93.Readshot`
+
+For a local development install from a repo checkout:
+
+```bash
+packaging/macos/install-local.sh --uninstall
+```
+
 ## Usage
 
 Launch the menu-bar app from Applications, then use the tray icon or
@@ -172,102 +280,6 @@ In the region overlay:
 | `⇧` (held while dragging) | Constrain to a square |
 | `Enter` / `Space` | Capture the full screen |
 | `Esc` | Cancel |
-
-## Install (macOS)
-
-Download the latest Apple Silicon or Intel DMG from
-[GitHub Releases](https://github.com/pawanpaudel93/readshot/releases):
-
-- `readshot-macos-aarch64.dmg` for Apple Silicon Macs.
-- `readshot-macos-x86_64.dmg` for Intel Macs.
-
-Open the DMG and drag `Readshot.app` to `Applications`.
-
-The app bundle includes both command-line entry points:
-
-- `/Applications/Readshot.app/Contents/MacOS/readshot` — GUI plus
-  CLI subcommands.
-- `/Applications/Readshot.app/Contents/MacOS/readshot-mcp` — MCP
-  server for AI hosts. See [docs/MCP.md](docs/MCP.md).
-
-The menu-bar item **Install Command Line Tools…** points users back to
-these copy-pasteable setup commands. Readshot does not write shell
-symlinks automatically. Use the setup block in **Usage** above.
-
-Current releases are self-signed, not Apple-notarised. If macOS shows
-the Gatekeeper warning, use either Finder's one-time bypass:
-
-1. Open **Finder → Applications**.
-2. Right-click `Readshot.app` → **Open**.
-3. Click **Open** in the warning dialog.
-
-Or clear quarantine from Terminal:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/Readshot.app
-open /Applications/Readshot.app
-```
-
-Readshot includes Sparkle update checks backed by GitHub Releases.
-Use the menu-bar item **Check for Updates…** after installing.
-
-### Build and install locally
-
-For development, the repo ships a script that builds the binary,
-assembles a `.app` bundle with the proper icon, ad-hoc codesigns it,
-installs it to `/Applications`, and resets the TCC entry so Screen
-Recording grants apply cleanly:
-
-```bash
-git clone https://github.com/pawanpaudel93/readshot
-cd readshot
-packaging/macos/install-local.sh
-```
-
-Then open the app:
-
-```bash
-open /Applications/Readshot.app
-```
-
-Requirements:
-
-- macOS 14 (Sonoma) or newer.
-- A stable Rust toolchain — `rust-toolchain.toml` pins it via
-  `rustup`.
-- Homebrew `librsvg` (for icon rasterisation):
-  `brew install librsvg`.
-
-### First-run permission flow
-
-1. The app opens a small welcome window. Click **Allow Screen
-   Recording** — Readshot pokes ScreenCaptureKit, which prompts
-   macOS to register the bundle in *Privacy & Security → Screen &
-   System Audio Recording*.
-2. Click **Open System Settings** in the macOS prompt → toggle
-   **Readshot** on.
-3. macOS will offer **Quit & Reopen** — click it. Readshot relaunches
-   into the menu bar and a system notification confirms it's alive.
-   If macOS doesn't ask, the welcome window's **Restart Readshot**
-   button does the same thing.
-
-The local install script resets the TCC entry (`tccutil reset
-ScreenCapture dev.pawanpaudel93.readshot`) so a fresh development
-build never inherits a stale grant from an earlier ad-hoc-signed
-cdhash.
-
-### Uninstall
-
-For a GitHub Release install, quit Readshot and remove:
-
-- `/Applications/Readshot.app`
-- `~/Library/Application Support/dev.pawanpaudel93.Readshot`
-
-For a local development install from a repo checkout:
-
-```bash
-packaging/macos/install-local.sh --uninstall
-```
 
 ## Build from source (no install)
 
