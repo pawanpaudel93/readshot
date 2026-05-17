@@ -120,7 +120,7 @@ impl Default for OcrsEngine {
 }
 
 fn default_models_dir() -> PathBuf {
-    directories::ProjectDirs::from("dev", "pawanpaudel93", "readshot")
+    directories::ProjectDirs::from("np.com", "pawanpaudel", "readshot")
         .map(|p| p.data_local_dir().join("models"))
         .unwrap_or_else(|| PathBuf::from("./models"))
 }

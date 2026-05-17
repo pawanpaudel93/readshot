@@ -152,7 +152,7 @@ appcast for the new version, DMG URLs, byte lengths, and
 
 Use the same clean macOS VM. Resetting the VM snapshot between
 releases is best; otherwise remove `/Applications/Readshot.app` and
-run `tccutil reset ScreenCapture dev.pawanpaudel93.readshot` before
+run `tccutil reset ScreenCapture np.com.pawanpaudel.readshot` before
 installing.
 
 1. Open the architecture-matching DMG and drag `Readshot.app` to

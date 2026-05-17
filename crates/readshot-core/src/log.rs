@@ -3,7 +3,7 @@
 //! Every `tracing::info!` / `error!` / etc. inside Readshot must specify a
 //! target from this module. The reasons:
 //!
-//! 1. **Filtering.** `RUST_LOG=dev.pawanpaudel93.readshot::ocr=debug` enables
+//! 1. **Filtering.** `RUST_LOG=np.com.pawanpaudel.readshot::ocr=debug` enables
 //!    OCR-only diagnostic logging without affecting capture or editor.
 //! 2. **Audit visibility.** The CLI and MCP server log every silent capture
 //!    they perform; using a stable target makes those entries easy to grep
@@ -28,19 +28,19 @@
 
 /// Root tracing target — equal to the macOS bundle id so OSLog sees a stable
 /// subsystem name and Linux/Windows log filters can use the same string.
-pub const LOG_TARGET: &str = "dev.pawanpaudel93.readshot";
+pub const LOG_TARGET: &str = "np.com.pawanpaudel.readshot";
 
 /// Per-component sub-targets. Each value is `LOG_TARGET` followed by a
 /// double-colon component name. Use `tracing::info!(target: cat::CAPTURE, …)`.
 pub mod cat {
-    pub const CAPTURE: &str = concat!("dev.pawanpaudel93.readshot", "::capture");
-    pub const EDITOR: &str = concat!("dev.pawanpaudel93.readshot", "::editor");
-    pub const OCR: &str = concat!("dev.pawanpaudel93.readshot", "::ocr");
-    pub const PERMS: &str = concat!("dev.pawanpaudel93.readshot", "::permissions");
-    pub const HISTORY: &str = concat!("dev.pawanpaudel93.readshot", "::history");
-    pub const UPDATER: &str = concat!("dev.pawanpaudel93.readshot", "::updater");
-    pub const CLI: &str = concat!("dev.pawanpaudel93.readshot", "::cli");
-    pub const MCP: &str = concat!("dev.pawanpaudel93.readshot", "::mcp");
+    pub const CAPTURE: &str = concat!("np.com.pawanpaudel.readshot", "::capture");
+    pub const EDITOR: &str = concat!("np.com.pawanpaudel.readshot", "::editor");
+    pub const OCR: &str = concat!("np.com.pawanpaudel.readshot", "::ocr");
+    pub const PERMS: &str = concat!("np.com.pawanpaudel.readshot", "::permissions");
+    pub const HISTORY: &str = concat!("np.com.pawanpaudel.readshot", "::history");
+    pub const UPDATER: &str = concat!("np.com.pawanpaudel.readshot", "::updater");
+    pub const CLI: &str = concat!("np.com.pawanpaudel.readshot", "::cli");
+    pub const MCP: &str = concat!("np.com.pawanpaudel.readshot", "::mcp");
 }
 
 #[cfg(test)]
@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn root_target_matches_bundle_id() {
-        assert_eq!(LOG_TARGET, "dev.pawanpaudel93.readshot");
+        assert_eq!(LOG_TARGET, "np.com.pawanpaudel.readshot");
     }
 
     #[test]

@@ -59,6 +59,6 @@ async fn main() -> std::io::Result<()> {
 }
 
 fn default_history_root() -> Option<std::path::PathBuf> {
-    directories::ProjectDirs::from("dev", "pawanpaudel93", "Readshot")
+    directories::ProjectDirs::from("np.com", "pawanpaudel", "Readshot")
         .map(|d| d.data_local_dir().join("history"))
 }

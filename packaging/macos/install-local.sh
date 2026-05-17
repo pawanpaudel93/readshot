@@ -37,7 +37,7 @@ done
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 APP_NAME="Readshot"
-BUNDLE_ID="dev.pawanpaudel93.readshot"
+BUNDLE_ID="np.com.pawanpaudel.readshot"
 APP_BUNDLE="${REPO_ROOT}/target/release/${APP_NAME}.app"
 INSTALLED="/Applications/${APP_NAME}.app"
 ICON_SRC="${REPO_ROOT}/packaging/macos/icon.svg"

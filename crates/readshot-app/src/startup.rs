@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-const LAUNCH_AGENT_LABEL: &str = "dev.pawanpaudel93.readshot.login";
-const LAUNCH_AGENT_FILENAME: &str = "dev.pawanpaudel93.readshot.login.plist";
+const LAUNCH_AGENT_LABEL: &str = "np.com.pawanpaudel.readshot.login";
+const LAUNCH_AGENT_FILENAME: &str = "np.com.pawanpaudel.readshot.login.plist";
 
 #[derive(Debug, Error)]
 pub enum StartupError {
@@ -143,7 +143,7 @@ mod tests {
         let plist = super::launch_agent_plist(Path::new("/Applications/Readshot.app"));
 
         assert!(plist.contains("<key>Label</key>"));
-        assert!(plist.contains("<string>dev.pawanpaudel93.readshot.login</string>"));
+        assert!(plist.contains("<string>np.com.pawanpaudel.readshot.login</string>"));
         assert!(plist.contains("<string>/usr/bin/open</string>"));
         assert!(plist.contains("<string>/Applications/Readshot.app</string>"));
         assert!(plist.contains("<key>RunAtLoad</key>"));

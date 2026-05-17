@@ -1,13 +1,13 @@
 # Flatpak manifest for Readshot.
 #
-# Submitted to https://github.com/flathub/dev.pawanpaudel93.readshot
+# Submitted to https://github.com/flathub/np.com.pawanpaudel.readshot
 # once the project lands on Flathub. The release workflow opens a
 # bot-driven PR against that repo on every tag push.
 #
 # Build locally with:
-#   flatpak-builder --force-clean build packaging/linux/flatpak/dev.pawanpaudel93.readshot.yaml
+#   flatpak-builder --force-clean build packaging/linux/flatpak/np.com.pawanpaudel.readshot.yaml
 
-app-id: dev.pawanpaudel93.readshot
+app-id: np.com.pawanpaudel.readshot
 runtime: org.freedesktop.Platform
 runtime-version: "23.08"
 sdk: org.freedesktop.Sdk
@@ -45,8 +45,8 @@ modules:
       - cargo --offline fetch --manifest-path Cargo.toml --verbose
       - cargo --offline build --release --bin readshot
       - install -Dm755 target/release/readshot /app/bin/readshot
-      - install -Dm644 packaging/linux/readshot.desktop /app/share/applications/dev.pawanpaudel93.readshot.desktop
-      - install -Dm644 packaging/linux/readshot.png /app/share/icons/hicolor/512x512/apps/dev.pawanpaudel93.readshot.png
+      - install -Dm644 packaging/linux/readshot.desktop /app/share/applications/np.com.pawanpaudel.readshot.desktop
+      - install -Dm644 packaging/linux/readshot.png /app/share/icons/hicolor/512x512/apps/np.com.pawanpaudel.readshot.png
     sources:
       - type: dir
         path: ../../..

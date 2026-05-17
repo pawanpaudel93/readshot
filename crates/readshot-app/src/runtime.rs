@@ -4613,21 +4613,21 @@ fn close_all_overlays(state: &mut App) -> Vec<Task<Message>> {
 }
 
 /// Default per-user history root —
-/// `~/Library/Application Support/dev.pawanpaudel93.Readshot/history/`
+/// `~/Library/Application Support/np.com.pawanpaudel.Readshot/history/`
 /// on macOS, the equivalent `data_local_dir` on other platforms.
 /// `None` when the system can't supply a project dir (rare; tests fall
 /// back to no history).
 pub fn default_history_root() -> Option<PathBuf> {
-    directories::ProjectDirs::from("dev", "pawanpaudel93", "Readshot")
+    directories::ProjectDirs::from("np.com", "pawanpaudel", "Readshot")
         .map(|d| d.data_local_dir().join("history"))
 }
 
 /// Default per-user preferences file —
-/// `<config_dir>/dev.pawanpaudel93.Readshot/preferences.toml`. `None`
+/// `<config_dir>/np.com.pawanpaudel.Readshot/preferences.toml`. `None`
 /// in the same edge cases [`default_history_root`] returns `None`;
 /// settings changes in that mode stay in-memory only.
 pub fn default_preferences_path() -> Option<PathBuf> {
-    directories::ProjectDirs::from("dev", "pawanpaudel93", "Readshot")
+    directories::ProjectDirs::from("np.com", "pawanpaudel", "Readshot")
         .map(|d| d.config_dir().join("preferences.toml"))
 }
 

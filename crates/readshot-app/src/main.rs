@@ -111,7 +111,7 @@ fn init_logging(log_to_stderr: bool) {
     let stderr_layer =
         log_to_stderr.then(|| fmt::layer().with_writer(std::io::stderr).with_target(true));
 
-    let log_path = directories::ProjectDirs::from("dev", "pawanpaudel93", "Readshot")
+    let log_path = directories::ProjectDirs::from("np.com", "pawanpaudel", "Readshot")
         .map(|d| d.data_local_dir().join("readshot.log"))
         .or_else(|| std::env::temp_dir().join("readshot.log").into());
 
