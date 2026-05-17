@@ -99,6 +99,7 @@ Useful docs:
 - [AGENTS.md](AGENTS.md) — contributor orientation and repo layout.
 - [docs/INSTALL.md](docs/INSTALL.md) — install paths and first-launch notes.
 - [docs/MCP.md](docs/MCP.md) — MCP server setup.
+- [docs/ROADMAP.md](docs/ROADMAP.md) — planned screenshot workflow improvements.
 - [docs/RELEASING.md](docs/RELEASING.md) — release runbook.
 
 ## License
