@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Pure-Rust domain core for Readshot — annotation model, traits, persistence schema."
 
 [dependencies]

@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Per-OS screen capture for Readshot behind a Capturer trait."
 
 [features]

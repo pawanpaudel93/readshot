@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description = "Per-OS offline OCR for Readshot behind an OCREngine trait."
 
 [features]

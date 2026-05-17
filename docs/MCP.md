@@ -20,6 +20,11 @@ common hosts. Every snippet uses the absolute installed binary path
 If you built from source, it's at
 `./target/release/readshot-mcp` after `cargo build --release -p readshot-mcp`.
 
+The one-line macOS installer also creates a `readshot-mcp` symlink in
+`~/.local/bin` for terminal use. The host snippets below use the
+absolute app-bundle path because desktop MCP hosts often do not inherit
+your shell `PATH`.
+
 ## Tools exposed
 
 | Tool                       | Inputs                                          | Output                            |

@@ -2,7 +2,7 @@
 # Install Readshot from the latest GitHub Release.
 #
 # Intended public usage:
-#   curl -fsSL https://raw.githubusercontent.com/pawanpaudel93/readshot/main/install.sh | bash
+#   curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash
 #
 # This installer removes the quarantine attribute from the installed
 # app after verifying the release SHA-256.
@@ -26,8 +26,8 @@ Options:
   --help                     Show this help
 
 Examples:
-  curl -fsSL https://raw.githubusercontent.com/pawanpaudel93/readshot/main/install.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/pawanpaudel93/readshot/main/install.sh | bash -s -- 0.4.1
+  curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash
+  curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- 0.4.1
 EOF
 }
 

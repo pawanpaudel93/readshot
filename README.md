@@ -7,6 +7,8 @@
 Readshot is a free, offline screenshot tool for macOS with OCR,
 annotation, and searchable capture history.
 
+Website: <https://readshot.pawanpaudel.com.np>
+
 Capture a region, mark it up, copy the image or recognized text, and
 find it later by searching the text inside the screenshot.
 
@@ -31,7 +33,7 @@ find it later by searching the text inside the screenshot.
 Requires macOS 14 Sonoma or newer.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pawanpaudel93/readshot/main/install.sh | bash
+curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash
 ```
 
 The installer downloads the latest matching DMG, verifies it, installs

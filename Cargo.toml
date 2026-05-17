@@ -8,6 +8,7 @@ edition = "2021"
 authors = ["Pawan Paudel <pawanpaudel93@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/pawanpaudel93/readshot"
+homepage = "https://readshot.pawanpaudel.com.np"
 
 [workspace.dependencies]
 anyhow = "1"

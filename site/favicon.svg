@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Readshot app icon. 1024x1024 source; the packaging pipeline
+  rasterises it at every macOS app-icon size and then bundles
+  the iconset into AppIcon.icns.
+
+  Visual: a deep teal-blue rounded tile with selection-corner
+  brackets framing a centered glass lens. Reads as "screenshot
+  selection + OCR lens" from 16px to 1024px.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#123B48"/>
+      <stop offset="48%" stop-color="#176E80"/>
+      <stop offset="100%" stop-color="#21B6A8"/>
+    </linearGradient>
+    <radialGradient id="lensGlass" cx="34%" cy="28%" r="78%">
+      <stop offset="0%" stop-color="#F7FBFF"/>
+      <stop offset="42%" stop-color="#BFEFFF"/>
+      <stop offset="100%" stop-color="#0E4252"/>
+    </radialGradient>
+    <linearGradient id="lensRing" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="52%" stop-color="#D3F8FF"/>
+      <stop offset="100%" stop-color="#7EDFD8"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="16%" y1="8%" x2="78%" y2="76%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="18"/>
+      <feOffset dx="0" dy="18"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.28"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="lensShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="24" stdDeviation="24" flood-color="#062A33" flood-opacity="0.42"/>
+    </filter>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="224" fill="url(#bg)"/>
+  <rect x="96" y="88" width="832" height="520" rx="196" fill="url(#shine)"/>
+  <path d="M 168 764 C 300 884 724 920 856 684" fill="none" stroke="#0D3B46" stroke-width="84" stroke-linecap="round" stroke-opacity="0.2"/>
+
+  <g stroke="#F8FFFF" stroke-width="48" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#softShadow)">
+    <path d="M 286 386 L 286 254 L 418 254"/>
+    <path d="M 738 386 L 738 254 L 606 254"/>
+    <path d="M 286 638 L 286 770 L 418 770"/>
+    <path d="M 738 638 L 738 770 L 606 770"/>
+  </g>
+
+  <g transform="translate(512 512)" filter="url(#lensShadow)">
+    <circle r="166" fill="#082E38" opacity="0.92"/>
+    <circle r="138" fill="url(#lensRing)"/>
+    <circle r="104" fill="url(#lensGlass)"/>
+    <circle r="104" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-opacity="0.48"/>
+    <path d="M -48 -58 C -4 -98 74 -82 96 -24" fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round" stroke-opacity="0.72"/>
+    <circle cx="-34" cy="-34" r="22" fill="#FFFFFF" fill-opacity="0.86"/>
+    <circle cx="44" cy="54" r="18" fill="#7DF7E7" fill-opacity="0.68"/>
+  </g>
+</svg>

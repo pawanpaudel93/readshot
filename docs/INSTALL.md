@@ -14,7 +14,7 @@ one-time security prompt; subsequent launches are silent.
 ### Recommended: one-line installer
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pawanpaudel93/readshot/main/install.sh | bash
+curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash
 ```
 
 The installer detects Apple Silicon vs Intel, downloads the matching
@@ -27,7 +27,7 @@ quarantine from the installed app by running
 To install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pawanpaudel93/readshot/main/install.sh | bash -s -- 0.4.1
+curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- 0.4.1
 ```
 
 GitHub Release asset:
