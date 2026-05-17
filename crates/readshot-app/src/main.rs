@@ -23,8 +23,6 @@ use readshot_app::runtime;
 use readshot_app::url_scheme;
 
 fn main() -> iced::Result {
-    init_logging();
-
     // Phase D (argv path): if the binary is invoked with a
     // `readshot://...` URL as the first argument (e.g. `open
     // readshot://new` on macOS or a desktop-handler invocation on
@@ -35,15 +33,8 @@ fn main() -> iced::Result {
         .get(1)
         .filter(|a| a.starts_with("readshot://"))
         .cloned();
-    if let Some(arg) = url_arg.as_deref() {
-        match url_scheme::parse(arg) {
-            Ok(action) => runtime::set_initial_url_action(action),
-            Err(e) => eprintln!("readshot: ignoring URL `{arg}`: {e}"),
-        }
-    }
-
-    // Parse CLI second. If argv[1] was a readshot:// URL we already
-    // consumed it above; clap won't see it as a subcommand. Any
+    // Parse CLI second. If argv[1] is a readshot:// URL, skip clap so
+    // the GUI path can handle it after logging is ready. Any
     // subcommand routes to the headless surface and exits with a
     // stable status code.
     let cli = if url_arg.is_some() {
@@ -53,6 +44,7 @@ fn main() -> iced::Result {
         Cli::parse()
     };
     if cli.command.is_some() {
+        init_cli_logging();
         let capturer = Arc::from(default_capturer());
         let ocr = Arc::from(default_engine());
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -63,6 +55,14 @@ fn main() -> iced::Result {
             std::process::exit(exit_code(&err));
         }
         return Ok(());
+    }
+
+    init_app_logging();
+    if let Some(arg) = url_arg.as_deref() {
+        match url_scheme::parse(arg) {
+            Ok(action) => runtime::set_initial_url_action(action),
+            Err(e) => eprintln!("readshot: ignoring URL `{arg}`: {e}"),
+        }
     }
 
     tracing::info!(
@@ -89,7 +89,18 @@ fn main() -> iced::Result {
 /// other platforms — Launch Services-launched apps lose stderr to
 /// `/dev/null`, so the file fallback is what makes triage possible
 /// when the user double-clicks the bundle from Finder.
-fn init_logging() {
+fn init_app_logging() {
+    init_logging(true);
+}
+
+/// Initialise quiet logging for headless CLI invocations. CLI output
+/// should stay script-friendly: data goes to stdout, errors go to
+/// stderr, and routine tracing stays in the log file when available.
+fn init_cli_logging() {
+    init_logging(false);
+}
+
+fn init_logging(log_to_stderr: bool) {
     use tracing_subscriber::fmt;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -97,7 +108,8 @@ fn init_logging() {
 
     let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-    let stderr_layer = fmt::layer().with_writer(std::io::stderr).with_target(true);
+    let stderr_layer =
+        log_to_stderr.then(|| fmt::layer().with_writer(std::io::stderr).with_target(true));
 
     let log_path = directories::ProjectDirs::from("dev", "pawanpaudel93", "Readshot")
         .map(|d| d.data_local_dir().join("readshot.log"))
@@ -114,7 +126,7 @@ fn init_logging() {
             .ok()
     });
 
-    if let (Some(file), Some(path)) = (file_appender, log_path.as_ref()) {
+    if let Some(file) = file_appender {
         let file_layer = fmt::layer()
             .with_writer(std::sync::Mutex::new(file))
             .with_ansi(false)
@@ -124,7 +136,6 @@ fn init_logging() {
             .with(stderr_layer)
             .with(file_layer)
             .init();
-        eprintln!("readshot: logging to {}", path.display());
     } else {
         tracing_subscriber::registry()
             .with(filter())

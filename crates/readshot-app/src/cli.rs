@@ -409,6 +409,9 @@ async fn build_capture_request(
     scale: Option<f32>,
     hide_cursor: bool,
 ) -> Result<CaptureRequest, CliError> {
+    if let Some(scale) = scale {
+        validate_scale(scale)?;
+    }
     let displays = capturer.list_displays().await?;
     if displays.is_empty() {
         return Err(CliError::NoDisplays);
@@ -425,12 +428,23 @@ async fn build_capture_request(
     };
     let rect = rect.unwrap_or(chosen.bounds);
     let scale = scale.unwrap_or(chosen.scale);
+    validate_scale(scale)?;
     Ok(CaptureRequest {
         display_id: chosen.id.clone(),
         rect,
         scale,
         hide_cursor,
     })
+}
+
+fn validate_scale(scale: f32) -> Result<(), CliError> {
+    if scale.is_finite() && scale > 0.0 {
+        Ok(())
+    } else {
+        Err(CliError::InvalidInput(
+            "--scale must be a positive finite number".into(),
+        ))
+    }
 }
 
 async fn lookup_window_bounds(
@@ -986,6 +1000,25 @@ mod tests {
         let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
         assert!(matches!(err, CliError::DisplayNotFound(ref s) if s == "no-such-display"));
         assert_eq!(exit_code(&err), 66);
+    }
+
+    #[tokio::test]
+    async fn run_capture_with_invalid_scale_returns_usage_error() {
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture",
+            "--scale",
+            "0",
+            "-o",
+            "/tmp/ignored.png",
+        ])
+        .unwrap();
+        let mut out = Vec::new();
+        let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
+
+        assert!(matches!(err, CliError::InvalidInput(ref s) if s.contains("--scale")));
+        assert_eq!(exit_code(&err), 64);
     }
 
     #[tokio::test]

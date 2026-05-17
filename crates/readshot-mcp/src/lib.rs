@@ -184,14 +184,23 @@ impl McpServer {
             return None;
         }
 
-        let req: RpcRequest = match serde_json::from_str(line) {
-            Ok(r) => r,
+        let value: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
             Err(e) => {
                 return Some(error_response(
                     Value::Null,
                     codes::PARSE_ERROR,
                     e.to_string(),
                 ))
+            }
+        };
+        let request_id = value.get("id").cloned();
+        let req: RpcRequest = match serde_json::from_value(value) {
+            Ok(r) => r,
+            Err(e) => {
+                return request_id.map(|id| {
+                    error_response(id, codes::INVALID_REQUEST, format!("invalid request: {e}"))
+                });
             }
         };
 
@@ -423,7 +432,7 @@ impl McpServer {
             .map_err(capture_to_rpc)?;
         let result = self
             .ocr
-            .recognise(ocr_request_from(args, img))
+            .recognise(ocr_request_from(args, img)?)
             .await
             .map_err(ocr_to_rpc)?;
         Ok(json!({
@@ -442,7 +451,7 @@ impl McpServer {
         let png = encode_png(&img)?;
         let result = self
             .ocr
-            .recognise(ocr_request_from(args, img))
+            .recognise(ocr_request_from(args, img)?)
             .await
             .map_err(ocr_to_rpc)?;
         Ok(json!({
@@ -453,6 +462,14 @@ impl McpServer {
     }
 
     async fn build_request(&self, args: &Value) -> Result<CaptureRequest, RpcErr> {
+        let requested_display = parse_optional_non_empty_str(args, "display")?;
+        let requested_rect = match args.get("rect") {
+            Some(v) => Some(parse_rect_value(v)?),
+            None => None,
+        };
+        let requested_scale = parse_optional_positive_f32(args, "scale")?;
+        let hide_cursor = parse_optional_bool(args, "hide_cursor")?.unwrap_or(true);
+
         let displays = self
             .capturer
             .list_displays()
@@ -464,7 +481,7 @@ impl McpServer {
                 message: "no displays available".into(),
             });
         }
-        let chosen = match args.get("display").and_then(Value::as_str) {
+        let chosen = match requested_display {
             Some(id) => displays.iter().find(|d| d.id == id).ok_or_else(|| RpcErr {
                 code: codes::INVALID_PARAMS,
                 message: format!("display `{id}` not found"),
@@ -475,19 +492,14 @@ impl McpServer {
                 .unwrap_or(&displays[0]),
         };
 
-        let rect = match args.get("rect") {
-            Some(v) => parse_rect_value(v)?,
-            None => chosen.bounds,
-        };
-        let scale = args
-            .get("scale")
-            .and_then(Value::as_f64)
-            .map(|f| f as f32)
-            .unwrap_or(chosen.scale);
-        let hide_cursor = args
-            .get("hide_cursor")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
+        let rect = requested_rect.unwrap_or(chosen.bounds);
+        let scale = requested_scale.unwrap_or(chosen.scale);
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: "scale must be a positive finite number".into(),
+            });
+        }
 
         Ok(CaptureRequest {
             display_id: chosen.id.clone(),
@@ -507,26 +519,14 @@ impl McpServer {
     }
 }
 
-fn ocr_request_from(args: &Value, image: RgbaImage) -> OCRRequest {
-    let languages = args
-        .get("languages")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    let use_language_correction = args
-        .get("language_correction")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    OCRRequest {
+fn ocr_request_from(args: &Value, image: RgbaImage) -> Result<OCRRequest, RpcErr> {
+    let languages = parse_optional_string_list(args, "languages")?.unwrap_or_default();
+    let use_language_correction = parse_optional_bool(args, "language_correction")?.unwrap_or(true);
+    Ok(OCRRequest {
         image,
         languages,
         use_language_correction,
-    }
+    })
 }
 
 fn parse_rect_value(v: &Value) -> Result<Rect, RpcErr> {
@@ -548,6 +548,81 @@ fn parse_rect_value(v: &Value) -> Result<Rect, RpcErr> {
         code: codes::INVALID_PARAMS,
         message: "rect has non-positive or non-finite dimensions".into(),
     })
+}
+
+fn parse_optional_non_empty_str<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>, RpcErr> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(value) => {
+            let text = value.as_str().ok_or_else(|| RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: format!("{key} must be a string"),
+            })?;
+            let text = text.trim();
+            if text.is_empty() {
+                return Err(RpcErr {
+                    code: codes::INVALID_PARAMS,
+                    message: format!("{key} must not be empty"),
+                });
+            }
+            Ok(Some(text))
+        }
+    }
+}
+
+fn parse_optional_positive_f32(args: &Value, key: &str) -> Result<Option<f32>, RpcErr> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(value) => {
+            let n = value.as_f64().ok_or_else(|| RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: format!("{key} must be a number"),
+            })? as f32;
+            if !n.is_finite() || n <= 0.0 {
+                return Err(RpcErr {
+                    code: codes::INVALID_PARAMS,
+                    message: format!("{key} must be a positive finite number"),
+                });
+            }
+            Ok(Some(n))
+        }
+    }
+}
+
+fn parse_optional_bool(args: &Value, key: &str) -> Result<Option<bool>, RpcErr> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(value) => value.as_bool().map(Some).ok_or_else(|| RpcErr {
+            code: codes::INVALID_PARAMS,
+            message: format!("{key} must be a boolean"),
+        }),
+    }
+}
+
+fn parse_optional_string_list(args: &Value, key: &str) -> Result<Option<Vec<String>>, RpcErr> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    let values = value.as_array().ok_or_else(|| RpcErr {
+        code: codes::INVALID_PARAMS,
+        message: format!("{key} must be an array of strings"),
+    })?;
+    let mut strings = Vec::with_capacity(values.len());
+    for value in values {
+        let text = value.as_str().ok_or_else(|| RpcErr {
+            code: codes::INVALID_PARAMS,
+            message: format!("{key} must be an array of strings"),
+        })?;
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: format!("{key} must not contain empty strings"),
+            });
+        }
+        strings.push(text.to_string());
+    }
+    Ok(Some(strings))
 }
 
 fn encode_png(img: &RgbaImage) -> Result<String, RpcErr> {
@@ -830,6 +905,9 @@ mod tests {
     use readshot_core::{CaptureRecord, FsHistoryStore, HistoryStore};
     use readshot_ocr::fake::FakeOcrEngine;
     use serde_json::Value;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static HISTORY_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn server() -> McpServer {
         McpServer::new(
@@ -854,11 +932,15 @@ mod tests {
 
     fn unique_history_root() -> std::path::PathBuf {
         let mut root = std::env::temp_dir();
+        let counter = HISTORY_ROOT_COUNTER.fetch_add(1, Ordering::Relaxed);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        root.push(format!("readshot-mcp-test-{}-{nanos}", std::process::id()));
+        root.push(format!(
+            "readshot-mcp-test-{}-{counter}-{nanos}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         root
     }
@@ -1248,6 +1330,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalid_scale_returns_invalid_params() {
+        let s = server();
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"capture_region","arguments":{"scale":"2"}}}"#,
+        )
+        .await;
+        assert_eq!(resp["error"]["code"], codes::INVALID_PARAMS);
+        assert!(resp["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("scale must be a number"));
+    }
+
+    #[tokio::test]
+    async fn invalid_ocr_languages_return_invalid_params() {
+        let s = server();
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"capture_text","arguments":{"languages":["en-US",42]}}}"#,
+        )
+        .await;
+        assert_eq!(resp["error"]["code"], codes::INVALID_PARAMS);
+        assert!(resp["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("languages must be an array of strings"));
+    }
+
+    #[tokio::test]
     async fn rect_missing_field_returns_invalid_params() {
         let s = server();
         let resp = call(
@@ -1264,6 +1376,14 @@ mod tests {
         let raw = s.handle("not json").await.unwrap();
         let resp: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(resp["error"]["code"], codes::PARSE_ERROR);
+    }
+
+    #[tokio::test]
+    async fn structurally_invalid_request_returns_invalid_request() {
+        let s = server();
+        let raw = s.handle(r#"{"jsonrpc":"2.0","id":25}"#).await.unwrap();
+        let resp: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(resp["error"]["code"], codes::INVALID_REQUEST);
     }
 
     #[tokio::test]

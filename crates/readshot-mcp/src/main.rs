@@ -5,7 +5,7 @@
 //! one-per-line) to stdout. All logging goes to stderr — stdout is
 //! reserved for protocol traffic.
 //!
-//! Agents launch this binary directly; see `docs/AGENTS.md` for the
+//! Agents launch this binary directly; see `docs/MCP.md` for the
 //! per-host configuration snippets (Claude Desktop, Cursor, OpenAI).
 
 use std::sync::Arc;

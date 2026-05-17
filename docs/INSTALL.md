@@ -47,33 +47,33 @@ To make those commands available as `readshot` and `readshot-mcp`,
 first create the symlinks:
 
 ```bash
-mkdir -p "$HOME/bin"
-ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot" "$HOME/bin/readshot"
-ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/bin/readshot-mcp"
+mkdir -p "$HOME/.local/bin"
+ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot" "$HOME/.local/bin/readshot"
+ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/.local/bin/readshot-mcp"
 ```
 
-Then add `~/bin` to the shell you use.
+Then add `~/.local/bin` to the shell you use.
 
 For zsh:
 
 ```bash
-export PATH="$HOME/bin:$PATH"
-grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc"
+export PATH="$HOME/.local/bin:$PATH"
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.zshrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
 ```
 
 For bash:
 
 ```bash
-export PATH="$HOME/bin:$PATH"
-grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
+export PATH="$HOME/.local/bin:$PATH"
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
 ```
 
 For fish:
 
 ```fish
-fish_add_path "$HOME/bin"
+fish_add_path "$HOME/.local/bin"
 mkdir -p "$HOME/.config/fish"
-grep -qxF 'fish_add_path "$HOME/bin"' "$HOME/.config/fish/config.fish" 2>/dev/null || echo 'fish_add_path "$HOME/bin"' >> "$HOME/.config/fish/config.fish"
+grep -qxF 'fish_add_path "$HOME/.local/bin"' "$HOME/.config/fish/config.fish" 2>/dev/null || echo 'fish_add_path "$HOME/.local/bin"' >> "$HOME/.config/fish/config.fish"
 ```
 
 Verify:
@@ -82,8 +82,8 @@ Verify:
 readshot --help
 ```
 
-The menu-bar item **Install Command Line Tools…** points users back to
-these commands. Readshot does not write shell symlinks automatically.
+The menu-bar item **Install Command Line Tools…** displays these
+commands for manual installs; it does not run shell setup automatically.
 
 ### Alternative: Homebrew Cask
 

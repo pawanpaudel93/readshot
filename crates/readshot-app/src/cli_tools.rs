@@ -17,19 +17,19 @@ impl Shell {
     }
 }
 
-const COMMON_COMMANDS: &str = r#"mkdir -p "$HOME/bin"
-ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot" "$HOME/bin/readshot"
-ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/bin/readshot-mcp""#;
+const COMMON_COMMANDS: &str = r#"mkdir -p "$HOME/.local/bin"
+ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot" "$HOME/.local/bin/readshot"
+ln -sf "/Applications/Readshot.app/Contents/MacOS/readshot-mcp" "$HOME/.local/bin/readshot-mcp""#;
 
-const ZSH_COMMANDS: &str = r#"export PATH="$HOME/bin:$PATH"
-grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.zshrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.zshrc""#;
+const ZSH_COMMANDS: &str = r#"export PATH="$HOME/.local/bin:$PATH"
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.zshrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc""#;
 
-const BASH_COMMANDS: &str = r#"export PATH="$HOME/bin:$PATH"
-grep -qxF 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc""#;
+const BASH_COMMANDS: &str = r#"export PATH="$HOME/.local/bin:$PATH"
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc""#;
 
-const FISH_COMMANDS: &str = r#"fish_add_path "$HOME/bin"
+const FISH_COMMANDS: &str = r#"fish_add_path "$HOME/.local/bin"
 mkdir -p "$HOME/.config/fish"
-grep -qxF 'fish_add_path "$HOME/bin"' "$HOME/.config/fish/config.fish" 2>/dev/null || echo 'fish_add_path "$HOME/bin"' >> "$HOME/.config/fish/config.fish""#;
+grep -qxF 'fish_add_path "$HOME/.local/bin"' "$HOME/.config/fish/config.fish" 2>/dev/null || echo 'fish_add_path "$HOME/.local/bin"' >> "$HOME/.config/fish/config.fish""#;
 
 const VERIFY_COMMANDS: &str = r#"readshot --help"#;
 
@@ -88,20 +88,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn instructions_create_user_bin_symlinks_and_update_path() {
+    fn instructions_create_local_bin_symlinks_and_update_path() {
         let instructions = command_line_tools_instructions();
 
-        assert!(instructions.contains("mkdir -p \"$HOME/bin\""));
+        assert!(instructions.contains("mkdir -p \"$HOME/.local/bin\""));
         assert!(instructions.contains(
-            "ln -sf \"/Applications/Readshot.app/Contents/MacOS/readshot\" \"$HOME/bin/readshot\""
+            "ln -sf \"/Applications/Readshot.app/Contents/MacOS/readshot\" \"$HOME/.local/bin/readshot\""
         ));
         assert!(instructions.contains(
-            "ln -sf \"/Applications/Readshot.app/Contents/MacOS/readshot-mcp\" \"$HOME/bin/readshot-mcp\""
+            "ln -sf \"/Applications/Readshot.app/Contents/MacOS/readshot-mcp\" \"$HOME/.local/bin/readshot-mcp\""
         ));
-        assert!(instructions.contains("export PATH=\"$HOME/bin:$PATH\""));
+        assert!(instructions.contains("export PATH=\"$HOME/.local/bin:$PATH\""));
         assert!(instructions.contains(".zshrc"));
         assert!(instructions.contains(".bashrc"));
-        assert!(instructions.contains("fish_add_path \"$HOME/bin\""));
+        assert!(instructions.contains("fish_add_path \"$HOME/.local/bin\""));
         assert!(instructions.contains("config.fish"));
         assert!(instructions.contains("readshot --help"));
     }
