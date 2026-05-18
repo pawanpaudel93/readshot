@@ -1,0 +1,558 @@
+:root {
+  color-scheme: dark;
+  --bg: #101316;
+  --panel: #191e23;
+  --panel-soft: #151a1f;
+  --line: #34404a;
+  --text: #f3f7f8;
+  --muted: #a9b3bd;
+  --teal: #21b6a8;
+  --blue: #5c6af2;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(33, 182, 168, 0.14), transparent 34rem),
+    radial-gradient(circle at 82% 10%, rgba(92, 106, 242, 0.12), transparent 30rem),
+    var(--bg);
+  color: var(--text);
+  overflow-x: hidden;
+}
+
+a {
+  color: inherit;
+}
+
+a,
+.button,
+.copy-button {
+  touch-action: manipulation;
+}
+
+a:focus-visible,
+.button:focus-visible,
+.copy-button:focus-visible {
+  border-radius: 7px;
+  outline: 2px solid var(--teal);
+  outline-offset: 3px;
+}
+
+.skip-link {
+  background: var(--teal);
+  border-radius: 7px;
+  color: #062b32;
+  font-weight: 700;
+  left: 16px;
+  padding: 10px 14px;
+  position: absolute;
+  text-decoration: none;
+  top: 14px;
+  transform: translateY(-160%);
+  z-index: 10;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+.shell {
+  margin: 0 auto;
+  width: min(1040px, calc(100% - 32px));
+}
+
+.nav {
+  align-items: center;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  padding: 22px 0;
+}
+
+.brand {
+  align-items: center;
+  display: inline-flex;
+  font-weight: 700;
+  gap: 12px;
+  text-decoration: none;
+}
+
+.brand-mark {
+  display: grid;
+  height: 38px;
+  place-items: center;
+  width: 38px;
+}
+
+.brand-mark img {
+  display: block;
+  height: 38px;
+  width: 38px;
+}
+
+.nav-links {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.nav-links a {
+  border-radius: 6px;
+  color: var(--muted);
+  padding: 8px 10px;
+  text-decoration: none;
+}
+
+.nav-links a:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+
+#install,
+#features,
+.doc-section {
+  scroll-margin-top: 24px;
+}
+
+.hero {
+  padding: 56px 0 52px;
+}
+
+.hero.compact {
+  padding-bottom: 28px;
+}
+
+.hero-inner {
+  max-width: 760px;
+}
+
+h1 {
+  font-size: 88px;
+  letter-spacing: 0;
+  line-height: 0.92;
+  margin: 0 0 22px;
+  text-wrap: balance;
+}
+
+.hero-copy {
+  color: #c9d2da;
+  font-size: 21px;
+  line-height: 1.5;
+  margin: 0 0 28px;
+  max-width: 680px;
+}
+
+.actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.button {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  display: inline-flex;
+  font-weight: 700;
+  min-height: 44px;
+  padding: 0 16px;
+  text-decoration: none;
+}
+
+.button.primary {
+  background: var(--teal);
+  color: #062b32;
+}
+
+.button.secondary {
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.button:hover {
+  filter: brightness(1.06);
+}
+
+.button:active {
+  transform: translateY(1px);
+}
+
+.install {
+  margin-top: 22px;
+  max-width: 760px;
+}
+
+.command,
+.terminal {
+  background: #080b0d;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 15px 16px;
+  scrollbar-width: thin;
+}
+
+.command {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.terminal {
+  margin-top: 16px;
+  overflow-x: auto;
+}
+
+code {
+  color: #d7f8f4;
+  font-family:
+    "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", monospace;
+  font-size: 14px;
+}
+
+.command code,
+.terminal code {
+  display: block;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  white-space: nowrap;
+}
+
+.command .mobile-command {
+  display: none;
+}
+
+.copy-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  height: 36px;
+  justify-content: center;
+  padding: 0;
+  width: 36px;
+}
+
+.copy-button:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.copy-button svg {
+  height: 18px;
+  width: 18px;
+}
+
+.copy-button .check-icon {
+  display: none;
+}
+
+.copy-button.is-copied {
+  border-color: rgba(33, 182, 168, 0.75);
+  color: var(--teal);
+}
+
+.copy-button.is-copied .copy-icon {
+  display: none;
+}
+
+.copy-button.is-copied .check-icon {
+  display: block;
+}
+
+.copy-status {
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
+}
+
+.section {
+  padding: 44px 0;
+}
+
+.section h2,
+.doc-section h2 {
+  font-size: 34px;
+  letter-spacing: 0;
+  margin: 0 0 22px;
+  text-wrap: balance;
+}
+
+.grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 22px;
+}
+
+.card strong,
+.card h3 {
+  display: block;
+  font-size: 18px;
+  margin: 0 0 9px;
+}
+
+.card h3 {
+  font-size: 22px;
+}
+
+.card p,
+.doc-section p {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.card p {
+  margin: 0;
+}
+
+.card-action {
+  margin-top: 16px !important;
+}
+
+.card-action a,
+.inline-link {
+  color: #d7f8f4;
+  font-weight: 700;
+}
+
+.compact-list {
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 14px 0 0;
+  padding-left: 18px;
+}
+
+.doc-layout {
+  display: grid;
+  gap: 34px;
+  grid-template-columns: minmax(0, 1fr) 230px;
+  padding-bottom: 56px;
+}
+
+.doc-main {
+  min-width: 0;
+}
+
+.doc-nav {
+  align-self: start;
+  background: rgba(25, 30, 35, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  position: sticky;
+  top: 18px;
+}
+
+.doc-nav strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.doc-nav a {
+  border-radius: 6px;
+  color: var(--muted);
+  display: block;
+  padding: 7px 8px;
+  text-decoration: none;
+}
+
+.doc-nav a:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+
+.doc-section {
+  margin-bottom: 44px;
+}
+
+.doc-section h2 {
+  margin-bottom: 12px;
+}
+
+.doc-section h3 {
+  font-size: 22px;
+  margin: 24px 0 10px;
+}
+
+.code-panel {
+  background: #080b0d;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 16px 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.code-panel-header {
+  align-items: center;
+  border-bottom: 1px solid rgba(52, 64, 74, 0.82);
+  color: var(--muted);
+  display: flex;
+  font-size: 13px;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 0 10px 0 15px;
+}
+
+.code-panel pre {
+  margin: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 15px 16px;
+  scrollbar-width: thin;
+}
+
+.code-panel code {
+  white-space: pre;
+}
+
+.data-table {
+  border-collapse: collapse;
+  color: var(--muted);
+  margin: 16px 0;
+  width: 100%;
+}
+
+.data-table th,
+.data-table td {
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.data-table th {
+  background: var(--panel-soft);
+  color: var(--text);
+}
+
+.data-table code {
+  white-space: nowrap;
+}
+
+footer {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  padding: 28px 0 42px;
+}
+
+footer .shell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+footer a {
+  color: #cbd5dd;
+}
+
+@media (max-width: 860px) {
+  .doc-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .doc-nav {
+    position: static;
+  }
+}
+
+@media (max-width: 760px) {
+  .nav {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .nav-links {
+    flex-wrap: wrap;
+  }
+
+  .hero {
+    padding: 36px 0 42px;
+  }
+
+  .grid,
+  .grid.two {
+    grid-template-columns: 1fr;
+  }
+
+  footer .shell {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 480px) {
+  .shell {
+    width: min(100% - 20px, 1040px);
+  }
+
+  h1 {
+    font-size: 52px;
+  }
+
+  .hero-copy {
+    font-size: 18px;
+  }
+
+  .command .desktop-command {
+    display: none;
+  }
+
+  .command .mobile-command {
+    display: block;
+    grid-column: 1 / -1;
+    white-space: normal;
+  }
+
+  .command .copy-button {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+  .data-table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    table-layout: fixed;
+    width: 100%;
+  }
+
+  .data-table th,
+  .data-table td {
+    overflow-wrap: anywhere;
+  }
+
+  .data-table code {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+}

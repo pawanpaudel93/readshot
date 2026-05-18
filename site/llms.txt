@@ -5,10 +5,10 @@ Readshot is a free offline screenshot and OCR app for macOS.
 ## Links
 
 - [Website](https://readshot.pawanpaudel.com.np/)
+- [CLI docs](https://readshot.pawanpaudel.com.np/cli.html)
+- [MCP docs](https://readshot.pawanpaudel.com.np/mcp.html)
 - [Source](https://github.com/pawanpaudel93/readshot)
 - [Releases](https://github.com/pawanpaudel93/readshot/releases)
-- [Install docs](https://github.com/pawanpaudel93/readshot/blob/main/docs/INSTALL.md)
-- [MCP docs](https://github.com/pawanpaudel93/readshot/blob/main/docs/MCP.md)
 
 ## Install
 

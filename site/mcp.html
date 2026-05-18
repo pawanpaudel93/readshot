@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Readshot MCP</title>
+    <meta
+      name="description"
+      content="Readshot MCP documentation for connecting AI agent clients to local screenshot and OCR tools."
+    />
+    <meta property="og:title" content="Readshot MCP" />
+    <meta
+      property="og:description"
+      content="Expose local screenshot capture, OCR, and history search to AI agent clients through MCP."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://readshot.pawanpaudel.com.np/mcp.html" />
+    <meta name="theme-color" content="#123b48" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to Content</a>
+    <header class="shell">
+      <nav class="nav" aria-label="Main navigation">
+        <a class="brand" href="index.html">
+          <span class="brand-mark" aria-hidden="true">
+            <img src="favicon.svg" width="38" height="38" alt="" />
+          </span>
+          <span>Readshot</span>
+        </a>
+        <div class="nav-links">
+          <a href="index.html">Install</a>
+          <a href="index.html#features">Features</a>
+          <a href="cli.html">CLI</a>
+          <a href="mcp.html">MCP</a>
+          <a href="https://github.com/pawanpaudel93/readshot">GitHub</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="shell hero compact">
+        <div class="hero-inner">
+          <h1>MCP</h1>
+          <p class="hero-copy">
+            <code translate="no">readshot-mcp</code> lets AI agent hosts capture screenshots,
+            run OCR, and search local capture history through Model Context Protocol stdio.
+          </p>
+        </div>
+      </section>
+
+      <div class="shell doc-layout">
+        <article class="doc-main">
+          <section class="doc-section" id="binary">
+            <h2>Binary Path</h2>
+            <p>
+              The one-line macOS installer creates a
+              <code translate="no">readshot-mcp</code> symlink in
+              <code translate="no">~/.local/bin</code>. Desktop MCP hosts often do not
+              inherit your shell <code>PATH</code>, so their config should use the
+              absolute app-bundle path.
+            </p>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>OS</th>
+                  <th>Path</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>macOS</td>
+                  <td><code translate="no">/Applications/Readshot.app/Contents/MacOS/readshot-mcp</code></td>
+                </tr>
+                <tr>
+                  <td>Source build</td>
+                  <td><code translate="no">./target/release/readshot-mcp</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
+          <section class="doc-section" id="tools">
+            <h2>Tools</h2>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Tool</th>
+                  <th>Use</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code translate="no">list_displays</code></td>
+                  <td>Return capturable displays.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">list_windows</code></td>
+                  <td>Return capturable app windows.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">capture_region</code></td>
+                  <td>Capture a display region and return a PNG payload.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">capture_window</code></td>
+                  <td>Capture a window, optionally with a window-relative region.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">capture_text</code></td>
+                  <td>Capture a region or window and return OCR text.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">capture_region_and_text</code></td>
+                  <td>Return both PNG pixels and OCR text.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">recent_captures</code></td>
+                  <td>Read recent captures from local history.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">latest_capture</code></td>
+                  <td>Return the newest saved capture.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">get_capture</code></td>
+                  <td>Return a saved capture by id.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">search_captures</code></td>
+                  <td>Search local history metadata and OCR text.</td>
+                </tr>
+              </tbody>
+            </table>
+            <p>
+              When <code translate="no">display</code> is omitted, the primary display is used.
+              When <code translate="no">rect</code> is omitted, the selected display or window is captured in full.
+            </p>
+          </section>
+
+          <section class="doc-section" id="host-config">
+            <h2>Host Config</h2>
+            <h3>Claude Desktop</h3>
+            <div class="code-panel">
+              <pre><code translate="no">{
+  "mcpServers": {
+    "readshot": {
+      "command": "/Applications/Readshot.app/Contents/MacOS/readshot-mcp"
+    }
+  }
+}</code></pre>
+            </div>
+
+            <h3>Cursor</h3>
+            <div class="code-panel">
+              <pre><code translate="no">{
+  "mcpServers": {
+    "readshot": {
+      "command": "/Applications/Readshot.app/Contents/MacOS/readshot-mcp",
+      "type": "stdio"
+    }
+  }
+}</code></pre>
+            </div>
+
+            <h3>OpenAI Desktop or Codex CLI</h3>
+            <div class="code-panel">
+              <pre><code translate="no">[mcp_servers.readshot]
+command = "/Applications/Readshot.app/Contents/MacOS/readshot-mcp"</code></pre>
+            </div>
+
+            <h3>Continue.dev</h3>
+            <div class="code-panel">
+              <pre><code translate="no">{
+  "mcpServers": [
+    {
+      "name": "readshot",
+      "command": "/Applications/Readshot.app/Contents/MacOS/readshot-mcp"
+    }
+  ]
+}</code></pre>
+            </div>
+          </section>
+
+          <section class="doc-section" id="tool-calls">
+            <h2>Tool Call Examples</h2>
+            <p>Capture a region and return both pixels and OCR text:</p>
+            <div class="code-panel">
+              <pre><code translate="no">{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "method": "tools/call",
+  "params": {
+    "name": "capture_region_and_text",
+    "arguments": {
+      "rect": { "x": 100, "y": 100, "width": 800, "height": 600 }
+    }
+  }
+}</code></pre>
+            </div>
+            <p>Capture a window:</p>
+            <div class="code-panel">
+              <pre><code translate="no">{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "method": "tools/call",
+  "params": {
+    "name": "capture_window",
+    "arguments": {
+      "window": "11474"
+    }
+  }
+}</code></pre>
+            </div>
+          </section>
+
+          <section class="doc-section" id="permissions">
+            <h2>Permissions</h2>
+            <p>
+              <code translate="no">readshot-mcp</code> does not prompt for Screen Recording itself.
+              The host app that launches it, such as Claude Desktop or Cursor, needs Screen
+              Recording permission in macOS System Settings.
+            </p>
+            <p>
+              Permission failures return a JSON-RPC error with
+              <code translate="no">code = -32001</code> and a message that the host can show to the user.
+            </p>
+          </section>
+
+          <section class="doc-section" id="verify">
+            <h2>Verify</h2>
+            <p>Set the binary path and ask the server for its advertised tools.</p>
+            <div class="code-panel">
+              <pre><code translate="no">READSHOT_MCP=/Applications/Readshot.app/Contents/MacOS/readshot-mcp
+printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' \
+  | "$READSHOT_MCP" \
+  | python3 -m json.tool</code></pre>
+            </div>
+            <p>List capturable windows:</p>
+            <div class="code-panel">
+              <pre><code translate="no">printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_windows","arguments":{}}}\n' \
+  | "$READSHOT_MCP" \
+  | python3 -m json.tool</code></pre>
+            </div>
+          </section>
+
+          <section class="doc-section" id="troubleshooting">
+            <h2>Troubleshooting</h2>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Symptom</th>
+                  <th>Likely cause</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code translate="no">command not found</code></td>
+                  <td>The host is using the wrong binary path.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">code = -32001</code></td>
+                  <td>The host app lacks Screen Recording permission.</td>
+                </tr>
+                <tr>
+                  <td>Empty display or window list</td>
+                  <td>No capturable surface was available or permission was denied.</td>
+                </tr>
+                <tr>
+                  <td>OCR returns empty text</td>
+                  <td>The selected region is too small or contains no rendered text.</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+        </article>
+
+        <aside class="doc-nav" aria-label="MCP sections">
+          <strong>On this page</strong>
+          <a href="#binary">Binary path</a>
+          <a href="#tools">Tools</a>
+          <a href="#host-config">Host config</a>
+          <a href="#tool-calls">Tool calls</a>
+          <a href="#permissions">Permissions</a>
+          <a href="#verify">Verify</a>
+          <a href="#troubleshooting">Troubleshooting</a>
+        </aside>
+      </div>
+      <span class="copy-status" aria-live="polite"></span>
+    </main>
+
+    <footer>
+      <div class="shell">
+        <span>Readshot by <a href="https://github.com/pawanpaudel93">Pawan Paudel</a></span>
+        <span>
+          <a href="index.html">Home</a>
+          ·
+          <a href="cli.html">CLI docs</a>
+          ·
+          <a href="https://github.com/pawanpaudel93/readshot">GitHub</a>
+        </span>
+      </div>
+    </footer>
+    <script src="script.js"></script>
+  </body>
+</html>

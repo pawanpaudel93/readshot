@@ -17,414 +17,13 @@
     <meta property="og:url" content="https://readshot.pawanpaudel.com.np/" />
     <meta name="theme-color" content="#123b48" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-    <style>
-      :root {
-        color-scheme: dark;
-        --bg: #101316;
-        --panel: #191e23;
-        --line: #34404a;
-        --text: #f3f7f8;
-        --muted: #a9b3bd;
-        --teal: #21b6a8;
-        --blue: #5c6af2;
-        font-family:
-          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-          "Segoe UI", sans-serif;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      html {
-        background: var(--bg);
-        scroll-behavior: smooth;
-      }
-
-      body {
-        margin: 0;
-        background:
-          radial-gradient(circle at 20% 0%, rgba(33, 182, 168, 0.14), transparent 34rem),
-          radial-gradient(circle at 82% 10%, rgba(92, 106, 242, 0.12), transparent 30rem),
-          var(--bg);
-        color: var(--text);
-      }
-
-      a {
-        color: inherit;
-      }
-
-      a,
-      .button {
-        touch-action: manipulation;
-      }
-
-      a:focus-visible,
-      .button:focus-visible {
-        border-radius: 7px;
-        outline: 2px solid var(--teal);
-        outline-offset: 3px;
-      }
-
-      .skip-link {
-        background: var(--teal);
-        border-radius: 7px;
-        color: #062b32;
-        font-weight: 700;
-        left: 16px;
-        padding: 10px 14px;
-        position: absolute;
-        text-decoration: none;
-        top: 14px;
-        transform: translateY(-160%);
-        z-index: 10;
-      }
-
-      .skip-link:focus-visible {
-        transform: translateY(0);
-      }
-
-      .shell {
-        margin: 0 auto;
-        width: min(1040px, calc(100% - 32px));
-      }
-
-      .nav {
-        align-items: center;
-        display: flex;
-        gap: 20px;
-        justify-content: space-between;
-        padding: 22px 0;
-      }
-
-      .brand {
-        align-items: center;
-        display: inline-flex;
-        font-weight: 700;
-        gap: 12px;
-        text-decoration: none;
-      }
-
-      .brand-mark {
-        display: grid;
-        height: 38px;
-        place-items: center;
-        width: 38px;
-      }
-
-      .brand-mark img {
-        display: block;
-        height: 38px;
-        width: 38px;
-      }
-
-      .nav-links {
-        align-items: center;
-        display: flex;
-        gap: 8px;
-      }
-
-      .nav-links a {
-        border-radius: 6px;
-        color: var(--muted);
-        padding: 8px 10px;
-        text-decoration: none;
-      }
-
-      .nav-links a:hover {
-        background: rgba(255, 255, 255, 0.06);
-        color: var(--text);
-      }
-
-      #install,
-      #features,
-      #automation {
-        scroll-margin-top: 24px;
-      }
-
-      .hero {
-        padding: 56px 0 52px;
-      }
-
-      .hero-inner {
-        max-width: 760px;
-      }
-
-      h1 {
-        font-size: 88px;
-        letter-spacing: 0;
-        line-height: 0.92;
-        margin: 0 0 22px;
-        text-wrap: balance;
-      }
-
-      .hero-copy {
-        color: #c9d2da;
-        font-size: 21px;
-        line-height: 1.5;
-        margin: 0 0 28px;
-        max-width: 680px;
-      }
-
-      .actions {
-        align-items: center;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-      }
-
-      .button {
-        align-items: center;
-        border: 1px solid transparent;
-        border-radius: 7px;
-        display: inline-flex;
-        font-weight: 700;
-        min-height: 44px;
-        padding: 0 16px;
-        text-decoration: none;
-      }
-
-      .button.primary {
-        background: var(--teal);
-        color: #062b32;
-      }
-
-      .button.secondary {
-        border-color: var(--line);
-        color: var(--text);
-      }
-
-      .button:hover {
-        filter: brightness(1.06);
-      }
-
-      .button:active {
-        transform: translateY(1px);
-      }
-
-      .install {
-        margin-top: 22px;
-        max-width: 760px;
-      }
-
-      .command,
-      .terminal {
-        background: #080b0d;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 15px 16px;
-        scrollbar-width: thin;
-      }
-
-      .command {
-        align-items: center;
-        display: grid;
-        gap: 12px;
-        grid-template-columns: minmax(0, 1fr) auto;
-      }
-
-      .terminal {
-        overflow-x: auto;
-      }
-
-      code {
-        color: #d7f8f4;
-        font-family:
-          "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", monospace;
-        font-size: 14px;
-      }
-
-      .command code,
-      .terminal code {
-        display: block;
-        overflow-x: auto;
-        scrollbar-width: thin;
-        white-space: nowrap;
-      }
-
-      .command .mobile-command {
-        display: none;
-      }
-
-      .copy-button {
-        align-items: center;
-        background: transparent;
-        border: 1px solid var(--line);
-        border-radius: 7px;
-        color: var(--text);
-        cursor: pointer;
-        display: inline-flex;
-        height: 36px;
-        justify-content: center;
-        padding: 0;
-        width: 36px;
-      }
-
-      .copy-button:hover {
-        background: rgba(255, 255, 255, 0.06);
-      }
-
-      .copy-button svg {
-        height: 18px;
-        width: 18px;
-      }
-
-      .copy-button .check-icon {
-        display: none;
-      }
-
-      .copy-button.is-copied {
-        border-color: rgba(33, 182, 168, 0.75);
-        color: var(--teal);
-      }
-
-      .copy-button.is-copied .copy-icon {
-        display: none;
-      }
-
-      .copy-button.is-copied .check-icon {
-        display: block;
-      }
-
-      .copy-status {
-        height: 1px;
-        overflow: hidden;
-        position: absolute;
-        width: 1px;
-      }
-
-      .card p {
-        color: var(--muted);
-        line-height: 1.55;
-      }
-
-      .section {
-        padding: 44px 0;
-      }
-
-      .section h2 {
-        font-size: 34px;
-        letter-spacing: 0;
-        margin: 0 0 22px;
-        text-wrap: balance;
-      }
-
-      .grid {
-        display: grid;
-        gap: 14px;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-      }
-
-      .grid.two {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .card {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        min-width: 0;
-        padding: 22px;
-      }
-
-      .card strong,
-      .card h3 {
-        display: block;
-        font-size: 18px;
-        margin: 0 0 9px;
-      }
-
-      .card h3 {
-        font-size: 22px;
-      }
-
-      .card p {
-        margin: 0;
-      }
-
-      .compact-list {
-        color: var(--muted);
-        line-height: 1.55;
-        margin: 14px 0 0;
-        padding-left: 18px;
-      }
-
-      .terminal {
-        margin-top: 16px;
-      }
-
-      footer {
-        border-top: 1px solid var(--line);
-        color: var(--muted);
-        padding: 28px 0 42px;
-      }
-
-      footer .shell {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        justify-content: space-between;
-      }
-
-      footer a {
-        color: #cbd5dd;
-      }
-
-      @media (max-width: 760px) {
-        .nav {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-
-        .nav-links {
-          flex-wrap: wrap;
-        }
-
-        .hero {
-          padding: 36px 0 42px;
-        }
-
-        .grid,
-        .grid.two {
-          grid-template-columns: 1fr;
-        }
-      }
-
-      @media (max-width: 480px) {
-        .shell {
-          width: min(100% - 20px, 1040px);
-        }
-
-        h1 {
-          font-size: 52px;
-        }
-
-        .hero-copy {
-          font-size: 18px;
-        }
-
-        .command .desktop-command {
-          display: none;
-        }
-
-        .command .mobile-command {
-          display: block;
-          grid-column: 1 / -1;
-          white-space: normal;
-        }
-
-        .command .copy-button {
-          grid-column: 1 / -1;
-          justify-self: end;
-        }
-      }
-    </style>
+    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to Content</a>
     <header class="shell">
       <nav class="nav" aria-label="Main navigation">
-        <a class="brand" href="/">
+        <a class="brand" href="index.html">
           <span class="brand-mark" aria-hidden="true">
             <img src="favicon.svg" width="38" height="38" alt="" />
           </span>
@@ -433,7 +32,8 @@
         <div class="nav-links">
           <a href="#install">Install</a>
           <a href="#features">Features</a>
-          <a href="#automation">CLI &amp; MCP</a>
+          <a href="cli.html">CLI</a>
+          <a href="mcp.html">MCP</a>
           <a href="https://github.com/pawanpaudel93/readshot">GitHub</a>
         </div>
       </nav>
@@ -457,21 +57,49 @@
           </div>
           <div class="install">
             <div class="command">
-              <code class="desktop-command" translate="no">curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash</code>
-              <code class="mobile-command" translate="no">curl -fsSL<br />https://readshot.pawanpaudel.com.np/<br />install.sh | bash</code>
+              <code class="desktop-command" translate="no"
+                >curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash</code
+              >
+              <code class="mobile-command" translate="no"
+                >curl -fsSL<br />https://readshot.pawanpaudel.com.np/<br />install.sh | bash</code
+              >
               <button
                 class="copy-button"
                 type="button"
                 title="Copy install command"
                 aria-label="Copy install command"
+                data-copy-title="Copy install command"
+                data-copy-label="Install command copied."
                 data-copy="curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash"
               >
                 <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2" />
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" />
+                  <rect
+                    x="9"
+                    y="9"
+                    width="11"
+                    height="11"
+                    rx="2"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  />
+                  <path
+                    d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-width="2"
+                  />
                 </svg>
                 <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M20 6 9 17l-5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.4" />
+                  <path
+                    d="M20 6 9 17l-5-5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2.4"
+                  />
                 </svg>
               </button>
             </div>
@@ -498,32 +126,30 @@
         </div>
       </section>
 
-      <section class="shell section" id="automation">
-        <h2>CLI &amp; MCP</h2>
+      <section class="shell section" aria-labelledby="automation-title">
+        <h2 id="automation-title">Automation</h2>
         <div class="grid two">
           <div class="card">
             <h3>CLI</h3>
-            <p>Capture, OCR, and copy from shell scripts.</p>
-            <ul class="compact-list">
-              <li>Capture a region, display, or window.</li>
-              <li>Use interactive selection, delay timers, clipboard output, and image formats.</li>
-              <li>Run OCR on screenshots with automatic language detection.</li>
-            </ul>
+            <p>
+              Use Readshot from shell scripts for capture, OCR, clipboard output,
+              delay timers, and image format conversion.
+            </p>
             <div class="terminal">
-              <code translate="no">readshot capture --interactive -o capture.png<br />readshot capture --delay 2 --format jpg -o capture.jpg<br />readshot capture-text --interactive --clipboard<br />readshot ocr -i capture.png --clipboard</code>
+              <code translate="no">readshot capture --interactive -o capture.png<br />readshot capture-text --interactive --clipboard</code>
             </div>
+            <p class="card-action"><a href="cli.html">Read CLI documentation</a></p>
           </div>
           <div class="card">
             <h3>MCP</h3>
-            <p>Expose screenshot and OCR tools to agent clients.</p>
-            <ul class="compact-list">
-              <li>Capture regions or app windows.</li>
-              <li>Return image pixels, OCR text, or both.</li>
-              <li>Search recent captures from local history.</li>
-            </ul>
+            <p>
+              Connect agent clients to local screenshot, OCR, window capture, and
+              history search tools over stdio.
+            </p>
             <div class="terminal">
               <code translate="no">readshot-mcp</code>
             </div>
+            <p class="card-action"><a href="mcp.html">Read MCP documentation</a></p>
           </div>
         </div>
       </section>
@@ -533,37 +159,14 @@
       <div class="shell">
         <span>Readshot by <a href="https://github.com/pawanpaudel93">Pawan Paudel</a></span>
         <span>
+          <a href="cli.html">CLI docs</a>
+          ·
+          <a href="mcp.html">MCP docs</a>
+          ·
           <a href="https://github.com/pawanpaudel93/readshot">GitHub</a>
-          ·
-          <a href="https://github.com/pawanpaudel93/readshot/blob/main/docs/INSTALL.md"
-            >Install docs</a
-          >
-          ·
-          <a href="https://github.com/pawanpaudel93/readshot/blob/main/docs/MCP.md">MCP docs</a>
         </span>
       </div>
     </footer>
-    <script>
-      const copyButton = document.querySelector("[data-copy]");
-      const copyStatus = document.querySelector(".copy-status");
-
-      copyButton?.addEventListener("click", async () => {
-        const text = copyButton.dataset.copy ?? "";
-        try {
-          await navigator.clipboard.writeText(text);
-          copyStatus.textContent = "Install command copied.";
-          copyButton.classList.add("is-copied");
-          copyButton.setAttribute("aria-label", "Install command copied");
-          copyButton.setAttribute("title", "Copied");
-          window.setTimeout(() => {
-            copyButton.classList.remove("is-copied");
-            copyButton.setAttribute("aria-label", "Copy install command");
-            copyButton.setAttribute("title", "Copy install command");
-          }, 1800);
-        } catch {
-          copyStatus.textContent = "Copy failed.";
-        }
-      });
-    </script>
+    <script src="script.js"></script>
   </body>
 </html>

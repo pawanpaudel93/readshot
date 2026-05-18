@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Readshot CLI</title>
+    <meta
+      name="description"
+      content="Readshot CLI documentation for screenshot capture, OCR, clipboard output, delay timers, and image formats."
+    />
+    <meta property="og:title" content="Readshot CLI" />
+    <meta
+      property="og:description"
+      content="Capture screenshots and OCR text from shell scripts with Readshot."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://readshot.pawanpaudel.com.np/cli.html" />
+    <meta name="theme-color" content="#123b48" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to Content</a>
+    <header class="shell">
+      <nav class="nav" aria-label="Main navigation">
+        <a class="brand" href="index.html">
+          <span class="brand-mark" aria-hidden="true">
+            <img src="favicon.svg" width="38" height="38" alt="" />
+          </span>
+          <span>Readshot</span>
+        </a>
+        <div class="nav-links">
+          <a href="index.html">Install</a>
+          <a href="index.html#features">Features</a>
+          <a href="cli.html">CLI</a>
+          <a href="mcp.html">MCP</a>
+          <a href="https://github.com/pawanpaudel93/readshot">GitHub</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="shell hero compact">
+        <div class="hero-inner">
+          <h1>CLI</h1>
+          <p class="hero-copy">
+            The <code translate="no">readshot</code> command ships inside the macOS app.
+            Run it with no arguments to open the GUI, or use subcommands for scripts.
+          </p>
+        </div>
+      </section>
+
+      <div class="shell doc-layout">
+        <article class="doc-main">
+          <section class="doc-section" id="common">
+            <h2>Common Commands</h2>
+            <p>These cover the usual capture, OCR, clipboard, and window workflows.</p>
+            <div class="code-panel">
+              <div class="code-panel-header">
+                <span>Terminal</span>
+                <button
+                  class="copy-button"
+                  type="button"
+                  title="Copy commands"
+                  aria-label="Copy commands"
+                  data-copy-title="Copy commands"
+                  data-copy-label="Commands copied."
+                  data-copy="readshot list-displays&#10;readshot list-windows&#10;readshot capture --interactive --output capture.png&#10;readshot capture --delay 2 --format jpg --output capture.jpg&#10;readshot capture-window --window 11474 --clipboard&#10;readshot capture-text --interactive --clipboard&#10;readshot capture-and-ocr --interactive --also-image capture.png&#10;readshot ocr --input capture.png --clipboard"
+                >
+                  <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" />
+                  </svg>
+                  <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.4" />
+                  </svg>
+                </button>
+              </div>
+              <pre><code translate="no">readshot list-displays
+readshot list-windows
+readshot capture --interactive --output capture.png
+readshot capture --delay 2 --format jpg --output capture.jpg
+readshot capture-window --window 11474 --clipboard
+readshot capture-text --interactive --clipboard
+readshot capture-and-ocr --interactive --also-image capture.png
+readshot ocr --input capture.png --clipboard</code></pre>
+            </div>
+          </section>
+
+          <section class="doc-section" id="interactive">
+            <h2>Interactive Capture</h2>
+            <p>
+              <code translate="no">--interactive</code> opens the same Readshot region selector used by the app.
+              Drag a region and release to capture immediately. Press <code>Enter</code>
+              for the full display or <code>Esc</code> to cancel.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot capture --interactive --output capture.png
+readshot capture-text --interactive
+readshot capture-and-ocr --interactive</code></pre>
+            </div>
+            <p>
+              Interactive capture can be combined with clipboard output, format
+              selection, delay timers, and cursor controls where those options apply.
+            </p>
+          </section>
+
+          <section class="doc-section" id="image-output">
+            <h2>Image Output</h2>
+            <p>
+              <code translate="no">capture</code> and
+              <code translate="no">capture-window</code> write PNG by default.
+              Use <code translate="no">--format</code> for other image formats.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot capture --format png --output capture.png
+readshot capture --format jpg --output capture.jpg
+readshot capture --format tiff --output capture.tiff
+readshot capture --format webp --output capture.webp
+readshot capture --interactive --clipboard</code></pre>
+            </div>
+          </section>
+
+          <section class="doc-section" id="text-output">
+            <h2>Text Output</h2>
+            <p>
+              <code translate="no">capture-text</code> captures a region, runs OCR,
+              and writes recognized text. <code translate="no">ocr</code> runs OCR
+              on an existing image. OCR uses automatic language detection by default.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot capture-text --interactive
+readshot capture-text --rect 100,100,800,600 --clipboard
+readshot ocr --input capture.png --output text.txt
+readshot ocr --input capture.png --clipboard</code></pre>
+            </div>
+          </section>
+
+          <section class="doc-section" id="options">
+            <h2>Timing, Cursor, and Window Options</h2>
+            <p>
+              Use <code translate="no">--delay SECONDS</code> for menus, popovers,
+              hover states, or other transient UI. The cursor is hidden by default;
+              use <code translate="no">--show-cursor</code> when documenting pointer state.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot capture --delay 2 --interactive --output menu.png
+readshot capture --interactive --show-cursor --output pointer.png
+readshot capture-window --window 11474 --window-shadow --output window.png
+readshot capture-window --window 11474 --no-window-shadow --output tight.png</code></pre>
+            </div>
+            <p>
+              Use <code translate="no">readshot --help</code> or
+              <code translate="no">readshot &lt;command&gt; --help</code> for the complete option list.
+            </p>
+          </section>
+        </article>
+
+        <aside class="doc-nav" aria-label="CLI sections">
+          <strong>On this page</strong>
+          <a href="#common">Common commands</a>
+          <a href="#interactive">Interactive capture</a>
+          <a href="#image-output">Image output</a>
+          <a href="#text-output">Text output</a>
+          <a href="#options">Options</a>
+        </aside>
+      </div>
+      <span class="copy-status" aria-live="polite"></span>
+    </main>
+
+    <footer>
+      <div class="shell">
+        <span>Readshot by <a href="https://github.com/pawanpaudel93">Pawan Paudel</a></span>
+        <span>
+          <a href="index.html">Home</a>
+          ·
+          <a href="mcp.html">MCP docs</a>
+          ·
+          <a href="https://github.com/pawanpaudel93/readshot">GitHub</a>
+        </span>
+      </div>
+    </footer>
+    <script src="script.js"></script>
+  </body>
+</html>
