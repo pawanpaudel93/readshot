@@ -80,6 +80,7 @@ Verify:
 
 ```bash
 readshot --help
+readshot capture --interactive --output capture.png
 ```
 
 The menu-bar item **Install Command Line Tools…** displays these

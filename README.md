@@ -26,7 +26,9 @@ find it later by searching the text inside the screenshot.
 - Searchable capture history with open, reveal, copy, pin, and delete
   actions.
 - Pin captures as always-on-top reference windows.
-- Scriptable CLI and bundled MCP server for AI-agent workflows.
+- Scriptable CLI with interactive capture, clipboard output, OCR,
+  delay timers, image formats, and bundled MCP server for AI-agent
+  workflows.
 
 ## Install
 
@@ -73,6 +75,8 @@ readshot-mcp
 
 See [docs/MCP.md](docs/MCP.md) for Claude Desktop, Cursor, OpenAI
 desktop, Codex CLI, and custom-client examples.
+See [docs/CLI.md](docs/CLI.md) for the full command-line workflow
+reference.
 
 ## Development
 
@@ -100,6 +104,7 @@ Useful docs:
 
 - [AGENTS.md](AGENTS.md) — contributor orientation and repo layout.
 - [docs/INSTALL.md](docs/INSTALL.md) — install paths and first-launch notes.
+- [docs/CLI.md](docs/CLI.md) — command-line capture and OCR recipes.
 - [docs/MCP.md](docs/MCP.md) — MCP server setup.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — planned screenshot workflow improvements.
 - [docs/RELEASING.md](docs/RELEASING.md) — release runbook.
