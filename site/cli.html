@@ -66,7 +66,7 @@
                   aria-label="Copy commands"
                   data-copy-title="Copy commands"
                   data-copy-label="Commands copied."
-                  data-copy="readshot list-displays&#10;readshot list-displays --json&#10;readshot list-windows&#10;readshot list-windows --json&#10;readshot capture --interactive --output capture.png&#10;readshot capture --delay 2 --format jpg --output capture.jpg&#10;readshot capture-window --window 11474 --clipboard&#10;readshot capture-text --interactive --clipboard&#10;readshot capture-and-ocr --interactive --also-image capture.png&#10;readshot ocr --input capture.png --clipboard"
+                  data-copy="readshot list-displays&#10;readshot list-displays --json&#10;readshot list-windows&#10;readshot list-windows --json&#10;readshot capture --interactive --output capture.png&#10;readshot capture --interactive --output capture.png --json&#10;readshot capture-text --interactive --json&#10;readshot capture-and-ocr --interactive --also-image capture.png --json&#10;readshot ocr --input capture.png --json&#10;readshot mcp-config"
                 >
                   <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2" />
@@ -82,11 +82,11 @@ readshot list-displays --json
 readshot list-windows
 readshot list-windows --json
 readshot capture --interactive --output capture.png
-readshot capture --delay 2 --format jpg --output capture.jpg
-readshot capture-window --window 11474 --clipboard
-readshot capture-text --interactive --clipboard
-readshot capture-and-ocr --interactive --also-image capture.png
-readshot ocr --input capture.png --clipboard</code></pre>
+readshot capture --interactive --output capture.png --json
+readshot capture-text --interactive --json
+readshot capture-and-ocr --interactive --also-image capture.png --json
+readshot ocr --input capture.png --json
+readshot mcp-config</code></pre>
             </div>
           </section>
 
@@ -131,6 +131,10 @@ readshot ocr --input capture.png --clipboard</code></pre>
                 <tr>
                   <td><code translate="no">ocr</code></td>
                   <td>Runs OCR on an existing image.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">mcp-config</code></td>
+                  <td>Prints a ready-to-paste MCP stdio config snippet.</td>
                 </tr>
               </tbody>
             </table>
@@ -195,6 +199,17 @@ readshot capture --interactive --clipboard</code></pre>
               This is the default when neither <code translate="no">--output</code> nor
               <code translate="no">--clipboard</code> is supplied.
             </p>
+            <p>
+              Use <code translate="no">--json</code> to print capture metadata after
+              saving or copying the image. Image capture commands require
+              <code translate="no">--output PATH</code> or
+              <code translate="no">--clipboard</code> when JSON is enabled.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot capture --interactive --output capture.png --json
+readshot capture-window --window 11474 --output window.png --json
+readshot capture --interactive --clipboard --json</code></pre>
+            </div>
           </section>
 
           <section class="doc-section" id="text-output">
@@ -220,6 +235,15 @@ readshot ocr --input capture.png --clipboard</code></pre>
               <pre><code translate="no">cat capture.png | readshot ocr --input -
 readshot ocr --input capture.png --languages en-US,fr-FR</code></pre>
             </div>
+            <p>
+              Use <code translate="no">--json</code> to include OCR metadata such as
+              confidence, image size, language hints, and positioned OCR lines when
+              the platform engine returns them.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot capture-text --interactive --json
+readshot ocr --input capture.png --json</code></pre>
+            </div>
           </section>
 
           <section class="doc-section" id="combined">
@@ -230,7 +254,22 @@ readshot ocr --input capture.png --languages en-US,fr-FR</code></pre>
             </p>
             <div class="code-panel">
               <pre><code translate="no">readshot capture-and-ocr --interactive --also-image capture.png --output text.txt
-readshot capture-and-ocr --rect 100,100,800,600 --also-image capture.png</code></pre>
+readshot capture-and-ocr --rect 100,100,800,600 --also-image capture.png
+readshot capture-and-ocr --interactive --also-image capture.png --json</code></pre>
+            </div>
+          </section>
+
+          <section class="doc-section" id="mcp-config">
+            <h2>MCP Config</h2>
+            <p>
+              <code translate="no">mcp-config</code> prints a standard
+              <code translate="no">mcpServers</code> JSON snippet for MCP stdio hosts.
+              Use the short command when the host inherits your shell
+              <code>PATH</code>, or pass the absolute app-bundle path for desktop apps.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot mcp-config
+readshot mcp-config --command /Applications/Readshot.app/Contents/MacOS/readshot-mcp</code></pre>
             </div>
           </section>
 
@@ -301,6 +340,7 @@ readshot capture-window --window 11474 --no-window-shadow --output tight.png</co
           <a href="#image-output">Image output</a>
           <a href="#text-output">Text output</a>
           <a href="#combined">Image and OCR</a>
+          <a href="#mcp-config">MCP config</a>
           <a href="#options">Options</a>
           <a href="#destinations">Destinations</a>
         </aside>

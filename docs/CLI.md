@@ -12,10 +12,13 @@ readshot list-windows
 readshot list-windows --json
 readshot capture --interactive --output capture.png
 readshot capture --delay 2 --format jpg --output capture.jpg
+readshot capture --interactive --output capture.png --json
 readshot capture-window --window 11474 --clipboard
 readshot capture-text --interactive --clipboard
+readshot capture-text --interactive --json
 readshot capture-and-ocr --interactive --also-image capture.png
-readshot ocr --input capture.png --clipboard
+readshot ocr --input capture.png --json
+readshot mcp-config
 ```
 
 ## Commands
@@ -30,9 +33,9 @@ readshot ocr --input capture.png --clipboard
 | `readshot capture-text` | Captures a region and writes OCR text. |
 | `readshot capture-and-ocr` | Captures a region, writes OCR text, and can also save the image. |
 | `readshot ocr` | Runs OCR on an existing image. |
+| `readshot mcp-config` | Prints a ready-to-paste MCP stdio config snippet. |
 
-Use `--json` with `list-displays` or `list-windows` when scripts need
-stable machine-readable output.
+Use `--json` when scripts need stable machine-readable output.
 
 ## Interactive Capture
 
@@ -97,6 +100,16 @@ readshot capture-window --window 11474 --clipboard
 Use `--output -` to write image bytes to stdout. This is the default
 when neither `--output` nor `--clipboard` is supplied.
 
+Use `--json` to print capture metadata after saving or copying the
+image. Because stdout is used for JSON, image capture commands require
+`--output PATH` or `--clipboard` when `--json` is set:
+
+```bash
+readshot capture --interactive --output capture.png --json
+readshot capture-window --window 11474 --output window.png --json
+readshot capture --interactive --clipboard --json
+```
+
 ## Text Output
 
 `capture-text` captures a region, runs OCR, and writes recognized text.
@@ -125,6 +138,15 @@ Use `--input -` with `ocr` to read image bytes from stdin:
 cat capture.png | readshot ocr --input -
 ```
 
+Use `--json` to include OCR metadata such as confidence, image size,
+language hints, and positioned OCR lines when the platform engine
+returns them:
+
+```bash
+readshot capture-text --interactive --json
+readshot ocr --input capture.png --json
+```
+
 `--languages` accepts comma-separated BCP-47 hints for OCR engines that
 support explicit language hints. Leave it empty for automatic detection:
 
@@ -143,7 +165,23 @@ at the same time:
 ```bash
 readshot capture-and-ocr --interactive --also-image capture.png --output text.txt
 readshot capture-and-ocr --rect 100,100,800,600 --also-image capture.png
+readshot capture-and-ocr --interactive --also-image capture.png --json
 ```
+
+## MCP Config
+
+`mcp-config` prints a standard stdio JSON snippet that works with
+Claude Desktop, Cursor, and other hosts that accept `mcpServers`
+configuration:
+
+```bash
+readshot mcp-config
+readshot mcp-config --command /Applications/Readshot.app/Contents/MacOS/readshot-mcp
+```
+
+The default uses `readshot-mcp`, which is correct when the host inherits
+your shell `PATH`. Use the absolute app-bundle path for desktop hosts
+that do not inherit `~/.local/bin`.
 
 ## Timing, Cursor, and Window Options
 

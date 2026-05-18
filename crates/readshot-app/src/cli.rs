@@ -97,6 +97,15 @@ impl ImageFormatChoice {
             Self::Webp => image::ImageFormat::WebP,
         }
     }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpg => "jpg",
+            Self::Tiff => "tiff",
+            Self::Webp => "webp",
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -156,6 +165,10 @@ pub enum Command {
         #[arg(long)]
         clipboard: bool,
 
+        /// Emit capture metadata as JSON to stdout. Requires `--output PATH` or `--clipboard`.
+        #[arg(long)]
+        json: bool,
+
         /// Hidden compatibility flag for the GUI-only Retake Last
         /// Region workflow. The CLI process has no shared in-memory
         /// overlay state, so this always returns a usage error.
@@ -189,6 +202,10 @@ pub enum Command {
         /// Copy the captured image to the clipboard instead of writing output.
         #[arg(long)]
         clipboard: bool,
+
+        /// Emit capture metadata as JSON to stdout. Requires `--output PATH` or `--clipboard`.
+        #[arg(long)]
+        json: bool,
 
         /// Include the native window shadow when the platform supports it.
         #[arg(long, conflicts_with = "no_window_shadow")]
@@ -240,6 +257,10 @@ pub enum Command {
         #[arg(long)]
         clipboard: bool,
 
+        /// Emit OCR result and capture metadata as JSON.
+        #[arg(long, conflicts_with = "clipboard")]
+        json: bool,
+
         /// Output text path. Use `-` for stdout (the default).
         #[arg(long, short = 'o', default_value = "-", conflicts_with = "clipboard")]
         output: PathBuf,
@@ -266,6 +287,10 @@ pub enum Command {
         /// Copy recognised text to the clipboard instead of writing output.
         #[arg(long)]
         clipboard: bool,
+
+        /// Emit OCR result metadata as JSON.
+        #[arg(long, conflicts_with = "clipboard")]
+        json: bool,
 
         /// BCP-47 language hints, comma-separated. Empty → engine default.
         #[arg(long, value_delimiter = ',')]
@@ -313,6 +338,10 @@ pub enum Command {
         #[arg(long, short = 'o', default_value = "-")]
         output: PathBuf,
 
+        /// Emit OCR result and capture metadata as JSON.
+        #[arg(long)]
+        json: bool,
+
         /// Optionally also write the captured PNG to this path.
         #[arg(long)]
         also_image: Option<PathBuf>,
@@ -336,6 +365,17 @@ pub enum Command {
         /// Include the cursor in the captured image.
         #[arg(long)]
         show_cursor: bool,
+    },
+
+    /// Print a ready-to-paste MCP stdio configuration snippet.
+    McpConfig {
+        /// Server name to use in the host config.
+        #[arg(long, default_value = "readshot")]
+        name: String,
+
+        /// Command used by the host to launch the MCP server.
+        #[arg(long, default_value = "readshot-mcp")]
+        command: String,
     },
 }
 
@@ -457,6 +497,7 @@ impl Cli {
                 delay,
                 format,
                 clipboard: use_clipboard,
+                json,
                 last_region,
                 output,
             } => {
@@ -465,9 +506,16 @@ impl Cli {
                         "--last-region is only available in the GUI session".into(),
                     ));
                 }
+                ensure_image_json_has_destination(json, use_clipboard, &output)?;
                 maybe_delay(delay).await;
-                let img = if interactive {
-                    interactive_capture(show_cursor).await?
+                let (img, source) = if interactive {
+                    (
+                        interactive_capture(show_cursor).await?,
+                        serde_json::json!({
+                            "type": "interactive",
+                            "show_cursor": show_cursor,
+                        }),
+                    )
                 } else {
                     let req = build_capture_request(
                         &*capturer,
@@ -477,12 +525,19 @@ impl Cli {
                         effective_hide_cursor(hide_cursor, show_cursor),
                     )
                     .await?;
-                    capturer.capture_region(req).await?
+                    let source = capture_request_json(&req);
+                    (capturer.capture_region(req).await?, source)
                 };
                 if use_clipboard {
                     clipboard.copy_image(&img)?;
                 } else {
                     write_image(&img, &output, stdout, format)?;
+                }
+                if json {
+                    write_json_value(
+                        stdout,
+                        capture_json("capture", &img, format, &source, use_clipboard, &output),
+                    )?;
                 }
             }
             Command::CaptureWindow {
@@ -491,10 +546,12 @@ impl Cli {
                 delay,
                 format,
                 clipboard: use_clipboard,
+                json,
                 window_shadow: _,
                 no_window_shadow,
                 output,
             } => {
+                ensure_image_json_has_destination(json, use_clipboard, &output)?;
                 maybe_delay(delay).await;
                 let window_id = WindowId(window);
                 let mut img = capturer
@@ -512,6 +569,24 @@ impl Cli {
                 } else {
                     write_image(&img, &output, stdout, format)?;
                 }
+                if json {
+                    write_json_value(
+                        stdout,
+                        capture_json(
+                            "capture-window",
+                            &img,
+                            format,
+                            &serde_json::json!({
+                                "type": "window",
+                                "window_id": window_id.0,
+                                "rect": rect.map(rect_json),
+                                "ignore_shadows": no_window_shadow,
+                            }),
+                            use_clipboard,
+                            &output,
+                        ),
+                    )?;
+                }
             }
             Command::CaptureText {
                 display,
@@ -522,13 +597,20 @@ impl Cli {
                 show_cursor,
                 delay,
                 clipboard: use_clipboard,
+                json,
                 output,
                 languages,
                 language_correction,
             } => {
                 maybe_delay(delay).await;
-                let img = if interactive {
-                    interactive_capture(show_cursor).await?
+                let (img, source) = if interactive {
+                    (
+                        interactive_capture(show_cursor).await?,
+                        serde_json::json!({
+                            "type": "interactive",
+                            "show_cursor": show_cursor,
+                        }),
+                    )
                 } else {
                     let req = build_capture_request(
                         &*capturer,
@@ -538,17 +620,33 @@ impl Cli {
                         effective_hide_cursor(hide_cursor, show_cursor),
                     )
                     .await?;
-                    capturer.capture_region(req).await?
+                    let source = capture_request_json(&req);
+                    (capturer.capture_region(req).await?, source)
                 };
+                let image_size = (img.width(), img.height());
                 let result = ocr
                     .recognise(OCRRequest {
                         image: img,
-                        languages,
+                        languages: languages.clone(),
                         use_language_correction: language_correction,
                     })
                     .await?;
                 if use_clipboard {
                     clipboard.copy_text(&result.text)?;
+                } else if json {
+                    write_json(
+                        &output,
+                        stdout,
+                        ocr_json(
+                            "capture-text",
+                            &result,
+                            Some(image_size),
+                            Some(&source),
+                            None,
+                            &languages,
+                            language_correction,
+                        ),
+                    )?;
                 } else {
                     write_text(&result.text, &output, stdout)?;
                 }
@@ -557,19 +655,35 @@ impl Cli {
                 input,
                 output,
                 clipboard: use_clipboard,
+                json,
                 languages,
                 language_correction,
             } => {
                 let img = read_image(&input)?;
+                let image_size = (img.width(), img.height());
                 let result = ocr
                     .recognise(OCRRequest {
                         image: img,
-                        languages,
+                        languages: languages.clone(),
                         use_language_correction: language_correction,
                     })
                     .await?;
                 if use_clipboard {
                     clipboard.copy_text(&result.text)?;
+                } else if json {
+                    write_json(
+                        &output,
+                        stdout,
+                        ocr_json(
+                            "ocr",
+                            &result,
+                            Some(image_size),
+                            None,
+                            Some(&input),
+                            &languages,
+                            language_correction,
+                        ),
+                    )?;
                 } else {
                     write_text(&result.text, &output, stdout)?;
                 }
@@ -583,13 +697,21 @@ impl Cli {
                 show_cursor,
                 delay,
                 output,
+                json,
                 also_image,
                 languages,
                 language_correction,
             } => {
+                ensure_combined_json_has_clean_stdout(json, also_image.as_deref())?;
                 maybe_delay(delay).await;
-                let img = if interactive {
-                    interactive_capture(show_cursor).await?
+                let (img, source) = if interactive {
+                    (
+                        interactive_capture(show_cursor).await?,
+                        serde_json::json!({
+                            "type": "interactive",
+                            "show_cursor": show_cursor,
+                        }),
+                    )
                 } else {
                     let req = build_capture_request(
                         &*capturer,
@@ -599,24 +721,45 @@ impl Cli {
                         effective_hide_cursor(hide_cursor, show_cursor),
                     )
                     .await?;
-                    capturer.capture_region(req).await?
+                    let source = capture_request_json(&req);
+                    (capturer.capture_region(req).await?, source)
                 };
+                let image_size = (img.width(), img.height());
                 if let Some(path) = also_image.as_deref() {
                     write_image(&img, path, stdout, ImageFormatChoice::Png)?;
                 }
                 let result = ocr
                     .recognise(OCRRequest {
                         image: img,
-                        languages,
+                        languages: languages.clone(),
                         use_language_correction: language_correction,
                     })
                     .await?;
-                write_text(&result.text, &output, stdout)?;
+                if json {
+                    write_json(
+                        &output,
+                        stdout,
+                        ocr_json(
+                            "capture-and-ocr",
+                            &result,
+                            Some(image_size),
+                            Some(&source),
+                            None,
+                            &languages,
+                            language_correction,
+                        ),
+                    )?;
+                } else {
+                    write_text(&result.text, &output, stdout)?;
+                }
             }
             Command::InteractiveCapture { .. } => {
                 return Err(CliError::InvalidInput(
                     "__interactive-capture is an internal command".into(),
                 ));
+            }
+            Command::McpConfig { name, command } => {
+                write_mcp_config(stdout, &name, &command)?;
             }
         }
         Ok(())
@@ -926,6 +1069,152 @@ fn write_windows_json(out: &mut dyn Write, windows: &[WindowInfo]) -> std::io::R
     Ok(())
 }
 
+fn ensure_image_json_has_destination(
+    json: bool,
+    clipboard: bool,
+    output: &std::path::Path,
+) -> Result<(), CliError> {
+    if json && !clipboard && output == std::path::Path::new("-") {
+        return Err(CliError::InvalidInput(
+            "--json with image capture requires --output PATH or --clipboard".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_combined_json_has_clean_stdout(
+    json: bool,
+    also_image: Option<&std::path::Path>,
+) -> Result<(), CliError> {
+    if json && also_image == Some(std::path::Path::new("-")) {
+        return Err(CliError::InvalidInput(
+            "--json cannot be combined with --also-image -".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn rect_json(rect: Rect) -> serde_json::Value {
+    serde_json::json!({
+        "x": rect.x(),
+        "y": rect.y(),
+        "width": rect.width(),
+        "height": rect.height(),
+    })
+}
+
+fn capture_request_json(req: &CaptureRequest) -> serde_json::Value {
+    serde_json::json!({
+        "type": "display",
+        "display_id": req.display_id,
+        "rect": rect_json(req.rect),
+        "scale": req.scale,
+        "hide_cursor": req.hide_cursor,
+    })
+}
+
+fn capture_json(
+    kind: &str,
+    img: &RgbaImage,
+    format: ImageFormatChoice,
+    source: &serde_json::Value,
+    clipboard: bool,
+    output: &std::path::Path,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": kind,
+        "image": {
+            "width": img.width(),
+            "height": img.height(),
+            "format": format.as_str(),
+        },
+        "source": source,
+        "output": if clipboard {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(output.display().to_string())
+        },
+        "clipboard": clipboard,
+    })
+}
+
+fn ocr_json(
+    kind: &str,
+    result: &readshot_ocr::OCRResult,
+    image_size: Option<(u32, u32)>,
+    source: Option<&serde_json::Value>,
+    input: Option<&std::path::Path>,
+    languages: &[String],
+    language_correction: bool,
+) -> serde_json::Value {
+    let lines: Vec<_> = result
+        .lines
+        .iter()
+        .map(|line| {
+            serde_json::json!({
+                "text": line.text,
+                "bounds": {
+                    "x": line.x,
+                    "y": line.y,
+                    "width": line.w,
+                    "height": line.h,
+                },
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "kind": kind,
+        "text": result.text,
+        "average_confidence": result.average_confidence,
+        "image": image_size.map(|(width, height)| serde_json::json!({
+            "width": width,
+            "height": height,
+        })),
+        "source": source.cloned(),
+        "input": input.map(|path| path.display().to_string()),
+        "languages": languages,
+        "language_correction": language_correction,
+        "lines": lines,
+    })
+}
+
+fn write_json(
+    path: &std::path::Path,
+    stdout: &mut dyn Write,
+    value: serde_json::Value,
+) -> Result<(), CliError> {
+    if path == std::path::Path::new("-") {
+        write_json_value(stdout, value)?;
+    } else {
+        let s = serde_json::to_string_pretty(&value).expect("serde_json Value cannot fail");
+        std::fs::write(path, format!("{s}\n"))?;
+    }
+    Ok(())
+}
+
+fn write_json_value(out: &mut dyn Write, value: serde_json::Value) -> std::io::Result<()> {
+    let s = serde_json::to_string_pretty(&value).expect("serde_json Value cannot fail");
+    out.write_all(s.as_bytes())?;
+    out.write_all(b"\n")?;
+    Ok(())
+}
+
+fn write_mcp_config(out: &mut dyn Write, name: &str, command: &str) -> std::io::Result<()> {
+    let mut servers = serde_json::Map::new();
+    servers.insert(
+        name.to_string(),
+        serde_json::json!({
+            "command": command,
+            "args": [],
+        }),
+    );
+    let payload = serde_json::json!({
+        "mcpServers": servers,
+    });
+    write_json_value(out, payload)
+}
+
 fn write_image(
     img: &RgbaImage,
     path: &std::path::Path,
@@ -1144,6 +1433,17 @@ mod tests {
         assert_eq!(delay, 2.0);
         assert_eq!(format, ImageFormatChoice::Jpg);
         assert!(show_cursor);
+    }
+
+    #[test]
+    fn parses_capture_json_flag() {
+        let cli = Cli::try_parse_from(["readshot", "capture", "--json", "--output", "capture.png"])
+            .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::Capture { json: true, .. })
+        ));
     }
 
     #[test]
@@ -1370,6 +1670,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_text_json_flags() {
+        let cli = Cli::try_parse_from(["readshot", "capture-text", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::CaptureText { json: true, .. })
+        ));
+
+        let cli = Cli::try_parse_from(["readshot", "ocr", "-i", "in.png", "--json"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Ocr { json: true, .. })));
+    }
+
+    #[test]
+    fn text_json_rejects_clipboard_output() {
+        let err =
+            Cli::try_parse_from(["readshot", "capture-text", "--json", "--clipboard"]).unwrap_err();
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
     fn parses_text_commands_with_clipboard_and_delay() {
         let cli =
             Cli::try_parse_from(["readshot", "capture-text", "--clipboard", "--delay", "0.25"])
@@ -1470,6 +1790,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_mcp_config_command() {
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "mcp-config",
+            "--name",
+            "screen",
+            "--command",
+            "/usr/local/bin/readshot-mcp",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::McpConfig { ref name, ref command })
+                if name == "screen" && command == "/usr/local/bin/readshot-mcp"
+        ));
+    }
+
+    #[test]
     fn parses_no_subcommand_for_gui_fallback() {
         let cli = Cli::try_parse_from(["readshot"]).unwrap();
         assert!(cli.command.is_none());
@@ -1544,6 +1883,45 @@ mod tests {
 
         let bytes = std::fs::read(&png_path).unwrap();
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[tokio::test]
+    async fn run_capture_json_requires_file_or_clipboard_destination() {
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from(["readshot", "capture", "--json"]).unwrap();
+        let mut out = Vec::new();
+        let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
+
+        assert!(matches!(err, CliError::InvalidInput(ref msg) if msg.contains("--json")));
+        assert_eq!(exit_code(&err), 64);
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_capture_json_writes_metadata_to_stdout() {
+        let dir = tempfile::tempdir().unwrap();
+        let png_path = dir.path().join("out.png");
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture",
+            "--rect",
+            "0,0,64,64",
+            "--json",
+            "-o",
+            png_path.to_str().unwrap(),
+        ])
+        .unwrap();
+        let mut out = Vec::new();
+        cli.run(cap, ocr, &mut out).await.unwrap();
+
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(value["kind"], "capture");
+        assert_eq!(value["image"]["width"], 256);
+        assert_eq!(value["image"]["format"], "png");
+        assert_eq!(value["source"]["display_id"], "fake-0");
+        assert_eq!(value["output"], png_path.display().to_string());
+        assert!(png_path.exists());
     }
 
     #[tokio::test]
@@ -1643,6 +2021,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_ocr_json_emits_text_confidence_and_image_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let png_path = dir.path().join("in.png");
+        let img = image::RgbaImage::new(8, 6);
+        readshot_core::save_png(&img, &png_path).unwrap();
+
+        let cap = Arc::new(FakeCapturer::new());
+        let ocr = Arc::new(FakeOcrEngine::with_text_and_confidence("json text", 0.42));
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "ocr",
+            "-i",
+            png_path.to_str().unwrap(),
+            "--json",
+        ])
+        .unwrap();
+        let mut out = Vec::new();
+        cli.run(cap, ocr, &mut out).await.unwrap();
+
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(value["kind"], "ocr");
+        assert_eq!(value["text"], "json text");
+        let confidence = value["average_confidence"].as_f64().unwrap();
+        assert!((confidence - 0.42).abs() < 0.001);
+        assert_eq!(value["image"]["width"], 8);
+        assert_eq!(value["image"]["height"], 6);
+        assert_eq!(value["input"], png_path.display().to_string());
+    }
+
+    #[tokio::test]
     async fn run_ocr_clipboard_copies_text_without_stdout() {
         let dir = tempfile::tempdir().unwrap();
         let png_path = dir.path().join("in.png");
@@ -1699,6 +2107,52 @@ mod tests {
 
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("hello world"));
+    }
+
+    #[tokio::test]
+    async fn run_capture_text_json_includes_capture_source() {
+        let (cap, ocr) = fakes();
+        let cli =
+            Cli::try_parse_from(["readshot", "capture-text", "--rect", "0,0,64,64", "--json"])
+                .unwrap();
+        let mut out = Vec::new();
+        cli.run(cap, ocr, &mut out).await.unwrap();
+
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(value["kind"], "capture-text");
+        assert_eq!(value["text"], "hello world");
+        assert_eq!(value["image"]["width"], 256);
+        assert_eq!(value["source"]["type"], "display");
+        assert_eq!(value["source"]["rect"]["width"], 64.0);
+    }
+
+    #[tokio::test]
+    async fn run_capture_and_ocr_json_rejects_stdout_image_output() {
+        let (cap, ocr) = fakes();
+        let cli =
+            Cli::try_parse_from(["readshot", "capture-and-ocr", "--json", "--also-image", "-"])
+                .unwrap();
+        let mut out = Vec::new();
+        let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
+
+        assert!(matches!(err, CliError::InvalidInput(ref msg) if msg.contains("--also-image")));
+        assert_eq!(exit_code(&err), 64);
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_mcp_config_emits_stdio_config() {
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from(["readshot", "mcp-config"]).unwrap();
+        let mut out = Vec::new();
+        cli.run(cap, ocr, &mut out).await.unwrap();
+
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(value["mcpServers"]["readshot"]["command"], "readshot-mcp");
+        assert_eq!(
+            value["mcpServers"]["readshot"]["args"],
+            serde_json::json!([])
+        );
     }
 
     #[tokio::test]

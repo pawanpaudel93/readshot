@@ -26,6 +26,13 @@ the host inherits your shell `PATH`. The desktop host snippets below
 use the absolute app-bundle path because desktop apps often do not
 inherit your shell `PATH`.
 
+You can generate the standard `mcpServers` JSON snippet from the CLI:
+
+```bash
+readshot mcp-config
+readshot mcp-config --command /Applications/Readshot.app/Contents/MacOS/readshot-mcp
+```
+
 ## Tools exposed
 
 | Tool                       | Inputs                                          | Output                            |

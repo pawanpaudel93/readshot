@@ -42,3 +42,18 @@ fn invalid_scale_exits_usage_error_without_capture_or_log_noise() {
         "CLI stderr should not include routine logging: {stderr}"
     );
 }
+
+#[test]
+fn mcp_config_prints_json_without_log_noise() {
+    let output = readshot().arg("mcp-config").output().unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should be empty for mcp-config, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["mcpServers"]["readshot"]["command"], "readshot-mcp");
+}

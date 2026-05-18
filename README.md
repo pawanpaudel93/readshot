@@ -61,10 +61,11 @@ readshot --help
 readshot list-displays
 readshot list-windows
 readshot capture --interactive --output capture.png
-readshot capture --delay 2 --format jpg --output capture.jpg
+readshot capture --interactive --output capture.png --json
 readshot capture-window --window 11474 --clipboard
 readshot capture-text --interactive --clipboard
-readshot ocr --input capture.png --clipboard
+readshot ocr --input capture.png --json
+readshot mcp-config
 ```
 
 For AI-agent hosts, use the bundled MCP command:
