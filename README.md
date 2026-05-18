@@ -66,6 +66,7 @@ readshot capture-window --window 11474 --clipboard
 readshot capture-text --interactive --clipboard
 readshot ocr --input capture.png --json
 readshot mcp-config
+readshot completions zsh
 ```
 
 For AI-agent hosts, use the bundled MCP command:
@@ -106,6 +107,7 @@ Useful docs:
 - [AGENTS.md](AGENTS.md) — contributor orientation and repo layout.
 - [docs/INSTALL.md](docs/INSTALL.md) — install paths and first-launch notes.
 - [docs/CLI.md](docs/CLI.md) — command-line capture and OCR recipes.
+- [docs/CLI_JSON.md](docs/CLI_JSON.md) — structured CLI output reference.
 - [docs/MCP.md](docs/MCP.md) — MCP server setup.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — planned screenshot workflow improvements.
 - [docs/RELEASING.md](docs/RELEASING.md) — release runbook.

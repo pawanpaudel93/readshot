@@ -19,6 +19,7 @@ readshot capture-text --interactive --json
 readshot capture-and-ocr --interactive --also-image capture.png
 readshot ocr --input capture.png --json
 readshot mcp-config
+readshot completions zsh
 ```
 
 ## Commands
@@ -34,8 +35,10 @@ readshot mcp-config
 | `readshot capture-and-ocr` | Captures a region, writes OCR text, and can also save the image. |
 | `readshot ocr` | Runs OCR on an existing image. |
 | `readshot mcp-config` | Prints a ready-to-paste MCP stdio config snippet. |
+| `readshot completions` | Generates zsh, bash, fish, PowerShell, or Elvish completions. |
 
 Use `--json` when scripts need stable machine-readable output.
+The full JSON output reference is in [CLI_JSON.md](CLI_JSON.md).
 
 ## Interactive Capture
 
@@ -182,6 +185,18 @@ readshot mcp-config --command /Applications/Readshot.app/Contents/MacOS/readshot
 The default uses `readshot-mcp`, which is correct when the host inherits
 your shell `PATH`. Use the absolute app-bundle path for desktop hosts
 that do not inherit `~/.local/bin`.
+
+## Shell Completions
+
+Generate completions from the current clap command tree:
+
+```bash
+readshot completions zsh > _readshot
+readshot completions bash > readshot.bash
+readshot completions fish > readshot.fish
+```
+
+Use `readshot completions --help` to see every supported shell.
 
 ## Timing, Cursor, and Window Options
 

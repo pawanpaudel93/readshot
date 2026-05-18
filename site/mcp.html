@@ -240,6 +240,12 @@
 readshot mcp-config --command /Applications/Readshot.app/Contents/MacOS/readshot-mcp</code></pre>
             </div>
             <p>
+              Check the MCP binary directly:
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot-mcp --check</code></pre>
+            </div>
+            <p>
               Terminal-launched hosts can usually use the short command:
             </p>
             <div class="code-panel">
@@ -376,6 +382,8 @@ command = "/Applications/Readshot.app/Contents/MacOS/readshot-mcp"</code></pre>
             <p>Set the binary path and ask the server for its advertised tools.</p>
             <div class="code-panel">
               <pre><code translate="no">READSHOT_MCP=/Applications/Readshot.app/Contents/MacOS/readshot-mcp
+"$READSHOT_MCP" --check
+
 printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' \
   | "$READSHOT_MCP" \
   | python3 -m json.tool</code></pre>

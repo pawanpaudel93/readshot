@@ -21,6 +21,7 @@ arboard = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
+clap_complete = { workspace = true }
 directories = { workspace = true }
 global-hotkey = { workspace = true }
 iced = { workspace = true }

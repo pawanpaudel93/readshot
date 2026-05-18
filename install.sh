@@ -15,6 +15,7 @@ APP_BUNDLE="${APP_NAME}.app"
 INSTALL_DIR="/Applications"
 BIN_DIR="${HOME}/.local/bin"
 TARGET_VERSION="latest"
+CHECK_ONLY=0
 
 usage() {
   cat <<'EOF'
@@ -23,11 +24,13 @@ Usage: install.sh [latest|stable|VERSION] [options]
 Options:
   --install-dir DIR          Install Readshot.app into DIR. Default: /Applications
   --bin-dir DIR              Symlink readshot and readshot-mcp into DIR. Default: ~/.local/bin
+  --check                    Check compatibility, release availability, and current install state
   --help                     Show this help
 
 Examples:
   curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash
   curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- 0.4.1
+  curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- --check
 EOF
 }
 
@@ -44,6 +47,7 @@ parse_args() {
   INSTALL_DIR="/Applications"
   BIN_DIR="${HOME}/.local/bin"
   TARGET_VERSION="latest"
+  CHECK_ONLY=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -56,6 +60,10 @@ parse_args() {
         [[ $# -ge 2 ]] || die "--bin-dir requires a directory"
         BIN_DIR="$2"
         shift 2
+        ;;
+      --check)
+        CHECK_ONLY=1
+        shift
         ;;
       --help|-h)
         usage
@@ -103,7 +111,14 @@ host_machine() {
 download_file() {
   local url="$1"
   local output="$2"
+
   curl -fL --retry 3 --connect-timeout 15 -o "${output}" "${url}"
+}
+
+check_url() {
+  local url="$1"
+
+  curl -fsSIL --retry 2 --connect-timeout 15 -o /dev/null "${url}"
 }
 
 resolve_version() {
@@ -186,6 +201,37 @@ verify_command_line_tools() {
   "${readshot_bin}" --help >/dev/null 2>&1 || die "readshot command self-check failed"
 }
 
+check_executable_status() {
+  local path="$1"
+
+  if [[ -x "${path}" ]]; then
+    printf 'ok'
+  elif [[ -e "${path}" ]]; then
+    printf 'not executable'
+  else
+    printf 'missing'
+  fi
+}
+
+macos_version() {
+  if command -v sw_vers >/dev/null 2>&1; then
+    sw_vers -productVersion
+  else
+    printf 'unknown'
+  fi
+}
+
+require_supported_macos_version() {
+  local version
+  local major
+
+  version="$(macos_version)"
+  major="${version%%.*}"
+  if [[ "${major}" =~ ^[0-9]+$ ]] && (( major < 14 )); then
+    die "macOS 14 or newer is required; found ${version}"
+  fi
+}
+
 path_contains_bin_dir() {
   case ":${PATH:-}:" in
     *":${BIN_DIR}:"*) return 0 ;;
@@ -212,9 +258,53 @@ For bash:
 EOF
 }
 
+check_install() {
+  require_macos
+  require_supported_macos_version
+  require_command curl
+  require_command awk
+
+  local version
+  local tag
+  local arch
+  local artifact
+  local target_app
+  local artifact_url
+  local sums_url
+
+  version="$(resolve_version "${TARGET_VERSION}")"
+  tag="v${version}"
+  arch="$(release_arch_for_machine "$(host_machine)")"
+  artifact="readshot-macos-${arch}.dmg"
+  target_app="${INSTALL_DIR%/}/${APP_BUNDLE}"
+  artifact_url="https://github.com/${REPO}/releases/download/${tag}/${artifact}"
+  sums_url="https://github.com/${REPO}/releases/download/${tag}/SHA256SUMS"
+
+  check_url "${artifact_url}" || die "release artifact is not available: ${artifact}"
+  check_url "${sums_url}" || die "SHA256SUMS is not available for ${tag}"
+
+  cat <<EOF
+Readshot install check:
+  macOS: $(macos_version)
+  Architecture: $(host_machine) -> ${arch}
+  Release: ${tag}
+  Artifact: ${artifact}
+  App: $([[ -d "${target_app}" ]] && printf 'installed' || printf 'not installed') (${target_app})
+  CLI: $(check_executable_status "${BIN_DIR}/readshot") (${BIN_DIR}/readshot)
+  MCP: $(check_executable_status "${BIN_DIR}/readshot-mcp") (${BIN_DIR}/readshot-mcp)
+  PATH: $(path_contains_bin_dir && printf 'contains %s' "${BIN_DIR}" || printf 'missing %s' "${BIN_DIR}")
+EOF
+}
+
 main() {
   parse_args "$@"
   require_macos
+  require_supported_macos_version
+  if [[ "${CHECK_ONLY}" == "1" ]]; then
+    check_install
+    exit 0
+  fi
+  require_command awk
   require_command curl
   require_command hdiutil
   require_command shasum

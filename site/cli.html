@@ -66,7 +66,7 @@
                   aria-label="Copy commands"
                   data-copy-title="Copy commands"
                   data-copy-label="Commands copied."
-                  data-copy="readshot list-displays&#10;readshot list-displays --json&#10;readshot list-windows&#10;readshot list-windows --json&#10;readshot capture --interactive --output capture.png&#10;readshot capture --interactive --output capture.png --json&#10;readshot capture-text --interactive --json&#10;readshot capture-and-ocr --interactive --also-image capture.png --json&#10;readshot ocr --input capture.png --json&#10;readshot mcp-config"
+                  data-copy="readshot list-displays&#10;readshot list-displays --json&#10;readshot list-windows&#10;readshot list-windows --json&#10;readshot capture --interactive --output capture.png&#10;readshot capture --interactive --output capture.png --json&#10;readshot capture-text --interactive --json&#10;readshot capture-and-ocr --interactive --also-image capture.png --json&#10;readshot ocr --input capture.png --json&#10;readshot mcp-config&#10;readshot completions zsh"
                 >
                   <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2" />
@@ -86,7 +86,8 @@ readshot capture --interactive --output capture.png --json
 readshot capture-text --interactive --json
 readshot capture-and-ocr --interactive --also-image capture.png --json
 readshot ocr --input capture.png --json
-readshot mcp-config</code></pre>
+readshot mcp-config
+readshot completions zsh</code></pre>
             </div>
           </section>
 
@@ -135,6 +136,10 @@ readshot mcp-config</code></pre>
                 <tr>
                   <td><code translate="no">mcp-config</code></td>
                   <td>Prints a ready-to-paste MCP stdio config snippet.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">completions</code></td>
+                  <td>Generates shell completions from the current CLI.</td>
                 </tr>
               </tbody>
             </table>
@@ -273,6 +278,35 @@ readshot mcp-config --command /Applications/Readshot.app/Contents/MacOS/readshot
             </div>
           </section>
 
+          <section class="doc-section" id="json-output">
+            <h2>JSON Output</h2>
+            <p>
+              <code translate="no">--json</code> returns stable metadata for scripts.
+              Capture JSON includes <code translate="no">kind</code>, image size,
+              source, output path, and clipboard state. OCR JSON includes text,
+              confidence, image size, language hints, and positioned lines when
+              the platform engine returns them.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot capture --output capture.png --json
+readshot capture-text --json
+readshot ocr --input capture.png --json</code></pre>
+            </div>
+          </section>
+
+          <section class="doc-section" id="completions">
+            <h2>Shell Completions</h2>
+            <p>
+              Generate zsh, bash, fish, PowerShell, or Elvish completions from
+              the same command tree used by <code translate="no">readshot --help</code>.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot completions zsh &gt; _readshot
+readshot completions bash &gt; readshot.bash
+readshot completions fish &gt; readshot.fish</code></pre>
+            </div>
+          </section>
+
           <section class="doc-section" id="options">
             <h2>Timing, Cursor, and Window Options</h2>
             <p>
@@ -341,6 +375,8 @@ readshot capture-window --window 11474 --no-window-shadow --output tight.png</co
           <a href="#text-output">Text output</a>
           <a href="#combined">Image and OCR</a>
           <a href="#mcp-config">MCP config</a>
+          <a href="#json-output">JSON output</a>
+          <a href="#completions">Completions</a>
           <a href="#options">Options</a>
           <a href="#destinations">Destinations</a>
         </aside>

@@ -57,3 +57,19 @@ fn mcp_config_prints_json_without_log_noise() {
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["mcpServers"]["readshot"]["command"], "readshot-mcp");
 }
+
+#[test]
+fn completions_prints_shell_script_without_log_noise() {
+    let output = readshot().args(["completions", "zsh"]).output().unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should be empty for completions, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("_readshot"));
+    assert!(stdout.contains("capture-and-ocr"));
+}

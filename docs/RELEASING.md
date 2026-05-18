@@ -115,6 +115,15 @@ section says what changed in user terms. The release workflow uses
 that file as the GitHub Release body and asks GitHub to append its
 generated commit notes.
 
+Run the local readiness check before creating the tag:
+
+```bash
+scripts/check-release.sh 0.2.0
+```
+
+It verifies local version metadata, release notes, packaging files,
+installer syntax, Sparkle inputs, and release workflow assumptions.
+
 ### 2. Tag and push
 
 ```bash

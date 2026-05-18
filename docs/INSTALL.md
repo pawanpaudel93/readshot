@@ -30,6 +30,13 @@ To install a specific version:
 curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- 0.4.1
 ```
 
+To check compatibility, release availability, and the current local
+install state without installing:
+
+```bash
+curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- --check
+```
+
 GitHub Release asset:
 
 * `readshot-macos-aarch64.dmg` for Apple Silicon Macs.

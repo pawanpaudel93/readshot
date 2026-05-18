@@ -51,7 +51,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use image::RgbaImage;
 use readshot_capture::{
     crop_window_relative_rect, CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest,
@@ -168,12 +168,6 @@ pub enum Command {
         /// Emit capture metadata as JSON to stdout. Requires `--output PATH` or `--clipboard`.
         #[arg(long)]
         json: bool,
-
-        /// Hidden compatibility flag for the GUI-only Retake Last
-        /// Region workflow. The CLI process has no shared in-memory
-        /// overlay state, so this always returns a usage error.
-        #[arg(long, hide = true)]
-        last_region: bool,
 
         /// Output image path. Use `-` for stdout.
         #[arg(long, short = 'o', default_value = "-", conflicts_with = "clipboard")]
@@ -355,18 +349,6 @@ pub enum Command {
         language_correction: bool,
     },
 
-    /// Hidden child mode used by `--interactive`.
-    #[command(name = "__interactive-capture", hide = true)]
-    InteractiveCapture {
-        /// Temp PNG written by the Readshot overlay flow.
-        #[arg(long)]
-        output: PathBuf,
-
-        /// Include the cursor in the captured image.
-        #[arg(long)]
-        show_cursor: bool,
-    },
-
     /// Print a ready-to-paste MCP stdio configuration snippet.
     McpConfig {
         /// Server name to use in the host config.
@@ -376,6 +358,13 @@ pub enum Command {
         /// Command used by the host to launch the MCP server.
         #[arg(long, default_value = "readshot-mcp")]
         command: String,
+    },
+
+    /// Generate shell completion scripts.
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
 }
 
@@ -498,14 +487,8 @@ impl Cli {
                 format,
                 clipboard: use_clipboard,
                 json,
-                last_region,
                 output,
             } => {
-                if last_region {
-                    return Err(CliError::InvalidInput(
-                        "--last-region is only available in the GUI session".into(),
-                    ));
-                }
                 ensure_image_json_has_destination(json, use_clipboard, &output)?;
                 maybe_delay(delay).await;
                 let (img, source) = if interactive {
@@ -753,13 +736,11 @@ impl Cli {
                     write_text(&result.text, &output, stdout)?;
                 }
             }
-            Command::InteractiveCapture { .. } => {
-                return Err(CliError::InvalidInput(
-                    "__interactive-capture is an internal command".into(),
-                ));
-            }
             Command::McpConfig { name, command } => {
                 write_mcp_config(stdout, &name, &command)?;
+            }
+            Command::Completions { shell } => {
+                write_completions(stdout, shell)?;
             }
         }
         Ok(())
@@ -794,14 +775,41 @@ fn clipboard_error(err: arboard::Error) -> CliError {
     CliError::Clipboard(err.to_string())
 }
 
-pub fn is_internal_interactive_command(command: &Command) -> Option<(&PathBuf, bool)> {
-    match command {
-        Command::InteractiveCapture {
-            output,
-            show_cursor,
-        } => Some((output, *show_cursor)),
-        _ => None,
+pub fn parse_internal_interactive_command(
+    argv: &[String],
+) -> Result<Option<(PathBuf, bool)>, CliError> {
+    if argv.get(1).map(String::as_str) != Some("__interactive-capture") {
+        return Ok(None);
     }
+
+    let mut output = None;
+    let mut show_cursor = false;
+    let mut args = argv.iter().skip(2);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--output" => {
+                let Some(value) = args.next() else {
+                    return Err(CliError::InvalidInput(
+                        "__interactive-capture requires --output PATH".into(),
+                    ));
+                };
+                output = Some(PathBuf::from(value));
+            }
+            "--show-cursor" => show_cursor = true,
+            other => {
+                return Err(CliError::InvalidInput(format!(
+                    "unknown __interactive-capture argument: {other}"
+                )));
+            }
+        }
+    }
+
+    let Some(output) = output else {
+        return Err(CliError::InvalidInput(
+            "__interactive-capture requires --output PATH".into(),
+        ));
+    };
+    Ok(Some((output, show_cursor)))
 }
 
 fn effective_hide_cursor(hide_cursor: bool, show_cursor: bool) -> bool {
@@ -1215,6 +1223,12 @@ fn write_mcp_config(out: &mut dyn Write, name: &str, command: &str) -> std::io::
     write_json_value(out, payload)
 }
 
+fn write_completions(out: &mut dyn Write, shell: clap_complete::Shell) -> std::io::Result<()> {
+    let mut command = Cli::command();
+    clap_complete::generate(shell, &mut command, "readshot", out);
+    Ok(())
+}
+
 fn write_image(
     img: &RgbaImage,
     path: &std::path::Path,
@@ -1504,23 +1518,19 @@ mod tests {
     }
 
     #[test]
-    fn parses_hidden_interactive_child_command() {
+    fn parses_internal_interactive_child_command_outside_clap() {
         let output = std::path::PathBuf::from("/tmp/readshot-interactive.png");
-        let cli = Cli::try_parse_from([
-            "readshot",
-            "__interactive-capture",
-            "--output",
-            output.to_str().unwrap(),
-            "--show-cursor",
+        let parsed = parse_internal_interactive_command(&[
+            "readshot".to_string(),
+            "__interactive-capture".to_string(),
+            "--output".to_string(),
+            output.display().to_string(),
+            "--show-cursor".to_string(),
         ])
         .unwrap();
 
-        let Some(Command::InteractiveCapture {
-            output: parsed,
-            show_cursor,
-        }) = cli.command
-        else {
-            panic!("wrong subcommand");
+        let Some((parsed, show_cursor)) = parsed else {
+            panic!("internal command should parse");
         };
         assert_eq!(parsed, output);
         assert!(show_cursor);
@@ -1727,19 +1737,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_capture_last_region_flag() {
-        let cli = Cli::try_parse_from(["readshot", "capture", "--last-region"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::Capture {
-                last_region: true,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn capture_help_hides_gui_only_last_region_flag() {
+    fn capture_help_does_not_include_gui_only_last_region_flag() {
         let mut command = Cli::command();
         let help = command
             .find_subcommand_mut("capture")
@@ -1805,6 +1803,18 @@ mod tests {
             cli.command,
             Some(Command::McpConfig { ref name, ref command })
                 if name == "screen" && command == "/usr/local/bin/readshot-mcp"
+        ));
+    }
+
+    #[test]
+    fn parses_completions_command() {
+        let cli = Cli::try_parse_from(["readshot", "completions", "zsh"]).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::Completions {
+                shell: clap_complete::Shell::Zsh
+            })
         ));
     }
 
@@ -2156,14 +2166,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_capture_last_region_returns_invalid_input() {
+    async fn run_completions_emits_shell_script() {
         let (cap, ocr) = fakes();
-        let cli = Cli::try_parse_from(["readshot", "capture", "--last-region"]).unwrap();
+        let cli = Cli::try_parse_from(["readshot", "completions", "zsh"]).unwrap();
         let mut out = Vec::new();
-        let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
+        cli.run(cap, ocr, &mut out).await.unwrap();
 
-        assert!(matches!(err, CliError::InvalidInput(ref s) if s.contains("--last-region")));
-        assert_eq!(exit_code(&err), 64);
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("_readshot"));
+        assert!(text.contains("capture-and-ocr"));
+        assert!(text.contains("mcp-config"));
+        assert!(!text.contains("__interactive-capture"));
+        assert!(!text.contains("--last-region"));
     }
 
     #[tokio::test]

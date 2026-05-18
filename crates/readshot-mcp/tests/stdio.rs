@@ -77,3 +77,37 @@ fn stdio_server_handles_core_json_rpc_methods() {
         "MCP stderr should not contain protocol JSON: {stderr}"
     );
 }
+
+#[test]
+fn check_prints_json_diagnostics_without_stderr() {
+    let output = readshot_mcp().arg("--check").output().unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should be empty for --check, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["server"], "readshot-mcp");
+    assert_eq!(value["transport"], "stdio");
+    assert!(value["tools"]["count"].as_u64().unwrap() > 0);
+    assert_eq!(value["history"]["writable"], true);
+}
+
+#[test]
+fn help_prints_usage_without_stderr() {
+    let output = readshot_mcp().arg("--help").output().unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "stderr should be empty for --help, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8(output.stdout)
+        .unwrap()
+        .contains("Usage: readshot-mcp"));
+}

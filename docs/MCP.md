@@ -33,6 +33,15 @@ readshot mcp-config
 readshot mcp-config --command /Applications/Readshot.app/Contents/MacOS/readshot-mcp
 ```
 
+You can also run a local MCP diagnostic:
+
+```bash
+readshot-mcp --check
+```
+
+It prints JSON with server version, stdio transport, advertised tool
+count, and history-directory writability.
+
 ## Tools exposed
 
 | Tool                       | Inputs                                          | Output                            |
@@ -329,6 +338,12 @@ List the advertised tools:
 printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' \
   | "$READSHOT_MCP" \
   | python3 -m json.tool
+```
+
+Or run the built-in diagnostic:
+
+```bash
+"$READSHOT_MCP" --check
 ```
 
 List capturable windows:

@@ -18,7 +18,7 @@ use clap::Parser;
 use readshot_capture::default_capturer;
 use readshot_ocr::default_engine;
 
-use readshot_app::cli::{exit_code, is_internal_interactive_command, Cli};
+use readshot_app::cli::{exit_code, parse_internal_interactive_command, Cli};
 use readshot_app::runtime;
 use readshot_app::url_scheme;
 
@@ -29,24 +29,10 @@ fn main() -> iced::Result {
     // Linux), parse it now and pass the result to the runtime so
     // start() can dispatch the corresponding action on boot.
     let argv: Vec<String> = std::env::args().collect();
-    let url_arg = argv
-        .get(1)
-        .filter(|a| a.starts_with("readshot://"))
-        .cloned();
-    // Parse CLI second. If argv[1] is a readshot:// URL, skip clap so
-    // the GUI path can handle it after logging is ready. Any
-    // subcommand routes to the headless surface and exits with a
-    // stable status code.
-    let cli = if url_arg.is_some() {
-        // Skip clap when argv[1] is a URL — clap would reject it.
-        Cli { command: None }
-    } else {
-        Cli::parse()
-    };
-    if let Some(command) = cli.command.as_ref() {
-        if let Some((output, show_cursor)) = is_internal_interactive_command(command) {
+    match parse_internal_interactive_command(&argv) {
+        Ok(Some((output, show_cursor))) => {
             init_cli_logging();
-            let _ = std::fs::remove_file(output);
+            let _ = std::fs::remove_file(&output);
             runtime::set_cli_interactive_request(runtime::CliInteractiveRequest {
                 output: output.clone(),
                 hide_cursor: !show_cursor,
@@ -63,7 +49,26 @@ fn main() -> iced::Result {
             }
             return result;
         }
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!("readshot: {err}");
+            std::process::exit(exit_code(&err));
+        }
     }
+    let url_arg = argv
+        .get(1)
+        .filter(|a| a.starts_with("readshot://"))
+        .cloned();
+    // Parse CLI second. If argv[1] is a readshot:// URL, skip clap so
+    // the GUI path can handle it after logging is ready. Any
+    // subcommand routes to the headless surface and exits with a
+    // stable status code.
+    let cli = if url_arg.is_some() {
+        // Skip clap when argv[1] is a URL — clap would reject it.
+        Cli { command: None }
+    } else {
+        Cli::parse()
+    };
 
     if cli.command.is_some() {
         init_cli_logging();
