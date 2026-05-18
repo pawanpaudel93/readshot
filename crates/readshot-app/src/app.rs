@@ -190,6 +190,9 @@ pub enum Message {
     /// Direct (no-editor) OCR-text-copy completion. Carries the
     /// recognised text so the toast can report a character count.
     OverlayCopyTextDone(Result<String, String>),
+    /// Hidden one-shot CLI interactive capture finished writing its
+    /// temp PNG. The runtime exits immediately afterward.
+    CliInteractiveWritten(Result<(), String>),
     /// Fire-and-forget history persistence completion. The boolean
     /// payload is `true` when the chain completed all the way through
     /// the OCR-and-update step (so the browser should reload to see
@@ -446,6 +449,14 @@ pub struct App {
     /// editor uses this to make actual-pixels zoom mean physical
     /// pixels instead of logical UI points.
     pub pending_display_scale: Option<f32>,
+    /// Whether the in-flight overlay capture should hide the cursor.
+    /// Normal app captures hide it; CLI interactive can opt into
+    /// including it with `--show-cursor`.
+    pub pending_hide_cursor: bool,
+    /// Output path for the hidden one-shot CLI interactive child
+    /// process. When set, the overlay writes the selected image here
+    /// and exits instead of opening app UI.
+    pub cli_interactive_output: Option<PathBuf>,
     /// Live pin windows mapped to their pre-rendered image state.
     /// Each pin window's `view` reads its state from this map. The
     /// map shrinks as pins close.
@@ -566,6 +577,9 @@ pub enum CaptureIntent {
     SaveDirect,
     /// Open a borderless always-on-top pin window, no editor.
     Pin,
+    /// Hidden one-shot CLI bridge: write PNG bytes to a temp path
+    /// and exit so the parent CLI process can continue.
+    CliInteractive,
 }
 
 impl App {
@@ -593,6 +607,8 @@ impl App {
             pending_intent: None,
             pending_display_id: None,
             pending_display_scale: None,
+            pending_hide_cursor: true,
+            cli_interactive_output: None,
             pins: HashMap::new(),
             overlay_tick: 0,
             last_save_dir: None,

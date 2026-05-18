@@ -506,11 +506,11 @@
             <p>Use Readshot from shell scripts.</p>
             <ul class="compact-list">
               <li>Capture a region, display, or window.</li>
+              <li>Use interactive selection, delay timers, and clipboard output.</li>
               <li>Run OCR on a screenshot or a fresh capture.</li>
-              <li>List displays and windows for scripts.</li>
             </ul>
             <div class="terminal">
-              <code translate="no">readshot list-windows<br />readshot capture -o capture.png<br />readshot capture-text<br />readshot ocr -i capture.png</code>
+              <code translate="no">readshot capture --interactive -o capture.png<br />readshot capture --delay 2 --format jpg -o capture.jpg<br />readshot capture-text --interactive --clipboard<br />readshot ocr -i capture.png --clipboard</code>
             </div>
           </div>
           <div class="card">

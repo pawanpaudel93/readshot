@@ -18,7 +18,7 @@ use clap::Parser;
 use readshot_capture::default_capturer;
 use readshot_ocr::default_engine;
 
-use readshot_app::cli::{exit_code, Cli};
+use readshot_app::cli::{exit_code, is_internal_interactive_command, Cli};
 use readshot_app::runtime;
 use readshot_app::url_scheme;
 
@@ -43,6 +43,28 @@ fn main() -> iced::Result {
     } else {
         Cli::parse()
     };
+    if let Some(command) = cli.command.as_ref() {
+        if let Some((output, show_cursor)) = is_internal_interactive_command(command) {
+            init_cli_logging();
+            let _ = std::fs::remove_file(output);
+            runtime::set_cli_interactive_request(runtime::CliInteractiveRequest {
+                output: output.clone(),
+                hide_cursor: !show_cursor,
+            });
+            let result = iced::daemon(runtime::start, runtime::update, runtime::view)
+                .title(runtime::title)
+                .subscription(runtime::subscription)
+                .theme(runtime::theme)
+                .style(runtime::style)
+                .font(readshot_core::render::FONT_DATA)
+                .run();
+            if !output.exists() || output.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
+                std::process::exit(64);
+            }
+            return result;
+        }
+    }
+
     if cli.command.is_some() {
         init_cli_logging();
         let capturer = Arc::from(default_capturer());

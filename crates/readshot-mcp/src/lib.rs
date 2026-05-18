@@ -408,10 +408,12 @@ impl McpServer {
                 message: "capture_window requires a non-empty `window` id".into(),
             })?;
         let window_id = WindowId(window_id.to_string());
+        let ignore_shadows = parse_optional_bool(args, "ignore_shadows")?.unwrap_or(false);
         let mut img = self
             .capturer
             .capture_window(WindowCaptureRequest {
                 window_id: window_id.clone(),
+                ignore_shadows,
             })
             .await
             .map_err(capture_to_rpc)?;
@@ -808,6 +810,7 @@ fn tool_descriptors() -> Value {
         "type": "object",
         "properties": {
             "window": { "type": "string", "minLength": 1, "description": "Window id from list_windows." },
+            "ignore_shadows": { "type": "boolean", "default": false, "description": "Omit the native window shadow when the platform supports it." },
             "rect": {
                 "type": "object",
                 "description": "Window-relative region in logical pixels. Defaults to the full window.",
@@ -1004,6 +1007,22 @@ mod tests {
                 "get_capture",
                 "search_captures"
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_list_documents_window_shadow_control() {
+        let s = server();
+        let resp = call(&s, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#).await;
+        let tools = resp["result"]["tools"].as_array().unwrap();
+        let capture_window = tools
+            .iter()
+            .find(|tool| tool["name"] == "capture_window")
+            .expect("capture_window tool is advertised");
+
+        assert_eq!(
+            capture_window["inputSchema"]["properties"]["ignore_shadows"]["type"],
+            "boolean"
         );
     }
 

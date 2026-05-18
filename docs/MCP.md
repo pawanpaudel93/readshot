@@ -32,7 +32,7 @@ your shell `PATH`.
 | `list_displays`            | (none)                                          | `{ displays: [...] }`             |
 | `list_windows`             | (none)                                          | `{ windows: [...] }`              |
 | `capture_region`           | `display?`, `rect?`, `scale?`, `hide_cursor?`   | `{ image_base64 }` (PNG)          |
-| `capture_window`           | `window`, `rect?`                               | `{ image_base64 }` (PNG)          |
+| `capture_window`           | `window`, `rect?`, `ignore_shadows?`            | `{ image_base64 }` (PNG)          |
 | `capture_text`             | …same plus `languages`, `language_correction`   | `{ text, average_confidence }`    |
 | `capture_region_and_text`  | …same                                           | `{ image_base64, text, … }`       |
 | `recent_captures`          | `limit?`                                        | `{ captures: [...] }`             |
@@ -45,7 +45,9 @@ is omitted, the chosen display's full bounds are captured.
 
 Use `list_windows` to find capturable app windows. Pass the returned
 `id` as `window` to `capture_window`. A `capture_window.rect` is
-relative to that window's top-left, not to the full display.
+relative to that window's top-left, not to the full display. Set
+`ignore_shadows` when the host needs a tighter window-only image and
+the platform backend supports native shadow control.
 
 The history tools read the same local archive as the GUI. Each capture
 result includes metadata, OCR text when available, and the absolute

@@ -45,6 +45,13 @@ use crate::url_scheme::UrlAction;
 /// `start()` consumes this and feeds an extra `Message::UrlActionReceived`
 /// task on boot, before the welcome window even has time to paint.
 static INITIAL_URL_ACTION: OnceLock<Mutex<Option<UrlAction>>> = OnceLock::new();
+static CLI_INTERACTIVE_REQUEST: OnceLock<Mutex<Option<CliInteractiveRequest>>> = OnceLock::new();
+
+#[derive(Clone, Debug)]
+pub struct CliInteractiveRequest {
+    pub output: PathBuf,
+    pub hide_cursor: bool,
+}
 
 /// Stash a parsed URL scheme action so the iced runtime sees it when
 /// it boots. Call this from `main.rs` before the daemon takes over.
@@ -59,6 +66,21 @@ pub fn set_initial_url_action(action: UrlAction) {
 
 fn take_initial_url_action() -> Option<UrlAction> {
     INITIAL_URL_ACTION
+        .get()
+        .and_then(|m| m.lock().ok().and_then(|mut g| g.take()))
+}
+
+/// Configure the daemon as a hidden one-shot child used by
+/// `readshot capture --interactive`. The normal CLI process launches
+/// this mode, waits for it to write the selected PNG, then continues
+/// with output formatting, clipboard, or OCR.
+pub fn set_cli_interactive_request(request: CliInteractiveRequest) {
+    let slot = CLI_INTERACTIVE_REQUEST.get_or_init(|| Mutex::new(None));
+    *slot.lock().expect("CLI_INTERACTIVE_REQUEST poisoned") = Some(request);
+}
+
+fn take_cli_interactive_request() -> Option<CliInteractiveRequest> {
+    CLI_INTERACTIVE_REQUEST
         .get()
         .and_then(|m| m.lock().ok().and_then(|mut g| g.take()))
 }
@@ -94,6 +116,12 @@ pub fn start() -> (App, Task<Message>) {
     let mut app = App::new(coordinator, permissions, prefs);
     app.history_root = history_root;
     app.preferences_path = preferences_path;
+    let cli_interactive_request = take_cli_interactive_request();
+    if let Some(request) = cli_interactive_request.as_ref() {
+        app.cli_interactive_output = Some(request.output.clone());
+        app.pending_intent = Some(crate::app::CaptureIntent::CliInteractive);
+        app.pending_hide_cursor = request.hide_cursor;
+    }
 
     // Surface the initial permission state in the log so users
     // (and us, when triaging issues) can see whether macOS TCC is
@@ -103,6 +131,17 @@ pub fn start() -> (App, Task<Message>) {
         "initial status: {:?}",
         app.coordinator.pre_capture_gate(),
     );
+
+    if cli_interactive_request.is_some() {
+        let task = if app.welcome.should_show() {
+            Task::done(Message::CliInteractiveWritten(Err(
+                "Screen Recording permission is required for interactive capture".into(),
+            )))
+        } else {
+            Task::done(Message::OpenOverlayRequested)
+        };
+        return (app, task);
+    }
 
     // Register the user's preferred global hotkey. Failures are
     // logged-and-swallowed: the binary remains usable from the GUI
@@ -928,18 +967,29 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.pending_intent = None;
             state.pending_display_id = None;
             state.pending_display_scale = None;
+            state.pending_hide_cursor = true;
+            if state.cli_interactive_output.is_some() {
+                state.cli_interactive_output = None;
+                return Task::batch(
+                    close_all_overlays(state)
+                        .into_iter()
+                        .chain(std::iter::once(iced::exit())),
+                );
+            }
             Task::batch(close_all_overlays(state))
         }
 
         Message::CaptureRegionRequested { display_id, rect } => {
             let coord = state.coordinator.clone();
+            let hide_cursor = state.pending_hide_cursor;
             state.capture_in_flight = true;
             state.last_capture_status = None;
             // Region capture lands in the editor instead of saving
             // directly — the editor decides what to do with it.
-            Task::perform(capture_region_to_image(coord, display_id, rect), |result| {
-                Message::RegionCaptureCompleted(result.map_err(|e| e.to_string()))
-            })
+            Task::perform(
+                capture_region_to_image(coord, display_id, rect, hide_cursor),
+                |result| Message::RegionCaptureCompleted(result.map_err(|e| e.to_string())),
+            )
         }
 
         Message::RegionCaptureCompleted(result) => {
@@ -950,6 +1000,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 .unwrap_or(crate::app::CaptureIntent::Editor);
             let display_id = state.pending_display_id.take().unwrap_or_default();
             let display_scale = state.pending_display_scale.take().unwrap_or(1.0);
+            state.pending_hide_cursor = true;
             match result {
                 Ok(image) => {
                     let history_record = history_record_for_capture(
@@ -962,13 +1013,17 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     // gated on `preferences.history_retention` and
                     // logs internally on failure, so it can never
                     // block or fail the user-visible flow.
-                    let history_task = persist_history_task(
-                        state.coordinator.clone(),
-                        image.clone(),
-                        history_record.clone(),
-                        state.preferences.history_retention,
-                        state.preferences.clone(),
-                    );
+                    let history_task = if intent == crate::app::CaptureIntent::CliInteractive {
+                        Task::none()
+                    } else {
+                        persist_history_task(
+                            state.coordinator.clone(),
+                            image.clone(),
+                            history_record.clone(),
+                            state.preferences.history_retention,
+                            state.preferences.clone(),
+                        )
+                    };
                     let intent_task = match intent {
                         crate::app::CaptureIntent::Editor => {
                             state.editor = Some(match history_record {
@@ -1023,12 +1078,26 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                             open_task
                                 .map(move |opened| Message::PinWindowReady(opened, handle.clone()))
                         }
+                        crate::app::CaptureIntent::CliInteractive => {
+                            let Some(output) = state.cli_interactive_output.take() else {
+                                return Task::done(Message::CliInteractiveWritten(Err(
+                                    "missing CLI interactive output path".into(),
+                                )));
+                            };
+                            Task::perform(write_cli_interactive_capture(image, output), |r| {
+                                Message::CliInteractiveWritten(r.map_err(|e| e.to_string()))
+                            })
+                        }
                     };
                     Task::batch([history_task, intent_task])
                 }
                 Err(e) => {
                     state.last_capture_status = Some(format!("Capture failed: {e}"));
-                    Task::none()
+                    if state.cli_interactive_output.is_some() {
+                        Task::done(Message::CliInteractiveWritten(Err(e)))
+                    } else {
+                        Task::none()
+                    }
                 }
             }
         }
@@ -1451,6 +1520,17 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 Err(e) => format!("Copy text failed: {e}"),
             });
             Task::none()
+        }
+        Message::CliInteractiveWritten(result) => {
+            if let Err(e) = result {
+                tracing::warn!(target: "readshot::cli", "interactive capture failed: {e}");
+            }
+            state.cli_interactive_output = None;
+            state.pending_intent = None;
+            state.pending_display_id = None;
+            state.pending_display_scale = None;
+            state.pending_hide_cursor = true;
+            iced::exit()
         }
 
         Message::EditorWindowReady(id) => {
@@ -3735,6 +3815,8 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
         .map(|d| d.display_id.clone())
         .unwrap_or_default();
     let scale = overlay_record.map(|d| d.scale).unwrap_or(1.0);
+    let auto_confirm_intent = overlay_auto_confirm_intent(state);
+    let cli_interactive = auto_confirm_intent == Some(crate::app::CaptureIntent::CliInteractive);
 
     let canvas = Canvas::new(crate::overlay::OverlayProgram {
         display_id,
@@ -3742,6 +3824,7 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
         // smoothly (each dash period is ~10 logical px).
         dash_offset: state.overlay_tick as usize,
         scale,
+        auto_confirm_intent,
     })
     .width(Length::Fill)
     .height(Length::Fill);
@@ -3760,21 +3843,22 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
     // Floating hint near the top of the overlay. We give it a
     // semi-opaque dark capsule so the text reads regardless of the
     // wallpaper underneath.
-    let hint = container(
-        text("Drag to select · hold Shift for square · Enter for full screen · Esc to cancel")
-            .size(13)
-            .color(Color::WHITE),
-    )
-    .padding(8)
-    .style(|_| iced::widget::container::Style {
-        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.55).into()),
-        text_color: Some(Color::WHITE),
-        border: iced::Border {
-            radius: 6.0.into(),
+    let hint_text = if cli_interactive {
+        "Drag to capture · hold Shift for square · Enter for full screen · Esc to cancel"
+    } else {
+        "Drag to select · hold Shift for square · Enter for full screen · Esc to cancel"
+    };
+    let hint = container(text(hint_text).size(13).color(Color::WHITE))
+        .padding(8)
+        .style(|_| iced::widget::container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.55).into()),
+            text_color: Some(Color::WHITE),
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        ..Default::default()
-    });
+        });
 
     let hint_layer = container(hint)
         .width(Length::Fill)
@@ -3787,20 +3871,36 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
     // committed selection. Layered above the canvas so its buttons
     // intercept clicks before the overlay's "click outside =
     // restart drag" path sees them.
-    let toolbar_layer = overlay_record
-        .and_then(|d| {
-            state
-                .overlay_selections
-                .get(&d.display_id)
-                .map(|rect| (d, rect))
-        })
-        .map(|(d, rect)| overlay_toolbar_layer(&d.display_id, rect, d.width, d.height));
+    let toolbar_layer = if cli_interactive {
+        None
+    } else {
+        overlay_record
+            .and_then(|d| {
+                state
+                    .overlay_selections
+                    .get(&d.display_id)
+                    .map(|rect| (d, rect))
+            })
+            .map(|(d, rect)| overlay_toolbar_layer(&d.display_id, rect, d.width, d.height))
+    };
 
     // Once the toolbar is up the introductory hint is just noise.
     if let Some(toolbar) = toolbar_layer {
         stack![canvas_layer, toolbar].into()
     } else {
         stack![canvas_layer, hint_layer].into()
+    }
+}
+
+fn overlay_auto_confirm_intent(state: &App) -> Option<crate::app::CaptureIntent> {
+    if matches!(
+        state.pending_intent,
+        Some(crate::app::CaptureIntent::CliInteractive)
+    ) || state.cli_interactive_output.is_some()
+    {
+        Some(crate::app::CaptureIntent::CliInteractive)
+    } else {
+        None
     }
 }
 
@@ -4578,6 +4678,7 @@ async fn capture_region_to_image(
     coord: CaptureCoordinator,
     display_id: readshot_capture::DisplayId,
     rect: readshot_core::geom::Rect,
+    hide_cursor: bool,
 ) -> Result<image::RgbaImage, CaptureRunError> {
     let displays = coord.list_displays().await?;
     let display = displays
@@ -4588,9 +4689,30 @@ async fn capture_region_to_image(
         display_id: display.id.clone(),
         rect,
         scale: display.scale,
-        hide_cursor: true,
+        hide_cursor,
     };
     Ok(coord.capture_region(req).await?)
+}
+
+async fn write_cli_interactive_capture(
+    image: image::RgbaImage,
+    output: PathBuf,
+) -> Result<(), CaptureRunError> {
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = output.with_extension("png.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    let write_result = image
+        .save_with_format(&tmp, image::ImageFormat::Png)
+        .map_err(CaptureRunError::from)
+        .and_then(|_| std::fs::rename(&tmp, &output).map_err(CaptureRunError::from));
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_file(&output);
+    }
+    write_result?;
+    Ok(())
 }
 
 /// Walks every registered overlay window, returns close tasks for
@@ -5077,6 +5199,8 @@ enum CaptureRunError {
     Capture(#[from] readshot_core::error::CaptureError),
     #[error(transparent)]
     Image(#[from] image::ImageError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
     #[error("no displays available")]
     NoDisplays,
 }
@@ -5323,6 +5447,28 @@ mod tests {
         );
 
         assert_eq!(app.last_region_display_id.as_deref(), Some("display-b"));
+    }
+
+    #[test]
+    fn overlay_auto_confirm_is_only_for_cli_interactive() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        assert_eq!(overlay_auto_confirm_intent(&app), None);
+
+        app.pending_intent = Some(crate::app::CaptureIntent::Editor);
+        assert_eq!(overlay_auto_confirm_intent(&app), None);
+
+        app.pending_intent = Some(crate::app::CaptureIntent::CliInteractive);
+        assert_eq!(
+            overlay_auto_confirm_intent(&app),
+            Some(crate::app::CaptureIntent::CliInteractive)
+        );
+
+        app.pending_intent = None;
+        app.cli_interactive_output = Some(std::env::temp_dir().join("capture.png"));
+        assert_eq!(
+            overlay_auto_confirm_intent(&app),
+            Some(crate::app::CaptureIntent::CliInteractive)
+        );
     }
 
     #[test]
@@ -5800,6 +5946,7 @@ mod tests {
             coord,
             "retina".into(),
             readshot_core::geom::Rect::from_xywh(0.0, 0.0, 128.0, 128.0).unwrap(),
+            true,
         )
         .await
         .unwrap();
@@ -5808,6 +5955,74 @@ mod tests {
         let saved = image::open(&path).unwrap();
         assert_eq!(saved.width(), 256);
         assert_eq!(saved.height(), 256);
+    }
+
+    #[tokio::test]
+    async fn capture_region_to_image_forwards_cursor_visibility() {
+        struct CursorFlagCapturer {
+            seen_hide_cursor: Arc<Mutex<Option<bool>>>,
+        }
+
+        #[async_trait]
+        impl Capturer for CursorFlagCapturer {
+            async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
+                Ok(vec![DisplayInfo {
+                    id: "primary".into(),
+                    bounds: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 64.0, 64.0).unwrap(),
+                    scale: 1.0,
+                    name: "Primary".into(),
+                    is_primary: true,
+                }])
+            }
+
+            async fn capture_region(
+                &self,
+                req: CaptureRequest,
+            ) -> Result<image::RgbaImage, CaptureError> {
+                *self.seen_hide_cursor.lock().unwrap() = Some(req.hide_cursor);
+                Ok(solid(64, 64))
+            }
+        }
+
+        let seen_hide_cursor = Arc::new(Mutex::new(None));
+        let perms = Arc::new(FakePermissions::granted());
+        let coord = CaptureCoordinator::new(
+            Arc::new(CursorFlagCapturer {
+                seen_hide_cursor: Arc::clone(&seen_hide_cursor),
+            }),
+            Arc::new(FakeOcrEngine::with_text("hi")),
+            perms,
+            None,
+        );
+
+        capture_region_to_image(
+            coord,
+            "primary".into(),
+            readshot_core::geom::Rect::from_xywh(0.0, 0.0, 32.0, 32.0).unwrap(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(*seen_hide_cursor.lock().unwrap(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn cli_interactive_write_removes_existing_tmp_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let output = dir.path().join("capture.png");
+        let tmp = dir.path().join("capture.png.tmp");
+        std::fs::write(&tmp, b"stale").unwrap();
+
+        write_cli_interactive_capture(solid(8, 8), output.clone())
+            .await
+            .unwrap();
+
+        assert!(output.exists());
+        assert!(!tmp.exists());
+        let saved = image::open(output).unwrap();
+        assert_eq!(saved.width(), 8);
+        assert_eq!(saved.height(), 8);
     }
 
     #[test]

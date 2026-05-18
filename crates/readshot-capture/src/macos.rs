@@ -128,6 +128,7 @@ impl Capturer for ScreenCaptureKitCapturer {
             .with_width(capture_w)
             .with_height(capture_h)
             .with_shows_cursor(false)
+            .with_ignores_shadows_single_window(req.ignore_shadows)
             .with_ignore_global_clip_single_window(true);
 
         let cg_image = SCScreenshotManager::capture_image(&filter, &config).map_err(map_err)?;

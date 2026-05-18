@@ -58,9 +58,11 @@ CLI examples:
 readshot --help
 readshot list-displays
 readshot list-windows
-readshot capture --output capture.png
-readshot capture-text
-readshot ocr --input capture.png
+readshot capture --interactive --output capture.png
+readshot capture --delay 2 --format jpg --output capture.jpg
+readshot capture-window --window 11474 --clipboard
+readshot capture-text --interactive --clipboard
+readshot ocr --input capture.png --clipboard
 ```
 
 For AI-agent hosts, use the bundled MCP command:

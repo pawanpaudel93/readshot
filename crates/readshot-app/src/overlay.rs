@@ -53,6 +53,10 @@ pub struct OverlayProgram {
     pub display_id: DisplayId,
     pub dash_offset: usize,
     pub scale: f32,
+    /// When set, the initial drag release immediately confirms the
+    /// selection with this intent instead of committing an editable
+    /// selection and showing the quick-action toolbar.
+    pub auto_confirm_intent: Option<CaptureIntent>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -108,6 +112,8 @@ const HANDLE_HALF: f32 = 4.0;
 /// Hit-test half-side. Slightly larger than visual so handles are
 /// easier to grab.
 const HANDLE_HIT: f32 = 8.0;
+const CROSSHAIR_ARM: f32 = 10.0;
+const CROSSHAIR_GAP: f32 = 4.0;
 
 impl OverlayState {
     /// The rect to draw / inspect *right now*. During InitialDrag this
@@ -211,6 +217,57 @@ fn cursor_for_handle(h: Handle) -> mouse::Interaction {
 
 fn rect_contains(r: Rectangle, p: Point) -> bool {
     p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height
+}
+
+fn crosshair_point(state: &OverlayState, cursor: Option<Point>) -> Option<Point> {
+    let point = cursor?;
+    match state.active {
+        Some(Active::InitialDrag { .. }) => Some(point),
+        Some(Active::Resize { .. }) | Some(Active::Move { .. }) => None,
+        None => {
+            if let Some(selection) = state.selection {
+                if handle_at(selection, point).is_some() || rect_contains(selection, point) {
+                    return None;
+                }
+            }
+            Some(point)
+        }
+    }
+}
+
+fn draw_crosshair(frame: &mut Frame<Renderer>, point: Point) {
+    let segments = [
+        (
+            Point::new(point.x - CROSSHAIR_ARM, point.y),
+            Point::new(point.x - CROSSHAIR_GAP, point.y),
+        ),
+        (
+            Point::new(point.x + CROSSHAIR_GAP, point.y),
+            Point::new(point.x + CROSSHAIR_ARM, point.y),
+        ),
+        (
+            Point::new(point.x, point.y - CROSSHAIR_ARM),
+            Point::new(point.x, point.y - CROSSHAIR_GAP),
+        ),
+        (
+            Point::new(point.x, point.y + CROSSHAIR_GAP),
+            Point::new(point.x, point.y + CROSSHAIR_ARM),
+        ),
+    ];
+
+    for (from, to) in segments {
+        let path = Path::line(from, to);
+        frame.stroke(
+            &path,
+            Stroke::default()
+                .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.85))
+                .with_width(3.0),
+        );
+        frame.stroke(
+            &path,
+            Stroke::default().with_color(Color::WHITE).with_width(1.25),
+        );
+    }
 }
 
 /// Recompute the rect when a handle is dragged. The cursor position
@@ -321,16 +378,16 @@ impl Program<Message> for OverlayProgram {
                 Key::Named(Named::Enter | Named::Space) => {
                     // Confirm: existing selection if any, else fall
                     // back to "capture the whole overlay" (the
-                    // original Phase B Enter semantics). Enter
-                    // routes through the editor by default — the
-                    // toolbar buttons publish their own
-                    // `OverlaySelected` with a different intent.
+                    // original Phase B Enter semantics). Enter routes
+                    // through the editor by default; one-shot CLI mode
+                    // overrides this to capture directly.
                     let r = state.selection.unwrap_or(Rectangle {
                         x: 0.0,
                         y: 0.0,
                         width: bounds.width,
                         height: bounds.height,
                     });
+                    let intent = self.auto_confirm_intent.unwrap_or(CaptureIntent::Editor);
                     state.active = None;
                     state.selection = None;
                     if let Some(domain) = rect_to_domain(r) {
@@ -338,7 +395,7 @@ impl Program<Message> for OverlayProgram {
                             Action::publish(Message::OverlaySelected {
                                 display_id: self.display_id.clone(),
                                 rect: domain,
-                                intent: CaptureIntent::Editor,
+                                intent,
                             })
                             .and_capture(),
                         );
@@ -431,6 +488,22 @@ impl Program<Message> for OverlayProgram {
                         // Discard sub-pixel "clicks" — the user almost
                         // certainly didn't mean to commit a 1×1 region.
                         if r.width >= 4.0 && r.height >= 4.0 {
+                            if let Some(intent) = self.auto_confirm_intent {
+                                state.selection = None;
+                                if let Some(domain) = rect_to_domain(r) {
+                                    return Some(
+                                        Action::publish(Message::OverlaySelected {
+                                            display_id: self.display_id.clone(),
+                                            rect: domain,
+                                            intent,
+                                        })
+                                        .and_capture(),
+                                    );
+                                }
+                                return Some(
+                                    Action::publish(Message::OverlayCancelled).and_capture(),
+                                );
+                            }
                             state.selection = Some(r);
                             if let Some(domain) = rect_to_domain(r) {
                                 return Some(
@@ -441,6 +514,9 @@ impl Program<Message> for OverlayProgram {
                                     .and_capture(),
                                 );
                             }
+                        }
+                        if self.auto_confirm_intent.is_some() {
+                            return Some(Action::publish(Message::OverlayCancelled).and_capture());
                         }
                         Some(Action::request_redraw().and_capture())
                     }
@@ -463,7 +539,7 @@ impl Program<Message> for OverlayProgram {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> Vec<Geometry<Renderer>> {
         let mut frame = Frame::new(renderer, bounds.size());
 
@@ -472,7 +548,11 @@ impl Program<Message> for OverlayProgram {
         let full = Path::rectangle(Point::ORIGIN, bounds.size());
         frame.fill(&full, Color::from_rgba(0.0, 0.0, 0.0, 0.5));
 
+        let cursor_point = cursor.position_in(bounds);
         let Some(rect) = state.current_rect() else {
+            if let Some(point) = crosshair_point(state, cursor_point) {
+                draw_crosshair(&mut frame, point);
+            }
             return vec![frame.into_geometry()];
         };
 
@@ -537,6 +617,10 @@ impl Program<Message> for OverlayProgram {
                         .with_width(1.0),
                 );
             }
+        }
+
+        if let Some(point) = crosshair_point(state, cursor_point) {
+            draw_crosshair(&mut frame, point);
         }
 
         vec![frame.into_geometry()]
@@ -687,6 +771,81 @@ mod tests {
             height: 50.0,
         };
         assert_eq!(handle_at(r, Point::new(60.0, 45.0)), None);
+    }
+
+    #[test]
+    fn crosshair_is_visible_before_selection() {
+        let point = Point::new(24.0, 36.0);
+        assert_eq!(
+            crosshair_point(&OverlayState::default(), Some(point)),
+            Some(point)
+        );
+    }
+
+    #[test]
+    fn crosshair_stays_visible_during_initial_drag() {
+        let point = Point::new(24.0, 36.0);
+        let state = OverlayState {
+            active: Some(Active::InitialDrag {
+                anchor: Point::new(10.0, 10.0),
+                current: point,
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(crosshair_point(&state, Some(point)), Some(point));
+    }
+
+    #[test]
+    fn crosshair_hides_over_committed_selection_body_and_handles() {
+        let state = OverlayState {
+            selection: Some(Rectangle {
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 50.0,
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(crosshair_point(&state, Some(Point::new(60.0, 45.0))), None);
+        assert_eq!(crosshair_point(&state, Some(Point::new(10.0, 20.0))), None);
+        assert_eq!(
+            crosshair_point(&state, Some(Point::new(160.0, 90.0))),
+            Some(Point::new(160.0, 90.0))
+        );
+    }
+
+    #[test]
+    fn crosshair_hides_while_moving_or_resizing() {
+        let selection = Rectangle {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+        let moving = OverlayState {
+            selection: Some(selection),
+            active: Some(Active::Move {
+                start_cursor: Point::new(60.0, 45.0),
+                original: selection,
+            }),
+            ..Default::default()
+        };
+        let resizing = OverlayState {
+            selection: Some(selection),
+            active: Some(Active::Resize {
+                handle: Handle::SE,
+                original: selection,
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(crosshair_point(&moving, Some(Point::new(80.0, 60.0))), None);
+        assert_eq!(
+            crosshair_point(&resizing, Some(Point::new(110.0, 70.0))),
+            None
+        );
     }
 
     #[test]

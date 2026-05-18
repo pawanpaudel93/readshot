@@ -72,6 +72,8 @@ pub struct WindowInfo {
 #[derive(Clone, Debug)]
 pub struct WindowCaptureRequest {
     pub window_id: WindowId,
+    /// Omit native decorative shadows when the backend can control them.
+    pub ignore_shadows: bool,
 }
 
 /// Crop a captured window image using a rectangle relative to the
@@ -211,6 +213,7 @@ mod tests {
         let result = capturer
             .capture_window(WindowCaptureRequest {
                 window_id: WindowId("missing".to_string()),
+                ignore_shadows: false,
             })
             .await;
 

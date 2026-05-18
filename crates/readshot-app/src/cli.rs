@@ -14,11 +14,11 @@
 //! stdout, and exits. That makes Readshot scriptable from shell,
 //! AI agents, and CI.
 //!
-//! Permission gating differs from the GUI: the CLI inherits the
-//! invoking user's TCC / portal grants, so the call simply fails
+//! Permission gating differs from the GUI: headless captures inherit
+//! the invoking user's TCC / portal grants, so the call simply fails
 //! with `CaptureError::PermissionDenied` if the host hasn't been
-//! granted Screen Recording. We surface that as an exit code (see
-//! [`Cli::run`]) rather than prompting interactively.
+//! granted Screen Recording. Interactive CLI captures are explicit
+//! user-selection flows.
 //!
 //! ## Region selection
 //!
@@ -30,8 +30,9 @@
 //!
 //! ## Output formats
 //!
-//! * `capture` writes a PNG to `--output` (or `stdout` by default / `-`).
-//! * `capture-window` captures one window by id and writes a PNG. Add
+//! * `capture` writes an image to `--output` (or `stdout` by default / `-`).
+//!   Add `--interactive` to pick a region with the Readshot overlay.
+//! * `capture-window` captures one window by id and writes an image. Add
 //!   `--rect x,y,w,h` to crop a region relative to the window's top-left.
 //! * `capture-text` captures a region, runs OCR, and writes recognised text
 //!   to stdout. In the GUI, the equivalent no-editor flow is the overlay
@@ -44,11 +45,13 @@
 //!   default, or JSON when `--json` is set — useful for scripts and MCP
 //!   wiring.
 
-use std::io::Write;
+use std::borrow::Cow;
+use std::io::{Cursor, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use image::RgbaImage;
 use readshot_capture::{
     crop_window_relative_rect, CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest,
@@ -68,11 +71,32 @@ use readshot_ocr::{OCREngine, OCRRequest};
 #[command(
     name = "readshot",
     version,
-    about = "Cross-platform screenshot + offline OCR. Run with no args for the GUI."
+    about = "Cross-platform screenshot + offline OCR. Run with no args for the GUI.",
+    long_about = None
 )]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ImageFormatChoice {
+    Png,
+    #[value(alias = "jpeg")]
+    Jpg,
+    Tiff,
+    Webp,
+}
+
+impl ImageFormatChoice {
+    fn image_format(self) -> image::ImageFormat {
+        match self {
+            Self::Png => image::ImageFormat::Png,
+            Self::Jpg => image::ImageFormat::Jpeg,
+            Self::Tiff => image::ImageFormat::Tiff,
+            Self::Webp => image::ImageFormat::WebP,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -91,7 +115,7 @@ pub enum Command {
         json: bool,
     },
 
-    /// Capture a region (or full display) and write the PNG to a file.
+    /// Capture a region (or full display) and write the image to a file.
     Capture {
         /// Target display id (as printed by `list-displays`). Defaults
         /// to the first reported display.
@@ -108,9 +132,29 @@ pub enum Command {
         #[arg(long)]
         scale: Option<f32>,
 
+        /// Use the Readshot overlay to select a region interactively.
+        #[arg(long, conflicts_with_all = ["display", "rect", "scale"])]
+        interactive: bool,
+
         /// Hide the cursor during capture. Default: true.
         #[arg(long, default_value_t = true)]
         hide_cursor: bool,
+
+        /// Include the cursor in the captured image.
+        #[arg(long, conflicts_with = "hide_cursor")]
+        show_cursor: bool,
+
+        /// Wait before capture, in seconds.
+        #[arg(long, default_value_t = 0.0, value_parser = parse_delay)]
+        delay: f64,
+
+        /// Output image format.
+        #[arg(long, value_enum, default_value_t = ImageFormatChoice::Png)]
+        format: ImageFormatChoice,
+
+        /// Copy the captured image to the clipboard instead of writing output.
+        #[arg(long)]
+        clipboard: bool,
 
         /// Hidden compatibility flag for the GUI-only Retake Last
         /// Region workflow. The CLI process has no shared in-memory
@@ -118,12 +162,12 @@ pub enum Command {
         #[arg(long, hide = true)]
         last_region: bool,
 
-        /// Output PNG path. Use `-` for stdout.
-        #[arg(long, short = 'o', default_value = "-")]
+        /// Output image path. Use `-` for stdout.
+        #[arg(long, short = 'o', default_value = "-", conflicts_with = "clipboard")]
         output: PathBuf,
     },
 
-    /// Capture one window and write the PNG to a file.
+    /// Capture one window and write the image to a file.
     CaptureWindow {
         /// Target window id, as printed by `list-windows`.
         #[arg(long)]
@@ -134,45 +178,94 @@ pub enum Command {
         #[arg(long, value_parser = parse_rect)]
         rect: Option<Rect>,
 
-        /// Output PNG path. Use `-` for stdout.
-        #[arg(long, short = 'o', default_value = "-")]
+        /// Wait before capture, in seconds.
+        #[arg(long, default_value_t = 0.0, value_parser = parse_delay)]
+        delay: f64,
+
+        /// Output image format.
+        #[arg(long, value_enum, default_value_t = ImageFormatChoice::Png)]
+        format: ImageFormatChoice,
+
+        /// Copy the captured image to the clipboard instead of writing output.
+        #[arg(long)]
+        clipboard: bool,
+
+        /// Include the native window shadow when the platform supports it.
+        #[arg(long, conflicts_with = "no_window_shadow")]
+        window_shadow: bool,
+
+        /// Omit the native window shadow when the platform supports it.
+        #[arg(long)]
+        no_window_shadow: bool,
+
+        /// Output image path. Use `-` for stdout.
+        #[arg(long, short = 'o', default_value = "-", conflicts_with = "clipboard")]
         output: PathBuf,
     },
 
     /// Capture a region, run OCR, and write recognised text to stdout.
     CaptureText {
+        /// Target display id (as printed by `list-displays`). Defaults
+        /// to the first reported display.
         #[arg(long)]
         display: Option<String>,
 
+        /// Region in logical pixels: `x,y,width,height`. Default: the
+        /// full bounds of the chosen display.
         #[arg(long, value_parser = parse_rect)]
         rect: Option<Rect>,
 
+        /// HiDPI scale factor. Default: read from the chosen display's
+        /// reported scale.
         #[arg(long)]
         scale: Option<f32>,
 
+        /// Use the Readshot overlay to select a region interactively.
+        #[arg(long, conflicts_with_all = ["display", "rect", "scale"])]
+        interactive: bool,
+
+        /// Hide the cursor during capture. Default: true.
         #[arg(long, default_value_t = true)]
         hide_cursor: bool,
 
+        /// Include the cursor in the captured image.
+        #[arg(long, conflicts_with = "hide_cursor")]
+        show_cursor: bool,
+
+        /// Wait before capture, in seconds.
+        #[arg(long, default_value_t = 0.0, value_parser = parse_delay)]
+        delay: f64,
+
+        /// Copy recognised text to the clipboard instead of writing output.
+        #[arg(long)]
+        clipboard: bool,
+
         /// Output text path. Use `-` for stdout (the default).
-        #[arg(long, short = 'o', default_value = "-")]
+        #[arg(long, short = 'o', default_value = "-", conflicts_with = "clipboard")]
         output: PathBuf,
 
+        /// BCP-47 language hints, comma-separated. Empty → automatic detection.
         #[arg(long, value_delimiter = ',')]
         languages: Vec<String>,
 
+        /// Apply post-recognition language correction when supported.
         #[arg(long, default_value_t = true)]
         language_correction: bool,
     },
 
-    /// Recognise text in an existing PNG.
+    /// Recognise text in an existing image.
     Ocr {
-        /// Input PNG path. Use `-` for stdin.
+        /// Input image path. Use `-` for stdin.
         #[arg(long, short = 'i')]
         input: PathBuf,
 
         /// Output text path. Use `-` for stdout (the default).
-        #[arg(long, short = 'o', default_value = "-")]
+        #[arg(long, short = 'o', default_value = "-", conflicts_with = "clipboard")]
         output: PathBuf,
+
+        /// Copy recognised text to the clipboard instead of writing output.
+        #[arg(long)]
+        clipboard: bool,
 
         /// BCP-47 language hints, comma-separated. Empty → engine default.
         #[arg(long, value_delimiter = ',')]
@@ -185,17 +278,36 @@ pub enum Command {
 
     /// Capture a region and recognise text in one shot.
     CaptureAndOcr {
+        /// Target display id (as printed by `list-displays`). Defaults
+        /// to the first reported display.
         #[arg(long)]
         display: Option<String>,
 
+        /// Region in logical pixels: `x,y,width,height`. Default: the
+        /// full bounds of the chosen display.
         #[arg(long, value_parser = parse_rect)]
         rect: Option<Rect>,
 
+        /// HiDPI scale factor. Default: read from the chosen display's
+        /// reported scale.
         #[arg(long)]
         scale: Option<f32>,
 
+        /// Use the Readshot overlay to select a region interactively.
+        #[arg(long, conflicts_with_all = ["display", "rect", "scale"])]
+        interactive: bool,
+
+        /// Hide the cursor during capture. Default: true.
         #[arg(long, default_value_t = true)]
         hide_cursor: bool,
+
+        /// Include the cursor in the captured image.
+        #[arg(long, conflicts_with = "hide_cursor")]
+        show_cursor: bool,
+
+        /// Wait before capture, in seconds.
+        #[arg(long, default_value_t = 0.0, value_parser = parse_delay)]
+        delay: f64,
 
         /// Output text path. Use `-` for stdout (the default).
         #[arg(long, short = 'o', default_value = "-")]
@@ -205,11 +317,25 @@ pub enum Command {
         #[arg(long)]
         also_image: Option<PathBuf>,
 
+        /// BCP-47 language hints, comma-separated. Empty → automatic detection.
         #[arg(long, value_delimiter = ',')]
         languages: Vec<String>,
 
+        /// Apply post-recognition language correction when supported.
         #[arg(long, default_value_t = true)]
         language_correction: bool,
+    },
+
+    /// Hidden child mode used by `--interactive`.
+    #[command(name = "__interactive-capture", hide = true)]
+    InteractiveCapture {
+        /// Temp PNG written by the Readshot overlay flow.
+        #[arg(long)]
+        output: PathBuf,
+
+        /// Include the cursor in the captured image.
+        #[arg(long)]
+        show_cursor: bool,
     },
 }
 
@@ -226,6 +352,8 @@ pub enum CliError {
     Io(#[from] std::io::Error),
     #[error("image decode failed: {0}")]
     Image(#[from] image::ImageError),
+    #[error("clipboard failed: {0}")]
+    Clipboard(String),
     #[error("display `{0}` not found")]
     DisplayNotFound(String),
     #[error("no displays reported by capture backend")]
@@ -248,7 +376,18 @@ pub fn exit_code(err: &CliError) -> i32 {
         CliError::Ocr(_) => 70,                                  // EX_SOFTWARE
         CliError::DisplayNotFound(_) | CliError::NoDisplays => 66, // EX_NOINPUT
         CliError::InvalidInput(_) | CliError::InvalidRect { .. } => 64, // EX_USAGE
-        CliError::Io(_) | CliError::Image(_) => 74,              // EX_IOERR
+        CliError::Io(_) | CliError::Image(_) | CliError::Clipboard(_) => 74, // EX_IOERR
+    }
+}
+
+fn parse_delay(s: &str) -> Result<f64, String> {
+    let delay = s
+        .parse::<f64>()
+        .map_err(|e| format!("delay `{s}` is not a number: {e}"))?;
+    if delay.is_finite() && delay >= 0.0 {
+        Ok(delay)
+    } else {
+        Err("--delay must be a non-negative finite number".into())
     }
 }
 
@@ -277,6 +416,17 @@ impl Cli {
         ocr: Arc<dyn OCREngine>,
         stdout: &mut dyn Write,
     ) -> Result<(), CliError> {
+        self.run_with_clipboard(capturer, ocr, stdout, &SystemClipboard)
+            .await
+    }
+
+    async fn run_with_clipboard(
+        self,
+        capturer: Arc<dyn Capturer>,
+        ocr: Arc<dyn OCREngine>,
+        stdout: &mut dyn Write,
+        clipboard: &dyn ClipboardSink,
+    ) -> Result<(), CliError> {
         let Some(command) = self.command else {
             return Ok(()); // no subcommand → caller falls back to GUI
         };
@@ -301,7 +451,12 @@ impl Cli {
                 display,
                 rect,
                 scale,
+                interactive,
                 hide_cursor,
+                show_cursor,
+                delay,
+                format,
+                clipboard: use_clipboard,
                 last_region,
                 output,
             } => {
@@ -310,42 +465,81 @@ impl Cli {
                         "--last-region is only available in the GUI session".into(),
                     ));
                 }
-                let req =
-                    build_capture_request(&*capturer, display.as_deref(), rect, scale, hide_cursor)
-                        .await?;
-                let img = capturer.capture_region(req).await?;
-                write_png(&img, &output, stdout)?;
+                maybe_delay(delay).await;
+                let img = if interactive {
+                    interactive_capture(show_cursor).await?
+                } else {
+                    let req = build_capture_request(
+                        &*capturer,
+                        display.as_deref(),
+                        rect,
+                        scale,
+                        effective_hide_cursor(hide_cursor, show_cursor),
+                    )
+                    .await?;
+                    capturer.capture_region(req).await?
+                };
+                if use_clipboard {
+                    clipboard.copy_image(&img)?;
+                } else {
+                    write_image(&img, &output, stdout, format)?;
+                }
             }
             Command::CaptureWindow {
                 window,
                 rect,
+                delay,
+                format,
+                clipboard: use_clipboard,
+                window_shadow: _,
+                no_window_shadow,
                 output,
             } => {
+                maybe_delay(delay).await;
                 let window_id = WindowId(window);
                 let mut img = capturer
                     .capture_window(WindowCaptureRequest {
                         window_id: window_id.clone(),
+                        ignore_shadows: no_window_shadow,
                     })
                     .await?;
                 if let Some(rect) = rect {
                     let window_bounds = lookup_window_bounds(&*capturer, &window_id).await?;
                     img = crop_window_relative_rect(img, window_bounds, rect)?;
                 }
-                write_png(&img, &output, stdout)?;
+                if use_clipboard {
+                    clipboard.copy_image(&img)?;
+                } else {
+                    write_image(&img, &output, stdout, format)?;
+                }
             }
             Command::CaptureText {
                 display,
                 rect,
                 scale,
+                interactive,
                 hide_cursor,
+                show_cursor,
+                delay,
+                clipboard: use_clipboard,
                 output,
                 languages,
                 language_correction,
             } => {
-                let req =
-                    build_capture_request(&*capturer, display.as_deref(), rect, scale, hide_cursor)
-                        .await?;
-                let img = capturer.capture_region(req).await?;
+                maybe_delay(delay).await;
+                let img = if interactive {
+                    interactive_capture(show_cursor).await?
+                } else {
+                    let req = build_capture_request(
+                        &*capturer,
+                        display.as_deref(),
+                        rect,
+                        scale,
+                        effective_hide_cursor(hide_cursor, show_cursor),
+                    )
+                    .await?;
+                    capturer.capture_region(req).await?
+                };
                 let result = ocr
                     .recognise(OCRRequest {
                         image: img,
@@ -353,15 +547,20 @@ impl Cli {
                         use_language_correction: language_correction,
                     })
                     .await?;
-                write_text(&result.text, &output, stdout)?;
+                if use_clipboard {
+                    clipboard.copy_text(&result.text)?;
+                } else {
+                    write_text(&result.text, &output, stdout)?;
+                }
             }
             Command::Ocr {
                 input,
                 output,
+                clipboard: use_clipboard,
                 languages,
                 language_correction,
             } => {
-                let img = read_png(&input)?;
+                let img = read_image(&input)?;
                 let result = ocr
                     .recognise(OCRRequest {
                         image: img,
@@ -369,24 +568,41 @@ impl Cli {
                         use_language_correction: language_correction,
                     })
                     .await?;
-                write_text(&result.text, &output, stdout)?;
+                if use_clipboard {
+                    clipboard.copy_text(&result.text)?;
+                } else {
+                    write_text(&result.text, &output, stdout)?;
+                }
             }
             Command::CaptureAndOcr {
                 display,
                 rect,
                 scale,
+                interactive,
                 hide_cursor,
+                show_cursor,
+                delay,
                 output,
                 also_image,
                 languages,
                 language_correction,
             } => {
-                let req =
-                    build_capture_request(&*capturer, display.as_deref(), rect, scale, hide_cursor)
-                        .await?;
-                let img = capturer.capture_region(req).await?;
+                maybe_delay(delay).await;
+                let img = if interactive {
+                    interactive_capture(show_cursor).await?
+                } else {
+                    let req = build_capture_request(
+                        &*capturer,
+                        display.as_deref(),
+                        rect,
+                        scale,
+                        effective_hide_cursor(hide_cursor, show_cursor),
+                    )
+                    .await?;
+                    capturer.capture_region(req).await?
+                };
                 if let Some(path) = also_image.as_deref() {
-                    write_png(&img, path, stdout)?;
+                    write_image(&img, path, stdout, ImageFormatChoice::Png)?;
                 }
                 let result = ocr
                     .recognise(OCRRequest {
@@ -397,9 +613,160 @@ impl Cli {
                     .await?;
                 write_text(&result.text, &output, stdout)?;
             }
+            Command::InteractiveCapture { .. } => {
+                return Err(CliError::InvalidInput(
+                    "__interactive-capture is an internal command".into(),
+                ));
+            }
         }
         Ok(())
     }
+}
+
+trait ClipboardSink {
+    fn copy_image(&self, img: &RgbaImage) -> Result<(), CliError>;
+    fn copy_text(&self, text: &str) -> Result<(), CliError>;
+}
+
+struct SystemClipboard;
+
+impl ClipboardSink for SystemClipboard {
+    fn copy_image(&self, img: &RgbaImage) -> Result<(), CliError> {
+        let mut ctx = arboard::Clipboard::new().map_err(clipboard_error)?;
+        ctx.set_image(arboard::ImageData {
+            width: img.width() as usize,
+            height: img.height() as usize,
+            bytes: Cow::Borrowed(img.as_raw()),
+        })
+        .map_err(clipboard_error)
+    }
+
+    fn copy_text(&self, text: &str) -> Result<(), CliError> {
+        let mut ctx = arboard::Clipboard::new().map_err(clipboard_error)?;
+        ctx.set_text(text.to_string()).map_err(clipboard_error)
+    }
+}
+
+fn clipboard_error(err: arboard::Error) -> CliError {
+    CliError::Clipboard(err.to_string())
+}
+
+pub fn is_internal_interactive_command(command: &Command) -> Option<(&PathBuf, bool)> {
+    match command {
+        Command::InteractiveCapture {
+            output,
+            show_cursor,
+        } => Some((output, *show_cursor)),
+        _ => None,
+    }
+}
+
+fn effective_hide_cursor(hide_cursor: bool, show_cursor: bool) -> bool {
+    hide_cursor && !show_cursor
+}
+
+async fn maybe_delay(delay: f64) {
+    if delay > 0.0 {
+        tokio::time::sleep(Duration::from_secs_f64(delay)).await;
+    }
+}
+
+async fn interactive_capture(show_cursor: bool) -> Result<RgbaImage, CliError> {
+    tokio::task::spawn_blocking(move || interactive_capture_blocking(show_cursor))
+        .await
+        .map_err(|e| CliError::Capture(CaptureError::Backend(e.to_string())))?
+}
+
+fn interactive_capture_blocking(show_cursor: bool) -> Result<RgbaImage, CliError> {
+    cleanup_stale_interactive_temp_files();
+    let path = unique_temp_png_path();
+    let _ = std::fs::remove_file(&path);
+    let exe = std::env::current_exe()?;
+    let mut command = std::process::Command::new(exe);
+    for arg in interactive_capture_child_args(&path, show_cursor) {
+        command.arg(arg);
+    }
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    let status = command.status()?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&path);
+        return Err(interactive_capture_cancelled());
+    }
+
+    let result = read_interactive_capture_file(&path);
+    let _ = std::fs::remove_file(&path);
+    result
+}
+
+fn interactive_capture_child_args(
+    path: &std::path::Path,
+    show_cursor: bool,
+) -> Vec<std::ffi::OsString> {
+    let mut args = vec![
+        std::ffi::OsString::from("__interactive-capture"),
+        std::ffi::OsString::from("--output"),
+        path.as_os_str().to_owned(),
+    ];
+    if show_cursor {
+        args.push(std::ffi::OsString::from("--show-cursor"));
+    }
+    args
+}
+
+fn unique_temp_png_path() -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    std::env::temp_dir().join(format!(
+        "readshot-interactive-{}-{nanos}.png",
+        std::process::id()
+    ))
+}
+
+fn cleanup_stale_interactive_temp_files() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    let stale_before = SystemTime::now()
+        .checked_sub(Duration::from_secs(24 * 60 * 60))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("readshot-interactive-") || !name.ends_with(".png") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if modified < stale_before {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn read_interactive_capture_file(path: &std::path::Path) -> Result<RgbaImage, CliError> {
+    let metadata = std::fs::metadata(path).map_err(|_| interactive_capture_cancelled())?;
+    if metadata.len() == 0 {
+        return Err(interactive_capture_cancelled());
+    }
+    image::open(path)
+        .map(|img| img.to_rgba8())
+        .map_err(CliError::from)
+}
+
+fn interactive_capture_cancelled() -> CliError {
+    CliError::InvalidInput("interactive capture cancelled".into())
 }
 
 async fn build_capture_request(
@@ -559,21 +926,52 @@ fn write_windows_json(out: &mut dyn Write, windows: &[WindowInfo]) -> std::io::R
     Ok(())
 }
 
-fn write_png(
+fn write_image(
     img: &RgbaImage,
     path: &std::path::Path,
     stdout: &mut dyn Write,
+    format: ImageFormatChoice,
 ) -> Result<(), CliError> {
+    let bytes = encode_image(img, format)?;
     if path == std::path::Path::new("-") {
-        let buf = readshot_core::encode_png(img)?;
-        stdout.write_all(&buf)?;
+        stdout.write_all(&bytes)?;
     } else {
-        readshot_core::save_png(img, path)?;
+        std::fs::write(path, bytes)?;
     }
     Ok(())
 }
 
-fn read_png(path: &std::path::Path) -> Result<RgbaImage, CliError> {
+fn encode_image(img: &RgbaImage, format: ImageFormatChoice) -> Result<Vec<u8>, CliError> {
+    if format == ImageFormatChoice::Png {
+        return Ok(readshot_core::encode_png(img)?);
+    }
+
+    let mut cursor = Cursor::new(Vec::new());
+    if format == ImageFormatChoice::Jpg {
+        let rgb = rgba_to_rgb(img);
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 90);
+        encoder.encode(
+            &rgb,
+            img.width(),
+            img.height(),
+            image::ColorType::Rgb8.into(),
+        )?;
+    } else {
+        image::DynamicImage::ImageRgba8(img.clone())
+            .write_to(&mut cursor, format.image_format())?;
+    }
+    Ok(cursor.into_inner())
+}
+
+fn rgba_to_rgb(img: &RgbaImage) -> Vec<u8> {
+    let mut rgb = Vec::with_capacity(img.width() as usize * img.height() as usize * 3);
+    for pixel in img.pixels() {
+        rgb.extend_from_slice(&pixel.0[..3]);
+    }
+    rgb
+}
+
+fn read_image(path: &std::path::Path) -> Result<RgbaImage, CliError> {
     if path == std::path::Path::new("-") {
         let mut buf = Vec::new();
         std::io::Read::read_to_end(&mut std::io::stdin(), &mut buf)?;
@@ -603,12 +1001,41 @@ mod tests {
     use clap::{CommandFactory, Parser};
     use readshot_capture::fake::FakeCapturer;
     use readshot_ocr::fake::FakeOcrEngine;
+    use std::sync::Mutex;
 
     fn fakes() -> (Arc<dyn Capturer>, Arc<dyn OCREngine>) {
         (
             Arc::new(FakeCapturer::new()),
             Arc::new(FakeOcrEngine::with_text("hello world")),
         )
+    }
+
+    #[derive(Default)]
+    struct FakeClipboard {
+        image_size: Mutex<Option<(u32, u32)>>,
+        text: Mutex<Option<String>>,
+    }
+
+    impl FakeClipboard {
+        fn image_size(&self) -> Option<(u32, u32)> {
+            *self.image_size.lock().unwrap()
+        }
+
+        fn text(&self) -> Option<String> {
+            self.text.lock().unwrap().clone()
+        }
+    }
+
+    impl ClipboardSink for FakeClipboard {
+        fn copy_image(&self, img: &RgbaImage) -> Result<(), CliError> {
+            *self.image_size.lock().unwrap() = Some((img.width(), img.height()));
+            Ok(())
+        }
+
+        fn copy_text(&self, text: &str) -> Result<(), CliError> {
+            *self.text.lock().unwrap() = Some(text.to_string());
+            Ok(())
+        }
     }
 
     #[test]
@@ -691,6 +1118,162 @@ mod tests {
     }
 
     #[test]
+    fn parses_capture_with_clipboard_delay_format_and_show_cursor() {
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture",
+            "--clipboard",
+            "--delay",
+            "2",
+            "--format",
+            "jpg",
+            "--show-cursor",
+        ])
+        .unwrap();
+        let Some(Command::Capture {
+            clipboard,
+            delay,
+            format,
+            show_cursor,
+            ..
+        }) = cli.command
+        else {
+            panic!("wrong subcommand");
+        };
+        assert!(clipboard);
+        assert_eq!(delay, 2.0);
+        assert_eq!(format, ImageFormatChoice::Jpg);
+        assert!(show_cursor);
+    }
+
+    #[test]
+    fn parses_jpeg_as_jpg_format_alias() {
+        let cli = Cli::try_parse_from(["readshot", "capture", "--format", "jpeg"]).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::Capture {
+                format: ImageFormatChoice::Jpg,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn clipboard_output_rejects_file_output() {
+        let err = Cli::try_parse_from([
+            "readshot",
+            "capture",
+            "--clipboard",
+            "--output",
+            "capture.png",
+        ])
+        .unwrap_err();
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn parses_interactive_capture_commands() {
+        let cli = Cli::try_parse_from(["readshot", "capture", "--interactive"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Capture {
+                interactive: true,
+                ..
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["readshot", "capture-text", "--interactive"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::CaptureText {
+                interactive: true,
+                ..
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["readshot", "capture-and-ocr", "--interactive"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::CaptureAndOcr {
+                interactive: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_hidden_interactive_child_command() {
+        let output = std::path::PathBuf::from("/tmp/readshot-interactive.png");
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "__interactive-capture",
+            "--output",
+            output.to_str().unwrap(),
+            "--show-cursor",
+        ])
+        .unwrap();
+
+        let Some(Command::InteractiveCapture {
+            output: parsed,
+            show_cursor,
+        }) = cli.command
+        else {
+            panic!("wrong subcommand");
+        };
+        assert_eq!(parsed, output);
+        assert!(show_cursor);
+    }
+
+    #[test]
+    fn interactive_child_args_include_temp_output_and_cursor_flag() {
+        let output = std::path::Path::new("/tmp/readshot-interactive.png");
+        let args = interactive_capture_child_args(output, true);
+
+        assert_eq!(args[0], std::ffi::OsString::from("__interactive-capture"));
+        assert!(args.iter().any(|arg| arg == "--output"));
+        assert!(args.iter().any(|arg| arg == "--show-cursor"));
+        assert!(args.iter().any(|arg| arg == output.as_os_str()));
+    }
+
+    #[test]
+    fn unique_interactive_temp_path_uses_readshot_prefix() {
+        let path = unique_temp_png_path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap();
+
+        assert!(name.starts_with("readshot-interactive-"));
+        assert!(name.ends_with(".png"));
+        assert_eq!(path.parent(), Some(std::env::temp_dir().as_path()));
+    }
+
+    #[test]
+    fn interactive_capture_rejects_explicit_geometry() {
+        let err = Cli::try_parse_from([
+            "readshot",
+            "capture",
+            "--interactive",
+            "--rect",
+            "0,0,10,10",
+        ])
+        .unwrap_err();
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn interactive_capture_missing_file_is_cancelled() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.png");
+
+        let err = read_interactive_capture_file(&missing).unwrap_err();
+
+        assert!(matches!(err, CliError::InvalidInput(ref msg) if msg.contains("cancelled")));
+        assert_eq!(exit_code(&err), 64);
+    }
+
+    #[test]
     fn parses_capture_window_subcommand() {
         let cli = Cli::try_parse_from([
             "readshot",
@@ -707,6 +1290,7 @@ mod tests {
             window,
             rect,
             output,
+            ..
         }) = cli.command
         else {
             panic!("wrong subcommand");
@@ -721,9 +1305,92 @@ mod tests {
     }
 
     #[test]
+    fn parses_capture_window_with_clipboard_delay_and_format() {
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture-window",
+            "--window",
+            "fake-window-0",
+            "--clipboard",
+            "--delay",
+            "1.5",
+            "--format",
+            "webp",
+        ])
+        .unwrap();
+        let Some(Command::CaptureWindow {
+            clipboard,
+            delay,
+            format,
+            ..
+        }) = cli.command
+        else {
+            panic!("wrong subcommand");
+        };
+        assert!(clipboard);
+        assert_eq!(delay, 1.5);
+        assert_eq!(format, ImageFormatChoice::Webp);
+    }
+
+    #[test]
+    fn parses_capture_window_shadow_flags() {
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture-window",
+            "--window",
+            "fake-window-0",
+            "--no-window-shadow",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::CaptureWindow {
+                no_window_shadow: true,
+                window_shadow: false,
+                ..
+            })
+        ));
+
+        let err = Cli::try_parse_from([
+            "readshot",
+            "capture-window",
+            "--window",
+            "fake-window-0",
+            "--window-shadow",
+            "--no-window-shadow",
+        ])
+        .unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
     fn parses_capture_text_subcommand() {
         let cli = Cli::try_parse_from(["readshot", "capture-text"]).unwrap();
         assert!(matches!(cli.command, Some(Command::CaptureText { .. })));
+    }
+
+    #[test]
+    fn parses_text_commands_with_clipboard_and_delay() {
+        let cli =
+            Cli::try_parse_from(["readshot", "capture-text", "--clipboard", "--delay", "0.25"])
+                .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::CaptureText {
+                clipboard: true,
+                delay: 0.25,
+                ..
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["readshot", "ocr", "-i", "in.png", "--clipboard"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Ocr {
+                clipboard: true,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -880,6 +1547,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_capture_clipboard_copies_image_without_stdout_png() {
+        let (cap, ocr) = fakes();
+        let clipboard = FakeClipboard::default();
+        let cli = Cli::try_parse_from(["readshot", "capture", "--clipboard"]).unwrap();
+        let mut out = Vec::new();
+        cli.run_with_clipboard(cap, ocr, &mut out, &clipboard)
+            .await
+            .unwrap();
+
+        assert!(out.is_empty());
+        assert_eq!(clipboard.image_size(), Some((256, 256)));
+    }
+
+    #[tokio::test]
+    async fn run_capture_writes_jpg_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let jpg_path = dir.path().join("out.jpg");
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture",
+            "--format",
+            "jpg",
+            "-o",
+            jpg_path.to_str().unwrap(),
+        ])
+        .unwrap();
+        let mut out = Vec::new();
+        cli.run(cap, ocr, &mut out).await.unwrap();
+
+        let bytes = std::fs::read(&jpg_path).unwrap();
+        assert_eq!(&bytes[..3], &[0xff, 0xd8, 0xff]);
+    }
+
+    #[tokio::test]
     async fn run_capture_window_writes_png_to_file() {
         let dir = tempfile::tempdir().unwrap();
         let png_path = dir.path().join("window.png");
@@ -938,6 +1640,32 @@ mod tests {
         cli.run(cap, ocr, &mut out).await.unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with("hello world"));
+    }
+
+    #[tokio::test]
+    async fn run_ocr_clipboard_copies_text_without_stdout() {
+        let dir = tempfile::tempdir().unwrap();
+        let png_path = dir.path().join("in.png");
+        let img = image::RgbaImage::new(8, 8);
+        readshot_core::save_png(&img, &png_path).unwrap();
+
+        let (cap, ocr) = fakes();
+        let clipboard = FakeClipboard::default();
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "ocr",
+            "-i",
+            png_path.to_str().unwrap(),
+            "--clipboard",
+        ])
+        .unwrap();
+        let mut out = Vec::new();
+        cli.run_with_clipboard(cap, ocr, &mut out, &clipboard)
+            .await
+            .unwrap();
+
+        assert!(out.is_empty());
+        assert_eq!(clipboard.text(), Some("hello world".to_string()));
     }
 
     #[tokio::test]
