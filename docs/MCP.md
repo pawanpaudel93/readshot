@@ -6,8 +6,8 @@ Any agent that supports MCP stdio servers can use it to ask Readshot
 for screenshots and OCR text on the user's behalf.
 
 This document gives copy-paste configuration snippets for the most
-common hosts. Every snippet uses the absolute installed binary path
-— adjust to wherever Readshot landed on your machine.
+common hosts. Desktop-app snippets use the absolute installed binary
+path; adjust it if Readshot is installed somewhere else.
 
 ## Locate the binary
 
@@ -21,9 +21,10 @@ If you built from source, it's at
 `./target/release/readshot-mcp` after `cargo build --release -p readshot-mcp`.
 
 The one-line macOS installer also creates a `readshot-mcp` symlink in
-`~/.local/bin` for terminal use. The host snippets below use the
-absolute app-bundle path because desktop MCP hosts often do not inherit
-your shell `PATH`.
+`~/.local/bin` for terminal use. Use `readshot-mcp` in configs when
+the host inherits your shell `PATH`. The desktop host snippets below
+use the absolute app-bundle path because desktop apps often do not
+inherit your shell `PATH`.
 
 ## Tools exposed
 
@@ -39,6 +40,47 @@ your shell `PATH`.
 | `latest_capture`           | (none)                                          | `{ capture: {...} }`              |
 | `get_capture`              | `id`                                            | `{ capture: {...} }`              |
 | `search_captures`          | `query`, `limit?`                               | `{ captures: [...] }`             |
+
+## Input Shapes
+
+`rect` is always an object in logical pixels:
+
+```json
+{ "x": 100, "y": 100, "width": 800, "height": 600 }
+```
+
+Common region capture arguments:
+
+| Argument | Type | Notes |
+|----------|------|-------|
+| `display` | string | Display id from `list_displays`. Defaults to the primary display. |
+| `rect` | object | Display-relative region. Defaults to the full display. |
+| `scale` | number | Optional HiDPI scale override. Defaults to the display scale. |
+| `hide_cursor` | boolean | Defaults to `true`. Set `false` to include the cursor when supported. |
+
+Window capture arguments:
+
+| Argument | Type | Notes |
+|----------|------|-------|
+| `window` | string | Required. Window id from `list_windows`. |
+| `rect` | object | Window-relative region. Defaults to the full window. |
+| `ignore_shadows` | boolean | Defaults to `false`. Set `true` for tighter window-only captures when supported. |
+
+OCR arguments for `capture_text` and `capture_region_and_text`:
+
+| Argument | Type | Notes |
+|----------|------|-------|
+| `languages` | string array | Optional BCP-47 language hints. Omit for automatic language detection. |
+| `language_correction` | boolean | Defaults to `true` where the platform OCR engine supports correction. |
+
+History arguments:
+
+| Tool | Arguments |
+|------|-----------|
+| `recent_captures` | `limit` from 1 to 100, default 20. |
+| `latest_capture` | none. |
+| `get_capture` | `id` from a history result. |
+| `search_captures` | `query`, plus optional `limit`. |
 
 When `display` is omitted, the primary display is used. When `rect`
 is omitted, the chosen display's full bounds are captured.
@@ -64,7 +106,9 @@ without guessing a limit. Use `get_capture` after `recent_captures` or
 `search_captures` when the agent already has a capture id and needs
 the full metadata again.
 
-A full example tool call from the agent's side:
+## Tool Call Examples
+
+Capture a region and return both pixels and OCR text:
 
 ```jsonc
 {
@@ -76,6 +120,22 @@ A full example tool call from the agent's side:
     "arguments": {
       "rect": { "x": 100, "y": 100, "width": 800, "height": 600 },
       "languages": ["en-US"]
+    }
+  }
+}
+```
+
+Text-only capture:
+
+```jsonc
+{
+  "jsonrpc": "2.0",
+  "id": 9,
+  "method": "tools/call",
+  "params": {
+    "name": "capture_text",
+    "arguments": {
+      "rect": { "x": 100, "y": 100, "width": 800, "height": 600 }
     }
   }
 }
@@ -93,6 +153,23 @@ Capture one window:
     "arguments": {
       "window": "11474",
       "rect": { "x": 100, "y": 100, "width": 800, "height": 500 }
+    }
+  }
+}
+```
+
+Search history:
+
+```jsonc
+{
+  "jsonrpc": "2.0",
+  "id": 10,
+  "method": "tools/call",
+  "params": {
+    "name": "search_captures",
+    "arguments": {
+      "query": "invoice",
+      "limit": 10
     }
   }
 }
@@ -132,6 +209,19 @@ Add a `mcpServers` entry:
   "mcpServers": {
     "readshot": {
       "command": "/Applications/Readshot.app/Contents/MacOS/readshot-mcp"
+    }
+  }
+}
+```
+
+If the host is launched from a shell where `~/.local/bin` is already on
+`PATH`, this shorter form can work:
+
+```json
+{
+  "mcpServers": {
+    "readshot": {
+      "command": "readshot-mcp"
     }
   }
 }

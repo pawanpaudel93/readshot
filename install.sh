@@ -176,6 +176,32 @@ install_symlinks() {
   ln -sf "${target_app}/Contents/MacOS/readshot-mcp" "${BIN_DIR}/readshot-mcp"
 }
 
+path_contains_bin_dir() {
+  case ":${PATH:-}:" in
+    *":${BIN_DIR}:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+print_path_hint() {
+  if path_contains_bin_dir; then
+    return
+  fi
+
+  cat <<EOF
+
+${BIN_DIR} is not currently in your PATH.
+
+For zsh:
+  echo 'export PATH="${BIN_DIR}:\$PATH"' >> "\$HOME/.zshrc"
+  export PATH="${BIN_DIR}:\$PATH"
+
+For bash:
+  echo 'export PATH="${BIN_DIR}:\$PATH"' >> "\$HOME/.bashrc"
+  export PATH="${BIN_DIR}:\$PATH"
+EOF
+}
+
 main() {
   parse_args "$@"
   require_macos
@@ -242,13 +268,13 @@ Command-line tools:
   ${BIN_DIR}/readshot
   ${BIN_DIR}/readshot-mcp
 
-If ${BIN_DIR} is not in your PATH, add it to your shell profile.
-
 Open Readshot:
   open "${target_app}"
 
 Then grant Screen Recording permission when macOS asks.
 EOF
+
+  print_path_hint
 }
 
 if [[ "${READSHOT_INSTALL_SKIP_MAIN:-0}" != "1" ]]; then

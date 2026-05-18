@@ -30,6 +30,7 @@ body {
     var(--bg);
   color: var(--text);
   overflow-x: hidden;
+  -webkit-tap-highlight-color: rgba(33, 182, 168, 0.24);
 }
 
 a {
@@ -120,6 +121,12 @@ a:focus-visible,
   color: var(--text);
 }
 
+.nav-links a[aria-current="page"],
+.nav-links a[data-current="true"] {
+  background: rgba(33, 182, 168, 0.12);
+  color: var(--text);
+}
+
 #install,
 #features,
 .doc-section {
@@ -136,6 +143,15 @@ a:focus-visible,
 
 .hero-inner {
   max-width: 760px;
+}
+
+.eyebrow {
+  color: var(--teal);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin: 0 0 14px;
+  text-transform: uppercase;
 }
 
 h1 {
@@ -221,6 +237,7 @@ code {
   font-family:
     "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", monospace;
   font-size: 14px;
+  font-variant-numeric: tabular-nums;
 }
 
 .command code,
@@ -343,6 +360,14 @@ code {
   font-weight: 700;
 }
 
+.card-action a {
+  border-radius: 6px;
+  display: inline-flex;
+  padding: 6px 0;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+}
+
 .compact-list {
   color: var(--muted);
   line-height: 1.55;
@@ -402,6 +427,11 @@ code {
   margin: 24px 0 10px;
 }
 
+.doc-section + .doc-section {
+  border-top: 1px solid rgba(52, 64, 74, 0.45);
+  padding-top: 38px;
+}
+
 .code-panel {
   background: #080b0d;
   border: 1px solid var(--line);
@@ -449,6 +479,10 @@ code {
   vertical-align: top;
 }
 
+.data-table tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.018);
+}
+
 .data-table th {
   background: var(--panel-soft);
   color: var(--text);
@@ -493,10 +527,15 @@ footer a {
 
   .nav-links {
     flex-wrap: wrap;
+    row-gap: 4px;
   }
 
   .hero {
     padding: 36px 0 42px;
+  }
+
+  .hero.compact {
+    padding-bottom: 18px;
   }
 
   .grid,
@@ -507,34 +546,11 @@ footer a {
   footer .shell {
     flex-direction: column;
   }
-}
 
-@media (max-width: 480px) {
-  .shell {
-    width: min(100% - 20px, 1040px);
-  }
-
-  h1 {
-    font-size: 52px;
-  }
-
-  .hero-copy {
-    font-size: 18px;
-  }
-
-  .command .desktop-command {
-    display: none;
-  }
-
-  .command .mobile-command {
-    display: block;
-    grid-column: 1 / -1;
-    white-space: normal;
-  }
-
-  .command .copy-button {
-    grid-column: 1 / -1;
-    justify-self: end;
+  .code-panel code,
+  .terminal code {
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
   }
 
   .data-table {
@@ -554,5 +570,58 @@ footer a {
   .data-table code {
     overflow-wrap: anywhere;
     white-space: normal;
+  }
+}
+
+@media (max-width: 480px) {
+  .shell {
+    width: min(100% - 20px, 1040px);
+  }
+
+  h1 {
+    font-size: 52px;
+  }
+
+  .section h2,
+  .doc-section h2 {
+    font-size: 30px;
+  }
+
+  .hero-copy {
+    font-size: 18px;
+  }
+
+  .doc-section {
+    margin-bottom: 36px;
+  }
+
+  .doc-section + .doc-section {
+    padding-top: 30px;
+  }
+
+  .command .desktop-command {
+    display: none;
+  }
+
+  .command .mobile-command {
+    display: block;
+    grid-column: 1 / -1;
+    white-space: normal;
+  }
+
+  .command .copy-button {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .button:active {
+    transform: none;
   }
 }

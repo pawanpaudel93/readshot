@@ -32,7 +32,7 @@
         <div class="nav-links">
           <a href="index.html">Install</a>
           <a href="index.html#features">Features</a>
-          <a href="cli.html">CLI</a>
+          <a href="cli.html" aria-current="page">CLI</a>
           <a href="mcp.html">MCP</a>
           <a href="https://github.com/pawanpaudel93/readshot">GitHub</a>
         </div>
@@ -42,6 +42,7 @@
     <main id="main">
       <section class="shell hero compact">
         <div class="hero-inner">
+          <p class="eyebrow">Documentation</p>
           <h1>CLI</h1>
           <p class="hero-copy">
             The <code translate="no">readshot</code> command ships inside the macOS app.
@@ -65,7 +66,7 @@
                   aria-label="Copy commands"
                   data-copy-title="Copy commands"
                   data-copy-label="Commands copied."
-                  data-copy="readshot list-displays&#10;readshot list-windows&#10;readshot capture --interactive --output capture.png&#10;readshot capture --delay 2 --format jpg --output capture.jpg&#10;readshot capture-window --window 11474 --clipboard&#10;readshot capture-text --interactive --clipboard&#10;readshot capture-and-ocr --interactive --also-image capture.png&#10;readshot ocr --input capture.png --clipboard"
+                  data-copy="readshot list-displays&#10;readshot list-displays --json&#10;readshot list-windows&#10;readshot list-windows --json&#10;readshot capture --interactive --output capture.png&#10;readshot capture --delay 2 --format jpg --output capture.jpg&#10;readshot capture-window --window 11474 --clipboard&#10;readshot capture-text --interactive --clipboard&#10;readshot capture-and-ocr --interactive --also-image capture.png&#10;readshot ocr --input capture.png --clipboard"
                 >
                   <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2" />
@@ -77,7 +78,9 @@
                 </button>
               </div>
               <pre><code translate="no">readshot list-displays
+readshot list-displays --json
 readshot list-windows
+readshot list-windows --json
 readshot capture --interactive --output capture.png
 readshot capture --delay 2 --format jpg --output capture.jpg
 readshot capture-window --window 11474 --clipboard
@@ -85,6 +88,52 @@ readshot capture-text --interactive --clipboard
 readshot capture-and-ocr --interactive --also-image capture.png
 readshot ocr --input capture.png --clipboard</code></pre>
             </div>
+          </section>
+
+          <section class="doc-section" id="commands">
+            <h2>Commands</h2>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Command</th>
+                  <th>What it does</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code translate="no">readshot</code></td>
+                  <td>Launches the GUI.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">list-displays</code></td>
+                  <td>Lists displays with ids, bounds, and scale. Add <code translate="no">--json</code> for scripts.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">list-windows</code></td>
+                  <td>Lists capturable windows with ids, app names, titles, display ids, and bounds. Add <code translate="no">--json</code> for scripts.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">capture</code></td>
+                  <td>Captures a display region or full display as an image.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">capture-window</code></td>
+                  <td>Captures a window or window-relative region.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">capture-text</code></td>
+                  <td>Captures a region and writes OCR text.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">capture-and-ocr</code></td>
+                  <td>Captures a region, writes OCR text, and can also save the image.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">ocr</code></td>
+                  <td>Runs OCR on an existing image.</td>
+                </tr>
+              </tbody>
+            </table>
           </section>
 
           <section class="doc-section" id="interactive">
@@ -105,6 +154,28 @@ readshot capture-and-ocr --interactive</code></pre>
             </p>
           </section>
 
+          <section class="doc-section" id="targets">
+            <h2>Targets</h2>
+            <p>
+              Display captures default to the primary display. Use
+              <code translate="no">list-displays</code> to find display ids and
+              <code translate="no">--rect x,y,width,height</code> to capture a region.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot list-displays --json
+readshot capture --display 1 --rect 100,100,800,600 --output region.png</code></pre>
+            </div>
+            <p>
+              Window captures use ids from <code translate="no">list-windows</code>.
+              Window rectangles are relative to the window's top-left corner.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot list-windows
+readshot capture-window --window 11474 --output window.png
+readshot capture-window --window 11474 --rect 40,40,900,600 --output panel.png</code></pre>
+            </div>
+          </section>
+
           <section class="doc-section" id="image-output">
             <h2>Image Output</h2>
             <p>
@@ -119,6 +190,11 @@ readshot capture --format tiff --output capture.tiff
 readshot capture --format webp --output capture.webp
 readshot capture --interactive --clipboard</code></pre>
             </div>
+            <p>
+              Use <code translate="no">--output -</code> to write image bytes to stdout.
+              This is the default when neither <code translate="no">--output</code> nor
+              <code translate="no">--clipboard</code> is supplied.
+            </p>
           </section>
 
           <section class="doc-section" id="text-output">
@@ -133,6 +209,28 @@ readshot capture --interactive --clipboard</code></pre>
 readshot capture-text --rect 100,100,800,600 --clipboard
 readshot ocr --input capture.png --output text.txt
 readshot ocr --input capture.png --clipboard</code></pre>
+            </div>
+            <p>
+              Use <code translate="no">--input -</code> with
+              <code translate="no">ocr</code> to read image bytes from stdin.
+              <code translate="no">--languages</code> accepts comma-separated BCP-47
+              hints; omit it for automatic detection.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">cat capture.png | readshot ocr --input -
+readshot ocr --input capture.png --languages en-US,fr-FR</code></pre>
+            </div>
+          </section>
+
+          <section class="doc-section" id="combined">
+            <h2>Combined Image and OCR</h2>
+            <p>
+              <code translate="no">capture-and-ocr</code> writes OCR text and can save
+              the captured image at the same time.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot capture-and-ocr --interactive --also-image capture.png --output text.txt
+readshot capture-and-ocr --rect 100,100,800,600 --also-image capture.png</code></pre>
             </div>
           </section>
 
@@ -154,15 +252,57 @@ readshot capture-window --window 11474 --no-window-shadow --output tight.png</co
               <code translate="no">readshot &lt;command&gt; --help</code> for the complete option list.
             </p>
           </section>
+
+          <section class="doc-section" id="destinations">
+            <h2>Output Destinations</h2>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Need</th>
+                  <th>Use</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Save an image</td>
+                  <td><code translate="no">--output capture.png</code></td>
+                </tr>
+                <tr>
+                  <td>Print image bytes</td>
+                  <td><code translate="no">--output -</code></td>
+                </tr>
+                <tr>
+                  <td>Copy image</td>
+                  <td><code translate="no">--clipboard</code></td>
+                </tr>
+                <tr>
+                  <td>Save OCR text</td>
+                  <td><code translate="no">--output text.txt</code></td>
+                </tr>
+                <tr>
+                  <td>Print OCR text</td>
+                  <td><code translate="no">--output -</code></td>
+                </tr>
+                <tr>
+                  <td>Copy OCR text</td>
+                  <td><code translate="no">--clipboard</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
         </article>
 
         <aside class="doc-nav" aria-label="CLI sections">
           <strong>On this page</strong>
           <a href="#common">Common commands</a>
+          <a href="#commands">Commands</a>
           <a href="#interactive">Interactive capture</a>
+          <a href="#targets">Targets</a>
           <a href="#image-output">Image output</a>
           <a href="#text-output">Text output</a>
+          <a href="#combined">Image and OCR</a>
           <a href="#options">Options</a>
+          <a href="#destinations">Destinations</a>
         </aside>
       </div>
       <span class="copy-status" aria-live="polite"></span>

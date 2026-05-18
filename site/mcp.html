@@ -33,7 +33,7 @@
           <a href="index.html">Install</a>
           <a href="index.html#features">Features</a>
           <a href="cli.html">CLI</a>
-          <a href="mcp.html">MCP</a>
+          <a href="mcp.html" aria-current="page">MCP</a>
           <a href="https://github.com/pawanpaudel93/readshot">GitHub</a>
         </div>
       </nav>
@@ -42,6 +42,7 @@
     <main id="main">
       <section class="shell hero compact">
         <div class="hero-inner">
+          <p class="eyebrow">Documentation</p>
           <h1>MCP</h1>
           <p class="hero-copy">
             <code translate="no">readshot-mcp</code> lets AI agent hosts capture screenshots,
@@ -57,9 +58,10 @@
             <p>
               The one-line macOS installer creates a
               <code translate="no">readshot-mcp</code> symlink in
-              <code translate="no">~/.local/bin</code>. Desktop MCP hosts often do not
-              inherit your shell <code>PATH</code>, so their config should use the
-              absolute app-bundle path.
+              <code translate="no">~/.local/bin</code>. Use
+              <code translate="no">readshot-mcp</code> in configs when the host inherits
+              that <code>PATH</code>. Desktop MCP hosts often do not, so the absolute
+              app-bundle path is the more reliable default.
             </p>
             <table class="data-table">
               <thead>
@@ -139,8 +141,113 @@
             </p>
           </section>
 
+          <section class="doc-section" id="arguments">
+            <h2>Arguments</h2>
+            <p>
+              <code translate="no">rect</code> is always an object in logical pixels:
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">{ "x": 100, "y": 100, "width": 800, "height": 600 }</code></pre>
+            </div>
+            <h3>Region Capture</h3>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Argument</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code translate="no">display</code></td>
+                  <td>Display id from <code translate="no">list_displays</code>. Defaults to the primary display.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">rect</code></td>
+                  <td>Display-relative region. Defaults to the full display.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">scale</code></td>
+                  <td>Optional HiDPI scale override. Defaults to the display scale.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">hide_cursor</code></td>
+                  <td>Defaults to <code translate="no">true</code>. Set <code translate="no">false</code> to include the cursor when supported.</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3>Window Capture</h3>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Argument</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code translate="no">window</code></td>
+                  <td>Required. Window id from <code translate="no">list_windows</code>.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">rect</code></td>
+                  <td>Window-relative region. Defaults to the full window.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">ignore_shadows</code></td>
+                  <td>Defaults to <code translate="no">false</code>. Set <code translate="no">true</code> for tighter captures when supported.</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3>OCR and History</h3>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Argument</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code translate="no">languages</code></td>
+                  <td>Optional BCP-47 language hints. Omit for automatic language detection.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">language_correction</code></td>
+                  <td>Defaults to <code translate="no">true</code> where the platform OCR engine supports correction.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">limit</code></td>
+                  <td>Used by history list/search tools. Minimum 1, maximum 100.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">query</code></td>
+                  <td>Searches local history metadata and OCR text.</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
           <section class="doc-section" id="host-config">
             <h2>Host Config</h2>
+            <p>
+              Terminal-launched hosts can usually use the short command:
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">{
+  "mcpServers": {
+    "readshot": {
+      "command": "readshot-mcp"
+    }
+  }
+}</code></pre>
+            </div>
+            <p>
+              For desktop apps, prefer the absolute path below unless you know the app
+              inherits <code translate="no">~/.local/bin</code> from your shell.
+            </p>
             <h3>Claude Desktop</h3>
             <div class="code-panel">
               <pre><code translate="no">{
@@ -213,6 +320,35 @@ command = "/Applications/Readshot.app/Contents/MacOS/readshot-mcp"</code></pre>
   }
 }</code></pre>
             </div>
+            <p>Capture text only:</p>
+            <div class="code-panel">
+              <pre><code translate="no">{
+  "jsonrpc": "2.0",
+  "id": 9,
+  "method": "tools/call",
+  "params": {
+    "name": "capture_text",
+    "arguments": {
+      "rect": { "x": 100, "y": 100, "width": 800, "height": 600 }
+    }
+  }
+}</code></pre>
+            </div>
+            <p>Search local history:</p>
+            <div class="code-panel">
+              <pre><code translate="no">{
+  "jsonrpc": "2.0",
+  "id": 10,
+  "method": "tools/call",
+  "params": {
+    "name": "search_captures",
+    "arguments": {
+      "query": "invoice",
+      "limit": 10
+    }
+  }
+}</code></pre>
+            </div>
           </section>
 
           <section class="doc-section" id="permissions">
@@ -280,6 +416,7 @@ printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' \
           <strong>On this page</strong>
           <a href="#binary">Binary path</a>
           <a href="#tools">Tools</a>
+          <a href="#arguments">Arguments</a>
           <a href="#host-config">Host config</a>
           <a href="#tool-calls">Tool calls</a>
           <a href="#permissions">Permissions</a>
