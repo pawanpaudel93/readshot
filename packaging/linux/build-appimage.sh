@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-VERSION="${VERSION:-0.5.0}"
+VERSION="${VERSION:-0.6.0}"
 TARGET="${TARGET:-x86_64-unknown-linux-gnu}"
 BIN_PATH="target/${TARGET}/release/readshot"
 APP_DIR="target/release/Readshot.AppDir"
