@@ -176,6 +176,16 @@ install_symlinks() {
   ln -sf "${target_app}/Contents/MacOS/readshot-mcp" "${BIN_DIR}/readshot-mcp"
 }
 
+verify_command_line_tools() {
+  local readshot_bin="${BIN_DIR}/readshot"
+  local mcp_bin="${BIN_DIR}/readshot-mcp"
+
+  [[ -x "${readshot_bin}" ]] || die "${readshot_bin} is not executable"
+  [[ -x "${mcp_bin}" ]] || die "${mcp_bin} is not executable"
+
+  "${readshot_bin}" --help >/dev/null 2>&1 || die "readshot command self-check failed"
+}
+
 path_contains_bin_dir() {
   case ":${PATH:-}:" in
     *":${BIN_DIR}:"*) return 0 ;;
@@ -258,6 +268,7 @@ main() {
   remove_quarantine "${target_app}"
 
   install_symlinks "${target_app}"
+  verify_command_line_tools
 
   cat <<EOF
 
