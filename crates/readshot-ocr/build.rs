@@ -5,10 +5,37 @@ fn main() {
         use std::path::PathBuf;
         use std::process::Command;
 
+        let arch = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+            Ok("aarch64") => "arm64",
+            Ok("x86_64") => "x86_64",
+            Ok(other) => panic!("unsupported macOS OCR target architecture: {other}"),
+            Err(error) => panic!("CARGO_CFG_TARGET_ARCH should be set: {error}"),
+        };
+        let target = format!("{arch}-apple-macosx14.0");
+        let sdk = Command::new("xcrun")
+            .args(["--sdk", "macosx", "--show-sdk-path"])
+            .output()
+            .expect("failed to locate macOS SDK with xcrun");
+        if !sdk.status.success() {
+            panic!("xcrun could not locate the macOS SDK");
+        }
+        let sdk_path = String::from_utf8(sdk.stdout).expect("SDK path should be UTF-8");
+        let sdk_path = sdk_path.trim();
+
         let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR should be set"));
         let lib_path = out_dir.join("libreadshot_macos_vision_swift.a");
         let status = Command::new("swiftc")
-            .args(["-parse-as-library", "-emit-library", "-static", "-O", "-o"])
+            .args([
+                "-parse-as-library",
+                "-emit-library",
+                "-static",
+                "-O",
+                "-target",
+                &target,
+                "-sdk",
+                sdk_path,
+                "-o",
+            ])
             .arg(&lib_path)
             .arg("src/macos_vision.swift")
             .status()
