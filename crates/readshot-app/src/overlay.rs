@@ -57,6 +57,10 @@ pub struct OverlayProgram {
     /// selection with this intent instead of committing an editable
     /// selection and showing the quick-action toolbar.
     pub auto_confirm_intent: Option<CaptureIntent>,
+    /// Runtime-tracked Shift state. iced 0.14 does not route keyboard
+    /// events into canvas widgets, so the daemon listens globally and
+    /// passes the current modifier state in here on each view().
+    pub shift_held: bool,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -351,8 +355,19 @@ impl Program<Message> for OverlayProgram {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<Action<Message>> {
-        // Track Shift modifier (mouse events lack modifier state in
-        // iced 0.14). Falls through so other keyboard arms still match.
+        // iced 0.14 does not deliver keyboard events to canvas widgets,
+        // so the runtime tracks Shift globally and threads the current
+        // state into `self.shift_held`. Sync it into the program state
+        // on every event so the rest of the draw path (which reads
+        // state.shift_held) can stay unchanged. A direct
+        // `KeyPressed { modifiers, .. }` branch is kept below as a
+        // fallback for the rare case where iced does deliver them.
+        if state.shift_held != self.shift_held {
+            state.shift_held = self.shift_held;
+            if state.active.is_some() {
+                return Some(Action::request_redraw());
+            }
+        }
         if let Event::Keyboard(
             keyboard::Event::KeyPressed { modifiers, .. }
             | keyboard::Event::KeyReleased { modifiers, .. },

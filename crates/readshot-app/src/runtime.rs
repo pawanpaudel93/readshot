@@ -520,6 +520,21 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // any open region overlay. 80 ms ≈ 12.5 fps which reads as
         // smooth motion without burning CPU.
         subs.push(iced::time::every(Duration::from_millis(80)).map(|_| Message::OverlayTick));
+        // Global Shift watcher — iced 0.14 does not pipe keyboard
+        // events into canvas widgets, so the overlay's "hold Shift =
+        // square" constraint relies on this subscription forwarding
+        // the modifier state into App.overlay_shift_held.
+        subs.push(iced::event::listen_with(|event, _status, _window| {
+            use iced::keyboard::Event as KbEvent;
+            match event {
+                iced::Event::Keyboard(KbEvent::KeyPressed { modifiers, .. })
+                | iced::Event::Keyboard(KbEvent::KeyReleased { modifiers, .. })
+                | iced::Event::Keyboard(KbEvent::ModifiersChanged(modifiers)) => {
+                    Some(Message::OverlayShiftChanged(modifiers.shift()))
+                }
+                _ => None,
+            }
+        }));
     }
     if state.editor.is_some() {
         // Keyboard sub: ⌘Z / Ctrl+Z = Undo, ⌘⇧Z / Ctrl+Shift+Z = Redo,
@@ -711,6 +726,19 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // `state.overlay_tick` indirectly via the OverlayProgram
             // we build in `view`.
             state.overlay_tick = state.overlay_tick.wrapping_add(2);
+            Task::none()
+        }
+
+        Message::OverlayShiftChanged(held) => {
+            // No-op when state didn't actually flip — keeps the redraw
+            // path from firing on every key event.
+            if state.overlay_shift_held == held {
+                return Task::none();
+            }
+            state.overlay_shift_held = held;
+            // The overlay rebuilds OverlayProgram from `state` on every
+            // view(); a redraw picks the new shift state up and the
+            // OverlayTick's 80 ms loop covers most of the rest.
             Task::none()
         }
 
@@ -3825,6 +3853,7 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
         dash_offset: state.overlay_tick as usize,
         scale,
         auto_confirm_intent,
+        shift_held: state.overlay_shift_held,
     })
     .width(Length::Fill)
     .height(Length::Fill);

@@ -140,6 +140,11 @@ pub enum Message {
     /// animation. Only fires while at least one overlay window is
     /// open.
     OverlayTick,
+    /// Shift modifier toggled while an overlay window is open. Drives
+    /// the "hold Shift = square selection" constraint; iced 0.14 does
+    /// not pipe keyboard events into the canvas widget, so the runtime
+    /// listens globally and forwards the state into the overlay.
+    OverlayShiftChanged(bool),
     /// 100 ms drain tick — runtime polls the tray + menu event channels.
     TrayTick,
     /// 100 ms drain tick — runtime polls queued `readshot://` URL events.
@@ -464,6 +469,13 @@ pub struct App {
     /// Monotonically-increasing counter the region-overlay reads to
     /// animate its marching-ants stroke. Bumped by `OverlayTick`.
     pub overlay_tick: u32,
+    /// Tracks whether Shift is currently held while the region-overlay
+    /// is open. The overlay's canvas Program would read modifiers
+    /// itself if iced delivered keyboard events to canvas widgets, but
+    /// it doesn't — so the runtime tracks Shift via a global keyboard
+    /// subscription and threads it back into each `OverlayProgram` on
+    /// view().
+    pub overlay_shift_held: bool,
     /// Last directory the user saved into. The editor's save picker
     /// seeds itself there next time so a burst of related captures
     /// lands in the same place. Reset whenever the user picks a new
@@ -611,6 +623,7 @@ impl App {
             cli_interactive_output: None,
             pins: HashMap::new(),
             overlay_tick: 0,
+            overlay_shift_held: false,
             last_save_dir: None,
             history_root: None,
             history_records: Vec::new(),
