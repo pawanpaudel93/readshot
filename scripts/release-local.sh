@@ -26,9 +26,19 @@ publishes the Sparkle appcast to gh-pages.
 VERSION defaults to the workspace version from Cargo.toml.
 
 Required .env values:
+  SPARKLE_ED_KEY_BASE64
+
+Required for self-signed releases:
   MACOS_SELF_SIGN_CERT_BASE64
   MACOS_SELF_SIGN_CERT_PASSWORD
-  SPARKLE_ED_KEY_BASE64
+
+Optional Developer ID / notarization values, matching release.yml:
+  APPLE_DEVELOPER_ID_P12_BASE64
+  APPLE_DEVELOPER_ID_P12_PASSWORD
+  MACOS_SIGNING_IDENTITY
+  APPLE_ID
+  APPLE_TEAM_ID
+  APPLE_APP_SPECIFIC_PASSWORD
 
 Use --force-tag when reusing an existing tag for the current HEAD.
 EOF
@@ -94,7 +104,7 @@ load_release_env() {
     value="$(parse_env_value "${line#*=}")"
 
     case "${key}" in
-      MACOS_SELF_SIGN_CERT_BASE64|MACOS_SELF_SIGN_CERT_PASSWORD|SPARKLE_ED_KEY_BASE64)
+      MACOS_SELF_SIGN_CERT_BASE64|MACOS_SELF_SIGN_CERT_PASSWORD|APPLE_DEVELOPER_ID_P12_BASE64|APPLE_DEVELOPER_ID_P12_PASSWORD|MACOS_SIGNING_IDENTITY|APPLE_ID|APPLE_TEAM_ID|APPLE_APP_SPECIFIC_PASSWORD|SPARKLE_ED_KEY_BASE64)
         printf -v "${key}" '%s' "${value}"
         export "${key}"
         ;;
@@ -193,32 +203,66 @@ publish_appcast() {
 }
 
 validate_release_secrets() {
-  require_env MACOS_SELF_SIGN_CERT_BASE64
-  require_env MACOS_SELF_SIGN_CERT_PASSWORD
   require_env SPARKLE_ED_KEY_BASE64
   require_command security
 
   local keychain_pass
   local identities
+  local cert_base64
+  local cert_password
+  local signing_identity
+
+  if [[ -n "${APPLE_DEVELOPER_ID_P12_BASE64:-}" ]]; then
+    cert_base64="${APPLE_DEVELOPER_ID_P12_BASE64}"
+    cert_password="${APPLE_DEVELOPER_ID_P12_PASSWORD:-}"
+    signing_identity="${MACOS_SIGNING_IDENTITY:-Developer ID Application}"
+    if [[ -z "${cert_password}" ]]; then
+      echo "error: APPLE_DEVELOPER_ID_P12_PASSWORD is required when APPLE_DEVELOPER_ID_P12_BASE64 is set" >&2
+      exit 1
+    fi
+  else
+    cert_base64="${MACOS_SELF_SIGN_CERT_BASE64:-}"
+    cert_password="${MACOS_SELF_SIGN_CERT_PASSWORD:-}"
+    signing_identity="${MACOS_SIGNING_IDENTITY:-Readshot Project Self-Signed}"
+    if [[ -z "${cert_base64}" ]]; then
+      echo "error: MACOS_SELF_SIGN_CERT_BASE64 is required when Developer ID cert is absent" >&2
+      exit 1
+    fi
+    if [[ -z "${cert_password}" ]]; then
+      echo "error: MACOS_SELF_SIGN_CERT_PASSWORD is required when Developer ID cert is absent" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ -z "${APPLE_DEVELOPER_ID_P12_BASE64:-}" ]] \
+    && [[ -n "${APPLE_ID:-}" || -n "${APPLE_TEAM_ID:-}" || -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]]; then
+    echo "error: notarization credentials require APPLE_DEVELOPER_ID_P12_BASE64" >&2
+    exit 1
+  fi
+
   CERT_CHECK_KEYCHAIN="readshot-release-check-$$.keychain-db"
   keychain_pass="release-check-$$"
   CERT_CHECK_PATH="$(mktemp -t readshot-cert-check).p12"
-  if ! printf '%s' "${MACOS_SELF_SIGN_CERT_BASE64}" | base64 -d > "${CERT_CHECK_PATH}"; then
-    echo "error: MACOS_SELF_SIGN_CERT_BASE64 is not valid base64" >&2
+  if ! printf '%s' "${cert_base64}" | base64 -d > "${CERT_CHECK_PATH}"; then
+    echo "error: selected signing certificate is not valid base64" >&2
     exit 1
   fi
   security create-keychain -p "${keychain_pass}" "${CERT_CHECK_KEYCHAIN}" >/dev/null
   security unlock-keychain -p "${keychain_pass}" "${CERT_CHECK_KEYCHAIN}" >/dev/null
   if ! security import "${CERT_CHECK_PATH}" \
     -k "${CERT_CHECK_KEYCHAIN}" \
-    -P "${MACOS_SELF_SIGN_CERT_PASSWORD}" \
+    -P "${cert_password}" \
     -T /usr/bin/codesign >/dev/null; then
-    echo "error: MACOS_SELF_SIGN_CERT_PASSWORD does not unlock MACOS_SELF_SIGN_CERT_BASE64 for macOS codesigning" >&2
+    echo "error: selected signing certificate password does not unlock the .p12 for macOS codesigning" >&2
     exit 1
   fi
   identities="$(security find-identity -v -p codesigning "${CERT_CHECK_KEYCHAIN}")"
-  if [[ "${identities}" != *"Readshot Project Self-Signed"* ]]; then
-    echo "error: MACOS_SELF_SIGN_CERT_BASE64 does not contain the Readshot Project Self-Signed identity" >&2
+  if [[ "${identities}" != *"valid identities found"* || "${identities}" == *"0 valid identities found"* ]]; then
+    echo "error: selected signing certificate .p12 has no valid code-signing identity; export the certificate with its private key" >&2
+    exit 1
+  fi
+  if [[ "${identities}" != *"${signing_identity}"* ]]; then
+    echo "error: selected signing certificate does not contain signing identity '${signing_identity}'" >&2
     exit 1
   fi
   if ! printf '%s' "${SPARKLE_ED_KEY_BASE64}" | base64 -d >/dev/null; then
