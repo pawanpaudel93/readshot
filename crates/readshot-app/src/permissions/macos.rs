@@ -1,22 +1,30 @@
 //! macOS Screen Recording permission.
 //!
-//! Two CoreGraphics functions do the work:
+//! macOS 15 Sequoia split this consent into two TCC keys:
 //!
-//! * `CGPreflightScreenCaptureAccess` — returns whether the app
-//!   currently has the grant. Cheap; safe to poll. Returns `false`
-//!   even after a fresh user grant until the app is **relaunched** —
-//!   this is a TCC quirk we can't work around in-process.
-//! * `CGRequestScreenCaptureAccess` — adds the app to System Settings
-//!   → Privacy & Security → Screen Recording and triggers the OS
-//!   prompt the first time it is called for a given (bundle id,
-//!   cdhash) pair. Subsequent calls after a user denial are
-//!   silent — the user must toggle the row in System Settings.
+//! * Legacy "Screen Recording" — what `CGPreflightScreenCaptureAccess`
+//!   consults. Sequoia keeps populating it for back-compat, but new
+//!   apps that only use ScreenCaptureKit don't get a row there.
+//! * "Screen & System Audio Recording" — what ScreenCaptureKit
+//!   (`SCShareableContent`) actually consults at capture time.
+//!
+//! Readshot captures via SCK, so a user grant in the new pane is what
+//! lets us capture — but `CGPreflightScreenCaptureAccess` still
+//! reports false. Without a second probe the welcome window would
+//! stay stuck on "grant permission" forever even after the user
+//! toggled the right row.
+//!
+//! Strategy: try CG preflight first (cheap, non-blocking). If it
+//! reports denied, fall through to an SCK probe (`SCShareableContent::get`)
+//! which the screencapturekit crate runs synchronously. The first
+//! call may take ~20-50 ms; subsequent calls are cached by the OS.
 //!
 //! `open_settings` deep-links into the Privacy pane. macOS 13+
 //! ("System Settings") and 12- ("System Preferences") use different
 //! URL schemes, so we try both in order.
 
 use core_graphics::access::ScreenCaptureAccess;
+use screencapturekit::shareable_content::SCShareableContent;
 
 use super::{PermissionStatus, PermissionsProvider};
 
@@ -26,9 +34,20 @@ impl PermissionsProvider for MacOsPermissions {
     fn status(&self) -> PermissionStatus {
         let access = ScreenCaptureAccess;
         if access.preflight() {
-            PermissionStatus::Granted
-        } else {
-            PermissionStatus::Denied
+            return PermissionStatus::Granted;
+        }
+        // CG preflight reports denied on Sequoia even after a SCK-pane
+        // grant. Probe SCK directly so the welcome window doesn't get
+        // stuck. A successful call means TCC currently allows capture.
+        match SCShareableContent::get() {
+            Ok(_) => PermissionStatus::Granted,
+            Err(e) => {
+                tracing::trace!(
+                    target: "readshot::permissions",
+                    "SCK probe denied: {e:?}",
+                );
+                PermissionStatus::Denied
+            }
         }
     }
 

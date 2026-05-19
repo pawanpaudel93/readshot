@@ -4546,6 +4546,7 @@ dependencies = [
  "readshot-test-fixtures",
  "readshot-ui",
  "rfd",
+ "screencapturekit",
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
