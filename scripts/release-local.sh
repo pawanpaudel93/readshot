@@ -12,6 +12,7 @@ ENV_FILE="${ROOT}/.env"
 FORCE_TAG=0
 SKIP_APPCAST=0
 PAGES_DIR=""
+CERT_CHECK_PATH=""
 
 usage() {
   cat <<'EOF'
@@ -104,6 +105,9 @@ cleanup() {
   if [[ -n "${PAGES_DIR}" && -d "${PAGES_DIR}" ]]; then
     git -C "${ROOT}" worktree remove "${PAGES_DIR}" --force >/dev/null 2>&1 || true
   fi
+  if [[ -n "${CERT_CHECK_PATH}" ]]; then
+    rm -f "${CERT_CHECK_PATH}"
+  fi
 }
 trap cleanup EXIT
 
@@ -142,6 +146,32 @@ publish_appcast() {
   fi
 }
 
+validate_release_secrets() {
+  require_env MACOS_SELF_SIGN_CERT_BASE64
+  require_env MACOS_SELF_SIGN_CERT_PASSWORD
+  require_env SPARKLE_ED_KEY_BASE64
+  require_command openssl
+
+  CERT_CHECK_PATH="$(mktemp -t readshot-cert-check).p12"
+  if ! printf '%s' "${MACOS_SELF_SIGN_CERT_BASE64}" | base64 -d > "${CERT_CHECK_PATH}"; then
+    echo "error: MACOS_SELF_SIGN_CERT_BASE64 is not valid base64" >&2
+    exit 1
+  fi
+  if ! openssl pkcs12 \
+    -in "${CERT_CHECK_PATH}" \
+    -password "pass:${MACOS_SELF_SIGN_CERT_PASSWORD}" \
+    -nokeys \
+    -clcerts \
+    -out /dev/null >/dev/null 2>&1; then
+    echo "error: MACOS_SELF_SIGN_CERT_PASSWORD does not unlock MACOS_SELF_SIGN_CERT_BASE64" >&2
+    exit 1
+  fi
+  if ! printf '%s' "${SPARKLE_ED_KEY_BASE64}" | base64 -d >/dev/null; then
+    echo "error: SPARKLE_ED_KEY_BASE64 is not valid base64" >&2
+    exit 1
+  fi
+}
+
 main() {
   parse_args "$@"
   cd "${ROOT}"
@@ -177,9 +207,7 @@ main() {
   source "${ENV_FILE}"
   set +a
 
-  require_env MACOS_SELF_SIGN_CERT_BASE64
-  require_env MACOS_SELF_SIGN_CERT_PASSWORD
-  require_env SPARKLE_ED_KEY_BASE64
+  validate_release_secrets
 
   if ! git diff --quiet || ! git diff --cached --quiet; then
     echo "error: git worktree has uncommitted changes" >&2
@@ -194,6 +222,17 @@ main() {
 
   rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
+  rm -rf "${out_dir}"
+  mkdir -p "${out_dir}"
+
+  build_dmg aarch64-apple-darwin "${out_dir}/readshot-macos-aarch64.dmg"
+  build_dmg x86_64-apple-darwin "${out_dir}/readshot-macos-x86_64.dmg"
+
+  (
+    cd "${out_dir}"
+    shasum -a 256 readshot-macos-*.dmg > SHA256SUMS
+  )
+
   git push origin main
   if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
     if [[ "${FORCE_TAG}" != "1" ]]; then
@@ -206,17 +245,6 @@ main() {
     git tag "${tag}"
     git push origin "${tag}"
   fi
-
-  rm -rf "${out_dir}"
-  mkdir -p "${out_dir}"
-
-  build_dmg aarch64-apple-darwin "${out_dir}/readshot-macos-aarch64.dmg"
-  build_dmg x86_64-apple-darwin "${out_dir}/readshot-macos-x86_64.dmg"
-
-  (
-    cd "${out_dir}"
-    shasum -a 256 readshot-macos-*.dmg > SHA256SUMS
-  )
 
   if gh release view "${tag}" >/dev/null 2>&1; then
     gh release upload "${tag}" "${out_dir}"/readshot-macos-*.dmg "${out_dir}/SHA256SUMS" --clobber
