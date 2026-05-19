@@ -7,6 +7,39 @@
         <language>en</language>
 
         <item>
+            <title>Readshot 0.6.0 (aarch64)</title>
+            <pubDate>Tue, 19 May 2026 07:55:36 +0000</pubDate>
+            <sparkle:version>0.6.0</sparkle:version>
+            <sparkle:shortVersionString>0.6.0</sparkle:shortVersionString>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+                <p><a href="https://github.com/pawanpaudel93/readshot/releases/tag/v0.6.0">Release notes for Readshot 0.6.0</a></p>
+            ]]></description>
+            <enclosure
+                url="https://github.com/pawanpaudel93/readshot/releases/download/v0.6.0/readshot-macos-aarch64.dmg"
+                length="14750570"
+                type="application/octet-stream"
+                sparkle:edSignature="rOYqYSWlOI0/cK+D7TQkwFN/vqh2HULoEZ8w30W2zGbz7S1rUkW3bRJcLVqxMjl4gZfEWXJITqX31kCoaxwvCw=="
+            />
+        </item>
+        <item>
+            <title>Readshot 0.6.0 (x86_64)</title>
+            <pubDate>Tue, 19 May 2026 07:55:36 +0000</pubDate>
+            <sparkle:version>0.6.0</sparkle:version>
+            <sparkle:shortVersionString>0.6.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+                <p><a href="https://github.com/pawanpaudel93/readshot/releases/tag/v0.6.0">Release notes for Readshot 0.6.0</a></p>
+            ]]></description>
+            <enclosure
+                url="https://github.com/pawanpaudel93/readshot/releases/download/v0.6.0/readshot-macos-x86_64.dmg"
+                length="15696201"
+                type="application/octet-stream"
+                sparkle:edSignature="DneeM93ye6MULkXXSO6o8B95edHosFxQca2S1CyroCcTKaPuVKsf2Pl+gtjhjPPV0bOIGh2IzO+aGYU7JRo6CA=="
+            />
+        </item>
+        <item>
             <title>Readshot 0.3.0 (aarch64)</title>
             <pubDate>Thu, 07 May 2026 17:17:59 +0000</pubDate>
             <sparkle:version>0.3.0</sparkle:version>
