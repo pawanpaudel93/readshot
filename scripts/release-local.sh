@@ -14,6 +14,7 @@ FORCE_TAG=0
 SKIP_APPCAST=0
 PAGES_DIR=""
 CERT_CHECK_PATH=""
+CERT_CHECK_KEYCHAIN=""
 
 usage() {
   cat <<'EOF'
@@ -150,6 +151,9 @@ cleanup() {
   if [[ -n "${CERT_CHECK_PATH}" ]]; then
     rm -f "${CERT_CHECK_PATH}"
   fi
+  if [[ -n "${CERT_CHECK_KEYCHAIN}" ]]; then
+    security delete-keychain "${CERT_CHECK_KEYCHAIN}" >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 
@@ -192,20 +196,29 @@ validate_release_secrets() {
   require_env MACOS_SELF_SIGN_CERT_BASE64
   require_env MACOS_SELF_SIGN_CERT_PASSWORD
   require_env SPARKLE_ED_KEY_BASE64
-  require_command openssl
+  require_command security
 
+  local keychain_pass
+  local identities
+  CERT_CHECK_KEYCHAIN="readshot-release-check-$$.keychain-db"
+  keychain_pass="release-check-$$"
   CERT_CHECK_PATH="$(mktemp -t readshot-cert-check).p12"
   if ! printf '%s' "${MACOS_SELF_SIGN_CERT_BASE64}" | base64 -d > "${CERT_CHECK_PATH}"; then
     echo "error: MACOS_SELF_SIGN_CERT_BASE64 is not valid base64" >&2
     exit 1
   fi
-  if ! openssl pkcs12 \
-    -in "${CERT_CHECK_PATH}" \
-    -password "pass:${MACOS_SELF_SIGN_CERT_PASSWORD}" \
-    -nokeys \
-    -clcerts \
-    -out /dev/null >/dev/null 2>&1; then
-    echo "error: MACOS_SELF_SIGN_CERT_PASSWORD does not unlock MACOS_SELF_SIGN_CERT_BASE64" >&2
+  security create-keychain -p "${keychain_pass}" "${CERT_CHECK_KEYCHAIN}" >/dev/null
+  security unlock-keychain -p "${keychain_pass}" "${CERT_CHECK_KEYCHAIN}" >/dev/null
+  if ! security import "${CERT_CHECK_PATH}" \
+    -k "${CERT_CHECK_KEYCHAIN}" \
+    -P "${MACOS_SELF_SIGN_CERT_PASSWORD}" \
+    -T /usr/bin/codesign >/dev/null; then
+    echo "error: MACOS_SELF_SIGN_CERT_PASSWORD does not unlock MACOS_SELF_SIGN_CERT_BASE64 for macOS codesigning" >&2
+    exit 1
+  fi
+  identities="$(security find-identity -v -p codesigning "${CERT_CHECK_KEYCHAIN}")"
+  if [[ "${identities}" != *"Readshot Project Self-Signed"* ]]; then
+    echo "error: MACOS_SELF_SIGN_CERT_BASE64 does not contain the Readshot Project Self-Signed identity" >&2
     exit 1
   fi
   if ! printf '%s' "${SPARKLE_ED_KEY_BASE64}" | base64 -d >/dev/null; then
