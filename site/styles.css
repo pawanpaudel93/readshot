@@ -7,6 +7,9 @@
   --text: #f3f7f8;
   --muted: #a9b3bd;
   --teal: #21b6a8;
+  /* Brighter teal reserved for text-on-dark uses (eyebrow, inline
+     links) where the button-fill teal falls below 4.5:1. */
+  --teal-text: #5be0d0;
   --blue: #5c6af2;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
@@ -65,6 +68,10 @@ a:focus-visible,
   z-index: 10;
 }
 
+.skip-link {
+  transition: transform 160ms ease;
+}
+
 .skip-link:focus-visible {
   transform: translateY(0);
 }
@@ -121,8 +128,7 @@ a:focus-visible,
   color: var(--text);
 }
 
-.nav-links a[aria-current="page"],
-.nav-links a[data-current="true"] {
+.nav-links a[aria-current="page"] {
   background: rgba(33, 182, 168, 0.12);
   color: var(--text);
 }
@@ -130,7 +136,8 @@ a:focus-visible,
 #install,
 #features,
 .doc-section {
-  scroll-margin-top: 24px;
+  /* Anchor jumps land below the nav with breathing room. */
+  scroll-margin-top: 80px;
 }
 
 .hero {
@@ -146,7 +153,7 @@ a:focus-visible,
 }
 
 .eyebrow {
-  color: var(--teal);
+  color: var(--teal-text);
   font-size: 13px;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -155,7 +162,7 @@ a:focus-visible,
 }
 
 h1 {
-  font-size: 88px;
+  font-size: clamp(48px, 9vw, 88px);
   letter-spacing: 0;
   line-height: 0.92;
   margin: 0 0 22px;
@@ -198,12 +205,25 @@ h1 {
   color: var(--text);
 }
 
+.button {
+  transition:
+    filter 180ms ease,
+    transform 120ms ease,
+    box-shadow 180ms ease;
+}
+
 .button:hover {
   filter: brightness(1.06);
 }
 
 .button:active {
   transform: translateY(1px);
+}
+
+.button.primary:focus-visible {
+  /* Inner ring so the focus indicator is visible against the teal
+     fill (the outer teal outline blends into it). */
+  box-shadow: inset 0 0 0 2px #062b32;
 }
 
 .install {
@@ -236,7 +256,7 @@ code {
   color: #d7f8f4;
   font-family:
     "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", monospace;
-  font-size: 14px;
+  font-size: 15px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -260,10 +280,14 @@ code {
   color: var(--text);
   cursor: pointer;
   display: inline-flex;
-  height: 36px;
+  height: 44px;
   justify-content: center;
   padding: 0;
-  width: 36px;
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+  width: 44px;
 }
 
 .copy-button:hover {
@@ -293,9 +317,17 @@ code {
 }
 
 .copy-status {
+  /* Standard sr-only pattern — keeps the live region announcable
+     without leaving a 1×1 element that can break sticky layouts. */
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
   height: 1px;
+  margin: -1px;
   overflow: hidden;
+  padding: 0;
   position: absolute;
+  white-space: nowrap;
   width: 1px;
 }
 
@@ -343,7 +375,12 @@ code {
 .card p,
 .doc-section p {
   color: var(--muted);
-  line-height: 1.55;
+  line-height: 1.6;
+}
+
+.doc-section p {
+  /* Cap measure for readability on wide viewports. */
+  max-width: 70ch;
 }
 
 .card p {
@@ -356,7 +393,7 @@ code {
 
 .card-action a,
 .inline-link {
-  color: #d7f8f4;
+  color: var(--teal-text);
   font-weight: 700;
 }
 
@@ -480,7 +517,7 @@ code {
 }
 
 .data-table tbody tr:nth-child(even) {
-  background: rgba(255, 255, 255, 0.018);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .data-table th {
@@ -528,6 +565,14 @@ footer a {
   .nav-links {
     flex-wrap: wrap;
     row-gap: 4px;
+  }
+
+  .nav-links a {
+    /* Bump mobile hit area to WCAG 2.5.5 minimum. */
+    min-height: 44px;
+    padding: 11px 12px;
+    display: inline-flex;
+    align-items: center;
   }
 
   .hero {
@@ -619,6 +664,14 @@ footer a {
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
 
   .button:active {
