@@ -65,11 +65,8 @@ a:focus-visible,
   text-decoration: none;
   top: 14px;
   transform: translateY(-160%);
-  z-index: 10;
-}
-
-.skip-link {
   transition: transform 160ms ease;
+  z-index: 10;
 }
 
 .skip-link:focus-visible {
@@ -162,7 +159,7 @@ a:focus-visible,
 }
 
 h1 {
-  font-size: clamp(48px, 9vw, 88px);
+  font-size: clamp(52px, 9vw, 88px);
   letter-spacing: 0;
   line-height: 0.92;
   margin: 0 0 22px;
@@ -193,6 +190,10 @@ h1 {
   min-height: 44px;
   padding: 0 16px;
   text-decoration: none;
+  transition:
+    filter 180ms ease,
+    transform 120ms ease,
+    box-shadow 180ms ease;
 }
 
 .button.primary {
@@ -205,13 +206,6 @@ h1 {
   color: var(--text);
 }
 
-.button {
-  transition:
-    filter 180ms ease,
-    transform 120ms ease,
-    box-shadow 180ms ease;
-}
-
 .button:hover {
   filter: brightness(1.06);
 }
@@ -221,8 +215,10 @@ h1 {
 }
 
 .button.primary:focus-visible {
-  /* Inner ring so the focus indicator is visible against the teal
-     fill (the outer teal outline blends into it). */
+  /* The shared focus outline is teal-on-teal against this fill, so
+     swap the outline to high-contrast white and add an inner ring
+     for double-indicator visibility. */
+  outline-color: var(--text);
   box-shadow: inset 0 0 0 2px #062b32;
 }
 
@@ -623,9 +619,8 @@ footer a {
     width: min(100% - 20px, 1040px);
   }
 
-  h1 {
-    font-size: 52px;
-  }
+  /* h1 size handled by the clamp at the top-level rule — no need
+     to override at this breakpoint. */
 
   .section h2,
   .doc-section h2 {
