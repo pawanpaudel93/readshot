@@ -29,7 +29,7 @@ Options:
 
 Examples:
   curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash
-  curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- 0.4.1
+  curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- 0.6.0
   curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- --check
 EOF
 }
