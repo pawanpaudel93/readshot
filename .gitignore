@@ -7,6 +7,10 @@ target/
 .swiftpm/
 .build/
 
+# Local secrets
+.env
+.env.*
+
 # OS
 .DS_Store
 
