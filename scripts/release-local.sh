@@ -2,7 +2,8 @@
 # Build and publish a Readshot macOS release from a local machine.
 #
 # This is the local fallback for maintainers when GitHub Actions cannot run.
-# It reads signing secrets from .env by default.
+# It reads signing secrets from .env by default. Values are parsed
+# literally so passwords do not need shell escaping.
 
 set -euo pipefail
 
@@ -57,6 +58,47 @@ require_env() {
     echo "error: ${name} is required" >&2
     exit 1
   fi
+}
+
+parse_env_value() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+
+  if [[ "${value}" == \"*\" && "${value}" == *\" ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "${value}" == \'*\' && "${value}" == *\' ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+
+  printf '%s' "${value}"
+}
+
+load_release_env() {
+  local line key value
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "${line}" || "${line}" == \#* ]] && continue
+
+    if [[ "${line}" == export[[:space:]]* ]]; then
+      line="${line#export}"
+      line="${line#"${line%%[![:space:]]*}"}"
+    fi
+    [[ "${line}" != *=* ]] && continue
+
+    key="${line%%=*}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="$(parse_env_value "${line#*=}")"
+
+    case "${key}" in
+      MACOS_SELF_SIGN_CERT_BASE64|MACOS_SELF_SIGN_CERT_PASSWORD|SPARKLE_ED_KEY_BASE64)
+        printf -v "${key}" '%s' "${value}"
+        export "${key}"
+        ;;
+    esac
+  done < "${ENV_FILE}"
 }
 
 parse_args() {
@@ -202,10 +244,7 @@ main() {
     exit 1
   fi
 
-  set -a
-  # shellcheck disable=SC1090
-  source "${ENV_FILE}"
-  set +a
+  load_release_env
 
   validate_release_secrets
 
