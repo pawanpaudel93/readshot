@@ -175,6 +175,7 @@ main() {
   check_script_syntax "install.sh"
   check_script_syntax "scripts/bump-version.sh"
   check_script_syntax "scripts/smoke-macos-release.sh"
+  check_script_syntax "scripts/release-local.sh"
   check_script_syntax "scripts/test-install-script.sh"
   check_script_syntax "scripts/test-update-appcast.sh"
   check_script_syntax "packaging/macos/build-dmg.sh"

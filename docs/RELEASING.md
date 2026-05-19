@@ -142,6 +142,18 @@ The GitHub Release is the canonical distribution point. It publishes:
   containing `Readshot.app` with both `readshot` and `readshot-mcp`.
 * `SHA256SUMS`.
 
+If GitHub Actions is unavailable, run the same macOS release locally
+from a clean checkout. The helper reads signing secrets from `.env`,
+builds both DMGs, uploads the GitHub Release, and updates the Sparkle
+appcast on `gh-pages`.
+
+```bash
+scripts/release-local.sh 0.6.0 --force-tag
+```
+
+Use `--force-tag` only when intentionally moving an existing tag to
+the current `HEAD`.
+
 ### 3. Verify release artifacts
 
 Download the GitHub Release artifacts into a clean directory on a
