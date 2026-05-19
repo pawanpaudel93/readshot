@@ -1,6 +1,7 @@
 # autoarchitect-generated specs, plans, journals, and session state — kept locally, not committed.
 docs/superpowers/
 .autoarchitect/
+.codex/
 
 # Rust / Cargo
 target/
