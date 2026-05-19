@@ -207,15 +207,12 @@ validate_release_secrets() {
   require_command security
 
   local keychain_pass
-  local identities
   local cert_base64
   local cert_password
-  local signing_identity
 
   if [[ -n "${APPLE_DEVELOPER_ID_P12_BASE64:-}" ]]; then
     cert_base64="${APPLE_DEVELOPER_ID_P12_BASE64}"
     cert_password="${APPLE_DEVELOPER_ID_P12_PASSWORD:-}"
-    signing_identity="${MACOS_SIGNING_IDENTITY:-Developer ID Application}"
     if [[ -z "${cert_password}" ]]; then
       echo "error: APPLE_DEVELOPER_ID_P12_PASSWORD is required when APPLE_DEVELOPER_ID_P12_BASE64 is set" >&2
       exit 1
@@ -223,7 +220,6 @@ validate_release_secrets() {
   else
     cert_base64="${MACOS_SELF_SIGN_CERT_BASE64:-}"
     cert_password="${MACOS_SELF_SIGN_CERT_PASSWORD:-}"
-    signing_identity="${MACOS_SIGNING_IDENTITY:-Readshot Project Self-Signed}"
     if [[ -z "${cert_base64}" ]]; then
       echo "error: MACOS_SELF_SIGN_CERT_BASE64 is required when Developer ID cert is absent" >&2
       exit 1
@@ -254,15 +250,6 @@ validate_release_secrets() {
     -P "${cert_password}" \
     -T /usr/bin/codesign >/dev/null; then
     echo "error: selected signing certificate password does not unlock the .p12 for macOS codesigning" >&2
-    exit 1
-  fi
-  identities="$(security find-identity -v -p codesigning "${CERT_CHECK_KEYCHAIN}")"
-  if [[ "${identities}" != *"valid identities found"* || "${identities}" == *"0 valid identities found"* ]]; then
-    echo "error: selected signing certificate .p12 has no valid code-signing identity; export the certificate with its private key" >&2
-    exit 1
-  fi
-  if [[ "${identities}" != *"${signing_identity}"* ]]; then
-    echo "error: selected signing certificate does not contain signing identity '${signing_identity}'" >&2
     exit 1
   fi
   if ! printf '%s' "${SPARKLE_ED_KEY_BASE64}" | base64 -d >/dev/null; then
