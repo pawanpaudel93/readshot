@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::PreferencesError;
+use crate::fs_atomic::write_atomic;
 
 /// Bumped on every breaking schema change.
 pub const PREFERENCES_SCHEMA_VERSION: u32 = 2;
@@ -161,25 +162,22 @@ impl Preferences {
     /// Convenience: read or fall back to [`Default`] if the file does not
     /// exist. IO errors other than not-found still propagate.
     pub fn load_or_default(path: &Path) -> Result<Preferences, PreferencesError> {
-        match Self::load(path) {
-            Ok(p) => Ok(p),
-            Err(PreferencesError::Io(msg))
-                if msg.contains("(os error 2)") || msg.contains("No such") =>
-            {
-                Ok(Preferences::default())
-            }
-            Err(e) => Err(e),
+        if !path.exists() {
+            return Ok(Preferences::default());
         }
+        Self::load(path)
     }
 
     /// Write a pretty-printed TOML representation to `path`. Creates the
-    /// parent directory as needed.
+    /// parent directory as needed. The write is atomic: contents are
+    /// staged to a sibling `.tmp` file and renamed into place so a crash
+    /// mid-write cannot leave a torn or truncated preferences file.
     pub fn save(&self, path: &Path) -> Result<(), PreferencesError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let content = toml::to_string_pretty(self)?;
-        std::fs::write(path, content)?;
+        write_atomic(path, content.as_bytes())?;
         Ok(())
     }
 

@@ -5307,7 +5307,27 @@ fn macos_notification_script(title: &str, body: &str) -> String {
 
 #[cfg(target_os = "macos")]
 fn applescript_escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            // Newlines / carriage returns / NULs would otherwise close
+            // the string literal or break osascript parsing entirely.
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            // AppleScript's line-continuation char joins onto the
+            // next statement. AppleScript strings have no `\u`
+            // escape, so the only safe option is to drop it.
+            '\u{00AC}' => {}
+            c if (c as u32) < 0x20 => {
+                // Drop other control chars; they have no useful
+                // representation inside an AppleScript string.
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Map an editor line-width to a text point-size. The Text tool

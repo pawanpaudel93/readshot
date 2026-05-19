@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::annotation::Annotation;
 use crate::error::HistoryError;
+use crate::fs_atomic::write_atomic;
 use crate::preferences::HistoryRetention;
 
 pub const HISTORY_SCHEMA_VERSION: u32 = 1;
@@ -153,7 +154,10 @@ impl FsHistoryStore {
     fn write_index(&self, index: &HistoryIndex) -> Result<(), HistoryError> {
         fs::create_dir_all(&self.root)?;
         let content = serde_json::to_string_pretty(index)?;
-        fs::write(self.index_path(), content)?;
+        // Stage to a sibling `.tmp` and rename so a crash mid-write
+        // cannot truncate or corrupt the index file. POSIX rename is
+        // atomic within a filesystem.
+        write_atomic(&self.index_path(), content.as_bytes())?;
         Ok(())
     }
 
@@ -217,7 +221,7 @@ impl HistoryStore for FsHistoryStore {
         self.write_thumbnail_from_bytes(record, png);
 
         let json_content = serde_json::to_string_pretty(record)?;
-        fs::write(&abs_json, json_content)?;
+        write_atomic(&abs_json, json_content.as_bytes())?;
 
         let mut index = self.read_index()?;
         index.records.push(HistoryIndexEntry {
@@ -336,7 +340,7 @@ impl HistoryStore for FsHistoryStore {
             return Ok(());
         }
         let json_content = serde_json::to_string_pretty(record)?;
-        fs::write(&abs_json, json_content)?;
+        write_atomic(&abs_json, json_content.as_bytes())?;
         // Bump the index's updated_at so callers can see the archive
         // has changed; the index entry's captured_at is immutable.
         let mut index = self.read_index()?;

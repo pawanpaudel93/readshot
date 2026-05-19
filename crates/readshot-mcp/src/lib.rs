@@ -68,6 +68,7 @@ use readshot_core::{CaptureRecord, HistoryStore};
 use readshot_ocr::{OCREngine, OCRRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 /// MCP protocol version we advertise. The agent picks the highest
 /// version both sides accept; older versions are still permitted.
@@ -194,13 +195,28 @@ impl McpServer {
                 ))
             }
         };
-        let request_id = value.get("id").cloned();
+        // Per JSON-RPC 2.0 §4, `id` must be a string, number, or null.
+        // Reject object/array/bool ids before attempting to dispatch.
+        let raw_id = value.get("id").cloned();
+        if let Some(ref v) = raw_id {
+            if !(v.is_null() || v.is_string() || v.is_number()) {
+                return Some(error_response(
+                    Value::Null,
+                    codes::INVALID_REQUEST,
+                    "id must be a string, number, or null".into(),
+                ));
+            }
+        }
         let req: RpcRequest = match serde_json::from_value(value) {
             Ok(r) => r,
             Err(e) => {
-                return request_id.map(|id| {
-                    error_response(id, codes::INVALID_REQUEST, format!("invalid request: {e}"))
-                });
+                // Structurally invalid: reply with id=Null per spec
+                // rather than dropping the message silently.
+                return Some(error_response(
+                    raw_id.unwrap_or(Value::Null),
+                    codes::INVALID_REQUEST,
+                    format!("invalid request: {e}"),
+                ));
             }
         };
 
@@ -209,9 +225,13 @@ impl McpServer {
         let id = req.id.clone();
 
         if req.jsonrpc.as_deref() != Some("2.0") {
-            return id.map(|id| {
-                error_response(id, codes::INVALID_REQUEST, "jsonrpc must be \"2.0\"".into())
-            });
+            // Even when id is missing the spec wants an error reply
+            // with id=Null so clients can correlate malformed input.
+            return Some(error_response(
+                id.unwrap_or(Value::Null),
+                codes::INVALID_REQUEST,
+                "jsonrpc must be \"2.0\"".into(),
+            ));
         }
 
         let response = self.dispatch(&req.method, req.params).await;
@@ -316,13 +336,14 @@ impl McpServer {
     fn tool_latest_capture(&self) -> Result<Value, RpcErr> {
         let history = self.history()?;
         let mut records = history.store.list().map_err(history_to_rpc)?;
-        let record = records.drain(..).next().ok_or_else(|| RpcErr {
-            code: codes::SERVER_ERROR,
-            message: "history is empty".into(),
-        })?;
-        Ok(json!({
-            "capture": record_to_json(&record, history.root.as_deref())
-        }))
+        // An empty history is a normal state, not a server error.
+        // Return `{"capture": null}` so MCP clients can distinguish
+        // "no captures yet" from a backend failure.
+        let capture = match records.drain(..).next() {
+            Some(record) => record_to_json(&record, history.root.as_deref()),
+            None => Value::Null,
+        };
+        Ok(json!({ "capture": capture }))
     }
 
     fn tool_get_capture(&self, args: &Value) -> Result<Value, RpcErr> {
@@ -335,11 +356,15 @@ impl McpServer {
                 code: codes::INVALID_PARAMS,
                 message: "get_capture requires a non-empty `id`".into(),
             })?;
+        let parsed = Uuid::parse_str(id).map_err(|_| RpcErr {
+            code: codes::INVALID_PARAMS,
+            message: format!("capture id `{id}` is not a valid UUID"),
+        })?;
         let history = self.history()?;
         let records = history.store.list().map_err(history_to_rpc)?;
         let record = records
             .into_iter()
-            .find(|record| record.id.to_string() == id)
+            .find(|record| record.id == parsed)
             .ok_or_else(|| RpcErr {
                 code: codes::INVALID_PARAMS,
                 message: format!("capture `{id}` not found"),
@@ -531,6 +556,17 @@ fn ocr_request_from(args: &Value, image: RgbaImage) -> Result<OCRRequest, RpcErr
     })
 }
 
+/// Largest rect dimension we will accept from an MCP caller, in
+/// logical pixels. Bounds the worst-case capture buffer to roughly
+/// `MAX_RECT_DIM * MAX_RECT_DIM * 4 * MAX_SCALE^2` bytes, which keeps
+/// an adversarial caller from coercing the process into multi-GB
+/// allocations.
+const MAX_RECT_DIM: f32 = 16_384.0;
+
+/// Largest output scale factor we accept. Anything beyond 8x of the
+/// display's logical pixels is almost certainly a mistake or abuse.
+const MAX_SCALE: f32 = 8.0;
+
 fn parse_rect_value(v: &Value) -> Result<Rect, RpcErr> {
     let obj = v.as_object().ok_or_else(|| RpcErr {
         code: codes::INVALID_PARAMS,
@@ -546,9 +582,23 @@ fn parse_rect_value(v: &Value) -> Result<Rect, RpcErr> {
             })
     };
     let (x, y, w, h) = (field("x")?, field("y")?, field("width")?, field("height")?);
+    for (name, v) in [("x", x), ("y", y), ("width", w), ("height", h)] {
+        if !v.is_finite() {
+            return Err(RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: format!("rect.{name} must be finite"),
+            });
+        }
+    }
+    if w > MAX_RECT_DIM || h > MAX_RECT_DIM || x.abs() > MAX_RECT_DIM || y.abs() > MAX_RECT_DIM {
+        return Err(RpcErr {
+            code: codes::INVALID_PARAMS,
+            message: format!("rect coordinates must not exceed {MAX_RECT_DIM} logical pixels"),
+        });
+    }
     Rect::from_xywh(x, y, w, h).ok_or_else(|| RpcErr {
         code: codes::INVALID_PARAMS,
-        message: "rect has non-positive or non-finite dimensions".into(),
+        message: "rect must have positive width and height".into(),
     })
 }
 
@@ -584,6 +634,12 @@ fn parse_optional_positive_f32(args: &Value, key: &str) -> Result<Option<f32>, R
                 return Err(RpcErr {
                     code: codes::INVALID_PARAMS,
                     message: format!("{key} must be a positive finite number"),
+                });
+            }
+            if key == "scale" && n > MAX_SCALE {
+                return Err(RpcErr {
+                    code: codes::INVALID_PARAMS,
+                    message: format!("scale must not exceed {MAX_SCALE}"),
                 });
             }
             Ok(Some(n))
@@ -665,6 +721,8 @@ fn window_to_json(window: &WindowInfo) -> Value {
     })
 }
 
+const MAX_LIMIT: u64 = 100;
+
 fn parse_limit(args: &Value, default: usize) -> Result<usize, RpcErr> {
     match args.get("limit") {
         None => Ok(default),
@@ -679,7 +737,13 @@ fn parse_limit(args: &Value, default: usize) -> Result<usize, RpcErr> {
                     message: "limit must be a positive integer".into(),
                 });
             }
-            Ok((n as usize).min(100))
+            if n > MAX_LIMIT {
+                return Err(RpcErr {
+                    code: codes::INVALID_PARAMS,
+                    message: format!("limit must be <= {MAX_LIMIT}"),
+                });
+            }
+            Ok(n as usize)
         }
     }
 }

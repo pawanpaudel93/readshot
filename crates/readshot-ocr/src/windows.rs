@@ -98,6 +98,7 @@ impl OCREngine for WindowsMediaOcrEngine {
             // treat 0.0 as "engine reports no signal" and ignore it
             // for this backend.
             average_confidence: 0.0,
+            lines: Vec::new(),
         })
     }
 }

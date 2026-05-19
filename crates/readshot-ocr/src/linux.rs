@@ -160,6 +160,7 @@ impl OCREngine for OcrsEngine {
             // and average those scores. 0.0 means "the engine returns no
             // signal", which agents reading MCP responses can ignore.
             average_confidence: 0.0,
+            lines: Vec::new(),
         })
     }
 }

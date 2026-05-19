@@ -13,6 +13,7 @@ pub mod arrowhead;
 pub mod error;
 pub mod filename;
 pub mod filters;
+pub(crate) mod fs_atomic;
 pub mod geom;
 pub mod history;
 pub mod log;

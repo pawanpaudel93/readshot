@@ -409,15 +409,23 @@ pub fn exit_code(err: &CliError) -> i32 {
     }
 }
 
+/// Largest `--delay` we accept, in seconds. Beyond this the value is
+/// almost certainly user error; capping also avoids passing absurd
+/// values to `Duration::from_secs_f64`, which panics near
+/// `Duration::MAX`.
+const MAX_DELAY_SECS: f64 = 3600.0;
+
 fn parse_delay(s: &str) -> Result<f64, String> {
     let delay = s
         .parse::<f64>()
         .map_err(|e| format!("delay `{s}` is not a number: {e}"))?;
-    if delay.is_finite() && delay >= 0.0 {
-        Ok(delay)
-    } else {
-        Err("--delay must be a non-negative finite number".into())
+    if !delay.is_finite() || delay < 0.0 {
+        return Err("--delay must be a non-negative finite number".into());
     }
+    if delay > MAX_DELAY_SECS {
+        return Err(format!("--delay must be <= {MAX_DELAY_SECS} seconds"));
+    }
+    Ok(delay)
 }
 
 fn parse_rect(s: &str) -> Result<Rect, String> {

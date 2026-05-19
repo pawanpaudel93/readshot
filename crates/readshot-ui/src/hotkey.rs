@@ -127,7 +127,17 @@ fn parse_key_code(token: &str) -> Option<Code> {
         "escape" | "esc" => Code::Escape,
         "tab" => Code::Tab,
         "space" => Code::Space,
-        "backspace" | "delete" => Code::Backspace,
+        "backspace" => Code::Backspace,
+        "delete" | "del" => Code::Delete,
+        "left" => Code::ArrowLeft,
+        "right" => Code::ArrowRight,
+        "up" => Code::ArrowUp,
+        "down" => Code::ArrowDown,
+        "home" => Code::Home,
+        "end" => Code::End,
+        "pageup" | "pgup" => Code::PageUp,
+        "pagedown" | "pgdn" => Code::PageDown,
+        "insert" | "ins" => Code::Insert,
         _ => return None,
     })
 }

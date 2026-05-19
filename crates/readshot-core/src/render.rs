@@ -39,8 +39,11 @@ pub fn render(base: &RgbaImage, model: &[Annotation]) -> RgbaImage {
     let (output_w, output_h, offset) = compute_output_geometry(base.width(), base.height(), model);
 
     // Build the canvas at the output size and copy the (possibly cropped)
-    // base into it.
-    let mut pixmap = Pixmap::new(output_w, output_h).expect("non-zero canvas");
+    // base into it. `Pixmap::new` rejects zero dimensions and very large
+    // sizes (~ Skia's 32767 limit); fall back to a 1×1 pixmap so a
+    // degenerate input cannot panic the renderer.
+    let mut pixmap = Pixmap::new(output_w, output_h)
+        .unwrap_or_else(|| Pixmap::new(1, 1).expect("1x1 pixmap is always allocatable"));
     blit_base(&mut pixmap, base, offset);
 
     // Lazy font load — kept inside `render` so callers don't need an init

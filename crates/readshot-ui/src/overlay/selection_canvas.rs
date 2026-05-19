@@ -30,7 +30,6 @@ use iced::Point;
 use iced::Rectangle;
 use iced::Renderer;
 use iced::Theme;
-use iced::Vector;
 use iced::{Color, Size};
 
 use readshot_core::geom::Rect as CoreRect;
@@ -164,10 +163,7 @@ impl Program<SelectionMessage, Theme, Renderer> for SelectionCanvas {
                 *state = DragState::Idle;
                 Some(canvas::Action::publish(SelectionMessage::DragCancelled).and_capture())
             }
-            _ => {
-                let _ = (bounds, cursor);
-                None
-            }
+            _ => None,
         }
     }
 
@@ -181,25 +177,10 @@ impl Program<SelectionMessage, Theme, Renderer> for SelectionCanvas {
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
 
-        // Dim backdrop.
-        frame.fill_rectangle(
-            Point::ORIGIN,
-            bounds.size(),
-            Color::from_rgba(0.0, 0.0, 0.0, 0.4),
-        );
-
         if let Some(rect) = state.current_rect() {
-            // Punch the selection out of the backdrop by re-painting
-            // it with a fully transparent fill (Color { a: 0 }) — the
-            // canvas's blend mode is `over`, so this clears the
-            // existing dim.
-            //
-            // Note: iced::Frame doesn't expose `clear_rect` directly;
-            // the standard idiom is to draw four tinted bands around
-            // the selection rather than punch a hole. We use that
-            // approach here so the visual result is identical even
-            // when the renderer has no compositing API.
-            let _ = (); // (Hole-punching done implicitly by re-tinting around the rect.)
+            // Paint dim only around the selection so the selection
+            // itself remains undimmed. iced::Frame has no clear_rect,
+            // so we draw four tinted bands instead of fill-then-punch.
             paint_dim_around(&mut frame, bounds, rect);
 
             // Marching-ants outline.
@@ -207,6 +188,10 @@ impl Program<SelectionMessage, Theme, Renderer> for SelectionCanvas {
                 Point::new(rect.x, rect.y),
                 Size::new(rect.width, rect.height),
             );
+            // Keep the dash offset in a stable positive range so the
+            // f32 -> usize cast can't saturate to 0 and freeze the
+            // animation when ants_phase grows past 2*ANT_DASH.
+            let dash_offset = (ANT_DASH.mul_add(2.0, -self.ants_phase)).rem_euclid(ANT_DASH * 2.0);
             let stroke = Stroke {
                 style: Style::Solid(Color::WHITE),
                 width: 1.5,
@@ -214,10 +199,18 @@ impl Program<SelectionMessage, Theme, Renderer> for SelectionCanvas {
                 line_join: canvas::LineJoin::Miter,
                 line_dash: canvas::LineDash {
                     segments: &[ANT_DASH, ANT_DASH],
-                    offset: ANT_DASH.mul_add(2.0, -self.ants_phase) as usize,
+                    offset: dash_offset as usize,
                 },
             };
             frame.stroke(&outline_path, stroke);
+        } else {
+            // No selection: dim the whole overlay so the user sees
+            // capture is active.
+            frame.fill_rectangle(
+                Point::ORIGIN,
+                bounds.size(),
+                Color::from_rgba(0.0, 0.0, 0.0, 0.4),
+            );
         }
 
         vec![frame.into_geometry()]
@@ -267,11 +260,6 @@ fn paint_dim_around(frame: &mut Frame, bounds: Rectangle, rect: Rectangle) {
         Size::new((bounds.width - right_x).max(0.0), rect.height),
         dim,
     );
-
-    // Quiet `Vector` import — used by some Frame methods on other
-    // platforms; keep the symbol in scope so module imports stay
-    // uniform.
-    let _ = Vector::ZERO;
 }
 
 /// Convert an iced `Rectangle` (canvas-local logical pixels) to a
