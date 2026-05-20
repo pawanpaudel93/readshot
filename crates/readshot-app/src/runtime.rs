@@ -2859,26 +2859,36 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     } else {
         Color::WHITE
     };
-    let counter_size = 22.0 + 6.0 * pop_eased;
     let tail_alpha = 0.55 + 0.25 * pop_eased;
-    let counter_row = row![
-        text(format!("{frame_count}"))
-            .size(counter_size)
-            .color(counter_color),
-        text(format!("/ {cap} frames"))
-            .size(11)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, tail_alpha)),
-        Space::new().width(Length::Fill),
-        text(if fps > 0.0 {
-            format!("{fps:.1} fps")
-        } else {
-            String::new()
-        })
-        .size(10)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.45)),
-    ]
-    .spacing(6)
-    .align_y(Alignment::End);
+    // Fixed font size — the previous `22 + 6 * pop_eased` grow
+    // animation expanded the counter row and pushed everything below
+    // it in the column, which iced compensated for by shrinking the
+    // Length::Fixed preview. Net effect: thumbnail wobbled in size
+    // every frame. Keep the text size stable and let the color flash
+    // do the "scroll registered" pulse on its own.
+    let counter_row = container(
+        row![
+            text(format!("{frame_count}")).size(26).color(counter_color),
+            text(format!("/ {cap} frames"))
+                .size(11)
+                .color(Color::from_rgba(1.0, 1.0, 1.0, tail_alpha)),
+            Space::new().width(Length::Fill),
+            text(if fps > 0.0 {
+                format!("{fps:.1} fps")
+            } else {
+                String::new()
+            })
+            .size(10)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.45)),
+        ]
+        .spacing(6)
+        .align_y(Alignment::End),
+    )
+    // Pin the row to a fixed height so even if a future change adds
+    // a transient grow animation back, the surrounding column won't
+    // reflow and squeeze the preview.
+    .height(Length::Fixed(32.0))
+    .width(Length::Fill);
 
     // Slim capacity bar — uses the same blue accent as the history
     // selected row so the chrome reads as part of the same app.
