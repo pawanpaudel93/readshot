@@ -485,6 +485,28 @@ fn scroll_hud_window_settings(position: iced::Point) -> window::Settings {
     }
 }
 
+/// Window settings for the transparent click-through region indicator
+/// that highlights the captured rect while a scrolling-capture session
+/// is running. Sized to cover the entire active display so the canvas
+/// inside can stroke the rect in display-local coordinates without
+/// needing per-window position math.
+fn scroll_region_window_settings(display_bounds: (f32, f32)) -> window::Settings {
+    window::Settings {
+        size: iced::Size::new(display_bounds.0, display_bounds.1),
+        min_size: None,
+        position: window::Position::Specific(iced::Point::new(0.0, 0.0)),
+        resizable: false,
+        decorations: false,
+        transparent: true,
+        visible: true,
+        fullscreen: false,
+        level: window::Level::AlwaysOnTop,
+        closeable: false,
+        minimizable: false,
+        ..Default::default()
+    }
+}
+
 fn overlay_window_settings_for(display: &readshot_capture::DisplayInfo) -> window::Settings {
     let bounds = display.bounds;
     window::Settings {
@@ -514,6 +536,7 @@ pub fn title(state: &App, id: window::Id) -> String {
         Some(WindowKind::Settings) => "Readshot — Settings".into(),
         Some(WindowKind::CliTools) => "Readshot — Command Line Tools".into(),
         Some(WindowKind::ScrollHud) => "Readshot — Scrolling Capture".into(),
+        Some(WindowKind::ScrollRegion) => "Readshot — Capture Region".into(),
     }
 }
 
@@ -527,7 +550,10 @@ const OVERLAY_THEME_NAME: &str = "readshot-overlay-transparent";
 /// matter for the canvas-only overlay view, so we copy `Theme::Dark`
 /// to avoid widget surprises if iced ever consults them.
 pub fn theme(state: &App, id: window::Id) -> Theme {
-    if matches!(state.windows.kind(id), Some(WindowKind::Overlay)) {
+    if matches!(
+        state.windows.kind(id),
+        Some(WindowKind::Overlay) | Some(WindowKind::ScrollRegion)
+    ) {
         Theme::custom(OVERLAY_THEME_NAME.to_string(), iced::theme::Palette::DARK)
     } else {
         Theme::Dark
@@ -1238,11 +1264,28 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                                 display_scale,
                             );
                             session.frames.push(image);
+                            session.display_size = display_bounds;
                             state.scroll_session = Some(session);
+                            // Open the click-through region indicator
+                            // first so the user sees the rect outline
+                            // anchored to the page they're scrolling.
+                            // The HUD opens beside it for stop/cancel.
+                            let mut tasks: Vec<Task<Message>> = Vec::new();
+                            if let Some(bounds) = display_bounds {
+                                let (region_id, region_open) =
+                                    window::open(scroll_region_window_settings(bounds));
+                                state.windows.register(region_id, WindowKind::ScrollRegion);
+                                if let Some(s) = state.scroll_session.as_mut() {
+                                    s.region_window_id = Some(region_id);
+                                }
+                                tasks.push(region_open.map(Message::ScrollRegionWindowReady));
+                            }
                             let hud_pos = scroll_hud_position(last.rect, display_bounds);
-                            let (id, open_task) = window::open(scroll_hud_window_settings(hud_pos));
-                            state.windows.register(id, WindowKind::ScrollHud);
-                            open_task.map(Message::ScrollHudWindowReady)
+                            let (hud_id, hud_open) =
+                                window::open(scroll_hud_window_settings(hud_pos));
+                            state.windows.register(hud_id, WindowKind::ScrollHud);
+                            tasks.push(hud_open.map(Message::ScrollHudWindowReady));
+                            Task::batch(tasks)
                         }
                     };
                     Task::batch([history_task, intent_task])
@@ -1696,6 +1739,13 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::ScrollRegionWindowReady(id) => {
+            // Enable mouse passthrough so scroll wheel events fall
+            // through to the page underneath. Without this, the
+            // always-on-top transparent window would swallow scrolls.
+            window::enable_mouse_passthrough(id)
+        }
+
         Message::ScrollHudDragRequested => {
             match state.scroll_session.as_ref().and_then(|s| s.hud_window_id) {
                 Some(id) => window::drag(id),
@@ -1776,22 +1826,22 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
 
         Message::ScrollCaptureCancelRequested => {
-            // Discard the session without stitching. Close the HUD,
-            // drop the captured frames, clear the status — a clean
-            // "never happened" path the user can take if the page
-            // wasn't the right one or the scroll went wrong.
+            // Discard the session without stitching. Close every
+            // session-owned window, drop the captured frames, clear
+            // the status — a clean "never happened" path.
             let Some(session) = state.scroll_session.take() else {
                 return Task::none();
             };
-            let close_task = match session.hud_window_id {
-                Some(id) => {
-                    state.windows.forget(id);
-                    window::close(id)
-                }
-                None => Task::none(),
-            };
+            let mut tasks: Vec<Task<Message>> = Vec::new();
+            for id in [session.hud_window_id, session.region_window_id]
+                .into_iter()
+                .flatten()
+            {
+                state.windows.forget(id);
+                tasks.push(window::close(id));
+            }
             state.last_capture_status = Some("Scroll capture cancelled.".into());
-            close_task
+            Task::batch(tasks)
         }
 
         Message::ScrollCaptureStopRequested => {
@@ -1804,18 +1854,18 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             session.stopping = true;
             let frames = std::mem::take(&mut session.frames);
             let hud_id = session.hud_window_id;
-            // Close the HUD now — the stitch task runs on its own.
-            let close_task = match hud_id {
-                Some(id) => {
-                    state.windows.forget(id);
-                    window::close(id)
-                }
-                None => Task::none(),
-            };
-            let stitch_task = Task::perform(stitch_frames_async(frames), |r| {
+            let region_id = session.region_window_id;
+            // Close session windows now — the stitch task runs on its
+            // own and the HUD / region overlay are no longer useful.
+            let mut tasks: Vec<Task<Message>> = Vec::new();
+            for id in [hud_id, region_id].into_iter().flatten() {
+                state.windows.forget(id);
+                tasks.push(window::close(id));
+            }
+            tasks.push(Task::perform(stitch_frames_async(frames), |r| {
                 Message::ScrollCaptureStitched(r.map_err(|e| e.to_string()))
-            });
-            Task::batch([close_task, stitch_task])
+            }));
+            Task::batch(tasks)
         }
 
         Message::ScrollCaptureStitched(result) => {
@@ -2429,7 +2479,86 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
         Some(WindowKind::Settings) => settings_view(state),
         Some(WindowKind::CliTools) => cli_tools_view(state),
         Some(WindowKind::ScrollHud) => scroll_hud_view(state),
+        Some(WindowKind::ScrollRegion) => scroll_region_view(state),
     }
+}
+
+/// Transparent click-through overlay that draws the captured rect's
+/// border on screen during a scrolling-capture session. Mouse and
+/// scroll events fall through to the page underneath thanks to
+/// `iced::window::enable_mouse_passthrough` (wired in the
+/// `ScrollRegionWindowReady` handler).
+fn scroll_region_view(state: &App) -> Element<'_, Message> {
+    use iced::widget::canvas::{Canvas, Frame, Geometry, LineDash, Path, Program, Stroke};
+    use iced::Renderer;
+
+    let session = state.scroll_session.as_ref();
+    let Some(s) = session else {
+        return iced::widget::Space::new()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    };
+    let rect = s.rect;
+    let phase = (s.started_at.elapsed().as_millis() / 80) as usize;
+
+    #[derive(Clone, Copy)]
+    struct RegionProgram {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        dash_offset: usize,
+    }
+    impl Program<Message> for RegionProgram {
+        type State = ();
+        fn draw(
+            &self,
+            _state: &Self::State,
+            renderer: &Renderer,
+            _theme: &Theme,
+            bounds: iced::Rectangle,
+            _cursor: iced::mouse::Cursor,
+        ) -> Vec<Geometry<Renderer>> {
+            let mut frame = Frame::new(renderer, bounds.size());
+            let path = Path::rectangle(
+                iced::Point::new(self.x, self.y),
+                iced::Size::new(self.w, self.h),
+            );
+            // Black halo for contrast on light wallpapers.
+            frame.stroke(
+                &path,
+                Stroke::default()
+                    .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.7))
+                    .with_width(3.0),
+            );
+            // Animated white dashes — same marching-ants look as the
+            // region-selection overlay so the user reads it as "yes,
+            // this is the area being captured" without a legend.
+            const DASH: &[f32] = &[6.0, 4.0];
+            frame.stroke(
+                &path,
+                Stroke {
+                    line_dash: LineDash {
+                        segments: DASH,
+                        offset: self.dash_offset,
+                    },
+                    ..Stroke::default().with_color(Color::WHITE).with_width(1.5)
+                },
+            );
+            vec![frame.into_geometry()]
+        }
+    }
+    Canvas::new(RegionProgram {
+        x: rect.x(),
+        y: rect.y(),
+        w: rect.width(),
+        h: rect.height(),
+        dash_offset: phase,
+    })
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
 
 /// Floating HUD showing the live state of a scrolling-capture session.

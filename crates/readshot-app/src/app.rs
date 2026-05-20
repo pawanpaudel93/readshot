@@ -60,6 +60,13 @@ pub enum WindowKind {
     /// active. Floats above the user's content with a frame counter
     /// and a Stop button so the user can end the session manually.
     ScrollHud,
+    /// Transparent, click-through, always-on-top overlay covering the
+    /// active display while a scrolling-capture session is running.
+    /// Renders only the captured-rect border so the user can see
+    /// exactly which area is being captured as they scroll the page
+    /// underneath. iced 0.14's `enable_mouse_passthrough` keeps it
+    /// from blocking scroll wheel events.
+    ScrollRegion,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -226,6 +233,10 @@ pub enum Message {
     /// drag so they can reposition the HUD without it stealing focus
     /// from the page they're scrolling.
     ScrollHudDragRequested,
+    /// First view of the transparent click-through region-indicator
+    /// window — runtime records the id and enables mouse passthrough
+    /// so scroll events fall through to the page underneath.
+    ScrollRegionWindowReady(iced::window::Id),
     /// Fire-and-forget history persistence completion. The boolean
     /// payload is `true` when the chain completed all the way through
     /// the OCR-and-update step (so the browser should reload to see
@@ -598,6 +609,15 @@ pub struct ScrollSession {
     pub no_motion_count: u32,
     /// `window::Id` of the HUD floating above the capture region.
     pub hud_window_id: Option<iced::window::Id>,
+    /// `window::Id` of the transparent click-through overlay that
+    /// draws the captured-rect border on screen, so the user can see
+    /// what area is being captured while they scroll the underlying
+    /// content.
+    pub region_window_id: Option<iced::window::Id>,
+    /// Logical width × height of the display the session is running
+    /// on. Cached at session-open time so the region-indicator window
+    /// can be sized to the display without a coordinator round-trip.
+    pub display_size: Option<(f32, f32)>,
     /// True while a `capture_region` future is in flight, to keep
     /// successive ticks from piling up requests faster than the
     /// backend can satisfy them.
@@ -636,6 +656,8 @@ impl ScrollSession {
             frames: Vec::new(),
             no_motion_count: 0,
             hud_window_id: None,
+            region_window_id: None,
+            display_size: None,
             capture_in_flight: false,
             stopping: false,
             started_at: std::time::Instant::now(),
