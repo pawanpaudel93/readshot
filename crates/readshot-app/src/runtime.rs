@@ -435,33 +435,32 @@ const SCROLL_HUD_GAP: f32 = 16.0;
 ///
 /// Order of preference: right of the rect → left of the rect → below →
 /// above → fallback to the display's top-right corner clamped into
-/// the display bounds. Returns logical-pixel screen coordinates.
+/// the display bounds. Returns logical-pixel **global** screen
+/// coordinates (origin_x/y of the host display plus the in-display
+/// offset) so multi-monitor sessions land the HUD on the correct
+/// monitor.
 fn scroll_hud_position(
     rect: readshot_core::geom::Rect,
-    display_bounds: Option<(f32, f32)>,
+    display_bounds: Option<(f32, f32, f32, f32)>,
 ) -> iced::Point {
-    let (dw, dh) = display_bounds.unwrap_or((1440.0, 900.0));
+    let (ox, oy, dw, dh) = display_bounds.unwrap_or((0.0, 0.0, 1440.0, 900.0));
     let w = SCROLL_HUD_WIDTH;
     let h = SCROLL_HUD_HEIGHT;
     let g = SCROLL_HUD_GAP;
-    // Right of the selection.
-    if rect.right() + g + w <= dw {
-        return iced::Point::new(rect.right() + g, rect.y().clamp(0.0, (dh - h).max(0.0)));
-    }
-    // Left of the selection.
-    if rect.x() - g - w >= 0.0 {
-        return iced::Point::new(rect.x() - g - w, rect.y().clamp(0.0, (dh - h).max(0.0)));
-    }
-    // Below the selection.
-    if rect.bottom() + g + h <= dh {
-        return iced::Point::new(rect.x().clamp(0.0, (dw - w).max(0.0)), rect.bottom() + g);
-    }
-    // Above the selection.
-    if rect.y() - g - h >= 0.0 {
-        return iced::Point::new(rect.x().clamp(0.0, (dw - w).max(0.0)), rect.y() - g - h);
-    }
-    // Last resort: top-right corner clamped into the display.
-    iced::Point::new((dw - w - g).max(0.0), g)
+    // Compute the local position first, then add the display origin
+    // at the end so each branch reads the same way as before.
+    let local: iced::Point = if rect.right() + g + w <= dw {
+        iced::Point::new(rect.right() + g, rect.y().clamp(0.0, (dh - h).max(0.0)))
+    } else if rect.x() - g - w >= 0.0 {
+        iced::Point::new(rect.x() - g - w, rect.y().clamp(0.0, (dh - h).max(0.0)))
+    } else if rect.bottom() + g + h <= dh {
+        iced::Point::new(rect.x().clamp(0.0, (dw - w).max(0.0)), rect.bottom() + g)
+    } else if rect.y() - g - h >= 0.0 {
+        iced::Point::new(rect.x().clamp(0.0, (dw - w).max(0.0)), rect.y() - g - h)
+    } else {
+        iced::Point::new((dw - w - g).max(0.0), g)
+    };
+    iced::Point::new(local.x + ox, local.y + oy)
 }
 
 /// Floating HUD shown while a scrolling-capture session is active.
@@ -487,14 +486,18 @@ fn scroll_hud_window_settings(position: iced::Point) -> window::Settings {
 
 /// Window settings for the transparent click-through region indicator
 /// that highlights the captured rect while a scrolling-capture session
-/// is running. Sized to cover the entire active display so the canvas
-/// inside can stroke the rect in display-local coordinates without
-/// needing per-window position math.
-fn scroll_region_window_settings(display_bounds: (f32, f32)) -> window::Settings {
+/// is running. Sized to cover the active display and positioned at
+/// that display's global origin so the canvas inside can stroke the
+/// rect in display-local coordinates without needing per-window
+/// position math. Multi-monitor: the origin offsets ensure the
+/// indicator opens on the *correct* monitor instead of always landing
+/// on the primary display at (0, 0).
+fn scroll_region_window_settings(display_bounds: (f32, f32, f32, f32)) -> window::Settings {
+    let (ox, oy, w, h) = display_bounds;
     window::Settings {
-        size: iced::Size::new(display_bounds.0, display_bounds.1),
+        size: iced::Size::new(w, h),
         min_size: None,
-        position: window::Position::Specific(iced::Point::new(0.0, 0.0)),
+        position: window::Position::Specific(iced::Point::new(ox, oy)),
         resizable: false,
         decorations: false,
         transparent: true,
@@ -1058,6 +1061,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     crate::app::OverlayDisplay {
                         display_id: d.id.clone(),
                         scale: d.scale,
+                        origin_x: d.bounds.x(),
+                        origin_y: d.bounds.y(),
                         width: d.bounds.width(),
                         height: d.bounds.height(),
                     },
@@ -1083,7 +1088,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 .values()
                 .find(|d| d.display_id == display_id);
             let display_scale = overlay_record.map(|d| d.scale).unwrap_or(1.0);
-            let display_bounds = overlay_record.map(|d| (d.width, d.height));
+            let display_bounds =
+                overlay_record.map(|d| (d.origin_x, d.origin_y, d.width, d.height));
             state.last_regions.insert(
                 display_id.clone(),
                 crate::app::LastRegion {

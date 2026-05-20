@@ -493,12 +493,13 @@ pub struct App {
     /// editor uses this to make actual-pixels zoom mean physical
     /// pixels instead of logical UI points.
     pub pending_display_scale: Option<f32>,
-    /// Logical width × height of the display the in-flight capture
-    /// lives on. Captured at `OverlaySelected` time (before the
-    /// overlay close-task drains `overlay_displays`) so downstream
-    /// flows like scroll-capture HUD positioning don't need to round-
-    /// trip back through `coordinator.list_displays`.
-    pub pending_display_bounds: Option<(f32, f32)>,
+    /// Logical bounds (origin_x, origin_y, width, height) of the
+    /// display the in-flight capture lives on. Captured at
+    /// `OverlaySelected` time (before the overlay close-task drains
+    /// `overlay_displays`) so downstream flows like scroll-capture
+    /// HUD placement and the on-screen region indicator window don't
+    /// need to round-trip back through `coordinator.list_displays`.
+    pub pending_display_bounds: Option<(f32, f32, f32, f32)>,
     /// Whether the in-flight overlay capture should hide the cursor.
     /// Normal app captures hide it; CLI interactive can opt into
     /// including it with `--show-cursor`.
@@ -614,10 +615,11 @@ pub struct ScrollSession {
     /// what area is being captured while they scroll the underlying
     /// content.
     pub region_window_id: Option<iced::window::Id>,
-    /// Logical width × height of the display the session is running
-    /// on. Cached at session-open time so the region-indicator window
-    /// can be sized to the display without a coordinator round-trip.
-    pub display_size: Option<(f32, f32)>,
+    /// Logical bounds (origin_x, origin_y, width, height) of the
+    /// display the session is running on. Cached at session-open time
+    /// so multi-monitor windows can be sized and positioned without a
+    /// coordinator round-trip.
+    pub display_size: Option<(f32, f32, f32, f32)>,
     /// True while a `capture_region` future is in flight, to keep
     /// successive ticks from piling up requests faster than the
     /// backend can satisfy them.
@@ -670,12 +672,18 @@ impl ScrollSession {
 
 /// Per-overlay-window record. Tracks which display the window covers
 /// so capture can run against the right monitor, plus the logical
-/// size needed for edge-aware toolbar positioning.
+/// bounds needed for edge-aware toolbar positioning and multi-monitor
+/// follow-up windows (scroll-capture region indicator).
 #[derive(Clone, Debug)]
 pub struct OverlayDisplay {
     pub display_id: readshot_capture::DisplayId,
     /// HiDPI scale factor of the display (physical / logical).
     pub scale: f32,
+    /// Logical x origin of the display in global screen coordinates.
+    /// macOS: relative to the primary display's top-left.
+    pub origin_x: f32,
+    /// Logical y origin of the display in global screen coordinates.
+    pub origin_y: f32,
     /// Logical width of the overlay window (= display logical width).
     pub width: f32,
     /// Logical height of the overlay window.
