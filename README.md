@@ -19,6 +19,8 @@ find it later by searching the text inside the screenshot.
 ## Features
 
 - Region capture from the menu bar or global hotkey.
+- Scrolling capture — lock a region, scroll the page, get one tall
+  stitched image with a live HUD preview.
 - Multi-monitor capture with Retina-quality output.
 - Annotation editor with shapes, arrows, pen, highlighter, text, blur,
   pixelate, numbered pins, crop, undo, and redo.

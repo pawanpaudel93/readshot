@@ -1,6 +1,6 @@
 # Readshot
 
-Readshot is a free offline screenshot and OCR app for macOS.
+Readshot is a free offline screenshot, scrolling-capture, and OCR app for macOS.
 
 ## Links
 
