@@ -654,6 +654,19 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             }
         }));
     }
+    if state
+        .editor
+        .as_ref()
+        .map(|e| e.status.is_some() && !e.status_is_in_progress())
+        .unwrap_or(false)
+    {
+        // Slow tick drives the auto-dismiss of stale status pills.
+        // Only runs while there's actually something to dismiss so
+        // the editor doesn't burn CPU on idle windows.
+        subs.push(
+            iced::time::every(Duration::from_millis(1000)).map(|_| Message::EditorStatusTick),
+        );
+    }
     if state.editor.is_some() {
         // Keyboard sub: ⌘Z / Ctrl+Z = Undo, ⌘⇧Z / Ctrl+Shift+Z = Redo,
         // ⌘S / Ctrl+S = Save. Iced 0.14's `event::listen_with` is the
@@ -1739,6 +1752,23 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             iced::exit()
         }
 
+        Message::EditorStatusTick => {
+            // View re-renders on every Message; the actual dismiss
+            // happens inline in `editor_view` by comparing
+            // `status_set_at.elapsed()` against `STATUS_AUTO_DISMISS`.
+            // Also use the tick to expire stale "Discard? Click again"
+            // arms so the editor doesn't keep listening for a confirm
+            // that the user has already walked away from.
+            if let Some(ed) = state.editor.as_mut() {
+                if let Some(t) = ed.discard_pending_at {
+                    if t.elapsed() > crate::editor::DISCARD_CONFIRM_WINDOW {
+                        ed.discard_pending_at = None;
+                    }
+                }
+            }
+            Task::none()
+        }
+
         Message::ScrollHudWindowReady(id) => {
             if let Some(session) = state.scroll_session.as_mut() {
                 session.hud_window_id = Some(id);
@@ -1883,7 +1913,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     let (w, h) = (image.width(), image.height());
                     let mut ed =
                         crate::editor::EditorSession::new_with_display_scale(image, display_scale);
-                    ed.status = Some(format!("Scrolling capture stitched into {w} × {h}px."));
+                    ed.set_status(format!("Scrolling capture stitched into {w} × {h}px."));
                     state.editor = Some(ed);
                     let (id, open_task) = window::open(editor_window_settings());
                     state.windows.register(id, WindowKind::Editor);
@@ -1909,7 +1939,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 return Task::none();
             };
             ed.busy = true;
-            ed.status = Some("Choose a save location…".into());
+            ed.set_status("Choose a save location…");
             let img = ed.model.flatten();
             let seed = preferred_save_seed_dir(&state.preferences, &state.last_save_dir);
             let template = state.preferences.filename_template.clone();
@@ -1928,7 +1958,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             if let Some(ed) = state.editor.as_mut() {
                 ed.busy = false;
-                ed.status = Some(match result {
+                ed.set_status(match result {
                     Ok(Some(p)) => format!("Saved to {}", p.display()),
                     Ok(None) => "Save cancelled.".into(),
                     Err(e) => format!("Save failed: {e}"),
@@ -1942,7 +1972,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 return Task::none();
             };
             ed.busy = true;
-            ed.status = Some("Copying…".into());
+            ed.set_status("Copying…");
             let img = ed.model.flatten();
             Task::perform(copy_image_to_clipboard(img), |r| {
                 Message::EditorCopyImageDone(r.map_err(|e| e.to_string()))
@@ -1951,7 +1981,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::EditorCopyImageDone(result) => {
             if let Some(ed) = state.editor.as_mut() {
                 ed.busy = false;
-                ed.status = Some(match result {
+                ed.set_status(match result {
                     Ok(()) => "Copied to clipboard.".into(),
                     Err(e) => format!("Copy failed: {e}"),
                 });
@@ -1964,7 +1994,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 return Task::none();
             };
             ed.busy = true;
-            ed.status = Some("Recognising text…".into());
+            ed.set_status("Recognising text…");
             let img = ed.model.flatten();
             let coord = state.coordinator.clone();
             let prefs = state.preferences.clone();
@@ -1975,7 +2005,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::EditorCopyTextDone(result) => {
             if let Some(ed) = state.editor.as_mut() {
                 ed.busy = false;
-                ed.status = Some(match result {
+                ed.set_status(match result {
                     Ok(text) if text.is_empty() => "No text recognised.".into(),
                     Ok(text) => format!(
                         "Copied {} character{} of text.",
@@ -1989,6 +2019,32 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
 
         Message::EditorDiscardRequested => {
+            // Two-stage discard guards against accidental data loss.
+            // Clean editors (no annotations applied) close immediately.
+            // Dirty editors require a second click within
+            // `DISCARD_CONFIRM_WINDOW` before the window actually closes.
+            let dirty = state
+                .editor
+                .as_ref()
+                .map(|e| e.model.can_undo())
+                .unwrap_or(false);
+            if dirty {
+                if let Some(ed) = state.editor.as_mut() {
+                    let now = std::time::Instant::now();
+                    let armed = ed
+                        .discard_pending_at
+                        .map(|t| now.duration_since(t) < crate::editor::DISCARD_CONFIRM_WINDOW)
+                        .unwrap_or(false);
+                    if !armed {
+                        ed.discard_pending_at = Some(now);
+                        ed.status = Some(
+                            "Discard unsaved annotations? Click Discard again to confirm.".into(),
+                        );
+                        ed.status_set_at = Some(now);
+                        return Task::none();
+                    }
+                }
+            }
             let id = state.editor.as_ref().and_then(|e| e.window_id);
             state.editor = None;
             if let Some(id) = id {
@@ -3926,7 +3982,19 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         tool_hint(active_tool)
     };
     let hint_text = hint_str.to_string();
-    let status_text = ed.status.clone();
+    // Auto-dismiss old success / info status text so the chrome
+    // doesn't stay loud forever after a successful save / copy.
+    // In-progress strings (Saving…, Copying…, Recognising text…)
+    // are kept until the next transition overwrites them.
+    let status_text = match (ed.status.clone(), ed.status_set_at) {
+        (Some(s), Some(t))
+            if !ed.status_is_in_progress() && t.elapsed() > crate::editor::STATUS_AUTO_DISMISS =>
+        {
+            tracing::trace!(target: "readshot::editor", "auto-dismissed status: {s}");
+            None
+        }
+        (s, _) => s,
+    };
     let bottom_row: Element<'_, Message> = responsive(move |available| {
         let layout = editor_bottom_layout(available.width);
         let compact = layout == EditorBottomLayout::Compact;
@@ -4346,20 +4414,36 @@ fn toolbar_divider() -> Element<'static, Message> {
 
 fn toolbar_button_style(theme: &Theme, status: button::Status, is_active: bool) -> button::Style {
     let palette = theme.extended_palette();
+    // Active tool gets a pronounced fill *and* a 2 px accent border
+    // so the active state is unambiguous against any backdrop. The
+    // previous styling relied solely on a subtle fill change that
+    // washed out next to the rest of the toolbar.
     let base = if is_active {
         palette.primary.strong.color
+    } else if matches!(status, button::Status::Disabled) {
+        Color::from_rgba(0.0, 0.0, 0.0, 0.0)
     } else if matches!(status, button::Status::Hovered) {
         palette.background.strongest.color
     } else {
         Color::TRANSPARENT
     };
+    let border_color = if is_active {
+        palette.primary.base.color
+    } else {
+        Color::from_rgba(1.0, 1.0, 1.0, 0.10)
+    };
+    let text_color = if matches!(status, button::Status::Disabled) {
+        Color::from_rgba(1.0, 1.0, 1.0, 0.35)
+    } else {
+        Color::WHITE
+    };
     button::Style {
         background: Some(base.into()),
-        text_color: Color::WHITE,
+        text_color,
         border: iced::Border {
             radius: 6.0.into(),
-            width: if is_active { 0.0 } else { 1.0 },
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+            width: if is_active { 2.0 } else { 1.0 },
+            color: border_color,
         },
         ..Default::default()
     }
@@ -4370,17 +4454,26 @@ fn toolbar_ghost_style(_theme: &Theme, status: button::Status, enabled: bool) ->
         (true, button::Status::Hovered) => Color::from_rgba(1.0, 1.0, 1.0, 0.10),
         _ => Color::TRANSPARENT,
     };
+    // Mirror the active toolbar button's disabled treatment so
+    // undo / redo / icon ghost buttons fade out coherently when
+    // `busy` removes their `on_press`.
+    let disabled_or_inactive = !enabled || matches!(status, button::Status::Disabled);
     button::Style {
         background: Some(bg.into()),
-        text_color: if enabled {
-            Color::WHITE
-        } else {
+        text_color: if disabled_or_inactive {
             Color::from_rgba(1.0, 1.0, 1.0, 0.35)
+        } else {
+            Color::WHITE
         },
         border: iced::Border {
             radius: 6.0.into(),
             width: 1.0,
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+            color: Color::from_rgba(
+                1.0,
+                1.0,
+                1.0,
+                if disabled_or_inactive { 0.05 } else { 0.10 },
+            ),
         },
         ..Default::default()
     }
@@ -6371,7 +6464,7 @@ fn handle_commit_annotation(
     ed.refresh_image();
     if cropped {
         let (w, h) = ed.effective_image_size();
-        ed.status = Some(format!("Cropped to {w} × {h} px. ⌘Z to undo."));
+        ed.set_status(format!("Cropped to {w} × {h} px. ⌘Z to undo."));
     }
 }
 
@@ -6382,7 +6475,7 @@ fn sync_editor_history(ed: &mut crate::editor::EditorSession, coord: &CaptureCoo
     record.annotation_model = ed.model.annotations().to_vec();
     if let Err(e) = coord.update_history(record) {
         tracing::warn!(target: "readshot::history", "annotation update failed: {e}");
-        ed.status = Some(format!("History sync failed: {e}"));
+        ed.set_status(format!("History sync failed: {e}"));
     }
 }
 

@@ -60,7 +60,27 @@ pub struct EditorSession {
     /// uses this so one image pixel maps to one physical screen pixel
     /// on HiDPI displays.
     pub display_scale: f32,
+    /// `true` after the user has clicked Discard / pressed ⌘W once on
+    /// a dirty editor (undo stack non-empty). The next Discard click
+    /// inside [`DISCARD_CONFIRM_WINDOW`] commits; otherwise the flag
+    /// expires and the user is back to a single click. Prevents
+    /// accidental data loss without forcing a modal dialog.
+    pub discard_pending_at: Option<std::time::Instant>,
+    /// Wall-clock instant the current `status` toast was set. The
+    /// runtime uses this to auto-dismiss successful status messages
+    /// (e.g. "Saved to …") after a few seconds so the chrome doesn't
+    /// stay loud forever.
+    pub status_set_at: Option<std::time::Instant>,
 }
+
+/// How long a "Click Discard again to confirm" prompt stays armed
+/// before reverting to a fresh single-click state.
+pub const DISCARD_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Successful status toasts auto-dismiss after this window so they
+/// don't linger forever. Error / in-progress messages stay until
+/// they're overwritten.
+pub const STATUS_AUTO_DISMISS: std::time::Duration = std::time::Duration::from_secs(4);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EditorZoom {
@@ -218,6 +238,8 @@ impl EditorSession {
             source_record: None,
             zoom: EditorZoom::Fit,
             display_scale: display_scale.max(f32::EPSILON),
+            discard_pending_at: None,
+            status_set_at: None,
         }
     }
 
@@ -244,11 +266,40 @@ impl EditorSession {
             source_record: Some(record),
             zoom: EditorZoom::Fit,
             display_scale: display_scale.max(f32::EPSILON),
+            discard_pending_at: None,
+            status_set_at: None,
         }
     }
 
     pub fn actual_size_zoom(&self) -> EditorZoom {
         EditorZoom::actual_size(self.display_scale)
+    }
+
+    /// Set the toast text under the action row and stamp the
+    /// `status_set_at` clock so auto-dismiss can run on the runtime
+    /// tick. Use this everywhere `status = Some(…)` was set inline so
+    /// the auto-dismiss is uniform across save / copy / OCR / pin
+    /// paths.
+    pub fn set_status(&mut self, msg: impl Into<String>) {
+        self.status = Some(msg.into());
+        self.status_set_at = Some(std::time::Instant::now());
+    }
+
+    /// "In-progress" status strings the auto-dismiss logic must
+    /// leave alone — clearing "Saving…" before the save actually
+    /// completes would look broken. Any message that ends with `…`
+    /// or starts with one of these prefixes counts as in-progress.
+    pub fn status_is_in_progress(&self) -> bool {
+        match self.status.as_deref() {
+            None => false,
+            Some(s) => {
+                s.ends_with('…')
+                    || s.starts_with("Saving")
+                    || s.starts_with("Copying")
+                    || s.starts_with("Recognising")
+                    || s.starts_with("Choose")
+            }
+        }
     }
 
     pub fn zoom_label(&self) -> String {
