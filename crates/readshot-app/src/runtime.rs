@@ -1696,6 +1696,13 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::ScrollHudDragRequested => {
+            match state.scroll_session.as_ref().and_then(|s| s.hud_window_id) {
+                Some(id) => window::drag(id),
+                None => Task::none(),
+            }
+        }
+
         Message::ScrollCaptureTick => {
             let Some(session) = state.scroll_session.as_mut() else {
                 return Task::none();
@@ -2431,6 +2438,7 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
 /// capacity progress bar, the current activity status, and the
 /// Stop / Cancel buttons.
 fn scroll_hud_view(state: &App) -> Element<'_, Message> {
+    use iced::widget::mouse_area;
     let session = state.scroll_session.as_ref();
     let frame_count = session.map(|s| s.frames.len()).unwrap_or(0);
     let stopping = session.map(|s| s.stopping).unwrap_or(false);
@@ -2457,8 +2465,11 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
         (elapsed_secs as u32) / 60,
         (elapsed_secs as u32) % 60
     );
-    let header = row![
-        text("Scrolling Capture")
+    // Whole header doubles as the drag handle. iced delegates to the
+    // OS window drag on press so the user can reposition the HUD
+    // without it stealing focus from the page they're scrolling.
+    let header_row = row![
+        text("⋮⋮ Scrolling Capture")
             .size(14)
             .color(Color::from_rgba(1.0, 1.0, 1.0, 0.92)),
         Space::new().width(Length::Fill),
@@ -2469,6 +2480,9 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
         text(chip_label).size(10).color(chip_color),
     ]
     .align_y(Alignment::Center);
+    let header = mouse_area(header_row)
+        .on_press(Message::ScrollHudDragRequested)
+        .interaction(iced::mouse::Interaction::Grab);
 
     // Live preview of the most recent accepted frame so the user can
     // confirm what's in the capture region while they scroll. Letter-

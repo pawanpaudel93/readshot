@@ -222,6 +222,10 @@ pub enum Message {
     /// First view of the scrolling-capture HUD window — records the
     /// `window::Id` so the runtime can close it when the session ends.
     ScrollHudWindowReady(iced::window::Id),
+    /// User pressed the HUD's drag handle. Hands off the OS window
+    /// drag so they can reposition the HUD without it stealing focus
+    /// from the page they're scrolling.
+    ScrollHudDragRequested,
     /// Fire-and-forget history persistence completion. The boolean
     /// payload is `true` when the chain completed all the way through
     /// the OCR-and-update step (so the browser should reload to see

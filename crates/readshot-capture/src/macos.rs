@@ -57,9 +57,23 @@ impl Capturer for ScreenCaptureKitCapturer {
         let display = find_display(&displays, &req.display_id)
             .ok_or_else(|| CaptureError::DisplayNotFound(req.display_id.clone()))?;
 
+        // Exclude every window owned by our own process so the
+        // scroll-capture HUD (and any pinned readshot windows that
+        // happen to be visible) never bleed into the captured image
+        // and break the stitch.
+        let own_pid = std::process::id() as i32;
+        let all_windows = content.windows();
+        let own_windows: Vec<_> = all_windows
+            .iter()
+            .filter(|w| {
+                w.owning_application()
+                    .map(|app| app.process_id() == own_pid)
+                    .unwrap_or(false)
+            })
+            .collect();
         let filter = SCContentFilter::create()
             .with_display(display)
-            .with_excluding_windows(&[])
+            .with_excluding_windows(&own_windows)
             .build();
 
         let (capture_w, capture_h) =
