@@ -2251,7 +2251,9 @@ fn history_view(state: &App) -> Element<'_, Message> {
         .padding(8)
         .size(13);
     let clear_button = {
-        let b = button(text("Clear All").size(12)).padding([8, 10]);
+        let b = button(text("Clear All").size(12))
+            .padding([8, 10])
+            .style(|t, s| action_button_style(t, s, ActionKind::Danger));
         if total > 0 {
             b.on_press(Message::HistoryClearAllRequested)
         } else {
@@ -2349,11 +2351,29 @@ fn history_view(state: &App) -> Element<'_, Message> {
                 } else {
                     png_path
                 };
-                image_widget(image_widget::Handle::from_path(path))
-                    .width(Length::Fixed(132.0))
-                    .height(Length::Fixed(92.0))
-                    .content_fit(iced::ContentFit::Contain)
-                    .into()
+                // Letterbox the thumbnail inside a fixed 132×92 frame
+                // with a dim background so tall portrait captures don't
+                // sit flush against the row text — the dim border reads
+                // as deliberate framing rather than image stretching.
+                container(
+                    image_widget(image_widget::Handle::from_path(path))
+                        .width(Length::Fixed(132.0))
+                        .height(Length::Fixed(92.0))
+                        .content_fit(iced::ContentFit::Contain),
+                )
+                .width(Length::Fixed(132.0))
+                .height(Length::Fixed(92.0))
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| iced::widget::container::Style {
+                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.28).into()),
+                    border: iced::Border {
+                        radius: 4.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .into()
             } else {
                 container(text("Missing"))
                     .width(Length::Fixed(132.0))
@@ -2872,9 +2892,18 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             )
             .padding(0)
             .style(move |_theme, status| {
+                // Swap the selected ring colour to a dark stroke when the
+                // swatch itself is bright, otherwise white-on-white makes
+                // the selected swatch invisible. sRGB relative luminance.
+                let lum = 0.2126 * swatch.r + 0.7152 * swatch.g + 0.0722 * swatch.b;
+                let selected_ring = if lum > 0.72 {
+                    Color::from_rgba(0.0, 0.0, 0.0, 0.85)
+                } else {
+                    Color::WHITE
+                };
                 let border = if is_selected {
                     iced::Border {
-                        color: Color::WHITE,
+                        color: selected_ring,
                         width: 2.5,
                         radius: 6.0.into(),
                     }
@@ -2919,15 +2948,33 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     .step(0.5)
     .width(Length::Fixed(140.0));
 
+    let undo_depth = ed.model.undo_depth();
+    let redo_depth = ed.model.redo_depth();
+    let undo_tip = if undo_depth > 0 {
+        format!(
+            "Undo (⌘Z) · {undo_depth} action{}",
+            if undo_depth == 1 { "" } else { "s" }
+        )
+    } else {
+        "Undo (⌘Z)".to_string()
+    };
+    let redo_tip = if redo_depth > 0 {
+        format!(
+            "Redo (⌘⇧Z) · {redo_depth} action{}",
+            if redo_depth == 1 { "" } else { "s" }
+        )
+    } else {
+        "Redo (⌘⇧Z)".to_string()
+    };
     let undo_btn = ghost_icon_button(
         crate::editor_icons::EditorIcon::Undo,
-        "Undo (⌘Z)",
+        undo_tip,
         !busy && ed.model.can_undo(),
         || Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
     );
     let redo_btn = ghost_icon_button(
         crate::editor_icons::EditorIcon::Redo,
-        "Redo (⌘⇧Z)",
+        redo_tip,
         !busy && ed.model.can_redo(),
         || Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
     );
@@ -3511,13 +3558,14 @@ fn tool_button<'a>(
 /// produces the message lazily so we only build it when enabled.
 fn ghost_icon_button<'a, F>(
     icon: crate::editor_icons::EditorIcon,
-    tip: &'static str,
+    tip: impl Into<String>,
     enabled: bool,
     gen: F,
 ) -> Element<'a, Message>
 where
     F: Fn() -> Message + 'a,
 {
+    let tip = tip.into();
     use iced::widget::tooltip;
     let mut b = button(crate::editor_icons::editor_icon(icon, enabled))
         .padding(0)
@@ -4226,13 +4274,25 @@ fn settings_view(state: &App) -> Element<'_, Message> {
                     .spacing(8)
                     .align_y(Alignment::Center);
 
-                    if available.width < 360.0 {
+                    let main: Element<'_, Message> = if available.width < 360.0 {
                         column![value, actions].spacing(8).into()
                     } else {
                         row![value, actions]
                             .spacing(8)
                             .align_y(Alignment::Center)
                             .into()
+                    };
+                    if settings_recording_hotkey {
+                        column![
+                            main,
+                            text("Press the new shortcut, or Esc to cancel.")
+                                .size(11)
+                                .color(Color::from_rgba(0.78, 0.85, 1.0, 0.85)),
+                        ]
+                        .spacing(6)
+                        .into()
+                    } else {
+                        main
                     }
                 }
             })
@@ -4475,10 +4535,17 @@ fn setting_value_box(value: String, active: bool) -> Element<'static, Message> {
             palette.background.strong.color
         };
         iced::widget::container::Style {
-            background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.045).into()),
+            background: Some(
+                if active {
+                    Color::from_rgba(0.45, 0.55, 1.0, 0.10)
+                } else {
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.045)
+                }
+                .into(),
+            ),
             border: iced::Border {
                 color: border_color,
-                width: 1.0,
+                width: if active { 2.0 } else { 1.0 },
                 radius: 7.0.into(),
             },
             ..Default::default()

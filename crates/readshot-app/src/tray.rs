@@ -23,6 +23,7 @@
 
 use std::collections::HashMap;
 
+use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -187,8 +188,25 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
     let capture_label = capture_menu_label(hotkey_label);
     let item_capture = MenuItem::new(capture_label, true, None);
     let item_retake_last_region = MenuItem::new("Retake Last Region", false, None);
-    let item_history = MenuItem::new("History…", true, None);
-    let item_settings = MenuItem::new("Settings…", true, None);
+    // ⌘Y / ⌘, only render as hint text in the menu — muda doesn't
+    // dispatch them globally because the tray menu isn't the focused
+    // surface. The actual keyboard handling lives in the main window
+    // via iced; these accelerators exist only to display the shortcut
+    // alongside the menu entry, matching native macOS apps.
+    #[cfg(target_os = "macos")]
+    let cmd_mod = Modifiers::META;
+    #[cfg(not(target_os = "macos"))]
+    let cmd_mod = Modifiers::CONTROL;
+    let item_history = MenuItem::new(
+        "History…",
+        true,
+        Some(Accelerator::new(Some(cmd_mod), Code::KeyY)),
+    );
+    let item_settings = MenuItem::new(
+        "Settings…",
+        true,
+        Some(Accelerator::new(Some(cmd_mod), Code::Comma)),
+    );
     let item_install_cli = MenuItem::new("Install Command Line Tools…", true, None);
     let item_check_updates = MenuItem::new("Check for Updates…", true, None);
     let item_quit = MenuItem::new("Quit", true, None);

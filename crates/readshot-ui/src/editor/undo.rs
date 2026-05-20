@@ -84,6 +84,18 @@ impl History {
         !self.future.is_empty()
     }
 
+    /// Number of states currently available on the undo stack — used
+    /// by the editor toolbar to surface "X actions to undo" in the
+    /// button tooltip.
+    pub fn past_len(&self) -> usize {
+        self.past.len()
+    }
+
+    /// Number of states currently available on the redo stack.
+    pub fn future_len(&self) -> usize {
+        self.future.len()
+    }
+
     /// Drop everything: clears all stacks and resets to an empty
     /// present. Used when the editor opens a new capture.
     pub fn clear(&mut self) {

@@ -82,6 +82,17 @@ impl EditorState {
         self.history.can_redo()
     }
 
+    /// Depth of the undo stack — surfaced in the editor toolbar
+    /// tooltip so the user knows how far back they can go.
+    pub fn undo_depth(&self) -> usize {
+        self.history.past_len()
+    }
+
+    /// Depth of the redo stack.
+    pub fn redo_depth(&self) -> usize {
+        self.history.future_len()
+    }
+
     pub fn set_tool(&mut self, tool: ToolState) {
         self.active_tool = tool;
     }
