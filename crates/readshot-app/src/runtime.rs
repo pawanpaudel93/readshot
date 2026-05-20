@@ -2627,21 +2627,52 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     let elapsed_secs = session
         .map(|s| s.started_at.elapsed().as_secs_f32())
         .unwrap_or(0.0);
-    // Flash the counter for ~150 ms after each accepted frame so the
-    // user gets a clear "yes, that scroll registered" signal.
-    let flash = session
+    // Frame-arrival pop: tracks elapsed-since-last-frame and uses it
+    // to drive a brief tint + grow on the counter. 220 ms gives the
+    // pulse enough room to read as a deliberate animation without
+    // feeling sluggish.
+    let pop_t = session
         .and_then(|s| s.last_frame_at)
-        .map(|t| t.elapsed().as_millis() < 150)
-        .unwrap_or(false);
+        .map(|t| (t.elapsed().as_millis() as f32) / 220.0)
+        .unwrap_or(2.0);
+    let pop_active = pop_t < 1.0;
+    let pop_eased = if pop_active {
+        // Quick rise (0.0–0.3) → slow decay (0.3–1.0). Reads as a
+        // satisfying "thunk" rather than a fade.
+        if pop_t < 0.3 {
+            pop_t / 0.3
+        } else {
+            1.0 - (pop_t - 0.3) / 0.7
+        }
+    } else {
+        0.0
+    };
+    // Recording-dot heartbeat: gentle 1.4 s sine pulse on the chip's
+    // alpha so the HUD doesn't feel statically dead between frames.
+    let pulse = if !stopping {
+        let t = elapsed_secs * std::f32::consts::TAU / 1.4;
+        0.65 + 0.35 * (0.5 + 0.5 * t.sin())
+    } else {
+        0.55
+    };
+    // Throughput indicator — frames per second over the whole
+    // session. Useful diagnostic for the user wondering whether
+    // they're scrolling fast enough or too fast.
+    let fps = if elapsed_secs > 0.5 {
+        frame_count as f32 / elapsed_secs
+    } else {
+        0.0
+    };
     let cap = SCROLL_MAX_FRAMES;
     let progress = (frame_count as f32 / cap as f32).clamp(0.0, 1.0);
 
-    // Header — title + recording / stitching chip.
-    let (chip_label, chip_color): (&'static str, Color) = if stopping {
+    // Header — title + recording / stitching chip with heartbeat.
+    let (chip_label, chip_base): (&'static str, Color) = if stopping {
         ("Stitching", Color::from_rgba(1.0, 1.0, 1.0, 0.55))
     } else {
-        ("● Recording", Color::from_rgba(0.95, 0.4, 0.4, 0.95))
+        ("● Recording", Color::from_rgba(0.95, 0.4, 0.4, pulse))
     };
+    let chip_color = chip_base;
     let elapsed_label = format!(
         "{:02}:{:02}",
         (elapsed_secs as u32) / 60,
@@ -2713,18 +2744,34 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     };
 
     // Frame counter — big number plus capacity tail. The number
-    // briefly tints blue when a new frame just landed so the user
-    // gets a visible "scroll registered" pulse.
-    let counter_color = if flash {
-        Color::from_rgba(0.65, 0.78, 1.0, 1.0)
+    // grows + tints blue for ~220 ms each time a new frame lands so
+    // the user gets a clear "scroll registered" pulse without
+    // staring at the digits.
+    let counter_color = if pop_active {
+        let r = 1.0 - 0.35 * pop_eased;
+        let g = 1.0 - 0.22 * pop_eased;
+        let b = 1.0;
+        Color::from_rgba(r, g, b, 1.0)
     } else {
         Color::WHITE
     };
+    let counter_size = 22.0 + 6.0 * pop_eased;
+    let tail_alpha = 0.55 + 0.25 * pop_eased;
     let counter_row = row![
-        text(format!("{frame_count}")).size(22).color(counter_color),
+        text(format!("{frame_count}"))
+            .size(counter_size)
+            .color(counter_color),
         text(format!("/ {cap} frames"))
             .size(11)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+            .color(Color::from_rgba(1.0, 1.0, 1.0, tail_alpha)),
+        Space::new().width(Length::Fill),
+        text(if fps > 0.0 {
+            format!("{fps:.1} fps")
+        } else {
+            String::new()
+        })
+        .size(10)
+        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.45)),
     ]
     .spacing(6)
     .align_y(Alignment::End);
@@ -5569,11 +5616,13 @@ const SCROLL_MAX_FRAMES: usize = 120;
 /// are considered different. Used by [`frames_differ`] to drop near-
 /// duplicate captures and detect "user stopped scrolling".
 const SCROLL_MOTION_THRESHOLD: u64 = 1500;
-/// Tick interval (ms) driving the per-frame capture loop. 180 ms ≈
-/// 5.5 fps — fast enough to keep up with a typical trackpad scroll
-/// while leaving headroom for the actual `capture_region` future to
-/// complete before the next tick fires.
-const SCROLL_FRAME_INTERVAL_MS: u64 = 180;
+/// Tick interval (ms) driving the per-frame capture loop. 120 ms ≈
+/// 8.3 fps — fast enough that a brisk trackpad scroll produces many
+/// frames and the session feels live. Captures are debounced inside
+/// the session via `capture_in_flight`, so if the backend can't keep
+/// up the loop naturally throttles to whatever rate the
+/// `capture_region` future supports.
+const SCROLL_FRAME_INTERVAL_MS: u64 = 120;
 
 /// "Did the page move?" check between two adjacent capture frames.
 ///
