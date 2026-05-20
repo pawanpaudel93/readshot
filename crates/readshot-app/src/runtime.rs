@@ -2550,10 +2550,12 @@ fn history_selected_panel_style(_theme: &Theme) -> iced::widget::container::Styl
     }
 }
 
-/// Compact row-level selection affordance. The real commands live in
-/// the selected-capture panel above the list, which keeps each row
-/// readable and prevents a tall command stack from dominating the UI.
-fn history_row_actions<'a>(id: readshot_core::Uuid, is_selected: bool) -> Element<'a, Message> {
+/// Compact row-level affordance. The whole row is already pressable
+/// via `mouse_area`, so non-selected rows just show a chevron hint
+/// that the row leads somewhere; selected rows show a labelled chip
+/// so the active row is unambiguous. The real Open / Copy / Reveal
+/// commands live in the selected-capture panel above the list.
+fn history_row_actions<'a>(_id: readshot_core::Uuid, is_selected: bool) -> Element<'a, Message> {
     if is_selected {
         return container(
             text("Selected")
@@ -2571,33 +2573,13 @@ fn history_row_actions<'a>(id: readshot_core::Uuid, is_selected: bool) -> Elemen
         })
         .into();
     }
-
-    let make_btn = |label: &'static str, msg: Message| -> Element<'a, Message> {
-        let b = button(text(label).size(12))
-            .padding([6, 10])
-            .style(|_, status| {
-                let base = Color::from_rgba(1.0, 1.0, 1.0, 0.055);
-                let hovered = Color::from_rgba(1.0, 1.0, 1.0, 0.15);
-                let pressed = Color::from_rgba(1.0, 1.0, 1.0, 0.24);
-                let bg = match status {
-                    iced::widget::button::Status::Hovered => hovered,
-                    iced::widget::button::Status::Pressed => pressed,
-                    _ => base,
-                };
-                iced::widget::button::Style {
-                    background: Some(bg.into()),
-                    text_color: Color::WHITE,
-                    border: iced::Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }
-            })
-            .on_press(msg);
-        b.into()
-    };
-    make_btn("Select", Message::HistorySelect(id))
+    container(
+        text("›")
+            .size(18)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.35)),
+    )
+    .padding([6, 12])
+    .into()
 }
 
 /// True when `record` matches the lowercase search query `q`. Tries
@@ -3179,11 +3161,43 @@ fn editor_view(state: &App) -> Element<'_, Message> {
                 iced::widget::text::Wrapping::None
             });
         let toast: Element<'_, Message> = match status_text.clone() {
-            Some(s) => text(s)
-                .size(11)
-                .color(Color::from_rgba(0.65, 0.95, 0.75, 1.0))
-                .wrapping(iced::widget::text::Wrapping::Word)
-                .into(),
+            Some(s) => {
+                let lower = s.to_lowercase();
+                let is_error = lower.contains("fail") || lower.contains("error");
+                let in_progress = lower.starts_with("copying") || lower.contains("recognising");
+                let (bg, fg) = if is_error {
+                    (
+                        Color::from_rgba(0.85, 0.32, 0.32, 0.22),
+                        Color::from_rgba(1.0, 0.78, 0.78, 1.0),
+                    )
+                } else if in_progress {
+                    (
+                        Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+                        Color::from_rgba(1.0, 1.0, 1.0, 0.85),
+                    )
+                } else {
+                    (
+                        Color::from_rgba(0.30, 0.65, 0.45, 0.24),
+                        Color::from_rgba(0.78, 1.0, 0.88, 1.0),
+                    )
+                };
+                container(
+                    text(s)
+                        .size(11)
+                        .color(fg)
+                        .wrapping(iced::widget::text::Wrapping::Word),
+                )
+                .padding([3, 8])
+                .style(move |_| iced::widget::container::Style {
+                    background: Some(bg.into()),
+                    border: iced::Border {
+                        radius: 9.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .into()
+            }
             None => IcedSpace::new().height(Length::Fixed(0.0)).into(),
         };
         let status_area = if compact {
@@ -3938,6 +3952,12 @@ fn overlay_auto_confirm_intent(state: &App) -> Option<crate::app::CaptureIntent>
 /// doesn't expose mid-build).
 const OVERLAY_TOOLBAR_HEIGHT: f32 = 44.0;
 const OVERLAY_TOOLBAR_GAP: f32 = 8.0;
+/// Conservative estimate of the floating toolbar's rendered width.
+/// iced doesn't expose mid-layout widget measurement, so the value is
+/// hand-tuned against the actual button row (6 buttons, ~78px each
+/// after padding + the row's internal spacing). Slight over-estimate
+/// is fine — it just means the clamp engages a few px earlier.
+const OVERLAY_TOOLBAR_WIDTH: f32 = 480.0;
 
 /// Build a positioned action toolbar (Capture / Copy / Save / Pin /
 /// Cancel) anchored to the right edge of `rect`. Falls back to
@@ -4048,7 +4068,11 @@ fn overlay_toolbar_layer<'a>(
         sel_y + OVERLAY_TOOLBAR_GAP
     };
 
-    let right_pad = (bounds_w - (sel_x + sel_w)).max(0.0);
+    // Anchor the toolbar's right edge at the selection's right edge,
+    // but clamp so the toolbar never extends past the left edge of the
+    // overlay when the selection sits near the left of the screen.
+    let desired_right = (sel_x + sel_w).clamp(OVERLAY_TOOLBAR_WIDTH.min(bounds_w), bounds_w);
+    let right_pad = (bounds_w - desired_right).max(0.0);
 
     container(bar)
         .width(Length::Fill)

@@ -317,6 +317,44 @@ fn resize_rect(orig: Rectangle, handle: Handle, cursor: Point) -> Rectangle {
     rectangle_from_two_points(Point::new(left, top), Point::new(right, bottom))
 }
 
+/// Draw a small dark chip near the cursor showing its physical-pixel
+/// coordinate. Helps the user align the very first click of a drag
+/// without needing to commit a rect to see the size badge.
+fn draw_cursor_coord_chip(
+    frame: &mut Frame<Renderer>,
+    bounds: Rectangle,
+    cursor: Point,
+    scale: f32,
+) {
+    let phys_x = (cursor.x * scale).round() as i32;
+    let phys_y = (cursor.y * scale).round() as i32;
+    let label = format!("{phys_x}, {phys_y}");
+    let chip_w = 8.0 + label.chars().count() as f32 * 7.0;
+    let chip_h = 18.0;
+    // Place chip to the lower-right of the cursor so it never sits
+    // under it. Flip horizontally / vertically when near the edge.
+    let gap = 14.0;
+    let mut x = cursor.x + gap;
+    let mut y = cursor.y + gap;
+    if x + chip_w > bounds.width {
+        x = cursor.x - gap - chip_w;
+    }
+    if y + chip_h > bounds.height {
+        y = cursor.y - gap - chip_h;
+    }
+    x = x.clamp(0.0, (bounds.width - chip_w).max(0.0));
+    y = y.clamp(0.0, (bounds.height - chip_h).max(0.0));
+    let path = Path::rectangle(Point::new(x, y), iced::Size::new(chip_w, chip_h));
+    frame.fill(&path, Color::from_rgba(0.0, 0.0, 0.0, 0.7));
+    frame.fill_text(CanvasText {
+        content: label,
+        position: Point::new(x + 4.0, y + 2.0),
+        color: Color::WHITE,
+        size: iced::Pixels(11.0),
+        ..Default::default()
+    });
+}
+
 fn size_badge_origin(
     bounds: Rectangle,
     selection: Rectangle,
@@ -568,6 +606,7 @@ impl Program<Message> for OverlayProgram {
         let Some(rect) = state.current_rect() else {
             if let Some(point) = crosshair_point(state, cursor_point) {
                 draw_crosshair(&mut frame, point);
+                draw_cursor_coord_chip(&mut frame, bounds, point, self.scale);
             }
             return vec![frame.into_geometry()];
         };
