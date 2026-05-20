@@ -632,10 +632,11 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             None
         }));
     }
-    if !state.overlay_displays.is_empty() {
+    if !state.overlay_displays.is_empty() || state.scroll_session.is_some() {
         // Marching-ants tick — drives the dash-offset animation on
-        // any open region overlay. 80 ms ≈ 12.5 fps which reads as
-        // smooth motion without burning CPU.
+        // any open region overlay and the scroll-capture region
+        // indicator (so its border animates at the same cadence as
+        // the selector). 80 ms ≈ 12.5 fps; smooth without burning CPU.
         subs.push(iced::time::every(Duration::from_millis(80)).map(|_| Message::OverlayTick));
         // Global Shift watcher — iced 0.14 does not pipe keyboard
         // events into canvas widgets, so the overlay's "hold Shift =
@@ -2490,12 +2491,25 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
 }
 
 /// Transparent click-through overlay that draws the captured rect's
-/// border on screen during a scrolling-capture session. Mouse and
-/// scroll events fall through to the page underneath thanks to
-/// `iced::window::enable_mouse_passthrough` (wired in the
+/// border on screen during a scrolling-capture session.
+///
+/// Visual style mirrors the region-selection overlay
+/// ([`crate::overlay::OverlayProgram`]): 5 % white fill inside the
+/// rect so the active area reads as slightly distinct without
+/// obscuring the page underneath, 3 px black halo + 1.5 px animated
+/// white dashes (`[6.0, 4.0]`) around it, and a size badge at the
+/// rect's top-right corner that mirrors the selector's
+/// `phys_w × phys_h px · phys_x, phys_y` format. Sharing
+/// `state.overlay_tick` with the selector keeps the marching-ants
+/// animation in lockstep.
+///
+/// Mouse / scroll events pass through to the page underneath thanks
+/// to `iced::window::enable_mouse_passthrough` (wired in the
 /// `ScrollRegionWindowReady` handler).
 fn scroll_region_view(state: &App) -> Element<'_, Message> {
-    use iced::widget::canvas::{Canvas, Frame, Geometry, LineDash, Path, Program, Stroke};
+    use iced::widget::canvas::{
+        Canvas, Frame, Geometry, LineDash, Path, Program, Stroke, Text as CanvasText,
+    };
     use iced::Renderer;
 
     let session = state.scroll_session.as_ref();
@@ -2506,7 +2520,8 @@ fn scroll_region_view(state: &App) -> Element<'_, Message> {
             .into();
     };
     let rect = s.rect;
-    let phase = (s.started_at.elapsed().as_millis() / 80) as usize;
+    let scale = s.scale;
+    let dash_offset = state.overlay_tick as usize;
 
     #[derive(Clone, Copy)]
     struct RegionProgram {
@@ -2514,6 +2529,7 @@ fn scroll_region_view(state: &App) -> Element<'_, Message> {
         y: f32,
         w: f32,
         h: f32,
+        scale: f32,
         dash_offset: usize,
     }
     impl Program<Message> for RegionProgram {
@@ -2531,16 +2547,21 @@ fn scroll_region_view(state: &App) -> Element<'_, Message> {
                 iced::Point::new(self.x, self.y),
                 iced::Size::new(self.w, self.h),
             );
-            // Black halo for contrast on light wallpapers.
+            // 5 % white fill — same "punch out" treatment the region
+            // selector uses for its committed rect, so the active
+            // capture area reads as a faint highlight instead of an
+            // unmarked area inside the border.
+            frame.fill(&path, Color::from_rgba(1.0, 1.0, 1.0, 0.05));
+            // 3 px black halo for contrast on light wallpapers.
             frame.stroke(
                 &path,
                 Stroke::default()
                     .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.7))
                     .with_width(3.0),
             );
-            // Animated white dashes — same marching-ants look as the
-            // region-selection overlay so the user reads it as "yes,
-            // this is the area being captured" without a legend.
+            // 1.5 px animated white dashes — same marching-ants
+            // pattern as the selector so both surfaces read as a
+            // single visual language.
             const DASH: &[f32] = &[6.0, 4.0];
             frame.stroke(
                 &path,
@@ -2552,6 +2573,31 @@ fn scroll_region_view(state: &App) -> Element<'_, Message> {
                     ..Stroke::default().with_color(Color::WHITE).with_width(1.5)
                 },
             );
+            // Size badge — physical-pixel dimensions + top-left
+            // origin, anchored to the rect's top-right with a 4 px
+            // pad, clamped into the visible viewport. Same shape
+            // and copy as `overlay::draw`'s badge.
+            let phys_w = ((self.w * self.scale).round() as i32).max(0);
+            let phys_h = ((self.h * self.scale).round() as i32).max(0);
+            let phys_x = (self.x * self.scale).round() as i32;
+            let phys_y = (self.y * self.scale).round() as i32;
+            let label = format!("{phys_w} × {phys_h}px · {phys_x}, {phys_y}");
+            let badge_w = 8.0 + label.chars().count() as f32 * 7.0;
+            let badge_h = 18.0;
+            let pad = 4.0;
+            let bx =
+                (self.x + self.w - badge_w - pad).clamp(0.0, (bounds.width - badge_w).max(0.0));
+            let by = (self.y + pad).clamp(0.0, (bounds.height - badge_h).max(0.0));
+            let badge_path =
+                Path::rectangle(iced::Point::new(bx, by), iced::Size::new(badge_w, badge_h));
+            frame.fill(&badge_path, Color::from_rgba(0.0, 0.0, 0.0, 0.7));
+            frame.fill_text(CanvasText {
+                content: label,
+                position: iced::Point::new(bx + 4.0, by + 2.0),
+                color: Color::WHITE,
+                size: iced::Pixels(11.0),
+                ..Default::default()
+            });
             vec![frame.into_geometry()]
         }
     }
@@ -2560,7 +2606,8 @@ fn scroll_region_view(state: &App) -> Element<'_, Message> {
         y: rect.y(),
         w: rect.width(),
         h: rect.height(),
-        dash_offset: phase,
+        scale,
+        dash_offset,
     })
     .width(Length::Fill)
     .height(Length::Fill)
