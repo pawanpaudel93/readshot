@@ -1797,6 +1797,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::NoOp => Task::none(),
+
         Message::ScrollHudWindowReady(id) => {
             if let Some(session) = state.scroll_session.as_mut() {
                 session.hud_window_id = Some(id);
@@ -1891,12 +1893,30 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
 
         Message::ScrollCaptureCancelRequested => {
-            // Discard the session without stitching. Close every
-            // session-owned window, drop the captured frames, clear
-            // the status — a clean "never happened" path.
-            let Some(session) = state.scroll_session.take() else {
+            // Two-click cancel guard. Discarding a session that
+            // already accumulated frames is destructive (the captured
+            // frames are dropped on the floor), so the first click
+            // arms the cancel and updates the HUD copy to confirm.
+            // A second click inside `CANCEL_ARM_WINDOW` actually
+            // discards. The arm expires on the OverlayTick if the
+            // user changes their mind.
+            const CANCEL_ARM_WINDOW: std::time::Duration = std::time::Duration::from_millis(2500);
+            let Some(session) = state.scroll_session.as_mut() else {
                 return Task::none();
             };
+            // Pristine sessions (only the first auto-captured frame)
+            // skip the confirm — nothing of value to lose.
+            let has_real_content = session.frames.len() > 1;
+            let now = std::time::Instant::now();
+            let armed = session
+                .cancel_armed_at
+                .map(|t| now.duration_since(t) < CANCEL_ARM_WINDOW)
+                .unwrap_or(false);
+            if has_real_content && !armed {
+                session.cancel_armed_at = Some(now);
+                return Task::none();
+            }
+            let session = state.scroll_session.take().expect("session checked above");
             let mut tasks: Vec<Task<Message>> = Vec::new();
             for id in [session.hud_window_id, session.region_window_id]
                 .into_iter()
@@ -2914,8 +2934,26 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
             .on_press(Message::ScrollCaptureStopRequested)
             .into()
     };
+    // Cancel button flips to a Danger-styled "Discard N frames?" the
+    // moment the user clicks it once on a session with content, so
+    // the second click reads as an explicit destructive confirm
+    // rather than a benign close.
+    let cancel_armed = session.and_then(|s| s.cancel_armed_at).is_some();
     let cancel_btn: Element<'_, Message> = if stopping {
         Space::new().width(Length::Fixed(0.0)).into()
+    } else if cancel_armed {
+        button(
+            text(format!(
+                "Discard {} frame{}?",
+                frame_count,
+                if frame_count == 1 { "" } else { "s" }
+            ))
+            .size(12),
+        )
+        .padding([6, 12])
+        .style(|t, s| action_button_style(t, s, ActionKind::Danger))
+        .on_press(Message::ScrollCaptureCancelRequested)
+        .into()
     } else {
         button(text("Cancel").size(12))
             .padding([6, 12])
@@ -4281,7 +4319,11 @@ fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
         .height(Length::Fill)
         .content_fit(iced::ContentFit::Contain)
         .opacity(opacity);
-    let drag_area = mouse_area(img).on_double_click(Message::PinClosePressed(id));
+    // Double-click toggles the lock instead of destroying the pin —
+    // the audit flagged the previous "double-click closes" as a
+    // landmine because pin-positioning involves a lot of accidental
+    // double-clicks. Close is now exclusively the `×` button.
+    let drag_area = mouse_area(img).on_double_click(Message::PinLockToggled(id));
     let drag_layer: Element<'_, Message> = if locked {
         drag_area.into()
     } else {
@@ -4322,7 +4364,15 @@ fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
     let controls = row![lock, opacity_slider, opacity_label]
         .spacing(6)
         .align_y(Alignment::Center);
-    let controls_layer = container(controls)
+    // Wrap the controls row in a `mouse_area` whose `on_press` is a
+    // no-op (`Message::NoOp`) so iced consumes the press at the
+    // controls layer instead of letting it fall through to the drag
+    // layer beneath. Without this, the gap between the Lock button
+    // and the slider — and any drag-attempt along the slider track —
+    // moved the entire window because the underlying drag-press
+    // fired before the slider widget could lock the gesture.
+    let controls_blocker = mouse_area(controls).on_press(Message::NoOp);
+    let controls_layer = container(controls_blocker)
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(6)
@@ -4836,13 +4886,37 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
 
     // Floating hint near the top of the overlay. We give it a
     // semi-opaque dark capsule so the text reads regardless of the
-    // wallpaper underneath.
-    let hint_text = if cli_interactive {
-        "Drag to capture · hold Shift for square · Enter for full screen · Esc to cancel"
+    // wallpaper underneath. In CLI-interactive mode the hint copy
+    // changes and a small "CLI mode" chip prefixes it so the user
+    // sees that mouse-up will commit immediately (no editable rect,
+    // no quick-action toolbar).
+    let hint_body: Element<'_, Message> = if cli_interactive {
+        let chip = container(text("CLI mode").size(11).color(Color::WHITE))
+            .padding([2, 8])
+            .style(|_| iced::widget::container::Style {
+                background: Some(Color::from_rgba(0.45, 0.55, 1.0, 0.85).into()),
+                border: iced::Border {
+                    radius: 9.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+        row![
+            chip,
+            text("Drag to capture · mouse-up commits · Shift = square · Esc cancels")
+                .size(13)
+                .color(Color::WHITE),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .into()
     } else {
-        "Drag to select · hold Shift for square · Enter for full screen · Esc to cancel"
+        text("Drag to select · hold Shift for square · Enter for full screen · Esc to cancel")
+            .size(13)
+            .color(Color::WHITE)
+            .into()
     };
-    let hint = container(text(hint_text).size(13).color(Color::WHITE))
+    let hint = container(hint_body)
         .padding(8)
         .style(|_| iced::widget::container::Style {
             background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.55).into()),

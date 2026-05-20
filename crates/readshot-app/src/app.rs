@@ -238,6 +238,11 @@ pub enum Message {
     /// drag so they can reposition the HUD without it stealing focus
     /// from the page they're scrolling.
     ScrollHudDragRequested,
+    /// No-op message used purely to consume mouse presses on the
+    /// pin window's controls row so they don't fall through to the
+    /// underlying drag layer and turn an opacity-slider drag into a
+    /// window move.
+    NoOp,
     /// First view of the transparent click-through region-indicator
     /// window — runtime records the id and enables mouse passthrough
     /// so scroll events fall through to the page underneath.
@@ -644,6 +649,11 @@ pub struct ScrollSession {
     /// limit. The next tick observes this and kicks off stitching
     /// instead of capturing another frame.
     pub stopping: bool,
+    /// `Some(when)` once the user has clicked Cancel for the first
+    /// time. The second click inside a short window confirms the
+    /// discard; otherwise the arm expires. Guards a long scroll
+    /// session from a single mis-click.
+    pub cancel_armed_at: Option<std::time::Instant>,
     /// Wall-clock time the session began — drives the HUD's elapsed
     /// counter so the user can see how long they've been recording.
     pub started_at: std::time::Instant,
@@ -678,6 +688,7 @@ impl ScrollSession {
             display_size: None,
             capture_in_flight: false,
             stopping: false,
+            cancel_armed_at: None,
             started_at: std::time::Instant::now(),
             last_frame_at: None,
             frame_tick: 0,
