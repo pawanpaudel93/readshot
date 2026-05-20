@@ -3152,7 +3152,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         && active_tool == ToolState::Select
         && ed.status.is_none()
     {
-        "Press R / O / L / A / P / H / T / B / X / N / C to pick a tool · ⌘Z to undo"
+        "Press V / R / O / L / A / P / H / T / B / X / N / C to pick a tool · ⌘Z to undo"
     } else {
         tool_hint(active_tool)
     };
@@ -3409,7 +3409,7 @@ fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
     // styling so it's discoverable without dominating the pin.
     let close = button(
         text("×")
-            .size(16)
+            .size(20)
             .color(Color::WHITE)
             .align_x(iced::alignment::Horizontal::Center)
             .align_y(iced::alignment::Vertical::Center)
@@ -3417,8 +3417,8 @@ fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
             .height(Length::Fill),
     )
     .padding(0)
-    .width(Length::Fixed(22.0))
-    .height(Length::Fixed(22.0))
+    .width(Length::Fixed(28.0))
+    .height(Length::Fixed(28.0))
     .style(|_, status| {
         let bg = match status {
             button::Status::Hovered => Color::from_rgba(0.85, 0.25, 0.25, 0.95),
@@ -3430,7 +3430,7 @@ fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
             border: iced::Border {
                 color: Color::from_rgba(1.0, 1.0, 1.0, 0.4),
                 width: 1.0,
-                radius: 11.0.into(),
+                radius: 14.0.into(),
             },
             ..Default::default()
         }
@@ -4264,11 +4264,21 @@ fn settings_view(state: &App) -> Element<'_, Message> {
                 "Starting folder for Save. Platform default uses your system screenshots location.",
                 save_folder_control,
             );
-            let filename_control: Element<'_, Message> =
+            let filename_input =
                 text_input("Screenshot {YYYY-MM-DD at HH.mm.ss}", &filename_template)
                     .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
-                    .padding([8, 10])
-                    .into();
+                    .padding([8, 10]);
+            let preview_template = if filename_template.trim().is_empty() {
+                "Screenshot {YYYY-MM-DD at HH.mm.ss}".to_string()
+            } else {
+                filename_template.clone()
+            };
+            let preview_name = default_save_filename(&preview_template, chrono::Utc::now());
+            let preview_line = text(format!("Saves as: {preview_name}"))
+                .size(11)
+                .color(settings_muted_text());
+            let filename_control: Element<'_, Message> =
+                column![filename_input, preview_line].spacing(4).into();
             let filename_row = settings_field(
                 "Filename template",
                 "Supports date, time, year, and timestamp tokens.",
@@ -4306,8 +4316,14 @@ fn settings_view(state: &App) -> Element<'_, Message> {
 
         if reset_pending {
             let actions = row![
-                button(text("Reset all")).on_press(Message::SettingsResetAllConfirmed),
-                button(text("Cancel")).on_press(Message::SettingsResetAllCancelled),
+                button(text("Reset all"))
+                    .padding([8, 14])
+                    .style(|t, s| action_button_style(t, s, ActionKind::Danger))
+                    .on_press(Message::SettingsResetAllConfirmed),
+                button(text("Cancel"))
+                    .padding([8, 14])
+                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                    .on_press(Message::SettingsResetAllCancelled),
             ]
             .spacing(8)
             .align_y(Alignment::Center);
@@ -4646,6 +4662,14 @@ fn welcome_granted_card(state: &App) -> Element<'_, Message> {
     if !state.capture_in_flight {
         capture_btn = capture_btn.on_press(Message::OpenOverlayRequested);
     }
+    let history_btn = button(text("Show History").size(13))
+        .padding([8, 14])
+        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+        .on_press(Message::OpenHistoryRequested);
+    let settings_btn = button(text("Open Settings").size(13))
+        .padding([8, 14])
+        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+        .on_press(Message::OpenSettingsRequested);
     let hotkey = pretty_hotkey(&state.preferences.capture_hotkey);
     let body = column![
         text("You're all set.").size(18),
@@ -4658,6 +4682,10 @@ fn welcome_granted_card(state: &App) -> Element<'_, Message> {
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7)),
         Space::new().height(Length::Fixed(6.0)),
         capture_btn,
+        Space::new().height(Length::Fixed(4.0)),
+        row![history_btn, settings_btn]
+            .spacing(8)
+            .align_y(Alignment::Center),
     ]
     .spacing(10)
     .align_x(Alignment::Center);

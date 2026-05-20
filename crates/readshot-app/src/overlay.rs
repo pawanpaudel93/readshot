@@ -113,9 +113,10 @@ pub(crate) enum Handle {
 
 /// Visual half-side of a resize handle, in logical pixels.
 const HANDLE_HALF: f32 = 4.0;
-/// Hit-test half-side. Slightly larger than visual so handles are
-/// easier to grab.
-const HANDLE_HIT: f32 = 8.0;
+/// Hit-test half-side. Roughly a fingertip target so handles are
+/// easy to grab on a trackpad — the visual square stays small but
+/// the active grab area expands around it.
+const HANDLE_HIT: f32 = 14.0;
 const CROSSHAIR_ARM: f32 = 10.0;
 const CROSSHAIR_GAP: f32 = 4.0;
 
@@ -595,12 +596,15 @@ impl Program<Message> for OverlayProgram {
         );
 
         // Live size badge in physical pixels (what the captured PNG
-        // will be). Keep it inside the top edge of the selection so
-        // it never competes with the quick-action toolbar.
+        // will be), plus the selection's top-left origin. Keep it
+        // inside the top edge of the selection so it never competes
+        // with the quick-action toolbar.
         let phys_w = ((rect.width * self.scale).round() as i32).max(0);
         let phys_h = ((rect.height * self.scale).round() as i32).max(0);
-        let label = format!("{phys_w} × {phys_h}px");
-        let badge_w = 8.0 + label.chars().count() as f32 * 7.5;
+        let phys_x = (rect.x * self.scale).round() as i32;
+        let phys_y = (rect.y * self.scale).round() as i32;
+        let label = format!("{phys_w} × {phys_h}px · {phys_x}, {phys_y}");
+        let badge_w = 8.0 + label.chars().count() as f32 * 7.0;
         let badge_h = 18.0;
         let (bx, by) = size_badge_origin(bounds, rect, badge_w, badge_h);
         let badge_path = Path::rectangle(Point::new(bx, by), iced::Size::new(badge_w, badge_h));

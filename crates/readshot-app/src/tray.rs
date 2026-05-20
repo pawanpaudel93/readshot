@@ -110,15 +110,27 @@ fn capture_menu_label(hotkey_label: Option<&str>) -> String {
 /// action that menu item represents. Drop the controller and the
 /// system tray entry disappears.
 pub struct TrayController {
-    _tray: TrayIcon,
+    tray: TrayIcon,
     item_capture: MenuItem,
     item_retake_last_region: MenuItem,
     menu_ids: HashMap<MenuId, TrayAction>,
 }
 
+fn tray_tooltip(hotkey_label: Option<&str>) -> String {
+    match hotkey_label {
+        Some(k) if !k.is_empty() => {
+            format!("Readshot — click to capture · {k} · right-click for menu")
+        }
+        _ => "Readshot — click to capture, right-click for menu".to_string(),
+    }
+}
+
 impl TrayController {
     pub fn set_capture_hotkey_label(&self, hotkey_label: Option<&str>) {
         self.item_capture.set_text(capture_menu_label(hotkey_label));
+        if let Err(e) = self.tray.set_tooltip(Some(tray_tooltip(hotkey_label))) {
+            tracing::debug!(target: "readshot::tray", "set_tooltip failed: {e}");
+        }
     }
 
     pub fn set_retake_last_region_enabled(&self, enabled: bool) {
@@ -212,7 +224,7 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
 
     let tray = match TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("Readshot — click to capture, right-click for menu")
+        .with_tooltip(tray_tooltip(hotkey_label))
         .with_icon(icon)
         .with_icon_as_template(true) // macOS renders the icon monochrome / dark-mode aware.
         .build()
@@ -226,7 +238,7 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
 
     tracing::info!(target: "readshot::tray", "tray icon installed");
     Some(TrayController {
-        _tray: tray,
+        tray,
         item_capture,
         item_retake_last_region,
         menu_ids,
