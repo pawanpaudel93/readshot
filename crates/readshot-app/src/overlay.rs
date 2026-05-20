@@ -685,14 +685,15 @@ impl Program<Message> for OverlayProgram {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        // While dragging, lock the cursor to the op kind.
+        // Hide OS cursor whenever we draw our own crosshair on the
+        // canvas — otherwise the OS crosshair shows alongside and the
+        // user sees two crosshairs.
         match &state.active {
             Some(Active::Resize { handle, .. }) => return cursor_for_handle(*handle),
             Some(Active::Move { .. }) => return mouse::Interaction::Grabbing,
-            Some(Active::InitialDrag { .. }) => return mouse::Interaction::Crosshair,
+            Some(Active::InitialDrag { .. }) => return mouse::Interaction::Hidden,
             None => {}
         }
-        // Idle hover: reflect what a click would do.
         if let (Some(sel), Some(p)) = (state.selection, cursor.position_in(bounds)) {
             if let Some(h) = handle_at(sel, p) {
                 return cursor_for_handle(h);
@@ -701,7 +702,7 @@ impl Program<Message> for OverlayProgram {
                 return mouse::Interaction::Grab;
             }
         }
-        mouse::Interaction::Crosshair
+        mouse::Interaction::Hidden
     }
 }
 
