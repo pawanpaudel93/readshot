@@ -102,7 +102,7 @@ fn menu_items(hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<T
 
 fn capture_menu_label(hotkey_label: Option<&str>) -> String {
     match hotkey_label {
-        Some(k) if !k.is_empty() => format!("Capture  ({k})"),
+        Some(k) if !k.is_empty() => format!("Capture ({k})"),
         _ => "Capture".to_string(),
     }
 }
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn capture_menu_label_includes_hotkey_when_known() {
-        assert_eq!(capture_menu_label(Some("⌘⇧X")), "Capture  (⌘⇧X)");
+        assert_eq!(capture_menu_label(Some("⌘⇧X")), "Capture (⌘⇧X)");
         assert_eq!(capture_menu_label(Some("")), "Capture");
         assert_eq!(capture_menu_label(None), "Capture");
     }

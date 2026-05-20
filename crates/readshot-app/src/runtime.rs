@@ -2266,7 +2266,9 @@ fn history_view(state: &App) -> Element<'_, Message> {
             .is_some_and(|text| !text.trim().is_empty())
     });
     let copy_visible_button = {
-        let b = button(text("Copy Visible Text").size(12)).padding([8, 10]);
+        let b = button(text("Copy Visible Text").size(12))
+            .padding([8, 10])
+            .style(|t, s| action_button_style(t, s, ActionKind::Secondary));
         if has_visible_text {
             b.on_press(Message::HistoryCopyVisibleTextRequested)
         } else {
@@ -2406,7 +2408,7 @@ fn history_view(state: &App) -> Element<'_, Message> {
             .style(move |_| iced::widget::container::Style {
                 background: Some(
                     if is_selected {
-                        Color::from_rgba(0.32, 0.38, 1.0, 0.16)
+                        history_selected_fill()
                     } else {
                         Color::from_rgba(1.0, 1.0, 1.0, 0.04)
                     }
@@ -2414,7 +2416,7 @@ fn history_view(state: &App) -> Element<'_, Message> {
                 ),
                 border: iced::Border {
                     color: if is_selected {
-                        Color::from_rgba(0.65, 0.7, 1.0, 0.6)
+                        history_selected_border()
                     } else {
                         Color::TRANSPARENT
                     },
@@ -2492,39 +2494,34 @@ fn history_selected_panel<'a>(
             .size(12),
         ]
         .spacing(3);
+        let secondary = |label: &'static str, msg: Message| {
+            button(text(label).size(12))
+                .padding([6, 9])
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(msg)
+        };
         let copy_text_button: Element<'_, Message> = if has_text {
+            secondary("Copy Text", Message::HistoryCopyText(id)).into()
+        } else {
             button(text("Copy Text").size(12))
                 .padding([6, 9])
-                .on_press(Message::HistoryCopyText(id))
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                 .into()
-        } else {
-            button(text("Copy Text").size(12)).padding([6, 9]).into()
         };
         let primary_actions = row![
-            button(text("Open").size(12))
-                .padding([6, 9])
-                .on_press(Message::HistoryOpenInEditor(id)),
-            button(text("Reveal").size(12))
-                .padding([6, 9])
-                .on_press(Message::HistoryReveal(id)),
+            secondary("Open", Message::HistoryOpenInEditor(id)),
+            secondary("Reveal", Message::HistoryReveal(id)),
             copy_text_button,
         ]
         .spacing(6)
         .align_y(Alignment::Center);
         let secondary_actions = row![
-            button(text("Copy Image").size(12))
+            secondary("Copy Image", Message::HistoryCopyImage(id)),
+            secondary("Pin", Message::HistoryPin(id)),
+            button(text("Delete").size(12))
                 .padding([6, 9])
-                .on_press(Message::HistoryCopyImage(id)),
-            button(text("Pin").size(12))
-                .padding([6, 9])
-                .on_press(Message::HistoryPin(id)),
-            button(
-                text("Delete")
-                    .size(12)
-                    .color(Color::from_rgb(1.0, 0.86, 0.86))
-            )
-            .padding([6, 9])
-            .on_press(Message::HistoryDelete(id)),
+                .style(|t, s| action_button_style(t, s, ActionKind::Danger))
+                .on_press(Message::HistoryDelete(id)),
         ]
         .spacing(6)
         .align_y(Alignment::Center);
@@ -2558,6 +2555,30 @@ fn history_selected_panel<'a>(
     .into()
 }
 
+/// Shared accent colour for the history row's selected state — used
+/// by the row background, the "Selected" chip, the selected border,
+/// and the chip's foreground text so all three read as the same
+/// accent rather than three sibling blues drifting apart.
+const HISTORY_SELECTED_RGB: (f32, f32, f32) = (0.45, 0.55, 1.0);
+const HISTORY_SELECTED_FILL_ALPHA: f32 = 0.14;
+const HISTORY_SELECTED_CHIP_ALPHA: f32 = 0.20;
+const HISTORY_SELECTED_BORDER_ALPHA: f32 = 0.55;
+
+fn history_selected_fill() -> Color {
+    let (r, g, b) = HISTORY_SELECTED_RGB;
+    Color::from_rgba(r, g, b, HISTORY_SELECTED_FILL_ALPHA)
+}
+
+fn history_selected_chip() -> Color {
+    let (r, g, b) = HISTORY_SELECTED_RGB;
+    Color::from_rgba(r, g, b, HISTORY_SELECTED_CHIP_ALPHA)
+}
+
+fn history_selected_border() -> Color {
+    let (r, g, b) = HISTORY_SELECTED_RGB;
+    Color::from_rgba(r, g, b, HISTORY_SELECTED_BORDER_ALPHA)
+}
+
 fn history_selected_panel_style(_theme: &Theme) -> iced::widget::container::Style {
     iced::widget::container::Style {
         background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.045).into()),
@@ -2584,7 +2605,7 @@ fn history_row_actions<'a>(_id: readshot_core::Uuid, is_selected: bool) -> Eleme
         )
         .padding([6, 10])
         .style(|_| iced::widget::container::Style {
-            background: Some(Color::from_rgba(0.45, 0.5, 1.0, 0.18).into()),
+            background: Some(history_selected_chip().into()),
             border: iced::Border {
                 radius: 6.0.into(),
                 ..Default::default()
@@ -3360,16 +3381,17 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             .padding([8, 14])
             .style(|theme, status| action_button_style(theme, status, ActionKind::Secondary))
             .on_press(Message::EditorTextCancel);
+        let icon = container(crate::editor_icons::editor_icon(
+            crate::editor_icons::EditorIcon::Tool(readshot_ui::editor::ToolState::Text),
+            true,
+        ))
+        .width(Length::Fixed(22.0))
+        .height(Length::Fixed(22.0));
         container(
-            row![
-                text("T").size(13).color(Color::WHITE),
-                input,
-                commit,
-                cancel,
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .padding(6),
+            row![icon, input, commit, cancel]
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .padding(6),
         )
         .style(|theme: &Theme| {
             let palette = theme.extended_palette();
@@ -3441,7 +3463,7 @@ fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
                 border: iced::Border {
                     color: Color::from_rgba(1.0, 1.0, 1.0, 0.28),
                     width: 1.0,
-                    radius: 5.0.into(),
+                    radius: 6.0.into(),
                 },
                 ..Default::default()
             }
@@ -3450,7 +3472,7 @@ fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
     let opacity_label = text(format!("{:.0}%", opacity * 100.0))
         .size(11)
         .color(Color::WHITE)
-        .width(Length::Fixed(34.0));
+        .width(Length::Shrink);
     let opacity_slider = iced::widget::slider(0.2..=1.0, opacity, move |value| {
         Message::PinOpacityChanged(id, value)
     })
@@ -3767,13 +3789,28 @@ fn action_button_style(theme: &Theme, status: button::Status, kind: ActionKind) 
             Color::WHITE,
         ),
     };
-    let bg = match status {
-        button::Status::Hovered => hover,
-        _ => base,
+    // Disabled state: dim the background to ~40% of its base alpha and
+    // mute the text. Without this the button looks identical whether
+    // its `on_press` is wired or not — confusing for the user when
+    // there's nothing to copy / nothing to clear.
+    let (bg, fg) = match status {
+        button::Status::Hovered => (hover, text_color),
+        button::Status::Disabled => {
+            let dim = Color {
+                a: base.a * 0.4,
+                ..base
+            };
+            let muted = Color {
+                a: 0.5,
+                ..text_color
+            };
+            (dim, muted)
+        }
+        _ => (base, text_color),
     };
     button::Style {
         background: Some(bg.into()),
-        text_color,
+        text_color: fg,
         border: iced::Border {
             radius: 8.0.into(),
             ..Default::default()
@@ -4018,8 +4055,9 @@ fn overlay_toolbar_layer<'a>(
 ) -> Element<'a, Message> {
     use crate::app::CaptureIntent;
 
-    let make_btn = |label: &'static str, msg: Message| {
-        button(text(label).size(13).color(Color::WHITE))
+    use iced::widget::tooltip;
+    let make_btn = |label: &'static str, tip: &'static str, msg: Message| -> Element<'a, Message> {
+        let btn = button(text(label).size(13).color(Color::WHITE))
             .padding([6, 10])
             .style(|_, status| {
                 let base = Color::from_rgba(1.0, 1.0, 1.0, 0.0);
@@ -4040,12 +4078,27 @@ fn overlay_toolbar_layer<'a>(
                     ..Default::default()
                 }
             })
-            .on_press(msg)
+            .on_press(msg);
+        let pop = container(text(tip).size(11).color(Color::WHITE))
+            .padding([4, 8])
+            .style(|_| container::Style {
+                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
+                border: iced::Border {
+                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.15),
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..Default::default()
+            });
+        tooltip::Tooltip::new(btn, pop, tooltip::Position::Bottom)
+            .gap(4)
+            .into()
     };
 
     let buttons = row![
         make_btn(
             "✓ Capture",
+            "Open in editor (Enter)",
             Message::OverlaySelected {
                 display_id: display_id.clone(),
                 rect: *rect,
@@ -4054,6 +4107,7 @@ fn overlay_toolbar_layer<'a>(
         ),
         make_btn(
             "Copy Image",
+            "Copy selection to clipboard",
             Message::OverlaySelected {
                 display_id: display_id.clone(),
                 rect: *rect,
@@ -4062,6 +4116,7 @@ fn overlay_toolbar_layer<'a>(
         ),
         make_btn(
             "Copy Text",
+            "Run OCR and copy recognized text",
             Message::OverlaySelected {
                 display_id: display_id.clone(),
                 rect: *rect,
@@ -4070,6 +4125,7 @@ fn overlay_toolbar_layer<'a>(
         ),
         make_btn(
             "Save",
+            "Save to default folder",
             Message::OverlaySelected {
                 display_id: display_id.clone(),
                 rect: *rect,
@@ -4078,13 +4134,14 @@ fn overlay_toolbar_layer<'a>(
         ),
         make_btn(
             "Pin",
+            "Pin as always-on-top window",
             Message::OverlaySelected {
                 display_id: display_id.clone(),
                 rect: *rect,
                 intent: CaptureIntent::Pin,
             },
         ),
-        make_btn("✕", Message::OverlayCancelled),
+        make_btn("✕", "Cancel (Esc)", Message::OverlayCancelled),
     ]
     .spacing(4)
     .align_y(Alignment::Center);
@@ -4747,7 +4804,7 @@ fn welcome_permission_guidance(state: WelcomeState) -> (&'static str, &'static s
 }
 
 fn welcome_granted_card(state: &App) -> Element<'_, Message> {
-    let mut capture_btn = button(text("Capture screen").size(14))
+    let mut capture_btn = button(text("Capture Screen").size(14))
         .padding([10, 20])
         .style(|t, s| action_button_style(t, s, ActionKind::Primary));
     if !state.capture_in_flight {
