@@ -117,8 +117,6 @@ const HANDLE_HALF: f32 = 4.0;
 /// easy to grab on a trackpad — the visual square stays small but
 /// the active grab area expands around it.
 const HANDLE_HIT: f32 = 14.0;
-const CROSSHAIR_ARM: f32 = 10.0;
-const CROSSHAIR_GAP: f32 = 4.0;
 
 impl OverlayState {
     /// The rect to draw / inspect *right now*. During InitialDrag this
@@ -237,41 +235,6 @@ fn crosshair_point(state: &OverlayState, cursor: Option<Point>) -> Option<Point>
             }
             Some(point)
         }
-    }
-}
-
-fn draw_crosshair(frame: &mut Frame<Renderer>, point: Point) {
-    let segments = [
-        (
-            Point::new(point.x - CROSSHAIR_ARM, point.y),
-            Point::new(point.x - CROSSHAIR_GAP, point.y),
-        ),
-        (
-            Point::new(point.x + CROSSHAIR_GAP, point.y),
-            Point::new(point.x + CROSSHAIR_ARM, point.y),
-        ),
-        (
-            Point::new(point.x, point.y - CROSSHAIR_ARM),
-            Point::new(point.x, point.y - CROSSHAIR_GAP),
-        ),
-        (
-            Point::new(point.x, point.y + CROSSHAIR_GAP),
-            Point::new(point.x, point.y + CROSSHAIR_ARM),
-        ),
-    ];
-
-    for (from, to) in segments {
-        let path = Path::line(from, to);
-        frame.stroke(
-            &path,
-            Stroke::default()
-                .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.85))
-                .with_width(3.0),
-        );
-        frame.stroke(
-            &path,
-            Stroke::default().with_color(Color::WHITE).with_width(1.25),
-        );
     }
 }
 
@@ -604,8 +567,12 @@ impl Program<Message> for OverlayProgram {
 
         let cursor_point = cursor.position_in(bounds);
         let Some(rect) = state.current_rect() else {
+            // Don't draw a canvas crosshair — iced sets the OS
+            // cursor to `mouse::Interaction::Crosshair` via
+            // `mouse_interaction`, so a canvas-drawn one would
+            // double-render alongside the system cursor. Keep just
+            // the live coord-chip near the cursor.
             if let Some(point) = crosshair_point(state, cursor_point) {
-                draw_crosshair(&mut frame, point);
                 draw_cursor_coord_chip(&mut frame, bounds, point, self.scale);
             }
             return vec![frame.into_geometry()];
@@ -677,9 +644,10 @@ impl Program<Message> for OverlayProgram {
             }
         }
 
-        if let Some(point) = crosshair_point(state, cursor_point) {
-            draw_crosshair(&mut frame, point);
-        }
+        // Crosshair: OS cursor handles this — see no-canvas comment
+        // above in the no-rect branch. Leaving the cursor_point in
+        // scope so future "mid-drag indicator" code can re-use it.
+        let _ = cursor_point;
 
         vec![frame.into_geometry()]
     }

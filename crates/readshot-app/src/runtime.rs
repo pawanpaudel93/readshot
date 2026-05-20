@@ -951,12 +951,14 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 } else if state.capture_in_flight || state.scroll_session.is_some() {
                     Task::none()
                 } else {
-                    // Open the overlay normally — the user still picks
-                    // their region via the standard selector. The
-                    // toolbar's ↕ Scroll button confirms with the
-                    // ScrollCapture intent. Surfacing the entry from
-                    // the tray just shortens "how do I start a
-                    // scrolling capture" to a single menu click.
+                    // Pre-set the intent so the overlay's mouse-up /
+                    // Enter confirm immediately starts a scroll
+                    // session instead of routing to the editor. The
+                    // quick-action toolbar still shows so the user
+                    // can change their mind, but they no longer have
+                    // to hunt for the ↕ Scroll button — the default
+                    // matches the menu entry they clicked.
+                    state.pending_intent = Some(crate::app::CaptureIntent::ScrollCapture);
                     update(state, Message::OpenOverlayRequested)
                 }
             }
@@ -4977,6 +4979,14 @@ fn overlay_auto_confirm_intent(state: &App) -> Option<crate::app::CaptureIntent>
     ) || state.cli_interactive_output.is_some()
     {
         Some(crate::app::CaptureIntent::CliInteractive)
+    } else if matches!(
+        state.pending_intent,
+        Some(crate::app::CaptureIntent::ScrollCapture)
+    ) {
+        // Tray "Scrolling Capture" pre-sets pending_intent so the
+        // mouse-up / Enter default kicks straight into a scroll
+        // session, no toolbar hunting required.
+        Some(crate::app::CaptureIntent::ScrollCapture)
     } else {
         None
     }
