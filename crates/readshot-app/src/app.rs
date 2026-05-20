@@ -213,6 +213,9 @@ pub enum Message {
     /// stop limit). Closes the HUD and kicks off stitching of the
     /// captured frames.
     ScrollCaptureStopRequested,
+    /// User clicked Cancel in the HUD. Throws the session away
+    /// without stitching — captured frames are dropped on the floor.
+    ScrollCaptureCancelRequested,
     /// Stitching task finished. `Ok` opens the stitched image in the
     /// editor; `Err` toasts a status and clears the session.
     ScrollCaptureStitched(Result<image::RgbaImage, String>),
@@ -475,6 +478,12 @@ pub struct App {
     /// editor uses this to make actual-pixels zoom mean physical
     /// pixels instead of logical UI points.
     pub pending_display_scale: Option<f32>,
+    /// Logical width × height of the display the in-flight capture
+    /// lives on. Captured at `OverlaySelected` time (before the
+    /// overlay close-task drains `overlay_displays`) so downstream
+    /// flows like scroll-capture HUD positioning don't need to round-
+    /// trip back through `coordinator.list_displays`.
+    pub pending_display_bounds: Option<(f32, f32)>,
     /// Whether the in-flight overlay capture should hide the cursor.
     /// Normal app captures hide it; CLI interactive can opt into
     /// including it with `--show-cursor`.
@@ -704,6 +713,7 @@ impl App {
             pending_intent: None,
             pending_display_id: None,
             pending_display_scale: None,
+            pending_display_bounds: None,
             pending_hide_cursor: true,
             cli_interactive_output: None,
             pins: HashMap::new(),
