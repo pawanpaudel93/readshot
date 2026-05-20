@@ -641,10 +641,11 @@ pub struct ScrollSession {
     /// so multi-monitor windows can be sized and positioned without a
     /// coordinator round-trip.
     pub display_size: Option<(f32, f32, f32, f32)>,
-    /// True while a `capture_region` future is in flight, to keep
-    /// successive ticks from piling up requests faster than the
-    /// backend can satisfy them.
-    pub capture_in_flight: bool,
+    /// Number of `capture_region` futures currently in flight. The
+    /// tick handler caps this at `SCROLL_MAX_CONCURRENT_CAPTURES` so
+    /// fast scrolls can run multiple captures in parallel while a
+    /// slow backend still naturally throttles the loop.
+    pub capture_in_flight: u32,
     /// True after the user has clicked Stop / pressed Esc / hit a
     /// limit. The next tick observes this and kicks off stitching
     /// instead of capturing another frame.
@@ -686,7 +687,7 @@ impl ScrollSession {
             hud_window_id: None,
             region_window_id: None,
             display_size: None,
-            capture_in_flight: false,
+            capture_in_flight: 0,
             stopping: false,
             cancel_armed_at: None,
             started_at: std::time::Instant::now(),

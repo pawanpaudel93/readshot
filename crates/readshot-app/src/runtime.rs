@@ -1153,7 +1153,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     hud_window_id: None,
                     region_window_id: None,
                     display_size: Some(bounds),
-                    capture_in_flight: false,
+                    capture_in_flight: 0,
                     stopping: false,
                     started_at: std::time::Instant::now(),
                     last_frame_at: None,
@@ -1867,14 +1867,13 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(session) = state.scroll_session.as_mut() else {
                 return Task::none();
             };
-            if session.stopping || session.capture_in_flight {
+            if session.stopping || session.capture_in_flight >= SCROLL_MAX_CONCURRENT_CAPTURES {
                 return Task::none();
             }
-            // Hard limits: bail out if the user has been at it too long.
             if session.frames.len() >= SCROLL_MAX_FRAMES {
                 return Task::done(Message::ScrollCaptureStopRequested);
             }
-            session.capture_in_flight = true;
+            session.capture_in_flight += 1;
             let coord = state.coordinator.clone();
             let request = readshot_capture::CaptureRequest {
                 display_id: session.display_id.clone(),
@@ -1892,7 +1891,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(session) = state.scroll_session.as_mut() else {
                 return Task::none();
             };
-            session.capture_in_flight = false;
+            session.capture_in_flight = session.capture_in_flight.saturating_sub(1);
             match result {
                 Ok(image) => {
                     // Quick motion check vs. previous frame — compare a
@@ -5969,6 +5968,10 @@ async fn capture_request_to_dir(
 /// output and doesn't gobble gigabytes of RAM. The limits below cover
 /// roughly 30 s of continuous scrolling at the configured tick rate.
 const SCROLL_MAX_FRAMES: usize = 120;
+/// Maximum captures allowed in flight at once. Lets a fast scroll
+/// overlap several SCK round-trips (each ~100 ms on macOS) instead
+/// of serialising them, so heavy trackpad scrolls don't lose frames.
+const SCROLL_MAX_CONCURRENT_CAPTURES: u32 = 3;
 /// Per-pixel SAD threshold (0-255 per channel) above which two frames
 /// are considered different. Used by [`frames_differ`] to drop near-
 /// duplicate captures and detect "user stopped scrolling".
