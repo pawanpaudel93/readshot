@@ -5170,12 +5170,23 @@ fn settings_view(state: &App) -> Element<'_, Message> {
             return status.into();
         }
 
-        let open_button =
-            button(text("Open Settings")).on_press(Message::OpenPermissionSettingsRequested);
+        let open_button = button(text("Open Settings"))
+            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+            .on_press(Message::OpenPermissionSettingsRequested);
+        // Recheck button forces a fresh permission poll so the user
+        // can confirm a System Settings change without quitting and
+        // relaunching the app. Drives the existing PermissionPoll
+        // handler with the latest probe result.
+        let recheck_button = button(text("Recheck"))
+            .style(|t, s| action_button_style(t, s, ActionKind::Primary))
+            .on_press(Message::PermissionTick);
+        let actions = row![recheck_button, open_button]
+            .spacing(8)
+            .align_y(Alignment::Center);
         if available.width < 460.0 {
-            column![status, open_button].spacing(10).into()
+            column![status, actions].spacing(10).into()
         } else {
-            row![status, open_button]
+            row![status, actions]
                 .spacing(10)
                 .align_y(Alignment::Center)
                 .into()
@@ -5192,16 +5203,28 @@ fn settings_view(state: &App) -> Element<'_, Message> {
                 let hotkey_label = hotkey_label.clone();
                 move |available| {
                     let value = setting_value_box(hotkey_label.clone(), settings_recording_hotkey);
+                    // Record / Cancel are exclusive: while a recording
+                    // is armed, the user needs an obvious exit that
+                    // doesn't require pressing a real shortcut.
+                    // Previously the Record button was a no-op once
+                    // armed, leaving Esc as the only way out (and Esc
+                    // wasn't documented).
+                    let primary_btn = if settings_recording_hotkey {
+                        button(text("Cancel"))
+                            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                            .on_press(Message::SettingsHotkeyRecordingCancelled)
+                    } else {
+                        button(text("Record"))
+                            .style(|t, s| action_button_style(t, s, ActionKind::Primary))
+                            .on_press(Message::SettingsStartHotkeyRecording)
+                    };
                     let actions = row![
-                        button(text(if settings_recording_hotkey {
-                            "Recording"
-                        } else {
-                            "Record"
-                        }))
-                        .on_press(Message::SettingsStartHotkeyRecording),
-                        button(text("Reset")).on_press(Message::Settings(
-                            SettingsMessage::SetCaptureHotkey(default_capture_hotkey().into()),
-                        )),
+                        primary_btn,
+                        button(text("Reset"))
+                            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                            .on_press(Message::Settings(SettingsMessage::SetCaptureHotkey(
+                                default_capture_hotkey().into()
+                            ),)),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center);
@@ -5264,11 +5287,17 @@ fn settings_view(state: &App) -> Element<'_, Message> {
             let save_folder_control: Element<'_, Message> = column![
                 setting_value_box(save_folder_value.clone(), false),
                 row![
-                    button(text("Choose")).on_press(Message::SettingsChooseSaveFolderRequested),
-                    button(text("Open")).on_press(Message::SettingsOpenSaveFolderRequested),
-                    button(text("Reset")).on_press(Message::Settings(
-                        SettingsMessage::SetSaveFolder(PathBuf::new()),
-                    )),
+                    button(text("Choose"))
+                        .style(|t, s| action_button_style(t, s, ActionKind::Primary))
+                        .on_press(Message::SettingsChooseSaveFolderRequested),
+                    button(text("Open"))
+                        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                        .on_press(Message::SettingsOpenSaveFolderRequested),
+                    button(text("Reset"))
+                        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                        .on_press(Message::Settings(SettingsMessage::SetSaveFolder(
+                            PathBuf::new()
+                        ))),
                 ]
                 .spacing(8)
                 .align_y(Alignment::Center),
@@ -5297,7 +5326,7 @@ fn settings_view(state: &App) -> Element<'_, Message> {
                 column![filename_input, preview_line].spacing(4).into();
             let filename_row = settings_field(
                 "Filename template",
-                "Supports date, time, year, and timestamp tokens.",
+                "Tokens: {YYYY-MM-DD at HH.mm.ss} · {YYYY-MM-DD} · {HH.mm.ss} · {YYYY} · {timestamp}",
                 filename_control,
             );
 
@@ -5324,7 +5353,8 @@ fn settings_view(state: &App) -> Element<'_, Message> {
         .to_string();
     let reset_controls: Element<'_, Message> = responsive(move |available| {
         let copy = if reset_pending {
-            "Reset every setting to the app defaults?".to_string()
+            "Resets hotkey, save folder, filename template, retention, OCR, and startup options. History records are kept."
+                .to_string()
         } else {
             reset_status.clone()
         };
