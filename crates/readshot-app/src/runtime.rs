@@ -1135,6 +1135,47 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.pending_display_bounds = display_bounds;
             state.overlay_selections.clear();
             let mut tasks = close_all_overlays(state);
+            // Scroll capture: skip the synchronous first-frame capture
+            // and open the HUD + region indicator immediately. The
+            // timer tick captures frame 1 on its next fire, ~120 ms
+            // later, so the HUD shows up instantly instead of waiting
+            // for the ~100-200 ms ScreenCaptureKit round-trip.
+            if matches!(intent, crate::app::CaptureIntent::ScrollCapture) {
+                let Some(bounds) = display_bounds else {
+                    return Task::batch(tasks);
+                };
+                let session = crate::app::ScrollSession {
+                    display_id: display_id.clone(),
+                    rect,
+                    scale: display_scale,
+                    frames: Vec::new(),
+                    no_motion_count: 0,
+                    hud_window_id: None,
+                    region_window_id: None,
+                    display_size: Some(bounds),
+                    capture_in_flight: false,
+                    stopping: false,
+                    started_at: std::time::Instant::now(),
+                    last_frame_at: None,
+                    frame_tick: 0,
+                    last_frame_handle: None,
+                    cancel_armed_at: None,
+                };
+                state.scroll_session = Some(session);
+                state.pending_intent = None;
+                state.pending_display_bounds = None;
+                let (region_id, region_open) = window::open(scroll_region_window_settings(bounds));
+                state.windows.register(region_id, WindowKind::ScrollRegion);
+                if let Some(s) = state.scroll_session.as_mut() {
+                    s.region_window_id = Some(region_id);
+                }
+                tasks.push(region_open.map(Message::ScrollRegionWindowReady));
+                let hud_pos = scroll_hud_position(rect, Some(bounds));
+                let (hud_id, hud_open) = window::open(scroll_hud_window_settings(hud_pos));
+                state.windows.register(hud_id, WindowKind::ScrollHud);
+                tasks.push(hud_open.map(Message::ScrollHudWindowReady));
+                return Task::batch(tasks);
+            }
             tasks.push(Task::done(Message::CaptureRegionRequested {
                 display_id,
                 rect,
