@@ -613,6 +613,10 @@ pub struct ScrollSession {
     /// frames-vec length for animation triggers because some ticks
     /// produce no-motion drops which leave the length unchanged).
     pub frame_tick: u64,
+    /// Cached `iced::Handle` to the most recent accepted frame so the
+    /// HUD can render it as a live preview without re-cloning the
+    /// RGBA buffer on every redraw tick (a 1080p frame is ~8 MB).
+    pub last_frame_handle: Option<iced::widget::image::Handle>,
 }
 
 impl ScrollSession {
@@ -633,6 +637,7 @@ impl ScrollSession {
             started_at: std::time::Instant::now(),
             last_frame_at: None,
             frame_tick: 0,
+            last_frame_handle: None,
         }
     }
 }

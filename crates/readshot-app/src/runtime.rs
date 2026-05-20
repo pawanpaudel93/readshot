@@ -426,8 +426,9 @@ fn pin_window_settings(image_size: (u32, u32)) -> window::Settings {
 /// helper below can pick a spot that doesn't overlap the capture
 /// region (where it would otherwise show up in every captured frame
 /// and ruin the stitch).
-const SCROLL_HUD_WIDTH: f32 = 300.0;
-const SCROLL_HUD_HEIGHT: f32 = 150.0;
+const SCROLL_HUD_WIDTH: f32 = 320.0;
+const SCROLL_HUD_HEIGHT: f32 = 360.0;
+const SCROLL_HUD_PREVIEW_HEIGHT: f32 = 170.0;
 const SCROLL_HUD_GAP: f32 = 16.0;
 
 /// Pick a HUD position that doesn't overlap the captured rect.
@@ -1737,16 +1738,26 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         None => true,
                     };
                     if moved {
+                        // Cache an iced Handle once per accepted frame
+                        // so the HUD's live preview doesn't re-clone
+                        // ~8 MB of RGBA on every redraw.
+                        let handle = iced::widget::image::Handle::from_rgba(
+                            image.width(),
+                            image.height(),
+                            image.as_raw().clone(),
+                        );
                         session.no_motion_count = 0;
                         session.frames.push(image);
                         session.frame_tick = session.frame_tick.wrapping_add(1);
                         session.last_frame_at = Some(std::time::Instant::now());
+                        session.last_frame_handle = Some(handle);
                     } else {
                         session.no_motion_count += 1;
                     }
-                    if session.no_motion_count >= SCROLL_NO_MOTION_LIMIT {
-                        return Task::done(Message::ScrollCaptureStopRequested);
-                    }
+                    // Session never auto-stops on stillness — the user
+                    // explicitly clicks Stop & Stitch (or Cancel) when
+                    // they're done. Auto-stop on no-motion was killing
+                    // sessions every time the user paused to read.
                     Task::none()
                 }
                 Err(e) => {
@@ -2415,33 +2426,29 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
 }
 
 /// Floating HUD showing the live state of a scrolling-capture session.
-/// Renders a recording chip, a labelled frame counter with capacity
-/// progress bar, the current activity status (including a countdown
-/// when the user pauses scrolling), and the Stop / Cancel buttons.
+/// Renders a live preview of the most recently captured frame so the
+/// user can see what's actually being captured, a frame counter with
+/// capacity progress bar, the current activity status, and the
+/// Stop / Cancel buttons.
 fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     let session = state.scroll_session.as_ref();
     let frame_count = session.map(|s| s.frames.len()).unwrap_or(0);
     let stopping = session.map(|s| s.stopping).unwrap_or(false);
-    let no_motion = session.map(|s| s.no_motion_count).unwrap_or(0);
     let elapsed_secs = session
         .map(|s| s.started_at.elapsed().as_secs_f32())
         .unwrap_or(0.0);
     // Flash the counter for ~150 ms after each accepted frame so the
-    // user gets a clear "yes, that scroll registered" signal even if
-    // the count is small.
+    // user gets a clear "yes, that scroll registered" signal.
     let flash = session
         .and_then(|s| s.last_frame_at)
         .map(|t| t.elapsed().as_millis() < 150)
         .unwrap_or(false);
     let cap = SCROLL_MAX_FRAMES;
     let progress = (frame_count as f32 / cap as f32).clamp(0.0, 1.0);
-    let idle_countdown = SCROLL_NO_MOTION_LIMIT.saturating_sub(no_motion);
 
-    // Header — title + recording / stitching / paused chip.
+    // Header — title + recording / stitching chip.
     let (chip_label, chip_color): (&'static str, Color) = if stopping {
         ("Stitching", Color::from_rgba(1.0, 1.0, 1.0, 0.55))
-    } else if no_motion > 0 {
-        ("● Paused", Color::from_rgba(0.95, 0.78, 0.35, 0.95))
     } else {
         ("● Recording", Color::from_rgba(0.95, 0.4, 0.4, 0.95))
     };
@@ -2463,17 +2470,62 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     ]
     .align_y(Alignment::Center);
 
+    // Live preview of the most recent accepted frame so the user can
+    // confirm what's in the capture region while they scroll. Letter-
+    // boxed inside a fixed-size bay so HUD layout stays stable across
+    // very tall / very wide rects.
+    let preview: Element<'_, Message> = match session.and_then(|s| s.last_frame_handle.clone()) {
+        Some(handle) => container(
+            iced::widget::image(handle)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .content_fit(iced::ContentFit::Contain),
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(SCROLL_HUD_PREVIEW_HEIGHT))
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_| iced::widget::container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.4).into()),
+            border: iced::Border {
+                color: Color::from_rgba(0.45, 0.55, 1.0, 0.55),
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..Default::default()
+        })
+        .into(),
+        None => container(
+            text("Waiting for first frame…")
+                .size(11)
+                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.45)),
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(SCROLL_HUD_PREVIEW_HEIGHT))
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_| iced::widget::container::Style {
+            background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.04).into()),
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..Default::default()
+        })
+        .into(),
+    };
+
     // Frame counter — big number plus capacity tail. The number
     // briefly tints blue when a new frame just landed so the user
-    // gets a visible "scroll registered" pulse without having to
-    // stare at the digits to see them change.
+    // gets a visible "scroll registered" pulse.
     let counter_color = if flash {
         Color::from_rgba(0.65, 0.78, 1.0, 1.0)
     } else {
         Color::WHITE
     };
     let counter_row = row![
-        text(format!("{frame_count}")).size(28).color(counter_color),
+        text(format!("{frame_count}")).size(22).color(counter_color),
         text(format!("/ {cap} frames"))
             .size(11)
             .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
@@ -2514,13 +2566,8 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     // Status line — what the user should be doing right now.
     let status_text = if stopping {
         "Stitching frames into one tall image…".to_string()
-    } else if no_motion > 0 {
-        format!(
-            "Paused — auto-stops in {idle_countdown} tick{}",
-            if idle_countdown == 1 { "" } else { "s" }
-        )
     } else {
-        "Scroll the page underneath. Esc or Stop to finish.".to_string()
+        "Scroll the page underneath. Click Stop & Stitch (or Esc) when done.".to_string()
     };
     let status = text(status_text)
         .size(11)
@@ -2555,6 +2602,7 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
 
     let body = column![
         header,
+        preview,
         counter_row,
         bar,
         Space::new().height(Length::Fixed(2.0)),
@@ -5321,12 +5369,6 @@ async fn capture_request_to_dir(
 /// output and doesn't gobble gigabytes of RAM. The limits below cover
 /// roughly 30 s of continuous scrolling at the configured tick rate.
 const SCROLL_MAX_FRAMES: usize = 120;
-/// Consecutive "no motion detected" ticks before the session auto-
-/// stops. With a 180 ms frame interval this is just over a second of
-/// stillness before stitching kicks off automatically. Generous so
-/// the user has time to read a paragraph mid-scroll without losing
-/// the session.
-const SCROLL_NO_MOTION_LIMIT: u32 = 7;
 /// Per-pixel SAD threshold (0-255 per channel) above which two frames
 /// are considered different. Used by [`frames_differ`] to drop near-
 /// duplicate captures and detect "user stopped scrolling".
