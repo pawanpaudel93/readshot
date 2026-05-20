@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn single_frame_returns_clone() {
         let f = stripe_frame(64, 32, 0);
-        let out = stitch_scrolling(&[f.clone()], StitchConfig::default()).unwrap();
+        let out = stitch_scrolling(std::slice::from_ref(&f), StitchConfig::default()).unwrap();
         assert_eq!(out.dimensions(), (64, 32));
         assert_eq!(out.get_pixel(0, 0), f.get_pixel(0, 0));
     }
