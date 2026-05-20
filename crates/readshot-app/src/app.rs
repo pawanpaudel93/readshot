@@ -56,6 +56,10 @@ pub enum WindowKind {
     Settings,
     /// Command-line setup instructions window.
     CliTools,
+    /// Heads-up display shown while a scrolling-capture session is
+    /// active. Floats above the user's content with a frame counter
+    /// and a Stop button so the user can end the session manually.
+    ScrollHud,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,6 +202,23 @@ pub enum Message {
     /// Hidden one-shot CLI interactive capture finished writing its
     /// temp PNG. The runtime exits immediately afterward.
     CliInteractiveWritten(Result<(), String>),
+    /// Periodic tick driving the scrolling-capture frame loop. Fires
+    /// from a 250 ms timer subscription while a session is active.
+    ScrollCaptureTick,
+    /// Async per-frame capture for the scrolling-capture session
+    /// finished. `Ok` appends the frame; `Err` logs and continues
+    /// (a one-off backend error shouldn't kill the whole session).
+    ScrollCaptureFrame(Result<image::RgbaImage, String>),
+    /// User clicked Stop in the HUD (or pressed Esc / hit an auto-
+    /// stop limit). Closes the HUD and kicks off stitching of the
+    /// captured frames.
+    ScrollCaptureStopRequested,
+    /// Stitching task finished. `Ok` opens the stitched image in the
+    /// editor; `Err` toasts a status and clears the session.
+    ScrollCaptureStitched(Result<image::RgbaImage, String>),
+    /// First view of the scrolling-capture HUD window — records the
+    /// `window::Id` so the runtime can close it when the session ends.
+    ScrollHudWindowReady(iced::window::Id),
     /// Fire-and-forget history persistence completion. The boolean
     /// payload is `true` when the chain completed all the way through
     /// the OCR-and-update step (so the browser should reload to see
@@ -531,6 +552,66 @@ pub struct App {
     pub cli_tools_window_id: Option<iced::window::Id>,
     /// Copy-status text shown in the command-line setup window.
     pub cli_tools_status: Option<String>,
+    /// Active scrolling-capture session, if any. Holds the per-frame
+    /// state (captured frames, no-motion counter, HUD window id) so
+    /// the runtime can drive the capture loop, render the HUD, and
+    /// stitch the result when the session ends.
+    pub scroll_session: Option<ScrollSession>,
+}
+
+/// State for an active scrolling-capture session.
+///
+/// One session at a time. Reset when stitching kicks off or the user
+/// cancels. The runtime appends to `frames` on each timer tick (once
+/// the previous tick's `capture_region` future resolves), auto-stops
+/// when motion stalls or a hard limit is hit, then drains `frames`
+/// into the stitcher.
+#[derive(Clone, Debug)]
+pub struct ScrollSession {
+    /// Display the captured region lives on. Carried through every
+    /// per-tick `CaptureRequest`.
+    pub display_id: readshot_capture::DisplayId,
+    /// Capture region in display-local logical pixels.
+    pub rect: readshot_core::geom::Rect,
+    /// HiDPI scale factor of the display.
+    pub scale: f32,
+    /// Frames captured so far. The first frame is captured
+    /// synchronously when the session starts; subsequent frames come
+    /// from the timer tick.
+    pub frames: Vec<image::RgbaImage>,
+    /// Number of consecutive timer ticks that produced a frame with
+    /// no detectable motion vs. the previous frame. Used to auto-stop
+    /// when the user pauses scrolling for a while.
+    pub no_motion_count: u32,
+    /// `window::Id` of the HUD floating above the capture region.
+    pub hud_window_id: Option<iced::window::Id>,
+    /// True while a `capture_region` future is in flight, to keep
+    /// successive ticks from piling up requests faster than the
+    /// backend can satisfy them.
+    pub capture_in_flight: bool,
+    /// True after the user has clicked Stop / pressed Esc / hit a
+    /// limit. The next tick observes this and kicks off stitching
+    /// instead of capturing another frame.
+    pub stopping: bool,
+}
+
+impl ScrollSession {
+    pub fn new(
+        display_id: readshot_capture::DisplayId,
+        rect: readshot_core::geom::Rect,
+        scale: f32,
+    ) -> Self {
+        Self {
+            display_id,
+            rect,
+            scale,
+            frames: Vec::new(),
+            no_motion_count: 0,
+            hud_window_id: None,
+            capture_in_flight: false,
+            stopping: false,
+        }
+    }
 }
 
 /// Per-overlay-window record. Tracks which display the window covers
@@ -589,6 +670,10 @@ pub enum CaptureIntent {
     SaveDirect,
     /// Open a borderless always-on-top pin window, no editor.
     Pin,
+    /// Start a scrolling-capture session: capture the region repeatedly
+    /// while the user scrolls the underlying content, then stitch the
+    /// frames into a tall image and open it in the editor.
+    ScrollCapture,
     /// Hidden one-shot CLI bridge: write PNG bytes to a temp path
     /// and exit so the parent CLI process can continue.
     CliInteractive,
@@ -640,6 +725,7 @@ impl App {
             settings_reset_all_pending: false,
             cli_tools_window_id: None,
             cli_tools_status: None,
+            scroll_session: None,
         }
     }
 

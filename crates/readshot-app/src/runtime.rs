@@ -421,6 +421,27 @@ fn pin_window_settings(image_size: (u32, u32)) -> window::Settings {
     }
 }
 
+/// Floating HUD shown while a scrolling-capture session is active.
+/// Small, borderless, always-on-top so it stays visible above the
+/// content being scrolled. The HUD itself has no scroll-blocking
+/// surface — it sits on the side, the user keeps scrolling underneath.
+fn scroll_hud_window_settings() -> window::Settings {
+    window::Settings {
+        size: iced::Size::new(280.0, 130.0),
+        min_size: Some(iced::Size::new(260.0, 120.0)),
+        position: window::Position::Default,
+        resizable: false,
+        decorations: false,
+        transparent: false,
+        visible: true,
+        fullscreen: false,
+        level: window::Level::AlwaysOnTop,
+        closeable: false,
+        minimizable: false,
+        ..Default::default()
+    }
+}
+
 fn overlay_window_settings_for(display: &readshot_capture::DisplayInfo) -> window::Settings {
     let bounds = display.bounds;
     window::Settings {
@@ -449,6 +470,7 @@ pub fn title(state: &App, id: window::Id) -> String {
         Some(WindowKind::History) => "Readshot — History".into(),
         Some(WindowKind::Settings) => "Readshot — Settings".into(),
         Some(WindowKind::CliTools) => "Readshot — Command Line Tools".into(),
+        Some(WindowKind::ScrollHud) => "Readshot — Scrolling Capture".into(),
     }
 }
 
@@ -514,6 +536,28 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // callback while the app is already running. That callback
         // queues parsed actions; this tick drains them back into iced.
         subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::UrlTick));
+    }
+    if state.scroll_session.is_some() {
+        // Drive the scrolling-capture frame loop at ~4 fps. The
+        // capture coordinator's async future is debounced inside the
+        // session (the tick handler bails out if a capture is still
+        // in flight) so a slow backend can't pile up requests.
+        subs.push(
+            iced::time::every(Duration::from_millis(250)).map(|_| Message::ScrollCaptureTick),
+        );
+        // Esc anywhere ends the session — same affordance as the
+        // Stop button on the HUD.
+        subs.push(iced::event::listen_with(|event, _status, _window| {
+            use iced::keyboard::{key::Named, Event as KbEvent, Key};
+            if let iced::Event::Keyboard(KbEvent::KeyPressed {
+                key: Key::Named(Named::Escape),
+                ..
+            }) = event
+            {
+                return Some(Message::ScrollCaptureStopRequested);
+            }
+            None
+        }));
     }
     if !state.overlay_displays.is_empty() {
         // Marching-ants tick — drives the dash-offset animation on
@@ -1116,6 +1160,29 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                                 Message::CliInteractiveWritten(r.map_err(|e| e.to_string()))
                             })
                         }
+                        crate::app::CaptureIntent::ScrollCapture => {
+                            // Start a new scrolling-capture session.
+                            // The first frame is the just-captured `image`;
+                            // subsequent frames come from the timer-tick loop.
+                            // `last_regions` was populated by OverlaySelected just
+                            // before this branch ran, so the lookup is safe.
+                            let Some(last) = state.last_regions.get(&display_id).copied() else {
+                                state.last_capture_status =
+                                    Some("Scroll capture: missing region".into());
+                                return Task::batch([history_task]);
+                            };
+                            let session = crate::app::ScrollSession::new(
+                                display_id.clone(),
+                                last.rect,
+                                display_scale,
+                            );
+                            let mut session = session;
+                            session.frames.push(image);
+                            state.scroll_session = Some(session);
+                            let (id, open_task) = window::open(scroll_hud_window_settings());
+                            state.windows.register(id, WindowKind::ScrollHud);
+                            open_task.map(Message::ScrollHudWindowReady)
+                        }
                     };
                     Task::batch([history_task, intent_task])
                 }
@@ -1559,6 +1626,118 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.pending_display_scale = None;
             state.pending_hide_cursor = true;
             iced::exit()
+        }
+
+        Message::ScrollHudWindowReady(id) => {
+            if let Some(session) = state.scroll_session.as_mut() {
+                session.hud_window_id = Some(id);
+            }
+            Task::none()
+        }
+
+        Message::ScrollCaptureTick => {
+            let Some(session) = state.scroll_session.as_mut() else {
+                return Task::none();
+            };
+            if session.stopping || session.capture_in_flight {
+                return Task::none();
+            }
+            // Hard limits: bail out if the user has been at it too long.
+            if session.frames.len() >= SCROLL_MAX_FRAMES {
+                return Task::done(Message::ScrollCaptureStopRequested);
+            }
+            session.capture_in_flight = true;
+            let coord = state.coordinator.clone();
+            let request = readshot_capture::CaptureRequest {
+                display_id: session.display_id.clone(),
+                rect: session.rect,
+                scale: session.scale,
+                hide_cursor: true,
+            };
+            Task::perform(
+                async move { coord.capture_region(request).await },
+                |result| Message::ScrollCaptureFrame(result.map_err(|e| e.to_string())),
+            )
+        }
+
+        Message::ScrollCaptureFrame(result) => {
+            let Some(session) = state.scroll_session.as_mut() else {
+                return Task::none();
+            };
+            session.capture_in_flight = false;
+            match result {
+                Ok(image) => {
+                    // Quick motion check vs. previous frame — compare a
+                    // few horizontal rows in the middle of the image.
+                    // Skips appending if the page hasn't moved, and
+                    // bumps the no-motion counter so we can auto-stop
+                    // when the user pauses scrolling.
+                    let moved = match session.frames.last() {
+                        Some(prev) => frames_differ(prev, &image),
+                        None => true,
+                    };
+                    if moved {
+                        session.no_motion_count = 0;
+                        session.frames.push(image);
+                    } else {
+                        session.no_motion_count += 1;
+                    }
+                    if session.no_motion_count >= SCROLL_NO_MOTION_LIMIT {
+                        return Task::done(Message::ScrollCaptureStopRequested);
+                    }
+                    Task::none()
+                }
+                Err(e) => {
+                    tracing::warn!(target: "readshot::scroll", "frame capture failed: {e}");
+                    session.no_motion_count += 1;
+                    Task::none()
+                }
+            }
+        }
+
+        Message::ScrollCaptureStopRequested => {
+            let Some(session) = state.scroll_session.as_mut() else {
+                return Task::none();
+            };
+            if session.stopping {
+                return Task::none();
+            }
+            session.stopping = true;
+            let frames = std::mem::take(&mut session.frames);
+            let hud_id = session.hud_window_id;
+            // Close the HUD now — the stitch task runs on its own.
+            let close_task = match hud_id {
+                Some(id) => {
+                    state.windows.forget(id);
+                    window::close(id)
+                }
+                None => Task::none(),
+            };
+            let stitch_task = Task::perform(stitch_frames_async(frames), |r| {
+                Message::ScrollCaptureStitched(r.map_err(|e| e.to_string()))
+            });
+            Task::batch([close_task, stitch_task])
+        }
+
+        Message::ScrollCaptureStitched(result) => {
+            let session = state.scroll_session.take();
+            let display_scale = session.as_ref().map(|s| s.scale).unwrap_or(1.0);
+            match result {
+                Ok(image) => {
+                    state.editor = Some(crate::editor::EditorSession::new_with_display_scale(
+                        image,
+                        display_scale,
+                    ));
+                    let (id, open_task) = window::open(editor_window_settings());
+                    state.windows.register(id, WindowKind::Editor);
+                    open_task.map(Message::EditorWindowReady)
+                }
+                Err(e) => {
+                    state.last_capture_status = Some(format!("Scroll capture failed: {e}"));
+                    tracing::warn!(target: "readshot::scroll", "stitch failed: {e}");
+                    Task::none()
+                }
+            }
         }
 
         Message::EditorWindowReady(id) => {
@@ -2149,7 +2328,69 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
         Some(WindowKind::History) => history_view(state),
         Some(WindowKind::Settings) => settings_view(state),
         Some(WindowKind::CliTools) => cli_tools_view(state),
+        Some(WindowKind::ScrollHud) => scroll_hud_view(state),
     }
+}
+
+/// Floating HUD showing the live state of a scrolling-capture session.
+/// Renders a frame counter, an instruction line, and a Stop button.
+/// The window itself stays out of the captured region because the
+/// capture is region-locked to whatever the user picked in the
+/// overlay before the session started.
+fn scroll_hud_view(state: &App) -> Element<'_, Message> {
+    let frame_count = state
+        .scroll_session
+        .as_ref()
+        .map(|s| s.frames.len())
+        .unwrap_or(0);
+    let stopping = state
+        .scroll_session
+        .as_ref()
+        .map(|s| s.stopping)
+        .unwrap_or(false);
+    let status = if stopping {
+        "Stitching frames…"
+    } else {
+        "Scroll the page now. Click Stop when done."
+    };
+    let stop_btn = if stopping {
+        button(text("Stitching…").size(13))
+            .padding([8, 14])
+            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+    } else {
+        button(text("Stop & Stitch").size(13))
+            .padding([8, 14])
+            .style(|t, s| action_button_style(t, s, ActionKind::Primary))
+            .on_press(Message::ScrollCaptureStopRequested)
+    };
+    let body = column![
+        text("Scrolling Capture").size(15).color(Color::WHITE),
+        text(format!("Frames captured: {frame_count}"))
+            .size(12)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.75)),
+        text(status)
+            .size(11)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.60))
+            .wrapping(iced::widget::text::Wrapping::Word),
+        Space::new().height(Length::Fixed(4.0)),
+        stop_btn,
+    ]
+    .spacing(6)
+    .align_x(Alignment::Start);
+    container(body)
+        .padding(14)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|_| iced::widget::container::Style {
+            background: Some(Color::from_rgba(0.07, 0.07, 0.08, 0.96).into()),
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
+                width: 1.0,
+                radius: 10.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
 fn cli_tools_view(state: &App) -> Element<'_, Message> {
@@ -4042,7 +4283,7 @@ const OVERLAY_TOOLBAR_GAP: f32 = 8.0;
 /// hand-tuned against the actual button row (6 buttons, ~78px each
 /// after padding + the row's internal spacing). Slight over-estimate
 /// is fine — it just means the clamp engages a few px earlier.
-const OVERLAY_TOOLBAR_WIDTH: f32 = 480.0;
+const OVERLAY_TOOLBAR_WIDTH: f32 = 560.0;
 
 /// Build a positioned action toolbar (Capture / Copy / Save / Pin /
 /// Cancel) anchored to the right edge of `rect`. Falls back to
@@ -4139,6 +4380,15 @@ fn overlay_toolbar_layer<'a>(
                 display_id: display_id.clone(),
                 rect: *rect,
                 intent: CaptureIntent::Pin,
+            },
+        ),
+        make_btn(
+            "↕ Scroll",
+            "Capture a scrolling page (region locked, scroll then Stop)",
+            Message::OverlaySelected {
+                display_id: display_id.clone(),
+                rect: *rect,
+                intent: CaptureIntent::ScrollCapture,
             },
         ),
         make_btn("✕", "Cancel (Esc)", Message::OverlayCancelled),
@@ -4879,6 +5129,83 @@ async fn capture_request_to_dir(
 /// Looks up the named display so the request carries its real HiDPI
 /// scale; without that, the macOS backend would render at half
 /// resolution on Retina monitors.
+/// Hard limits for a single scrolling-capture session. Tuned so a
+/// runaway loop bounded by these caps still produces a sane stitched
+/// output and doesn't gobble gigabytes of RAM. The limits below cover
+/// roughly 30 s of scroll-and-pause at 4 frames/second.
+const SCROLL_MAX_FRAMES: usize = 80;
+/// Consecutive "no motion detected" ticks before the session
+/// auto-stops. With a 250 ms frame interval this is about a second
+/// of stillness before stitching kicks off automatically.
+const SCROLL_NO_MOTION_LIMIT: u32 = 4;
+/// Per-channel motion threshold (0-255). Two frames are considered
+/// "moved" if any of the sampled probe rows differs by at least this
+/// much in mean RGB. Tuned to ignore font-AA jitter while catching
+/// real one-line scroll bumps.
+const SCROLL_MOTION_THRESHOLD: u32 = 4;
+
+/// Cheap "did the page move?" check between two adjacent capture
+/// frames. Samples a few horizontal rows (top, middle, bottom-ish)
+/// and compares their mean RGB to the same rows in the other frame.
+/// Returns `true` if any row differs by more than
+/// [`SCROLL_MOTION_THRESHOLD`]. Used to drop near-duplicate frames
+/// before they enter the stitcher and to detect "user stopped
+/// scrolling" for the auto-stop heuristic.
+fn frames_differ(a: &image::RgbaImage, b: &image::RgbaImage) -> bool {
+    if a.dimensions() != b.dimensions() {
+        return true;
+    }
+    let (w, h) = a.dimensions();
+    if w == 0 || h == 0 {
+        return false;
+    }
+    let probe_rows = [h / 5, h / 2, (h * 4) / 5];
+    for y in probe_rows {
+        let ma = row_mean(a, y);
+        let mb = row_mean(b, y);
+        let dr = (ma[0] as i32 - mb[0] as i32).unsigned_abs();
+        let dg = (ma[1] as i32 - mb[1] as i32).unsigned_abs();
+        let db = (ma[2] as i32 - mb[2] as i32).unsigned_abs();
+        if dr.max(dg).max(db) > SCROLL_MOTION_THRESHOLD {
+            return true;
+        }
+    }
+    false
+}
+
+fn row_mean(img: &image::RgbaImage, y: u32) -> [u8; 3] {
+    let w = img.width();
+    if w == 0 {
+        return [0, 0, 0];
+    }
+    let mut r: u64 = 0;
+    let mut g: u64 = 0;
+    let mut b: u64 = 0;
+    for x in 0..w {
+        let p = img.get_pixel(x, y).0;
+        r += p[0] as u64;
+        g += p[1] as u64;
+        b += p[2] as u64;
+    }
+    let n = w as u64;
+    [(r / n) as u8, (g / n) as u8, (b / n) as u8]
+}
+
+/// Run the stitching algorithm on a background thread so it doesn't
+/// block the iced event loop. Stitching a long scroll can take a
+/// hundred ms or two — fine in a worker, not fine on the UI thread.
+async fn stitch_frames_async(frames: Vec<image::RgbaImage>) -> Result<image::RgbaImage, String> {
+    tokio::task::spawn_blocking(move || {
+        readshot_core::scroll_stitch::stitch_scrolling(
+            &frames,
+            readshot_core::scroll_stitch::StitchConfig::default(),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 async fn capture_region_to_image(
     coord: CaptureCoordinator,
     display_id: readshot_capture::DisplayId,
