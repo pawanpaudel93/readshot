@@ -22,6 +22,7 @@ pub mod ocr_text;
 pub mod png;
 pub mod preferences;
 pub mod render;
+pub mod scroll_stitch;
 
 pub use annotation::{Annotation, Rgba};
 pub use error::{CaptureError, CoreError, ExportError, HistoryError, OCRError, PreferencesError};
