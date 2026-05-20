@@ -764,13 +764,16 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         subs.push(iced::event::listen_with(|event, status, window| {
             use iced::event::Status;
             use iced::keyboard::{key::Named, Event as KbEvent, Key};
-            if status != Status::Ignored {
-                return None;
-            }
             let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event else {
                 return None;
             };
-            if modifiers.command() && !modifiers.alt() && !modifiers.control() {
+            // ⌘C / ⌘⇧C only fire when no widget has captured the
+            // event — search-input text selection takes precedence.
+            if status == Status::Ignored
+                && modifiers.command()
+                && !modifiers.alt()
+                && !modifiers.control()
+            {
                 if let Key::Character(c) = &key {
                     if c.eq_ignore_ascii_case("c") {
                         return Some(Message::HistoryKeyboardShortcut(
@@ -787,6 +790,14 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             if modifiers.command() || modifiers.alt() || modifiers.control() || modifiers.shift() {
                 return None;
             }
+            // Arrow / Enter ALWAYS navigate the list — the search
+            // input is single-line so arrow keys for cursor movement
+            // don't conflict (text_input ignores Up/Down anyway).
+            // Delete still requires `Status::Ignored` so it doesn't
+            // hijack character-deletion in the search field;
+            // Backspace is intentionally NOT bound (avoid the macOS
+            // convention violation flagged in the audit — use
+            // Forward-Delete to remove a capture).
             match key {
                 Key::Named(Named::ArrowUp) => Some(Message::HistoryKeyboardShortcut(
                     window,
@@ -800,9 +811,10 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                     window,
                     HistoryKeyboardAction::Open,
                 )),
-                Key::Named(Named::Delete) | Key::Named(Named::Backspace) => Some(
+                Key::Named(Named::Delete) if status == Status::Ignored => Some(
                     Message::HistoryKeyboardShortcut(window, HistoryKeyboardAction::Delete),
                 ),
+                Key::Named(Named::Escape) => Some(Message::HistorySearchChanged(String::new())),
                 _ => None,
             }
         }));
@@ -1515,14 +1527,30 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
         }
         Message::HistoryClearAllRequested => {
+            // First click arms the destructive prompt. The button
+            // flips to "Confirm Clear · Cancel" so the user has a
+            // visible second step before everything is wiped.
+            state.history_clear_all_pending = true;
+            Task::none()
+        }
+        Message::HistoryClearAllCancelled => {
+            state.history_clear_all_pending = false;
+            Task::none()
+        }
+        Message::HistoryClearAllConfirmed => {
+            state.history_clear_all_pending = false;
             if let Err(e) = state.coordinator.clear_history() {
                 state.history_status = Some(format!("Clear history failed: {e}"));
                 return Task::none();
             }
+            let n = state.history_records.len();
             state.history_records.clear();
             state.history_search.clear();
             state.history_selected_id = None;
-            state.history_status = Some("History cleared.".into());
+            state.history_status = Some(format!(
+                "Cleared {n} capture{}.",
+                if n == 1 { "" } else { "s" }
+            ));
             Task::none()
         }
         Message::HistoryOpenInEditor(id) => {
@@ -3025,14 +3053,32 @@ fn history_view(state: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .padding(8)
         .size(13);
-    let clear_button = {
+    // Two-stage Clear All. Idle: a single Danger-styled "Clear All"
+    // button. Armed: the button flips to "Confirm Clear" and a
+    // companion "Cancel" button appears next to it so the user has
+    // an obvious second-step before everything is wiped.
+    let clear_button: Element<'_, Message> = if state.history_clear_all_pending {
+        row![
+            button(text(format!("Confirm Clear ({total})")).size(12))
+                .padding([8, 10])
+                .style(|t, s| action_button_style(t, s, ActionKind::Danger))
+                .on_press(Message::HistoryClearAllConfirmed),
+            button(text("Cancel").size(12))
+                .padding([8, 10])
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(Message::HistoryClearAllCancelled),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
         let b = button(text("Clear All").size(12))
             .padding([8, 10])
             .style(|t, s| action_button_style(t, s, ActionKind::Danger));
         if total > 0 {
-            b.on_press(Message::HistoryClearAllRequested)
+            b.on_press(Message::HistoryClearAllRequested).into()
         } else {
-            b
+            b.into()
         }
     };
     let has_visible_text = visible.iter().any(|r| {
@@ -3283,8 +3329,16 @@ fn history_selected_panel<'a>(
                 .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                 .into()
         };
+        // `Open` is the most common action on a selected row (also
+        // the Enter-key default) — promote it to Primary styling so
+        // the eye lands on it instead of bouncing between three
+        // identical Secondary buttons.
+        let open_btn = button(text("Open").size(12))
+            .padding([6, 9])
+            .style(|t, s| action_button_style(t, s, ActionKind::Primary))
+            .on_press(Message::HistoryOpenInEditor(id));
         let primary_actions = row![
-            secondary("Open", Message::HistoryOpenInEditor(id)),
+            open_btn,
             secondary("Reveal", Message::HistoryReveal(id)),
             copy_text_button,
         ]
@@ -5547,21 +5601,50 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
         .into()
 }
 
+/// Severity tint for a welcome card. `Neutral` is the default
+/// glassy chrome; `Blocked` warms it up with an amber accent so the
+/// Denied state reads as "needs your attention" instead of looking
+/// the same as the cold Pending state.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WelcomeCardTone {
+    Neutral,
+    Blocked,
+}
+
 /// Shared chrome for every welcome card — soft semi-transparent
 /// background, subtle border, generous padding so the action button
-/// has room to breathe.
+/// has room to breathe. `tone` lets the Denied card stand out.
 fn welcome_card<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
+    welcome_card_with_tone(content, WelcomeCardTone::Neutral)
+}
+
+fn welcome_card_with_tone<'a>(
+    content: Element<'a, Message>,
+    tone: WelcomeCardTone,
+) -> Element<'a, Message> {
     container(content)
         .padding(20)
         .width(Length::Fill)
-        .style(|_| iced::widget::container::Style {
-            background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.04).into()),
-            border: iced::Border {
-                radius: 10.0.into(),
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.08),
-                width: 1.0,
-            },
-            ..Default::default()
+        .style(move |_| {
+            let (bg, border) = match tone {
+                WelcomeCardTone::Neutral => (
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.04),
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.08),
+                ),
+                WelcomeCardTone::Blocked => (
+                    Color::from_rgba(0.95, 0.55, 0.30, 0.10),
+                    Color::from_rgba(0.95, 0.55, 0.30, 0.55),
+                ),
+            };
+            iced::widget::container::Style {
+                background: Some(bg.into()),
+                border: iced::Border {
+                    radius: 10.0.into(),
+                    color: border,
+                    width: 1.0,
+                },
+                ..Default::default()
+            }
         })
         .into()
 }
@@ -5588,8 +5671,19 @@ fn welcome_pending_card<'a>() -> Element<'a, Message> {
 
 fn welcome_awaiting_card<'a>(state: WelcomeState) -> Element<'a, Message> {
     let (title, body_copy) = welcome_permission_guidance(state);
+    let is_denied = matches!(state, WelcomeState::Denied);
+    let header_label = if is_denied {
+        format!("⚠ {title}")
+    } else {
+        title.to_string()
+    };
+    let header_color = if is_denied {
+        Color::from_rgba(1.0, 0.78, 0.55, 0.95)
+    } else {
+        Color::WHITE
+    };
     let body = column![
-        text(title).size(18),
+        text(header_label).size(18).color(header_color),
         text(body_copy)
             .size(13)
             .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7)),
@@ -5608,7 +5702,12 @@ fn welcome_awaiting_card<'a>(state: WelcomeState) -> Element<'a, Message> {
     ]
     .spacing(10)
     .align_x(Alignment::Center);
-    welcome_card(body.into())
+    let tone = if is_denied {
+        WelcomeCardTone::Blocked
+    } else {
+        WelcomeCardTone::Neutral
+    };
+    welcome_card_with_tone(body.into(), tone)
 }
 
 fn welcome_permission_guidance(state: WelcomeState) -> (&'static str, &'static str) {
@@ -6875,11 +6974,26 @@ mod tests {
         app.history_records = vec![newer, older];
         app.history_status = Some("stale".into());
 
+        // First click arms the destructive prompt; records stay intact.
         let _ = update(&mut app, Message::HistoryClearAllRequested);
+        assert!(app.history_clear_all_pending);
+        assert_eq!(app.history_records.len(), 2);
+        // Cancel exits the armed state without touching anything.
+        let _ = update(&mut app, Message::HistoryClearAllCancelled);
+        assert!(!app.history_clear_all_pending);
+        assert_eq!(app.history_records.len(), 2);
+        // Re-arm and confirm; now the records actually go.
+        let _ = update(&mut app, Message::HistoryClearAllRequested);
+        let _ = update(&mut app, Message::HistoryClearAllConfirmed);
 
+        assert!(!app.history_clear_all_pending);
         assert!(store.list().unwrap().is_empty());
         assert!(app.history_records.is_empty());
-        assert_eq!(app.history_status.as_deref(), Some("History cleared."));
+        assert!(app
+            .history_status
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("Cleared "));
     }
 
     #[cfg(target_os = "macos")]

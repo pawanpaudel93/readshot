@@ -282,9 +282,15 @@ pub enum Message {
     /// the window id before applying the action, because iced event
     /// subscriptions are global to the daemon.
     HistoryKeyboardShortcut(iced::window::Id, HistoryKeyboardAction),
-    /// Browser-level "Clear All" — remove every history record from disk
-    /// and clear the visible list.
+    /// Browser-level "Clear All" — first click arms the confirm
+    /// prompt. The button label flips and a Cancel option appears;
+    /// a second click sends `HistoryClearAllConfirmed`.
     HistoryClearAllRequested,
+    /// Confirm the armed "Clear All" — actually wipes the history.
+    HistoryClearAllConfirmed,
+    /// Cancel the armed "Clear All" — returns the button to its
+    /// idle state without touching any records.
+    HistoryClearAllCancelled,
     /// Per-row "Open" — load the PNG and reopen it as a history-backed
     /// editor session. Annotation edits flow back into the JSON sidecar.
     HistoryOpenInEditor(readshot_core::Uuid),
@@ -578,6 +584,11 @@ pub struct App {
     /// True after the user asks to reset settings and before they
     /// confirm or cancel.
     pub settings_reset_all_pending: bool,
+    /// True after the user clicks "Clear All" in the history browser
+    /// and before they confirm or cancel. Drives the two-stage
+    /// destructive prompt that guards against accidentally nuking
+    /// every saved capture.
+    pub history_clear_all_pending: bool,
     /// `window::Id` of the live command-line setup instructions window.
     pub cli_tools_window_id: Option<iced::window::Id>,
     /// Copy-status text shown in the command-line setup window.
@@ -791,6 +802,7 @@ impl App {
             settings_hotkey_status: None,
             settings_status: None,
             settings_reset_all_pending: false,
+            history_clear_all_pending: false,
             cli_tools_window_id: None,
             cli_tools_status: None,
             scroll_session: None,
