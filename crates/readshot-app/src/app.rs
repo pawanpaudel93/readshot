@@ -602,6 +602,17 @@ pub struct ScrollSession {
     /// limit. The next tick observes this and kicks off stitching
     /// instead of capturing another frame.
     pub stopping: bool,
+    /// Wall-clock time the session began — drives the HUD's elapsed
+    /// counter so the user can see how long they've been recording.
+    pub started_at: std::time::Instant,
+    /// Last frame that was accepted (frame count bumped) — used by
+    /// the HUD to draw a brief flash when a fresh frame lands.
+    pub last_frame_at: Option<std::time::Instant>,
+    /// Counter that increments every time a fresh frame is accepted.
+    /// Used purely for HUD animation gating (we can't trust the
+    /// frames-vec length for animation triggers because some ticks
+    /// produce no-motion drops which leave the length unchanged).
+    pub frame_tick: u64,
 }
 
 impl ScrollSession {
@@ -619,6 +630,9 @@ impl ScrollSession {
             hud_window_id: None,
             capture_in_flight: false,
             stopping: false,
+            started_at: std::time::Instant::now(),
+            last_frame_at: None,
+            frame_tick: 0,
         }
     }
 }

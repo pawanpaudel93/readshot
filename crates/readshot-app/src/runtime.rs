@@ -889,6 +889,21 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     update(state, Message::OpenOverlayRequested)
                 }
             }
+            crate::tray::TrayAction::ScrollCapture => {
+                if state.welcome.should_show() {
+                    show_or_focus_welcome(state)
+                } else if state.capture_in_flight || state.scroll_session.is_some() {
+                    Task::none()
+                } else {
+                    // Open the overlay normally — the user still picks
+                    // their region via the standard selector. The
+                    // toolbar's ↕ Scroll button confirms with the
+                    // ScrollCapture intent. Surfacing the entry from
+                    // the tray just shortens "how do I start a
+                    // scrolling capture" to a single menu click.
+                    update(state, Message::OpenOverlayRequested)
+                }
+            }
             crate::tray::TrayAction::RetakeLastRegion => {
                 state.pending_intent = Some(crate::app::CaptureIntent::Editor);
                 update(state, Message::RetakeLastRegionRequested)
@@ -1724,6 +1739,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     if moved {
                         session.no_motion_count = 0;
                         session.frames.push(image);
+                        session.frame_tick = session.frame_tick.wrapping_add(1);
+                        session.last_frame_at = Some(std::time::Instant::now());
                     } else {
                         session.no_motion_count += 1;
                     }
@@ -2406,33 +2423,57 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     let frame_count = session.map(|s| s.frames.len()).unwrap_or(0);
     let stopping = session.map(|s| s.stopping).unwrap_or(false);
     let no_motion = session.map(|s| s.no_motion_count).unwrap_or(0);
+    let elapsed_secs = session
+        .map(|s| s.started_at.elapsed().as_secs_f32())
+        .unwrap_or(0.0);
+    // Flash the counter for ~150 ms after each accepted frame so the
+    // user gets a clear "yes, that scroll registered" signal even if
+    // the count is small.
+    let flash = session
+        .and_then(|s| s.last_frame_at)
+        .map(|t| t.elapsed().as_millis() < 150)
+        .unwrap_or(false);
     let cap = SCROLL_MAX_FRAMES;
     let progress = (frame_count as f32 / cap as f32).clamp(0.0, 1.0);
     let idle_countdown = SCROLL_NO_MOTION_LIMIT.saturating_sub(no_motion);
 
-    // Header — title + recording chip / stitching chip.
-    let chip_label = if stopping {
-        "Stitching"
+    // Header — title + recording / stitching / paused chip.
+    let (chip_label, chip_color): (&'static str, Color) = if stopping {
+        ("Stitching", Color::from_rgba(1.0, 1.0, 1.0, 0.55))
+    } else if no_motion > 0 {
+        ("● Paused", Color::from_rgba(0.95, 0.78, 0.35, 0.95))
     } else {
-        "● Recording"
+        ("● Recording", Color::from_rgba(0.95, 0.4, 0.4, 0.95))
     };
-    let chip_color = if stopping {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.55)
-    } else {
-        Color::from_rgba(0.95, 0.4, 0.4, 0.95)
-    };
+    let elapsed_label = format!(
+        "{:02}:{:02}",
+        (elapsed_secs as u32) / 60,
+        (elapsed_secs as u32) % 60
+    );
     let header = row![
         text("Scrolling Capture")
             .size(14)
             .color(Color::from_rgba(1.0, 1.0, 1.0, 0.92)),
         Space::new().width(Length::Fill),
+        text(elapsed_label)
+            .size(10)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.50)),
+        Space::new().width(Length::Fixed(8.0)),
         text(chip_label).size(10).color(chip_color),
     ]
     .align_y(Alignment::Center);
 
-    // Frame counter — big number plus capacity tail.
+    // Frame counter — big number plus capacity tail. The number
+    // briefly tints blue when a new frame just landed so the user
+    // gets a visible "scroll registered" pulse without having to
+    // stare at the digits to see them change.
+    let counter_color = if flash {
+        Color::from_rgba(0.65, 0.78, 1.0, 1.0)
+    } else {
+        Color::WHITE
+    };
     let counter_row = row![
-        text(format!("{frame_count}")).size(28).color(Color::WHITE),
+        text(format!("{frame_count}")).size(28).color(counter_color),
         text(format!("/ {cap} frames"))
             .size(11)
             .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),

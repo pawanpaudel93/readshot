@@ -38,6 +38,11 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Capture,
+    /// Open the overlay pre-set to start a scrolling-capture session
+    /// when the user confirms a region. Lets the user reach the
+    /// feature without first picking a region and then hunting for
+    /// the ↕ Scroll button in the quick-action toolbar.
+    ScrollCapture,
     RetakeLastRegion,
     History,
     Settings,
@@ -61,6 +66,11 @@ fn menu_items(hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<T
             label: capture_menu_label(hotkey_label),
             enabled: true,
             action: Some(TrayAction::Capture),
+        },
+        TrayMenuItem {
+            label: "Scrolling Capture…".to_string(),
+            enabled: true,
+            action: Some(TrayAction::ScrollCapture),
         },
         TrayMenuItem {
             label: "Retake Last Region".to_string(),
@@ -187,6 +197,7 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
     let menu = Menu::new();
     let capture_label = capture_menu_label(hotkey_label);
     let item_capture = MenuItem::new(capture_label, true, None);
+    let item_scroll_capture = MenuItem::new("Scrolling Capture…", true, None);
     let item_retake_last_region = MenuItem::new("Retake Last Region", false, None);
     // ⌘Y / ⌘, only render as hint text in the menu — muda doesn't
     // dispatch them globally because the tray menu isn't the focused
@@ -213,6 +224,7 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
 
     let mut menu_ids = HashMap::new();
     menu_ids.insert(item_capture.id().clone(), TrayAction::Capture);
+    menu_ids.insert(item_scroll_capture.id().clone(), TrayAction::ScrollCapture);
     menu_ids.insert(
         item_retake_last_region.id().clone(),
         TrayAction::RetakeLastRegion,
@@ -228,6 +240,7 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
 
     if let Err(e) = menu.append_items(&[
         &item_capture,
+        &item_scroll_capture,
         &item_retake_last_region,
         &item_history,
         &item_settings,
@@ -392,6 +405,7 @@ mod tests {
             actions,
             vec![
                 TrayAction::Capture,
+                TrayAction::ScrollCapture,
                 TrayAction::RetakeLastRegion,
                 TrayAction::History,
                 TrayAction::Settings,
@@ -418,9 +432,9 @@ mod tests {
     #[test]
     fn menu_contains_retake_last_region_after_capture() {
         let items = menu_items(Some("⌘⇧X"), true);
-        let capture = items
+        let scroll = items
             .iter()
-            .position(|item| item.action == Some(TrayAction::Capture))
+            .position(|item| item.action == Some(TrayAction::ScrollCapture))
             .unwrap();
         let retake = items
             .iter()
@@ -429,7 +443,9 @@ mod tests {
 
         assert_eq!(items[retake].label, "Retake Last Region");
         assert!(items[retake].enabled);
-        assert_eq!(retake, capture + 1);
+        // Retake follows the Scrolling Capture entry, which itself
+        // follows the primary Capture entry.
+        assert_eq!(retake, scroll + 1);
     }
 
     #[test]
