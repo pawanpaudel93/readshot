@@ -34,6 +34,13 @@ pub enum ResizeHandle {
     End,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextEdit {
+    pub index: usize,
+    pub origin: PointLike,
+    pub content: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct EditorState {
     base: RgbaImage,
@@ -219,6 +226,74 @@ impl EditorState {
         true
     }
 
+    pub fn selected_kind_label(&self) -> Option<&'static str> {
+        let idx = self.selected_annotation()?;
+        Some(annotation_kind_label(&self.history.current()[idx]))
+    }
+
+    pub fn selected_text_edit(&self) -> Option<TextEdit> {
+        let idx = self.selected_annotation()?;
+        match &self.history.current()[idx] {
+            Annotation::Text {
+                content, origin, ..
+            } => Some(TextEdit {
+                index: idx,
+                origin: *origin,
+                content: content.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn replace_selected_text(&mut self, content: String) -> bool {
+        let Some(idx) = self.selected_annotation() else {
+            return false;
+        };
+        let mut next = self.history.current().to_vec();
+        let Some(Annotation::Text {
+            content: existing, ..
+        }) = next.get_mut(idx)
+        else {
+            return false;
+        };
+        if *existing == content {
+            return false;
+        }
+        *existing = content;
+        self.history.push(next);
+        self.selected_annotation = Some(idx);
+        self.flattened_cache = None;
+        true
+    }
+
+    pub fn apply_color_to_selected(&mut self, color: Rgba) -> bool {
+        let Some(idx) = self.selected_annotation() else {
+            return false;
+        };
+        let mut next = self.history.current().to_vec();
+        if !set_annotation_color(&mut next[idx], color) {
+            return false;
+        }
+        self.history.push(next);
+        self.selected_annotation = Some(idx);
+        self.flattened_cache = None;
+        true
+    }
+
+    pub fn apply_line_width_to_selected(&mut self, width: f32) -> bool {
+        let Some(idx) = self.selected_annotation() else {
+            return false;
+        };
+        let mut next = self.history.current().to_vec();
+        if !set_annotation_width(&mut next[idx], width.clamp(0.5, 64.0)) {
+            return false;
+        }
+        self.history.push(next);
+        self.selected_annotation = Some(idx);
+        self.flattened_cache = None;
+        true
+    }
+
     pub fn preview_move_selected_from(
         &mut self,
         baseline: &[Annotation],
@@ -318,6 +393,98 @@ fn annotation_hit_test(annotation: &Annotation, point: PointLike) -> bool {
         _ => {
             annotation_bounds(annotation).is_some_and(|rect| rect_contains(rect, point, TOLERANCE))
         }
+    }
+}
+
+fn annotation_kind_label(annotation: &Annotation) -> &'static str {
+    match annotation {
+        Annotation::Rectangle { .. } => "Rectangle",
+        Annotation::Ellipse { .. } => "Ellipse",
+        Annotation::Line { .. } => "Line",
+        Annotation::Arrow { .. } => "Arrow",
+        Annotation::Pen { .. } => "Pen",
+        Annotation::Highlighter { .. } => "Highlighter",
+        Annotation::Text { .. } => "Text",
+        Annotation::Blur { .. } => "Blur",
+        Annotation::Pixelate { .. } => "Pixelate",
+        Annotation::NumberedPin { .. } => "Pin",
+        Annotation::Crop { .. } => "Crop",
+    }
+}
+
+fn set_annotation_color(annotation: &mut Annotation, color: Rgba) -> bool {
+    match annotation {
+        Annotation::Rectangle { color: c, .. }
+        | Annotation::Ellipse { color: c, .. }
+        | Annotation::Line { color: c, .. }
+        | Annotation::Arrow { color: c, .. }
+        | Annotation::Pen { color: c, .. }
+        | Annotation::Text { color: c, .. }
+        | Annotation::NumberedPin { color: c, .. } => {
+            if *c == color {
+                return false;
+            }
+            *c = color;
+            true
+        }
+        Annotation::Highlighter { color: c, .. } => {
+            let next = Rgba::new(color.r, color.g, color.b, c.a);
+            if *c == next {
+                return false;
+            }
+            *c = next;
+            true
+        }
+        Annotation::Blur { .. } | Annotation::Pixelate { .. } | Annotation::Crop { .. } => false,
+    }
+}
+
+fn set_annotation_width(annotation: &mut Annotation, width: f32) -> bool {
+    match annotation {
+        Annotation::Rectangle { line_width, .. }
+        | Annotation::Ellipse { line_width, .. }
+        | Annotation::Line { line_width, .. }
+        | Annotation::Arrow { line_width, .. }
+        | Annotation::Pen { line_width, .. } => {
+            if (*line_width - width).abs() < f32::EPSILON {
+                return false;
+            }
+            *line_width = width;
+            true
+        }
+        Annotation::Highlighter { line_width, .. } => {
+            let width = width.max(12.0);
+            if (*line_width - width).abs() < f32::EPSILON {
+                return false;
+            }
+            *line_width = width;
+            true
+        }
+        Annotation::Text { size, .. } => {
+            let next = (width * 4.0 + 8.0).clamp(12.0, 96.0);
+            if (*size - next).abs() < f32::EPSILON {
+                return false;
+            }
+            *size = next;
+            true
+        }
+        Annotation::Blur { radius, .. } => {
+            let next = width.max(2.0);
+            if (*radius - next).abs() < f32::EPSILON {
+                return false;
+            }
+            *radius = next;
+            true
+        }
+        Annotation::Pixelate { block_size, .. } => {
+            let next = width.max(4.0);
+            if (*block_size - next).abs() < f32::EPSILON {
+                return false;
+            }
+            *block_size = next;
+            true
+        }
+        Annotation::NumberedPin { .. } | Annotation::Crop { .. } => false,
     }
 }
 
@@ -789,6 +956,68 @@ mod tests {
                 assert_eq!(*b, PointLike::new(34.0, 24.0));
             }
             other => panic!("expected line, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn selected_annotation_color_updates_undoably() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        assert_eq!(s.select_at(PointLike::new(2.0, 2.0)), Some(0));
+        let blue = Rgba::new(0.0, 0.2, 1.0, 1.0);
+
+        assert!(s.apply_color_to_selected(blue));
+
+        match &s.annotations()[0] {
+            Annotation::Rectangle { color, .. } => assert_eq!(*color, blue),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+        assert!(s.undo());
+        match &s.annotations()[0] {
+            Annotation::Rectangle { color, .. } => assert_eq!(*color, Rgba::OPAQUE_BLACK),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn selected_annotation_width_updates_undoably() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        assert_eq!(s.select_at(PointLike::new(2.0, 2.0)), Some(0));
+
+        assert!(s.apply_line_width_to_selected(9.0));
+
+        match &s.annotations()[0] {
+            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 9.0),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn selected_text_can_be_replaced_undoably() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(Annotation::Text {
+            content: "old".into(),
+            origin: PointLike::new(10.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 16.0,
+        });
+        assert_eq!(s.select_at(PointLike::new(12.0, 8.0)), Some(0));
+        let edit = s.selected_text_edit().expect("selected text is editable");
+        assert_eq!(edit.index, 0);
+        assert_eq!(edit.content, "old");
+
+        assert!(s.replace_selected_text("new".into()));
+
+        match &s.annotations()[0] {
+            Annotation::Text { content, .. } => assert_eq!(content, "new"),
+            other => panic!("expected text, got {other:?}"),
+        }
+        assert!(s.undo());
+        match &s.annotations()[0] {
+            Annotation::Text { content, .. } => assert_eq!(content, "old"),
+            other => panic!("expected text, got {other:?}"),
         }
     }
 

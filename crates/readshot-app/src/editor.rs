@@ -186,6 +186,7 @@ impl EditorZoom {
 pub struct PendingText {
     pub origin: PointLike,
     pub content: String,
+    pub edit_index: Option<usize>,
 }
 
 #[derive(Clone, Debug)]

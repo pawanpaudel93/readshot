@@ -404,6 +404,8 @@ pub enum Message {
     EditorTextCancel,
     /// Delete the currently selected editor annotation, if any.
     EditorDeleteSelected,
+    /// Edit the selected text annotation, if one is selected.
+    EditorEditSelectedText,
     /// Background capture-and-save task finished. Carries the final
     /// PNG path or a stringified error.
     CaptureSaved(Result<PathBuf, String>),

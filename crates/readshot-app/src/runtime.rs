@@ -722,6 +722,9 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                     ) {
                         return Some(Message::EditorDeleteSelected);
                     }
+                    if matches!(key, Key::Named(iced::keyboard::key::Named::Enter)) {
+                        return Some(Message::EditorEditSelectedText);
+                    }
                     if let Key::Character(c) = &key {
                         // Tool selection: V/R/O/L/A/P/H/T/B/X/N/C
                         if let Some(t) = tool_for_key(c.as_str()) {
@@ -2164,8 +2167,22 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     ed.move_drag = None;
                     ed.model.set_tool(t);
                 }
-                readshot_ui::ToolbarMessage::SelectColor(c) => ed.model.set_color(c),
-                readshot_ui::ToolbarMessage::SetLineWidth(w) => ed.model.set_line_width(w),
+                readshot_ui::ToolbarMessage::SelectColor(c) => {
+                    ed.model.set_color(c);
+                    if ed.model.apply_color_to_selected(c) {
+                        ed.refresh_image();
+                        ed.set_status("Updated selected annotation color. ⌘Z to undo.");
+                        sync_editor_history(ed, &state.coordinator);
+                    }
+                }
+                readshot_ui::ToolbarMessage::SetLineWidth(w) => {
+                    ed.model.set_line_width(w);
+                    if ed.model.apply_line_width_to_selected(w) {
+                        ed.refresh_image();
+                        ed.set_status("Updated selected annotation size. ⌘Z to undo.");
+                        sync_editor_history(ed, &state.coordinator);
+                    }
+                }
                 readshot_ui::ToolbarMessage::Undo => {
                     ed.move_drag = None;
                     if ed.model.undo() {
@@ -2263,12 +2280,28 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     ed.pending_text = Some(crate::editor::PendingText {
                         origin: p,
                         content: String::new(),
+                        edit_index: None,
                     });
                 }
                 readshot_ui::CanvasMessage::CommitAnnotation(annotation) => {
                     handle_commit_annotation(ed, annotation);
                     sync_editor_history(ed, &state.coordinator);
                 }
+            }
+            Task::none()
+        }
+
+        Message::EditorEditSelectedText => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            if let Some(edit) = ed.model.selected_text_edit() {
+                ed.move_drag = None;
+                ed.pending_text = Some(crate::editor::PendingText {
+                    origin: edit.origin,
+                    content: edit.content,
+                    edit_index: Some(edit.index),
+                });
             }
             Task::none()
         }
@@ -2301,18 +2334,26 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             if let Some(pending) = ed.pending_text.take() {
                 let trimmed = pending.content.trim();
                 if !trimmed.is_empty() {
-                    let annotation = readshot_core::Annotation::Text {
-                        content: trimmed.to_string(),
-                        origin: pending.origin,
-                        color: ed.model.current_color(),
-                        font_family: "system-ui".to_string(),
-                        // Tie text size to the line-width slider so
-                        // it's discoverable without a separate control.
-                        size: text_size_from_line_width(ed.model.current_line_width()),
-                    };
-                    ed.model.commit_annotation(annotation);
-                    ed.refresh_image();
-                    sync_editor_history(ed, &state.coordinator);
+                    if pending.edit_index.is_some() {
+                        if ed.model.replace_selected_text(trimmed.to_string()) {
+                            ed.refresh_image();
+                            ed.set_status("Updated text. ⌘Z to undo.");
+                            sync_editor_history(ed, &state.coordinator);
+                        }
+                    } else {
+                        let annotation = readshot_core::Annotation::Text {
+                            content: trimmed.to_string(),
+                            origin: pending.origin,
+                            color: ed.model.current_color(),
+                            font_family: "system-ui".to_string(),
+                            // Tie text size to the line-width slider so
+                            // it's discoverable without a separate control.
+                            size: text_size_from_line_width(ed.model.current_line_width()),
+                        };
+                        ed.model.commit_annotation(annotation);
+                        ed.refresh_image();
+                        sync_editor_history(ed, &state.coordinator);
+                    }
                 }
             }
             Task::none()
@@ -4207,15 +4248,23 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     // in place of the per-tool guidance — the keyboard shortcuts
     // aren't visible anywhere in the chrome until the user hovers
     // a tool button, so this is the surface that surfaces them.
-    let hint_str = if ed.model.annotations().is_empty()
-        && active_tool == ToolState::Select
-        && ed.status.is_none()
-    {
-        "Press V / R / O / L / A / P / H / T / B / X / N / C to pick a tool · ⌘Z to undo"
+    let hint_str = if active_tool == ToolState::Select {
+        if let Some(kind) = ed.model.selected_kind_label() {
+            if ed.model.selected_text_edit().is_some() {
+                format!("Selected {kind} — Enter edits text · color/size update selected · Delete removes")
+            } else {
+                format!("Selected {kind} — drag to move · handles resize · color/size update selected · Delete removes")
+            }
+        } else if ed.model.annotations().is_empty() && ed.status.is_none() {
+            "Press V / R / O / L / A / P / H / T / B / X / N / C to pick a tool · ⌘Z to undo"
+                .to_string()
+        } else {
+            tool_hint(active_tool).to_string()
+        }
     } else {
-        tool_hint(active_tool)
+        tool_hint(active_tool).to_string()
     };
-    let hint_text = hint_str.to_string();
+    let hint_text = hint_str;
     // Auto-dismiss old success / info status text so the chrome
     // doesn't stay loud forever after a successful save / copy.
     // In-progress strings (Saving…, Copying…, Recognising text…)
