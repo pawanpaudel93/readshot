@@ -4,8 +4,8 @@
 [![release](https://github.com/pawanpaudel93/readshot/actions/workflows/release.yml/badge.svg)](https://github.com/pawanpaudel93/readshot/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Readshot is a free, offline screenshot tool for macOS with OCR,
-annotation, and searchable capture history.
+Readshot is a free, offline screenshot tool for macOS with scrolling
+capture, OCR, annotation, and searchable capture history.
 
 Website: <https://readshot.pawanpaudel.com.np>
 

@@ -148,7 +148,7 @@ builds both DMGs, uploads the GitHub Release, and updates the Sparkle
 appcast on `gh-pages`.
 
 ```bash
-scripts/release-local.sh 0.6.0 --force-tag
+scripts/release-local.sh <version> --force-tag
 ```
 
 Use `--force-tag` only when intentionally moving an existing tag to
