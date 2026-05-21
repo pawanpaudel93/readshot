@@ -6532,31 +6532,179 @@ fn default_save_filename(template: &str, when: chrono::DateTime<chrono::Utc>) ->
 }
 
 fn share_framed_image(img: &image::RgbaImage) -> image::RgbaImage {
-    const PAD: u32 = 32;
-    const SHADOW_OFFSET: u32 = 8;
-    const SHADOW_SPREAD: u32 = 10;
+    const PAD: u32 = 72;
+    const RADIUS: u32 = 18;
+    const SHADOW_OFFSET: i64 = 18;
+    const SHADOW_LAYERS: u32 = 8;
     let out_w = img.width().saturating_add(PAD * 2).max(1);
     let out_h = img.height().saturating_add(PAD * 2).max(1);
-    let mut out = image::RgbaImage::from_pixel(out_w, out_h, image::Rgba([244, 246, 248, 255]));
+    let mut out = image::RgbaImage::from_pixel(out_w, out_h, image::Rgba([229, 234, 240, 255]));
 
-    let shadow_x = PAD + SHADOW_OFFSET;
-    let shadow_y = PAD + SHADOW_OFFSET;
-    let shadow_w = img
-        .width()
-        .saturating_add(SHADOW_SPREAD)
-        .min(out_w - shadow_x);
-    let shadow_h = img
-        .height()
-        .saturating_add(SHADOW_SPREAD)
-        .min(out_h - shadow_y);
-    for y in shadow_y..shadow_y.saturating_add(shadow_h) {
-        for x in shadow_x..shadow_x.saturating_add(shadow_w) {
-            blend_pixel(&mut out, x, y, [15, 23, 42, 28]);
-        }
+    for layer in (1..=SHADOW_LAYERS).rev() {
+        let spread = layer * 3;
+        let alpha = (30 / layer).max(3) as u8;
+        draw_rounded_rect(
+            &mut out,
+            PAD as i64 + SHADOW_OFFSET - spread as i64,
+            PAD as i64 + SHADOW_OFFSET - spread as i64,
+            img.width().saturating_add(spread * 2),
+            img.height().saturating_add(spread * 2),
+            RADIUS.saturating_add(spread),
+            [15, 23, 42, alpha],
+        );
     }
 
-    image::imageops::overlay(&mut out, img, PAD as i64, PAD as i64);
+    draw_rounded_rect(
+        &mut out,
+        PAD as i64 - 1,
+        PAD as i64 - 1,
+        img.width().saturating_add(2),
+        img.height().saturating_add(2),
+        RADIUS + 1,
+        [255, 255, 255, 255],
+    );
+    overlay_rounded_image(&mut out, img, PAD, PAD, RADIUS);
+    draw_rounded_stroke(
+        &mut out,
+        PAD as i64 - 1,
+        PAD as i64 - 1,
+        img.width().saturating_add(2),
+        img.height().saturating_add(2),
+        RADIUS + 1,
+        [148, 163, 184, 180],
+    );
     out
+}
+
+fn draw_rounded_rect(
+    img: &mut image::RgbaImage,
+    x: i64,
+    y: i64,
+    w: u32,
+    h: u32,
+    radius: u32,
+    color: [u8; 4],
+) {
+    if w == 0 || h == 0 {
+        return;
+    }
+
+    let x0 = x.max(0) as u32;
+    let y0 = y.max(0) as u32;
+    let x1 = (x + w as i64).clamp(0, img.width() as i64) as u32;
+    let y1 = (y + h as i64).clamp(0, img.height() as i64) as u32;
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+
+    for py in y0..y1 {
+        for px in x0..x1 {
+            if point_in_rounded_rect(px as i64, py as i64, x, y, w, h, radius) {
+                blend_pixel(img, px, py, color);
+            }
+        }
+    }
+}
+
+fn draw_rounded_stroke(
+    img: &mut image::RgbaImage,
+    x: i64,
+    y: i64,
+    w: u32,
+    h: u32,
+    radius: u32,
+    color: [u8; 4],
+) {
+    if w <= 2 || h <= 2 {
+        draw_rounded_rect(img, x, y, w, h, radius, color);
+        return;
+    }
+
+    for py in y..y + h as i64 {
+        for px in x..x + w as i64 {
+            if px < 0 || py < 0 || px >= img.width() as i64 || py >= img.height() as i64 {
+                continue;
+            }
+            let outer = point_in_rounded_rect(px, py, x, y, w, h, radius);
+            let inner = point_in_rounded_rect(
+                px,
+                py,
+                x + 1,
+                y + 1,
+                w.saturating_sub(2),
+                h.saturating_sub(2),
+                radius.saturating_sub(1),
+            );
+            if outer && !inner {
+                blend_pixel(img, px as u32, py as u32, color);
+            }
+        }
+    }
+}
+
+fn overlay_rounded_image(
+    out: &mut image::RgbaImage,
+    src: &image::RgbaImage,
+    x: u32,
+    y: u32,
+    radius: u32,
+) {
+    for sy in 0..src.height() {
+        for sx in 0..src.width() {
+            let dx = x.saturating_add(sx);
+            let dy = y.saturating_add(sy);
+            if dx >= out.width() || dy >= out.height() {
+                continue;
+            }
+            if point_in_rounded_rect(
+                dx as i64,
+                dy as i64,
+                x as i64,
+                y as i64,
+                src.width(),
+                src.height(),
+                radius,
+            ) {
+                out.put_pixel(dx, dy, *src.get_pixel(sx, sy));
+            }
+        }
+    }
+}
+
+fn point_in_rounded_rect(px: i64, py: i64, x: i64, y: i64, w: u32, h: u32, radius: u32) -> bool {
+    if w == 0 || h == 0 {
+        return false;
+    }
+
+    let right = x + w as i64 - 1;
+    let bottom = y + h as i64 - 1;
+    if px < x || py < y || px > right || py > bottom {
+        return false;
+    }
+
+    let r = radius.min(w / 2).min(h / 2) as i64;
+    if r <= 0 {
+        return true;
+    }
+
+    let cx = if px < x + r {
+        x + r
+    } else if px > right - r {
+        right - r
+    } else {
+        px
+    };
+    let cy = if py < y + r {
+        y + r
+    } else if py > bottom - r {
+        bottom - r
+    } else {
+        py
+    };
+
+    let dx = px - cx;
+    let dy = py - cy;
+    dx * dx + dy * dy <= r * r
 }
 
 fn blend_pixel(img: &mut image::RgbaImage, x: u32, y: u32, src: [u8; 4]) {
@@ -7729,17 +7877,22 @@ mod tests {
 
     #[test]
     fn share_framed_image_adds_padding_and_preserves_center_pixels() {
-        let mut img = image::RgbaImage::new(2, 2);
+        let mut img = image::RgbaImage::new(64, 64);
         for px in img.pixels_mut() {
             *px = image::Rgba([200, 10, 20, 255]);
         }
 
         let framed = share_framed_image(&img);
 
-        assert_eq!(framed.width(), 66);
-        assert_eq!(framed.height(), 66);
-        assert_eq!(*framed.get_pixel(32, 32), image::Rgba([200, 10, 20, 255]));
-        assert_eq!(*framed.get_pixel(0, 0), image::Rgba([244, 246, 248, 255]));
+        assert_eq!(framed.width(), 208);
+        assert_eq!(framed.height(), 208);
+        assert_eq!(*framed.get_pixel(104, 104), image::Rgba([200, 10, 20, 255]));
+        assert_eq!(*framed.get_pixel(0, 0), image::Rgba([229, 234, 240, 255]));
+        assert_eq!(*framed.get_pixel(72, 72), image::Rgba([229, 234, 240, 255]));
+        assert_ne!(
+            *framed.get_pixel(104, 71),
+            image::Rgba([229, 234, 240, 255])
+        );
     }
 
     #[test]
