@@ -344,6 +344,10 @@ pub enum Message {
     EditorCopyImageRequested,
     /// Image-copy task completed.
     EditorCopyImageDone(Result<(), String>),
+    /// User clicked Copy Framed (presentation-ready image to clipboard).
+    EditorCopyFramedRequested,
+    /// Framed-image copy task completed.
+    EditorCopyFramedDone(Result<(), String>),
     /// User clicked Copy Text (run OCR + clipboard).
     EditorCopyTextRequested,
     /// OCR + clipboard write completed.

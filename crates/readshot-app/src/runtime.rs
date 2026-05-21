@@ -2089,6 +2089,28 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::EditorCopyFramedRequested => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            ed.busy = true;
+            ed.set_status("Copying framed image…");
+            let img = share_framed_image(&ed.model.flatten());
+            Task::perform(copy_image_to_clipboard(img), |r| {
+                Message::EditorCopyFramedDone(r.map_err(|e| e.to_string()))
+            })
+        }
+        Message::EditorCopyFramedDone(result) => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.busy = false;
+                ed.set_status(match result {
+                    Ok(()) => "Copied framed image to clipboard.".into(),
+                    Err(e) => format!("Copy framed failed: {e}"),
+                });
+            }
+            Task::none()
+        }
+
         Message::EditorCopyTextRequested => {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
@@ -4383,6 +4405,12 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             ActionKind::Secondary,
             busy,
         );
+        let copy_framed = editor_action_button(
+            "Copy Framed",
+            Message::EditorCopyFramedRequested,
+            ActionKind::Secondary,
+            busy,
+        );
         let save = editor_action_button(
             "Save",
             Message::EditorSaveRequested,
@@ -4399,6 +4427,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
                     pin,
                     copy_text,
                     copy_image,
+                    copy_framed,
                     save,
                 ]
                 .spacing(6)
@@ -4409,7 +4438,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             .into(),
             EditorBottomLayout::Stacked => column![
                 status_area,
-                row![discard, pin, copy_text, copy_image, save]
+                row![discard, pin, copy_text, copy_image, copy_framed, save]
                     .spacing(6)
                     .align_y(Alignment::Center)
             ]
@@ -4420,7 +4449,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
                 row![discard, pin, save]
                     .spacing(6)
                     .align_y(Alignment::Center),
-                row![copy_text, copy_image]
+                row![copy_text, copy_image, copy_framed]
                     .spacing(6)
                     .align_y(Alignment::Center),
             ]
@@ -6502,6 +6531,46 @@ fn default_save_filename(template: &str, when: chrono::DateTime<chrono::Utc>) ->
     filename
 }
 
+fn share_framed_image(img: &image::RgbaImage) -> image::RgbaImage {
+    const PAD: u32 = 32;
+    const SHADOW_OFFSET: u32 = 8;
+    const SHADOW_SPREAD: u32 = 10;
+    let out_w = img.width().saturating_add(PAD * 2).max(1);
+    let out_h = img.height().saturating_add(PAD * 2).max(1);
+    let mut out = image::RgbaImage::from_pixel(out_w, out_h, image::Rgba([244, 246, 248, 255]));
+
+    let shadow_x = PAD + SHADOW_OFFSET;
+    let shadow_y = PAD + SHADOW_OFFSET;
+    let shadow_w = img
+        .width()
+        .saturating_add(SHADOW_SPREAD)
+        .min(out_w - shadow_x);
+    let shadow_h = img
+        .height()
+        .saturating_add(SHADOW_SPREAD)
+        .min(out_h - shadow_y);
+    for y in shadow_y..shadow_y.saturating_add(shadow_h) {
+        for x in shadow_x..shadow_x.saturating_add(shadow_w) {
+            blend_pixel(&mut out, x, y, [15, 23, 42, 28]);
+        }
+    }
+
+    image::imageops::overlay(&mut out, img, PAD as i64, PAD as i64);
+    out
+}
+
+fn blend_pixel(img: &mut image::RgbaImage, x: u32, y: u32, src: [u8; 4]) {
+    let dst = img.get_pixel_mut(x, y);
+    let alpha = src[3] as f32 / 255.0;
+    let inv = 1.0 - alpha;
+    dst.0 = [
+        (src[0] as f32 * alpha + dst[0] as f32 * inv).round() as u8,
+        (src[1] as f32 * alpha + dst[1] as f32 * inv).round() as u8,
+        (src[2] as f32 * alpha + dst[2] as f32 * inv).round() as u8,
+        255,
+    ];
+}
+
 /// Push an RGBA image to the system clipboard. Runs the arboard
 /// init synchronously inside `spawn_blocking` because some platforms
 /// (X11 specifically) hold internal mutexes that don't play well
@@ -7656,6 +7725,21 @@ mod tests {
         let filename = default_save_filename("Capture {YYYY}-{timestamp}", when);
 
         assert_eq!(filename, "Capture 2023-1700000000.png");
+    }
+
+    #[test]
+    fn share_framed_image_adds_padding_and_preserves_center_pixels() {
+        let mut img = image::RgbaImage::new(2, 2);
+        for px in img.pixels_mut() {
+            *px = image::Rgba([200, 10, 20, 255]);
+        }
+
+        let framed = share_framed_image(&img);
+
+        assert_eq!(framed.width(), 66);
+        assert_eq!(framed.height(), 66);
+        assert_eq!(*framed.get_pixel(32, 32), image::Rgba([200, 10, 20, 255]));
+        assert_eq!(*framed.get_pixel(0, 0), image::Rgba([244, 246, 248, 255]));
     }
 
     #[test]
