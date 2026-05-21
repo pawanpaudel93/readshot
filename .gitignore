@@ -2,6 +2,7 @@
 docs/superpowers/
 .autoarchitect/
 .codex/
+.superpowers/
 
 # Rust / Cargo
 target/

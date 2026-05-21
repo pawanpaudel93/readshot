@@ -12,7 +12,7 @@
 //! `EditorState` and feeds it iced messages.
 
 use image::RgbaImage;
-use readshot_core::{render, Annotation, Rgba};
+use readshot_core::{render, Annotation, PointLike, RectLike, Rgba};
 
 use super::tool_state::ToolState;
 use super::undo::History;
@@ -26,6 +26,7 @@ pub struct EditorState {
     active_tool: ToolState,
     current_color: Rgba,
     current_line_width: f32,
+    selected_annotation: Option<usize>,
     /// Cached flattened image. Invalidated whenever `history`,
     /// `current_color`, or `current_line_width` change.
     flattened_cache: Option<RgbaImage>,
@@ -39,6 +40,7 @@ impl EditorState {
             active_tool: ToolState::default(),
             current_color: Rgba::new(1.0, 0.0, 0.0, 1.0),
             current_line_width: DEFAULT_LINE_WIDTH,
+            selected_annotation: None,
             flattened_cache: None,
         }
     }
@@ -50,6 +52,7 @@ impl EditorState {
             active_tool: ToolState::default(),
             current_color: Rgba::new(1.0, 0.0, 0.0, 1.0),
             current_line_width: DEFAULT_LINE_WIDTH,
+            selected_annotation: None,
             flattened_cache: None,
         }
     }
@@ -95,6 +98,9 @@ impl EditorState {
 
     pub fn set_tool(&mut self, tool: ToolState) {
         self.active_tool = tool;
+        if tool != ToolState::Select {
+            self.selected_annotation = None;
+        }
     }
 
     pub fn set_color(&mut self, color: Rgba) {
@@ -113,6 +119,7 @@ impl EditorState {
     pub fn commit_annotation(&mut self, annotation: Annotation) {
         let mut next = self.history.current().to_vec();
         next.push(annotation);
+        self.selected_annotation = next.len().checked_sub(1);
         self.history.push(next);
         self.flattened_cache = None;
     }
@@ -120,6 +127,7 @@ impl EditorState {
     pub fn undo(&mut self) -> bool {
         let changed = self.history.undo().is_some();
         if changed {
+            self.clamp_selection();
             self.flattened_cache = None;
         }
         changed
@@ -128,6 +136,7 @@ impl EditorState {
     pub fn redo(&mut self) -> bool {
         let changed = self.history.redo().is_some();
         if changed {
+            self.clamp_selection();
             self.flattened_cache = None;
         }
         changed
@@ -137,7 +146,83 @@ impl EditorState {
     /// "Discard" action button before the editor closes.
     pub fn discard(&mut self) {
         self.history.clear();
+        self.selected_annotation = None;
         self.flattened_cache = None;
+    }
+
+    pub fn selected_annotation(&self) -> Option<usize> {
+        self.selected_annotation
+            .filter(|idx| *idx < self.history.current().len())
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selected_annotation = None;
+    }
+
+    pub fn selected_bounds(&self) -> Option<RectLike> {
+        let idx = self.selected_annotation()?;
+        annotation_bounds(&self.history.current()[idx])
+    }
+
+    pub fn select_at(&mut self, point: PointLike) -> Option<usize> {
+        let hit = self
+            .history
+            .current()
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(idx, annotation)| annotation_hit_test(annotation, point).then_some(idx));
+        self.selected_annotation = hit;
+        hit
+    }
+
+    pub fn delete_selected_annotation(&mut self) -> bool {
+        let Some(idx) = self.selected_annotation() else {
+            return false;
+        };
+        let mut next = self.history.current().to_vec();
+        if idx >= next.len() {
+            self.selected_annotation = None;
+            return false;
+        }
+        next.remove(idx);
+        self.selected_annotation = None;
+        self.history.push(next);
+        self.flattened_cache = None;
+        true
+    }
+
+    pub fn preview_move_selected_from(
+        &mut self,
+        baseline: &[Annotation],
+        dx: f32,
+        dy: f32,
+    ) -> bool {
+        let Some(idx) = self.selected_annotation else {
+            return false;
+        };
+        if idx >= baseline.len() {
+            self.selected_annotation = None;
+            return false;
+        }
+        let mut next = baseline.to_vec();
+        translate_annotation(&mut next[idx], dx, dy);
+        self.history.replace_present(next);
+        self.flattened_cache = None;
+        true
+    }
+
+    pub fn commit_preview_from_baseline(&mut self, baseline: Vec<Annotation>) -> bool {
+        let final_state = self.history.current().to_vec();
+        if final_state == baseline {
+            self.history.replace_present(baseline);
+            return false;
+        }
+        self.history.replace_present(baseline);
+        self.history.push(final_state);
+        self.clamp_selection();
+        self.flattened_cache = None;
+        true
     }
 
     /// Render base + annotations into a single flat `RgbaImage`,
@@ -151,6 +236,150 @@ impl EditorState {
         self.flattened_cache = Some(img.clone());
         img
     }
+
+    fn clamp_selection(&mut self) {
+        if self
+            .selected_annotation
+            .is_some_and(|idx| idx >= self.history.current().len())
+        {
+            self.selected_annotation = None;
+        }
+    }
+}
+
+fn annotation_hit_test(annotation: &Annotation, point: PointLike) -> bool {
+    const TOLERANCE: f32 = 6.0;
+    match annotation {
+        Annotation::Line {
+            a, b, line_width, ..
+        }
+        | Annotation::Arrow {
+            a, b, line_width, ..
+        } => distance_to_segment(point, *a, *b) <= (*line_width * 0.5).max(TOLERANCE),
+        Annotation::Pen {
+            points, line_width, ..
+        }
+        | Annotation::Highlighter {
+            points, line_width, ..
+        } => points.windows(2).any(|pair| {
+            distance_to_segment(point, pair[0], pair[1]) <= (*line_width * 0.5).max(TOLERANCE)
+        }),
+        Annotation::NumberedPin { origin, .. } => distance(point, *origin) <= 16.0,
+        _ => {
+            annotation_bounds(annotation).is_some_and(|rect| rect_contains(rect, point, TOLERANCE))
+        }
+    }
+}
+
+fn annotation_bounds(annotation: &Annotation) -> Option<RectLike> {
+    match annotation {
+        Annotation::Rectangle { rect, .. }
+        | Annotation::Ellipse { rect, .. }
+        | Annotation::Blur { rect, .. }
+        | Annotation::Pixelate { rect, .. }
+        | Annotation::Crop { rect } => Some(*rect),
+        Annotation::Line {
+            a, b, line_width, ..
+        }
+        | Annotation::Arrow {
+            a, b, line_width, ..
+        } => bounds_for_points(&[*a, *b], (*line_width * 0.5).max(6.0)),
+        Annotation::Pen {
+            points, line_width, ..
+        }
+        | Annotation::Highlighter {
+            points, line_width, ..
+        } => bounds_for_points(points, (*line_width * 0.5).max(6.0)),
+        Annotation::Text {
+            content,
+            origin,
+            size,
+            ..
+        } => {
+            let width = (content.chars().count() as f32 * *size * 0.6).max(*size);
+            Some(RectLike::new(
+                origin.x,
+                origin.y - *size,
+                width,
+                *size * 1.35,
+            ))
+        }
+        Annotation::NumberedPin { origin, .. } => {
+            Some(RectLike::new(origin.x - 16.0, origin.y - 16.0, 32.0, 32.0))
+        }
+    }
+}
+
+fn translate_annotation(annotation: &mut Annotation, dx: f32, dy: f32) {
+    match annotation {
+        Annotation::Rectangle { rect, .. }
+        | Annotation::Ellipse { rect, .. }
+        | Annotation::Blur { rect, .. }
+        | Annotation::Pixelate { rect, .. }
+        | Annotation::Crop { rect } => translate_rect(rect, dx, dy),
+        Annotation::Line { a, b, .. } | Annotation::Arrow { a, b, .. } => {
+            translate_point(a, dx, dy);
+            translate_point(b, dx, dy);
+        }
+        Annotation::Pen { points, .. } | Annotation::Highlighter { points, .. } => {
+            for point in points {
+                translate_point(point, dx, dy);
+            }
+        }
+        Annotation::Text { origin, .. } | Annotation::NumberedPin { origin, .. } => {
+            translate_point(origin, dx, dy);
+        }
+    }
+}
+
+fn translate_rect(rect: &mut RectLike, dx: f32, dy: f32) {
+    rect.x += dx;
+    rect.y += dy;
+}
+
+fn translate_point(point: &mut PointLike, dx: f32, dy: f32) {
+    point.x += dx;
+    point.y += dy;
+}
+
+fn bounds_for_points(points: &[PointLike], pad: f32) -> Option<RectLike> {
+    let first = points.first()?;
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (first.x, first.y, first.x, first.y);
+    for point in points.iter().skip(1) {
+        min_x = min_x.min(point.x);
+        min_y = min_y.min(point.y);
+        max_x = max_x.max(point.x);
+        max_y = max_y.max(point.y);
+    }
+    Some(RectLike::new(
+        min_x - pad,
+        min_y - pad,
+        (max_x - min_x) + pad * 2.0,
+        (max_y - min_y) + pad * 2.0,
+    ))
+}
+
+fn rect_contains(rect: RectLike, point: PointLike, tolerance: f32) -> bool {
+    point.x >= rect.x - tolerance
+        && point.y >= rect.y - tolerance
+        && point.x <= rect.x + rect.width + tolerance
+        && point.y <= rect.y + rect.height + tolerance
+}
+
+fn distance(a: PointLike, b: PointLike) -> f32 {
+    (a.x - b.x).hypot(a.y - b.y)
+}
+
+fn distance_to_segment(point: PointLike, a: PointLike, b: PointLike) -> f32 {
+    let ab_x = b.x - a.x;
+    let ab_y = b.y - a.y;
+    let len_sq = ab_x * ab_x + ab_y * ab_y;
+    if len_sq <= f32::EPSILON {
+        return distance(point, a);
+    }
+    let t = (((point.x - a.x) * ab_x + (point.y - a.y) * ab_y) / len_sq).clamp(0.0, 1.0);
+    let projection = PointLike::new(a.x + ab_x * t, a.y + ab_y * t);
+    distance(point, projection)
 }
 
 #[cfg(test)]
@@ -254,6 +483,68 @@ mod tests {
         s.discard();
         assert!(s.annotations().is_empty());
         assert!(!s.can_undo());
+    }
+
+    #[test]
+    fn select_at_returns_topmost_annotation_containing_point() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 30.0, 30.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+        });
+        s.commit_annotation(Annotation::Ellipse {
+            rect: RectLike::new(10.0, 10.0, 30.0, 30.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+        });
+
+        assert_eq!(s.select_at(PointLike::new(20.0, 20.0)), Some(1));
+        assert_eq!(s.selected_annotation(), Some(1));
+
+        assert_eq!(s.select_at(PointLike::new(55.0, 55.0)), None);
+        assert_eq!(s.selected_annotation(), None);
+    }
+
+    #[test]
+    fn delete_selected_annotation_pushes_one_undoable_edit() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        s.commit_annotation(rect(20.0));
+        assert_eq!(s.select_at(PointLike::new(22.0, 2.0)), Some(1));
+
+        assert!(s.delete_selected_annotation());
+
+        assert_eq!(s.annotations().len(), 1);
+        assert_eq!(s.selected_annotation(), None);
+        assert!(s.undo());
+        assert_eq!(s.annotations().len(), 2);
+    }
+
+    #[test]
+    fn selected_annotation_can_preview_move_then_commit_one_undo_step() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        assert_eq!(s.select_at(PointLike::new(2.0, 2.0)), Some(0));
+
+        let baseline = s.annotations().to_vec();
+        assert!(s.preview_move_selected_from(&baseline, 5.0, 7.0));
+        match &s.annotations()[0] {
+            Annotation::Rectangle { rect, .. } => {
+                assert_eq!(rect.x, 5.0);
+                assert_eq!(rect.y, 7.0);
+            }
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+        assert!(s.commit_preview_from_baseline(baseline));
+        assert!(s.undo());
+        match &s.annotations()[0] {
+            Annotation::Rectangle { rect, .. } => {
+                assert_eq!(rect.x, 0.0);
+                assert_eq!(rect.y, 0.0);
+            }
+            other => panic!("expected rectangle, got {other:?}"),
+        }
     }
 
     #[test]

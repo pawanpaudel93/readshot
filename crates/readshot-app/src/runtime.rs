@@ -715,6 +715,13 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                 // has captured the event — i.e. the user isn't
                 // typing into the text-input banner.
                 if status == Status::Ignored && !cmd && !modifiers.alt() && !modifiers.control() {
+                    if matches!(
+                        key,
+                        Key::Named(iced::keyboard::key::Named::Delete)
+                            | Key::Named(iced::keyboard::key::Named::Backspace)
+                    ) {
+                        return Some(Message::EditorDeleteSelected);
+                    }
                     if let Key::Character(c) = &key {
                         // Tool selection: V/R/O/L/A/P/H/T/B/X/N/C
                         if let Some(t) = tool_for_key(c.as_str()) {
@@ -2153,16 +2160,21 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 return Task::none();
             };
             match msg {
-                readshot_ui::ToolbarMessage::SelectTool(t) => ed.model.set_tool(t),
+                readshot_ui::ToolbarMessage::SelectTool(t) => {
+                    ed.move_drag = None;
+                    ed.model.set_tool(t);
+                }
                 readshot_ui::ToolbarMessage::SelectColor(c) => ed.model.set_color(c),
                 readshot_ui::ToolbarMessage::SetLineWidth(w) => ed.model.set_line_width(w),
                 readshot_ui::ToolbarMessage::Undo => {
+                    ed.move_drag = None;
                     if ed.model.undo() {
                         ed.refresh_image();
                         sync_editor_history(ed, &state.coordinator);
                     }
                 }
                 readshot_ui::ToolbarMessage::Redo => {
+                    ed.move_drag = None;
                     if ed.model.redo() {
                         ed.refresh_image();
                         sync_editor_history(ed, &state.coordinator);
@@ -2188,6 +2200,43 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     // Preview-only events. The canvas's own State holds
                     // the drag points; a redraw is automatic.
                 }
+                readshot_ui::CanvasMessage::SelectPressed(p) => {
+                    ed.pending_text = None;
+                    if ed.model.select_at(p).is_some() {
+                        ed.move_drag = Some(crate::editor::MoveDrag {
+                            baseline: ed.model.annotations().to_vec(),
+                            start: p,
+                            moved: false,
+                        });
+                    } else {
+                        ed.move_drag = None;
+                    }
+                }
+                readshot_ui::CanvasMessage::SelectDragged(p) => {
+                    if let Some(drag) = ed.move_drag.as_mut() {
+                        let dx = p.x - drag.start.x;
+                        let dy = p.y - drag.start.y;
+                        if (dx.abs() >= 0.5 || dy.abs() >= 0.5)
+                            && ed.model.preview_move_selected_from(&drag.baseline, dx, dy)
+                        {
+                            drag.moved = true;
+                            ed.refresh_image();
+                        }
+                    }
+                }
+                readshot_ui::CanvasMessage::SelectReleased => {
+                    if let Some(drag) = ed.move_drag.take() {
+                        if drag.moved {
+                            if ed.model.commit_preview_from_baseline(drag.baseline) {
+                                ed.refresh_image();
+                                ed.set_status("Moved annotation. ⌘Z to undo.");
+                                sync_editor_history(ed, &state.coordinator);
+                            } else {
+                                ed.refresh_image();
+                            }
+                        }
+                    }
+                }
                 readshot_ui::CanvasMessage::RequestText(p) => {
                     // Text tool clicked — open the inline text-input
                     // banner. The eventual Annotation::Text lands at
@@ -2202,6 +2251,19 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     handle_commit_annotation(ed, annotation);
                     sync_editor_history(ed, &state.coordinator);
                 }
+            }
+            Task::none()
+        }
+
+        Message::EditorDeleteSelected => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            ed.move_drag = None;
+            if ed.model.delete_selected_annotation() {
+                ed.refresh_image();
+                ed.set_status("Deleted annotation. ⌘Z to undo.");
+                sync_editor_history(ed, &state.coordinator);
             }
             Task::none()
         }
@@ -2239,6 +2301,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::EditorTextCancel => {
             if let Some(ed) = state.editor.as_mut() {
+                ed.move_drag = None;
+                ed.model.clear_selection();
                 ed.pending_text = None;
             }
             Task::none()
@@ -4001,6 +4065,9 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             image_size: (image_w, image_h),
             image_offset,
             display_scale: Some(scale),
+            selected_bounds: (active_tool == ToolState::Select)
+                .then(|| ed.model.selected_bounds())
+                .flatten(),
         };
         let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
             .width(Length::Fixed(content_w))
@@ -4835,7 +4902,7 @@ fn tool_for_key(c: &str) -> Option<readshot_ui::editor::ToolState> {
 fn tool_hint(tool: readshot_ui::editor::ToolState) -> &'static str {
     use readshot_ui::editor::ToolState as T;
     match tool {
-        T::Select => "Select tool — drag tools commit on release. ⌘Z undoes, ⌘⇧Z redoes.",
+        T::Select => "Select — click an annotation, drag to move, Delete removes, Esc deselects.",
         T::Rectangle => "Rectangle — drag to outline a region.",
         T::Ellipse => "Ellipse — drag the bounding box.",
         T::Line => "Line — drag from start to end.",
@@ -4853,7 +4920,7 @@ fn tool_hint(tool: readshot_ui::editor::ToolState) -> &'static str {
 fn editor_compact_hint(tool: readshot_ui::editor::ToolState) -> &'static str {
     use readshot_ui::editor::ToolState as T;
     match tool {
-        T::Select => "Tools: R/O/L/A/P/H/T/B/X/N/C · Undo: ⌘Z",
+        T::Select => "Click to select · drag to move · Delete removes",
         T::Rectangle => "Drag to draw a rectangle.",
         T::Ellipse => "Drag to draw an ellipse.",
         T::Line => "Drag start to end.",

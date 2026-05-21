@@ -15,7 +15,7 @@
 //! the raw capture.
 
 use iced::Rectangle;
-use readshot_core::{CaptureRecord, PointLike};
+use readshot_core::{Annotation, CaptureRecord, PointLike};
 use readshot_ui::editor::EditorState as Model;
 
 /// One open editor window, plus the iced-side state that doesn't
@@ -71,6 +71,11 @@ pub struct EditorSession {
     /// (e.g. "Saved to …") after a few seconds so the chrome doesn't
     /// stay loud forever.
     pub status_set_at: Option<std::time::Instant>,
+    /// Transient Select-tool move. The model previews movement
+    /// without pushing undo history on every mouse move; release
+    /// commits the final state against this baseline as one undoable
+    /// edit.
+    pub move_drag: Option<MoveDrag>,
 }
 
 /// How long a "Click Discard again to confirm" prompt stays armed
@@ -183,6 +188,13 @@ pub struct PendingText {
     pub content: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct MoveDrag {
+    pub baseline: Vec<Annotation>,
+    pub start: PointLike,
+    pub moved: bool,
+}
+
 /// Transient drag preview the canvas emits via `DragMoved` and the
 /// editor view re-paints over the image. Shape variants mirror the
 /// tool classifications in `readshot_ui::editor::tool_state`.
@@ -240,6 +252,7 @@ impl EditorSession {
             display_scale: display_scale.max(f32::EPSILON),
             discard_pending_at: None,
             status_set_at: None,
+            move_drag: None,
         }
     }
 
@@ -268,6 +281,7 @@ impl EditorSession {
             display_scale: display_scale.max(f32::EPSILON),
             discard_pending_at: None,
             status_set_at: None,
+            move_drag: None,
         }
     }
 

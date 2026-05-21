@@ -50,6 +50,10 @@ pub enum DrawState {
         points: Vec<Point>,
         tool_at_press: ToolState,
     },
+    /// Select-tool drag in base-image coordinates. The runtime owns
+    /// hit testing and live move preview; the canvas only streams
+    /// points that have already been transformed out of canvas space.
+    Selecting { last: PointLike },
 }
 
 /// Messages the editor canvas publishes upward.
@@ -73,6 +77,13 @@ pub enum CanvasMessage {
     /// position; the eventual `Annotation::Text` is built from the
     /// user's typed content.
     RequestText(PointLike),
+    /// Select tool pressed on the image. The editor model decides
+    /// whether this hits an annotation or clears selection.
+    SelectPressed(PointLike),
+    /// Select tool is dragging across the image.
+    SelectDragged(PointLike),
+    /// Select tool released.
+    SelectReleased,
     /// User pressed Escape or released a zero-area drag — drop
     /// in-progress preview without committing anything.
     Cancelled,
@@ -110,6 +121,10 @@ pub struct EditorCanvas {
     /// Explicit display scale supplied by the app. `None` means fit
     /// large images down and never upscale small captures.
     pub display_scale: Option<f32>,
+    /// Bounds of the currently selected annotation in base-image
+    /// coordinates. The canvas paints this as a lightweight selection
+    /// outline over the flattened image.
+    pub selected_bounds: Option<RectLike>,
 }
 
 /// Display scale for the editor image. Fit mode scales the image to
@@ -179,6 +194,28 @@ pub(crate) fn canvas_to_base(
     ))
 }
 
+fn base_rect_to_canvas(
+    rect: RectLike,
+    bounds: Rectangle,
+    image_size: (u32, u32),
+    image_offset: (f32, f32),
+    explicit_scale: Option<f32>,
+) -> Option<Rectangle> {
+    let scale = display_scale_for_bounds(bounds, image_size, explicit_scale)?;
+    let displayed_w = image_size.0 as f32 * scale;
+    let displayed_h = image_size.1 as f32 * scale;
+    let offset_x = (bounds.width - displayed_w) * 0.5;
+    let offset_y = (bounds.height - displayed_h) * 0.5;
+    let local_x = rect.x - image_offset.0;
+    let local_y = rect.y - image_offset.1;
+    Some(Rectangle {
+        x: offset_x + local_x * scale,
+        y: offset_y + local_y * scale,
+        width: rect.width * scale,
+        height: rect.height * scale,
+    })
+}
+
 impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
     type State = DrawState;
 
@@ -202,6 +239,13 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 // where the user clicked.
                 let image_point =
                     Point::new(local.x + self.image_offset.0, local.y + self.image_offset.1);
+                if self.active_tool == ToolState::Select {
+                    let base = PointLike::new(image_point.x, image_point.y);
+                    *state = DrawState::Selecting { last: base };
+                    return Some(
+                        canvas::Action::publish(CanvasMessage::SelectPressed(base)).and_capture(),
+                    );
+                }
                 // Text is a point tool but doesn't commit immediately
                 // — the runtime opens a text-input UI in response, and
                 // the typed content drives the eventual Annotation::Text.
@@ -279,6 +323,27 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                                 points.iter().map(|p| PointLike::new(p.x, p.y)).collect();
                             return Some(
                                 canvas::Action::publish(CanvasMessage::PolylineMoved(snapshot))
+                                    .and_capture(),
+                            );
+                        }
+                    }
+                    None
+                }
+                DrawState::Selecting { last } => {
+                    if let Some(point) = cursor.position_in(bounds).and_then(|p| {
+                        canvas_to_base(
+                            p,
+                            bounds,
+                            self.image_size,
+                            self.image_offset,
+                            self.display_scale,
+                        )
+                    }) {
+                        let base = PointLike::new(point.x, point.y);
+                        if (base.x - last.x).hypot(base.y - last.y) >= 0.5 {
+                            *last = base;
+                            return Some(
+                                canvas::Action::publish(CanvasMessage::SelectDragged(base))
                                     .and_capture(),
                             );
                         }
@@ -398,6 +463,9 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                             ),
                         }
                     }
+                    DrawState::Selecting { .. } => {
+                        Some(canvas::Action::publish(CanvasMessage::SelectReleased).and_capture())
+                    }
                     DrawState::Idle => None,
                 }
             }
@@ -435,6 +503,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
 
         match state {
             DrawState::Idle => {}
+            DrawState::Selecting { .. } => {}
             DrawState::Dragging {
                 anchor,
                 cursor: cur,
@@ -539,6 +608,18 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                     frame.stroke(&path, stroke);
                 }
             }
+        }
+
+        if let Some(rect) = self.selected_bounds.and_then(|r| {
+            base_rect_to_canvas(
+                r,
+                bounds,
+                self.image_size,
+                self.image_offset,
+                self.display_scale,
+            )
+        }) {
+            draw_selection_bounds(&mut frame, rect);
         }
 
         vec![frame.into_geometry()]
@@ -707,6 +788,43 @@ fn draw_preview_badge(frame: &mut Frame, bounds: Rectangle, rect: Rectangle, lab
         size: iced::Pixels(11.0),
         ..Default::default()
     });
+}
+
+fn draw_selection_bounds(frame: &mut Frame, rect: Rectangle) {
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        return;
+    }
+    let path = Path::rectangle(
+        Point::new(rect.x, rect.y),
+        iced::Size::new(rect.width, rect.height),
+    );
+    frame.stroke(
+        &path,
+        Stroke::default()
+            .with_color(Color::from_rgba(0.0, 0.48, 1.0, 0.95))
+            .with_width(1.5),
+    );
+
+    let handle = 6.0;
+    let half = handle * 0.5;
+    for point in [
+        Point::new(rect.x, rect.y),
+        Point::new(rect.x + rect.width, rect.y),
+        Point::new(rect.x, rect.y + rect.height),
+        Point::new(rect.x + rect.width, rect.y + rect.height),
+    ] {
+        let handle_path = Path::rectangle(
+            Point::new(point.x - half, point.y - half),
+            iced::Size::new(handle, handle),
+        );
+        frame.fill(&handle_path, Color::WHITE);
+        frame.stroke(
+            &handle_path,
+            Stroke::default()
+                .with_color(Color::from_rgba(0.0, 0.48, 1.0, 1.0))
+                .with_width(1.0),
+        );
+    }
 }
 
 /// Translate a single click for a point tool into an annotation.

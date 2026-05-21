@@ -42,6 +42,13 @@ impl History {
         &self.present
     }
 
+    /// Replace the current state without touching undo / redo. Used
+    /// for live edit previews that are later committed as one undoable
+    /// action when the drag ends.
+    pub(crate) fn replace_present(&mut self, present: Vec<Annotation>) {
+        self.present = present;
+    }
+
     /// Push a new state, truncating the redo stack and capping the
     /// undo stack at `MAX_HISTORY`. The previous present moves onto
     /// `past`.
