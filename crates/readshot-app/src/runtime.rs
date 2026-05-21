@@ -4250,11 +4250,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     // a tool button, so this is the surface that surfaces them.
     let hint_str = if active_tool == ToolState::Select {
         if let Some(kind) = ed.model.selected_kind_label() {
-            if ed.model.selected_text_edit().is_some() {
-                format!("Selected {kind} — Enter edits text · color/size update selected · Delete removes")
-            } else {
-                format!("Selected {kind} — drag to move · handles resize · color/size update selected · Delete removes")
-            }
+            editor_selected_hint(kind, ed.model.selected_text_edit().is_some())
         } else if ed.model.annotations().is_empty() && ed.status.is_none() {
             "Press V / R / O / L / A / P / H / T / B / X / N / C to pick a tool · ⌘Z to undo"
                 .to_string()
@@ -6870,7 +6866,25 @@ fn handle_commit_annotation(
     ed.refresh_image();
     if cropped {
         let (w, h) = ed.effective_image_size();
-        ed.set_status(format!("Cropped to {w} × {h} px. ⌘Z to undo."));
+        ed.set_status(format!(
+            "Crop selected at {w} × {h}px. Drag handles to adjust; Delete or ⌘Z cancels."
+        ));
+    }
+}
+
+fn editor_selected_hint(kind: &str, text_editable: bool) -> String {
+    match (kind, text_editable) {
+        ("Crop", _) => {
+            "Selected Crop — drag or resize frame · Delete or ⌘Z restores full image".to_string()
+        }
+        (_, true) => {
+            format!(
+                "Selected {kind} — Enter edits text · color/size update selected · Delete removes"
+            )
+        }
+        _ => {
+            format!("Selected {kind} — drag to move · handles resize · color/size update selected · Delete removes")
+        }
     }
 }
 
@@ -7070,6 +7084,22 @@ mod tests {
         assert_eq!(editor_bottom_layout(1000.0), EditorBottomLayout::Wide);
         assert_eq!(editor_bottom_layout(700.0), EditorBottomLayout::Stacked);
         assert_eq!(editor_bottom_layout(420.0), EditorBottomLayout::Compact);
+    }
+
+    #[test]
+    fn editor_selected_hint_special_cases_crop_and_text() {
+        assert_eq!(
+            editor_selected_hint("Crop", false),
+            "Selected Crop — drag or resize frame · Delete or ⌘Z restores full image"
+        );
+        assert_eq!(
+            editor_selected_hint("Text", true),
+            "Selected Text — Enter edits text · color/size update selected · Delete removes"
+        );
+        assert_eq!(
+            editor_selected_hint("Rectangle", false),
+            "Selected Rectangle — drag to move · handles resize · color/size update selected · Delete removes"
+        );
     }
 
     #[test]
