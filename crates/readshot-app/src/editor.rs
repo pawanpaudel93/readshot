@@ -193,6 +193,13 @@ pub struct MoveDrag {
     pub baseline: Vec<Annotation>,
     pub start: PointLike,
     pub moved: bool,
+    pub kind: MoveDragKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveDragKind {
+    Move,
+    Resize(readshot_ui::editor::ResizeHandle),
 }
 
 /// Transient drag preview the canvas emits via `DragMoved` and the

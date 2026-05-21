@@ -27,6 +27,7 @@ use iced::{mouse::Cursor, Color, Point, Rectangle, Renderer, Theme};
 
 use readshot_core::{Annotation, PointLike, RectLike, Rgba as CoreRgba};
 
+use super::state::ResizeHandle;
 use super::tool_state::ToolState;
 
 /// Canvas state: tracks the kind of in-progress interaction so the
@@ -125,6 +126,10 @@ pub struct EditorCanvas {
     /// coordinates. The canvas paints this as a lightweight selection
     /// outline over the flattened image.
     pub selected_bounds: Option<RectLike>,
+    /// Editable handle centers in base-image coordinates. Rectangular
+    /// annotations expose eight handles; line / arrow expose the two
+    /// endpoints.
+    pub selected_handles: Vec<(ResizeHandle, PointLike)>,
 }
 
 /// Display scale for the editor image. Fit mode scales the image to
@@ -214,6 +219,24 @@ fn base_rect_to_canvas(
         width: rect.width * scale,
         height: rect.height * scale,
     })
+}
+
+fn base_point_to_canvas(
+    point: PointLike,
+    bounds: Rectangle,
+    image_size: (u32, u32),
+    image_offset: (f32, f32),
+    explicit_scale: Option<f32>,
+) -> Option<Point> {
+    let scale = display_scale_for_bounds(bounds, image_size, explicit_scale)?;
+    let displayed_w = image_size.0 as f32 * scale;
+    let displayed_h = image_size.1 as f32 * scale;
+    let offset_x = (bounds.width - displayed_w) * 0.5;
+    let offset_y = (bounds.height - displayed_h) * 0.5;
+    Some(Point::new(
+        offset_x + (point.x - image_offset.0) * scale,
+        offset_y + (point.y - image_offset.1) * scale,
+    ))
 }
 
 impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
@@ -621,6 +644,17 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
         }) {
             draw_selection_bounds(&mut frame, rect);
         }
+        for (_, handle) in &self.selected_handles {
+            if let Some(point) = base_point_to_canvas(
+                *handle,
+                bounds,
+                self.image_size,
+                self.image_offset,
+                self.display_scale,
+            ) {
+                draw_selection_handle(&mut frame, point);
+            }
+        }
 
         vec![frame.into_geometry()]
     }
@@ -804,27 +838,22 @@ fn draw_selection_bounds(frame: &mut Frame, rect: Rectangle) {
             .with_color(Color::from_rgba(0.0, 0.48, 1.0, 0.95))
             .with_width(1.5),
     );
+}
 
+fn draw_selection_handle(frame: &mut Frame, point: Point) {
     let handle = 6.0;
     let half = handle * 0.5;
-    for point in [
-        Point::new(rect.x, rect.y),
-        Point::new(rect.x + rect.width, rect.y),
-        Point::new(rect.x, rect.y + rect.height),
-        Point::new(rect.x + rect.width, rect.y + rect.height),
-    ] {
-        let handle_path = Path::rectangle(
-            Point::new(point.x - half, point.y - half),
-            iced::Size::new(handle, handle),
-        );
-        frame.fill(&handle_path, Color::WHITE);
-        frame.stroke(
-            &handle_path,
-            Stroke::default()
-                .with_color(Color::from_rgba(0.0, 0.48, 1.0, 1.0))
-                .with_width(1.0),
-        );
-    }
+    let handle_path = Path::rectangle(
+        Point::new(point.x - half, point.y - half),
+        iced::Size::new(handle, handle),
+    );
+    frame.fill(&handle_path, Color::WHITE);
+    frame.stroke(
+        &handle_path,
+        Stroke::default()
+            .with_color(Color::from_rgba(0.0, 0.48, 1.0, 1.0))
+            .with_width(1.0),
+    );
 }
 
 /// Translate a single click for a point tool into an annotation.

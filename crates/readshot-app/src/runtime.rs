@@ -2202,11 +2202,19 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 }
                 readshot_ui::CanvasMessage::SelectPressed(p) => {
                     ed.pending_text = None;
-                    if ed.model.select_at(p).is_some() {
+                    if let Some(handle) = ed.model.resize_handle_at(p) {
                         ed.move_drag = Some(crate::editor::MoveDrag {
                             baseline: ed.model.annotations().to_vec(),
                             start: p,
                             moved: false,
+                            kind: crate::editor::MoveDragKind::Resize(handle),
+                        });
+                    } else if ed.model.select_at(p).is_some() {
+                        ed.move_drag = Some(crate::editor::MoveDrag {
+                            baseline: ed.model.annotations().to_vec(),
+                            start: p,
+                            moved: false,
+                            kind: crate::editor::MoveDragKind::Move,
                         });
                     } else {
                         ed.move_drag = None;
@@ -2216,9 +2224,15 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     if let Some(drag) = ed.move_drag.as_mut() {
                         let dx = p.x - drag.start.x;
                         let dy = p.y - drag.start.y;
-                        if (dx.abs() >= 0.5 || dy.abs() >= 0.5)
-                            && ed.model.preview_move_selected_from(&drag.baseline, dx, dy)
-                        {
+                        let changed = match drag.kind {
+                            crate::editor::MoveDragKind::Move => {
+                                ed.model.preview_move_selected_from(&drag.baseline, dx, dy)
+                            }
+                            crate::editor::MoveDragKind::Resize(handle) => ed
+                                .model
+                                .preview_resize_selected_from(&drag.baseline, handle, dx, dy),
+                        };
+                        if (dx.abs() >= 0.5 || dy.abs() >= 0.5) && changed {
                             drag.moved = true;
                             ed.refresh_image();
                         }
@@ -2229,7 +2243,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         if drag.moved {
                             if ed.model.commit_preview_from_baseline(drag.baseline) {
                                 ed.refresh_image();
-                                ed.set_status("Moved annotation. ⌘Z to undo.");
+                                let verb = match drag.kind {
+                                    crate::editor::MoveDragKind::Move => "Moved",
+                                    crate::editor::MoveDragKind::Resize(_) => "Resized",
+                                };
+                                ed.set_status(format!("{verb} annotation. ⌘Z to undo."));
                                 sync_editor_history(ed, &state.coordinator);
                             } else {
                                 ed.refresh_image();
@@ -4068,6 +4086,11 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             selected_bounds: (active_tool == ToolState::Select)
                 .then(|| ed.model.selected_bounds())
                 .flatten(),
+            selected_handles: if active_tool == ToolState::Select {
+                ed.model.selected_handles()
+            } else {
+                Vec::new()
+            },
         };
         let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
             .width(Length::Fixed(content_w))

@@ -34,7 +34,7 @@ pub mod undo;
 
 pub use action_bar::ActionMessage;
 pub use canvas::{CanvasMessage, EditorCanvas};
-pub use state::EditorState;
+pub use state::{EditorState, ResizeHandle};
 pub use tool_state::ToolState;
 pub use toolbar::ToolbarMessage;
 pub use undo::History;

@@ -18,6 +18,21 @@ use super::tool_state::ToolState;
 use super::undo::History;
 
 const DEFAULT_LINE_WIDTH: f32 = 3.0;
+const HANDLE_HIT_RADIUS: f32 = 8.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResizeHandle {
+    NorthWest,
+    North,
+    NorthEast,
+    East,
+    SouthEast,
+    South,
+    SouthWest,
+    West,
+    Start,
+    End,
+}
 
 #[derive(Clone, Debug)]
 pub struct EditorState {
@@ -164,6 +179,18 @@ impl EditorState {
         annotation_bounds(&self.history.current()[idx])
     }
 
+    pub fn selected_handles(&self) -> Vec<(ResizeHandle, PointLike)> {
+        let Some(idx) = self.selected_annotation() else {
+            return Vec::new();
+        };
+        annotation_resize_handles(&self.history.current()[idx])
+    }
+
+    pub fn resize_handle_at(&self, point: PointLike) -> Option<ResizeHandle> {
+        let idx = self.selected_annotation()?;
+        annotation_resize_handle_at(&self.history.current()[idx], point)
+    }
+
     pub fn select_at(&mut self, point: PointLike) -> Option<usize> {
         let hit = self
             .history
@@ -207,6 +234,29 @@ impl EditorState {
         }
         let mut next = baseline.to_vec();
         translate_annotation(&mut next[idx], dx, dy);
+        self.history.replace_present(next);
+        self.flattened_cache = None;
+        true
+    }
+
+    pub fn preview_resize_selected_from(
+        &mut self,
+        baseline: &[Annotation],
+        handle: ResizeHandle,
+        dx: f32,
+        dy: f32,
+    ) -> bool {
+        let Some(idx) = self.selected_annotation else {
+            return false;
+        };
+        if idx >= baseline.len() {
+            self.selected_annotation = None;
+            return false;
+        }
+        let mut next = baseline.to_vec();
+        if !resize_annotation(&mut next[idx], handle, dx, dy) {
+            return false;
+        }
         self.history.replace_present(next);
         self.flattened_cache = None;
         true
@@ -310,6 +360,53 @@ fn annotation_bounds(annotation: &Annotation) -> Option<RectLike> {
     }
 }
 
+fn annotation_resize_handle_at(annotation: &Annotation, point: PointLike) -> Option<ResizeHandle> {
+    annotation_resize_handles(annotation)
+        .into_iter()
+        .find_map(|(handle, p)| (distance(point, p) <= HANDLE_HIT_RADIUS).then_some(handle))
+}
+
+fn annotation_resize_handles(annotation: &Annotation) -> Vec<(ResizeHandle, PointLike)> {
+    match annotation {
+        Annotation::Rectangle { rect, .. }
+        | Annotation::Ellipse { rect, .. }
+        | Annotation::Blur { rect, .. }
+        | Annotation::Pixelate { rect, .. }
+        | Annotation::Crop { rect } => rect_resize_handles(*rect),
+        Annotation::Line { a, b, .. } | Annotation::Arrow { a, b, .. } => {
+            vec![(ResizeHandle::Start, *a), (ResizeHandle::End, *b)]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn rect_resize_handles(rect: RectLike) -> Vec<(ResizeHandle, PointLike)> {
+    let cx = rect.x + rect.width * 0.5;
+    let cy = rect.y + rect.height * 0.5;
+    vec![
+        (ResizeHandle::NorthWest, PointLike::new(rect.x, rect.y)),
+        (ResizeHandle::North, PointLike::new(cx, rect.y)),
+        (
+            ResizeHandle::NorthEast,
+            PointLike::new(rect.x + rect.width, rect.y),
+        ),
+        (ResizeHandle::East, PointLike::new(rect.x + rect.width, cy)),
+        (
+            ResizeHandle::SouthEast,
+            PointLike::new(rect.x + rect.width, rect.y + rect.height),
+        ),
+        (
+            ResizeHandle::South,
+            PointLike::new(cx, rect.y + rect.height),
+        ),
+        (
+            ResizeHandle::SouthWest,
+            PointLike::new(rect.x, rect.y + rect.height),
+        ),
+        (ResizeHandle::West, PointLike::new(rect.x, cy)),
+    ]
+}
+
 fn translate_annotation(annotation: &mut Annotation, dx: f32, dy: f32) {
     match annotation {
         Annotation::Rectangle { rect, .. }
@@ -330,6 +427,71 @@ fn translate_annotation(annotation: &mut Annotation, dx: f32, dy: f32) {
             translate_point(origin, dx, dy);
         }
     }
+}
+
+fn resize_annotation(annotation: &mut Annotation, handle: ResizeHandle, dx: f32, dy: f32) -> bool {
+    match annotation {
+        Annotation::Rectangle { rect, .. }
+        | Annotation::Ellipse { rect, .. }
+        | Annotation::Blur { rect, .. }
+        | Annotation::Pixelate { rect, .. }
+        | Annotation::Crop { rect } => {
+            if matches!(handle, ResizeHandle::Start | ResizeHandle::End) {
+                return false;
+            }
+            resize_rect(rect, handle, dx, dy);
+            true
+        }
+        Annotation::Line { a, b, .. } | Annotation::Arrow { a, b, .. } => match handle {
+            ResizeHandle::Start => {
+                translate_point(a, dx, dy);
+                true
+            }
+            ResizeHandle::End => {
+                translate_point(b, dx, dy);
+                true
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn resize_rect(rect: &mut RectLike, handle: ResizeHandle, dx: f32, dy: f32) {
+    let mut left = rect.x;
+    let mut right = rect.x + rect.width;
+    let mut top = rect.y;
+    let mut bottom = rect.y + rect.height;
+    match handle {
+        ResizeHandle::NorthWest => {
+            left += dx;
+            top += dy;
+        }
+        ResizeHandle::North => top += dy,
+        ResizeHandle::NorthEast => {
+            right += dx;
+            top += dy;
+        }
+        ResizeHandle::East => right += dx,
+        ResizeHandle::SouthEast => {
+            right += dx;
+            bottom += dy;
+        }
+        ResizeHandle::South => bottom += dy,
+        ResizeHandle::SouthWest => {
+            left += dx;
+            bottom += dy;
+        }
+        ResizeHandle::West => left += dx,
+        ResizeHandle::Start | ResizeHandle::End => return,
+    }
+
+    let x = left.min(right);
+    let y = top.min(bottom);
+    rect.x = x;
+    rect.y = y;
+    rect.width = (right - left).abs().max(1.0);
+    rect.height = (bottom - top).abs().max(1.0);
 }
 
 fn translate_rect(rect: &mut RectLike, dx: f32, dy: f32) {
@@ -544,6 +706,89 @@ mod tests {
                 assert_eq!(rect.y, 0.0);
             }
             other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn selected_rect_reports_resize_handle_at_corner() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(10.0, 20.0, 30.0, 40.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+        });
+        assert_eq!(s.select_at(PointLike::new(12.0, 22.0)), Some(0));
+
+        assert_eq!(
+            s.resize_handle_at(PointLike::new(40.0, 60.0)),
+            Some(ResizeHandle::SouthEast)
+        );
+        assert_eq!(s.resize_handle_at(PointLike::new(25.0, 40.0)), None);
+        assert_eq!(s.selected_handles().len(), 8);
+    }
+
+    #[test]
+    fn selected_rect_can_preview_resize_then_commit_one_undo_step() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(10.0, 20.0, 30.0, 40.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+        });
+        assert_eq!(s.select_at(PointLike::new(12.0, 22.0)), Some(0));
+
+        let baseline = s.annotations().to_vec();
+        assert!(s.preview_resize_selected_from(&baseline, ResizeHandle::SouthEast, 5.0, 7.0));
+        match &s.annotations()[0] {
+            Annotation::Rectangle { rect, .. } => {
+                assert_eq!(rect.x, 10.0);
+                assert_eq!(rect.y, 20.0);
+                assert_eq!(rect.width, 35.0);
+                assert_eq!(rect.height, 47.0);
+            }
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+        assert!(s.commit_preview_from_baseline(baseline));
+        assert!(s.undo());
+        match &s.annotations()[0] {
+            Annotation::Rectangle { rect, .. } => {
+                assert_eq!(rect.width, 30.0);
+                assert_eq!(rect.height, 40.0);
+            }
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn selected_line_endpoint_can_move_independently() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(Annotation::Line {
+            a: PointLike::new(10.0, 10.0),
+            b: PointLike::new(30.0, 30.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(s.select_at(PointLike::new(20.0, 20.0)), Some(0));
+        assert_eq!(
+            s.resize_handle_at(PointLike::new(30.0, 30.0)),
+            Some(ResizeHandle::End)
+        );
+        assert_eq!(
+            s.selected_handles(),
+            vec![
+                (ResizeHandle::Start, PointLike::new(10.0, 10.0)),
+                (ResizeHandle::End, PointLike::new(30.0, 30.0)),
+            ]
+        );
+
+        let baseline = s.annotations().to_vec();
+        assert!(s.preview_resize_selected_from(&baseline, ResizeHandle::End, 4.0, -6.0));
+        match &s.annotations()[0] {
+            Annotation::Line { a, b, .. } => {
+                assert_eq!(*a, PointLike::new(10.0, 10.0));
+                assert_eq!(*b, PointLike::new(34.0, 24.0));
+            }
+            other => panic!("expected line, got {other:?}"),
         }
     }
 
