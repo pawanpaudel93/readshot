@@ -12,6 +12,8 @@ use std::sync::{Mutex, OnceLock};
 use crate::url_scheme::{self, UrlAction, UrlParseError};
 
 static ACTIONS: OnceLock<Mutex<VecDeque<UrlAction>>> = OnceLock::new();
+#[cfg(test)]
+static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, thiserror::Error)]
 pub enum UrlEventInstallError {
@@ -53,6 +55,14 @@ pub fn install_platform_handler() -> Result<(), UrlEventInstallError> {
 #[cfg(test)]
 pub fn clear_for_tests() {
     queue().lock().expect("url event queue poisoned").clear();
+}
+
+#[cfg(test)]
+pub fn lock_for_tests() -> std::sync::MutexGuard<'static, ()> {
+    TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("url event test lock poisoned")
 }
 
 #[cfg(target_os = "macos")]

@@ -325,11 +325,15 @@ fn welcome_window_settings() -> window::Settings {
 /// is wide enough to show the toolbar without wrapping and tall
 /// enough to give a typical 16:9 capture comfortable headroom for
 /// drawing.
-fn editor_window_settings() -> window::Settings {
+fn editor_window_settings(display_bounds: Option<(f32, f32, f32, f32)>) -> window::Settings {
+    const W: f32 = 1100.0;
+    const H: f32 = 760.0;
+    let position = centered_window_position(display_bounds, iced::Size::new(W, H))
+        .unwrap_or(window::Position::Centered);
     window::Settings {
-        size: iced::Size::new(1100.0, 760.0),
+        size: iced::Size::new(W, H),
         min_size: Some(iced::Size::new(720.0, 480.0)),
-        position: window::Position::Centered,
+        position,
         resizable: true,
         decorations: true,
         transparent: false,
@@ -398,17 +402,22 @@ fn cli_tools_window_settings() -> window::Settings {
 /// so a giant 4K pin doesn't dominate the screen). The user
 /// repositions by dragging anywhere on the body and dismisses via
 /// the small `×` in the corner.
-fn pin_window_settings(image_size: (u32, u32)) -> window::Settings {
+fn pin_window_settings(
+    image_size: (u32, u32),
+    display_bounds: Option<(f32, f32, f32, f32)>,
+) -> window::Settings {
     const MAX_W: f32 = 800.0;
     const MAX_H: f32 = 600.0;
     let (iw, ih) = (image_size.0 as f32, image_size.1 as f32);
     let scale = (MAX_W / iw).min(MAX_H / ih).min(1.0);
     let w = (iw * scale).max(120.0);
     let h = (ih * scale).max(80.0);
+    let position = centered_window_position(display_bounds, iced::Size::new(w, h))
+        .unwrap_or(window::Position::Default);
     window::Settings {
         size: iced::Size::new(w, h),
         min_size: Some(iced::Size::new(120.0, 80.0)),
-        position: window::Position::Default,
+        position,
         resizable: true,
         decorations: false,
         transparent: false,
@@ -419,6 +428,17 @@ fn pin_window_settings(image_size: (u32, u32)) -> window::Settings {
         minimizable: false,
         ..Default::default()
     }
+}
+
+fn centered_window_position(
+    display_bounds: Option<(f32, f32, f32, f32)>,
+    size: iced::Size,
+) -> Option<window::Position> {
+    display_bounds.map(|(x, y, display_w, display_h)| {
+        let px = x + ((display_w - size.width).max(0.0) * 0.5);
+        let py = y + ((display_h - size.height).max(0.0) * 0.5);
+        window::Position::Specific(iced::Point::new(px, py))
+    })
 }
 
 /// Logical width × height of the floating HUD shown while a scroll-
@@ -1144,6 +1164,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.pending_intent = None;
             state.pending_display_id = None;
             state.pending_display_scale = None;
+            state.pending_display_bounds = None;
             state.pending_hide_cursor = true;
             if state.cli_interactive_output.is_some() {
                 state.cli_interactive_output = None;
@@ -1159,12 +1180,27 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::CaptureRegionRequested { display_id, rect } => {
             let coord = state.coordinator.clone();
             let hide_cursor = state.pending_hide_cursor;
+            let display_scale = state.pending_display_scale;
             state.capture_in_flight = true;
             state.last_capture_status = None;
             // Region capture lands in the editor instead of saving
             // directly — the editor decides what to do with it.
             Task::perform(
-                capture_region_to_image(coord, display_id, rect, hide_cursor),
+                async move {
+                    match display_scale {
+                        Some(scale) => {
+                            capture_region_to_image_with_scale(
+                                coord,
+                                display_id,
+                                rect,
+                                scale,
+                                hide_cursor,
+                            )
+                            .await
+                        }
+                        None => capture_region_to_image(coord, display_id, rect, hide_cursor).await,
+                    }
+                },
                 |result| Message::RegionCaptureCompleted(result.map_err(|e| e.to_string())),
             )
         }
@@ -1177,6 +1213,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 .unwrap_or(crate::app::CaptureIntent::Editor);
             let display_id = state.pending_display_id.take().unwrap_or_default();
             let display_scale = state.pending_display_scale.take().unwrap_or(1.0);
+            let display_bounds = state.pending_display_bounds.take();
             state.pending_hide_cursor = true;
             match result {
                 Ok(image) => {
@@ -1216,7 +1253,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                                     display_scale,
                                 ),
                             });
-                            let (id, open_task) = window::open(editor_window_settings());
+                            let (id, open_task) =
+                                window::open(editor_window_settings(display_bounds));
                             state.windows.register(id, WindowKind::Editor);
                             open_task.map(Message::EditorWindowReady)
                         }
@@ -1247,7 +1285,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                                 image.height(),
                                 image.as_raw().clone(),
                             );
-                            let (id, open_task) = window::open(pin_window_settings(size));
+                            let (id, open_task) =
+                                window::open(pin_window_settings(size, display_bounds));
                             state.windows.register(id, WindowKind::Pin);
                             state
                                 .pins
@@ -1276,7 +1315,6 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                                     Some("Scroll capture: missing region".into());
                                 return Task::batch([history_task]);
                             };
-                            let display_bounds = state.pending_display_bounds.take();
                             let mut session = crate::app::ScrollSession::new(
                                 display_id.clone(),
                                 last.rect,
@@ -1581,7 +1619,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::HistoryOpenInEditorReady(result) => match result {
             Ok((image, record)) => {
                 state.editor = Some(crate::editor::EditorSession::from_history(image, record));
-                let (id, open_task) = window::open(editor_window_settings());
+                let (id, open_task) = window::open(editor_window_settings(None));
                 state.windows.register(id, WindowKind::Editor);
                 open_task.map(Message::EditorWindowReady)
             }
@@ -1720,7 +1758,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     image.height(),
                     image.as_raw().clone(),
                 );
-                let (wid, open_task) = window::open(pin_window_settings(size));
+                let (wid, open_task) = window::open(pin_window_settings(size, None));
                 state.windows.register(wid, WindowKind::Pin);
                 state
                     .pins
@@ -1786,6 +1824,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.pending_intent = None;
             state.pending_display_id = None;
             state.pending_display_scale = None;
+            state.pending_display_bounds = None;
             state.pending_hide_cursor = true;
             iced::exit()
         }
@@ -1965,6 +2004,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::ScrollCaptureStitched(result) => {
             let session = state.scroll_session.take();
             let display_scale = session.as_ref().map(|s| s.scale).unwrap_or(1.0);
+            let display_bounds = session.as_ref().and_then(|s| s.display_size);
             match result {
                 Ok(image) => {
                     let (w, h) = (image.width(), image.height());
@@ -1972,7 +2012,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         crate::editor::EditorSession::new_with_display_scale(image, display_scale);
                     ed.set_status(format!("Scrolling capture stitched into {w} × {h}px."));
                     state.editor = Some(ed);
-                    let (id, open_task) = window::open(editor_window_settings());
+                    let (id, open_task) = window::open(editor_window_settings(display_bounds));
                     state.windows.register(id, WindowKind::Editor);
                     open_task.map(Message::EditorWindowReady)
                 }
@@ -2451,7 +2491,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // Open the pin window. We register both kind + image
             // handle eagerly so the first `view` call paints the
             // pin instead of the "(no capture)" fallback.
-            let (id, open_task) = window::open(pin_window_settings(size));
+            let (id, open_task) = window::open(pin_window_settings(size, None));
             state.windows.register(id, WindowKind::Pin);
             state
                 .pins
@@ -6273,10 +6313,21 @@ async fn capture_region_to_image(
         .iter()
         .find(|d| d.id == display_id)
         .ok_or(CaptureRunError::NoDisplays)?;
+    capture_region_to_image_with_scale(coord, display.id.clone(), rect, display.scale, hide_cursor)
+        .await
+}
+
+async fn capture_region_to_image_with_scale(
+    coord: CaptureCoordinator,
+    display_id: readshot_capture::DisplayId,
+    rect: readshot_core::geom::Rect,
+    scale: f32,
+    hide_cursor: bool,
+) -> Result<image::RgbaImage, CaptureRunError> {
     let req = CaptureRequest {
-        display_id: display.id.clone(),
+        display_id,
         rect,
-        scale: display.scale,
+        scale,
         hide_cursor,
     };
     Ok(coord.capture_region(req).await?)
@@ -7279,6 +7330,32 @@ mod tests {
     }
 
     #[test]
+    fn editor_window_centers_on_capture_display() {
+        let settings = editor_window_settings(Some((1440.0, 0.0, 1920.0, 1080.0)));
+
+        match settings.position {
+            window::Position::Specific(point) => {
+                assert_eq!(point.x, 1850.0);
+                assert_eq!(point.y, 160.0);
+            }
+            other => panic!("expected specific editor position, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pin_window_centers_on_capture_display() {
+        let settings = pin_window_settings((400, 300), Some((-1280.0, 120.0, 1280.0, 720.0)));
+
+        match settings.position {
+            window::Position::Specific(point) => {
+                assert_eq!(point.x, -840.0);
+                assert_eq!(point.y, 330.0);
+            }
+            other => panic!("expected specific pin position, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn overlay_selection_stores_last_region_per_display() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let display_id = "primary".to_string();
@@ -7323,6 +7400,39 @@ mod tests {
         );
 
         assert_eq!(app.last_region_display_id.as_deref(), Some("display-b"));
+    }
+
+    #[test]
+    fn overlay_selection_preserves_display_context_for_fast_capture() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let window = iced::window::Id::unique();
+        app.overlay_displays.insert(
+            window,
+            crate::app::OverlayDisplay {
+                display_id: "display-a".to_string(),
+                scale: 2.0,
+                origin_x: 1440.0,
+                origin_y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+        );
+        let rect = readshot_core::geom::Rect::from_xywh(10.0, 20.0, 120.0, 80.0).unwrap();
+
+        let _ = update(
+            &mut app,
+            Message::OverlaySelected {
+                display_id: "display-a".to_string(),
+                rect,
+                intent: crate::app::CaptureIntent::Editor,
+            },
+        );
+
+        assert_eq!(app.pending_display_scale, Some(2.0));
+        assert_eq!(
+            app.pending_display_bounds,
+            Some((1440.0, 0.0, 1920.0, 1080.0))
+        );
     }
 
     #[test]
@@ -7915,6 +8025,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn capture_region_with_known_scale_skips_display_listing() {
+        struct KnownScaleCapturer {
+            seen_scale: Arc<Mutex<Option<f32>>>,
+        }
+
+        #[async_trait]
+        impl Capturer for KnownScaleCapturer {
+            async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
+                panic!("known-scale capture should not list displays");
+            }
+
+            async fn capture_region(
+                &self,
+                req: CaptureRequest,
+            ) -> Result<image::RgbaImage, CaptureError> {
+                *self.seen_scale.lock().unwrap() = Some(req.scale);
+                Ok(solid(64, 64))
+            }
+        }
+
+        let seen_scale = Arc::new(Mutex::new(None));
+        let perms = Arc::new(FakePermissions::granted());
+        let coord = CaptureCoordinator::new(
+            Arc::new(KnownScaleCapturer {
+                seen_scale: Arc::clone(&seen_scale),
+            }),
+            Arc::new(FakeOcrEngine::with_text("hi")),
+            perms,
+            None,
+        );
+
+        capture_region_to_image_with_scale(
+            coord,
+            "secondary".into(),
+            readshot_core::geom::Rect::from_xywh(0.0, 0.0, 32.0, 32.0).unwrap(),
+            2.0,
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(*seen_scale.lock().unwrap(), Some(2.0));
+    }
+
+    #[tokio::test]
     async fn cli_interactive_write_removes_existing_tmp_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let output = dir.path().join("capture.png");
@@ -8100,6 +8255,7 @@ mod tests {
 
     #[test]
     fn url_tick_drains_delivered_url_actions() {
+        let _lock = crate::url_events::lock_for_tests();
         crate::url_events::clear_for_tests();
         crate::url_events::deliver_url_string("readshot://new").unwrap();
         let mut app = build_app(Arc::new(FakePermissions::granted()));

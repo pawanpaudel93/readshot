@@ -65,6 +65,7 @@ mod tests {
 
     #[test]
     fn delivered_urls_are_drained_in_order_once() {
+        let _lock = crate::url_events::lock_for_tests();
         crate::url_events::clear_for_tests();
 
         crate::url_events::deliver_url_string("readshot://new").unwrap();
@@ -79,6 +80,7 @@ mod tests {
 
     #[test]
     fn rejected_delivered_urls_are_not_queued() {
+        let _lock = crate::url_events::lock_for_tests();
         crate::url_events::clear_for_tests();
 
         assert_eq!(
