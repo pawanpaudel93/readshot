@@ -1172,6 +1172,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     region_window_id: None,
                     display_size: Some(bounds),
                     capture_in_flight: 0,
+                    next_capture_seq: 0,
+                    next_frame_seq_to_process: 1,
+                    pending_frames: std::collections::BTreeMap::new(),
                     stopping: false,
                     started_at: std::time::Instant::now(),
                     last_frame_at: None,
@@ -1934,6 +1937,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 return Task::done(Message::ScrollCaptureStopRequested);
             }
             session.capture_in_flight += 1;
+            session.next_capture_seq = session.next_capture_seq.saturating_add(1);
+            let seq = session.next_capture_seq;
             let coord = state.coordinator.clone();
             let request = readshot_capture::CaptureRequest {
                 display_id: session.display_id.clone(),
@@ -1943,55 +1948,24 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             };
             Task::perform(
                 async move { coord.capture_region(request).await },
-                |result| Message::ScrollCaptureFrame(result.map_err(|e| e.to_string())),
+                move |result| Message::ScrollCaptureFrame {
+                    seq,
+                    result: result.map_err(|e| e.to_string()),
+                },
             )
         }
 
-        Message::ScrollCaptureFrame(result) => {
+        Message::ScrollCaptureFrame { seq, result } => {
             let Some(session) = state.scroll_session.as_mut() else {
                 return Task::none();
             };
             session.capture_in_flight = session.capture_in_flight.saturating_sub(1);
-            match result {
-                Ok(image) => {
-                    // Quick motion check vs. previous frame — compare a
-                    // few horizontal rows in the middle of the image.
-                    // Skips appending if the page hasn't moved, and
-                    // bumps the no-motion counter so we can auto-stop
-                    // when the user pauses scrolling.
-                    let moved = match session.frames.last() {
-                        Some(prev) => frames_differ(prev, &image),
-                        None => true,
-                    };
-                    if moved {
-                        // Cache an iced Handle once per accepted frame
-                        // so the HUD's live preview doesn't re-clone
-                        // ~8 MB of RGBA on every redraw.
-                        let handle = iced::widget::image::Handle::from_rgba(
-                            image.width(),
-                            image.height(),
-                            image.as_raw().clone(),
-                        );
-                        session.no_motion_count = 0;
-                        session.frames.push(image);
-                        session.frame_tick = session.frame_tick.wrapping_add(1);
-                        session.last_frame_at = Some(std::time::Instant::now());
-                        session.last_frame_handle = Some(handle);
-                    } else {
-                        session.no_motion_count += 1;
-                    }
-                    // Session never auto-stops on stillness — the user
-                    // explicitly clicks Stop & Stitch (or Cancel) when
-                    // they're done. Auto-stop on no-motion was killing
-                    // sessions every time the user paused to read.
-                    Task::none()
-                }
-                Err(e) => {
-                    tracing::warn!(target: "readshot::scroll", "frame capture failed: {e}");
-                    session.no_motion_count += 1;
-                    Task::none()
-                }
+            if seq < session.next_frame_seq_to_process {
+                return Task::none();
             }
+            session.pending_frames.insert(seq, result);
+            drain_ready_scroll_frames(session);
+            Task::none()
         }
 
         Message::ScrollCaptureCancelRequested => {
@@ -6286,10 +6260,11 @@ const SCROLL_MAX_FRAMES: usize = 120;
 /// overlap several SCK round-trips (each ~100 ms on macOS) instead
 /// of serialising them, so heavy trackpad scrolls don't lose frames.
 const SCROLL_MAX_CONCURRENT_CAPTURES: u32 = 3;
-/// Per-pixel SAD threshold (0-255 per channel) above which two frames
-/// are considered different. Used by [`frames_differ`] to drop near-
-/// duplicate captures and detect "user stopped scrolling".
-const SCROLL_MOTION_THRESHOLD: u64 = 1500;
+/// Minimum estimated vertical movement before a captured frame is
+/// accepted into the scroll session. Smaller offsets are usually
+/// duplicate frames, hover/caret animation, or a tiny inertial nudge
+/// that would repeat content in the stitched output.
+const SCROLL_MIN_ACCEPTED_MOTION_PX: u32 = 8;
 /// Tick interval (ms) driving the per-frame capture loop. 120 ms ≈
 /// 8.3 fps — fast enough that a brisk trackpad scroll produces many
 /// frames and the session feels live. Captures are debounced inside
@@ -6298,44 +6273,122 @@ const SCROLL_MOTION_THRESHOLD: u64 = 1500;
 /// `capture_region` future supports.
 const SCROLL_FRAME_INTERVAL_MS: u64 = 120;
 
-/// "Did the page move?" check between two adjacent capture frames.
-///
-/// Computes a subsampled sum-of-absolute-differences over a single
-/// horizontal strip in the middle of the frame. SAD beats the
-/// per-row mean check it replaced because a small one-line scroll
-/// changes lots of individual pixels but barely shifts the row mean.
-fn frames_differ(a: &image::RgbaImage, b: &image::RgbaImage) -> bool {
+fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession) {
+    while let Some(result) = session
+        .pending_frames
+        .remove(&session.next_frame_seq_to_process)
+    {
+        session.next_frame_seq_to_process = session.next_frame_seq_to_process.saturating_add(1);
+        match result {
+            Ok(image) => accept_scroll_frame_if_moved(session, image),
+            Err(e) => {
+                tracing::warn!(target: "readshot::scroll", "frame capture failed: {e}");
+                session.no_motion_count += 1;
+            }
+        }
+    }
+}
+
+fn accept_scroll_frame_if_moved(session: &mut crate::app::ScrollSession, image: image::RgbaImage) {
+    let moved = match session.frames.last() {
+        Some(prev) => frame_has_scroll_motion(prev, &image),
+        None => true,
+    };
+    if moved {
+        // Cache an iced Handle once per accepted frame so the HUD's
+        // live preview doesn't re-clone ~8 MB of RGBA on every redraw.
+        let handle = iced::widget::image::Handle::from_rgba(
+            image.width(),
+            image.height(),
+            image.as_raw().clone(),
+        );
+        session.no_motion_count = 0;
+        session.frames.push(image);
+        session.frame_tick = session.frame_tick.wrapping_add(1);
+        session.last_frame_at = Some(std::time::Instant::now());
+        session.last_frame_handle = Some(handle);
+    } else {
+        session.no_motion_count += 1;
+    }
+    // Session never auto-stops on stillness — the user explicitly
+    // clicks Stop & Stitch (or Cancel) when they're done.
+}
+
+/// Returns true only when adjacent captures appear to have vertical
+/// scroll movement, not merely changed pixels. This prevents repeated
+/// frames caused by blinking carets, hover states, timers, or video
+/// from entering the final stitch.
+fn frame_has_scroll_motion(a: &image::RgbaImage, b: &image::RgbaImage) -> bool {
     if a.dimensions() != b.dimensions() {
         return true;
     }
+    scroll_motion_offset(a, b).is_some_and(|dy| dy >= SCROLL_MIN_ACCEPTED_MOTION_PX)
+}
+
+fn scroll_motion_offset(a: &image::RgbaImage, b: &image::RgbaImage) -> Option<u32> {
+    if a.dimensions() != b.dimensions() {
+        return None;
+    }
     let (w, h) = a.dimensions();
     if w == 0 || h == 0 {
-        return false;
+        return None;
     }
-    // Strip in the middle third of the frame — likely to contain
-    // content motion regardless of sticky header/footer noise.
-    let strip_h = (h / 8).clamp(8, 64);
-    let strip_y = h / 2 - strip_h / 2;
-    let mut sum: u64 = 0;
+    let strip_h = (h / 8).clamp(16, 80).min(h / 3).max(1);
+    if strip_h >= h {
+        return None;
+    }
+    // Use the lower-middle content region. It usually avoids sticky
+    // headers while still leaving room below to detect downward scroll.
+    let template_y = ((h * 2) / 3).min(h.saturating_sub(strip_h));
+    let max_motion = (h / 2).max(SCROLL_MIN_ACCEPTED_MOTION_PX);
+    let lo_y_b = template_y.saturating_sub(max_motion);
+    let hi_y_b = template_y;
     let stride_x: u32 = 4;
     let stride_y: u32 = 2;
+    let mut best_cost = u64::MAX;
+    let mut best_y_b = hi_y_b;
+    // Scan from no-motion upward. Equal-cost ties keep the smaller
+    // motion, so blank/repeated content does not look like a scroll.
+    let mut y_b = hi_y_b;
+    loop {
+        let cost = sad_scroll_strip(a, template_y, b, y_b, w, strip_h, (stride_x, stride_y));
+        if cost < best_cost {
+            best_cost = cost;
+            best_y_b = y_b;
+        }
+        if y_b == lo_y_b {
+            break;
+        }
+        y_b -= 1;
+    }
+    Some(template_y - best_y_b)
+}
+
+fn sad_scroll_strip(
+    a: &image::RgbaImage,
+    a_y: u32,
+    b: &image::RgbaImage,
+    b_y: u32,
+    w: u32,
+    strip_h: u32,
+    stride: (u32, u32),
+) -> u64 {
+    let (stride_x, stride_y) = stride;
+    let mut sum: u64 = 0;
     let mut y = 0u32;
     while y < strip_h {
         let mut x = 0u32;
         while x < w {
-            let pa = a.get_pixel(x, strip_y + y).0;
-            let pb = b.get_pixel(x, strip_y + y).0;
+            let pa = a.get_pixel(x, a_y + y).0;
+            let pb = b.get_pixel(x, b_y + y).0;
             sum += diff_u8(pa[0], pb[0]) as u64
                 + diff_u8(pa[1], pb[1]) as u64
                 + diff_u8(pa[2], pb[2]) as u64;
-            if sum > SCROLL_MOTION_THRESHOLD {
-                return true;
-            }
             x += stride_x;
         }
         y += stride_y;
     }
-    false
+    sum
 }
 
 fn diff_u8(a: u8, b: u8) -> u32 {
@@ -7386,6 +7439,76 @@ mod tests {
             *px = image::Rgba([255, 255, 255, 255]);
         }
         img
+    }
+
+    fn scrolling_texture(w: u32, h: u32, offset: u32) -> image::RgbaImage {
+        let mut img = image::RgbaImage::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let content_y = y + offset;
+                let r = ((content_y * 3 + x * 5) % 251) as u8;
+                let g = ((content_y * 7 + x * 11) % 253) as u8;
+                let b = ((content_y * 13 + x * 17) % 247) as u8;
+                img.put_pixel(x, y, image::Rgba([r, g, b, 255]));
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn scroll_motion_accepts_real_vertical_motion() {
+        let a = scrolling_texture(80, 120, 0);
+        let b = scrolling_texture(80, 120, 14);
+
+        assert!(frame_has_scroll_motion(&a, &b));
+        let dy = scroll_motion_offset(&a, &b).unwrap();
+        assert!((12..=16).contains(&dy), "expected dy near 14, got {dy}");
+    }
+
+    #[test]
+    fn scroll_motion_rejects_non_scroll_pixel_change() {
+        let a = scrolling_texture(80, 120, 0);
+        let mut b = a.clone();
+        for y in 45..55 {
+            for x in 20..30 {
+                b.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+            }
+        }
+
+        assert!(!frame_has_scroll_motion(&a, &b));
+        assert_eq!(scroll_motion_offset(&a, &b), Some(0));
+    }
+
+    #[test]
+    fn scroll_capture_drains_out_of_order_frames_in_sequence() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let rect = readshot_core::geom::Rect::from_xywh(0.0, 0.0, 80.0, 120.0).unwrap();
+        let mut session = crate::app::ScrollSession::new("display-a".into(), rect, 1.0);
+        session.frames.push(scrolling_texture(80, 120, 0));
+        app.scroll_session = Some(session);
+
+        let _ = update(
+            &mut app,
+            Message::ScrollCaptureFrame {
+                seq: 2,
+                result: Ok(scrolling_texture(80, 120, 28)),
+            },
+        );
+        let session = app.scroll_session.as_ref().unwrap();
+        assert_eq!(session.frames.len(), 1);
+        assert_eq!(session.pending_frames.len(), 1);
+
+        let _ = update(
+            &mut app,
+            Message::ScrollCaptureFrame {
+                seq: 1,
+                result: Ok(scrolling_texture(80, 120, 14)),
+            },
+        );
+        let session = app.scroll_session.as_ref().unwrap();
+        assert_eq!(session.frames.len(), 3);
+        assert!(session.pending_frames.is_empty());
+        assert_eq!(session.next_frame_seq_to_process, 3);
     }
 
     #[test]

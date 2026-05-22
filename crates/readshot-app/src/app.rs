@@ -13,7 +13,7 @@
 //! permission gating, message routing) is covered by unit tests in
 //! sibling modules.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -215,7 +215,10 @@ pub enum Message {
     /// Async per-frame capture for the scrolling-capture session
     /// finished. `Ok` appends the frame; `Err` logs and continues
     /// (a one-off backend error shouldn't kill the whole session).
-    ScrollCaptureFrame(Result<image::RgbaImage, String>),
+    ScrollCaptureFrame {
+        seq: u64,
+        result: Result<image::RgbaImage, String>,
+    },
     /// User clicked Stop in the HUD (or pressed Esc / hit an auto-
     /// stop limit). Closes the HUD and kicks off stitching of the
     /// captured frames.
@@ -628,10 +631,10 @@ pub struct App {
 /// State for an active scrolling-capture session.
 ///
 /// One session at a time. Reset when stitching kicks off or the user
-/// cancels. The runtime appends to `frames` on each timer tick (once
-/// the previous tick's `capture_region` future resolves), auto-stops
-/// when motion stalls or a hard limit is hit, then drains `frames`
-/// into the stitcher.
+/// cancels. The runtime starts captures on timer ticks, buffers
+/// completed responses by sequence id, appends only frames with
+/// detected vertical scroll, and drains `frames` into the stitcher
+/// when the user stops the session or the hard frame limit is hit.
 #[derive(Clone, Debug)]
 pub struct ScrollSession {
     /// Display the captured region lives on. Carried through every
@@ -641,13 +644,14 @@ pub struct ScrollSession {
     pub rect: readshot_core::geom::Rect,
     /// HiDPI scale factor of the display.
     pub scale: f32,
-    /// Frames captured so far. The first frame is captured
-    /// synchronously when the session starts; subsequent frames come
-    /// from the timer tick.
+    /// Frames captured so far. Frames come from timer ticks and are
+    /// appended in capture sequence order even when backend futures
+    /// complete out of order.
     pub frames: Vec<image::RgbaImage>,
     /// Number of consecutive timer ticks that produced a frame with
-    /// no detectable motion vs. the previous frame. Used to auto-stop
-    /// when the user pauses scrolling for a while.
+    /// no detectable vertical scroll vs. the previous accepted frame.
+    /// Surfaced for diagnostics; the user explicitly stops the
+    /// session when ready.
     pub no_motion_count: u32,
     /// `window::Id` of the HUD floating above the capture region.
     pub hud_window_id: Option<iced::window::Id>,
@@ -666,6 +670,16 @@ pub struct ScrollSession {
     /// fast scrolls can run multiple captures in parallel while a
     /// slow backend still naturally throttles the loop.
     pub capture_in_flight: u32,
+    /// Monotonic id assigned to each per-tick capture request.
+    /// Multiple captures may be in flight, so completion order is not
+    /// necessarily capture order.
+    pub next_capture_seq: u64,
+    /// Next capture id that may be appended to `frames`. Responses
+    /// are buffered until this sequence arrives so stitching receives
+    /// frames in chronological order.
+    pub next_frame_seq_to_process: u64,
+    /// Completed capture responses waiting for earlier sequence ids.
+    pub pending_frames: BTreeMap<u64, Result<image::RgbaImage, String>>,
     /// True after the user has clicked Stop / pressed Esc / hit a
     /// limit. The next tick observes this and kicks off stitching
     /// instead of capturing another frame.
@@ -708,6 +722,9 @@ impl ScrollSession {
             region_window_id: None,
             display_size: None,
             capture_in_flight: 0,
+            next_capture_seq: 0,
+            next_frame_seq_to_process: 1,
+            pending_frames: BTreeMap::new(),
             stopping: false,
             cancel_armed_at: None,
             started_at: std::time::Instant::now(),
