@@ -90,8 +90,8 @@ readshot --help
 readshot capture --interactive --output capture.png
 ```
 
-The menu-bar item **Install Command Line Tools…** displays these
-commands for manual installs; it does not run shell setup automatically.
+Readshot does not run shell setup automatically; use the commands above
+if you install the app outside Homebrew and want terminal access.
 
 ### Alternative: Homebrew Cask
 

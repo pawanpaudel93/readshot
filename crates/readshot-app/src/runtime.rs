@@ -989,9 +989,6 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 // Screen Recording.
                 update(state, Message::OpenSettingsRequested)
             }
-            crate::tray::TrayAction::InstallCommandLineTools => {
-                update(state, Message::OpenCliToolsRequested)
-            }
             crate::tray::TrayAction::CheckForUpdates => {
                 notify_update_check_started();
                 if let Err(e) = crate::updater::check_for_updates() {

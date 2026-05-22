@@ -32,9 +32,7 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 /// overlay; `RetakeLastRegion` repeats the last confirmed overlay
 /// rectangle; `History` opens the persistent capture browser;
 /// `Settings` opens the preferences window; `CheckForUpdates` opens
-/// Sparkle's standard updater UI on macOS; `InstallCommandLineTools`
-/// points users at copy-pasteable CLI setup commands; `Quit` exits
-/// the daemon.
+/// Sparkle's standard updater UI on macOS; `Quit` exits the daemon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Capture,
@@ -46,7 +44,6 @@ pub enum TrayAction {
     RetakeLastRegion,
     History,
     Settings,
-    InstallCommandLineTools,
     CheckForUpdates,
     Quit,
 }
@@ -86,11 +83,6 @@ fn menu_items(hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<T
             label: "Settings…".to_string(),
             enabled: true,
             action: Some(TrayAction::Settings),
-        },
-        TrayMenuItem {
-            label: "Install Command Line Tools…".to_string(),
-            enabled: true,
-            action: Some(TrayAction::InstallCommandLineTools),
         },
         TrayMenuItem {
             label: "Check for Updates…".to_string(),
@@ -218,7 +210,6 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
         true,
         Some(Accelerator::new(Some(cmd_mod), Code::Comma)),
     );
-    let item_install_cli = MenuItem::new("Install Command Line Tools…", true, None);
     let item_check_updates = MenuItem::new("Check for Updates…", true, None);
     let item_quit = MenuItem::new("Quit", true, None);
 
@@ -231,10 +222,6 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
     );
     menu_ids.insert(item_history.id().clone(), TrayAction::History);
     menu_ids.insert(item_settings.id().clone(), TrayAction::Settings);
-    menu_ids.insert(
-        item_install_cli.id().clone(),
-        TrayAction::InstallCommandLineTools,
-    );
     menu_ids.insert(item_check_updates.id().clone(), TrayAction::CheckForUpdates);
     menu_ids.insert(item_quit.id().clone(), TrayAction::Quit);
 
@@ -244,7 +231,6 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
         &item_retake_last_region,
         &item_history,
         &item_settings,
-        &item_install_cli,
         &item_check_updates,
         &PredefinedMenuItem::separator(),
         &item_quit,
@@ -409,7 +395,6 @@ mod tests {
                 TrayAction::RetakeLastRegion,
                 TrayAction::History,
                 TrayAction::Settings,
-                TrayAction::InstallCommandLineTools,
                 TrayAction::CheckForUpdates,
                 TrayAction::Quit,
             ]
@@ -417,16 +402,14 @@ mod tests {
     }
 
     #[test]
-    fn menu_contains_install_command_line_tools_before_updates() {
+    fn menu_contains_check_for_updates_after_settings() {
         let items = menu_items(None, false);
         let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
 
         assert!(labels
             .windows(2)
-            .any(|pair| pair == ["Install Command Line Tools…", "Check for Updates…"]));
-        assert!(items
-            .iter()
-            .any(|item| item.action == Some(TrayAction::InstallCommandLineTools)));
+            .any(|pair| pair == ["Settings…", "Check for Updates…"]));
+        assert!(!labels.contains(&"Install Command Line Tools…"));
     }
 
     #[test]
