@@ -309,10 +309,14 @@ fn sync_tray_capture_hotkey_label(state: &App) {
 }
 
 fn welcome_window_settings() -> window::Settings {
+    const W: f32 = 520.0;
+    const H: f32 = 380.0;
+    let size = iced::Size::new(W, H);
     window::Settings {
-        size: iced::Size::new(520.0, 380.0),
+        size,
         min_size: Some(iced::Size::new(420.0, 320.0)),
-        position: window::Position::Centered,
+        position: centered_window_position_on_active_display(size)
+            .unwrap_or(window::Position::Centered),
         resizable: true,
         decorations: true,
         transparent: false,
@@ -328,10 +332,12 @@ fn welcome_window_settings() -> window::Settings {
 fn editor_window_settings(display_bounds: Option<(f32, f32, f32, f32)>) -> window::Settings {
     const W: f32 = 1100.0;
     const H: f32 = 760.0;
-    let position = centered_window_position(display_bounds, iced::Size::new(W, H))
+    let size = iced::Size::new(W, H);
+    let position = centered_window_position(display_bounds, size)
+        .or_else(|| centered_window_position_on_active_display(size))
         .unwrap_or(window::Position::Centered);
     window::Settings {
-        size: iced::Size::new(W, H),
+        size,
         min_size: Some(iced::Size::new(720.0, 480.0)),
         position,
         resizable: true,
@@ -347,10 +353,14 @@ fn editor_window_settings(display_bounds: Option<(f32, f32, f32, f32)>) -> windo
 /// overlay, it's a regular workspace window the user stays inside
 /// while triaging history.
 fn history_window_settings() -> window::Settings {
+    const W: f32 = 900.0;
+    const H: f32 = 700.0;
+    let size = iced::Size::new(W, H);
     window::Settings {
-        size: iced::Size::new(900.0, 700.0),
+        size,
         min_size: Some(iced::Size::new(540.0, 400.0)),
-        position: window::Position::Centered,
+        position: centered_window_position_on_active_display(size)
+            .unwrap_or(window::Position::Centered),
         resizable: true,
         decorations: true,
         transparent: false,
@@ -361,10 +371,14 @@ fn history_window_settings() -> window::Settings {
 
 /// Window settings for the preferences window.
 fn settings_window_settings() -> window::Settings {
+    const W: f32 = 720.0;
+    const H: f32 = 640.0;
+    let size = iced::Size::new(W, H);
     window::Settings {
-        size: iced::Size::new(720.0, 640.0),
+        size,
         min_size: Some(iced::Size::new(520.0, 480.0)),
-        position: window::Position::Centered,
+        position: centered_window_position_on_active_display(size)
+            .unwrap_or(window::Position::Centered),
         resizable: true,
         decorations: true,
         transparent: false,
@@ -374,10 +388,14 @@ fn settings_window_settings() -> window::Settings {
 }
 
 fn cli_tools_window_settings() -> window::Settings {
+    const W: f32 = 760.0;
+    const H: f32 = 620.0;
+    let size = iced::Size::new(W, H);
     window::Settings {
-        size: iced::Size::new(760.0, 620.0),
+        size,
         min_size: Some(iced::Size::new(560.0, 420.0)),
-        position: window::Position::Centered,
+        position: centered_window_position_on_active_display(size)
+            .unwrap_or(window::Position::Centered),
         resizable: true,
         decorations: true,
         transparent: false,
@@ -412,10 +430,12 @@ fn pin_window_settings(
     let scale = (MAX_W / iw).min(MAX_H / ih).min(1.0);
     let w = (iw * scale).max(120.0);
     let h = (ih * scale).max(80.0);
-    let position = centered_window_position(display_bounds, iced::Size::new(w, h))
+    let size = iced::Size::new(w, h);
+    let position = centered_window_position(display_bounds, size)
+        .or_else(|| centered_window_position_on_active_display(size))
         .unwrap_or(window::Position::Default);
     window::Settings {
-        size: iced::Size::new(w, h),
+        size,
         min_size: Some(iced::Size::new(120.0, 80.0)),
         position,
         resizable: true,
@@ -439,6 +459,36 @@ fn centered_window_position(
         let py = y + ((display_h - size.height).max(0.0) * 0.5);
         window::Position::Specific(iced::Point::new(px, py))
     })
+}
+
+fn centered_window_position_on_active_display(size: iced::Size) -> Option<window::Position> {
+    centered_window_position(active_display_bounds(), size)
+}
+
+#[cfg(target_os = "macos")]
+fn active_display_bounds() -> Option<(f32, f32, f32, f32)> {
+    use core_graphics::display::CGDisplay;
+    use core_graphics::event::CGEvent;
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
+    let cursor = CGEvent::new(source).ok()?.location();
+    let (displays, count) = CGDisplay::displays_with_point(cursor, 1).ok()?;
+    if count == 0 {
+        return None;
+    }
+    let bounds = CGDisplay::new(*displays.first()?).bounds();
+    Some((
+        bounds.origin.x as f32,
+        bounds.origin.y as f32,
+        bounds.size.width as f32,
+        bounds.size.height as f32,
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn active_display_bounds() -> Option<(f32, f32, f32, f32)> {
+    None
 }
 
 /// Logical width × height of the floating HUD shown while a scroll-
