@@ -308,6 +308,10 @@ fn sync_tray_capture_hotkey_label(state: &App) {
     }
 }
 
+fn mono_font() -> iced::Font {
+    iced::Font::with_name(readshot_core::render::FONT_FAMILY)
+}
+
 fn welcome_window_settings() -> window::Settings {
     const W: f32 = 520.0;
     const H: f32 = 380.0;
@@ -2957,6 +2961,7 @@ fn scroll_region_view(state: &App) -> Element<'_, Message> {
                 position: iced::Point::new(bx + 4.0, by + 2.0),
                 color: Color::WHITE,
                 size: iced::Pixels(11.0),
+                font: mono_font(),
                 ..Default::default()
             });
             vec![frame.into_geometry()]
@@ -3280,9 +3285,13 @@ fn cli_tools_view(state: &App) -> Element<'_, Message> {
                             ]
                             .spacing(12)
                             .align_y(Alignment::Center),
-                            container(text(crate::cli_tools::shell_commands(shell)).size(13))
-                                .padding(12)
-                                .width(Length::Fill),
+                            container(
+                                text(crate::cli_tools::shell_commands(shell))
+                                    .size(13)
+                                    .font(mono_font())
+                            )
+                            .padding(12)
+                            .width(Length::Fill),
                         ]
                         .spacing(8),
                     )
@@ -3299,12 +3308,12 @@ fn cli_tools_view(state: &App) -> Element<'_, Message> {
             scrollable(
                 column![
                     text("Run for every shell").size(18),
-                    container(text(common).size(13))
+                    container(text(common).size(13).font(mono_font()))
                         .padding(12)
                         .width(Length::Fill),
                     shell_sections,
                     text("Verify").size(18),
-                    container(text(verify).size(13))
+                    container(text(verify).size(13).font(mono_font()))
                         .padding(12)
                         .width(Length::Fill),
                 ]

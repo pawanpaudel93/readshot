@@ -346,6 +346,7 @@ fn draw_cursor_coord_chip(
         position: Point::new(x + 4.0, y + 2.0),
         color: Color::WHITE,
         size: iced::Pixels(11.0),
+        font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
         ..Default::default()
     });
 }
@@ -648,6 +649,7 @@ impl Program<Message> for OverlayProgram {
             position: Point::new(bx + 4.0, by + 2.0),
             color: Color::WHITE,
             size: iced::Pixels(11.0),
+            font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
             ..Default::default()
         });
 

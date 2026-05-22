@@ -827,6 +827,7 @@ fn draw_preview_badge(frame: &mut Frame, bounds: Rectangle, rect: Rectangle, lab
         position: Point::new(x + 7.0, y + 3.0),
         color: Color::WHITE,
         size: iced::Pixels(11.0),
+        font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
         ..Default::default()
     });
 }

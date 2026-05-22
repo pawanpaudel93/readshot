@@ -29,6 +29,9 @@ use crate::{arrowhead, RectLike};
 /// via `iced::daemon::font(...)` for visually consistent text.
 pub const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
 
+/// Family name of the bundled annotation/code font.
+pub const FONT_FAMILY: &str = "JetBrains Mono";
+
 /// Render `model` over `base` and return the flattened result.
 ///
 /// If the model contains an [`Annotation::Crop`], the output dimensions

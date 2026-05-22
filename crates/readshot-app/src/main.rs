@@ -42,6 +42,7 @@ fn main() -> iced::Result {
                 .subscription(runtime::subscription)
                 .theme(runtime::theme)
                 .style(runtime::style)
+                .default_font(iced::Font::DEFAULT)
                 .font(readshot_core::render::FONT_DATA)
                 .run();
             if !output.exists() || output.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
@@ -107,6 +108,11 @@ fn main() -> iced::Result {
         // wgpu surface clear color, so a transparent background lets
         // the desktop show through. See `runtime::style`.
         .style(runtime::style)
+        // Keep product chrome native and readable: SF Pro on macOS,
+        // Segoe UI on Windows, and the platform sans on Linux. The
+        // bundled JetBrains Mono below is reserved for annotations,
+        // code blocks, and measurement badges.
+        .default_font(iced::Font::DEFAULT)
         .font(readshot_core::render::FONT_DATA)
         .run()
 }
