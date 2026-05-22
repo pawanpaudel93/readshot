@@ -667,9 +667,16 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
     fn mouse_interaction(
         &self,
         _state: &Self::State,
-        _bounds: Rectangle,
-        _cursor: Cursor,
+        bounds: Rectangle,
+        cursor: Cursor,
     ) -> iced::mouse::Interaction {
+        let Some(point) = cursor.position_in(bounds) else {
+            return iced::mouse::Interaction::default();
+        };
+        if canvas_to_image(point, bounds, self.image_size, self.display_scale).is_none() {
+            return iced::mouse::Interaction::default();
+        }
+
         match self.active_tool {
             ToolState::Select => iced::mouse::Interaction::default(),
             ToolState::Text => iced::mouse::Interaction::Text,
@@ -954,6 +961,7 @@ fn rect_like_from_points(a: PointLike, b: PointLike) -> RectLike {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iced::widget::canvas::Program;
 
     fn pt(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -1132,6 +1140,44 @@ mod tests {
         assert_eq!(
             canvas_to_image(pt(600.0, 400.0), bounds, (200, 100), Some(2.0)),
             Some(pt(200.0, 100.0))
+        );
+    }
+
+    #[test]
+    fn drawing_cursor_only_applies_over_displayed_image() {
+        let canvas = EditorCanvas {
+            active_tool: ToolState::Rectangle,
+            color: CoreRgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            next_pin_number: 1,
+            image_size: (200, 100),
+            image_offset: (0.0, 0.0),
+            display_scale: Some(2.0),
+            selected_bounds: None,
+            selected_handles: Vec::new(),
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+
+        assert_eq!(
+            canvas.mouse_interaction(
+                &DrawState::Idle,
+                bounds,
+                Cursor::Available(Point::new(400.0, 300.0))
+            ),
+            iced::mouse::Interaction::Crosshair
+        );
+        assert_eq!(
+            canvas.mouse_interaction(
+                &DrawState::Idle,
+                bounds,
+                Cursor::Available(Point::new(400.0, 120.0))
+            ),
+            iced::mouse::Interaction::default()
         );
     }
 }
