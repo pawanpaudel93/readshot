@@ -99,6 +99,10 @@ impl EditorState {
         self.history.current()
     }
 
+    pub fn render_snapshot(&self) -> (RgbaImage, Vec<Annotation>) {
+        (self.base.clone(), self.history.current().to_vec())
+    }
+
     pub fn can_undo(&self) -> bool {
         self.history.can_undo()
     }
@@ -330,6 +334,29 @@ impl EditorState {
         }
         let mut next = baseline.to_vec();
         if !resize_annotation(&mut next[idx], handle, dx, dy) {
+            return false;
+        }
+        self.history.replace_present(next);
+        self.flattened_cache = None;
+        true
+    }
+
+    pub fn preview_line_width_selected_from(
+        &mut self,
+        baseline: &[Annotation],
+        width: f32,
+    ) -> bool {
+        let Some(idx) = self.selected_annotation else {
+            return false;
+        };
+        if idx >= baseline.len() {
+            self.selected_annotation = None;
+            return false;
+        }
+        let mut next = baseline.to_vec();
+        if !set_annotation_width(&mut next[idx], width.clamp(0.5, 64.0)) {
+            self.history.replace_present(next);
+            self.flattened_cache = None;
             return false;
         }
         self.history.replace_present(next);
@@ -989,6 +1016,29 @@ mod tests {
 
         match &s.annotations()[0] {
             Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 9.0),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn selected_annotation_width_preview_commits_one_undo_step() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        assert_eq!(s.select_at(PointLike::new(2.0, 2.0)), Some(0));
+        let baseline = s.annotations().to_vec();
+
+        assert!(s.preview_line_width_selected_from(&baseline, 8.0));
+        assert!(s.preview_line_width_selected_from(&baseline, 10.0));
+        assert!(s.commit_preview_from_baseline(baseline));
+        assert_eq!(s.undo_depth(), 2);
+
+        match &s.annotations()[0] {
+            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 10.0),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+        assert!(s.undo());
+        match &s.annotations()[0] {
+            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 1.0),
             other => panic!("expected rectangle, got {other:?}"),
         }
     }

@@ -76,6 +76,10 @@ pub struct EditorSession {
     /// commits the final state against this baseline as one undoable
     /// edit.
     pub move_drag: Option<MoveDrag>,
+    /// Baseline for the line-width slider while it previews selected
+    /// annotation sizing. Release commits the preview as one undoable
+    /// edit.
+    pub width_drag_baseline: Option<Vec<Annotation>>,
 }
 
 /// How long a "Click Discard again to confirm" prompt stays armed
@@ -261,6 +265,7 @@ impl EditorSession {
             discard_pending_at: None,
             status_set_at: None,
             move_drag: None,
+            width_drag_baseline: None,
         }
     }
 
@@ -290,6 +295,7 @@ impl EditorSession {
             discard_pending_at: None,
             status_set_at: None,
             move_drag: None,
+            width_drag_baseline: None,
         }
     }
 

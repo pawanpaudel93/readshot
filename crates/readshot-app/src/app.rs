@@ -410,6 +410,18 @@ pub enum Message {
     EditorDeleteSelected,
     /// Edit the selected text annotation, if one is selected.
     EditorEditSelectedText,
+    /// Keyboard event observed while an editor exists. Runtime filters
+    /// it to the live editor window before acting.
+    EditorKeyPressed {
+        window: iced::window::Id,
+        key: iced::keyboard::Key,
+        modifiers: iced::keyboard::Modifiers,
+        status_ignored: bool,
+    },
+    /// Preview selected-annotation width while the toolbar slider is dragged.
+    EditorLineWidthPreview(f32),
+    /// Commit the toolbar slider's selected-annotation width preview.
+    EditorLineWidthCommit,
     /// Background capture-and-save task finished. Carries the final
     /// PNG path or a stringified error.
     CaptureSaved(Result<PathBuf, String>),

@@ -676,80 +676,17 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // Escape; that's why Esc isn't handled here).
         subs.push(iced::event::listen_with(|event, status, window| {
             use iced::event::Status;
-            use iced::keyboard::{Event as KbEvent, Key};
+            use iced::keyboard::Event as KbEvent;
             if let iced::Event::Window(iced::window::Event::Rescaled(scale)) = event {
                 return Some(Message::WindowRescaled(window, scale));
             }
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                let cmd = modifiers.command();
-                // ⌘-shortcuts are global to the editor — fire even
-                // if a widget already saw the event.
-                match (&key, cmd, modifiers.shift()) {
-                    (Key::Character(c), true, false) if c.eq_ignore_ascii_case("z") => {
-                        return Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
-                    }
-                    (Key::Character(c), true, true) if c.eq_ignore_ascii_case("z") => {
-                        return Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo));
-                    }
-                    (Key::Character(c), true, false) if c.eq_ignore_ascii_case("s") => {
-                        return Some(Message::EditorSaveRequested);
-                    }
-                    (Key::Character(c), true, false) if c.eq_ignore_ascii_case("w") => {
-                        return Some(Message::EditorDiscardRequested);
-                    }
-                    (Key::Character(c), true, false) if c == "+" || c == "=" => {
-                        return Some(Message::EditorZoomIn);
-                    }
-                    (Key::Character(c), true, false) if c == "-" => {
-                        return Some(Message::EditorZoomOut);
-                    }
-                    (Key::Character(c), true, false) if c == "0" => {
-                        return Some(Message::EditorZoomActual);
-                    }
-                    (Key::Named(iced::keyboard::key::Named::Escape), _, _) => {
-                        return Some(Message::EditorTextCancel);
-                    }
-                    _ => {}
-                }
-                // Single-letter shortcuts only fire when no widget
-                // has captured the event — i.e. the user isn't
-                // typing into the text-input banner.
-                if status == Status::Ignored && !cmd && !modifiers.alt() && !modifiers.control() {
-                    if matches!(
-                        key,
-                        Key::Named(iced::keyboard::key::Named::Delete)
-                            | Key::Named(iced::keyboard::key::Named::Backspace)
-                    ) {
-                        return Some(Message::EditorDeleteSelected);
-                    }
-                    if matches!(key, Key::Named(iced::keyboard::key::Named::Enter)) {
-                        return Some(Message::EditorEditSelectedText);
-                    }
-                    if let Key::Character(c) = &key {
-                        // Tool selection: V/R/O/L/A/P/H/T/B/X/N/C
-                        if let Some(t) = tool_for_key(c.as_str()) {
-                            return Some(Message::EditorToolbar(
-                                readshot_ui::ToolbarMessage::SelectTool(t),
-                            ));
-                        }
-                        // Numeric width: 1..=9 → 1..=9 logical px.
-                        if let Some(n) = c.chars().next().and_then(|ch| ch.to_digit(10)) {
-                            if (1..=9).contains(&n) {
-                                return Some(Message::EditorToolbar(
-                                    readshot_ui::ToolbarMessage::SetLineWidth(n as f32),
-                                ));
-                            }
-                        }
-                        // [ / ] bump line width by 1 logical px.
-                        match c.as_str() {
-                            "[" => return Some(Message::EditorWidthBump(-1.0)),
-                            "]" => return Some(Message::EditorWidthBump(1.0)),
-                            "," => return Some(Message::EditorColorCycle(-1)),
-                            "." => return Some(Message::EditorColorCycle(1)),
-                            _ => {}
-                        }
-                    }
-                }
+                return Some(Message::EditorKeyPressed {
+                    window,
+                    key,
+                    modifiers,
+                    status_ignored: status == Status::Ignored,
+                });
             }
             None
         }));
@@ -1490,6 +1427,14 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 state.cli_tools_window_id = None;
                 state.cli_tools_status = None;
             }
+            if state
+                .editor
+                .as_ref()
+                .and_then(|ed| ed.window_id)
+                .is_some_and(|editor_id| editor_id == id)
+            {
+                state.editor = None;
+            }
             Task::none()
         }
         Message::WindowRescaled(id, scale) => {
@@ -1503,6 +1448,21 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 }
             }
             Task::none()
+        }
+        Message::EditorKeyPressed {
+            window,
+            key,
+            modifiers,
+            status_ignored,
+        } => {
+            let editor_window = state.editor.as_ref().and_then(|ed| ed.window_id);
+            if editor_window != Some(window) {
+                return Task::none();
+            }
+            match editor_key_message(key, modifiers, status_ignored) {
+                Some(message) => update(state, message),
+                None => Task::none(),
+            }
         }
         Message::HistorySearchChanged(q) => {
             state.history_search = q;
@@ -2092,8 +2052,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             };
             ed.busy = true;
             ed.set_status("Copying framed image…");
-            let img = share_framed_image(&ed.model.flatten());
-            Task::perform(copy_image_to_clipboard(img), |r| {
+            let (base, annotations) = ed.model.render_snapshot();
+            Task::perform(copy_framed_image_to_clipboard(base, annotations), |r| {
                 Message::EditorCopyFramedDone(r.map_err(|e| e.to_string()))
             })
         }
@@ -2184,26 +2144,18 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             match msg {
                 readshot_ui::ToolbarMessage::SelectTool(t) => {
                     ed.move_drag = None;
+                    ed.width_drag_baseline = None;
                     ed.model.set_tool(t);
                 }
                 readshot_ui::ToolbarMessage::SelectColor(c) => {
-                    ed.model.set_color(c);
-                    if ed.model.apply_color_to_selected(c) {
-                        ed.refresh_image();
-                        ed.set_status("Updated selected annotation color. ⌘Z to undo.");
-                        sync_editor_history(ed, &state.coordinator);
-                    }
+                    apply_editor_color(ed, &state.coordinator, c);
                 }
                 readshot_ui::ToolbarMessage::SetLineWidth(w) => {
-                    ed.model.set_line_width(w);
-                    if ed.model.apply_line_width_to_selected(w) {
-                        ed.refresh_image();
-                        ed.set_status("Updated selected annotation size. ⌘Z to undo.");
-                        sync_editor_history(ed, &state.coordinator);
-                    }
+                    apply_editor_line_width(ed, &state.coordinator, w);
                 }
                 readshot_ui::ToolbarMessage::Undo => {
                     ed.move_drag = None;
+                    ed.width_drag_baseline = None;
                     if ed.model.undo() {
                         ed.refresh_image();
                         sync_editor_history(ed, &state.coordinator);
@@ -2211,10 +2163,35 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 }
                 readshot_ui::ToolbarMessage::Redo => {
                     ed.move_drag = None;
+                    ed.width_drag_baseline = None;
                     if ed.model.redo() {
                         ed.refresh_image();
                         sync_editor_history(ed, &state.coordinator);
                     }
+                }
+            }
+            Task::none()
+        }
+
+        Message::EditorLineWidthPreview(width) => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            preview_editor_line_width(ed, width);
+            Task::none()
+        }
+
+        Message::EditorLineWidthCommit => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            if let Some(baseline) = ed.width_drag_baseline.take() {
+                if ed.model.commit_preview_from_baseline(baseline) {
+                    ed.refresh_image();
+                    ed.set_status("Updated selected annotation size. ⌘Z to undo.");
+                    sync_editor_history(ed, &state.coordinator);
+                } else {
+                    ed.refresh_image();
                 }
             }
             Task::none()
@@ -2238,6 +2215,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 }
                 readshot_ui::CanvasMessage::SelectPressed(p) => {
                     ed.pending_text = None;
+                    ed.width_drag_baseline = None;
                     if let Some(handle) = ed.model.resize_handle_at(p) {
                         ed.move_drag = Some(crate::editor::MoveDrag {
                             baseline: ed.model.annotations().to_vec(),
@@ -2301,8 +2279,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         content: String::new(),
                         edit_index: None,
                     });
+                    ed.width_drag_baseline = None;
                 }
                 readshot_ui::CanvasMessage::CommitAnnotation(annotation) => {
+                    ed.width_drag_baseline = None;
                     handle_commit_annotation(ed, annotation);
                     sync_editor_history(ed, &state.coordinator);
                 }
@@ -2316,6 +2296,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             };
             if let Some(edit) = ed.model.selected_text_edit() {
                 ed.move_drag = None;
+                ed.width_drag_baseline = None;
                 ed.pending_text = Some(crate::editor::PendingText {
                     origin: edit.origin,
                     content: edit.content,
@@ -2330,6 +2311,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 return Task::none();
             };
             ed.move_drag = None;
+            ed.width_drag_baseline = None;
             if ed.model.delete_selected_annotation() {
                 ed.refresh_image();
                 ed.set_status("Deleted annotation. ⌘Z to undo.");
@@ -2380,6 +2362,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::EditorTextCancel => {
             if let Some(ed) = state.editor.as_mut() {
                 ed.move_drag = None;
+                ed.width_drag_baseline = None;
                 ed.model.clear_selection();
                 ed.pending_text = None;
             }
@@ -2388,7 +2371,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::EditorWidthBump(delta) => {
             if let Some(ed) = state.editor.as_mut() {
                 let next = ed.model.current_line_width() + delta;
-                ed.model.set_line_width(next);
+                apply_editor_line_width(ed, &state.coordinator, next);
             }
             Task::none()
         }
@@ -2402,7 +2385,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     .unwrap_or(0) as i32;
                 let len = palette.len() as i32;
                 let next = ((idx + dir).rem_euclid(len)) as usize;
-                ed.model.set_color(palette[next]);
+                apply_editor_color(ed, &state.coordinator, palette[next]);
             }
             Task::none()
         }
@@ -4025,9 +4008,10 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let width_slider = iced::widget::slider(
         toolbar::MIN_LINE_WIDTH..=toolbar::MAX_LINE_WIDTH,
         line_width,
-        |v| Message::EditorToolbar(readshot_ui::ToolbarMessage::SetLineWidth(v)),
+        Message::EditorLineWidthPreview,
     )
     .step(0.5)
+    .on_release(Message::EditorLineWidthCommit)
     .width(Length::Fixed(140.0));
 
     let undo_depth = ed.model.undo_depth();
@@ -4988,6 +4972,76 @@ fn tool_for_key(c: &str) -> Option<readshot_ui::editor::ToolState> {
         "c" => Some(T::Crop),
         _ => None,
     }
+}
+
+fn editor_key_message(
+    key: iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+    status_ignored: bool,
+) -> Option<Message> {
+    use iced::keyboard::{key::Named, Key};
+
+    let cmd = modifiers.command();
+    match (&key, cmd, modifiers.shift()) {
+        (Key::Character(c), true, false) if c.eq_ignore_ascii_case("z") => {
+            return Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
+        }
+        (Key::Character(c), true, true) if c.eq_ignore_ascii_case("z") => {
+            return Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo));
+        }
+        (Key::Character(c), true, false) if c.eq_ignore_ascii_case("s") => {
+            return Some(Message::EditorSaveRequested);
+        }
+        (Key::Character(c), true, false) if c.eq_ignore_ascii_case("w") => {
+            return Some(Message::EditorDiscardRequested);
+        }
+        (Key::Character(c), true, false) if c == "+" || c == "=" => {
+            return Some(Message::EditorZoomIn);
+        }
+        (Key::Character(c), true, false) if c == "-" => {
+            return Some(Message::EditorZoomOut);
+        }
+        (Key::Character(c), true, false) if c == "0" => {
+            return Some(Message::EditorZoomActual);
+        }
+        (Key::Named(Named::Escape), _, _) => return Some(Message::EditorTextCancel),
+        _ => {}
+    }
+
+    if status_ignored && !cmd && !modifiers.alt() && !modifiers.control() {
+        if matches!(
+            key,
+            Key::Named(Named::Delete) | Key::Named(Named::Backspace)
+        ) {
+            return Some(Message::EditorDeleteSelected);
+        }
+        if matches!(key, Key::Named(Named::Enter)) {
+            return Some(Message::EditorEditSelectedText);
+        }
+        if let Key::Character(c) = &key {
+            if let Some(t) = tool_for_key(c.as_str()) {
+                return Some(Message::EditorToolbar(
+                    readshot_ui::ToolbarMessage::SelectTool(t),
+                ));
+            }
+            if let Some(n) = c.chars().next().and_then(|ch| ch.to_digit(10)) {
+                if (1..=9).contains(&n) {
+                    return Some(Message::EditorToolbar(
+                        readshot_ui::ToolbarMessage::SetLineWidth(n as f32),
+                    ));
+                }
+            }
+            match c.as_str() {
+                "[" => return Some(Message::EditorWidthBump(-1.0)),
+                "]" => return Some(Message::EditorWidthBump(1.0)),
+                "," => return Some(Message::EditorColorCycle(-1)),
+                "." => return Some(Message::EditorColorCycle(1)),
+                _ => {}
+            }
+        }
+    }
+
+    None
 }
 
 /// One-line guidance for the currently active tool — replaces the
@@ -6735,6 +6789,26 @@ async fn copy_image_to_clipboard(img: image::RgbaImage) -> Result<(), ClipboardE
     .map_err(|e| ClipboardError::Join(e.to_string()))?
 }
 
+async fn copy_framed_image_to_clipboard(
+    base: image::RgbaImage,
+    annotations: Vec<readshot_core::Annotation>,
+) -> Result<(), ClipboardError> {
+    tokio::task::spawn_blocking(move || {
+        let img = readshot_core::render(&base, &annotations);
+        let framed = share_framed_image(&img);
+        let mut ctx = arboard::Clipboard::new()?;
+        let data = arboard::ImageData {
+            width: framed.width() as usize,
+            height: framed.height() as usize,
+            bytes: std::borrow::Cow::Borrowed(framed.as_raw()),
+        };
+        ctx.set_image(data)?;
+        Ok::<(), ClipboardError>(())
+    })
+    .await
+    .map_err(|e| ClipboardError::Join(e.to_string()))?
+}
+
 async fn copy_text_to_clipboard(text: String) -> Result<(), ClipboardError> {
     tokio::task::spawn_blocking(move || {
         let mut ctx = arboard::Clipboard::new()?;
@@ -7102,6 +7176,48 @@ fn editor_selected_hint(kind: &str, text_editable: bool) -> String {
     }
 }
 
+fn apply_editor_color(
+    ed: &mut crate::editor::EditorSession,
+    coord: &CaptureCoordinator,
+    color: readshot_core::Rgba,
+) {
+    ed.width_drag_baseline = None;
+    ed.model.set_color(color);
+    if ed.model.apply_color_to_selected(color) {
+        ed.refresh_image();
+        ed.set_status("Updated selected annotation color. ⌘Z to undo.");
+        sync_editor_history(ed, coord);
+    }
+}
+
+fn apply_editor_line_width(
+    ed: &mut crate::editor::EditorSession,
+    coord: &CaptureCoordinator,
+    width: f32,
+) {
+    ed.width_drag_baseline = None;
+    ed.model.set_line_width(width);
+    if ed.model.apply_line_width_to_selected(width) {
+        ed.refresh_image();
+        ed.set_status("Updated selected annotation size. ⌘Z to undo.");
+        sync_editor_history(ed, coord);
+    }
+}
+
+fn preview_editor_line_width(ed: &mut crate::editor::EditorSession, width: f32) {
+    ed.model.set_line_width(width);
+    if ed.model.selected_annotation().is_none() {
+        ed.width_drag_baseline = None;
+        return;
+    }
+    let baseline = ed
+        .width_drag_baseline
+        .get_or_insert_with(|| ed.model.annotations().to_vec())
+        .clone();
+    ed.model.preview_line_width_selected_from(&baseline, width);
+    ed.refresh_image();
+}
+
 fn sync_editor_history(ed: &mut crate::editor::EditorSession, coord: &CaptureCoordinator) {
     let Some(record) = ed.source_record.as_mut() else {
         return;
@@ -7131,7 +7247,7 @@ mod tests {
     use readshot_capture::fake::FakeCapturer;
     use readshot_capture::{Capturer, DisplayInfo};
     use readshot_core::error::CaptureError;
-    use readshot_core::{Annotation, FsHistoryStore, HistoryStore, RectLike, Rgba};
+    use readshot_core::{Annotation, FsHistoryStore, HistoryStore, PointLike, RectLike, Rgba};
     use readshot_ocr::fake::FakeOcrEngine;
 
     fn build_app(perms: Arc<FakePermissions>) -> App {
@@ -8095,5 +8211,80 @@ mod tests {
         assert!(!app.settings_recording_hotkey);
         assert!(app.settings_hotkey_error.is_none());
         assert!(app.windows.kind(id).is_none());
+    }
+
+    #[test]
+    fn window_closed_clears_editor_session() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = iced::window::Id::unique();
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.window_id = Some(id);
+        app.windows.register(id, WindowKind::Editor);
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::WindowClosed(id));
+
+        assert!(app.editor.is_none());
+        assert!(app.windows.kind(id).is_none());
+    }
+
+    #[test]
+    fn keyboard_width_bump_updates_selected_annotation() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorWidthBump(3.0));
+
+        let ed = app.editor.as_ref().unwrap();
+        match &ed.model.annotations()[0] {
+            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 6.0),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_key_events_ignore_non_editor_windows() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let editor_id = iced::window::Id::unique();
+        let other_id = iced::window::Id::unique();
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.window_id = Some(editor_id);
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        app.editor = Some(ed);
+
+        let delete = iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete);
+        let _ = update(
+            &mut app,
+            Message::EditorKeyPressed {
+                window: other_id,
+                key: delete.clone(),
+                modifiers: iced::keyboard::Modifiers::empty(),
+                status_ignored: true,
+            },
+        );
+        assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 1);
+
+        let _ = update(
+            &mut app,
+            Message::EditorKeyPressed {
+                window: editor_id,
+                key: delete,
+                modifiers: iced::keyboard::Modifiers::empty(),
+                status_ignored: true,
+            },
+        );
+        assert!(app.editor.as_ref().unwrap().model.annotations().is_empty());
     }
 }
