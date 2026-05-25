@@ -209,15 +209,14 @@ pub fn start() -> (App, Task<Message>) {
     // the window once after the grant is visible so macOS's "Quit &
     // Reopen" flow has an obvious result instead of relaunching into
     // a silent menu-bar-only state.
+    let initial_url_action = take_initial_url_action();
     let mut tasks: Vec<Task<Message>> = Vec::new();
-    let needs_welcome_window = needs_welcome_window_on_boot(app.welcome, &app.preferences);
+    let needs_welcome_window =
+        needs_welcome_window_on_boot(app.welcome, initial_url_action.is_some());
     if needs_welcome_window {
         let (id, open_task) = window::open(welcome_window_settings());
         app.windows.register(id, WindowKind::Welcome);
         tasks.push(open_task.map(|_id| Message::WelcomeWindowReady));
-        if !app.welcome.should_show() {
-            app.mark_onboarding_completed();
-        }
     } else {
         // No welcome window — user is already past the permission
         // gate. Surface a system notification so a relaunch is
@@ -228,14 +227,14 @@ pub fn start() -> (App, Task<Message>) {
         // app actually came back.
         notify_running_in_menu_bar(&app.preferences.capture_hotkey);
     }
-    if let Some(action) = take_initial_url_action() {
+    if let Some(action) = initial_url_action {
         tasks.push(Task::done(Message::UrlActionReceived(action)));
     }
     (app, Task::batch(tasks))
 }
 
-fn needs_welcome_window_on_boot(welcome: WelcomeState, preferences: &Preferences) -> bool {
-    welcome.should_show() || !preferences.onboarding_completed
+fn needs_welcome_window_on_boot(welcome: WelcomeState, has_initial_url_action: bool) -> bool {
+    welcome.should_show() || !has_initial_url_action
 }
 
 /// Per-platform suggested default for `Preferences::capture_hotkey`.
@@ -893,7 +892,12 @@ pub fn subscription(state: &App) -> Subscription<Message> {
 /// [`App::update_sync`] and adds the iced-only async branches.
 pub fn update(state: &mut App, message: Message) -> Task<Message> {
     match message {
-        Message::WelcomeWindowReady => Task::none(),
+        Message::WelcomeWindowReady => {
+            if !state.welcome.should_show() {
+                state.mark_onboarding_completed();
+            }
+            Task::none()
+        }
 
         Message::PermissionTick => {
             let status = state.permissions.status();
@@ -6129,12 +6133,12 @@ fn slim_scrollbar() -> iced::widget::scrollable::Scrollbar {
 
 fn welcome_view(state: &App) -> Element<'_, Message> {
     let hero = column![
-        text("Readshot").size(36),
+        text("Readshot").size(32),
         text("Capture, search, find again.")
-            .size(14)
+            .size(13)
             .color(settings_muted_text()),
         container(Space::new())
-            .width(Length::Fixed(52.0))
+            .width(Length::Fixed(44.0))
             .height(Length::Fixed(2.0))
             .style(|_| container::Style {
                 background: Some(accent(0.85).into()),
@@ -6145,7 +6149,7 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
                 ..Default::default()
             }),
     ]
-    .spacing(8)
+    .spacing(7)
     .align_x(Alignment::Center);
 
     let card: Element<'_, Message> = match state.welcome {
@@ -6164,9 +6168,9 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
 
     let inner = column![
         hero,
-        Space::new().height(Length::Fixed(24.0)),
+        Space::new().height(Length::Fixed(20.0)),
         card,
-        Space::new().height(Length::Fixed(16.0)),
+        Space::new().height(Length::Fixed(10.0)),
         toast,
     ]
     .max_width(420)
@@ -6220,7 +6224,7 @@ fn welcome_card_with_tone<'a>(
             iced::widget::container::Style {
                 background: Some(bg.into()),
                 border: iced::Border {
-                    radius: 10.0.into(),
+                    radius: 8.0.into(),
                     color: border,
                     width: 1.0,
                 },
@@ -6305,23 +6309,23 @@ fn welcome_permission_guidance(state: WelcomeState) -> (&'static str, &'static s
 }
 
 fn welcome_granted_card(state: &App) -> Element<'_, Message> {
-    let mut capture_btn = button(text("Capture Screen").size(14))
-        .padding([10, 20])
+    let mut capture_btn = button(welcome_button_label("Capture Screen", 14, 136.0, 40.0))
+        .padding(0)
         .style(|t, s| action_button_style(t, s, ActionKind::Primary));
     if !state.capture_in_flight {
         capture_btn = capture_btn.on_press(Message::OpenOverlayRequested);
     }
-    let history_btn = button(text("Show History").size(13))
-        .padding([8, 14])
+    let history_btn = button(welcome_button_label("Show History", 13, 104.0, 34.0))
+        .padding(0)
         .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
         .on_press(Message::OpenHistoryRequested);
-    let settings_btn = button(text("Open Settings").size(13))
-        .padding([8, 14])
+    let settings_btn = button(welcome_button_label("Open Settings", 13, 110.0, 34.0))
+        .padding(0)
         .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
         .on_press(Message::OpenSettingsRequested);
     let hotkey = pretty_hotkey(&state.preferences.capture_hotkey);
     let body = column![
-        text("You're all set.").size(18),
+        text("You're all set.").size(17),
         text(format!(
             "Press {hotkey} or click the menu-bar icon to capture. Every \
              capture lands in History — searchable by anything visible \
@@ -6331,14 +6335,32 @@ fn welcome_granted_card(state: &App) -> Element<'_, Message> {
         .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7)),
         Space::new().height(Length::Fixed(6.0)),
         capture_btn,
-        Space::new().height(Length::Fixed(4.0)),
+        Space::new().height(Length::Fixed(2.0)),
         row![history_btn, settings_btn]
-            .spacing(8)
+            .spacing(10)
             .align_y(Alignment::Center),
     ]
     .spacing(10)
     .align_x(Alignment::Center);
     welcome_card(body.into())
+}
+
+fn welcome_button_label<'a>(
+    label: &'static str,
+    size: u32,
+    width: f32,
+    height: f32,
+) -> Element<'a, Message> {
+    container(
+        text(label)
+            .size(size)
+            .line_height(iced::widget::text::LineHeight::Relative(1.0)),
+    )
+    .width(Length::Fixed(width))
+    .height(Length::Fixed(height))
+    .align_x(iced::alignment::Horizontal::Center)
+    .align_y(iced::alignment::Vertical::Center)
+    .into()
 }
 
 /// Async helper: capture the primary display's full bounds and write
@@ -7307,15 +7329,35 @@ fn relaunch_via_launch_services() -> std::io::Result<()> {
         .and_then(|p| p.parent()) // *.app
         .map(|p| p.to_path_buf())
         .unwrap_or(exe);
-    // Fully detach the child so it doesn't die when we exit.
-    std::process::Command::new("open")
-        .arg("-n")
-        .arg(&bundle)
+    let command = relaunch_command_for_bundle(&bundle);
+    // Fully detach the helper so it survives this process exiting.
+    std::process::Command::new(command.program)
+        .args(command.args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RelaunchCommand {
+    program: &'static str,
+    args: Vec<String>,
+}
+
+#[cfg(target_os = "macos")]
+fn relaunch_command_for_bundle(bundle: &Path) -> RelaunchCommand {
+    RelaunchCommand {
+        program: "/bin/sh",
+        args: vec![
+            "-c".into(),
+            "sleep 0.35; exec /usr/bin/open \"$1\"".into(),
+            "readshot-relaunch".into(),
+            bundle.to_string_lossy().to_string(),
+        ],
+    }
 }
 
 /// Show a one-line system notification announcing that Readshot is
@@ -8119,6 +8161,18 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn relaunch_command_waits_for_current_process_to_exit() {
+        let command =
+            relaunch_command_for_bundle(std::path::Path::new("/Applications/Readshot.app"));
+
+        assert_eq!(command.program, "/bin/sh");
+        assert!(command.args[1].contains("sleep 0.35"));
+        assert!(command.args[1].contains("/usr/bin/open \"$1\""));
+        assert_eq!(command.args[3], "/Applications/Readshot.app");
+    }
+
     #[test]
     fn history_thumbnail_path_matches_core_layout() {
         use chrono::TimeZone;
@@ -8163,6 +8217,17 @@ mod tests {
         perms.flip_to_granted();
         let _ = update(&mut app, Message::PermissionTick);
         assert!(!app.welcome.should_show());
+    }
+
+    #[test]
+    fn welcome_ready_marks_onboarding_completed_after_grant() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.preferences.onboarding_completed = false;
+        app.welcome = WelcomeState::Granted;
+
+        let _ = update(&mut app, Message::WelcomeWindowReady);
+
+        assert!(app.preferences.onboarding_completed);
     }
 
     #[test]
@@ -8649,15 +8714,18 @@ mod tests {
     }
 
     #[test]
-    fn boot_opens_welcome_for_first_granted_launch_until_onboarded() {
-        let mut prefs = first_launch_preferences();
-        prefs.onboarding_completed = false;
-        assert!(needs_welcome_window_on_boot(WelcomeState::Granted, &prefs));
+    fn boot_opens_ready_window_for_normal_granted_launch() {
+        assert!(needs_welcome_window_on_boot(WelcomeState::Granted, false));
+    }
 
-        prefs.onboarding_completed = true;
-        assert!(!needs_welcome_window_on_boot(WelcomeState::Granted, &prefs));
+    #[test]
+    fn boot_skips_ready_window_for_url_launch_when_granted() {
+        assert!(!needs_welcome_window_on_boot(WelcomeState::Granted, true));
+    }
 
-        assert!(needs_welcome_window_on_boot(WelcomeState::Pending, &prefs));
+    #[test]
+    fn boot_still_opens_permission_window_for_url_launch_when_blocked() {
+        assert!(needs_welcome_window_on_boot(WelcomeState::Pending, true));
     }
 
     #[test]

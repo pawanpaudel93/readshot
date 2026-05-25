@@ -10,6 +10,7 @@ description = "Per-OS offline OCR for Readshot behind an OCREngine trait."
 
 [features]
 default = []
+test-fixtures = []
 # Enables real-engine fixture tests. Off by default because they need
 # OS-resident OCR (Apple Vision / Windows.Media.Ocr) or downloaded ocrs
 # `.rten` model files. CI enables this when the runners have what
@@ -21,7 +22,6 @@ async-trait = { workspace = true }
 directories = { workspace = true }
 image = { workspace = true }
 readshot-core = { path = "../readshot-core" }
-readshot-test-fixtures = { path = "../readshot-test-fixtures" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 

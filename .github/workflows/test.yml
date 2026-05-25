@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "23 9 * * *"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -46,19 +49,17 @@ jobs:
         run: cargo nextest run --workspace --no-fail-fast
 
   # Nightly job: enables `--features integration` and pre-grants
-  # Screen Recording on macOS so the per-OS smoke tests
-  # (screencapturekit, Apple Vision) actually run. Off by default
-  # because granting TCC requires a privileged tccutil call.
+  # Screen Recording on macOS when available so the per-OS smoke tests
+  # (screencapturekit, Apple Vision) can run. Capture smoke tests
+  # self-skip until CI has a real TCC grant.
   integration:
     name: integration (${{ matrix.os }})
-    if: github.event_name == 'schedule' || contains(github.event.head_commit.message, '[run integration]')
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run integration]')
     strategy:
       fail-fast: false
       matrix:
         os: [macos-14]
     runs-on: ${{ matrix.os }}
-    env:
-      CI_HAS_SCREEN_PERMISSION: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -72,6 +73,6 @@ jobs:
           # `tccutil reset ScreenCapture` then a programmatic grant
           # is the standard CI pattern. Implementation deferred to
           # the first runner that needs it.
-          echo "TODO: pre-grant Screen Recording via tccutil"
+          echo "Screen Recording pre-grant is not implemented; capture smoke tests self-skip."
       - name: cargo nextest run --features integration
         run: cargo nextest run --workspace --features readshot-capture/integration,readshot-ocr/integration --no-fail-fast

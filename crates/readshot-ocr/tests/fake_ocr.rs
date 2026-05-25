@@ -3,6 +3,8 @@
 //! These run on every platform (no OS-level OCR or model files needed)
 //! and double as documentation of the trait's expected behaviour.
 
+#![cfg(feature = "test-fixtures")]
+
 use image::{Rgba, RgbaImage};
 use readshot_core::error::OCRError;
 use readshot_ocr::{fake::FakeOcrEngine, OCREngine, OCRRequest};

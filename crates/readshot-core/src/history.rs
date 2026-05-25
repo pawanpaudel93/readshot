@@ -16,6 +16,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use chrono::{DateTime, Datelike, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -119,11 +120,15 @@ pub trait HistoryStore: Send + Sync {
 /// `root`.
 pub struct FsHistoryStore {
     root: PathBuf,
+    index_lock: Mutex<()>,
 }
 
 impl FsHistoryStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            index_lock: Mutex::new(()),
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -204,10 +209,17 @@ impl FsHistoryStore {
         }
         let _ = crate::save_png(&thumb.to_rgba8(), &abs_thumb);
     }
+
+    fn lock_index(&self) -> Result<std::sync::MutexGuard<'_, ()>, HistoryError> {
+        self.index_lock
+            .lock()
+            .map_err(|_| HistoryError::Io("history index lock poisoned".into()))
+    }
 }
 
 impl HistoryStore for FsHistoryStore {
     fn save(&self, record: &CaptureRecord, png: &[u8]) -> Result<(), HistoryError> {
+        let _index_guard = self.lock_index()?;
         let (rel_png, rel_json) = Self::record_paths(record);
         let abs_png = self.root.join(&rel_png);
         let abs_json = self.root.join(&rel_json);
@@ -266,6 +278,7 @@ impl HistoryStore for FsHistoryStore {
         policy: HistoryRetention,
         now: DateTime<Utc>,
     ) -> Result<(), HistoryError> {
+        let _index_guard = self.lock_index()?;
         let mut index = self.read_index()?;
         // Sort newest first so `take(N)` keeps the freshest captures.
         index
@@ -318,6 +331,7 @@ impl HistoryStore for FsHistoryStore {
     }
 
     fn clear_all(&self) -> Result<(), HistoryError> {
+        let _index_guard = self.lock_index()?;
         if self.root.exists() {
             fs::remove_dir_all(&self.root)?;
         }
@@ -332,6 +346,7 @@ impl HistoryStore for FsHistoryStore {
     }
 
     fn update(&self, record: &CaptureRecord) -> Result<(), HistoryError> {
+        let _index_guard = self.lock_index()?;
         let (_rel_png, rel_json) = Self::record_paths(record);
         let abs_json = self.root.join(&rel_json);
         // Best-effort: a record that's been retention-pruned between
@@ -350,6 +365,7 @@ impl HistoryStore for FsHistoryStore {
     }
 
     fn delete(&self, id: Uuid) -> Result<(), HistoryError> {
+        let _index_guard = self.lock_index()?;
         let mut index = self.read_index()?;
         let Some(pos) = index.records.iter().position(|e| e.id == id) else {
             // Already gone — not an error.
@@ -415,6 +431,30 @@ mod tests {
         let list = s.list().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, r.id);
+    }
+
+    #[test]
+    fn concurrent_saves_keep_every_index_entry() {
+        let (_dir, s) = store();
+        let s = std::sync::Arc::new(s);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(12));
+        let mut handles = Vec::new();
+
+        for i in 0..12 {
+            let s = s.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                let record = record_at(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, i).unwrap());
+                barrier.wait();
+                s.save(&record, &fake_png()).unwrap();
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(s.list().unwrap().len(), 12);
     }
 
     #[test]

@@ -893,17 +893,7 @@ impl App {
     /// state-machine portion that's testable today.
     pub fn update_sync(&mut self, message: Message) -> bool {
         match message {
-            Message::PermissionPoll(status) => {
-                let changed = self.welcome.observe(status);
-                if matches!(
-                    status,
-                    crate::permissions::PermissionStatus::Granted
-                        | crate::permissions::PermissionStatus::NotApplicable
-                ) {
-                    return self.mark_onboarding_completed() || changed;
-                }
-                changed
-            }
+            Message::PermissionPoll(status) => self.welcome.observe(status),
             Message::GrantPermissionRequested => {
                 self.permissions.request();
                 self.welcome = WelcomeState::AwaitingGrant;
@@ -983,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn permission_poll_marks_onboarding_completed_on_grant() {
+    fn permission_poll_leaves_onboarding_completion_until_ready_window_opens() {
         let perms = Arc::new(FakePermissions::denied());
         let (mut app, _) = build_app(perms.clone());
         let dir = tempfile::TempDir::new().unwrap();
@@ -995,9 +985,8 @@ mod tests {
         let changed = app.update_sync(Message::PermissionPoll(PermissionStatus::Granted));
 
         assert!(changed);
-        assert!(app.preferences.onboarding_completed);
-        let from_disk = Preferences::load(&path).unwrap();
-        assert!(from_disk.onboarding_completed);
+        assert!(!app.preferences.onboarding_completed);
+        assert!(!path.exists());
     }
 
     #[test]

@@ -10,9 +10,9 @@
 //! * [`linux::LinuxCapturer`] — `ashpd` portal on Wayland with `x11rb`
 //!   fallback (Task 9).
 //!
-//! [`fake::FakeCapturer`] returns a deterministic fixture and is
-//! re-exported so every higher crate's tests can substitute capture
-//! without an OS-level grant.
+//! The optional `test-fixtures` feature exposes `fake::FakeCapturer`,
+//! a deterministic fixture so higher crate tests can substitute
+//! capture without an OS-level grant.
 //!
 //! Errors are typed as [`readshot_core::error::CaptureError`]; the CLI
 //! exit-code mapper (spec §3.15) and MCP error mapper (spec §3.16) match
@@ -23,6 +23,7 @@ use image::RgbaImage;
 use readshot_core::error::CaptureError;
 use readshot_core::geom::Rect;
 
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod fake;
 
 #[cfg(target_os = "linux")]

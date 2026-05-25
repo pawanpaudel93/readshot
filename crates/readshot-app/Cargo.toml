@@ -32,7 +32,6 @@ tiny-skia = { workspace = true }
 readshot-capture = { path = "../readshot-capture" }
 readshot-core = { path = "../readshot-core" }
 readshot-ocr = { path = "../readshot-ocr" }
-readshot-test-fixtures = { path = "../readshot-test-fixtures" }
 readshot-ui = { path = "../readshot-ui" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -48,4 +47,6 @@ objc2 = "0.6"
 screencapturekit = "1.5"
 
 [dev-dependencies]
+readshot-capture = { path = "../readshot-capture", features = ["test-fixtures"] }
+readshot-ocr = { path = "../readshot-ocr", features = ["test-fixtures"] }
 tempfile = { workspace = true }

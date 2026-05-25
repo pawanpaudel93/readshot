@@ -110,7 +110,15 @@ check_tag_state() {
   local tag="$1"
 
   if git -C "${ROOT}" rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-    warn "local tag ${tag} already exists"
+    local tag_commit
+    local head_commit
+    tag_commit="$(git -C "${ROOT}" rev-parse "refs/tags/${tag}^{}")"
+    head_commit="$(git -C "${ROOT}" rev-parse HEAD)"
+    if [[ "${tag_commit}" == "${head_commit}" ]]; then
+      warn "local tag ${tag} already exists and points at HEAD"
+    else
+      fail "local tag ${tag} exists but does not point at HEAD"
+    fi
   else
     ok "local tag ${tag} is available"
   fi
@@ -178,6 +186,8 @@ main() {
   check_script_syntax "scripts/release-local.sh"
   check_script_syntax "scripts/test-install-script.sh"
   check_script_syntax "scripts/test-update-appcast.sh"
+  check_script_syntax "scripts/test-check-release.sh"
+  check_script_syntax "scripts/test-dependency-hygiene.sh"
   check_script_syntax "packaging/macos/build-dmg.sh"
   check_script_syntax "packaging/macos/update-appcast.sh"
 

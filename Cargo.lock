@@ -4525,7 +4525,7 @@ dependencies = [
 
 [[package]]
 name = "readshot-app"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "arboard",
  "async-trait",
@@ -4543,7 +4543,6 @@ dependencies = [
  "readshot-capture",
  "readshot-core",
  "readshot-ocr",
- "readshot-test-fixtures",
  "readshot-ui",
  "rfd",
  "screencapturekit",
@@ -4559,7 +4558,7 @@ dependencies = [
 
 [[package]]
 name = "readshot-capture"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "async-trait",
  "core-foundation 0.10.1",
@@ -4575,7 +4574,7 @@ dependencies = [
 
 [[package]]
 name = "readshot-core"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "ab_glyph",
  "chrono",
@@ -4593,7 +4592,7 @@ dependencies = [
 
 [[package]]
 name = "readshot-mcp"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "async-trait",
  "base64",
@@ -4613,7 +4612,7 @@ dependencies = [
 
 [[package]]
 name = "readshot-ocr"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "async-trait",
  "directories",
@@ -4623,7 +4622,6 @@ dependencies = [
  "objc2-vision",
  "ocrs",
  "readshot-core",
- "readshot-test-fixtures",
  "rten",
  "serde",
  "serde_json",
@@ -4633,14 +4631,14 @@ dependencies = [
 
 [[package]]
 name = "readshot-test-fixtures"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "image",
 ]
 
 [[package]]
 name = "readshot-ui"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "global-hotkey",
  "iced",

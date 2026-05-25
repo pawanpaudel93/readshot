@@ -10,7 +10,8 @@
 //! * [`linux::OcrsEngine`] — the pure-Rust `ocrs` engine over its two
 //!   `.rten` model files (this task).
 //!
-//! [`fake::FakeOcrEngine`] returns deterministic preset text for tests.
+//! The optional `test-fixtures` feature exposes `fake::FakeOcrEngine`,
+//! which returns deterministic preset text for tests.
 //!
 //! Errors are typed as [`readshot_core::error::OCRError`]; the CLI exit-code
 //! mapper (spec §3.15) and MCP error mapper (spec §3.16) match on its
@@ -20,6 +21,7 @@ use async_trait::async_trait;
 use image::RgbaImage;
 use readshot_core::error::OCRError;
 
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod fake;
 
 #[cfg(target_os = "linux")]

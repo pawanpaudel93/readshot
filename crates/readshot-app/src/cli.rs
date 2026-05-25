@@ -414,6 +414,8 @@ pub fn exit_code(err: &CliError) -> i32 {
 /// values to `Duration::from_secs_f64`, which panics near
 /// `Duration::MAX`.
 const MAX_DELAY_SECS: f64 = 3600.0;
+const MAX_RECT_DIM: f32 = 16_384.0;
+const MAX_SCALE: f32 = 8.0;
 
 fn parse_delay(s: &str) -> Result<f64, String> {
     let delay = s
@@ -439,6 +441,21 @@ fn parse_rect(s: &str) -> Result<Rect, String> {
             .trim()
             .parse::<f32>()
             .map_err(|e| format!("component {i} (`{p}`) is not a number: {e}"))?;
+    }
+    for (name, v) in [
+        ("x", nums[0]),
+        ("y", nums[1]),
+        ("width", nums[2]),
+        ("height", nums[3]),
+    ] {
+        if !v.is_finite() {
+            return Err(format!("rect.{name} must be finite"));
+        }
+        if v.abs() > MAX_RECT_DIM {
+            return Err(format!(
+                "rect.{name} must not exceed {MAX_RECT_DIM} logical pixels"
+            ));
+        }
     }
     Rect::from_xywh(nums[0], nums[1], nums[2], nums[3])
         .ok_or_else(|| format!("rect `{s}` has non-positive or non-finite dimensions"))
@@ -964,13 +981,17 @@ async fn build_capture_request(
 }
 
 fn validate_scale(scale: f32) -> Result<(), CliError> {
-    if scale.is_finite() && scale > 0.0 {
-        Ok(())
-    } else {
-        Err(CliError::InvalidInput(
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(CliError::InvalidInput(
             "--scale must be a positive finite number".into(),
-        ))
+        ));
     }
+    if scale > MAX_SCALE {
+        return Err(CliError::InvalidInput(format!(
+            "--scale must not exceed {MAX_SCALE}"
+        )));
+    }
+    Ok(())
 }
 
 async fn lookup_window_bounds(
@@ -1372,6 +1393,12 @@ mod tests {
     fn parse_rect_rejects_negative_size() {
         let err = parse_rect("0,0,-10,600").unwrap_err();
         assert!(err.contains("non-positive") || err.contains("non-finite"));
+    }
+
+    #[test]
+    fn parse_rect_rejects_extreme_dimensions() {
+        let err = parse_rect("0,0,999999,600").unwrap_err();
+        assert!(err.contains("must not exceed"));
     }
 
     #[test]
@@ -2214,6 +2241,25 @@ mod tests {
             "capture",
             "--scale",
             "0",
+            "-o",
+            "/tmp/ignored.png",
+        ])
+        .unwrap();
+        let mut out = Vec::new();
+        let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
+
+        assert!(matches!(err, CliError::InvalidInput(ref s) if s.contains("--scale")));
+        assert_eq!(exit_code(&err), 64);
+    }
+
+    #[tokio::test]
+    async fn run_capture_with_extreme_scale_returns_usage_error() {
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture",
+            "--scale",
+            "99",
             "-o",
             "/tmp/ignored.png",
         ])

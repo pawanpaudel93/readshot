@@ -91,7 +91,9 @@ impl Capturer for ScreenCaptureKitCapturer {
         let full = RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
             CaptureError::Backend("rgba_data length does not match width × height × 4".to_string())
         })?;
-        Ok(crop_rgba(full, req.rect, req.scale))
+        let (scale_x, scale_y) =
+            capture_scales_for_image(display.display_id(), width, height, req.scale);
+        Ok(crop_rgba(full, req.rect, scale_x, scale_y))
     }
 
     async fn list_windows(&self) -> Result<Vec<WindowInfo>, CaptureError> {
@@ -156,14 +158,54 @@ impl Capturer for ScreenCaptureKitCapturer {
     }
 }
 
-fn crop_rgba(full: RgbaImage, rect_logical: Rect, scale: f32) -> RgbaImage {
-    let x0 = ((rect_logical.x() * scale).round().max(0.0) as u32).min(full.width());
-    let y0 = ((rect_logical.y() * scale).round().max(0.0) as u32).min(full.height());
-    let w_target = (rect_logical.width() * scale).round().max(1.0) as u32;
-    let h_target = (rect_logical.height() * scale).round().max(1.0) as u32;
+fn crop_rgba(full: RgbaImage, rect_logical: Rect, scale_x: f32, scale_y: f32) -> RgbaImage {
+    let x0 = ((rect_logical.x() * scale_x).round().max(0.0) as u32).min(full.width());
+    let y0 = ((rect_logical.y() * scale_y).round().max(0.0) as u32).min(full.height());
+    let w_target = (rect_logical.width() * scale_x).round().max(1.0) as u32;
+    let h_target = (rect_logical.height() * scale_y).round().max(1.0) as u32;
     let w = w_target.min(full.width().saturating_sub(x0));
     let h = h_target.min(full.height().saturating_sub(y0));
     image::imageops::crop_imm(&full, x0, y0, w, h).to_image()
+}
+
+fn capture_scales_for_image(
+    display_id: u32,
+    image_width: u32,
+    image_height: u32,
+    fallback: f32,
+) -> (f32, f32) {
+    use core_graphics::display::CGDisplay;
+    let bounds = CGDisplay::new(display_id).bounds();
+    capture_scales_from_values(
+        bounds.size.width as f32,
+        bounds.size.height as f32,
+        image_width,
+        image_height,
+        fallback,
+    )
+}
+
+fn capture_scales_from_values(
+    logical_w: f32,
+    logical_h: f32,
+    image_width: u32,
+    image_height: u32,
+    fallback: f32,
+) -> (f32, f32) {
+    (
+        capture_axis_scale_from_values(logical_w, image_width, fallback),
+        capture_axis_scale_from_values(logical_h, image_height, fallback),
+    )
+}
+
+fn capture_axis_scale_from_values(logical_extent: f32, image_pixels: u32, fallback: f32) -> f32 {
+    if logical_extent.is_finite() && logical_extent > 0.0 && image_pixels > 0 {
+        image_pixels as f32 / logical_extent
+    } else if fallback.is_finite() && fallback > 0.0 {
+        fallback
+    } else {
+        1.0
+    }
 }
 
 fn native_capture_size(display_id: u32, fallback_w: u32, fallback_h: u32) -> (u32, u32) {
@@ -317,6 +359,7 @@ mod tests {
             solid(400, 300),
             Rect::from_xywh(10.0, 20.0, 30.0, 40.0).unwrap(),
             2.0,
+            2.0,
         );
 
         assert_eq!(cropped.width(), 60);
@@ -330,6 +373,7 @@ mod tests {
             solid(100, 100),
             Rect::from_xywh(40.0, 40.0, 20.0, 20.0).unwrap(),
             2.0,
+            2.0,
         );
 
         assert_eq!(cropped.width(), 20);
@@ -341,6 +385,7 @@ mod tests {
         let cropped = crop_rgba(
             solid(100, 100),
             Rect::from_xywh(51.0, 51.0, 10.0, 10.0).unwrap(),
+            2.0,
             2.0,
         );
 
@@ -374,5 +419,31 @@ mod tests {
     fn display_scale_never_reports_less_than_one() {
         assert_eq!(display_scale_from_values(1920.0, 1920), 1.0);
         assert_eq!(display_scale_from_values(1920.0, 0), 1.0);
+    }
+
+    #[test]
+    fn capture_scales_use_actual_image_size_over_expected_display_scale() {
+        assert_eq!(
+            capture_scales_from_values(1512.0, 982.0, 1512, 982, 2.0),
+            (1.0, 1.0)
+        );
+        assert_eq!(
+            capture_scales_from_values(1512.0, 982.0, 3024, 1964, 1.0),
+            (2.0, 2.0)
+        );
+    }
+
+    #[test]
+    fn crop_rgba_uses_independent_actual_x_and_y_scales() {
+        let cropped = crop_rgba(
+            solid(400, 300),
+            Rect::from_xywh(10.0, 20.0, 30.0, 40.0).unwrap(),
+            1.0,
+            1.5,
+        );
+
+        assert_eq!(cropped.width(), 30);
+        assert_eq!(cropped.height(), 60);
+        assert_eq!(cropped.get_pixel(0, 0), &image::Rgba([10, 30, 0, 255]));
     }
 }
