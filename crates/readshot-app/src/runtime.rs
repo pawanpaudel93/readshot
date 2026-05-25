@@ -4178,18 +4178,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             .height(Length::Shrink)
             .width(Length::Fill),
     )
-    .style(|theme: &Theme| {
-        let palette = theme.extended_palette();
-        container::Style {
-            background: Some(palette.background.weak.color.into()),
-            border: iced::Border {
-                color: palette.background.strong.color,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..Default::default()
-        }
-    });
+    .style(editor_chrome_style);
 
     // ===== Image area — letterboxed image with canvas overlay =====
     // Both layers share the same container; the canvas Program knows
@@ -4305,9 +4294,9 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         )
         .padding([3, 6])
         .style(|_theme: &Theme| container::Style {
-            background: Some(Color::from_rgba(0.03, 0.035, 0.045, 0.82).into()),
+            background: Some(Color::from_rgba(0.02, 0.025, 0.025, 0.78).into()),
             border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.14),
+                color: accent(0.22),
                 width: 1.0,
                 radius: 8.0.into(),
             },
@@ -4335,21 +4324,8 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let image_area = container(image_area_content)
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding(0)
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                // Subtle inset rather than the previous near-black
-                // bezel — lets the actual image be the visual focus.
-                background: Some(Color::from_rgba(0.13, 0.14, 0.18, 1.0).into()),
-                border: iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 10.0.into(),
-                },
-                ..Default::default()
-            }
-        });
+        .padding(12)
+        .style(editor_stage_style);
 
     // ===== Bottom row — dims/hint + actions =====
     let (img_w, img_h) = ed.effective_image_size();
@@ -4384,7 +4360,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         }
         (s, _) => s,
     };
-    let bottom_row: Element<'_, Message> = responsive(move |available| {
+    let bottom_row: Element<'_, Message> = container(responsive(move |available| {
         let layout = editor_bottom_layout(available.width);
         let compact = layout == EditorBottomLayout::Compact;
         let dims = text(format!("{img_w} × {img_h} px"))
@@ -4550,7 +4526,9 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             .spacing(8)
             .into(),
         }
-    })
+    }))
+    .padding([8, 10])
+    .style(editor_chrome_style)
     .height(Length::Shrink)
     .into();
 
@@ -4582,17 +4560,11 @@ fn editor_view(state: &App) -> Element<'_, Message> {
                 .align_y(Alignment::Center)
                 .padding(6),
         )
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.weak.color.into()),
-                border: iced::Border {
-                    color: palette.primary.base.color,
-                    width: 1.5,
-                    radius: 10.0.into(),
-                },
-                ..Default::default()
-            }
+        .style(|_theme: &Theme| {
+            let mut style = editor_chrome_style(_theme);
+            style.border.color = accent(0.75);
+            style.border.width = 1.5;
+            style
         })
         .into()
     } else {
@@ -4601,13 +4573,45 @@ fn editor_view(state: &App) -> Element<'_, Message> {
 
     container(
         column![toolbar_row, image_area, text_banner, bottom_row]
-            .spacing(8)
-            .padding(10)
+            .spacing(10)
+            .padding(12)
             .align_x(Alignment::Start),
     )
     .width(Length::Fill)
     .height(Length::Fill)
+    .style(editor_shell_style)
     .into()
+}
+
+fn editor_shell_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgb8(13, 15, 15).into()),
+        ..Default::default()
+    }
+}
+
+fn editor_chrome_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.055).into()),
+        border: iced::Border {
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn editor_stage_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgb8(16, 20, 20).into()),
+        border: iced::Border {
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.08),
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..Default::default()
+    }
 }
 
 /// Render a pin window — borderless, always-on-top, draggable.
@@ -4826,25 +4830,24 @@ fn toolbar_divider() -> Element<'static, Message> {
         .into()
 }
 
-fn toolbar_button_style(theme: &Theme, status: button::Status, is_active: bool) -> button::Style {
-    let palette = theme.extended_palette();
+fn toolbar_button_style(_theme: &Theme, status: button::Status, is_active: bool) -> button::Style {
     // Active tool gets a pronounced fill *and* a 2 px accent border
     // so the active state is unambiguous against any backdrop. The
     // previous styling relied solely on a subtle fill change that
     // washed out next to the rest of the toolbar.
     let base = if is_active {
-        palette.primary.strong.color
+        accent(0.22)
     } else if matches!(status, button::Status::Disabled) {
         Color::from_rgba(0.0, 0.0, 0.0, 0.0)
     } else if matches!(status, button::Status::Hovered) {
-        palette.background.strongest.color
+        Color::from_rgba(1.0, 1.0, 1.0, 0.075)
     } else {
         Color::TRANSPARENT
     };
     let border_color = if is_active {
-        palette.primary.base.color
+        accent(0.85)
     } else {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.10)
+        Color::from_rgba(1.0, 1.0, 1.0, 0.08)
     };
     let text_color = if matches!(status, button::Status::Disabled) {
         Color::from_rgba(1.0, 1.0, 1.0, 0.35)
@@ -4856,7 +4859,7 @@ fn toolbar_button_style(theme: &Theme, status: button::Status, is_active: bool) 
         text_color,
         border: iced::Border {
             radius: 6.0.into(),
-            width: if is_active { 2.0 } else { 1.0 },
+            width: if is_active { 1.5 } else { 1.0 },
             color: border_color,
         },
         ..Default::default()
@@ -4865,7 +4868,7 @@ fn toolbar_button_style(theme: &Theme, status: button::Status, is_active: bool) 
 
 fn toolbar_ghost_style(_theme: &Theme, status: button::Status, enabled: bool) -> button::Style {
     let bg = match (enabled, status) {
-        (true, button::Status::Hovered) => Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+        (true, button::Status::Hovered) => Color::from_rgba(1.0, 1.0, 1.0, 0.075),
         _ => Color::TRANSPARENT,
     };
     // Mirror the active toolbar button's disabled treatment so
@@ -5012,23 +5015,25 @@ fn editor_action_button<'a>(
         .into()
 }
 
-fn action_button_style(theme: &Theme, status: button::Status, kind: ActionKind) -> button::Style {
-    let palette = theme.extended_palette();
-    let (base, hover, text_color) = match kind {
+fn action_button_style(_theme: &Theme, status: button::Status, kind: ActionKind) -> button::Style {
+    let (base, hover, text_color, border_color) = match kind {
         ActionKind::Primary => (
-            palette.primary.base.color,
-            palette.primary.strong.color,
-            palette.primary.base.text,
+            READSHOT_PRIMARY,
+            READSHOT_ACCENT,
+            Color::WHITE,
+            accent(0.75),
         ),
         ActionKind::Secondary => (
-            palette.background.strong.color,
-            palette.background.strongest.color,
+            Color::from_rgba(1.0, 1.0, 1.0, 0.070),
+            Color::from_rgba(1.0, 1.0, 1.0, 0.115),
             Color::WHITE,
+            Color::from_rgba(1.0, 1.0, 1.0, 0.10),
         ),
         ActionKind::Danger => (
-            Color::from_rgba(0.50, 0.13, 0.16, 1.0),
-            Color::from_rgba(0.65, 0.18, 0.22, 1.0),
+            Color::from_rgba(0.55, 0.13, 0.13, 0.92),
+            Color::from_rgba(0.72, 0.18, 0.18, 0.98),
             Color::WHITE,
+            Color::from_rgba(1.0, 0.40, 0.40, 0.22),
         ),
     };
     // Disabled state: dim the background to ~40% of its base alpha and
@@ -5055,7 +5060,8 @@ fn action_button_style(theme: &Theme, status: button::Status, kind: ActionKind) 
         text_color: fg,
         border: iced::Border {
             radius: 8.0.into(),
-            ..Default::default()
+            width: 1.0,
+            color: border_color,
         },
         ..Default::default()
     }
