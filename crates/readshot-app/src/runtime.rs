@@ -3441,7 +3441,8 @@ fn history_view(state: &App) -> Element<'_, Message> {
         ]
         .spacing(6),
     )
-    .padding([12, 16]);
+    .padding([12, 16])
+    .style(editor_chrome_style);
 
     // Records list — filtered.
     let mut col = column![].spacing(8).padding(iced::Padding {
@@ -3510,10 +3511,11 @@ fn history_view(state: &App) -> Element<'_, Message> {
                 .center_x(Length::Fill)
                 .center_y(Length::Fill)
                 .style(|_| iced::widget::container::Style {
-                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.28).into()),
+                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.22).into()),
                     border: iced::Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
+                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.08),
+                        width: 1.0,
+                        radius: 6.0.into(),
                     },
                     ..Default::default()
                 })
@@ -3552,7 +3554,7 @@ fn history_view(state: &App) -> Element<'_, Message> {
                     if is_selected {
                         history_selected_fill()
                     } else {
-                        Color::from_rgba(1.0, 1.0, 1.0, 0.04)
+                        Color::from_rgba(1.0, 1.0, 1.0, 0.045)
                     }
                     .into(),
                 ),
@@ -3560,10 +3562,10 @@ fn history_view(state: &App) -> Element<'_, Message> {
                     color: if is_selected {
                         history_selected_border()
                     } else {
-                        Color::TRANSPARENT
+                        Color::from_rgba(1.0, 1.0, 1.0, 0.075)
                     },
-                    width: if is_selected { 1.0 } else { 0.0 },
-                    radius: 6.0.into(),
+                    width: 1.0,
+                    radius: 8.0.into(),
                 },
                 ..Default::default()
             });
@@ -3582,17 +3584,22 @@ fn history_view(state: &App) -> Element<'_, Message> {
         )));
     }
 
-    column![
-        header,
-        scrollable(col)
-            .direction(iced::widget::scrollable::Direction::Vertical(
-                slim_scrollbar(),
-            ))
-            .spacing(10.0)
-            .height(Length::Fill)
-    ]
+    container(
+        column![
+            header,
+            scrollable(col)
+                .direction(iced::widget::scrollable::Direction::Vertical(
+                    slim_scrollbar(),
+                ))
+                .spacing(10.0)
+                .height(Length::Fill)
+        ]
+        .spacing(12)
+        .padding(12),
+    )
     .width(Length::Fill)
     .height(Length::Fill)
+    .style(editor_shell_style)
     .into()
 }
 
@@ -3732,11 +3739,11 @@ fn history_selected_border() -> Color {
 
 fn history_selected_panel_style(_theme: &Theme) -> iced::widget::container::Style {
     iced::widget::container::Style {
-        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.045).into()),
+        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.055).into()),
         border: iced::Border {
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.08),
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
             width: 1.0,
-            radius: 6.0.into(),
+            radius: 8.0.into(),
         },
         ..Default::default()
     }
