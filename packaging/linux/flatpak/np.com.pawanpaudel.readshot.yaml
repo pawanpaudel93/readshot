@@ -22,9 +22,6 @@ finish-args:
   - --share=ipc
   # GPU access for iced's wgpu renderer.
   - --device=dri
-  # Network for Sparkle / latest.json update checks. Opt-out by
-  # disabling auto-update in Settings.
-  - --share=network
   # xdg-desktop-portal access for ScreenCast capture.
   - --talk-name=org.freedesktop.portal.Desktop
   - --talk-name=org.freedesktop.portal.ScreenCast

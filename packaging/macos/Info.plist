@@ -42,7 +42,7 @@
 	<key>SUFeedURL</key>
 	<string>https://pawanpaudel93.github.io/readshot/appcast.xml</string>
 	<key>SUEnableAutomaticChecks</key>
-	<true/>
+	<false/>
 	<key>SUPublicEDKey</key>
 	<string>Bb2IJN5Xw23vKsCVnSvOrwim/DM2daj/4GjGVTcodjY=</string>
 </dict>

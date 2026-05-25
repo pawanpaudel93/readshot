@@ -62,13 +62,14 @@ mod platform {
         // SAFETY: Sparkle documents SPUStandardUpdaterController as a
         // main-thread API. `runtime::start` calls this during iced
         // daemon startup on the app thread before tray events are
-        // processed. We pass nil delegates and ask Sparkle to start
-        // immediately, matching its programmatic setup guidance.
+        // processed. We pass nil delegates and keep the updater
+        // stopped until the user explicitly picks "Check for
+        // Updates…"; Readshot is otherwise offline by default.
         let controller: Option<Retained<AnyObject>> = unsafe {
             let allocated: *mut AnyObject = msg_send![class, alloc];
             let controller: *mut AnyObject = msg_send![
                 allocated,
-                initWithStartingUpdater: true,
+                initWithStartingUpdater: false,
                 updaterDelegate: Option::<&AnyObject>::None,
                 userDriverDelegate: Option::<&AnyObject>::None
             ];
@@ -76,6 +77,7 @@ mod platform {
         };
 
         let controller = controller.ok_or(UpdaterError::NilController)?;
+        configure_manual_checks_only(&controller);
         let raw = Retained::into_raw(controller) as usize;
         if CONTROLLER.set(raw).is_err() {
             // Another caller won the race. Reclaim the extra +1 retain
@@ -108,10 +110,25 @@ mod platform {
         // pump, which satisfies Sparkle's main-thread requirement.
         unsafe {
             let controller = &*(raw as *mut AnyObject);
+            let _: () = msg_send![controller, startUpdater];
+            configure_manual_checks_only(controller);
             let _: () = msg_send![controller, checkForUpdates: Option::<&AnyObject>::None];
         }
 
         Ok(())
+    }
+
+    fn configure_manual_checks_only(controller: &AnyObject) {
+        // SAFETY: `updater` is a non-null SPUUpdater owned by
+        // SPUStandardUpdaterController. The property setter is
+        // main-thread-only; every caller of this helper runs from the
+        // iced app thread.
+        unsafe {
+            let updater: *mut AnyObject = msg_send![controller, updater];
+            if !updater.is_null() {
+                let _: () = msg_send![updater, setAutomaticallyChecksForUpdates: false];
+            }
+        }
     }
 
     fn check_or_install<HasController, InstallController, CheckController>(

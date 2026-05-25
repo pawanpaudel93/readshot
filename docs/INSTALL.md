@@ -112,10 +112,12 @@ This is expected for self-signed builds. Bypass:
 2. **Right-click** `Readshot.app` → **Open**.
 3. Click **Open** in the warning dialog.
 
-You only do this once. Future launches and auto-updates run silently.
-The tray menu includes **Check for Updates…**; it uses Sparkle to
-read the appcast published from GitHub Releases and verifies each
-download with the app's compiled-in EdDSA public key.
+You only do this once. Future launches open normally. The tray menu
+includes **Check for Updates…**; it uses Sparkle to read the appcast
+published from GitHub Releases and verifies each download with the
+app's compiled-in EdDSA public key. Readshot does not check for
+updates in the background unless a future version adds an explicit
+preference for it.
 
 If you'd rather use the command line:
 
