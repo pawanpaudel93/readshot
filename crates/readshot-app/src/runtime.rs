@@ -46,6 +46,39 @@ use crate::url_scheme::UrlAction;
 /// task on boot, before the welcome window even has time to paint.
 static INITIAL_URL_ACTION: OnceLock<Mutex<Option<UrlAction>>> = OnceLock::new();
 static CLI_INTERACTIVE_REQUEST: OnceLock<Mutex<Option<CliInteractiveRequest>>> = OnceLock::new();
+static READSHOT_THEME: OnceLock<Theme> = OnceLock::new();
+
+const READSHOT_THEME_NAME: &str = "readshot";
+const READSHOT_ACCENT: Color = Color::from_rgb8(20, 184, 166);
+const READSHOT_PRIMARY: Color = Color::from_rgb8(13, 148, 136);
+const READSHOT_SUCCESS: Color = Color::from_rgb8(34, 197, 94);
+const READSHOT_WARNING: Color = Color::from_rgb8(245, 158, 11);
+const READSHOT_DANGER: Color = Color::from_rgb8(239, 68, 68);
+
+fn readshot_theme() -> Theme {
+    READSHOT_THEME
+        .get_or_init(|| {
+            Theme::custom(
+                READSHOT_THEME_NAME,
+                iced::theme::Palette {
+                    background: Color::from_rgb8(23, 23, 23),
+                    text: Color::from_rgb8(245, 245, 244),
+                    primary: READSHOT_PRIMARY,
+                    success: READSHOT_SUCCESS,
+                    warning: READSHOT_WARNING,
+                    danger: READSHOT_DANGER,
+                },
+            )
+        })
+        .clone()
+}
+
+fn accent(alpha: f32) -> Color {
+    Color {
+        a: alpha,
+        ..READSHOT_ACCENT
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct CliInteractiveRequest {
@@ -621,7 +654,7 @@ pub fn title(state: &App, id: window::Id) -> String {
 /// to detect overlay windows and return a fully see-through palette.
 const OVERLAY_THEME_NAME: &str = "readshot-overlay-transparent";
 
-/// Theme: dark by default. Overlay windows get a custom theme whose
+/// Theme: Readshot-branded dark by default. Overlay windows get a custom theme whose
 /// `name()` is [`OVERLAY_THEME_NAME`] so [`style`] can identify them
 /// and return a transparent base style. The palette colors don't
 /// matter for the canvas-only overlay view, so we copy `Theme::Dark`
@@ -633,7 +666,7 @@ pub fn theme(state: &App, id: window::Id) -> Theme {
     ) {
         Theme::custom(OVERLAY_THEME_NAME.to_string(), iced::theme::Palette::DARK)
     } else {
-        Theme::Dark
+        readshot_theme()
     }
 }
 
@@ -977,7 +1010,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     // session instead of routing to the editor. The
                     // quick-action toolbar still shows so the user
                     // can change their mind, but they no longer have
-                    // to hunt for the ↕ Scroll button — the default
+                    // to hunt for the Scroll Capture button — the default
                     // matches the menu entry they clicked.
                     state.pending_intent = Some(crate::app::CaptureIntent::ScrollCapture);
                     update(state, Message::OpenOverlayRequested)
@@ -3022,7 +3055,7 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     // OS window drag on press so the user can reposition the HUD
     // without it stealing focus from the page they're scrolling.
     let header_row = row![
-        text("⋮⋮ Scrolling Capture")
+        text("Scrolling Capture")
             .size(14)
             .color(Color::from_rgba(1.0, 1.0, 1.0, 0.92)),
         Space::new().width(Length::Fill),
@@ -3055,7 +3088,7 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
         .style(|_| iced::widget::container::Style {
             background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.4).into()),
             border: iced::Border {
-                color: Color::from_rgba(0.45, 0.55, 1.0, 0.55),
+                color: accent(0.55),
                 width: 1.0,
                 radius: 6.0.into(),
             },
@@ -3137,7 +3170,7 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
                 .height(Length::Fixed(4.0)),
         )
         .style(|_| iced::widget::container::Style {
-            background: Some(Color::from_rgba(0.45, 0.55, 1.0, 0.85).into()),
+            background: Some(accent(0.85).into()),
             border: iced::Border {
                 radius: 2.0.into(),
                 ..Default::default()
@@ -3676,7 +3709,8 @@ fn history_selected_panel<'a>(
 /// by the row background, the "Selected" chip, the selected border,
 /// and the chip's foreground text so all three read as the same
 /// accent rather than three sibling blues drifting apart.
-const HISTORY_SELECTED_RGB: (f32, f32, f32) = (0.45, 0.55, 1.0);
+const HISTORY_SELECTED_RGB: (f32, f32, f32) =
+    (READSHOT_ACCENT.r, READSHOT_ACCENT.g, READSHOT_ACCENT.b);
 const HISTORY_SELECTED_FILL_ALPHA: f32 = 0.14;
 const HISTORY_SELECTED_CHIP_ALPHA: f32 = 0.20;
 const HISTORY_SELECTED_BORDER_ALPHA: f32 = 0.55;
@@ -3718,7 +3752,7 @@ fn history_row_actions<'a>(_id: readshot_core::Uuid, is_selected: bool) -> Eleme
         return container(
             text("Selected")
                 .size(12)
-                .color(Color::from_rgb(0.88, 0.9, 1.0)),
+                .color(Color::from_rgb8(214, 255, 247)),
         )
         .padding([6, 10])
         .style(|_| iced::widget::container::Style {
@@ -4440,36 +4474,42 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             Message::EditorDiscardRequested,
             ActionKind::Danger,
             busy,
+            "Close this editor. Dirty edits ask for a second click.",
         );
         let pin = editor_action_button(
             "Pin",
             Message::EditorPinRequested,
             ActionKind::Secondary,
             busy,
+            "Keep this capture floating above other windows.",
         );
         let copy_text = editor_action_button(
             "Copy Text",
             Message::EditorCopyTextRequested,
             ActionKind::Secondary,
             busy,
+            "Run OCR and copy the recognized text.",
         );
         let copy_image = editor_action_button(
             "Copy Image",
             Message::EditorCopyImageRequested,
             ActionKind::Secondary,
             busy,
+            "Copy the annotated image exactly as shown.",
         );
         let copy_framed = editor_action_button(
             "Copy Framed",
             Message::EditorCopyFramedRequested,
             ActionKind::Secondary,
             busy,
+            "Copy a share-ready version with margin, rounded corners, and shadow.",
         );
         let save = editor_action_button(
             "Save",
             Message::EditorSaveRequested,
             ActionKind::Primary,
             busy,
+            "Save the annotated image as a PNG file.",
         );
 
         match layout {
@@ -4892,7 +4932,7 @@ fn zoom_button_style(
     selected: bool,
 ) -> button::Style {
     let background = if selected {
-        Color::from_rgba(0.16, 0.44, 0.92, 1.0)
+        READSHOT_PRIMARY
     } else if !enabled {
         Color::from_rgba(1.0, 1.0, 1.0, 0.03)
     } else if matches!(status, button::Status::Hovered) {
@@ -4945,7 +4985,10 @@ fn editor_action_button<'a>(
     msg: Message,
     kind: ActionKind,
     busy: bool,
+    tip: &'static str,
 ) -> Element<'a, Message> {
+    use iced::widget::tooltip;
+
     let lbl = text(label).size(13).color(Color::WHITE);
     let mut b = button(lbl)
         .padding([8, 16])
@@ -4953,7 +4996,20 @@ fn editor_action_button<'a>(
     if !busy {
         b = b.on_press(msg);
     }
-    b.into()
+    let pop = container(text(tip).size(11).color(Color::WHITE))
+        .padding([4, 8])
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.15),
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..Default::default()
+        });
+    tooltip::Tooltip::new(b, pop, tooltip::Position::Top)
+        .gap(4)
+        .into()
 }
 
 fn action_button_style(theme: &Theme, status: button::Status, kind: ActionKind) -> button::Style {
@@ -5234,7 +5290,7 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
         let chip = container(text("CLI mode").size(11).color(Color::WHITE))
             .padding([2, 8])
             .style(|_| iced::widget::container::Style {
-                background: Some(Color::from_rgba(0.45, 0.55, 1.0, 0.85).into()),
+                background: Some(accent(0.85).into()),
                 border: iced::Border {
                     radius: 9.0.into(),
                     ..Default::default()
@@ -5327,10 +5383,10 @@ const OVERLAY_TOOLBAR_HEIGHT: f32 = 44.0;
 const OVERLAY_TOOLBAR_GAP: f32 = 8.0;
 /// Conservative estimate of the floating toolbar's rendered width.
 /// iced doesn't expose mid-layout widget measurement, so the value is
-/// hand-tuned against the actual button row (6 buttons, ~78px each
+/// hand-tuned against the actual button row (7 buttons, mostly short
 /// after padding + the row's internal spacing). Slight over-estimate
 /// is fine — it just means the clamp engages a few px earlier.
-const OVERLAY_TOOLBAR_WIDTH: f32 = 560.0;
+const OVERLAY_TOOLBAR_WIDTH: f32 = 660.0;
 
 /// Build a positioned action toolbar (Capture / Copy / Save / Pin /
 /// Cancel) anchored to the right edge of `rect`. Falls back to
@@ -5385,7 +5441,7 @@ fn overlay_toolbar_layer<'a>(
 
     let buttons = row![
         make_btn(
-            "✓ Capture",
+            "Capture",
             "Open in editor (Enter)",
             Message::OverlaySelected {
                 display_id: display_id.clone(),
@@ -5430,7 +5486,7 @@ fn overlay_toolbar_layer<'a>(
             },
         ),
         make_btn(
-            "↕ Scroll",
+            "Scroll Capture",
             "Scrolling capture — capture this region repeatedly as you scroll, then stitch into one tall image",
             Message::OverlaySelected {
                 display_id: display_id.clone(),
@@ -5438,7 +5494,7 @@ fn overlay_toolbar_layer<'a>(
                 intent: CaptureIntent::ScrollCapture,
             },
         ),
-        make_btn("✕", "Cancel (Esc)", Message::OverlayCancelled),
+        make_btn("Cancel", "Cancel (Esc)", Message::OverlayCancelled),
     ]
     .spacing(4)
     .align_y(Alignment::Center);
@@ -5664,7 +5720,7 @@ fn settings_view(state: &App) -> Element<'_, Message> {
                             main,
                             text("Press the new shortcut, or Esc to cancel.")
                                 .size(11)
-                                .color(Color::from_rgba(0.78, 0.85, 1.0, 0.85)),
+                                .color(accent(0.85)),
                         ]
                         .spacing(6)
                         .into()
@@ -5903,7 +5959,7 @@ fn setting_value_box(value: String, active: bool) -> Element<'static, Message> {
         text(value)
             .size(14)
             .color(if active {
-                Color::from_rgb(0.83, 0.86, 1.0)
+                Color::from_rgb8(214, 255, 247)
             } else {
                 Color::from_rgba(1.0, 1.0, 1.0, 0.82)
             })
@@ -5921,7 +5977,7 @@ fn setting_value_box(value: String, active: bool) -> Element<'static, Message> {
         iced::widget::container::Style {
             background: Some(
                 if active {
-                    Color::from_rgba(0.45, 0.55, 1.0, 0.10)
+                    accent(0.10)
                 } else {
                     Color::from_rgba(1.0, 1.0, 1.0, 0.045)
                 }
@@ -6125,7 +6181,7 @@ fn welcome_awaiting_card<'a>(state: WelcomeState) -> Element<'a, Message> {
     let (title, body_copy) = welcome_permission_guidance(state);
     let is_denied = matches!(state, WelcomeState::Denied);
     let header_label = if is_denied {
-        format!("⚠ {title}")
+        format!("Attention: {title}")
     } else {
         title.to_string()
     };
