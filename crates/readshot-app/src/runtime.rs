@@ -5887,15 +5887,19 @@ fn settings_view(state: &App) -> Element<'_, Message> {
         column![startup_row, reset_controls].spacing(12).into(),
     );
 
-    let body = column![
-        header,
-        permission_section,
-        capture_section,
-        files_section,
-        app_section,
-    ]
-    .spacing(16)
-    .max_width(660);
+    let body = container(
+        column![
+            header,
+            permission_section,
+            capture_section,
+            files_section,
+            app_section,
+        ]
+        .spacing(16)
+        .max_width(720),
+    )
+    .width(Length::Fill)
+    .center_x(Length::Fill);
 
     container(
         scrollable(body)
@@ -5907,7 +5911,8 @@ fn settings_view(state: &App) -> Element<'_, Message> {
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .padding([24, 30])
+    .padding([26, 32])
+    .style(editor_shell_style)
     .into()
 }
 
@@ -5978,14 +5983,14 @@ fn setting_value_box(value: String, active: bool) -> Element<'static, Message> {
         let border_color = if active {
             palette.primary.base.color
         } else {
-            palette.background.strong.color
+            Color::from_rgba(1.0, 1.0, 1.0, 0.12)
         };
         iced::widget::container::Style {
             background: Some(
                 if active {
                     accent(0.10)
                 } else {
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.045)
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.055)
                 }
                 .into(),
             ),
@@ -6031,12 +6036,11 @@ fn empty_state_card<'a>(
         .into()
 }
 
-fn settings_section_style(theme: &Theme) -> iced::widget::container::Style {
-    let palette = theme.extended_palette();
+fn settings_section_style(_theme: &Theme) -> iced::widget::container::Style {
     iced::widget::container::Style {
-        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.035).into()),
+        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.055).into()),
         border: iced::Border {
-            color: palette.background.strong.color,
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
             width: 1.0,
             radius: 8.0.into(),
         },
@@ -6045,7 +6049,7 @@ fn settings_section_style(theme: &Theme) -> iced::widget::container::Style {
 }
 
 fn settings_muted_text() -> Color {
-    Color::from_rgba(1.0, 1.0, 1.0, 0.56)
+    Color::from_rgba(1.0, 1.0, 1.0, 0.60)
 }
 
 fn permission_settings_summary(status: PermissionStatus) -> (&'static str, &'static str) {
@@ -6074,12 +6078,23 @@ fn slim_scrollbar() -> iced::widget::scrollable::Scrollbar {
 
 fn welcome_view(state: &App) -> Element<'_, Message> {
     let hero = column![
-        text("Readshot").size(34),
+        text("Readshot").size(36),
         text("Capture, search, find again.")
             .size(14)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
+            .color(settings_muted_text()),
+        container(Space::new())
+            .width(Length::Fixed(52.0))
+            .height(Length::Fixed(2.0))
+            .style(|_| container::Style {
+                background: Some(accent(0.85).into()),
+                border: iced::Border {
+                    radius: 1.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
     ]
-    .spacing(4)
+    .spacing(8)
     .align_x(Alignment::Center);
 
     let card: Element<'_, Message> = match state.welcome {
@@ -6112,6 +6127,7 @@ fn welcome_view(state: &App) -> Element<'_, Message> {
         .center_x(Length::Fill)
         .center_y(Length::Fill)
         .padding(28)
+        .style(editor_shell_style)
         .into()
 }
 
@@ -6142,8 +6158,8 @@ fn welcome_card_with_tone<'a>(
         .style(move |_| {
             let (bg, border) = match tone {
                 WelcomeCardTone::Neutral => (
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.04),
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.08),
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.055),
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.12),
                 ),
                 WelcomeCardTone::Blocked => (
                     Color::from_rgba(0.95, 0.55, 0.30, 0.10),
