@@ -200,7 +200,7 @@ pub fn start() -> (App, Task<Message>) {
     // appindicator daemon, or a Windows session without a Shell_Notify
     // surface, will simply not see the tray entry.
     let hotkey_label = pretty_hotkey(&app.preferences.capture_hotkey);
-    app.tray = crate::tray::install(Some(&hotkey_label));
+    app.tray = crate::tray::install(Some(&app.preferences.capture_hotkey), Some(&hotkey_label));
 
     // The welcome window is a *first-run permission gate*, not the
     // app's main UI. Once Screen Recording is granted the user lives
@@ -335,9 +335,9 @@ fn sync_tray_capture_hotkey_label(state: &App) {
     };
     let label = pretty_hotkey(&state.preferences.capture_hotkey);
     if label.is_empty() {
-        tray.set_capture_hotkey_label(None);
+        tray.set_capture_hotkey(None, None);
     } else {
-        tray.set_capture_hotkey_label(Some(&label));
+        tray.set_capture_hotkey(Some(&state.preferences.capture_hotkey), Some(&label));
     }
 }
 

@@ -57,10 +57,10 @@ struct TrayMenuItem {
 }
 
 #[cfg(test)]
-fn menu_items(hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<TrayMenuItem> {
+fn menu_items(_hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<TrayMenuItem> {
     vec![
         TrayMenuItem {
-            label: capture_menu_label(hotkey_label),
+            label: capture_menu_label().to_string(),
             enabled: true,
             action: Some(TrayAction::Capture),
         },
@@ -102,11 +102,46 @@ fn menu_items(hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<T
     ]
 }
 
-fn capture_menu_label(hotkey_label: Option<&str>) -> String {
-    match hotkey_label {
-        Some(k) if !k.is_empty() => format!("Capture ({k})"),
-        _ => "Capture".to_string(),
+fn capture_menu_label() -> &'static str {
+    "Capture"
+}
+
+fn capture_menu_accelerator(raw_hotkey: Option<&str>) -> Option<Accelerator> {
+    let raw_hotkey = raw_hotkey?.trim();
+    if raw_hotkey.is_empty() {
+        return None;
     }
+    let normalized = normalize_hotkey_for_menu(raw_hotkey)?;
+    match normalized.parse::<Accelerator>() {
+        Ok(accelerator) => Some(accelerator),
+        Err(e) => {
+            tracing::debug!(
+                target: "readshot::tray",
+                "could not parse tray accelerator `{raw_hotkey}`: {e}",
+            );
+            None
+        }
+    }
+}
+
+fn normalize_hotkey_for_menu(raw_hotkey: &str) -> Option<String> {
+    let tokens: Vec<String> = raw_hotkey
+        .split(|c: char| matches!(c, '+' | '-') || c.is_whitespace())
+        .filter(|token| !token.is_empty())
+        .map(|token| match token.to_ascii_lowercase().as_str() {
+            "cmd" | "command" | "meta" | "super" | "win" => "command".to_string(),
+            "ctrl" | "control" => "control".to_string(),
+            "alt" | "opt" | "option" => "alt".to_string(),
+            "shift" => "shift".to_string(),
+            "return" => "enter".to_string(),
+            "esc" => "escape".to_string(),
+            "del" => "delete".to_string(),
+            "pgup" => "pageup".to_string(),
+            "pgdn" => "pagedown".to_string(),
+            other => other.to_string(),
+        })
+        .collect();
+    (!tokens.is_empty()).then(|| tokens.join("+"))
 }
 
 /// Holds the live `TrayIcon` plus a map from menu-item id to the
@@ -129,8 +164,14 @@ fn tray_tooltip(hotkey_label: Option<&str>) -> String {
 }
 
 impl TrayController {
-    pub fn set_capture_hotkey_label(&self, hotkey_label: Option<&str>) {
-        self.item_capture.set_text(capture_menu_label(hotkey_label));
+    pub fn set_capture_hotkey(&self, raw_hotkey: Option<&str>, hotkey_label: Option<&str>) {
+        self.item_capture.set_text(capture_menu_label());
+        if let Err(e) = self
+            .item_capture
+            .set_accelerator(capture_menu_accelerator(raw_hotkey))
+        {
+            tracing::debug!(target: "readshot::tray", "set capture accelerator failed: {e}");
+        }
         if let Err(e) = self.tray.set_tooltip(Some(tray_tooltip(hotkey_label))) {
             tracing::debug!(target: "readshot::tray", "set_tooltip failed: {e}");
         }
@@ -174,10 +215,10 @@ impl TrayController {
 /// the request (most common reason on Linux: no system tray /
 /// libayatana-appindicator missing).
 ///
-/// `hotkey_label` is the already-pretty-printed shortcut (e.g.
-/// `"⌘⇧X"`). When provided, it's appended to the Capture menu item
-/// label so the global hotkey is discoverable at a glance.
-pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
+/// `raw_hotkey` is the configured shortcut string (for the native menu
+/// accelerator). `hotkey_label` is the already-pretty-printed shortcut
+/// (for the tray tooltip).
+pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<TrayController> {
     let icon = match build_icon(32) {
         Ok(i) => i,
         Err(e) => {
@@ -187,8 +228,11 @@ pub fn install(hotkey_label: Option<&str>) -> Option<TrayController> {
     };
 
     let menu = Menu::new();
-    let capture_label = capture_menu_label(hotkey_label);
-    let item_capture = MenuItem::new(capture_label, true, None);
+    let item_capture = MenuItem::new(
+        capture_menu_label(),
+        true,
+        capture_menu_accelerator(raw_hotkey),
+    );
     let item_scroll_capture = MenuItem::new("Scrolling Capture…", true, None);
     let item_retake_last_region = MenuItem::new("Retake Last Region", false, None);
     // ⌘Y / ⌘, only render as hint text in the menu — muda doesn't
@@ -432,10 +476,31 @@ mod tests {
     }
 
     #[test]
-    fn capture_menu_label_includes_hotkey_when_known() {
-        assert_eq!(capture_menu_label(Some("⌘⇧X")), "Capture (⌘⇧X)");
-        assert_eq!(capture_menu_label(Some("")), "Capture");
-        assert_eq!(capture_menu_label(None), "Capture");
+    fn capture_menu_label_stays_plain_when_hotkey_known() {
+        assert_eq!(capture_menu_label(), "Capture");
+    }
+
+    #[test]
+    fn capture_menu_accelerator_parses_default_hotkey() {
+        let accelerator = capture_menu_accelerator(Some("cmd+shift+x")).unwrap();
+        let modifiers = Modifiers::SUPER | Modifiers::SHIFT;
+
+        assert!(accelerator.matches(modifiers, Code::KeyX));
+    }
+
+    #[test]
+    fn capture_menu_accelerator_accepts_preference_synonyms() {
+        let accelerator = capture_menu_accelerator(Some("ctrl opt return")).unwrap();
+        let modifiers = Modifiers::CONTROL | Modifiers::ALT;
+
+        assert!(accelerator.matches(modifiers, Code::Enter));
+    }
+
+    #[test]
+    fn capture_menu_accelerator_rejects_invalid_hotkey() {
+        assert!(capture_menu_accelerator(Some("not a hotkey")).is_none());
+        assert!(capture_menu_accelerator(Some("")).is_none());
+        assert!(capture_menu_accelerator(None).is_none());
     }
 
     #[test]
