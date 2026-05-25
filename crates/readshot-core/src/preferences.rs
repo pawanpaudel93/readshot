@@ -22,7 +22,7 @@ use crate::error::PreferencesError;
 use crate::fs_atomic::write_atomic;
 
 /// Bumped on every breaking schema change.
-pub const PREFERENCES_SCHEMA_VERSION: u32 = 2;
+pub const PREFERENCES_SCHEMA_VERSION: u32 = 3;
 
 /// Image format chosen when the user invokes Save.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +126,12 @@ pub struct Preferences {
 
     /// When true, components log at `DEBUG` level instead of `INFO`.
     pub debug_logging: bool,
+
+    /// True once the first-run permission flow has shown the user the
+    /// ready state. This keeps normal launches tray-only while still
+    /// making the first post-permission relaunch visibly confirm that
+    /// Readshot came back.
+    pub onboarding_completed: bool,
 }
 
 impl Default for Preferences {
@@ -142,6 +148,7 @@ impl Default for Preferences {
             launch_at_login: false,
             update_channel: UpdateChannel::Stable,
             debug_logging: false,
+            onboarding_completed: false,
         }
     }
 }
@@ -187,6 +194,9 @@ impl Preferences {
         if original_version < 2 && self.ocr_languages == ["en"] {
             self.ocr_languages.clear();
         }
+        if (1..3).contains(&original_version) {
+            self.onboarding_completed = true;
+        }
         if self.schema_version < PREFERENCES_SCHEMA_VERSION {
             self.schema_version = PREFERENCES_SCHEMA_VERSION;
         }
@@ -218,7 +228,11 @@ mod tests {
         // Write a file with only the schema_version field; serde must
         // fill the rest from Default.
         let (_dir, path) = temp_path();
-        std::fs::write(&path, "schema_version = 1\n").unwrap();
+        std::fs::write(
+            &path,
+            format!("schema_version = {PREFERENCES_SCHEMA_VERSION}\n"),
+        )
+        .unwrap();
         let prefs = Preferences::load(&path).unwrap();
         let default = Preferences::default();
         assert_eq!(prefs, default);
@@ -271,6 +285,17 @@ ocr_languages = ["en"]
 
         assert_eq!(prefs.schema_version, PREFERENCES_SCHEMA_VERSION);
         assert!(prefs.ocr_languages.is_empty());
+    }
+
+    #[test]
+    fn migration_marks_existing_users_onboarded() {
+        let (_dir, path) = temp_path();
+        std::fs::write(&path, "schema_version = 2\n").unwrap();
+
+        let prefs = Preferences::load(&path).unwrap();
+
+        assert_eq!(prefs.schema_version, PREFERENCES_SCHEMA_VERSION);
+        assert!(prefs.onboarding_completed);
     }
 
     #[test]

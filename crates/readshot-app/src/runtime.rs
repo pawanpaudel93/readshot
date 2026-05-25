@@ -205,15 +205,19 @@ pub fn start() -> (App, Task<Message>) {
     // The welcome window is a *first-run permission gate*, not the
     // app's main UI. Once Screen Recording is granted the user lives
     // inside the menu-bar tray icon + global hotkey, which is what
-    // `LSUIElement=true` apps are supposed to look like. Skip
-    // opening the welcome at boot if permission is already granted —
-    // we'll only ever show it again to walk the user through a
-    // re-grant.
+    // `LSUIElement=true` apps are supposed to look like. Still open
+    // the window once after the grant is visible so macOS's "Quit &
+    // Reopen" flow has an obvious result instead of relaunching into
+    // a silent menu-bar-only state.
     let mut tasks: Vec<Task<Message>> = Vec::new();
-    if app.welcome.should_show() {
+    let needs_welcome_window = needs_welcome_window_on_boot(app.welcome, &app.preferences);
+    if needs_welcome_window {
         let (id, open_task) = window::open(welcome_window_settings());
         app.windows.register(id, WindowKind::Welcome);
         tasks.push(open_task.map(|_id| Message::WelcomeWindowReady));
+        if !app.welcome.should_show() {
+            app.mark_onboarding_completed();
+        }
     } else {
         // No welcome window — user is already past the permission
         // gate. Surface a system notification so a relaunch is
@@ -228,6 +232,10 @@ pub fn start() -> (App, Task<Message>) {
         tasks.push(Task::done(Message::UrlActionReceived(action)));
     }
     (app, Task::batch(tasks))
+}
+
+fn needs_welcome_window_on_boot(welcome: WelcomeState, preferences: &Preferences) -> bool {
+    welcome.should_show() || !preferences.onboarding_completed
 }
 
 /// Per-platform suggested default for `Preferences::capture_hotkey`.
@@ -890,15 +898,19 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::PermissionTick => {
             let status = state.permissions.status();
             let was_showing = state.welcome.should_show();
+            let was_onboarding_completed = state.preferences.onboarding_completed;
             // Reuse the existing synchronous handler — it drives the
             // `WelcomeState` machine without touching iced state.
             state.update_sync(Message::PermissionPoll(status));
-            // If we just transitioned out of the welcome state (i.e.
-            // permission was granted), close every welcome window and
-            // surface a one-time system notification so the user
-            // doesn't think the app vanished — it's now in the menu
-            // bar.
+            // If the permission gate just cleared for a user who has
+            // not yet completed onboarding, keep the visible welcome
+            // window open so it can redraw as the "You're all set"
+            // state. Returning users get the old tray-only behavior:
+            // close the permission window and show a notification.
             if was_showing && !state.welcome.should_show() {
+                if !was_onboarding_completed {
+                    return Task::none();
+                }
                 let welcome_ids: Vec<_> = state
                     .windows
                     .iter()
@@ -5929,7 +5941,17 @@ fn settings_view(state: &App) -> Element<'_, Message> {
         .max_width(720),
     )
     .width(Length::Fill)
-    .center_x(Length::Fill);
+    .center_x(Length::Fill)
+    // The scrollbar sits at the window edge. Because iced reserves a
+    // scrollbar lane on the right, equal content padding reads as
+    // right-heavy; offset the inner padding so the settings column
+    // appears optically centered.
+    .padding(iced::Padding {
+        top: 26.0,
+        right: 24.0,
+        bottom: 26.0,
+        left: 40.0,
+    });
 
     container(
         scrollable(body)
@@ -5941,7 +5963,6 @@ fn settings_view(state: &App) -> Element<'_, Message> {
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .padding([26, 32])
     .style(editor_shell_style)
     .into()
 }
@@ -8574,6 +8595,7 @@ mod tests {
             readshot_core::HistoryRetention::Last50,
         );
         assert_eq!(prefs.capture_hotkey, default_capture_hotkey());
+        assert!(!prefs.onboarding_completed);
     }
 
     #[test]
@@ -8586,6 +8608,7 @@ mod tests {
             prefs.history_retention,
             readshot_core::HistoryRetention::Last50,
         );
+        assert!(!prefs.onboarding_completed);
     }
 
     #[test]
@@ -8607,6 +8630,34 @@ mod tests {
             readshot_core::HistoryRetention::Off,
         );
         assert_eq!(loaded.capture_hotkey, "ctrl+alt+9");
+    }
+
+    #[test]
+    fn load_preferences_migrates_existing_users_as_onboarded() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("preferences.toml");
+        std::fs::write(
+            &path,
+            "schema_version = 2\ncapture_hotkey = \"ctrl+alt+9\"\n",
+        )
+        .unwrap();
+
+        let loaded = load_preferences(Some(&path));
+
+        assert!(loaded.onboarding_completed);
+        assert_eq!(loaded.capture_hotkey, "ctrl+alt+9");
+    }
+
+    #[test]
+    fn boot_opens_welcome_for_first_granted_launch_until_onboarded() {
+        let mut prefs = first_launch_preferences();
+        prefs.onboarding_completed = false;
+        assert!(needs_welcome_window_on_boot(WelcomeState::Granted, &prefs));
+
+        prefs.onboarding_completed = true;
+        assert!(!needs_welcome_window_on_boot(WelcomeState::Granted, &prefs));
+
+        assert!(needs_welcome_window_on_boot(WelcomeState::Pending, &prefs));
     }
 
     #[test]

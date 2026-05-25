@@ -875,6 +875,15 @@ impl App {
         }
     }
 
+    pub fn mark_onboarding_completed(&mut self) -> bool {
+        if self.preferences.onboarding_completed {
+            return false;
+        }
+        self.preferences.onboarding_completed = true;
+        self.persist_preferences_if_configured();
+        true
+    }
+
     /// Handle a top-level message and produce side-effects.
     ///
     /// Returns `true` if the change is user-visible (caller may
@@ -884,7 +893,17 @@ impl App {
     /// state-machine portion that's testable today.
     pub fn update_sync(&mut self, message: Message) -> bool {
         match message {
-            Message::PermissionPoll(status) => self.welcome.observe(status),
+            Message::PermissionPoll(status) => {
+                let changed = self.welcome.observe(status);
+                if matches!(
+                    status,
+                    crate::permissions::PermissionStatus::Granted
+                        | crate::permissions::PermissionStatus::NotApplicable
+                ) {
+                    return self.mark_onboarding_completed() || changed;
+                }
+                changed
+            }
             Message::GrantPermissionRequested => {
                 self.permissions.request();
                 self.welcome = WelcomeState::AwaitingGrant;
@@ -961,6 +980,24 @@ mod tests {
         let changed = app.update_sync(Message::PermissionPoll(PermissionStatus::Granted));
         assert!(changed);
         assert!(!app.welcome.should_show());
+    }
+
+    #[test]
+    fn permission_poll_marks_onboarding_completed_on_grant() {
+        let perms = Arc::new(FakePermissions::denied());
+        let (mut app, _) = build_app(perms.clone());
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("preferences.toml");
+        app.preferences_path = Some(path.clone());
+
+        app.update_sync(Message::GrantPermissionRequested);
+        perms.flip_to_granted();
+        let changed = app.update_sync(Message::PermissionPoll(PermissionStatus::Granted));
+
+        assert!(changed);
+        assert!(app.preferences.onboarding_completed);
+        let from_disk = Preferences::load(&path).unwrap();
+        assert!(from_disk.onboarding_completed);
     }
 
     #[test]
