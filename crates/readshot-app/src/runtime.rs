@@ -779,8 +779,8 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // ⌘S / Ctrl+S = Save. Iced 0.14's `event::listen_with` is the
         // window-agnostic event tap; we filter to KeyPressed events
         // and only react when the editor window is the focused one
-        // (the canvas captures key presses at the widget level for
-        // Escape; that's why Esc isn't handled here).
+        // (the canvas gets first chance to handle Escape; unhandled
+        // Escape falls through here as the advertised Discard shortcut).
         subs.push(iced::event::listen_with(|event, status, window| {
             use iced::event::Status;
             use iced::keyboard::Event as KbEvent;
@@ -5142,6 +5142,15 @@ fn editor_key_message(
         (Key::Character(c), true, true) if c.eq_ignore_ascii_case("z") => {
             return Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo));
         }
+        (Key::Character(c), true, false) if status_ignored && c.eq_ignore_ascii_case("c") => {
+            return Some(Message::EditorCopyImageRequested);
+        }
+        (Key::Character(c), true, true) if status_ignored && c.eq_ignore_ascii_case("c") => {
+            return Some(Message::EditorCopyTextRequested);
+        }
+        (Key::Character(c), true, false) if status_ignored && c.eq_ignore_ascii_case("p") => {
+            return Some(Message::EditorPinRequested);
+        }
         (Key::Character(c), true, false) if c.eq_ignore_ascii_case("s") => {
             return Some(Message::EditorSaveRequested);
         }
@@ -5156,6 +5165,9 @@ fn editor_key_message(
         }
         (Key::Character(c), true, false) if c == "0" => {
             return Some(Message::EditorZoomActual);
+        }
+        (Key::Named(Named::Escape), _, _) if status_ignored => {
+            return Some(Message::EditorDiscardRequested);
         }
         (Key::Named(Named::Escape), _, _) => return Some(Message::EditorTextCancel),
         _ => {}
@@ -7537,6 +7549,15 @@ mod tests {
         img
     }
 
+    fn command_modifiers() -> iced::keyboard::Modifiers {
+        let mut modifiers = iced::keyboard::Modifiers::default();
+        #[cfg(target_os = "macos")]
+        modifiers.insert(iced::keyboard::Modifiers::LOGO);
+        #[cfg(not(target_os = "macos"))]
+        modifiers.insert(iced::keyboard::Modifiers::CTRL);
+        modifiers
+    }
+
     fn scrolling_texture(w: u32, h: u32, offset: u32) -> image::RgbaImage {
         let mut img = image::RgbaImage::new(w, h);
         for y in 0..h {
@@ -8720,5 +8741,88 @@ mod tests {
             },
         );
         assert!(app.editor.as_ref().unwrap().model.annotations().is_empty());
+    }
+
+    #[test]
+    fn editor_advertised_copy_shortcuts_map_to_copy_messages() {
+        let cmd = command_modifiers();
+        let copy_image = editor_key_message(iced::keyboard::Key::Character("c".into()), cmd, true);
+
+        assert!(matches!(
+            copy_image,
+            Some(Message::EditorCopyImageRequested)
+        ));
+
+        let mut cmd_shift = cmd;
+        cmd_shift.insert(iced::keyboard::Modifiers::SHIFT);
+        let copy_text =
+            editor_key_message(iced::keyboard::Key::Character("c".into()), cmd_shift, true);
+
+        assert!(matches!(copy_text, Some(Message::EditorCopyTextRequested)));
+    }
+
+    #[test]
+    fn editor_copy_shortcuts_do_not_hijack_captured_text_input_events() {
+        let cmd = command_modifiers();
+        let copy_image = editor_key_message(iced::keyboard::Key::Character("c".into()), cmd, false);
+
+        assert!(copy_image.is_none());
+    }
+
+    #[test]
+    fn editor_advertised_pin_shortcut_maps_to_pin_message() {
+        let pin = editor_key_message(
+            iced::keyboard::Key::Character("p".into()),
+            command_modifiers(),
+            true,
+        );
+
+        assert!(matches!(pin, Some(Message::EditorPinRequested)));
+    }
+
+    #[test]
+    fn editor_existing_command_shortcuts_stay_mapped() {
+        let cmd = command_modifiers();
+        let undo = editor_key_message(iced::keyboard::Key::Character("z".into()), cmd, false);
+        assert!(matches!(
+            undo,
+            Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo))
+        ));
+
+        let mut cmd_shift = cmd;
+        cmd_shift.insert(iced::keyboard::Modifiers::SHIFT);
+        let redo = editor_key_message(iced::keyboard::Key::Character("z".into()), cmd_shift, false);
+        assert!(matches!(
+            redo,
+            Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo))
+        ));
+
+        let save = editor_key_message(iced::keyboard::Key::Character("s".into()), cmd, false);
+        assert!(matches!(save, Some(Message::EditorSaveRequested)));
+
+        let close = editor_key_message(iced::keyboard::Key::Character("w".into()), cmd, false);
+        assert!(matches!(close, Some(Message::EditorDiscardRequested)));
+    }
+
+    #[test]
+    fn editor_escape_maps_to_discard_when_not_handled_by_canvas() {
+        let discard = editor_key_message(
+            iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            iced::keyboard::Modifiers::empty(),
+            true,
+        );
+
+        assert!(matches!(discard, Some(Message::EditorDiscardRequested)));
+    }
+
+    #[test]
+    fn editor_escape_keeps_canvas_cancellation_when_already_handled() {
+        let cancel = editor_key_message(
+            iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            iced::keyboard::Modifiers::empty(),
+            false,
+        );
+
+        assert!(matches!(cancel, Some(Message::EditorTextCancel)));
     }
 }
