@@ -3261,11 +3261,11 @@ fn scroll_hud_view(state: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fill)
         .style(|_| iced::widget::container::Style {
-            background: Some(Color::from_rgba(0.07, 0.07, 0.08, 0.96).into()),
+            background: Some(Color::from_rgba(0.05, 0.06, 0.06, 0.96).into()),
             border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
+                color: accent(0.28),
                 width: 1.0,
-                radius: 10.0.into(),
+                radius: 8.0.into(),
             },
             ..Default::default()
         })
@@ -4692,7 +4692,18 @@ fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
     // and the slider — and any drag-attempt along the slider track —
     // moved the entire window because the underlying drag-press
     // fired before the slider widget could lock the gesture.
-    let controls_blocker = mouse_area(controls).on_press(Message::NoOp);
+    let controls_chrome = container(controls)
+        .padding([5, 7])
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.46).into()),
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.16),
+                width: 1.0,
+                radius: 8.0.into(),
+            },
+            ..Default::default()
+        });
+    let controls_blocker = mouse_area(controls_chrome).on_press(Message::NoOp);
     let controls_layer = container(controls_blocker)
         .width(Length::Fill)
         .height(Length::Fill)
@@ -4741,9 +4752,9 @@ fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fill)
         .style(|_| container::Style {
-            background: Some(Color::from_rgba(0.05, 0.05, 0.06, 1.0).into()),
+            background: Some(Color::from_rgb8(13, 15, 15).into()),
             border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
+                color: accent(0.20),
                 width: 1.0,
                 radius: 8.0.into(),
             },
@@ -5418,8 +5429,8 @@ fn overlay_toolbar_layer<'a>(
             .padding([6, 10])
             .style(|_, status| {
                 let base = Color::from_rgba(1.0, 1.0, 1.0, 0.0);
-                let hovered = Color::from_rgba(1.0, 1.0, 1.0, 0.12);
-                let pressed = Color::from_rgba(1.0, 1.0, 1.0, 0.22);
+                let hovered = accent(0.13);
+                let pressed = accent(0.22);
                 let bg = match status {
                     iced::widget::button::Status::Hovered => hovered,
                     iced::widget::button::Status::Pressed => pressed,
@@ -5515,10 +5526,10 @@ fn overlay_toolbar_layer<'a>(
     let bar = container(buttons)
         .padding(6)
         .style(|_| iced::widget::container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.78).into()),
+            background: Some(Color::from_rgba(0.05, 0.06, 0.06, 0.88).into()),
             border: iced::Border {
                 radius: 8.0.into(),
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
+                color: accent(0.30),
                 width: 1.0,
             },
             ..Default::default()
