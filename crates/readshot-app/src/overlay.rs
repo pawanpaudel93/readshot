@@ -117,8 +117,8 @@ const HANDLE_HALF: f32 = 4.0;
 /// easy to grab on a trackpad — the visual square stays small but
 /// the active grab area expands around it.
 const HANDLE_HIT: f32 = 14.0;
-const CROSSHAIR_ARM: f32 = 10.0;
-const CROSSHAIR_GAP: f32 = 4.0;
+const CROSSHAIR_ARM: f32 = 12.0;
+const CROSSHAIR_GAP: f32 = 5.0;
 
 impl OverlayState {
     /// The rect to draw / inspect *right now*. During InitialDrag this
@@ -240,26 +240,66 @@ fn crosshair_point(state: &OverlayState, cursor: Option<Point>) -> Option<Point>
     }
 }
 
-fn draw_crosshair(frame: &mut Frame<Renderer>, point: Point) {
-    let segments = [
+fn crosshair_segments(bounds: Rectangle, point: Point) -> [(Point, Point); 4] {
+    let left = 0.0;
+    let right = bounds.width.max(0.0);
+    let top = 0.0;
+    let bottom = bounds.height.max(0.0);
+    let x = point.x.clamp(left, right);
+    let y = point.y.clamp(top, bottom);
+    let x_before_gap = (x - CROSSHAIR_GAP).clamp(left, right);
+    let x_after_gap = (x + CROSSHAIR_GAP).clamp(left, right);
+    let y_before_gap = (y - CROSSHAIR_GAP).clamp(top, bottom);
+    let y_after_gap = (y + CROSSHAIR_GAP).clamp(top, bottom);
+    let x_before_arm = (x - CROSSHAIR_ARM).clamp(left, right);
+    let x_after_arm = (x + CROSSHAIR_ARM).clamp(left, right);
+    let y_before_arm = (y - CROSSHAIR_ARM).clamp(top, bottom);
+    let y_after_arm = (y + CROSSHAIR_ARM).clamp(top, bottom);
+
+    [
+        (Point::new(x_before_arm, y), Point::new(x_before_gap, y)),
+        (Point::new(x_after_gap, y), Point::new(x_after_arm, y)),
+        (Point::new(x, y_before_arm), Point::new(x, y_before_gap)),
+        (Point::new(x, y_after_gap), Point::new(x, y_after_arm)),
+    ]
+}
+
+fn draw_crosshair(frame: &mut Frame<Renderer>, bounds: Rectangle, point: Point) {
+    for (from, to) in crosshair_segments(bounds, point) {
+        let path = Path::line(from, to);
+        frame.stroke(
+            &path,
+            Stroke::default()
+                .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.55))
+                .with_width(2.25),
+        );
+        frame.stroke(
+            &path,
+            Stroke::default()
+                .with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.92))
+                .with_width(0.9),
+        );
+    }
+
+    let center_ticks = [
         (
-            Point::new(point.x - CROSSHAIR_ARM, point.y),
+            Point::new(point.x - CROSSHAIR_GAP - 3.0, point.y),
             Point::new(point.x - CROSSHAIR_GAP, point.y),
         ),
         (
             Point::new(point.x + CROSSHAIR_GAP, point.y),
-            Point::new(point.x + CROSSHAIR_ARM, point.y),
+            Point::new(point.x + CROSSHAIR_GAP + 3.0, point.y),
         ),
         (
-            Point::new(point.x, point.y - CROSSHAIR_ARM),
+            Point::new(point.x, point.y - CROSSHAIR_GAP - 3.0),
             Point::new(point.x, point.y - CROSSHAIR_GAP),
         ),
         (
             Point::new(point.x, point.y + CROSSHAIR_GAP),
-            Point::new(point.x, point.y + CROSSHAIR_ARM),
+            Point::new(point.x, point.y + CROSSHAIR_GAP + 3.0),
         ),
     ];
-    for (from, to) in segments {
+    for (from, to) in center_ticks {
         let path = Path::line(from, to);
         frame.stroke(
             &path,
@@ -601,7 +641,7 @@ impl Program<Message> for OverlayProgram {
         let cursor_point = cursor.position_in(bounds);
         let Some(rect) = state.current_rect() else {
             if let Some(point) = crosshair_point(state, cursor_point) {
-                draw_crosshair(&mut frame, point);
+                draw_crosshair(&mut frame, bounds, point);
                 draw_cursor_coord_chip(&mut frame, bounds, point, self.scale);
             }
             return vec![frame.into_geometry()];
@@ -675,7 +715,7 @@ impl Program<Message> for OverlayProgram {
         }
 
         if let Some(point) = crosshair_point(state, cursor_point) {
-            draw_crosshair(&mut frame, point);
+            draw_crosshair(&mut frame, bounds, point);
         }
 
         vec![frame.into_geometry()]
@@ -850,6 +890,48 @@ mod tests {
         };
 
         assert_eq!(crosshair_point(&state, Some(point)), Some(point));
+    }
+
+    #[test]
+    fn crosshair_segments_are_compact_with_center_gap() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        let segments = crosshair_segments(bounds, Point::new(50.0, 40.0));
+
+        assert_eq!(
+            segments,
+            [
+                (Point::new(38.0, 40.0), Point::new(45.0, 40.0)),
+                (Point::new(55.0, 40.0), Point::new(62.0, 40.0)),
+                (Point::new(50.0, 28.0), Point::new(50.0, 35.0)),
+                (Point::new(50.0, 45.0), Point::new(50.0, 52.0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn crosshair_segments_clamp_when_cursor_is_near_edge() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        let segments = crosshair_segments(bounds, Point::new(2.0, 98.0));
+
+        assert_eq!(
+            segments,
+            [
+                (Point::new(0.0, 98.0), Point::new(0.0, 98.0)),
+                (Point::new(7.0, 98.0), Point::new(14.0, 98.0)),
+                (Point::new(2.0, 86.0), Point::new(2.0, 93.0)),
+                (Point::new(2.0, 100.0), Point::new(2.0, 100.0)),
+            ]
+        );
     }
 
     #[test]
