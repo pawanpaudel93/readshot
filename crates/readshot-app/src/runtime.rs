@@ -746,12 +746,16 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             None
         }));
     }
-    if !state.overlay_displays.is_empty() || state.scroll_session.is_some() {
+    if overlay_tick_active(state) {
         // Marching-ants tick — drives the dash-offset animation on
         // any open region overlay and the scroll-capture region
-        // indicator (so its border animates at the same cadence as
-        // the selector). 80 ms ≈ 12.5 fps; smooth without burning CPU.
+        // indicator. Avoid running this while the selector is only
+        // showing the hint / live drag; mouse movement already redraws
+        // that path, and ticking every transparent full-screen overlay
+        // before a committed region makes capture feel heavier.
         subs.push(iced::time::every(Duration::from_millis(80)).map(|_| Message::OverlayTick));
+    }
+    if !state.overlay_displays.is_empty() || state.scroll_session.is_some() {
         // Global Shift watcher — iced 0.14 does not pipe keyboard
         // events into canvas widgets, so the overlay's "hold Shift =
         // square" constraint relies on this subscription forwarding
@@ -888,6 +892,10 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     Subscription::batch(subs)
 }
 
+fn overlay_tick_active(state: &App) -> bool {
+    state.scroll_session.is_some() || !state.overlay_selections.is_empty()
+}
+
 /// Top-level update fn. Delegates testable transitions to
 /// [`App::update_sync`] and adds the iced-only async branches.
 pub fn update(state: &mut App, message: Message) -> Task<Message> {
@@ -950,8 +958,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             state.overlay_shift_held = held;
             // The overlay rebuilds OverlayProgram from `state` on every
-            // view(); a redraw picks the new shift state up and the
-            // OverlayTick's 80 ms loop covers most of the rest.
+            // view(); the state update itself schedules the next view,
+            // so this does not need the animation tick to be active.
             Task::none()
         }
 
@@ -1147,6 +1155,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state
                 .pending_intent
                 .get_or_insert(crate::app::CaptureIntent::Editor);
+            crate::system_cursor::push_crosshair_for_overlay();
             for d in &displays {
                 let settings = overlay_window_settings_for(d);
                 let (id, open_task) = window::open(settings);
@@ -1512,7 +1521,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // ready callback just records the id in case iced hands
             // back a different one.
             state.history_window_id = Some(id);
-            Task::none()
+            window::gain_focus(id)
         }
         Message::HistoryListLoaded(result) => {
             match result {
@@ -2825,7 +2834,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // Belt-and-braces: window-open already records the id, but
             // iced may hand back a different one in some platforms.
             state.settings_window_id = Some(id);
-            Task::none()
+            window::gain_focus(id)
         }
         Message::OpenCliToolsRequested => {
             if let Some(id) = state.cli_tools_window_id {
@@ -5332,57 +5341,6 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
             ..Default::default()
         });
 
-    // Floating hint near the top of the overlay. We give it a
-    // semi-opaque dark capsule so the text reads regardless of the
-    // wallpaper underneath. In CLI-interactive mode the hint copy
-    // changes and a small "CLI mode" chip prefixes it so the user
-    // sees that mouse-up will commit immediately (no editable rect,
-    // no quick-action toolbar).
-    let hint_body: Element<'_, Message> = if cli_interactive {
-        let chip = container(text("CLI mode").size(11).color(Color::WHITE))
-            .padding([2, 8])
-            .style(|_| iced::widget::container::Style {
-                background: Some(accent(0.85).into()),
-                border: iced::Border {
-                    radius: 9.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            });
-        row![
-            chip,
-            text("Drag to capture · mouse-up commits · Shift = square · Esc cancels")
-                .size(13)
-                .color(Color::WHITE),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .into()
-    } else {
-        text("Drag to select · hold Shift for square · Enter for full screen · Esc to cancel")
-            .size(13)
-            .color(Color::WHITE)
-            .into()
-    };
-    let hint = container(hint_body)
-        .padding(8)
-        .style(|_| iced::widget::container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.55).into()),
-            text_color: Some(Color::WHITE),
-            border: iced::Border {
-                radius: 6.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-
-    let hint_layer = container(hint)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(24)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Start);
-
     // Floating action toolbar — only when this display has a
     // committed selection. Layered above the canvas so its buttons
     // intercept clicks before the overlay's "click outside =
@@ -5400,11 +5358,14 @@ fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> {
             .map(|(d, rect)| overlay_toolbar_layer(&d.display_id, rect, d.width, d.height))
     };
 
-    // Once the toolbar is up the introductory hint is just noise.
+    // Keep the overlay root as a stack even before the toolbar appears.
+    // The canvas owns the in-progress selection state; changing the
+    // root from `canvas` to `stack(canvas, toolbar)` on mouse-up makes
+    // iced rebuild that state and the just-drawn region disappears.
     if let Some(toolbar) = toolbar_layer {
         stack![canvas_layer, toolbar].into()
     } else {
-        stack![canvas_layer, hint_layer].into()
+        stack![canvas_layer].into()
     }
 }
 
@@ -6627,6 +6588,9 @@ fn close_all_overlays(state: &mut App) -> Vec<Task<Message>> {
         .iter()
         .filter_map(|(id, k)| (*k == WindowKind::Overlay).then_some(*id))
         .collect();
+    if !overlay_ids.is_empty() {
+        crate::system_cursor::pop_after_overlay();
+    }
     let mut tasks: Vec<Task<Message>> = Vec::with_capacity(overlay_ids.len());
     for id in overlay_ids {
         state.windows.forget(id);
@@ -7602,6 +7566,38 @@ mod tests {
             Some(history),
         );
         App::new(coord, perms, Preferences::default())
+    }
+
+    #[test]
+    fn overlay_animation_tick_only_runs_when_visual_animation_exists() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        assert!(!overlay_tick_active(&app));
+
+        let window = iced::window::Id::unique();
+        app.overlay_displays.insert(
+            window,
+            crate::app::OverlayDisplay {
+                display_id: "display-a".to_string(),
+                scale: 1.0,
+                origin_x: 0.0,
+                origin_y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+        );
+        assert!(!overlay_tick_active(&app));
+
+        let rect = readshot_core::geom::Rect::from_xywh(1.0, 2.0, 30.0, 40.0).unwrap();
+        app.overlay_selections.insert("display-a".to_string(), rect);
+        assert!(overlay_tick_active(&app));
+
+        app.overlay_selections.clear();
+        app.scroll_session = Some(crate::app::ScrollSession::new(
+            "display-a".to_string(),
+            rect,
+            1.0,
+        ));
+        assert!(overlay_tick_active(&app));
     }
 
     fn solid(w: u32, h: u32) -> image::RgbaImage {

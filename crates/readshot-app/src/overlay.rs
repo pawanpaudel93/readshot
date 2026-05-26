@@ -27,7 +27,7 @@
 use iced::keyboard::{self, key::Named, Key};
 use iced::mouse;
 use iced::widget::canvas::{
-    Action, Event, Frame, Geometry, LineDash, Path, Program, Stroke, Text as CanvasText,
+    Action, Cache, Event, Frame, Geometry, LineDash, Path, Program, Stroke, Text as CanvasText,
 };
 use iced::{Color, Point, Rectangle, Renderer, Theme};
 
@@ -63,7 +63,7 @@ pub struct OverlayProgram {
     pub shift_held: bool,
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Debug)]
 pub struct OverlayState {
     /// The committed-but-still-editable selection. Populated on the
     /// first drag's mouse-up, mutated by subsequent resize/move ops,
@@ -77,6 +77,9 @@ pub struct OverlayState {
     /// `KeyPressed` / `KeyReleased`. Only used to constrain the
     /// initial drag to a perfect square.
     pub(crate) shift_held: bool,
+    /// Static full-window dim veil. It only changes when the overlay
+    /// size changes, so keep it out of the cursor-move redraw path.
+    veil_cache: Cache<Renderer>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,8 +120,6 @@ const HANDLE_HALF: f32 = 4.0;
 /// easy to grab on a trackpad — the visual square stays small but
 /// the active grab area expands around it.
 const HANDLE_HIT: f32 = 14.0;
-const CROSSHAIR_ARM: f32 = 12.0;
-const CROSSHAIR_GAP: f32 = 5.0;
 
 impl OverlayState {
     /// The rect to draw / inspect *right now*. During InitialDrag this
@@ -240,78 +241,27 @@ fn crosshair_point(state: &OverlayState, cursor: Option<Point>) -> Option<Point>
     }
 }
 
-fn crosshair_segments(bounds: Rectangle, point: Point) -> [(Point, Point); 4] {
-    let left = 0.0;
-    let right = bounds.width.max(0.0);
-    let top = 0.0;
-    let bottom = bounds.height.max(0.0);
-    let x = point.x.clamp(left, right);
-    let y = point.y.clamp(top, bottom);
-    let x_before_gap = (x - CROSSHAIR_GAP).clamp(left, right);
-    let x_after_gap = (x + CROSSHAIR_GAP).clamp(left, right);
-    let y_before_gap = (y - CROSSHAIR_GAP).clamp(top, bottom);
-    let y_after_gap = (y + CROSSHAIR_GAP).clamp(top, bottom);
-    let x_before_arm = (x - CROSSHAIR_ARM).clamp(left, right);
-    let x_after_arm = (x + CROSSHAIR_ARM).clamp(left, right);
-    let y_before_arm = (y - CROSSHAIR_ARM).clamp(top, bottom);
-    let y_after_arm = (y + CROSSHAIR_ARM).clamp(top, bottom);
-
-    [
-        (Point::new(x_before_arm, y), Point::new(x_before_gap, y)),
-        (Point::new(x_after_gap, y), Point::new(x_after_arm, y)),
-        (Point::new(x, y_before_arm), Point::new(x, y_before_gap)),
-        (Point::new(x, y_after_gap), Point::new(x, y_after_arm)),
-    ]
-}
-
-fn draw_crosshair(frame: &mut Frame<Renderer>, bounds: Rectangle, point: Point) {
-    for (from, to) in crosshair_segments(bounds, point) {
-        let path = Path::line(from, to);
-        frame.stroke(
-            &path,
-            Stroke::default()
-                .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.55))
-                .with_width(2.25),
-        );
-        frame.stroke(
-            &path,
-            Stroke::default()
-                .with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.92))
-                .with_width(0.9),
-        );
-    }
-
-    let center_ticks = [
-        (
-            Point::new(point.x - CROSSHAIR_GAP - 3.0, point.y),
-            Point::new(point.x - CROSSHAIR_GAP, point.y),
-        ),
-        (
-            Point::new(point.x + CROSSHAIR_GAP, point.y),
-            Point::new(point.x + CROSSHAIR_GAP + 3.0, point.y),
-        ),
-        (
-            Point::new(point.x, point.y - CROSSHAIR_GAP - 3.0),
-            Point::new(point.x, point.y - CROSSHAIR_GAP),
-        ),
-        (
-            Point::new(point.x, point.y + CROSSHAIR_GAP),
-            Point::new(point.x, point.y + CROSSHAIR_GAP + 3.0),
-        ),
-    ];
-    for (from, to) in center_ticks {
-        let path = Path::line(from, to);
-        frame.stroke(
-            &path,
-            Stroke::default()
-                .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.85))
-                .with_width(3.0),
-        );
-        frame.stroke(
-            &path,
-            Stroke::default().with_color(Color::WHITE).with_width(1.25),
-        );
-    }
+fn draw_overlay_hint(frame: &mut Frame<Renderer>, bounds: Rectangle, cli_interactive: bool) {
+    let label = if cli_interactive {
+        "CLI mode · Drag to capture · mouse-up commits · Shift = square · Esc cancels"
+    } else {
+        "Drag to select · Shift = square · Enter = full screen · Esc cancels"
+    };
+    let text_w = (label.chars().count() as f32 * 7.0).min((bounds.width - 48.0).max(160.0));
+    let box_w = text_w + 24.0;
+    let box_h = 30.0;
+    let x = ((bounds.width - box_w) / 2.0).max(16.0);
+    let y = 24.0;
+    let bg = Path::rounded_rectangle(Point::new(x, y), iced::Size::new(box_w, box_h), 6.0.into());
+    frame.fill(&bg, Color::from_rgba(0.0, 0.0, 0.0, 0.58));
+    frame.fill_text(CanvasText {
+        content: label.to_string(),
+        position: Point::new(x + 12.0, y + 8.0),
+        color: Color::WHITE,
+        size: iced::Pixels(13.0),
+        font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
+        ..Default::default()
+    });
 }
 
 fn resize_rect(orig: Rectangle, handle: Handle, cursor: Point) -> Rectangle {
@@ -350,45 +300,6 @@ fn resize_rect(orig: Rectangle, handle: Handle, cursor: Point) -> Rectangle {
         }
     }
     rectangle_from_two_points(Point::new(left, top), Point::new(right, bottom))
-}
-
-/// Draw a small dark chip near the cursor showing its physical-pixel
-/// coordinate. Helps the user align the very first click of a drag
-/// without needing to commit a rect to see the size badge.
-fn draw_cursor_coord_chip(
-    frame: &mut Frame<Renderer>,
-    bounds: Rectangle,
-    cursor: Point,
-    scale: f32,
-) {
-    let phys_x = (cursor.x * scale).round() as i32;
-    let phys_y = (cursor.y * scale).round() as i32;
-    let label = format!("{phys_x}, {phys_y}");
-    let chip_w = 8.0 + label.chars().count() as f32 * 7.0;
-    let chip_h = 18.0;
-    // Place chip to the lower-right of the cursor so it never sits
-    // under it. Flip horizontally / vertically when near the edge.
-    let gap = 14.0;
-    let mut x = cursor.x + gap;
-    let mut y = cursor.y + gap;
-    if x + chip_w > bounds.width {
-        x = cursor.x - gap - chip_w;
-    }
-    if y + chip_h > bounds.height {
-        y = cursor.y - gap - chip_h;
-    }
-    x = x.clamp(0.0, (bounds.width - chip_w).max(0.0));
-    y = y.clamp(0.0, (bounds.height - chip_h).max(0.0));
-    let path = Path::rectangle(Point::new(x, y), iced::Size::new(chip_w, chip_h));
-    frame.fill(&path, Color::from_rgba(0.0, 0.0, 0.0, 0.7));
-    frame.fill_text(CanvasText {
-        content: label,
-        position: Point::new(x + 4.0, y + 2.0),
-        color: Color::WHITE,
-        size: iced::Pixels(11.0),
-        font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
-        ..Default::default()
-    });
 }
 
 fn size_badge_origin(
@@ -519,6 +430,7 @@ impl Program<Message> for OverlayProgram {
                     // and start a fresh drag from the click point.
                     // Tell the runtime the toolbar should disappear.
                     state.selection = None;
+                    crate::system_cursor::push_crosshair_for_overlay();
                     state.active = Some(Active::InitialDrag {
                         anchor: p,
                         current: p,
@@ -595,6 +507,7 @@ impl Program<Message> for OverlayProgram {
                                 );
                             }
                             state.selection = Some(r);
+                            crate::system_cursor::pop_after_overlay();
                             if let Some(domain) = rect_to_domain(r) {
                                 return Some(
                                     Action::publish(Message::OverlaySelectionChanged {
@@ -629,28 +542,34 @@ impl Program<Message> for OverlayProgram {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        cursor: mouse::Cursor,
+        _cursor: mouse::Cursor,
     ) -> Vec<Geometry<Renderer>> {
+        let veil = state.veil_cache.draw(renderer, bounds.size(), |frame| {
+            frame.fill(
+                &Path::rectangle(Point::ORIGIN, bounds.size()),
+                Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+            );
+        });
         let mut frame = Frame::new(renderer, bounds.size());
 
-        // Dim veil over the entire screen. 50% black so the user can
-        // still see what they're selecting through the overlay.
-        let full = Path::rectangle(Point::ORIGIN, bounds.size());
-        frame.fill(&full, Color::from_rgba(0.0, 0.0, 0.0, 0.5));
+        let current_rect = state.current_rect();
+        if current_rect.is_none() {
+            draw_overlay_hint(
+                &mut frame,
+                bounds,
+                self.auto_confirm_intent == Some(CaptureIntent::CliInteractive),
+            );
+        }
 
-        let cursor_point = cursor.position_in(bounds);
-        let Some(rect) = state.current_rect() else {
-            if let Some(point) = crosshair_point(state, cursor_point) {
-                draw_crosshair(&mut frame, bounds, point);
-                draw_cursor_coord_chip(&mut frame, bounds, point, self.scale);
-            }
-            return vec![frame.into_geometry()];
+        let Some(rect) = current_rect else {
+            return vec![veil, frame.into_geometry()];
         };
 
         // "Punch out" the selection by overdrawing it with a near-
         // transparent fill so it appears brighter than the surrounding
         // veil. Border = outer black halo + animated white dashes.
         let path = Path::rectangle(Point::new(rect.x, rect.y), rect.size());
+        let interaction_active = state.active.is_some();
         frame.fill(&path, Color::from_rgba(1.0, 1.0, 1.0, 0.05));
         frame.stroke(
             &path,
@@ -670,34 +589,35 @@ impl Program<Message> for OverlayProgram {
             },
         );
 
-        // Live size badge in physical pixels (what the captured PNG
-        // will be), plus the selection's top-left origin. Keep it
-        // inside the top edge of the selection so it never competes
-        // with the quick-action toolbar.
-        let phys_w = ((rect.width * self.scale).round() as i32).max(0);
-        let phys_h = ((rect.height * self.scale).round() as i32).max(0);
-        let phys_x = (rect.x * self.scale).round() as i32;
-        let phys_y = (rect.y * self.scale).round() as i32;
-        let label = format!("{phys_w} × {phys_h}px · {phys_x}, {phys_y}");
-        let badge_w = 8.0 + label.chars().count() as f32 * 7.0;
-        let badge_h = 18.0;
-        let (bx, by) = size_badge_origin(bounds, rect, badge_w, badge_h);
-        let badge_path = Path::rectangle(Point::new(bx, by), iced::Size::new(badge_w, badge_h));
-        frame.fill(&badge_path, Color::from_rgba(0.0, 0.0, 0.0, 0.7));
-        frame.fill_text(CanvasText {
-            content: label,
-            position: Point::new(bx + 4.0, by + 2.0),
-            color: Color::WHITE,
-            size: iced::Pixels(11.0),
-            font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
-            ..Default::default()
-        });
+        if !interaction_active {
+            // Size badge in physical pixels (what the captured PNG
+            // will be), plus the selection's top-left origin. Text
+            // layout is intentionally skipped during pointer drags so
+            // the hot path stays just vector strokes.
+            let phys_w = ((rect.width * self.scale).round() as i32).max(0);
+            let phys_h = ((rect.height * self.scale).round() as i32).max(0);
+            let phys_x = (rect.x * self.scale).round() as i32;
+            let phys_y = (rect.y * self.scale).round() as i32;
+            let label = format!("{phys_w} × {phys_h}px · {phys_x}, {phys_y}");
+            let badge_w = 8.0 + label.chars().count() as f32 * 7.0;
+            let badge_h = 18.0;
+            let (bx, by) = size_badge_origin(bounds, rect, badge_w, badge_h);
+            let badge_path = Path::rectangle(Point::new(bx, by), iced::Size::new(badge_w, badge_h));
+            frame.fill(&badge_path, Color::from_rgba(0.0, 0.0, 0.0, 0.7));
+            frame.fill_text(CanvasText {
+                content: label,
+                position: Point::new(bx + 4.0, by + 2.0),
+                color: Color::WHITE,
+                size: iced::Pixels(11.0),
+                font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
+                ..Default::default()
+            });
+        }
 
         // Resize handles — only when the selection is committed (i.e.
         // we're not mid-initial-drag). White squares with a thin black
         // outline so they read on any wallpaper.
-        let in_initial_drag = matches!(state.active, Some(Active::InitialDrag { .. }));
-        if !in_initial_drag && state.selection.is_some() {
+        if !interaction_active && state.selection.is_some() {
             let centers = corner_centers(rect).into_iter().chain(edge_centers(rect));
             for (_h, c) in centers {
                 let p = Path::rectangle(
@@ -714,11 +634,7 @@ impl Program<Message> for OverlayProgram {
             }
         }
 
-        if let Some(point) = crosshair_point(state, cursor_point) {
-            draw_crosshair(&mut frame, bounds, point);
-        }
-
-        vec![frame.into_geometry()]
+        vec![veil, frame.into_geometry()]
     }
 
     fn mouse_interaction(
@@ -727,25 +643,45 @@ impl Program<Message> for OverlayProgram {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        // Hide OS cursor whenever we draw our own crosshair on the
-        // canvas — otherwise the OS crosshair shows alongside and the
-        // user sees two crosshairs.
-        match &state.active {
-            Some(Active::Resize { handle, .. }) => return cursor_for_handle(*handle),
-            Some(Active::Move { .. }) => return mouse::Interaction::Grabbing,
-            Some(Active::InitialDrag { .. }) => return mouse::Interaction::Hidden,
-            None => {}
-        }
-        if let (Some(sel), Some(p)) = (state.selection, cursor.position_in(bounds)) {
-            if let Some(h) = handle_at(sel, p) {
-                return cursor_for_handle(h);
-            }
-            if rect_contains(sel, p) {
-                return mouse::Interaction::Grab;
-            }
-        }
-        mouse::Interaction::Hidden
+        overlay_mouse_interaction(state, bounds, cursor)
     }
+}
+
+fn overlay_mouse_interaction(
+    state: &OverlayState,
+    bounds: Rectangle,
+    cursor: mouse::Cursor,
+) -> mouse::Interaction {
+    if crosshair_point(state, cursor.position_in(bounds)).is_some() {
+        return overlay_crosshair_interaction();
+    }
+
+    match &state.active {
+        Some(Active::Resize { handle, .. }) => return cursor_for_handle(*handle),
+        Some(Active::Move { .. }) => return mouse::Interaction::Grabbing,
+        Some(Active::InitialDrag { .. }) => return overlay_crosshair_interaction(),
+        None => {}
+    }
+    if let (Some(sel), Some(p)) = (state.selection, cursor.position_in(bounds)) {
+        if let Some(h) = handle_at(sel, p) {
+            return cursor_for_handle(h);
+        }
+        if rect_contains(sel, p) {
+            return mouse::Interaction::Grab;
+        }
+    }
+    overlay_crosshair_interaction()
+}
+
+#[cfg(target_os = "macos")]
+fn overlay_crosshair_interaction() -> mouse::Interaction {
+    crate::system_cursor::set_crosshair_for_overlay();
+    mouse::Interaction::None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn overlay_crosshair_interaction() -> mouse::Interaction {
+    mouse::Interaction::Crosshair
 }
 
 #[cfg(test)]
@@ -893,44 +829,75 @@ mod tests {
     }
 
     #[test]
-    fn crosshair_segments_are_compact_with_center_gap() {
+    fn overlay_uses_crosshair_without_canvas_cursor_drawing() {
         let bounds = Rectangle {
             x: 0.0,
             y: 0.0,
             width: 200.0,
             height: 100.0,
         };
-        let segments = crosshair_segments(bounds, Point::new(50.0, 40.0));
 
         assert_eq!(
-            segments,
-            [
-                (Point::new(38.0, 40.0), Point::new(45.0, 40.0)),
-                (Point::new(55.0, 40.0), Point::new(62.0, 40.0)),
-                (Point::new(50.0, 28.0), Point::new(50.0, 35.0)),
-                (Point::new(50.0, 45.0), Point::new(50.0, 52.0)),
-            ]
+            overlay_mouse_interaction(
+                &OverlayState::default(),
+                bounds,
+                mouse::Cursor::Available(Point::new(50.0, 40.0)),
+            ),
+            overlay_crosshair_interaction()
         );
     }
 
     #[test]
-    fn crosshair_segments_clamp_when_cursor_is_near_edge() {
+    fn overlay_uses_native_crosshair_during_initial_drag() {
         let bounds = Rectangle {
             x: 0.0,
             y: 0.0,
             width: 200.0,
             height: 100.0,
         };
-        let segments = crosshair_segments(bounds, Point::new(2.0, 98.0));
+        let state = OverlayState {
+            active: Some(Active::InitialDrag {
+                anchor: Point::new(10.0, 10.0),
+                current: Point::new(50.0, 40.0),
+            }),
+            ..Default::default()
+        };
 
         assert_eq!(
-            segments,
-            [
-                (Point::new(0.0, 98.0), Point::new(0.0, 98.0)),
-                (Point::new(7.0, 98.0), Point::new(14.0, 98.0)),
-                (Point::new(2.0, 86.0), Point::new(2.0, 93.0)),
-                (Point::new(2.0, 100.0), Point::new(2.0, 100.0)),
-            ]
+            overlay_mouse_interaction(
+                &state,
+                bounds,
+                mouse::Cursor::Available(Point::new(50.0, 40.0)),
+            ),
+            overlay_crosshair_interaction()
+        );
+    }
+
+    #[test]
+    fn overlay_uses_handle_cursor_when_crosshair_is_hidden() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        let state = OverlayState {
+            selection: Some(Rectangle {
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 50.0,
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            overlay_mouse_interaction(
+                &state,
+                bounds,
+                mouse::Cursor::Available(Point::new(10.0, 20.0)),
+            ),
+            mouse::Interaction::ResizingDiagonallyDown
         );
     }
 

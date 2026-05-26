@@ -186,10 +186,12 @@ impl TrayController {
     /// passes the result list straight into `runtime::update`.
     pub fn drain(&self) -> Vec<TrayAction> {
         let mut out = Vec::new();
+        let mut saw_menu_action = false;
         // Menu clicks are the primary intent surface. We map every
         // delivered MenuEvent through our id table.
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if let Some(action) = self.menu_ids.get(&event.id).copied() {
+                saw_menu_action = true;
                 out.push(action);
             }
         }
@@ -198,16 +200,28 @@ impl TrayController {
         // on Linux), so we treat it as a Capture trigger. Right
         // clicks open the menu, which fires its own MenuEvents above.
         while let Ok(event) = TrayIconEvent::receiver().try_recv() {
-            if let TrayIconEvent::Click {
-                button: tray_icon::MouseButton::Left,
-                button_state: tray_icon::MouseButtonState::Up,
-                ..
-            } = event
-            {
-                out.push(TrayAction::Capture);
+            if let Some(action) = tray_icon_event_action(&event, saw_menu_action) {
+                out.push(action);
             }
         }
         out
+    }
+}
+
+fn tray_icon_event_action(
+    event: &TrayIconEvent,
+    suppress_icon_capture: bool,
+) -> Option<TrayAction> {
+    if suppress_icon_capture {
+        return None;
+    }
+    match event {
+        TrayIconEvent::Click {
+            button: tray_icon::MouseButton::Left,
+            button_state: tray_icon::MouseButtonState::Up,
+            ..
+        } => Some(TrayAction::Capture),
+        _ => None,
     }
 }
 
@@ -513,6 +527,35 @@ mod tests {
 
         assert_eq!(retake.label, "Retake Last Region");
         assert!(!retake.enabled);
+    }
+
+    #[test]
+    fn tray_icon_left_click_maps_to_capture() {
+        let event = TrayIconEvent::Click {
+            id: tray_icon::TrayIconId::new("readshot"),
+            position: tray_icon::dpi::PhysicalPosition::default(),
+            rect: tray_icon::Rect::default(),
+            button: tray_icon::MouseButton::Left,
+            button_state: tray_icon::MouseButtonState::Up,
+        };
+
+        assert_eq!(
+            tray_icon_event_action(&event, false),
+            Some(TrayAction::Capture)
+        );
+    }
+
+    #[test]
+    fn tray_icon_click_is_ignored_when_menu_action_was_drained() {
+        let event = TrayIconEvent::Click {
+            id: tray_icon::TrayIconId::new("readshot"),
+            position: tray_icon::dpi::PhysicalPosition::default(),
+            rect: tray_icon::Rect::default(),
+            button: tray_icon::MouseButton::Left,
+            button_state: tray_icon::MouseButtonState::Up,
+        };
+
+        assert_eq!(tray_icon_event_action(&event, true), None);
     }
 
     #[test]

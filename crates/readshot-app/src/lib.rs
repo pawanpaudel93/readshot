@@ -22,6 +22,7 @@ pub mod overlay;
 pub mod permissions;
 pub mod runtime;
 pub mod startup;
+mod system_cursor;
 pub mod tray;
 pub mod updater;
 pub mod url_events;
