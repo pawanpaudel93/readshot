@@ -79,6 +79,13 @@ pub enum HistoryKeyboardAction {
     CopyImage,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlobalHotkeyAction {
+    Capture,
+    History,
+    Settings,
+}
+
 /// Mapping from live `window::Id`s to their kind, so the daemon's
 /// per-window callbacks know what tree to render. Phase A only ever
 /// has a single Welcome window; the structure is built to grow.
@@ -160,6 +167,10 @@ pub enum Message {
     TrayTick,
     /// 100 ms drain tick — runtime polls queued `readshot://` URL events.
     UrlTick,
+    /// 100 ms drain tick — runtime polls queued macOS app-reopen events.
+    AppReopenTick,
+    /// Finder / Launch Services reopened the already-running app.
+    AppReopenRequested,
     /// User selected an item in the tray menu (or left-clicked the icon).
     TrayActionPerformed(crate::tray::TrayAction),
     /// User asked for a region capture (welcome button / tray menu).
@@ -494,6 +505,9 @@ pub struct App {
     /// Held here so it isn't dropped (which unregisters the hotkey).
     /// Tests and CLI invocations leave this `None`.
     pub hotkey_manager: Option<global_hotkey::GlobalHotKeyManager>,
+    /// Maps global-hotkey ids back to app actions. The upstream
+    /// event channel is process-wide and only reports ids.
+    pub hotkey_actions: HashMap<u32, GlobalHotkeyAction>,
     /// Live tray-icon controller. Held to keep the icon visible.
     /// Tests and CLI invocations leave this `None`.
     pub tray: Option<crate::tray::TrayController>,
@@ -822,6 +836,7 @@ impl App {
             capture_in_flight: false,
             last_capture_status: None,
             hotkey_manager: None,
+            hotkey_actions: HashMap::new(),
             tray: None,
             editor: None,
             overlay_displays: HashMap::new(),

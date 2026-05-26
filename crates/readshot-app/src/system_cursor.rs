@@ -96,12 +96,8 @@ mod macos {
         let path = NSBezierPath::bezierPath();
         path.setLineWidth(width);
         path.moveToPoint(point(12.0, 3.0));
-        path.lineToPoint(point(12.0, 9.0));
-        path.moveToPoint(point(12.0, 15.0));
         path.lineToPoint(point(12.0, 21.0));
         path.moveToPoint(point(3.0, 12.0));
-        path.lineToPoint(point(9.0, 12.0));
-        path.moveToPoint(point(15.0, 12.0));
         path.lineToPoint(point(21.0, 12.0));
         path.stroke();
     }

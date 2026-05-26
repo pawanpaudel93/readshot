@@ -123,6 +123,7 @@ fn parse_key_code(token: &str) -> Option<Code> {
     }
     // Named keys
     Some(match lower.as_str() {
+        "," | "comma" => Code::Comma,
         "enter" | "return" => Code::Enter,
         "escape" | "esc" => Code::Escape,
         "tab" => Code::Tab,
@@ -280,6 +281,12 @@ mod tests {
     fn parses_function_keys() {
         let spec = parse("ctrl+f5").unwrap();
         assert_eq!(spec.code, Code::F5);
+    }
+
+    #[test]
+    fn parses_comma_key() {
+        assert_eq!(parse("cmd+,").unwrap().code, Code::Comma);
+        assert_eq!(parse("cmd+comma").unwrap().code, Code::Comma);
     }
 
     #[test]

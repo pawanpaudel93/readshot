@@ -26,11 +26,12 @@
 //! `app.rs` / `coordinator.rs` / `cli.rs` — this module's job is to
 //! glue the typed state machine into iced and stay thin.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use iced::widget::{button, column, container, responsive, row, scrollable, text, Space};
 use iced::window;
 use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
@@ -118,7 +119,7 @@ fn take_cli_interactive_request() -> Option<CliInteractiveRequest> {
         .and_then(|m| m.lock().ok().and_then(|mut g| g.take()))
 }
 
-use crate::app::{App, HistoryKeyboardAction, Message, WindowKind};
+use crate::app::{App, GlobalHotkeyAction, HistoryKeyboardAction, Message, WindowKind};
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::{default_provider, PermissionStatus};
 use crate::welcome::WelcomeState;
@@ -180,8 +181,9 @@ pub fn start() -> (App, Task<Message>) {
     // logged-and-swallowed: the binary remains usable from the GUI
     // button + CLI / MCP surfaces if hotkey registration fails (e.g.
     // another app already owns the chord).
-    if let Some(manager) = register_default_hotkey(&app.preferences) {
+    if let Some((manager, actions)) = register_default_hotkey(&app.preferences) {
         app.hotkey_manager = Some(manager);
+        app.hotkey_actions = actions;
     }
     if app.preferences.launch_at_login {
         if let Err(e) = crate::startup::set_launch_at_login(true) {
@@ -191,6 +193,10 @@ pub fn start() -> (App, Task<Message>) {
     #[cfg(target_os = "macos")]
     if let Err(e) = crate::url_events::install_platform_handler() {
         tracing::warn!(target: "readshot::url", "running-app URL handler unavailable: {e}");
+    }
+    #[cfg(target_os = "macos")]
+    if let Err(e) = crate::app_events::install_platform_handler() {
+        tracing::warn!(target: "readshot::app-events", "app reopen handler unavailable: {e}");
     }
     #[cfg(target_os = "macos")]
     if let Err(e) = crate::updater::install() {
@@ -280,7 +286,9 @@ pub fn pretty_hotkey(s: &str) -> String {
     }
 }
 
-fn register_default_hotkey(prefs: &Preferences) -> Option<GlobalHotKeyManager> {
+fn register_default_hotkey(
+    prefs: &Preferences,
+) -> Option<(GlobalHotKeyManager, HashMap<u32, GlobalHotkeyAction>)> {
     let spec = match hotkey::parse(&prefs.capture_hotkey) {
         Ok(s) => s,
         Err(e) => {
@@ -299,7 +307,8 @@ fn register_default_hotkey(prefs: &Preferences) -> Option<GlobalHotKeyManager> {
             return None;
         }
     };
-    if let Err(e) = manager.register(spec.to_global_hotkey()) {
+    let capture_hotkey = spec.to_global_hotkey();
+    if let Err(e) = manager.register(capture_hotkey) {
         tracing::warn!(
             target: "readshot::hotkey",
             "failed to register `{}`: {e}",
@@ -307,12 +316,67 @@ fn register_default_hotkey(prefs: &Preferences) -> Option<GlobalHotKeyManager> {
         );
         return None;
     }
+    let mut actions = HashMap::new();
+    actions.insert(capture_hotkey.id(), GlobalHotkeyAction::Capture);
+    register_fixed_global_hotkey(
+        &manager,
+        &mut actions,
+        history_hotkey(),
+        GlobalHotkeyAction::History,
+    );
+    register_fixed_global_hotkey(
+        &manager,
+        &mut actions,
+        settings_hotkey(),
+        GlobalHotkeyAction::Settings,
+    );
     tracing::info!(
         target: "readshot::hotkey",
         "registered global hotkey: {}",
         prefs.capture_hotkey,
     );
-    Some(manager)
+    Some((manager, actions))
+}
+
+#[cfg(target_os = "macos")]
+fn history_hotkey() -> &'static str {
+    "cmd+y"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn history_hotkey() -> &'static str {
+    "ctrl+y"
+}
+
+#[cfg(target_os = "macos")]
+fn settings_hotkey() -> &'static str {
+    "cmd+comma"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn settings_hotkey() -> &'static str {
+    "ctrl+comma"
+}
+
+fn register_fixed_global_hotkey(
+    manager: &GlobalHotKeyManager,
+    actions: &mut HashMap<u32, GlobalHotkeyAction>,
+    hotkey_string: &str,
+    action: GlobalHotkeyAction,
+) {
+    let Ok(spec) = hotkey::parse(hotkey_string) else {
+        tracing::warn!(target: "readshot::hotkey", "fixed hotkey `{hotkey_string}` did not parse");
+        return;
+    };
+    let hotkey = spec.to_global_hotkey();
+    if let Err(e) = manager.register(hotkey) {
+        tracing::warn!(
+            target: "readshot::hotkey",
+            "failed to register fixed hotkey `{hotkey_string}`: {e}",
+        );
+        return;
+    }
+    actions.insert(hotkey.id(), action);
 }
 
 fn refresh_hotkey_registration(state: &mut App) {
@@ -320,7 +384,11 @@ fn refresh_hotkey_registration(state: &mut App) {
     // Only then try the new one; if the new chord fails to parse or
     // conflicts with another app, the field stays `None`.
     state.hotkey_manager = None;
-    state.hotkey_manager = register_default_hotkey(&state.preferences);
+    state.hotkey_actions.clear();
+    if let Some((manager, actions)) = register_default_hotkey(&state.preferences) {
+        state.hotkey_manager = Some(manager);
+        state.hotkey_actions = actions;
+    }
 }
 
 fn set_hotkey_registration_notice(state: &mut App) {
@@ -696,7 +764,7 @@ pub fn style(_state: &App, theme: &Theme) -> iced::theme::Style {
 }
 
 /// Background subscriptions — permission poll + global-hotkey drain
-/// + (when the editor is open) ⌘Z / ⌘⇧Z keyboard shortcuts.
+/// + app/window keyboard shortcuts.
 pub fn subscription(state: &App) -> Subscription<Message> {
     let mut subs = Vec::new();
     if state.welcome.should_show() {
@@ -718,10 +786,11 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     }
     #[cfg(target_os = "macos")]
     {
-        // macOS delivers `readshot://` opens to an AppKit AppleEvent
-        // callback while the app is already running. That callback
-        // queues parsed actions; this tick drains them back into iced.
+        // macOS delivers URL + reopen AppleEvents to AppKit callbacks
+        // while the app is already running. Those callbacks queue
+        // work; these ticks drain them back into iced.
         subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::UrlTick));
+        subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::AppReopenTick));
     }
     if state.scroll_session.is_some() {
         // Drive the scrolling-capture frame loop. The capture
@@ -824,6 +893,14 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             }
             None
         }));
+    } else {
+        subs.push(iced::event::listen_with(|event, _status, _window| {
+            use iced::keyboard::Event as KbEvent;
+            let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event else {
+                return None;
+            };
+            app_window_shortcut_message(key, modifiers)
+        }));
     }
     if state.history_window_id.is_some() {
         subs.push(iced::event::listen_with(|event, status, window| {
@@ -890,6 +967,46 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     // windows (silent no-op) instead of opening a fresh one.
     subs.push(window::close_events().map(Message::WindowClosed));
     Subscription::batch(subs)
+}
+
+fn app_window_shortcut_message(
+    key: iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+) -> Option<Message> {
+    use iced::keyboard::Key;
+
+    if !modifiers.command()
+        || modifiers.shift()
+        || modifiers.alt()
+        || extra_command_modifier(modifiers)
+    {
+        return None;
+    }
+    match key {
+        Key::Character(c) if c.eq_ignore_ascii_case("y") => Some(Message::OpenHistoryRequested),
+        Key::Character(c) if c == "," => Some(Message::OpenSettingsRequested),
+        _ => None,
+    }
+}
+
+fn global_hotkey_action(
+    event: &GlobalHotKeyEvent,
+    actions: &HashMap<u32, GlobalHotkeyAction>,
+) -> Option<GlobalHotkeyAction> {
+    if event.state != HotKeyState::Pressed {
+        return None;
+    }
+    actions.get(&event.id).copied()
+}
+
+#[cfg(target_os = "macos")]
+fn extra_command_modifier(modifiers: iced::keyboard::Modifiers) -> bool {
+    modifiers.control()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn extra_command_modifier(modifiers: iced::keyboard::Modifiers) -> bool {
+    modifiers.logo()
 }
 
 fn overlay_tick_active(state: &App) -> bool {
@@ -965,14 +1082,30 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
 
         Message::HotkeyTick => {
             // Drain anything the OS-side handler queued. We collapse
-            // multiple presses into a single capture request so a
-            // mashed hotkey doesn't stack pending captures.
-            let mut fired = false;
+            // repeated presses into one action per tick so a mashed
+            // hotkey doesn't stack pending windows/captures.
+            let mut capture = false;
+            let mut history = false;
+            let mut settings = false;
             let receiver = GlobalHotKeyEvent::receiver();
-            while receiver.try_recv().is_ok() {
-                fired = true;
+            while let Ok(event) = receiver.try_recv() {
+                match global_hotkey_action(&event, &state.hotkey_actions) {
+                    Some(GlobalHotkeyAction::Capture) => capture = true,
+                    Some(GlobalHotkeyAction::History) => history = true,
+                    Some(GlobalHotkeyAction::Settings) => settings = true,
+                    None => {}
+                }
             }
-            if fired {
+            if settings {
+                return update(state, Message::OpenSettingsRequested);
+            }
+            if history {
+                if state.welcome.should_show() {
+                    return show_or_focus_welcome(state);
+                }
+                return update(state, Message::OpenHistoryRequested);
+            }
+            if capture {
                 if state.welcome.should_show() {
                     // Hotkey works the same as a tray click: when
                     // permission isn't granted yet, point the user
@@ -1008,6 +1141,16 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 .collect();
             Task::batch(tasks)
         }
+
+        Message::AppReopenTick => {
+            if crate::app_events::take_reopen_requests() == 0 {
+                Task::none()
+            } else {
+                Task::done(Message::AppReopenRequested)
+            }
+        }
+
+        Message::AppReopenRequested => show_or_focus_welcome(state),
 
         Message::TrayActionPerformed(action) => match action {
             crate::tray::TrayAction::Capture => {
@@ -8624,6 +8767,60 @@ mod tests {
         let mut modifiers = iced::keyboard::Modifiers::default();
         modifiers.insert(iced::keyboard::Modifiers::SHIFT);
         assert!(!shortcut_cancelled_by_keypress(&escape, modifiers));
+    }
+
+    #[test]
+    fn app_window_shortcuts_open_history_and_settings() {
+        let mut modifiers = iced::keyboard::Modifiers::default();
+        modifiers.insert(iced::keyboard::Modifiers::COMMAND);
+
+        assert!(matches!(
+            app_window_shortcut_message(iced::keyboard::Key::Character("y".into()), modifiers),
+            Some(Message::OpenHistoryRequested)
+        ));
+        assert!(matches!(
+            app_window_shortcut_message(iced::keyboard::Key::Character(",".into()), modifiers),
+            Some(Message::OpenSettingsRequested)
+        ));
+    }
+
+    #[test]
+    fn app_window_shortcuts_ignore_extra_modifiers() {
+        let mut modifiers = iced::keyboard::Modifiers::default();
+        modifiers.insert(iced::keyboard::Modifiers::COMMAND);
+        modifiers.insert(iced::keyboard::Modifiers::SHIFT);
+
+        assert!(
+            app_window_shortcut_message(iced::keyboard::Key::Character("y".into()), modifiers)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn global_hotkey_action_ignores_release_events() {
+        let mut actions = HashMap::new();
+        actions.insert(7, GlobalHotkeyAction::History);
+        let event = GlobalHotKeyEvent {
+            id: 7,
+            state: HotKeyState::Released,
+        };
+
+        assert_eq!(global_hotkey_action(&event, &actions), None);
+    }
+
+    #[test]
+    fn global_hotkey_action_maps_pressed_ids() {
+        let mut actions = HashMap::new();
+        actions.insert(7, GlobalHotkeyAction::Settings);
+        let event = GlobalHotKeyEvent {
+            id: 7,
+            state: HotKeyState::Pressed,
+        };
+
+        assert_eq!(
+            global_hotkey_action(&event, &actions),
+            Some(GlobalHotkeyAction::Settings)
+        );
     }
 
     #[test]

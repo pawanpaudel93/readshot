@@ -13,6 +13,7 @@
 //! constructs the container and starts iced.
 
 pub mod app;
+pub mod app_events;
 pub mod cli;
 pub mod cli_tools;
 pub mod coordinator;
