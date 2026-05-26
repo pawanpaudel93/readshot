@@ -44,13 +44,6 @@ rfd = { workspace = true }
 core-graphics = "0.25"
 libc = "0.2"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = [
-    "NSBezierPath",
-    "NSColor",
-    "NSCursor",
-    "NSImage",
-] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSGeometry"] }
 screencapturekit = "1.5"
 
 [dev-dependencies]

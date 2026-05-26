@@ -120,6 +120,9 @@ const HANDLE_HALF: f32 = 4.0;
 /// easy to grab on a trackpad — the visual square stays small but
 /// the active grab area expands around it.
 const HANDLE_HIT: f32 = 14.0;
+/// Half-length of the drawn crosshair arms. Kept small so it reads
+/// like a precise selector, not a full-screen guide.
+const CROSSHAIR_ARM: f32 = 9.0;
 
 impl OverlayState {
     /// The rect to draw / inspect *right now*. During InitialDrag this
@@ -238,6 +241,39 @@ fn crosshair_point(state: &OverlayState, cursor: Option<Point>) -> Option<Point>
             }
             Some(point)
         }
+    }
+}
+
+fn draw_crosshair(frame: &mut Frame<Renderer>, bounds: Rectangle, point: Point) {
+    let left = 0.0;
+    let right = bounds.width.max(0.0);
+    let top = 0.0;
+    let bottom = bounds.height.max(0.0);
+    let x = point.x.clamp(left, right);
+    let y = point.y.clamp(top, bottom);
+    let segments = [
+        (
+            Point::new((x - CROSSHAIR_ARM).clamp(left, right), y),
+            Point::new((x + CROSSHAIR_ARM).clamp(left, right), y),
+        ),
+        (
+            Point::new(x, (y - CROSSHAIR_ARM).clamp(top, bottom)),
+            Point::new(x, (y + CROSSHAIR_ARM).clamp(top, bottom)),
+        ),
+    ];
+
+    for (from, to) in segments {
+        let path = Path::line(from, to);
+        frame.stroke(
+            &path,
+            Stroke::default()
+                .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.72))
+                .with_width(2.4),
+        );
+        frame.stroke(
+            &path,
+            Stroke::default().with_color(Color::WHITE).with_width(1.0),
+        );
     }
 }
 
@@ -430,7 +466,6 @@ impl Program<Message> for OverlayProgram {
                     // and start a fresh drag from the click point.
                     // Tell the runtime the toolbar should disappear.
                     state.selection = None;
-                    crate::system_cursor::push_crosshair_for_overlay();
                     state.active = Some(Active::InitialDrag {
                         anchor: p,
                         current: p,
@@ -452,7 +487,10 @@ impl Program<Message> for OverlayProgram {
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
                 let p = cursor.position_in(bounds)?;
                 let mut updated_selection: Option<Rectangle> = None;
-                match state.active.as_mut()? {
+                let Some(active) = state.active.as_mut() else {
+                    return Some(Action::request_redraw());
+                };
+                match active {
                     Active::InitialDrag { current, .. } => {
                         *current = p;
                     }
@@ -507,7 +545,6 @@ impl Program<Message> for OverlayProgram {
                                 );
                             }
                             state.selection = Some(r);
-                            crate::system_cursor::pop_after_overlay();
                             if let Some(domain) = rect_to_domain(r) {
                                 return Some(
                                     Action::publish(Message::OverlaySelectionChanged {
@@ -542,7 +579,7 @@ impl Program<Message> for OverlayProgram {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
     ) -> Vec<Geometry<Renderer>> {
         let veil = state.veil_cache.draw(renderer, bounds.size(), |frame| {
             frame.fill(
@@ -551,6 +588,7 @@ impl Program<Message> for OverlayProgram {
             );
         });
         let mut frame = Frame::new(renderer, bounds.size());
+        let cursor_point = cursor.position_in(bounds);
 
         let current_rect = state.current_rect();
         if current_rect.is_none() {
@@ -562,6 +600,9 @@ impl Program<Message> for OverlayProgram {
         }
 
         let Some(rect) = current_rect else {
+            if let Some(point) = crosshair_point(state, cursor_point) {
+                draw_crosshair(&mut frame, bounds, point);
+            }
             return vec![veil, frame.into_geometry()];
         };
 
@@ -634,6 +675,10 @@ impl Program<Message> for OverlayProgram {
             }
         }
 
+        if let Some(point) = crosshair_point(state, cursor_point) {
+            draw_crosshair(&mut frame, bounds, point);
+        }
+
         vec![veil, frame.into_geometry()]
     }
 
@@ -673,15 +718,8 @@ fn overlay_mouse_interaction(
     overlay_crosshair_interaction()
 }
 
-#[cfg(target_os = "macos")]
 fn overlay_crosshair_interaction() -> mouse::Interaction {
-    crate::system_cursor::set_crosshair_for_overlay();
-    mouse::Interaction::None
-}
-
-#[cfg(not(target_os = "macos"))]
-fn overlay_crosshair_interaction() -> mouse::Interaction {
-    mouse::Interaction::Crosshair
+    mouse::Interaction::Hidden
 }
 
 #[cfg(test)]
@@ -829,7 +867,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_uses_crosshair_without_canvas_cursor_drawing() {
+    fn overlay_hides_os_cursor_where_canvas_crosshair_draws() {
         let bounds = Rectangle {
             x: 0.0,
             y: 0.0,
@@ -843,12 +881,12 @@ mod tests {
                 bounds,
                 mouse::Cursor::Available(Point::new(50.0, 40.0)),
             ),
-            overlay_crosshair_interaction()
+            mouse::Interaction::Hidden
         );
     }
 
     #[test]
-    fn overlay_uses_native_crosshair_during_initial_drag() {
+    fn overlay_keeps_os_cursor_hidden_during_initial_drag() {
         let bounds = Rectangle {
             x: 0.0,
             y: 0.0,
@@ -869,7 +907,7 @@ mod tests {
                 bounds,
                 mouse::Cursor::Available(Point::new(50.0, 40.0)),
             ),
-            overlay_crosshair_interaction()
+            mouse::Interaction::Hidden
         );
     }
 

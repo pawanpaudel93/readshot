@@ -1298,7 +1298,6 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state
                 .pending_intent
                 .get_or_insert(crate::app::CaptureIntent::Editor);
-            crate::system_cursor::push_crosshair_for_overlay();
             for d in &displays {
                 let settings = overlay_window_settings_for(d);
                 let (id, open_task) = window::open(settings);
@@ -6731,9 +6730,6 @@ fn close_all_overlays(state: &mut App) -> Vec<Task<Message>> {
         .iter()
         .filter_map(|(id, k)| (*k == WindowKind::Overlay).then_some(*id))
         .collect();
-    if !overlay_ids.is_empty() {
-        crate::system_cursor::pop_after_overlay();
-    }
     let mut tasks: Vec<Task<Message>> = Vec::with_capacity(overlay_ids.len());
     for id in overlay_ids {
         state.windows.forget(id);
@@ -7711,23 +7707,25 @@ mod tests {
         App::new(coord, perms, Preferences::default())
     }
 
+    fn overlay_display(id: &str) -> crate::app::OverlayDisplay {
+        crate::app::OverlayDisplay {
+            display_id: id.to_string(),
+            scale: 1.0,
+            origin_x: 0.0,
+            origin_y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        }
+    }
+
     #[test]
     fn overlay_animation_tick_only_runs_when_visual_animation_exists() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         assert!(!overlay_tick_active(&app));
 
         let window = iced::window::Id::unique();
-        app.overlay_displays.insert(
-            window,
-            crate::app::OverlayDisplay {
-                display_id: "display-a".to_string(),
-                scale: 1.0,
-                origin_x: 0.0,
-                origin_y: 0.0,
-                width: 800.0,
-                height: 600.0,
-            },
-        );
+        app.overlay_displays
+            .insert(window, overlay_display("display-a"));
         assert!(!overlay_tick_active(&app));
 
         let rect = readshot_core::geom::Rect::from_xywh(1.0, 2.0, 30.0, 40.0).unwrap();
