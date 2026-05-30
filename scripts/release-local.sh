@@ -316,6 +316,7 @@ main() {
     cd "${out_dir}"
     shasum -a 256 readshot-macos-*.dmg > SHA256SUMS
   )
+  cp "${ROOT}/install.sh" "${out_dir}/install.sh"
 
   git push origin main
   if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
@@ -331,12 +332,12 @@ main() {
   fi
 
   if gh release view "${tag}" >/dev/null 2>&1; then
-    gh release upload "${tag}" "${out_dir}"/readshot-macos-*.dmg "${out_dir}/SHA256SUMS" --clobber
+    gh release upload "${tag}" "${out_dir}"/readshot-macos-*.dmg "${out_dir}/SHA256SUMS" "${out_dir}/install.sh" --clobber
     gh release edit "${tag}" \
       --title "Readshot ${VERSION}" \
       --notes-file "${ROOT}/docs/releases/${tag}.md"
   else
-    gh release create "${tag}" "${out_dir}"/readshot-macos-*.dmg "${out_dir}/SHA256SUMS" \
+    gh release create "${tag}" "${out_dir}"/readshot-macos-*.dmg "${out_dir}/SHA256SUMS" "${out_dir}/install.sh" \
       --verify-tag \
       --title "Readshot ${VERSION}" \
       --notes-file "${ROOT}/docs/releases/${tag}.md"
