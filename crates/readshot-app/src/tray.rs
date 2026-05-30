@@ -327,8 +327,13 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
 /// tints the alpha into whatever colour the menu bar wants (white
 /// in dark mode, near-black in light mode), with a nice highlight
 /// when the menu is open. This matches the app-icon's brand language:
-/// four selection-corner brackets framing a centered lens ring.
+/// four airy selection-corner brackets and a centered lens ring.
 fn build_icon(size: u32) -> Result<Icon, IconError> {
+    let rgba = build_icon_rgba(size)?;
+    Icon::from_rgba(rgba, size, size).map_err(IconError::Icon)
+}
+
+fn build_icon_rgba(size: u32) -> Result<Vec<u8>, IconError> {
     let mut pixmap = Pixmap::new(size, size).ok_or(IconError::Pixmap)?;
     let s = size as f32;
 
@@ -340,15 +345,16 @@ fn build_icon(size: u32) -> Result<Icon, IconError> {
     fg_paint.set_color_rgba8(0x00, 0x00, 0x00, 0xff);
     fg_paint.anti_alias = true;
 
-    // Selection-bracket geometry. Brackets sit `inset` from each edge;
-    // each arm is `arm` long and the stroke is `stroke_w`. Numbers are
-    // ratios of `size` so this scales linearly from 16 to 64+ without
-    // recomputing pixel offsets.
-    let inset = s * 0.17;
-    let arm = s * 0.29;
-    let stroke_w = (s * 0.12).max(2.0);
-    let stroke = Stroke {
-        width: stroke_w,
+    // Selection brackets use the same relative placement as the full
+    // colour icon, but drop the app tile. The menu bar gives us only
+    // ~18 px, so negative space matters more than literal fidelity.
+    let left = s * 0.2;
+    let right = s * 0.8;
+    let top = s * 0.2;
+    let bottom = s * 0.8;
+    let arm = s * 0.2;
+    let bracket_stroke = Stroke {
+        width: (s * 0.078).max(1.5),
         line_cap: tiny_skia::LineCap::Round,
         line_join: tiny_skia::LineJoin::Round,
         ..Stroke::default()
@@ -356,12 +362,6 @@ fn build_icon(size: u32) -> Result<Icon, IconError> {
 
     let bracket_path = {
         let mut pb = PathBuilder::new();
-        let left = inset;
-        let right = s - inset;
-        let top = inset;
-        let bottom = s - inset;
-        // Each bracket is two strokes that share a corner: a small
-        // L-shape. We reuse the same path object to keep things tight.
         // top-left
         pb.move_to(left, top + arm);
         pb.line_to(left, top);
@@ -383,18 +383,17 @@ fn build_icon(size: u32) -> Result<Icon, IconError> {
     pixmap.stroke_path(
         &bracket_path,
         &fg_paint,
-        &stroke,
+        &bracket_stroke,
         Transform::identity(),
         None,
     );
 
-    // Center lens ring. The ring echoes the full-colour app icon but
-    // remains a single-colour template glyph for menu-bar readability.
-    let lens_radius = (s * 0.15).max(2.0);
+    // Center OCR lens: solid ring with a transparent center, matching
+    // the app icon's glass lens while staying single-colour.
     let lens_path = {
         let mut pb = PathBuilder::new();
-        pb.push_circle(s * 0.5, s * 0.5, lens_radius);
-        pb.push_circle(s * 0.5, s * 0.5, (s * 0.07).max(1.0));
+        pb.push_circle(s * 0.5, s * 0.5, (s * 0.18).max(2.4));
+        pb.push_circle(s * 0.5, s * 0.5, (s * 0.105).max(1.4));
         pb.finish().ok_or(IconError::Path)?
     };
     pixmap.fill_path(
@@ -409,8 +408,7 @@ fn build_icon(size: u32) -> Result<Icon, IconError> {
     // `tray_icon` expects. Anti-aliased edges produce partial alphas
     // so this conversion is no longer a no-op.
     let raw = pixmap.take();
-    let rgba = unpremultiply(raw);
-    Icon::from_rgba(rgba, size, size).map_err(IconError::Icon)
+    Ok(unpremultiply(raw))
 }
 
 fn unpremultiply(mut buf: Vec<u8>) -> Vec<u8> {
@@ -571,6 +569,39 @@ mod tests {
         for size in [16u32, 22, 32, 64] {
             assert!(build_icon(size).is_ok(), "size {size} failed");
         }
+    }
+
+    #[test]
+    fn icon_builder_draws_airier_app_icon_mark() {
+        let size = 32;
+        let rgba = build_icon_rgba(size).unwrap();
+        let alpha_at = |x: u32, y: u32| -> u8 {
+            let i = ((y * size + x) * 4 + 3) as usize;
+            rgba[i]
+        };
+
+        assert_eq!(
+            alpha_at(0, 0),
+            0,
+            "outside the rounded tile stays transparent"
+        );
+        assert_eq!(
+            alpha_at(size / 2, 3),
+            0,
+            "menu-bar mark should not draw the dense outer app tile"
+        );
+        assert!(
+            alpha_at(7, 7) > 0,
+            "top-left capture bracket should be visible"
+        );
+        assert!(
+            alpha_at(size / 2, size / 2) == 0,
+            "lens center should stay hollow"
+        );
+        assert!(
+            alpha_at(size / 2 + 5, size / 2) > 0,
+            "lens ring should be visible"
+        );
     }
 
     #[test]
