@@ -155,6 +155,9 @@ jobs:
             git -C pages commit -m "chore: publish Sparkle appcast ${RELEASE_TAG}"
             git -C pages push origin HEAD:gh-pages
           fi
+          gh release upload "${RELEASE_TAG}" pages/appcast.xml --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # ─── Homebrew Cask ──────────────────────────────────────────────────
       - name: Bump Homebrew Cask

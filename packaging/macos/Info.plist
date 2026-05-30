@@ -40,7 +40,7 @@
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Readshot needs Screen Recording access so it can capture the region you select.</string>
 	<key>SUFeedURL</key>
-	<string>https://pawanpaudel93.github.io/readshot/appcast.xml</string>
+	<string>https://github.com/pawanpaudel93/readshot/releases/latest/download/appcast.xml</string>
 	<key>SUEnableAutomaticChecks</key>
 	<false/>
 	<key>SUPublicEDKey</key>

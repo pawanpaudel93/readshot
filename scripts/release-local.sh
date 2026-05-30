@@ -200,6 +200,7 @@ publish_appcast() {
     git -C "${PAGES_DIR}" commit -m "chore: publish Sparkle appcast ${tag}"
     git -C "${PAGES_DIR}" push origin HEAD:gh-pages
   fi
+  gh release upload "${tag}" "${PAGES_DIR}/appcast.xml" --clobber
 }
 
 validate_release_secrets() {

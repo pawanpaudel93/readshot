@@ -26,7 +26,7 @@ fi
 
 TAG="$1"
 ARTIFACT_DIR="$2"
-APPCAST_SOURCE="${3:-https://pawanpaudel93.github.io/readshot/appcast.xml}"
+APPCAST_SOURCE="${3:-https://github.com/pawanpaudel93/readshot/releases/latest/download/appcast.xml}"
 VERSION="${TAG#v}"
 
 if [[ "${TAG}" != v*.*.* ]]; then
@@ -119,12 +119,12 @@ for arch in aarch64 x86_64; do
     echo "error: ${arch} bundle version does not match ${VERSION}" >&2
     exit 1
   fi
-  if [[ "$(plutil -extract SUFeedURL raw -o - "${plist}")" != "https://pawanpaudel93.github.io/readshot/appcast.xml" ]]; then
+  if [[ "$(plutil -extract SUFeedURL raw -o - "${plist}")" != "https://github.com/pawanpaudel93/readshot/releases/latest/download/appcast.xml" ]]; then
     echo "error: ${arch} bundle SUFeedURL is not the production appcast" >&2
     exit 1
   fi
-  if [[ "$(plutil -extract SUEnableAutomaticChecks raw -o - "${plist}")" != "true" ]]; then
-    echo "error: ${arch} bundle does not enable Sparkle automatic checks" >&2
+  if [[ "$(plutil -extract SUEnableAutomaticChecks raw -o - "${plist}")" != "false" ]]; then
+    echo "error: ${arch} bundle should keep Sparkle automatic checks disabled" >&2
     exit 1
   fi
   if ! /usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes:0:CFBundleURLSchemes:0" "${plist}" | grep -qx "readshot"; then
