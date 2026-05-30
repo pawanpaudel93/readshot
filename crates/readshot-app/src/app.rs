@@ -439,9 +439,10 @@ pub enum Message {
     /// Background capture-and-save task finished. Carries the final
     /// PNG path or a stringified error.
     CaptureSaved(Result<PathBuf, String>),
-    /// First `view` call after the welcome window is opened. Used by
-    /// the runtime to detect the window-ready transition.
-    WelcomeWindowReady,
+    /// First native-window-ready callback after the welcome window is
+    /// opened. Used by the runtime to focus the window after Launch
+    /// Services reopens an LSUIElement app.
+    WelcomeWindowReady(iced::window::Id),
     /// User asked for the settings window — tray "Settings…" entry or
     /// (future) a "Settings" command from elsewhere. Single-instance:
     /// focuses the existing window if one is already open.

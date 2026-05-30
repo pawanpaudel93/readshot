@@ -222,7 +222,7 @@ pub fn start() -> (App, Task<Message>) {
     if needs_welcome_window {
         let (id, open_task) = window::open(welcome_window_settings());
         app.windows.register(id, WindowKind::Welcome);
-        tasks.push(open_task.map(|_id| Message::WelcomeWindowReady));
+        tasks.push(open_task.map(Message::WelcomeWindowReady));
     } else {
         // No welcome window — user is already past the permission
         // gate. Surface a system notification so a relaunch is
@@ -1097,11 +1097,11 @@ fn overlay_tick_active(state: &App) -> bool {
 /// [`App::update_sync`] and adds the iced-only async branches.
 pub fn update(state: &mut App, message: Message) -> Task<Message> {
     match message {
-        Message::WelcomeWindowReady => {
+        Message::WelcomeWindowReady(id) => {
             if !state.welcome.should_show() {
                 state.mark_onboarding_completed();
             }
-            Task::none()
+            window::gain_focus(id)
         }
 
         Message::PermissionTick => {
@@ -1294,7 +1294,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 }
                 Task::none()
             }
-            crate::tray::TrayAction::Quit => iced::exit(),
+            crate::tray::TrayAction::Quit => quit_readshot(),
         },
 
         Message::CaptureFullPrimaryRequested => {
@@ -2872,7 +2872,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
         },
 
-        Message::QuitRequested => iced::exit(),
+        Message::QuitRequested => quit_readshot(),
 
         Message::RestartRequested => {
             // macOS Screen Recording's TCC grant is cached per-process
@@ -5801,7 +5801,7 @@ fn show_or_focus_welcome(state: &mut App) -> Task<Message> {
     }
     let (id, open_task) = window::open(welcome_window_settings());
     state.windows.register(id, WindowKind::Welcome);
-    open_task.map(|_id| Message::WelcomeWindowReady)
+    open_task.map(Message::WelcomeWindowReady)
 }
 
 /// Preferences window. v1 = a single General tab with the controls
@@ -7487,6 +7487,22 @@ fn pick_primary(displays: &[DisplayInfo]) -> Option<&DisplayInfo> {
         .or_else(|| displays.first())
 }
 
+fn quit_readshot() -> Task<Message> {
+    #[cfg(target_os = "macos")]
+    {
+        // Menu-bar apps can otherwise linger as an LSUIElement process
+        // after iced has closed its windows/tray. A stale process makes
+        // the next Finder/open launch deliver a reopen AppleEvent to a
+        // non-visible instance instead of starting cleanly.
+        tracing::info!(target: "readshot::lifecycle", "quit requested; terminating process");
+        std::process::exit(0);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        iced::exit()
+    }
+}
+
 /// Capture-flow error type, surfaced to the welcome window's toast
 /// region. Bridged through `Message::CaptureSaved` as a `String` so
 /// `Message: Clone + Debug` stays trivially derivable.
@@ -8539,7 +8555,10 @@ mod tests {
         app.preferences.onboarding_completed = false;
         app.welcome = WelcomeState::Granted;
 
-        let _ = update(&mut app, Message::WelcomeWindowReady);
+        let _ = update(
+            &mut app,
+            Message::WelcomeWindowReady(iced::window::Id::unique()),
+        );
 
         assert!(app.preferences.onboarding_completed);
     }
