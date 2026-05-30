@@ -57,6 +57,11 @@ pub struct StitchConfig {
     /// enough to survive font anti-aliasing jitter without admitting
     /// real motion.
     pub sticky_tolerance: u8,
+    /// Number of overlapping rows to feather between the previous
+    /// output and the next frame before appending newly revealed
+    /// rows. This softens unavoidable sub-pixel / antialiasing
+    /// differences at frame boundaries.
+    pub seam_blend_rows: u32,
     /// Maximum number of contiguous rows from each edge to consider
     /// when detecting sticky elements (as a fraction of frame height,
     /// numerator only — denominator is 4). 1 = up to 25% top + 25%
@@ -74,6 +79,7 @@ impl Default for StitchConfig {
             subsample: 2,
             max_output_height: 16_384,
             sticky_tolerance: 6,
+            seam_blend_rows: 8,
             sticky_search_fraction_quarter: 1,
         }
     }
@@ -193,8 +199,28 @@ pub fn stitch_scrolling(
         if strip_h == 0 {
             continue;
         }
-        // Source rows are `[h - dy .. h - bottom_trim)` in `frame`.
+        // Source rows `[h - dy - overlap .. h - dy)` should overlap
+        // the output's tail. Feather those rows first so tiny
+        // anti-aliasing / fractional-scroll differences don't become
+        // visible horizontal boundary lines. Then append the truly
+        // new rows `[h - dy .. h - bottom_trim)`.
         let src_y = h - dy;
+        let overlap_h = config
+            .seam_blend_rows
+            .min(src_y.saturating_sub(sticky.top_rows))
+            .min(y_cursor.max(0) as u32);
+        if overlap_h > 0 {
+            blend_overlap_rows(
+                &mut out,
+                frame,
+                OverlapBlend {
+                    src_y: src_y - overlap_h,
+                    dst_y: (y_cursor as u32).saturating_sub(overlap_h),
+                    width: w,
+                    height: overlap_h,
+                },
+            );
+        }
         let strip = image::imageops::crop_imm(frame, 0, src_y, w, strip_h).to_image();
         image::imageops::overlay(&mut out, &strip, 0, y_cursor);
         y_cursor += strip_h as i64;
@@ -208,6 +234,38 @@ pub fn stitch_scrolling(
         return Ok(cropped);
     }
     Ok(out)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OverlapBlend {
+    src_y: u32,
+    dst_y: u32,
+    width: u32,
+    height: u32,
+}
+
+fn blend_overlap_rows(out: &mut RgbaImage, frame: &RgbaImage, blend: OverlapBlend) {
+    for y in 0..blend.height {
+        let next_weight = y + 1;
+        let prev_weight = blend.height + 1 - next_weight;
+        let denom = blend.height + 1;
+        for x in 0..blend.width {
+            let prev = out.get_pixel(x, blend.dst_y + y).0;
+            let next = frame.get_pixel(x, blend.src_y + y).0;
+            let blended = [
+                blend_channel(prev[0], next[0], prev_weight, next_weight, denom),
+                blend_channel(prev[1], next[1], prev_weight, next_weight, denom),
+                blend_channel(prev[2], next[2], prev_weight, next_weight, denom),
+                blend_channel(prev[3], next[3], prev_weight, next_weight, denom),
+            ];
+            out.put_pixel(x, blend.dst_y + y, image::Rgba(blended));
+        }
+    }
+}
+
+fn blend_channel(prev: u8, next: u8, prev_weight: u32, next_weight: u32, denom: u32) -> u8 {
+    let total = prev as u32 * prev_weight + next as u32 * next_weight;
+    ((total + denom / 2) / denom) as u8
 }
 
 /// Estimate the downward scroll (in px) from `a` to `b`.
@@ -488,5 +546,41 @@ mod tests {
         let config = StitchConfig::default();
         let dy = estimate_scroll(&a, &b, &StickyMask::default(), &config).unwrap();
         assert!((10..=14).contains(&dy), "expected dy near 12, got {dy}");
+    }
+
+    #[test]
+    fn stitch_feathers_shared_overlap_before_appending_new_rows() {
+        let w = 32;
+        let h = 96;
+        let dy = 12;
+        let a = stripe_frame(w, h, 0);
+        let mut b = stripe_frame(w, h, dy);
+
+        // This row is in the shared overlap immediately before the
+        // newly revealed strip. Real captures can differ here because
+        // text antialiasing/shadows settle differently while scrolling.
+        let overlap_y_in_b = h - dy - 1;
+        for x in 0..w {
+            b.put_pixel(x, overlap_y_in_b, Rgba([250, 250, 250, 255]));
+        }
+
+        let config = StitchConfig {
+            min_motion: 4,
+            ..StitchConfig::default()
+        };
+        let out = stitch_scrolling(&[a.clone(), b], config).unwrap();
+
+        let boundary_overlap_row = h - 1;
+        let before = a.get_pixel(0, boundary_overlap_row).0[0];
+        let after = out.get_pixel(0, boundary_overlap_row).0[0];
+
+        assert_ne!(
+            after, before,
+            "last pre-boundary row should be feathered with the next frame overlap"
+        );
+        assert!(
+            after > before && after < 250,
+            "expected a blended row between {before} and 250, got {after}"
+        );
     }
 }
