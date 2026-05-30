@@ -27,7 +27,7 @@ quarantine from the installed app by running
 To install a specific version:
 
 ```bash
-curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- 0.7.5
+curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- 0.7.6
 ```
 
 To check compatibility, release availability, and the current local
@@ -124,9 +124,9 @@ open /Applications/Readshot.app
 ### Alternative: download the DMG manually
 
 ```bash
-# Replace v0.7.5 with the version you want.
+# Replace v0.7.6 with the version you want.
 curl -L -o readshot.dmg \
-  https://github.com/pawanpaudel93/readshot/releases/download/v0.7.5/readshot-macos-aarch64.dmg
+  https://github.com/pawanpaudel93/readshot/releases/download/v0.7.6/readshot-macos-aarch64.dmg
 
 # Verify the hash against the value in the GitHub Release notes.
 shasum -a 256 readshot.dmg
