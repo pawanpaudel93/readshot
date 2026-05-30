@@ -8,7 +8,7 @@
 
         <item>
             <title>Readshot 0.7.4 (aarch64)</title>
-            <pubDate>Sat, 30 May 2026 09:19:27 +0000</pubDate>
+            <pubDate>Sat, 30 May 2026 09:25:29 +0000</pubDate>
             <sparkle:version>0.7.4</sparkle:version>
             <sparkle:shortVersionString>0.7.4</sparkle:shortVersionString>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
@@ -18,14 +18,14 @@
             ]]></description>
             <enclosure
                 url="https://github.com/pawanpaudel93/readshot/releases/download/v0.7.4/readshot-macos-aarch64.dmg"
-                length="14858280"
+                length="14858289"
                 type="application/octet-stream"
-                sparkle:edSignature="BGrYY6mErj4Err0KDVaDKpgo9GnNNGa4f7OufsPtHQDAEPGHYWUqtR0NE0UDUwqHCTA4a9d0XvIrHQxIQCyMCA=="
+                sparkle:edSignature="oXPUvB102rQDEwXl+ksBc7vgf+YU7D0vdWTPAtRrQ8iCt63IeFHYQT2cwiJMLauNiHOb7ddfslAb4uuVjNv4Bw=="
             />
         </item>
         <item>
             <title>Readshot 0.7.4 (x86_64)</title>
-            <pubDate>Sat, 30 May 2026 09:19:27 +0000</pubDate>
+            <pubDate>Sat, 30 May 2026 09:25:29 +0000</pubDate>
             <sparkle:version>0.7.4</sparkle:version>
             <sparkle:shortVersionString>0.7.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -34,9 +34,9 @@
             ]]></description>
             <enclosure
                 url="https://github.com/pawanpaudel93/readshot/releases/download/v0.7.4/readshot-macos-x86_64.dmg"
-                length="15831044"
+                length="15831090"
                 type="application/octet-stream"
-                sparkle:edSignature="MZAwwo1jLxygE17QMnH5dL1H1bEfiIa5eoqo2EgYYwh66EgaFGAm8pbH3KiIPx0lUAj9yqFZmtzw46ARpy4eBw=="
+                sparkle:edSignature="YEK3U4MYTB3wS1to9u+8MNEINsCM4bz/Dflio62uAKGclgq2OTGAjSE0HSjzX226K1J214pzNnZ3gMr3e0GcAQ=="
             />
         </item>
         <item>
