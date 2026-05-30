@@ -348,13 +348,13 @@ fn build_icon_rgba(size: u32) -> Result<Vec<u8>, IconError> {
     // Selection brackets use the same relative placement as the full
     // colour icon, but drop the app tile. The menu bar gives us only
     // ~18 px, so negative space matters more than literal fidelity.
-    let left = s * 0.2;
-    let right = s * 0.8;
-    let top = s * 0.2;
-    let bottom = s * 0.8;
-    let arm = s * 0.2;
+    let left = s * 0.16;
+    let right = s * 0.84;
+    let top = s * 0.16;
+    let bottom = s * 0.84;
+    let arm = s * 0.23;
     let bracket_stroke = Stroke {
-        width: (s * 0.078).max(1.5),
+        width: (s * 0.085).max(1.6),
         line_cap: tiny_skia::LineCap::Round,
         line_join: tiny_skia::LineJoin::Round,
         ..Stroke::default()
@@ -392,8 +392,8 @@ fn build_icon_rgba(size: u32) -> Result<Vec<u8>, IconError> {
     // the app icon's glass lens while staying single-colour.
     let lens_path = {
         let mut pb = PathBuilder::new();
-        pb.push_circle(s * 0.5, s * 0.5, (s * 0.18).max(2.4));
-        pb.push_circle(s * 0.5, s * 0.5, (s * 0.105).max(1.4));
+        pb.push_circle(s * 0.5, s * 0.5, (s * 0.205).max(2.7));
+        pb.push_circle(s * 0.5, s * 0.5, (s * 0.125).max(1.6));
         pb.finish().ok_or(IconError::Path)?
     };
     pixmap.fill_path(
@@ -591,7 +591,7 @@ mod tests {
             "menu-bar mark should not draw the dense outer app tile"
         );
         assert!(
-            alpha_at(7, 7) > 0,
+            alpha_at(5, 5) > 0,
             "top-left capture bracket should be visible"
         );
         assert!(
