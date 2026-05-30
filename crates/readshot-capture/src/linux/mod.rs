@@ -31,7 +31,7 @@ use readshot_core::error::CaptureError;
 use readshot_core::geom::Rect;
 use xcap::Monitor;
 
-use crate::{CaptureRequest, Capturer, DisplayInfo};
+use crate::{rect_relative_to_display, CaptureRequest, Capturer, DisplayInfo};
 
 /// Production Linux Capturer. Routes to the portal on Wayland and to
 /// X11 otherwise — both via [`xcap`]. The runtime selector lives inside
@@ -66,7 +66,9 @@ impl Capturer for LinuxCapturer {
             .ok_or_else(|| CaptureError::DisplayNotFound(req.display_id.clone()))?;
 
         let full = monitor.capture_image().map_err(map_err)?;
-        Ok(crop_rgba(full, req.rect, req.scale))
+        let display = monitor_to_display_info(&monitor)?;
+        let rect = rect_relative_to_display(req.rect, display.bounds);
+        crop_rgba(full, rect, req.scale)
     }
 }
 
@@ -90,14 +92,19 @@ fn monitor_to_display_info(m: &Monitor) -> Result<DisplayInfo, CaptureError> {
     })
 }
 
-fn crop_rgba(full: RgbaImage, rect_logical: Rect, scale: f32) -> RgbaImage {
+fn crop_rgba(full: RgbaImage, rect_logical: Rect, scale: f32) -> Result<RgbaImage, CaptureError> {
     let x0 = (rect_logical.x() * scale).round().max(0.0) as u32;
     let y0 = (rect_logical.y() * scale).round().max(0.0) as u32;
     let w_target = (rect_logical.width() * scale).round().max(1.0) as u32;
     let h_target = (rect_logical.height() * scale).round().max(1.0) as u32;
     let w = w_target.min(full.width().saturating_sub(x0));
     let h = h_target.min(full.height().saturating_sub(y0));
-    image::imageops::crop_imm(&full, x0, y0, w, h).to_image()
+    if w == 0 || h == 0 {
+        return Err(CaptureError::InvalidRegion(
+            "region is outside the captured display bounds".to_string(),
+        ));
+    }
+    Ok(image::imageops::crop_imm(&full, x0, y0, w, h).to_image())
 }
 
 fn map_err(e: xcap::XCapError) -> CaptureError {

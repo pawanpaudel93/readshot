@@ -199,6 +199,27 @@ pub(crate) fn canvas_to_base(
     ))
 }
 
+fn canvas_to_base_clamped(
+    point: Point,
+    bounds: Rectangle,
+    image_size: (u32, u32),
+    image_offset: (f32, f32),
+    explicit_scale: Option<f32>,
+) -> Option<Point> {
+    let (iw, ih) = (image_size.0 as f32, image_size.1 as f32);
+    let scale = display_scale_for_bounds(bounds, image_size, explicit_scale)?;
+    let displayed_w = iw * scale;
+    let displayed_h = ih * scale;
+    let offset_x = (bounds.width - displayed_w) * 0.5;
+    let offset_y = (bounds.height - displayed_h) * 0.5;
+    let dx = (point.x - offset_x).clamp(0.0, displayed_w);
+    let dy = (point.y - offset_y).clamp(0.0, displayed_h);
+    Some(Point::new(
+        (dx / scale).clamp(0.0, iw) + image_offset.0,
+        (dy / scale).clamp(0.0, ih) + image_offset.1,
+    ))
+}
+
 fn base_rect_to_canvas(
     rect: RectLike,
     bounds: Rectangle,
@@ -403,7 +424,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                             self.display_scale,
                         )
                         .unwrap_or(anchor);
-                        let cur_img = canvas_to_base(
+                        let cur_img = canvas_to_base_clamped(
                             cur,
                             bounds,
                             self.image_size,
@@ -442,7 +463,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                         let pts: Vec<PointLike> = points
                             .iter()
                             .map(|p| {
-                                let q = canvas_to_base(
+                                let q = canvas_to_base_clamped(
                                     *p,
                                     bounds,
                                     self.image_size,
@@ -1141,6 +1162,26 @@ mod tests {
         assert_eq!(
             canvas_to_image(pt(600.0, 400.0), bounds, (200, 100), Some(2.0)),
             Some(pt(200.0, 100.0))
+        );
+    }
+
+    #[test]
+    fn canvas_to_base_clamped_keeps_release_inside_image() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+
+        // The image displays at 800x400 with a 100px top/bottom gutter.
+        assert_eq!(
+            canvas_to_base_clamped(pt(400.0, 50.0), bounds, (200, 100), (10.0, 20.0), None),
+            Some(pt(110.0, 20.0))
+        );
+        assert_eq!(
+            canvas_to_base_clamped(pt(900.0, 650.0), bounds, (200, 100), (10.0, 20.0), None),
+            Some(pt(210.0, 120.0))
         );
     }
 

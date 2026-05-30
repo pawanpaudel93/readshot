@@ -27,7 +27,7 @@ quarantine from the installed app by running
 To install a specific version:
 
 ```bash
-curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- 0.7.4
+curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- 0.7.5
 ```
 
 To check compatibility, release availability, and the current local
@@ -93,16 +93,11 @@ readshot capture --interactive --output capture.png
 Readshot does not run shell setup automatically; use the commands above
 if you install the app outside Homebrew and want terminal access.
 
-### Alternative: Homebrew Cask
+### First launch
 
-```bash
-brew install --cask readshot
-```
-
-Homebrew verifies the DMG's SHA-256 hash automatically — no manual
-verification step needed. If the release is Developer ID signed and
-notarised, double-clicking opens normally. If it is self-signed, the
-first time you open Readshot, macOS Gatekeeper shows:
+If the release is Developer ID signed and notarised, double-clicking
+opens normally. If it is self-signed, the first time you open Readshot,
+macOS Gatekeeper shows:
 
 > "Readshot can't be opened because Apple cannot check it for malicious software."
 
@@ -113,9 +108,9 @@ This is expected for self-signed builds. Bypass:
 3. Click **Open** in the warning dialog.
 
 You only do this once. Future launches open normally. The tray menu
-includes **Check for Updates…**; it uses Sparkle to read the appcast
-published from GitHub Releases and verifies each download with the
-app's compiled-in EdDSA public key. Readshot does not check for
+includes **Check for Updates…** on macOS; it uses Sparkle to read the
+appcast published from GitHub Releases and verifies each download with
+the app's compiled-in EdDSA public key. Readshot does not check for
 updates in the background unless a future version adds an explicit
 preference for it.
 
@@ -129,9 +124,9 @@ open /Applications/Readshot.app
 ### Alternative: download the DMG manually
 
 ```bash
-# Replace v0.7.4 with the version you want.
+# Replace v0.7.5 with the version you want.
 curl -L -o readshot.dmg \
-  https://github.com/pawanpaudel93/readshot/releases/download/v0.7.4/readshot-macos-aarch64.dmg
+  https://github.com/pawanpaudel93/readshot/releases/download/v0.7.5/readshot-macos-aarch64.dmg
 
 # Verify the hash against the value in the GitHub Release notes.
 shasum -a 256 readshot.dmg

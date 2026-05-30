@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-VERSION="${VERSION:-0.7.4}"
+VERSION="${VERSION:-0.7.5}"
 TARGET="${TARGET:-x86_64-unknown-linux-gnu}"
 BIN_PATH="target/${TARGET}/release/readshot"
 APP_DIR="target/release/Readshot.AppDir"
@@ -36,6 +36,9 @@ cp packaging/linux/readshot.desktop "${APP_DIR}/usr/share/applications/readshot.
 cp packaging/linux/readshot.png "${APP_DIR}/readshot.png" 2>/dev/null || \
   echo "warning: packaging/linux/readshot.png missing — AppImage will be iconless"
 cp packaging/linux/readshot.png "${APP_DIR}/usr/share/icons/hicolor/512x512/apps/readshot.png" 2>/dev/null || true
+cp packaging/linux/readshot.png \
+  "${APP_DIR}/usr/share/icons/hicolor/512x512/apps/np.com.pawanpaudel.readshot.png" \
+  2>/dev/null || true
 
 cat > "${APP_DIR}/AppRun" <<'EOF'
 #!/usr/bin/env bash

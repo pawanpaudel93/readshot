@@ -84,7 +84,7 @@ jobs:
           path: |
             target/release/readshot-macos-*.dmg
             target/release/readshot-macos-*.dmg.sparkle.eddsa.txt
-          if-no-files-found: warn
+          if-no-files-found: error
 
   publish:
     needs: build
@@ -102,6 +102,15 @@ jobs:
           mkdir -p out
           find artifacts -type f \( -name "*.dmg" -o -name "*.sparkle.eddsa.txt" \) -exec cp {} out/ \;
           find out -type f -name "*.dmg" -exec sha256sum {} \; > out/SHA256SUMS
+          cp install.sh out/install.sh
+
+      - name: Verify Sparkle signatures before publishing
+        run: |
+          set -euo pipefail
+          for arch in aarch64 x86_64; do
+            test -s "out/readshot-macos-${arch}.dmg"
+            test -s "out/readshot-macos-${arch}.dmg.sparkle.eddsa.txt"
+          done
 
       - name: Prepare release notes
         run: |
@@ -122,6 +131,7 @@ jobs:
           files: |
             out/*.dmg
             out/SHA256SUMS
+            out/install.sh
           body_path: out/RELEASE_NOTES.md
           generate_release_notes: true
           tag_name: ${{ env.RELEASE_TAG }}

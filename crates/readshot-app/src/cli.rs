@@ -54,8 +54,8 @@ use std::time::{Duration, SystemTime};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use image::RgbaImage;
 use readshot_capture::{
-    crop_window_relative_rect, CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest,
-    WindowId, WindowInfo,
+    crop_window_relative_rect, display_local_bounds, CaptureRequest, Capturer, DisplayInfo,
+    WindowCaptureRequest, WindowId, WindowInfo,
 };
 use readshot_core::error::{CaptureError, OCRError};
 use readshot_core::geom::Rect;
@@ -416,6 +416,7 @@ pub fn exit_code(err: &CliError) -> i32 {
 const MAX_DELAY_SECS: f64 = 3600.0;
 const MAX_RECT_DIM: f32 = 16_384.0;
 const MAX_SCALE: f32 = 8.0;
+const MAX_CAPTURE_PIXELS: f64 = 100_000_000.0;
 
 fn parse_delay(s: &str) -> Result<f64, String> {
     let delay = s
@@ -969,15 +970,26 @@ async fn build_capture_request(
             .find(|d| d.is_primary)
             .unwrap_or(&displays[0]),
     };
-    let rect = rect.unwrap_or(chosen.bounds);
+    let rect = rect.unwrap_or_else(|| display_local_bounds(chosen));
     let scale = scale.unwrap_or(chosen.scale);
     validate_scale(scale)?;
+    validate_capture_pixels(rect, scale)?;
     Ok(CaptureRequest {
         display_id: chosen.id.clone(),
         rect,
         scale,
         hide_cursor,
     })
+}
+
+fn validate_capture_pixels(rect: Rect, scale: f32) -> Result<(), CliError> {
+    let pixels = rect.width() as f64 * rect.height() as f64 * scale as f64 * scale as f64;
+    if pixels > MAX_CAPTURE_PIXELS {
+        return Err(CliError::InvalidInput(format!(
+            "capture would be too large after scale ({pixels:.0} pixels > {MAX_CAPTURE_PIXELS:.0})"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_scale(scale: f32) -> Result<(), CliError> {
@@ -2268,6 +2280,27 @@ mod tests {
         let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
 
         assert!(matches!(err, CliError::InvalidInput(ref s) if s.contains("--scale")));
+        assert_eq!(exit_code(&err), 64);
+    }
+
+    #[tokio::test]
+    async fn run_capture_with_oversized_scaled_region_returns_usage_error() {
+        let (cap, ocr) = fakes();
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture",
+            "--rect",
+            "0,0,10000,10000",
+            "--scale",
+            "2",
+            "-o",
+            "/tmp/ignored.png",
+        ])
+        .unwrap();
+        let mut out = Vec::new();
+        let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
+
+        assert!(matches!(err, CliError::InvalidInput(ref s) if s.contains("too large")));
         assert_eq!(exit_code(&err), 64);
     }
 

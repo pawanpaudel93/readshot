@@ -8,6 +8,7 @@
 
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -21,7 +22,7 @@ static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// failure the temp file is cleaned up before the error is returned.
 pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     let tmp_path = temp_path_for(path)?;
-    if let Err(e) = fs::write(&tmp_path, contents) {
+    if let Err(e) = write_tmp_file(&tmp_path, contents) {
         let _ = fs::remove_file(&tmp_path);
         return Err(e);
     }
@@ -29,7 +30,24 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(&tmp_path);
         return Err(e);
     }
+    sync_parent_dir(path);
     Ok(())
+}
+
+fn write_tmp_file(tmp_path: &Path, contents: &[u8]) -> io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(tmp_path)?;
+    file.write_all(contents)?;
+    file.sync_all()
+}
+
+fn sync_parent_dir(path: &Path) {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    if let Ok(dir) = fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
 }
 
 fn temp_path_for(path: &Path) -> io::Result<std::path::PathBuf> {

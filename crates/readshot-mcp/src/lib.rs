@@ -59,8 +59,8 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 use image::RgbaImage;
 use readshot_capture::{
-    crop_window_relative_rect, CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest,
-    WindowId, WindowInfo,
+    crop_window_relative_rect, display_local_bounds, CaptureRequest, Capturer, DisplayInfo,
+    WindowCaptureRequest, WindowId, WindowInfo,
 };
 use readshot_core::error::{CaptureError, HistoryError, OCRError};
 use readshot_core::geom::Rect;
@@ -413,6 +413,7 @@ impl McpServer {
     }
 
     async fn tool_capture_region(&self, args: &Value) -> Result<Value, RpcErr> {
+        validate_args_object(args, &["display", "rect", "scale", "hide_cursor"])?;
         let req = self.build_request(args).await?;
         let img = self
             .capturer
@@ -423,6 +424,7 @@ impl McpServer {
     }
 
     async fn tool_capture_window(&self, args: &Value) -> Result<Value, RpcErr> {
+        validate_args_object(args, &["window", "rect", "ignore_shadows"])?;
         let window_id = args
             .get("window")
             .and_then(Value::as_str)
@@ -451,6 +453,17 @@ impl McpServer {
     }
 
     async fn tool_capture_text(&self, args: &Value) -> Result<Value, RpcErr> {
+        validate_args_object(
+            args,
+            &[
+                "display",
+                "rect",
+                "scale",
+                "hide_cursor",
+                "languages",
+                "language_correction",
+            ],
+        )?;
         let req = self.build_request(args).await?;
         let img = self
             .capturer
@@ -469,6 +482,17 @@ impl McpServer {
     }
 
     async fn tool_capture_region_and_text(&self, args: &Value) -> Result<Value, RpcErr> {
+        validate_args_object(
+            args,
+            &[
+                "display",
+                "rect",
+                "scale",
+                "hide_cursor",
+                "languages",
+                "language_correction",
+            ],
+        )?;
         let req = self.build_request(args).await?;
         let img = self
             .capturer
@@ -519,7 +543,7 @@ impl McpServer {
                 .unwrap_or(&displays[0]),
         };
 
-        let rect = requested_rect.unwrap_or(chosen.bounds);
+        let rect = requested_rect.unwrap_or_else(|| display_local_bounds(chosen));
         let scale = requested_scale.unwrap_or(chosen.scale);
         if !scale.is_finite() || scale <= 0.0 {
             return Err(RpcErr {
@@ -527,6 +551,7 @@ impl McpServer {
                 message: "scale must be a positive finite number".into(),
             });
         }
+        validate_capture_pixels(rect, scale)?;
 
         Ok(CaptureRequest {
             display_id: chosen.id.clone(),
@@ -566,6 +591,41 @@ const MAX_RECT_DIM: f32 = 16_384.0;
 /// Largest output scale factor we accept. Anything beyond 8x of the
 /// display's logical pixels is almost certainly a mistake or abuse.
 const MAX_SCALE: f32 = 8.0;
+const MAX_CAPTURE_PIXELS: f64 = 100_000_000.0;
+
+fn validate_args_object(args: &Value, allowed: &[&str]) -> Result<(), RpcErr> {
+    let Some(obj) = args.as_object() else {
+        if args.is_null() {
+            return Ok(());
+        }
+        return Err(RpcErr {
+            code: codes::INVALID_PARAMS,
+            message: "arguments must be an object".into(),
+        });
+    };
+    for key in obj.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: format!("unknown argument `{key}`"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_capture_pixels(rect: Rect, scale: f32) -> Result<(), RpcErr> {
+    let pixels = rect.width() as f64 * rect.height() as f64 * scale as f64 * scale as f64;
+    if pixels > MAX_CAPTURE_PIXELS {
+        return Err(RpcErr {
+            code: codes::INVALID_PARAMS,
+            message: format!(
+                "capture would be too large after scale ({pixels:.0} pixels > {MAX_CAPTURE_PIXELS:.0})"
+            ),
+        });
+    }
+    Ok(())
+}
 
 fn parse_rect_value(v: &Value) -> Result<Rect, RpcErr> {
     let obj = v.as_object().ok_or_else(|| RpcErr {
@@ -776,9 +836,7 @@ fn record_to_json(record: &CaptureRecord, history_root: Option<&Path>) -> Value 
 }
 
 fn history_png_path(root: &Path, record: &CaptureRecord) -> PathBuf {
-    root.join(record.captured_at.format("%Y").to_string())
-        .join(record.captured_at.format("%m").to_string())
-        .join(format!("{}.png", record.id))
+    root.join(readshot_core::FsHistoryStore::png_path(record))
 }
 
 fn capture_to_rpc(e: CaptureError) -> RpcErr {
@@ -1425,6 +1483,54 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("scale must be a number"));
+    }
+
+    #[tokio::test]
+    async fn non_object_tool_arguments_return_invalid_params() {
+        let s = server();
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"capture_region","arguments":"rect=0,0,64,64"}}"#,
+        )
+        .await;
+
+        assert_eq!(resp["error"]["code"], codes::INVALID_PARAMS);
+        assert!(resp["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("arguments must be an object"));
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_argument_returns_invalid_params() {
+        let s = server();
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"capture_region","arguments":{"rectangle":{"x":0,"y":0,"width":64,"height":64}}}}"#,
+        )
+        .await;
+
+        assert_eq!(resp["error"]["code"], codes::INVALID_PARAMS);
+        assert!(resp["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown argument `rectangle`"));
+    }
+
+    #[tokio::test]
+    async fn oversized_scaled_capture_returns_invalid_params() {
+        let s = server();
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"capture_region","arguments":{"rect":{"x":0,"y":0,"width":10000,"height":10000},"scale":2}}}"#,
+        )
+        .await;
+
+        assert_eq!(resp["error"]["code"], codes::INVALID_PARAMS);
+        assert!(resp["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("too large"));
     }
 
     #[tokio::test]

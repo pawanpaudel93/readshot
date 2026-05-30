@@ -36,7 +36,7 @@ use iced::widget::{button, column, container, responsive, row, scrollable, text,
 use iced::window;
 use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 
-use readshot_capture::{CaptureRequest, DisplayInfo};
+use readshot_capture::{display_local_bounds, CaptureRequest, DisplayInfo};
 use readshot_core::Preferences;
 use readshot_ui::{hotkey, SettingsMessage};
 
@@ -458,6 +458,31 @@ fn editor_window_settings(display_bounds: Option<(f32, f32, f32, f32)>) -> windo
         visible: true,
         ..Default::default()
     }
+}
+
+fn open_editor_window_replacing(
+    state: &mut App,
+    editor: crate::editor::EditorSession,
+    display_bounds: Option<(f32, f32, f32, f32)>,
+) -> Task<Message> {
+    let mut tasks: Vec<Task<Message>> = Vec::new();
+    if let Some(old_id) = state.editor.as_ref().and_then(|ed| ed.window_id) {
+        state.windows.forget(old_id);
+        tasks.push(window::close(old_id));
+    }
+    state.editor = Some(editor);
+    let (id, open_task) = window::open(editor_window_settings(display_bounds));
+    state.windows.register(id, WindowKind::Editor);
+    tasks.push(open_task.map(Message::EditorWindowReady));
+    Task::batch(tasks)
+}
+
+fn clear_pending_capture_state(state: &mut App) {
+    state.pending_intent = None;
+    state.pending_display_id = None;
+    state.pending_display_scale = None;
+    state.pending_display_bounds = None;
+    state.pending_hide_cursor = true;
 }
 
 /// Window settings for the persistent capture browser. Standard
@@ -1092,8 +1117,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // state. Returning users get the old tray-only behavior:
             // close the permission window and show a notification.
             if was_showing && !state.welcome.should_show() {
+                let pending_url = state.pending_url_after_permission.take();
                 if !was_onboarding_completed {
-                    return Task::none();
+                    return pending_url
+                        .map(|action| Task::done(Message::UrlActionReceived(action)))
+                        .unwrap_or_else(Task::none);
                 }
                 let welcome_ids: Vec<_> = state
                     .windows
@@ -1107,6 +1135,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 }
                 if !close_tasks.is_empty() {
                     notify_running_in_menu_bar(&state.preferences.capture_hotkey);
+                }
+                if let Some(action) = pending_url {
+                    close_tasks.push(Task::done(Message::UrlActionReceived(action)));
                 }
                 return Task::batch(close_tasks);
             }
@@ -1276,7 +1307,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
 
         Message::OpenOverlayRequested => {
-            if state.welcome.should_show() || state.capture_in_flight {
+            if state.welcome.should_show() || state.capture_in_flight || state.overlay_opening {
                 return Task::none();
             }
             // Don't stack overlays.
@@ -1287,6 +1318,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // actual window-open work in `OverlayDisplaysListed` so we
             // can spawn one transparent overlay per monitor.
             let coord = state.coordinator.clone();
+            state.overlay_opening = true;
             Task::perform(async move { coord.list_displays().await }, |result| {
                 Message::OverlayDisplaysListed(result.map_err(|e| e.to_string()))
             })
@@ -1332,14 +1364,30 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
 
         Message::OverlayDisplaysListed(Err(e)) => {
+            state.overlay_opening = false;
+            clear_pending_capture_state(state);
             state.last_capture_status =
                 Some(format!("Capture failed: could not list displays — {e}"));
-            Task::none()
+            if state.cli_interactive_output.is_some() {
+                Task::done(Message::CliInteractiveWritten(Err(format!(
+                    "could not list displays: {e}"
+                ))))
+            } else {
+                Task::none()
+            }
         }
         Message::OverlayDisplaysListed(Ok(displays)) => {
+            state.overlay_opening = false;
             if displays.is_empty() {
+                clear_pending_capture_state(state);
                 state.last_capture_status = Some("Capture failed: no displays detected.".into());
-                return Task::none();
+                return if state.cli_interactive_output.is_some() {
+                    Task::done(Message::CliInteractiveWritten(Err(
+                        "no displays detected".into()
+                    )))
+                } else {
+                    Task::none()
+                };
             }
             // Spawn one borderless transparent overlay per display,
             // positioned at that display's *global* logical origin.
@@ -1473,11 +1521,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
 
         Message::OverlayCancelled => {
             state.overlay_selections.clear();
-            state.pending_intent = None;
-            state.pending_display_id = None;
-            state.pending_display_scale = None;
-            state.pending_display_bounds = None;
-            state.pending_hide_cursor = true;
+            state.overlay_opening = false;
+            clear_pending_capture_state(state);
             if state.cli_interactive_output.is_some() {
                 state.cli_interactive_output = None;
                 return Task::batch(
@@ -1552,7 +1597,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     };
                     let intent_task = match intent {
                         crate::app::CaptureIntent::Editor => {
-                            state.editor = Some(match history_record {
+                            let editor = match history_record {
                                 Some(record) => {
                                     crate::editor::EditorSession::from_history_with_display_scale(
                                         image,
@@ -1564,11 +1609,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                                     image,
                                     display_scale,
                                 ),
-                            });
-                            let (id, open_task) =
-                                window::open(editor_window_settings(display_bounds));
-                            state.windows.register(id, WindowKind::Editor);
-                            open_task.map(Message::EditorWindowReady)
+                            };
+                            open_editor_window_replacing(state, editor, display_bounds)
                         }
                         crate::app::CaptureIntent::CopyToClipboard => {
                             Task::perform(copy_image_to_clipboard(image), |r| {
@@ -1758,6 +1800,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // probe the live-window map (e.g. `show_or_focus_welcome`)
             // don't try to focus a dead window.
             state.windows.forget(id);
+            state.overlay_displays.remove(&id);
             if state.history_window_id == Some(id) {
                 state.history_window_id = None;
                 state.history_records.clear();
@@ -1930,10 +1973,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::HistoryOpenInEditorReady(result) => match result {
             Ok((image, record)) => {
-                state.editor = Some(crate::editor::EditorSession::from_history(image, record));
-                let (id, open_task) = window::open(editor_window_settings(None));
-                state.windows.register(id, WindowKind::Editor);
-                open_task.map(Message::EditorWindowReady)
+                let editor = crate::editor::EditorSession::from_history(image, record);
+                open_editor_window_replacing(state, editor, None)
             }
             Err(e) => {
                 state.history_status = Some(format!("Open failed: {e}"));
@@ -2133,11 +2174,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 tracing::warn!(target: "readshot::cli", "interactive capture failed: {e}");
             }
             state.cli_interactive_output = None;
-            state.pending_intent = None;
-            state.pending_display_id = None;
-            state.pending_display_scale = None;
-            state.pending_display_bounds = None;
-            state.pending_hide_cursor = true;
+            state.overlay_opening = false;
+            clear_pending_capture_state(state);
             iced::exit()
         }
 
@@ -2294,10 +2332,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     let mut ed =
                         crate::editor::EditorSession::new_with_display_scale(image, display_scale);
                     ed.set_status(format!("Scrolling capture stitched into {w} × {h}px."));
-                    state.editor = Some(ed);
-                    let (id, open_task) = window::open(editor_window_settings(display_bounds));
-                    state.windows.register(id, WindowKind::Editor);
-                    open_task.map(Message::EditorWindowReady)
+                    open_editor_window_replacing(state, ed, display_bounds)
                 }
                 Err(e) => {
                     state.last_capture_status = Some(format!("Scroll capture failed: {e}"));
@@ -2825,6 +2860,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::UrlActionReceived(action) => match action {
             UrlAction::NewCapture => {
                 tracing::info!(target: "readshot::url", "readshot:// → opening overlay");
+                if state.welcome.should_show() {
+                    state.pending_url_after_permission = Some(UrlAction::NewCapture);
+                    return show_or_focus_welcome(state);
+                }
                 update(state, Message::OpenOverlayRequested)
             }
             UrlAction::Unknown(path) => {
@@ -4125,25 +4164,15 @@ async fn load_png_async(path: PathBuf) -> Result<image::RgbaImage, image::ImageE
     })
 }
 
-/// Resolve the absolute PNG path for a history record. The on-disk
-/// layout is `<root>/<YYYY>/<MM>/<uuid>.png`; we mirror that here so
-/// the browser can render thumbnails without round-tripping through
-/// the index.
 fn history_png_path(root: &std::path::Path, record: &readshot_core::CaptureRecord) -> PathBuf {
-    use chrono::Datelike;
-    root.join(format!("{:04}", record.captured_at.year()))
-        .join(format!("{:02}", record.captured_at.month()))
-        .join(format!("{}.png", record.id))
+    root.join(readshot_core::FsHistoryStore::png_path(record))
 }
 
 fn history_thumbnail_path(
     root: &std::path::Path,
     record: &readshot_core::CaptureRecord,
 ) -> PathBuf {
-    use chrono::Datelike;
-    root.join(format!("{:04}", record.captured_at.year()))
-        .join(format!("{:02}", record.captured_at.month()))
-        .join(format!("{}.thumb.png", record.id))
+    root.join(readshot_core::FsHistoryStore::thumbnail_path(record))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -6529,7 +6558,7 @@ async fn capture_primary_to_desktop(coord: CaptureCoordinator) -> Result<PathBuf
     let primary = pick_primary(&displays).ok_or(CaptureRunError::NoDisplays)?;
     let req = CaptureRequest {
         display_id: primary.id.clone(),
-        rect: primary.bounds,
+        rect: display_local_bounds(primary),
         scale: primary.scale,
         hide_cursor: true,
     };
@@ -8009,6 +8038,99 @@ mod tests {
             overlay_auto_confirm_intent(&app),
             Some(crate::app::CaptureIntent::CliInteractive)
         );
+    }
+
+    #[test]
+    fn open_overlay_sets_opening_guard_until_display_list_completes() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+
+        let _ = update(&mut app, Message::OpenOverlayRequested);
+
+        assert!(app.overlay_opening);
+
+        let _ = update(&mut app, Message::OverlayDisplaysListed(Ok(Vec::new())));
+
+        assert!(!app.overlay_opening);
+        assert_eq!(
+            app.last_capture_status.as_deref(),
+            Some("Capture failed: no displays detected.")
+        );
+    }
+
+    #[test]
+    fn overlay_display_list_error_clears_pending_capture_state() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.overlay_opening = true;
+        app.pending_intent = Some(crate::app::CaptureIntent::Editor);
+        app.pending_display_id = Some("display-a".to_string());
+        app.pending_display_scale = Some(2.0);
+        app.pending_display_bounds = Some((10.0, 20.0, 800.0, 600.0));
+        app.pending_hide_cursor = false;
+
+        let _ = update(
+            &mut app,
+            Message::OverlayDisplaysListed(Err("backend unavailable".into())),
+        );
+
+        assert!(!app.overlay_opening);
+        assert_eq!(app.pending_intent, None);
+        assert_eq!(app.pending_display_id, None);
+        assert_eq!(app.pending_display_scale, None);
+        assert_eq!(app.pending_display_bounds, None);
+        assert!(app.pending_hide_cursor);
+        assert!(app
+            .last_capture_status
+            .as_deref()
+            .unwrap()
+            .contains("backend unavailable"));
+    }
+
+    #[test]
+    fn url_capture_waits_for_permission_then_replays() {
+        let perms = Arc::new(FakePermissions::denied());
+        let mut app = build_app(perms.clone());
+
+        let _ = update(&mut app, Message::UrlActionReceived(UrlAction::NewCapture));
+
+        assert_eq!(
+            app.pending_url_after_permission,
+            Some(UrlAction::NewCapture)
+        );
+
+        perms.flip_to_granted();
+        let _ = update(&mut app, Message::PermissionTick);
+
+        assert_eq!(app.pending_url_after_permission, None);
+    }
+
+    #[test]
+    fn closing_overlay_window_removes_display_mapping() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = iced::window::Id::unique();
+        app.windows.register(id, WindowKind::Overlay);
+        app.overlay_displays
+            .insert(id, overlay_display("display-a"));
+
+        let _ = update(&mut app, Message::WindowClosed(id));
+
+        assert!(app.overlay_displays.is_empty());
+        assert!(app.windows.kind(id).is_none());
+    }
+
+    #[test]
+    fn opening_replacement_editor_forgets_previous_editor_window() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let old_id = iced::window::Id::unique();
+        let mut old = crate::editor::EditorSession::new(solid(16, 16));
+        old.window_id = Some(old_id);
+        app.windows.register(old_id, WindowKind::Editor);
+        app.editor = Some(old);
+
+        let new = crate::editor::EditorSession::new(solid(32, 32));
+        let _ = open_editor_window_replacing(&mut app, new, None);
+
+        assert!(app.windows.kind(old_id).is_none());
+        assert_eq!(app.editor.as_ref().unwrap().image_size(), (32, 32));
     }
 
     #[test]

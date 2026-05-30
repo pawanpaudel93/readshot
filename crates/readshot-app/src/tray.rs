@@ -58,7 +58,7 @@ struct TrayMenuItem {
 
 #[cfg(test)]
 fn menu_items(_hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<TrayMenuItem> {
-    vec![
+    let mut items = vec![
         TrayMenuItem {
             label: capture_menu_label().to_string(),
             enabled: true,
@@ -84,11 +84,16 @@ fn menu_items(_hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<
             enabled: true,
             action: Some(TrayAction::Settings),
         },
-        TrayMenuItem {
-            label: "Check for Updates…".to_string(),
-            enabled: true,
-            action: Some(TrayAction::CheckForUpdates),
-        },
+    ];
+
+    #[cfg(target_os = "macos")]
+    items.push(TrayMenuItem {
+        label: "Check for Updates…".to_string(),
+        enabled: true,
+        action: Some(TrayAction::CheckForUpdates),
+    });
+
+    items.extend([
         TrayMenuItem {
             label: String::new(),
             enabled: true,
@@ -99,7 +104,9 @@ fn menu_items(_hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<
             enabled: true,
             action: Some(TrayAction::Quit),
         },
-    ]
+    ]);
+
+    items
 }
 
 fn capture_menu_label() -> &'static str {
@@ -268,6 +275,7 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
         true,
         Some(Accelerator::new(Some(cmd_mod), Code::Comma)),
     );
+    #[cfg(target_os = "macos")]
     let item_check_updates = MenuItem::new("Check for Updates…", true, None);
     let item_quit = MenuItem::new("Quit", true, None);
 
@@ -280,6 +288,7 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
     );
     menu_ids.insert(item_history.id().clone(), TrayAction::History);
     menu_ids.insert(item_settings.id().clone(), TrayAction::Settings);
+    #[cfg(target_os = "macos")]
     menu_ids.insert(item_check_updates.id().clone(), TrayAction::CheckForUpdates);
     menu_ids.insert(item_quit.id().clone(), TrayAction::Quit);
 
@@ -289,10 +298,16 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
         &item_retake_last_region,
         &item_history,
         &item_settings,
-        &item_check_updates,
-        &PredefinedMenuItem::separator(),
-        &item_quit,
     ]) {
+        tracing::warn!(target: "readshot::tray", "menu build failed: {e}");
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    if let Err(e) = menu.append(&item_check_updates) {
+        tracing::warn!(target: "readshot::tray", "menu build failed: {e}");
+        return None;
+    }
+    if let Err(e) = menu.append_items(&[&PredefinedMenuItem::separator(), &item_quit]) {
         tracing::warn!(target: "readshot::tray", "menu build failed: {e}");
         return None;
     }
@@ -439,6 +454,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn menu_actions_match_supported_platform_features() {
+        let items = menu_items(None, false);
+        let actions: Vec<TrayAction> = items.iter().filter_map(|item| item.action).collect();
+
+        let mut expected = vec![
+            TrayAction::Capture,
+            TrayAction::ScrollCapture,
+            TrayAction::RetakeLastRegion,
+            TrayAction::History,
+            TrayAction::Settings,
+        ];
+        #[cfg(target_os = "macos")]
+        expected.push(TrayAction::CheckForUpdates);
+        expected.push(TrayAction::Quit);
+
+        assert_eq!(actions, expected);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn menu_contains_check_for_updates_before_quit() {
         let items = menu_items(None, false);
         let actions: Vec<TrayAction> = items.iter().filter_map(|item| item.action).collect();
@@ -457,6 +492,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn menu_contains_check_for_updates_after_settings() {
         let items = menu_items(None, false);

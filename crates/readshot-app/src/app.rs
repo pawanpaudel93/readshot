@@ -522,6 +522,10 @@ pub struct App {
     /// returned rect back into a `CaptureRequest` with the right
     /// scale.
     pub overlay_displays: HashMap<iced::window::Id, OverlayDisplay>,
+    /// True while display enumeration for a new overlay session is in
+    /// flight. This closes the race where two hotkey/tray clicks can both
+    /// enqueue `list_displays()` before any overlay window id exists.
+    pub overlay_opening: bool,
     /// Live overlay selections per display. Drives the floating
     /// action toolbar's position; populated by
     /// [`Message::OverlaySelectionChanged`] from the canvas.
@@ -557,6 +561,10 @@ pub struct App {
     /// Normal app captures hide it; CLI interactive can opt into
     /// including it with `--show-cursor`.
     pub pending_hide_cursor: bool,
+    /// URL action that arrived before Screen Recording permission was
+    /// granted. Replayed when the permission gate clears instead of
+    /// disappearing into an `OpenOverlayRequested` no-op.
+    pub pending_url_after_permission: Option<crate::url_scheme::UrlAction>,
     /// Output path for the hidden one-shot CLI interactive child
     /// process. When set, the overlay writes the selected image here
     /// and exits instead of opening app UI.
@@ -840,6 +848,7 @@ impl App {
             tray: None,
             editor: None,
             overlay_displays: HashMap::new(),
+            overlay_opening: false,
             overlay_selections: HashMap::new(),
             last_regions: HashMap::new(),
             last_region_display_id: None,
@@ -848,6 +857,7 @@ impl App {
             pending_display_scale: None,
             pending_display_bounds: None,
             pending_hide_cursor: true,
+            pending_url_after_permission: None,
             cli_interactive_output: None,
             pins: HashMap::new(),
             overlay_tick: 0,

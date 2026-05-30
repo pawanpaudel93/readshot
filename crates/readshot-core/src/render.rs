@@ -528,8 +528,8 @@ fn draw_numbered_pin(
 //  Premultiplied blend
 // ---------------------------------------------------------------------------
 
-/// Source-over blend `src * src_alpha * coverage` onto `dst[idx..idx + 4]`.
-/// Both are premultiplied RGBA; this is the standard porter-duff over.
+/// Source-over blend straight-RGBA `src` through glyph `coverage` onto
+/// `dst[idx..idx + 4]`, whose tiny-skia backing store is premultiplied.
 fn composite_premultiplied(dst: &mut [u8], idx: usize, src: [u8; 4], coverage: f32) {
     let cov = coverage.clamp(0.0, 1.0);
     let src_a = (src[3] as f32 / 255.0) * cov;
@@ -537,9 +537,9 @@ fn composite_premultiplied(dst: &mut [u8], idx: usize, src: [u8; 4], coverage: f
         return;
     }
     let inv_a = 1.0 - src_a;
-    let sr = (src[0] as f32) * cov;
-    let sg = (src[1] as f32) * cov;
-    let sb = (src[2] as f32) * cov;
+    let sr = (src[0] as f32) * src_a;
+    let sg = (src[1] as f32) * src_a;
+    let sb = (src[2] as f32) * src_a;
     let sa = src_a * 255.0;
 
     let dr = dst[idx] as f32;
@@ -564,6 +564,17 @@ mod tests {
             *px = ImgRgba([rgb[0], rgb[1], rgb[2], 255]);
         }
         img
+    }
+
+    #[test]
+    fn text_blend_premultiplies_source_alpha() {
+        let mut dst = [0u8, 0, 0, 0];
+        composite_premultiplied(&mut dst, 0, [200, 100, 50, 128], 1.0);
+
+        assert_eq!(dst[3], 128);
+        assert!(dst[0] <= dst[3]);
+        assert!(dst[1] <= dst[3]);
+        assert!(dst[2] <= dst[3]);
     }
 
     #[test]

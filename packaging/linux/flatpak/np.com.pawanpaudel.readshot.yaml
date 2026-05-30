@@ -39,8 +39,8 @@ modules:
   - name: readshot
     buildsystem: simple
     build-commands:
-      - cargo --offline fetch --manifest-path Cargo.toml --verbose
-      - cargo --offline build --release --bin readshot
+      - cargo fetch --manifest-path Cargo.toml --verbose
+      - cargo build --release --bin readshot
       - install -Dm755 target/release/readshot /app/bin/readshot
       - install -Dm644 packaging/linux/readshot.desktop /app/share/applications/np.com.pawanpaudel.readshot.desktop
       - install -Dm644 packaging/linux/readshot.png /app/share/icons/hicolor/512x512/apps/np.com.pawanpaudel.readshot.png

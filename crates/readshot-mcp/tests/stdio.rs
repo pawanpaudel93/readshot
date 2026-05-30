@@ -80,7 +80,19 @@ fn stdio_server_handles_core_json_rpc_methods() {
 
 #[test]
 fn check_prints_json_diagnostics_without_stderr() {
-    let output = readshot_mcp().arg("--check").output().unwrap();
+    let home = std::env::temp_dir().join(format!(
+        "readshot-mcp-check-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&home).unwrap();
+    let output = readshot_mcp()
+        .arg("--check")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join(".local/share"))
+        .env("XDG_CONFIG_HOME", home.join(".config"))
+        .output()
+        .unwrap();
 
     assert!(output.status.success());
     assert!(

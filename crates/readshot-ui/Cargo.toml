@@ -12,13 +12,8 @@ description = "Iced-based user interface for Readshot — overlay, editor, setti
 global-hotkey = { workspace = true }
 iced = { workspace = true }
 image = { workspace = true }
-muda = { workspace = true }
-readshot-capture = { path = "../readshot-capture" }
 readshot-core = { path = "../readshot-core" }
-readshot-ocr = { path = "../readshot-ocr" }
 thiserror = { workspace = true }
-tiny-skia = { workspace = true }
-tray-icon = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

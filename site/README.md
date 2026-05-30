@@ -22,7 +22,7 @@ Shared assets:
 `/install.sh` should return a temporary redirect to:
 
 ```text
-https://raw.githubusercontent.com/pawanpaudel93/readshot/main/install.sh
+https://github.com/pawanpaudel93/readshot/releases/latest/download/install.sh
 ```
 
 Included configs:

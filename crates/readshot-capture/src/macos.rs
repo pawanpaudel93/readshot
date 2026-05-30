@@ -30,7 +30,10 @@ use screencapturekit::shareable_content::{SCDisplay, SCShareableContent, SCWindo
 use screencapturekit::stream::configuration::SCStreamConfiguration;
 use screencapturekit::stream::content_filter::SCContentFilter;
 
-use crate::{CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest, WindowId, WindowInfo};
+use crate::{
+    rect_relative_to_display, CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest,
+    WindowId, WindowInfo,
+};
 
 /// Production macOS Capturer.
 pub struct ScreenCaptureKitCapturer;
@@ -93,7 +96,13 @@ impl Capturer for ScreenCaptureKitCapturer {
         })?;
         let (scale_x, scale_y) =
             capture_scales_for_image(display.display_id(), width, height, req.scale);
-        Ok(crop_rgba(full, req.rect, scale_x, scale_y))
+        let display_bounds = display_bounds_from_cg(
+            display.display_id(),
+            display.width() as f32,
+            display.height() as f32,
+        );
+        let rect = rect_relative_to_display(req.rect, display_bounds);
+        crop_rgba(full, rect, scale_x, scale_y)
     }
 
     async fn list_windows(&self) -> Result<Vec<WindowInfo>, CaptureError> {
@@ -158,14 +167,24 @@ impl Capturer for ScreenCaptureKitCapturer {
     }
 }
 
-fn crop_rgba(full: RgbaImage, rect_logical: Rect, scale_x: f32, scale_y: f32) -> RgbaImage {
+fn crop_rgba(
+    full: RgbaImage,
+    rect_logical: Rect,
+    scale_x: f32,
+    scale_y: f32,
+) -> Result<RgbaImage, CaptureError> {
     let x0 = ((rect_logical.x() * scale_x).round().max(0.0) as u32).min(full.width());
     let y0 = ((rect_logical.y() * scale_y).round().max(0.0) as u32).min(full.height());
     let w_target = (rect_logical.width() * scale_x).round().max(1.0) as u32;
     let h_target = (rect_logical.height() * scale_y).round().max(1.0) as u32;
     let w = w_target.min(full.width().saturating_sub(x0));
     let h = h_target.min(full.height().saturating_sub(y0));
-    image::imageops::crop_imm(&full, x0, y0, w, h).to_image()
+    if w == 0 || h == 0 {
+        return Err(CaptureError::InvalidRegion(
+            "region is outside the captured display bounds".to_string(),
+        ));
+    }
+    Ok(image::imageops::crop_imm(&full, x0, y0, w, h).to_image())
 }
 
 fn capture_scales_for_image(
@@ -248,17 +267,10 @@ fn display_info_from_sc(display: SCDisplay, primary_id: u32) -> DisplayInfo {
     // origin so it can position itself across a multi-monitor setup,
     // and the capture needs a real scale so HiDPI displays render at
     // sharp native resolution.
-    use core_graphics::display::CGDisplay;
-    let cg = CGDisplay::new(id);
-    let cg_bounds = cg.bounds();
-    let logical_w = (cg_bounds.size.width as f32).max(1.0);
-    let logical_h = (cg_bounds.size.height as f32).max(1.0);
-    let origin_x = cg_bounds.origin.x as f32;
-    let origin_y = cg_bounds.origin.y as f32;
+    let bounds = display_bounds_from_cg(id, display.width() as f32, display.height() as f32);
+    let logical_w = bounds.width();
     let (native_w, _) = native_capture_size(id, display.width(), display.height());
     let scale = display_scale_from_values(logical_w, native_w);
-    let bounds = Rect::from_xywh(origin_x, origin_y, logical_w, logical_h)
-        .unwrap_or_else(|| Rect::from_xywh(0.0, 0.0, 1.0, 1.0).unwrap());
     DisplayInfo {
         id: id.to_string(),
         bounds,
@@ -266,6 +278,19 @@ fn display_info_from_sc(display: SCDisplay, primary_id: u32) -> DisplayInfo {
         name: format!("Display {id}"),
         is_primary: id == primary_id,
     }
+}
+
+fn display_bounds_from_cg(id: u32, fallback_w: f32, fallback_h: f32) -> Rect {
+    use core_graphics::display::CGDisplay;
+    let cg = CGDisplay::new(id);
+    let cg_bounds = cg.bounds();
+    let logical_w = (cg_bounds.size.width as f32).max(1.0);
+    let logical_h = (cg_bounds.size.height as f32).max(1.0);
+    let origin_x = cg_bounds.origin.x as f32;
+    let origin_y = cg_bounds.origin.y as f32;
+    Rect::from_xywh(origin_x, origin_y, logical_w, logical_h).unwrap_or_else(|| {
+        Rect::from_xywh(0.0, 0.0, fallback_w.max(1.0), fallback_h.max(1.0)).unwrap()
+    })
 }
 
 fn display_scale_from_values(logical_w: f32, native_w: u32) -> f32 {
@@ -360,7 +385,8 @@ mod tests {
             Rect::from_xywh(10.0, 20.0, 30.0, 40.0).unwrap(),
             2.0,
             2.0,
-        );
+        )
+        .unwrap();
 
         assert_eq!(cropped.width(), 60);
         assert_eq!(cropped.height(), 80);
@@ -374,7 +400,8 @@ mod tests {
             Rect::from_xywh(40.0, 40.0, 20.0, 20.0).unwrap(),
             2.0,
             2.0,
-        );
+        )
+        .unwrap();
 
         assert_eq!(cropped.width(), 20);
         assert_eq!(cropped.height(), 20);
@@ -382,15 +409,15 @@ mod tests {
 
     #[test]
     fn crop_rgba_handles_edge_rounding_outside_bounds() {
-        let cropped = crop_rgba(
+        let err = crop_rgba(
             solid(100, 100),
             Rect::from_xywh(51.0, 51.0, 10.0, 10.0).unwrap(),
             2.0,
             2.0,
-        );
+        )
+        .unwrap_err();
 
-        assert_eq!(cropped.width(), 0);
-        assert_eq!(cropped.height(), 0);
+        assert!(matches!(err, CaptureError::InvalidRegion(_)));
     }
 
     #[test]
@@ -440,7 +467,8 @@ mod tests {
             Rect::from_xywh(10.0, 20.0, 30.0, 40.0).unwrap(),
             1.0,
             1.5,
-        );
+        )
+        .unwrap();
 
         assert_eq!(cropped.width(), 30);
         assert_eq!(cropped.height(), 60);

@@ -126,6 +126,41 @@ pub struct DisplayInfo {
     pub is_primary: bool,
 }
 
+/// Full-display capture rect in the display-local coordinate space used by
+/// [`CaptureRequest`].
+pub fn display_local_bounds(display: &DisplayInfo) -> Rect {
+    Rect::from_xywh(0.0, 0.0, display.bounds.width(), display.bounds.height())
+        .expect("DisplayInfo bounds have positive dimensions")
+}
+
+/// Accept both the documented display-local rect contract and the older
+/// de-facto global-bounds rect used by some call sites. Backends call this
+/// at the edge so a global full-display rect from a listed `DisplayInfo`
+/// still crops from `(0, 0)` on the selected monitor instead of from the
+/// monitor's global origin inside a single-display image.
+pub fn rect_relative_to_display(rect: Rect, display_bounds: Rect) -> Rect {
+    let origin_is_global = display_bounds.x() != 0.0 || display_bounds.y() != 0.0;
+    let rect_fits_display_local = rect.x() >= 0.0
+        && rect.y() >= 0.0
+        && rect.right() <= display_bounds.width()
+        && rect.bottom() <= display_bounds.height();
+    let rect_fits_display_global = rect.x() >= display_bounds.x()
+        && rect.y() >= display_bounds.y()
+        && rect.right() <= display_bounds.right()
+        && rect.bottom() <= display_bounds.bottom();
+    if origin_is_global && !rect_fits_display_local && rect_fits_display_global {
+        Rect::from_xywh(
+            rect.x() - display_bounds.x(),
+            rect.y() - display_bounds.y(),
+            rect.width(),
+            rect.height(),
+        )
+        .unwrap_or(rect)
+    } else {
+        rect
+    }
+}
+
 /// The single trait every Readshot capture backend implements.
 ///
 /// `Send + Sync` because the capture coordinator (Task 16) holds a
@@ -227,6 +262,52 @@ mod tests {
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
         Rect::from_xywh(x, y, w, h).expect("test rect must be valid")
+    }
+
+    #[test]
+    fn display_local_bounds_starts_at_zero() {
+        let display = DisplayInfo {
+            id: "side".into(),
+            bounds: rect(1440.0, -120.0, 1920.0, 1080.0),
+            scale: 2.0,
+            name: "Side".into(),
+            is_primary: false,
+        };
+
+        assert_eq!(
+            display_local_bounds(&display),
+            rect(0.0, 0.0, 1920.0, 1080.0)
+        );
+    }
+
+    #[test]
+    fn rect_relative_to_display_accepts_legacy_global_rect() {
+        let local = rect_relative_to_display(
+            rect(1440.0, 120.0, 1920.0, 1080.0),
+            rect(1440.0, 120.0, 1920.0, 1080.0),
+        );
+
+        assert_eq!(local, rect(0.0, 0.0, 1920.0, 1080.0));
+    }
+
+    #[test]
+    fn rect_relative_to_display_keeps_display_local_rect() {
+        let local = rect_relative_to_display(
+            rect(10.0, 20.0, 200.0, 100.0),
+            rect(1440.0, 120.0, 1920.0, 1080.0),
+        );
+
+        assert_eq!(local, rect(10.0, 20.0, 200.0, 100.0));
+    }
+
+    #[test]
+    fn rect_relative_to_display_prefers_ambiguous_local_rect() {
+        let local = rect_relative_to_display(
+            rect(1500.0, 140.0, 200.0, 100.0),
+            rect(1440.0, 120.0, 1920.0, 1080.0),
+        );
+
+        assert_eq!(local, rect(1500.0, 140.0, 200.0, 100.0));
     }
 
     #[test]

@@ -23,8 +23,12 @@ jobs:
       - run: cargo fmt --all -- --check
 
   test:
-    name: test (macos-14)
-    runs-on: macos-14
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +37,20 @@ jobs:
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libxcb1-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libdbus-1-dev \
+            libfontconfig1-dev \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2

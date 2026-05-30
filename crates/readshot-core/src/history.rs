@@ -175,6 +175,14 @@ impl FsHistoryStore {
         (png, json)
     }
 
+    pub fn png_path(record: &CaptureRecord) -> PathBuf {
+        Self::record_paths(record).0
+    }
+
+    pub fn json_path(record: &CaptureRecord) -> PathBuf {
+        Self::record_paths(record).1
+    }
+
     pub fn thumbnail_path(record: &CaptureRecord) -> PathBuf {
         let year = record.captured_at.year();
         let month = record.captured_at.month();
@@ -236,6 +244,7 @@ impl HistoryStore for FsHistoryStore {
         write_atomic(&abs_json, json_content.as_bytes())?;
 
         let mut index = self.read_index()?;
+        index.records.retain(|entry| entry.id != record.id);
         index.records.push(HistoryIndexEntry {
             id: record.id,
             captured_at: record.captured_at,
@@ -428,6 +437,19 @@ mod tests {
         let (_dir, s) = store();
         let r = record_at(Utc::now());
         s.save(&r, &fake_png()).unwrap();
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, r.id);
+    }
+
+    #[test]
+    fn saving_same_record_twice_replaces_index_entry() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+
+        s.save(&r, &fake_png()).unwrap();
+        s.save(&r, &fake_png()).unwrap();
+
         let list = s.list().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, r.id);
