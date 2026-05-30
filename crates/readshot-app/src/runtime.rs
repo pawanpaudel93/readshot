@@ -7540,7 +7540,7 @@ fn relaunch_command_for_bundle(bundle: &Path) -> RelaunchCommand {
         program: "/bin/sh",
         args: vec![
             "-c".into(),
-            "sleep 0.35; exec /usr/bin/open \"$1\"".into(),
+            "sleep 0.35; exec /usr/bin/open -n \"$1\"".into(),
             "readshot-relaunch".into(),
             bundle.to_string_lossy().to_string(),
         ],
@@ -8477,13 +8477,13 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn relaunch_command_waits_for_current_process_to_exit() {
+    fn relaunch_command_waits_then_forces_a_fresh_instance() {
         let command =
             relaunch_command_for_bundle(std::path::Path::new("/Applications/Readshot.app"));
 
         assert_eq!(command.program, "/bin/sh");
         assert!(command.args[1].contains("sleep 0.35"));
-        assert!(command.args[1].contains("/usr/bin/open \"$1\""));
+        assert!(command.args[1].contains("/usr/bin/open -n \"$1\""));
         assert_eq!(command.args[3], "/Applications/Readshot.app");
     }
 
