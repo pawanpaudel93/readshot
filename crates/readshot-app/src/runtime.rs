@@ -710,6 +710,61 @@ fn overlay_window_settings_for(display: &readshot_capture::DisplayInfo) -> windo
     }
 }
 
+fn configure_overlay_window_after_open(id: window::Id) -> Task<Message> {
+    #[cfg(target_os = "macos")]
+    {
+        window::run(id, |window| {
+            if let Err(e) = set_macos_capture_overlay_level(window) {
+                tracing::warn!(
+                    target: "readshot::overlay",
+                    "could not raise capture overlay above macOS system UI: {e}"
+                );
+            }
+        })
+        .discard()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = id;
+        Task::none()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_macos_capture_overlay_level<W>(window: &W) -> Result<(), String>
+where
+    W: iced::window::raw_window_handle::HasWindowHandle + ?Sized,
+{
+    use iced::window::raw_window_handle::RawWindowHandle;
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    let handle = window.window_handle().map_err(|e| e.to_string())?;
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return Err("window is not an AppKit window".to_string());
+    };
+
+    // SAFETY: `window::run` gives us the live iced/winit window on the
+    // event-loop thread. The raw handle guarantees `ns_view` points to
+    // a valid NSView for the lifetime of the callback; asking the view
+    // for its owning NSWindow and setting its level is an AppKit main
+    // thread operation. `CGShieldingWindowLevel()+1` is the same class
+    // of level winit uses for exclusive fullscreen, high enough to sit
+    // above the menu bar and Dock during region selection.
+    unsafe {
+        let ns_view = handle.ns_view.as_ptr().cast::<AnyObject>();
+        let ns_window: *mut AnyObject = msg_send![ns_view, window];
+        if ns_window.is_null() {
+            return Err("NSView has no owning NSWindow".to_string());
+        }
+        let level = core_graphics::display::CGShieldingWindowLevel() as isize + 1;
+        let _: () = msg_send![ns_window, setLevel: level];
+    }
+
+    Ok(())
+}
+
 /// Per-window title.
 pub fn title(state: &App, id: window::Id) -> String {
     match state.windows.kind(id) {
@@ -1318,7 +1373,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::batch(tasks)
         }
 
-        Message::OverlayWindowReady(_id) => Task::none(),
+        Message::OverlayWindowReady(id) => configure_overlay_window_after_open(id),
 
         Message::OverlaySelected {
             display_id,
