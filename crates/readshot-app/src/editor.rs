@@ -18,6 +18,45 @@ use iced::Rectangle;
 use readshot_core::{Annotation, CaptureRecord, PointLike};
 use readshot_ui::editor::EditorState as Model;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EditorFrameStyle {
+    #[default]
+    None,
+    Soft,
+    Light,
+    Dark,
+    Minimal,
+    Transparent,
+}
+
+impl EditorFrameStyle {
+    pub const ALL: [Self; 6] = [
+        Self::None,
+        Self::Soft,
+        Self::Light,
+        Self::Dark,
+        Self::Minimal,
+        Self::Transparent,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "No Frame",
+            Self::Soft => "Soft",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+            Self::Minimal => "Minimal",
+            Self::Transparent => "Transparent",
+        }
+    }
+}
+
+impl std::fmt::Display for EditorFrameStyle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 /// One open editor window, plus the iced-side state that doesn't
 /// belong inside the pure model.
 pub struct EditorSession {
@@ -80,6 +119,9 @@ pub struct EditorSession {
     /// annotation sizing. Release commits the preview as one undoable
     /// edit.
     pub width_drag_baseline: Option<Vec<Annotation>>,
+    /// Optional presentation frame applied to image outputs from this
+    /// editor window. `No Frame` keeps Save / Copy / Pin pixel-exact.
+    pub frame_style: EditorFrameStyle,
 }
 
 /// How long a "Click Discard again to confirm" prompt stays armed
@@ -266,6 +308,7 @@ impl EditorSession {
             status_set_at: None,
             move_drag: None,
             width_drag_baseline: None,
+            frame_style: EditorFrameStyle::None,
         }
     }
 
@@ -296,6 +339,7 @@ impl EditorSession {
             status_set_at: None,
             move_drag: None,
             width_drag_baseline: None,
+            frame_style: EditorFrameStyle::None,
         }
     }
 

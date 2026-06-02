@@ -32,14 +32,17 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-use iced::widget::{button, column, container, responsive, row, scrollable, text, Space};
+use iced::widget::{
+    button, column, container, pick_list, responsive, row, scrollable, text, Space,
+};
 use iced::window;
-use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
+use iced::{Alignment, Color, Element, Length, Shadow, Subscription, Task, Theme, Vector};
 
 use readshot_capture::{display_local_bounds, CaptureRequest, DisplayInfo};
 use readshot_core::Preferences;
 use readshot_ui::{hotkey, SettingsMessage};
 
+use crate::editor::{EditorFrameStyle, EditorSession};
 use crate::url_scheme::UrlAction;
 
 /// Initial URL action set from `main.rs` before `iced::daemon` starts.
@@ -2355,7 +2358,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             };
             ed.busy = true;
             ed.set_status("Choose a save location…");
-            let img = ed.model.flatten();
+            let img = editor_output_image(ed);
             let seed = preferred_save_seed_dir(&state.preferences, &state.last_save_dir);
             let template = state.preferences.filename_template.clone();
             Task::perform(save_image_via_picker(img, seed, template), |r| {
@@ -2387,8 +2390,15 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 return Task::none();
             };
             ed.busy = true;
-            ed.set_status("Copying…");
-            let img = ed.model.flatten();
+            if ed.frame_style == EditorFrameStyle::None {
+                ed.set_status("Copying…");
+            } else {
+                ed.set_status(format!(
+                    "Copying image with {} frame…",
+                    ed.frame_style.label()
+                ));
+            }
+            let img = editor_output_image(ed);
             Task::perform(copy_image_to_clipboard(img), |r| {
                 Message::EditorCopyImageDone(r.map_err(|e| e.to_string()))
             })
@@ -2404,23 +2414,12 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
 
-        Message::EditorCopyFramedRequested => {
-            let Some(ed) = state.editor.as_mut() else {
-                return Task::none();
-            };
-            ed.busy = true;
-            ed.set_status("Copying framed image…");
-            let (base, annotations) = ed.model.render_snapshot();
-            Task::perform(copy_framed_image_to_clipboard(base, annotations), |r| {
-                Message::EditorCopyFramedDone(r.map_err(|e| e.to_string()))
-            })
-        }
-        Message::EditorCopyFramedDone(result) => {
+        Message::EditorFrameStyleChanged(style) => {
             if let Some(ed) = state.editor.as_mut() {
-                ed.busy = false;
-                ed.set_status(match result {
-                    Ok(()) => "Copied framed image to clipboard.".into(),
-                    Err(e) => format!("Copy framed failed: {e}"),
+                ed.frame_style = style;
+                ed.set_status(match style {
+                    EditorFrameStyle::None => "Frame removed.".into(),
+                    _ => format!("Frame set to {}.", style.label()),
                 });
             }
             Task::none()
@@ -2791,7 +2790,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
-            let img = ed.model.flatten();
+            let img = editor_output_image(ed);
             let size = (img.width(), img.height());
             let handle = iced::widget::image::Handle::from_rgba(
                 img.width(),
@@ -4446,6 +4445,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let image_handle = ed.image_handle.clone();
     let (image_w, image_h) = ed.effective_image_size();
     let image_offset = ed.crop_offset();
+    let frame_style = ed.frame_style;
     let zoom = ed.zoom;
     let display_scale = ed.display_scale;
     let next_pin_number = ed.next_pin_number;
@@ -4456,22 +4456,28 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         let scale = zoom.explicit_scale().unwrap_or(fit_scale);
         let displayed_w = (iw * scale).max(1.0);
         let displayed_h = (ih * scale).max(1.0);
-        let content_w = displayed_w.max(available.width);
-        let content_h = displayed_h.max(available.height);
+        let frame_preset =
+            (frame_style != EditorFrameStyle::None).then(|| framed_image_preset(frame_style));
+        let frame_pad = frame_preset
+            .map(|preset| preset.pad as f32 * scale)
+            .unwrap_or(0.0);
+        let output_w = displayed_w + frame_pad * 2.0;
+        let output_h = displayed_h + frame_pad * 2.0;
+        let content_w = output_w.max(available.width);
+        let content_h = output_h.max(available.height);
 
         let filter = editor_image_filter(scale, display_scale);
 
-        let image_layer = container(
+        let image_layer: Element<'_, Message> = container(
             iced::widget::image(image_handle.clone())
                 .width(Length::Fixed(displayed_w))
                 .height(Length::Fixed(displayed_h))
                 .content_fit(iced::ContentFit::Contain)
                 .filter_method(filter),
         )
-        .width(Length::Fixed(content_w))
-        .height(Length::Fixed(content_h))
-        .center_x(Length::Fill)
-        .center_y(Length::Fill);
+        .width(Length::Fixed(displayed_w))
+        .height(Length::Fixed(displayed_h))
+        .into();
 
         let canvas_program = EditorCanvas {
             active_tool,
@@ -4491,17 +4497,51 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             },
         };
         let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
-            .width(Length::Fixed(content_w))
-            .height(Length::Fixed(content_h))
+            .width(Length::Fixed(displayed_w))
+            .height(Length::Fixed(displayed_h))
             .into();
         let canvas: Element<'_, Message> = canvas.map(Message::EditorCanvas);
         let canvas_layer = container(canvas)
-            .width(Length::Fixed(content_w))
-            .height(Length::Fixed(content_h));
+            .width(Length::Fixed(displayed_w))
+            .height(Length::Fixed(displayed_h));
 
-        let content = container(stack![image_layer, canvas_layer])
+        let editable_stack: Element<'_, Message> = container(stack![image_layer, canvas_layer])
+            .width(Length::Fixed(displayed_w))
+            .height(Length::Fixed(displayed_h))
+            .clip(true)
+            .style(move |_theme: &Theme| {
+                if let Some(preset) = frame_preset {
+                    container::Style {
+                        background: preset.mat.map(|rgba| rgba_color(rgba).into()),
+                        border: iced::Border {
+                            radius: (preset.radius as f32 * scale).into(),
+                            color: preset.border.map(rgba_color).unwrap_or(Color::TRANSPARENT),
+                            width: if preset.border.is_some() { 1.0 } else { 0.0 },
+                        },
+                        ..Default::default()
+                    }
+                } else {
+                    container::Style::default()
+                }
+            })
+            .into();
+
+        let preview_content: Element<'_, Message> = if let Some(preset) = frame_preset {
+            container(editable_stack)
+                .padding(frame_pad)
+                .width(Length::Fixed(output_w))
+                .height(Length::Fixed(output_h))
+                .style(move |_theme: &Theme| frame_preview_container_style(preset, scale))
+                .into()
+        } else {
+            editable_stack
+        };
+
+        let content = container(preview_content)
             .width(Length::Fixed(content_w))
-            .height(Length::Fixed(content_h));
+            .height(Length::Fixed(content_h))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill);
 
         let zoom_row = row![
             text("Zoom")
@@ -4567,6 +4607,61 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             .align_x(Alignment::Start)
             .align_y(Alignment::End);
 
+        let frame_picker: Element<'_, Message> = if busy {
+            container(
+                text(frame_style.label())
+                    .size(10)
+                    .color(Color::from_rgba(1.0, 1.0, 1.0, 0.62)),
+            )
+            .width(Length::Fixed(102.0))
+            .padding([4, 6])
+            .style(|_| iced::widget::container::Style {
+                background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.06).into()),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+                    width: 1.0,
+                },
+                ..Default::default()
+            })
+            .into()
+        } else {
+            pick_list(
+                &EditorFrameStyle::ALL[..],
+                Some(frame_style),
+                Message::EditorFrameStyleChanged,
+            )
+            .text_size(10)
+            .width(Length::Fixed(102.0))
+            .into()
+        };
+        let frame_controls = container(
+            row![
+                text("Frame:")
+                    .size(10)
+                    .color(Color::from_rgba(1.0, 1.0, 1.0, 0.48)),
+                frame_picker
+            ]
+            .spacing(4)
+            .align_y(Alignment::Center),
+        )
+        .padding([2, 4])
+        .style(|_theme: &Theme| container::Style {
+            background: Some(Color::from_rgba(0.02, 0.025, 0.025, 0.66).into()),
+            border: iced::Border {
+                color: accent(0.16),
+                width: 1.0,
+                radius: 7.0.into(),
+            },
+            ..Default::default()
+        });
+        let frame_layer = container(frame_controls)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(8)
+            .align_x(Alignment::End)
+            .align_y(Alignment::Start);
+
         let scroll_layer = scrollable(content)
             .direction(iced::widget::scrollable::Direction::Both {
                 vertical: slim_scrollbar(),
@@ -4575,7 +4670,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             .width(Length::Fill)
             .height(Length::Fill);
 
-        stack![scroll_layer, zoom_layer].into()
+        stack![scroll_layer, zoom_layer, frame_layer].into()
     })
     .width(Length::Fill)
     .height(Length::Fill);
@@ -4729,21 +4824,14 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             Message::EditorCopyImageRequested,
             ActionKind::Secondary,
             busy,
-            "Copy the annotated image exactly as shown.",
-        );
-        let copy_framed = editor_action_button(
-            "Copy Framed",
-            Message::EditorCopyFramedRequested,
-            ActionKind::Secondary,
-            busy,
-            "Copy a share-ready version with margin, rounded corners, and shadow.",
+            "Copy the annotated image using the selected frame option.",
         );
         let save = editor_action_button(
             "Save",
             Message::EditorSaveRequested,
             ActionKind::Primary,
             busy,
-            "Save the annotated image as a PNG file.",
+            "Save the annotated image using the selected frame option.",
         );
 
         match layout {
@@ -4752,10 +4840,9 @@ fn editor_view(state: &App) -> Element<'_, Message> {
                 row![
                     discard,
                     IcedSpace::new().width(Length::Fixed(8.0)),
-                    pin,
                     copy_text,
                     copy_image,
-                    copy_framed,
+                    pin,
                     save,
                 ]
                 .spacing(6)
@@ -4766,7 +4853,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             .into(),
             EditorBottomLayout::Stacked => column![
                 status_area,
-                row![discard, pin, copy_text, copy_image, copy_framed, save]
+                row![discard, copy_text, copy_image, pin, save]
                     .spacing(6)
                     .align_y(Alignment::Center)
             ]
@@ -4777,7 +4864,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
                 row![discard, pin, save]
                     .spacing(6)
                     .align_y(Alignment::Center),
-                row![copy_text, copy_image, copy_framed]
+                row![copy_text, copy_image]
                     .spacing(6)
                     .align_y(Alignment::Center),
             ]
@@ -7083,49 +7170,168 @@ fn default_save_filename(template: &str, when: chrono::DateTime<chrono::Utc>) ->
     filename
 }
 
-fn share_framed_image(img: &image::RgbaImage) -> image::RgbaImage {
-    const PAD: u32 = 72;
-    const RADIUS: u32 = 18;
-    const SHADOW_OFFSET: i64 = 18;
-    const SHADOW_LAYERS: u32 = 8;
-    let out_w = img.width().saturating_add(PAD * 2).max(1);
-    let out_h = img.height().saturating_add(PAD * 2).max(1);
-    let mut out = image::RgbaImage::from_pixel(out_w, out_h, image::Rgba([229, 234, 240, 255]));
+fn editor_output_image(ed: &mut EditorSession) -> image::RgbaImage {
+    let img = ed.model.flatten();
+    match ed.frame_style {
+        EditorFrameStyle::None => img,
+        style => share_framed_image(&img, style),
+    }
+}
 
-    for layer in (1..=SHADOW_LAYERS).rev() {
-        let spread = layer * 3;
-        let alpha = (30 / layer).max(3) as u8;
-        draw_rounded_rect(
-            &mut out,
-            PAD as i64 + SHADOW_OFFSET - spread as i64,
-            PAD as i64 + SHADOW_OFFSET - spread as i64,
-            img.width().saturating_add(spread * 2),
-            img.height().saturating_add(spread * 2),
-            RADIUS.saturating_add(spread),
-            [15, 23, 42, alpha],
-        );
+#[derive(Clone, Copy)]
+struct FramedImagePreset {
+    pad: u32,
+    radius: u32,
+    background: [u8; 4],
+    mat: Option<[u8; 4]>,
+    border: Option<[u8; 4]>,
+    shadow: Option<FrameShadow>,
+}
+
+#[derive(Clone, Copy)]
+struct FrameShadow {
+    color: [u8; 3],
+    offset: i64,
+    layers: u32,
+    alpha: u8,
+}
+
+fn rgba_color(rgba: [u8; 4]) -> Color {
+    Color::from_rgba8(rgba[0], rgba[1], rgba[2], rgba[3] as f32 / 255.0)
+}
+
+fn rgb_shadow_color(rgb: [u8; 3], alpha: u8) -> Color {
+    Color::from_rgba8(rgb[0], rgb[1], rgb[2], alpha as f32 / 255.0)
+}
+
+fn frame_preview_container_style(preset: FramedImagePreset, scale: f32) -> container::Style {
+    let shadow = preset.shadow.map_or_else(Shadow::default, |shadow| Shadow {
+        color: rgb_shadow_color(shadow.color, shadow.alpha),
+        offset: Vector::new(shadow.offset as f32 * scale, shadow.offset as f32 * scale),
+        blur_radius: shadow.layers as f32 * 5.0 * scale,
+    });
+    container::Style {
+        background: Some(rgba_color(preset.background).into()),
+        border: iced::Border {
+            radius: ((preset.radius + preset.pad / 3) as f32 * scale).into(),
+            ..Default::default()
+        },
+        shadow,
+        ..Default::default()
+    }
+}
+
+fn share_framed_image(img: &image::RgbaImage, style: EditorFrameStyle) -> image::RgbaImage {
+    if style == EditorFrameStyle::None {
+        return img.clone();
     }
 
-    draw_rounded_rect(
-        &mut out,
-        PAD as i64 - 1,
-        PAD as i64 - 1,
-        img.width().saturating_add(2),
-        img.height().saturating_add(2),
-        RADIUS + 1,
-        [255, 255, 255, 255],
-    );
-    overlay_rounded_image(&mut out, img, PAD, PAD, RADIUS);
-    draw_rounded_stroke(
-        &mut out,
-        PAD as i64 - 1,
-        PAD as i64 - 1,
-        img.width().saturating_add(2),
-        img.height().saturating_add(2),
-        RADIUS + 1,
-        [148, 163, 184, 180],
-    );
+    let preset = framed_image_preset(style);
+    let out_w = img.width().saturating_add(preset.pad * 2).max(1);
+    let out_h = img.height().saturating_add(preset.pad * 2).max(1);
+    let mut out = image::RgbaImage::from_pixel(out_w, out_h, image::Rgba(preset.background));
+
+    if let Some(shadow) = preset.shadow {
+        for layer in (1..=shadow.layers).rev() {
+            let spread = layer * 3;
+            let alpha = (shadow.alpha / layer as u8).max(3);
+            draw_rounded_rect(
+                &mut out,
+                preset.pad as i64 + shadow.offset - spread as i64,
+                preset.pad as i64 + shadow.offset - spread as i64,
+                img.width().saturating_add(spread * 2),
+                img.height().saturating_add(spread * 2),
+                preset.radius.saturating_add(spread),
+                [shadow.color[0], shadow.color[1], shadow.color[2], alpha],
+            );
+        }
+    }
+
+    if let Some(mat) = preset.mat {
+        draw_rounded_rect(
+            &mut out,
+            preset.pad as i64 - 1,
+            preset.pad as i64 - 1,
+            img.width().saturating_add(2),
+            img.height().saturating_add(2),
+            preset.radius + 1,
+            mat,
+        );
+    }
+    overlay_rounded_image(&mut out, img, preset.pad, preset.pad, preset.radius);
+    if let Some(border) = preset.border {
+        draw_rounded_stroke(
+            &mut out,
+            preset.pad as i64 - 1,
+            preset.pad as i64 - 1,
+            img.width().saturating_add(2),
+            img.height().saturating_add(2),
+            preset.radius + 1,
+            border,
+        );
+    }
     out
+}
+
+fn framed_image_preset(style: EditorFrameStyle) -> FramedImagePreset {
+    match style {
+        EditorFrameStyle::None => unreachable!("No Frame returns the source image"),
+        EditorFrameStyle::Soft => FramedImagePreset {
+            pad: 72,
+            radius: 18,
+            background: [229, 234, 240, 255],
+            mat: Some([255, 255, 255, 255]),
+            border: Some([148, 163, 184, 180]),
+            shadow: Some(FrameShadow {
+                color: [15, 23, 42],
+                offset: 18,
+                layers: 8,
+                alpha: 30,
+            }),
+        },
+        EditorFrameStyle::Light => FramedImagePreset {
+            pad: 56,
+            radius: 14,
+            background: [248, 250, 252, 255],
+            mat: Some([255, 255, 255, 255]),
+            border: Some([203, 213, 225, 220]),
+            shadow: Some(FrameShadow {
+                color: [71, 85, 105],
+                offset: 12,
+                layers: 5,
+                alpha: 18,
+            }),
+        },
+        EditorFrameStyle::Dark => FramedImagePreset {
+            pad: 64,
+            radius: 18,
+            background: [17, 24, 39, 255],
+            mat: Some([31, 41, 55, 255]),
+            border: Some([94, 234, 212, 180]),
+            shadow: Some(FrameShadow {
+                color: [0, 0, 0],
+                offset: 16,
+                layers: 8,
+                alpha: 42,
+            }),
+        },
+        EditorFrameStyle::Minimal => FramedImagePreset {
+            pad: 24,
+            radius: 8,
+            background: [255, 255, 255, 255],
+            mat: Some([255, 255, 255, 255]),
+            border: Some([203, 213, 225, 255]),
+            shadow: None,
+        },
+        EditorFrameStyle::Transparent => FramedImagePreset {
+            pad: 32,
+            radius: 16,
+            background: [0, 0, 0, 0],
+            mat: None,
+            border: Some([255, 255, 255, 180]),
+            shadow: None,
+        },
+    }
 }
 
 fn draw_rounded_rect(
@@ -7261,13 +7467,19 @@ fn point_in_rounded_rect(px: i64, py: i64, x: i64, y: i64, w: u32, h: u32, radiu
 
 fn blend_pixel(img: &mut image::RgbaImage, x: u32, y: u32, src: [u8; 4]) {
     let dst = img.get_pixel_mut(x, y);
-    let alpha = src[3] as f32 / 255.0;
-    let inv = 1.0 - alpha;
+    let src_alpha = src[3] as f32 / 255.0;
+    let dst_alpha = dst[3] as f32 / 255.0;
+    let out_alpha = src_alpha + dst_alpha * (1.0 - src_alpha);
+    if out_alpha <= f32::EPSILON {
+        dst.0 = [0, 0, 0, 0];
+        return;
+    }
+    let dst_weight = dst_alpha * (1.0 - src_alpha);
     dst.0 = [
-        (src[0] as f32 * alpha + dst[0] as f32 * inv).round() as u8,
-        (src[1] as f32 * alpha + dst[1] as f32 * inv).round() as u8,
-        (src[2] as f32 * alpha + dst[2] as f32 * inv).round() as u8,
-        255,
+        ((src[0] as f32 * src_alpha + dst[0] as f32 * dst_weight) / out_alpha).round() as u8,
+        ((src[1] as f32 * src_alpha + dst[1] as f32 * dst_weight) / out_alpha).round() as u8,
+        ((src[2] as f32 * src_alpha + dst[2] as f32 * dst_weight) / out_alpha).round() as u8,
+        (out_alpha * 255.0).round() as u8,
     ];
 }
 
@@ -7282,26 +7494,6 @@ async fn copy_image_to_clipboard(img: image::RgbaImage) -> Result<(), ClipboardE
             width: img.width() as usize,
             height: img.height() as usize,
             bytes: std::borrow::Cow::Borrowed(img.as_raw()),
-        };
-        ctx.set_image(data)?;
-        Ok::<(), ClipboardError>(())
-    })
-    .await
-    .map_err(|e| ClipboardError::Join(e.to_string()))?
-}
-
-async fn copy_framed_image_to_clipboard(
-    base: image::RgbaImage,
-    annotations: Vec<readshot_core::Annotation>,
-) -> Result<(), ClipboardError> {
-    tokio::task::spawn_blocking(move || {
-        let img = readshot_core::render(&base, &annotations);
-        let framed = share_framed_image(&img);
-        let mut ctx = arboard::Clipboard::new()?;
-        let data = arboard::ImageData {
-            width: framed.width() as usize,
-            height: framed.height() as usize,
-            bytes: std::borrow::Cow::Borrowed(framed.as_raw()),
         };
         ctx.set_image(data)?;
         Ok::<(), ClipboardError>(())
@@ -8862,13 +9054,26 @@ mod tests {
     }
 
     #[test]
-    fn share_framed_image_adds_padding_and_preserves_center_pixels() {
+    fn share_framed_image_none_returns_source_pixels() {
+        let mut img = image::RgbaImage::new(24, 16);
+        for px in img.pixels_mut() {
+            *px = image::Rgba([120, 40, 220, 255]);
+        }
+
+        let framed = share_framed_image(&img, EditorFrameStyle::None);
+
+        assert_eq!((framed.width(), framed.height()), (24, 16));
+        assert_eq!(framed.as_raw(), img.as_raw());
+    }
+
+    #[test]
+    fn share_framed_image_soft_adds_padding_and_preserves_center_pixels() {
         let mut img = image::RgbaImage::new(64, 64);
         for px in img.pixels_mut() {
             *px = image::Rgba([200, 10, 20, 255]);
         }
 
-        let framed = share_framed_image(&img);
+        let framed = share_framed_image(&img, EditorFrameStyle::Soft);
 
         assert_eq!(framed.width(), 208);
         assert_eq!(framed.height(), 208);
@@ -8879,6 +9084,39 @@ mod tests {
             *framed.get_pixel(104, 71),
             image::Rgba([229, 234, 240, 255])
         );
+    }
+
+    #[test]
+    fn share_framed_image_presets_have_distinct_canvases() {
+        let mut img = image::RgbaImage::new(64, 64);
+        for px in img.pixels_mut() {
+            *px = image::Rgba([200, 10, 20, 255]);
+        }
+
+        let light = share_framed_image(&img, EditorFrameStyle::Light);
+        let dark = share_framed_image(&img, EditorFrameStyle::Dark);
+        let minimal = share_framed_image(&img, EditorFrameStyle::Minimal);
+
+        assert_eq!((light.width(), light.height()), (176, 176));
+        assert_eq!((dark.width(), dark.height()), (192, 192));
+        assert_eq!((minimal.width(), minimal.height()), (112, 112));
+        assert_eq!(*light.get_pixel(0, 0), image::Rgba([248, 250, 252, 255]));
+        assert_eq!(*dark.get_pixel(0, 0), image::Rgba([17, 24, 39, 255]));
+        assert_eq!(*minimal.get_pixel(0, 0), image::Rgba([255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn share_framed_image_transparent_keeps_alpha_outside_image() {
+        let mut img = image::RgbaImage::new(32, 32);
+        for px in img.pixels_mut() {
+            *px = image::Rgba([20, 120, 240, 255]);
+        }
+
+        let framed = share_framed_image(&img, EditorFrameStyle::Transparent);
+
+        assert_eq!((framed.width(), framed.height()), (96, 96));
+        assert_eq!(*framed.get_pixel(0, 0), image::Rgba([0, 0, 0, 0]));
+        assert_eq!(*framed.get_pixel(48, 48), image::Rgba([20, 120, 240, 255]));
     }
 
     #[test]

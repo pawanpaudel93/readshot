@@ -358,10 +358,8 @@ pub enum Message {
     EditorCopyImageRequested,
     /// Image-copy task completed.
     EditorCopyImageDone(Result<(), String>),
-    /// User clicked Copy Framed (presentation-ready image to clipboard).
-    EditorCopyFramedRequested,
-    /// Framed-image copy task completed.
-    EditorCopyFramedDone(Result<(), String>),
+    /// User selected a presentation frame for image outputs.
+    EditorFrameStyleChanged(crate::editor::EditorFrameStyle),
     /// User clicked Copy Text (run OCR + clipboard).
     EditorCopyTextRequested,
     /// OCR + clipboard write completed.
