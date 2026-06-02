@@ -130,6 +130,11 @@ pub struct EditorCanvas {
     /// annotations expose eight handles; line / arrow expose the two
     /// endpoints.
     pub selected_handles: Vec<(ResizeHandle, PointLike)>,
+    /// Optional live preview for the selected annotation while Select
+    /// move / resize is in progress. The app can keep the flattened
+    /// background texture stable and ask the canvas to draw only this
+    /// transient overlay.
+    pub selected_preview: Option<Annotation>,
 }
 
 /// Display scale for the editor image. Fit mode scales the image to
@@ -538,10 +543,13 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
         _cursor: Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
+        let preview_scale =
+            display_scale_for_bounds(bounds, self.image_size, self.display_scale).unwrap_or(1.0);
+        let preview_width = preview_stroke_width(self.line_width, preview_scale);
         let stroke_color = Color::from_rgba(self.color.r, self.color.g, self.color.b, 1.0);
         let preview_stroke = Stroke::default()
             .with_color(stroke_color)
-            .with_width(self.line_width.max(1.0))
+            .with_width(preview_width)
             .with_line_cap(LineCap::Round)
             .with_line_join(LineJoin::Round);
 
@@ -590,7 +598,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                             // a hint, not the final stroke.
                             let path = Path::line(*anchor, *cur);
                             frame.stroke(&path, preview_stroke);
-                            let head = arrowhead_path(*anchor, *cur, self.line_width.max(2.0));
+                            let head = arrowhead_path(*anchor, *cur, preview_width.max(2.0));
                             frame.stroke(&head, preview_stroke);
                         }
                         ToolState::Blur | ToolState::Pixelate => {
@@ -643,7 +651,10 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                                     self.color.b,
                                     0.45,
                                 ))
-                                .with_width(self.line_width.max(12.0))
+                                .with_width(highlighter_preview_stroke_width(
+                                    self.line_width,
+                                    preview_scale,
+                                ))
                                 .with_line_cap(LineCap::Round)
                                 .with_line_join(LineJoin::Round)
                         }
@@ -654,26 +665,39 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
             }
         }
 
-        if let Some(rect) = self.selected_bounds.and_then(|r| {
-            base_rect_to_canvas(
-                r,
+        if let Some(annotation) = &self.selected_preview {
+            draw_annotation_preview(
+                &mut frame,
+                annotation,
                 bounds,
                 self.image_size,
                 self.image_offset,
                 self.display_scale,
-            )
-        }) {
-            draw_selection_bounds(&mut frame, rect);
+            );
         }
-        for (_, handle) in &self.selected_handles {
-            if let Some(point) = base_point_to_canvas(
-                *handle,
-                bounds,
-                self.image_size,
-                self.image_offset,
-                self.display_scale,
-            ) {
-                draw_selection_handle(&mut frame, point);
+
+        if self.selected_preview.is_none() {
+            if let Some(rect) = self.selected_bounds.and_then(|r| {
+                base_rect_to_canvas(
+                    r,
+                    bounds,
+                    self.image_size,
+                    self.image_offset,
+                    self.display_scale,
+                )
+            }) {
+                draw_selection_bounds(&mut frame, rect);
+            }
+            for (_, handle) in &self.selected_handles {
+                if let Some(point) = base_point_to_canvas(
+                    *handle,
+                    bounds,
+                    self.image_size,
+                    self.image_offset,
+                    self.display_scale,
+                ) {
+                    draw_selection_handle(&mut frame, point);
+                }
             }
         }
 
@@ -704,6 +728,14 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
             _ => iced::mouse::Interaction::Crosshair,
         }
     }
+}
+
+fn preview_stroke_width(line_width: f32, scale: f32) -> f32 {
+    (line_width.max(1.0) * scale.max(f32::EPSILON)).max(1.0)
+}
+
+fn highlighter_preview_stroke_width(line_width: f32, scale: f32) -> f32 {
+    preview_stroke_width(line_width.max(12.0), scale)
 }
 
 /// Build an ellipse path approximation using cubic beziers — iced's
@@ -851,6 +883,268 @@ fn draw_preview_badge(frame: &mut Frame, bounds: Rectangle, rect: Rectangle, lab
         font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
         ..Default::default()
     });
+}
+
+fn draw_annotation_preview(
+    frame: &mut Frame,
+    annotation: &Annotation,
+    bounds: Rectangle,
+    image_size: (u32, u32),
+    image_offset: (f32, f32),
+    display_scale: Option<f32>,
+) {
+    let Some(scale) = display_scale_for_bounds(bounds, image_size, display_scale) else {
+        return;
+    };
+    match annotation {
+        Annotation::Rectangle {
+            rect,
+            color,
+            line_width,
+        } => {
+            if let Some(rect) =
+                base_rect_to_canvas(*rect, bounds, image_size, image_offset, display_scale)
+            {
+                let path = Path::rectangle(
+                    Point::new(rect.x, rect.y),
+                    iced::Size::new(rect.width, rect.height),
+                );
+                frame.stroke(
+                    &path,
+                    Stroke::default()
+                        .with_color(core_rgba_to_color(*color))
+                        .with_width((*line_width * scale).max(1.0))
+                        .with_line_join(LineJoin::Round),
+                );
+            }
+        }
+        Annotation::Ellipse {
+            rect,
+            color,
+            line_width,
+        } => {
+            if let Some(rect) =
+                base_rect_to_canvas(*rect, bounds, image_size, image_offset, display_scale)
+            {
+                let center = Point::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
+                let path = Path::new(|builder| {
+                    ellipse_path(builder, center, (rect.width * 0.5, rect.height * 0.5));
+                });
+                frame.stroke(
+                    &path,
+                    Stroke::default()
+                        .with_color(core_rgba_to_color(*color))
+                        .with_width((*line_width * scale).max(1.0))
+                        .with_line_join(LineJoin::Round),
+                );
+            }
+        }
+        Annotation::Line {
+            a,
+            b,
+            color,
+            line_width,
+        } => draw_preview_polyline(
+            frame,
+            &[*a, *b],
+            *color,
+            *line_width,
+            bounds,
+            image_size,
+            image_offset,
+            display_scale,
+            true,
+        ),
+        Annotation::Arrow {
+            a,
+            b,
+            color,
+            line_width,
+        } => {
+            let points = [*a, *b];
+            draw_preview_polyline(
+                frame,
+                &points,
+                *color,
+                *line_width,
+                bounds,
+                image_size,
+                image_offset,
+                display_scale,
+                true,
+            );
+            if let (Some(from), Some(to)) = (
+                base_point_to_canvas(*a, bounds, image_size, image_offset, display_scale),
+                base_point_to_canvas(*b, bounds, image_size, image_offset, display_scale),
+            ) {
+                let head = arrowhead_path(from, to, (*line_width * scale).max(2.0));
+                frame.stroke(
+                    &head,
+                    Stroke::default()
+                        .with_color(core_rgba_to_color(*color))
+                        .with_width((*line_width * scale).max(1.0))
+                        .with_line_cap(LineCap::Round)
+                        .with_line_join(LineJoin::Round),
+                );
+            }
+        }
+        Annotation::Pen {
+            points,
+            color,
+            line_width,
+        } => draw_preview_polyline(
+            frame,
+            points,
+            *color,
+            *line_width,
+            bounds,
+            image_size,
+            image_offset,
+            display_scale,
+            true,
+        ),
+        Annotation::Highlighter {
+            points,
+            color,
+            line_width,
+        } => draw_preview_polyline(
+            frame,
+            points,
+            *color,
+            *line_width,
+            bounds,
+            image_size,
+            image_offset,
+            display_scale,
+            false,
+        ),
+        Annotation::Text {
+            content,
+            origin,
+            color,
+            size,
+            ..
+        } => {
+            if let Some(point) =
+                base_point_to_canvas(*origin, bounds, image_size, image_offset, display_scale)
+            {
+                frame.fill_text(CanvasText {
+                    content: content.clone(),
+                    position: point,
+                    color: core_rgba_to_color(*color),
+                    size: iced::Pixels((*size * scale).max(8.0)),
+                    font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
+                    ..Default::default()
+                });
+            }
+        }
+        Annotation::Blur { rect, .. } | Annotation::Pixelate { rect, .. } => {
+            if let Some(rect) =
+                base_rect_to_canvas(*rect, bounds, image_size, image_offset, display_scale)
+            {
+                let path = Path::rectangle(
+                    Point::new(rect.x, rect.y),
+                    iced::Size::new(rect.width, rect.height),
+                );
+                frame.fill(&path, Color::from_rgba(0.0, 0.48, 1.0, 0.14));
+                frame.stroke(
+                    &path,
+                    Stroke::default()
+                        .with_color(Color::from_rgba(0.0, 0.48, 1.0, 0.72))
+                        .with_width(1.5),
+                );
+            }
+        }
+        Annotation::NumberedPin {
+            origin,
+            number,
+            color,
+        } => {
+            if let Some(point) =
+                base_point_to_canvas(*origin, bounds, image_size, image_offset, display_scale)
+            {
+                let radius = 14.0 * scale;
+                let path = Path::circle(point, radius);
+                frame.fill(&path, core_rgba_to_color(*color));
+                frame.stroke(
+                    &path,
+                    Stroke::default()
+                        .with_color(Color::WHITE)
+                        .with_width((2.0 * scale).max(1.0)),
+                );
+                frame.fill_text(CanvasText {
+                    content: number.to_string(),
+                    position: Point::new(point.x - radius * 0.32, point.y - radius * 0.48),
+                    color: Color::WHITE,
+                    size: iced::Pixels((12.0 * scale).max(9.0)),
+                    font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
+                    ..Default::default()
+                });
+            }
+        }
+        Annotation::Crop { rect } => {
+            if let Some(rect) =
+                base_rect_to_canvas(*rect, bounds, image_size, image_offset, display_scale)
+            {
+                shade_crop_outside(frame, bounds, rect);
+                let path = Path::rectangle(
+                    Point::new(rect.x, rect.y),
+                    iced::Size::new(rect.width, rect.height),
+                );
+                frame.stroke(
+                    &path,
+                    Stroke::default()
+                        .with_color(Color::from_rgba(0.0, 0.48, 1.0, 0.95))
+                        .with_width(1.5),
+                );
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_preview_polyline(
+    frame: &mut Frame,
+    points: &[PointLike],
+    color: CoreRgba,
+    line_width: f32,
+    bounds: Rectangle,
+    image_size: (u32, u32),
+    image_offset: (f32, f32),
+    display_scale: Option<f32>,
+    round_caps: bool,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    let Some(scale) = display_scale_for_bounds(bounds, image_size, display_scale) else {
+        return;
+    };
+    let mapped: Vec<Point> = points
+        .iter()
+        .filter_map(|p| base_point_to_canvas(*p, bounds, image_size, image_offset, display_scale))
+        .collect();
+    if mapped.len() < 2 {
+        return;
+    }
+    let path = Path::new(|builder| {
+        builder.move_to(mapped[0]);
+        for point in mapped.iter().skip(1) {
+            builder.line_to(*point);
+        }
+    });
+    let mut stroke = Stroke::default()
+        .with_color(core_rgba_to_color(color))
+        .with_width((line_width * scale).max(1.0))
+        .with_line_join(LineJoin::Round);
+    if round_caps {
+        stroke = stroke.with_line_cap(LineCap::Round);
+    }
+    frame.stroke(&path, stroke);
+}
+
+fn core_rgba_to_color(color: CoreRgba) -> Color {
+    Color::from_rgba(color.r, color.g, color.b, color.a)
 }
 
 fn draw_selection_bounds(frame: &mut Frame, rect: Rectangle) {
@@ -1186,6 +1480,14 @@ mod tests {
     }
 
     #[test]
+    fn preview_stroke_width_tracks_display_scale() {
+        assert_eq!(preview_stroke_width(4.0, 2.0), 8.0);
+        assert_eq!(preview_stroke_width(4.0, 0.5), 2.0);
+        assert_eq!(preview_stroke_width(0.2, 0.25), 1.0);
+        assert_eq!(highlighter_preview_stroke_width(2.0, 2.0), 24.0);
+    }
+
+    #[test]
     fn drawing_cursor_only_applies_over_displayed_image() {
         let canvas = EditorCanvas {
             active_tool: ToolState::Rectangle,
@@ -1197,6 +1499,7 @@ mod tests {
             display_scale: Some(2.0),
             selected_bounds: None,
             selected_handles: Vec::new(),
+            selected_preview: None,
         };
         let bounds = Rectangle {
             x: 0.0,

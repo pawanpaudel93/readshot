@@ -5,8 +5,8 @@
 //! runtime cares about: which `window::Id` the session owns, whether
 //! a save/copy/ocr task is in flight, the toast text under the action
 //! row, and a few transient interaction-state fields the toolbar /
-//! canvas widgets read while the user is mid-drag (live preview rect,
-//! freehand polyline accumulator, pin counter).
+//! canvas widgets read while the user is mid-drag (selected-annotation
+//! drag baselines, line-width preview baselines, pin counter).
 //!
 //! The model itself owns the captured base image, the annotation list
 //! with undo/redo, and the active tool / colour / line-width. Rendering
@@ -14,7 +14,6 @@
 //! Save / Copy bake annotations into the saved PNG instead of emitting
 //! the raw capture.
 
-use iced::Rectangle;
 use readshot_core::{Annotation, CaptureRecord, PointLike};
 use readshot_ui::editor::EditorState as Model;
 
@@ -42,10 +41,10 @@ impl EditorFrameStyle {
     pub fn label(self) -> &'static str {
         match self {
             Self::None => "No Frame",
-            Self::Soft => "Soft",
-            Self::Light => "Light",
-            Self::Dark => "Dark",
-            Self::Minimal => "Minimal",
+            Self::Soft => "Soft Shadow",
+            Self::Light => "Light Card",
+            Self::Dark => "Dark Card",
+            Self::Minimal => "Minimal Border",
             Self::Transparent => "Transparent",
         }
     }
@@ -69,10 +68,6 @@ pub struct EditorSession {
     /// `Some` after iced has acknowledged the window-open request.
     /// Used by Discard so we know which window to close.
     pub window_id: Option<iced::window::Id>,
-    /// Live drag preview — shape / line / polyline being dragged but
-    /// not yet committed. The canvas draw step uses this to paint a
-    /// dashed outline so the user sees what they're about to commit.
-    pub preview: Option<Preview>,
     /// Counter for the next `NumberedPin` annotation. Starts at 1 and
     /// monotonically grows; resets when the editor is discarded.
     pub next_pin_number: u32,
@@ -99,11 +94,11 @@ pub struct EditorSession {
     /// uses this so one image pixel maps to one physical screen pixel
     /// on HiDPI displays.
     pub display_scale: f32,
-    /// `true` after the user has clicked Discard / pressed ⌘W once on
-    /// a dirty editor (undo stack non-empty). The next Discard click
-    /// inside [`DISCARD_CONFIRM_WINDOW`] commits; otherwise the flag
-    /// expires and the user is back to a single click. Prevents
-    /// accidental data loss without forcing a modal dialog.
+    /// `Some` after the user has clicked Discard / pressed ⌘W once on
+    /// an editor with unsaved work. The next Discard click inside
+    /// [`DISCARD_CONFIRM_WINDOW`] commits; otherwise the flag expires
+    /// and the user is back to a single click. Prevents accidental
+    /// data loss without forcing a modal dialog.
     pub discard_pending_at: Option<std::time::Instant>,
     /// Wall-clock instant the current `status` toast was set. The
     /// runtime uses this to auto-dismiss successful status messages
@@ -122,6 +117,26 @@ pub struct EditorSession {
     /// Optional presentation frame applied to image outputs from this
     /// editor window. `No Frame` keeps Save / Copy / Pin pixel-exact.
     pub frame_style: EditorFrameStyle,
+    /// Last editor output state that was successfully produced for
+    /// the user (saved/copied). Kept separate from undo history so a
+    /// saved editor can still undo while closing without a stale
+    /// "unsaved edits" warning.
+    output_checkpoint: EditorOutputCheckpoint,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct EditorOutputCheckpoint {
+    annotations: Vec<Annotation>,
+    frame_style: EditorFrameStyle,
+}
+
+impl EditorOutputCheckpoint {
+    fn new(annotations: &[Annotation], frame_style: EditorFrameStyle) -> Self {
+        Self {
+            annotations: annotations.to_vec(),
+            frame_style,
+        }
+    }
 }
 
 /// How long a "Click Discard again to confirm" prompt stays armed
@@ -238,6 +253,7 @@ pub struct PendingText {
 #[derive(Clone, Debug)]
 pub struct MoveDrag {
     pub baseline: Vec<Annotation>,
+    pub selected_index: usize,
     pub start: PointLike,
     pub moved: bool,
     pub kind: MoveDragKind,
@@ -249,41 +265,6 @@ pub enum MoveDragKind {
     Resize(readshot_ui::editor::ResizeHandle),
 }
 
-/// Transient drag preview the canvas emits via `DragMoved` and the
-/// editor view re-paints over the image. Shape variants mirror the
-/// tool classifications in `readshot_ui::editor::tool_state`.
-#[derive(Clone, Debug)]
-pub enum Preview {
-    /// Rectangular tools: Rectangle, Ellipse, Blur, Pixelate, Crop.
-    Rect { tool: PreviewKind, rect: Rectangle },
-    /// Segment tools: Line, Arrow.
-    Segment {
-        tool: PreviewKind,
-        anchor: iced::Point,
-        cursor: iced::Point,
-    },
-    /// Freehand tools: Pen, Highlighter — the accumulated polyline.
-    Freehand {
-        tool: PreviewKind,
-        points: Vec<PointLike>,
-    },
-}
-
-/// Lightweight tag the canvas attaches to a preview so the editor's
-/// draw step knows what shape to outline.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PreviewKind {
-    Rectangle,
-    Ellipse,
-    Line,
-    Arrow,
-    Blur,
-    Pixelate,
-    Crop,
-    Pen,
-    Highlighter,
-}
-
 impl EditorSession {
     pub fn new(image: image::RgbaImage) -> Self {
         Self::new_with_display_scale(image, 1.0)
@@ -292,12 +273,13 @@ impl EditorSession {
     pub fn new_with_display_scale(image: image::RgbaImage, display_scale: f32) -> Self {
         let mut model = Model::new(image);
         let image_handle = build_handle(&mut model);
+        let output_checkpoint =
+            EditorOutputCheckpoint::new(model.annotations(), EditorFrameStyle::None);
         Self {
             model,
             status: None,
             busy: false,
             window_id: None,
-            preview: None,
             next_pin_number: 1,
             image_handle,
             pending_text: None,
@@ -309,6 +291,7 @@ impl EditorSession {
             move_drag: None,
             width_drag_baseline: None,
             frame_style: EditorFrameStyle::None,
+            output_checkpoint,
         }
     }
 
@@ -321,15 +304,17 @@ impl EditorSession {
         record: CaptureRecord,
         display_scale: f32,
     ) -> Self {
+        let next_pin_number = next_pin_number_after(&record.annotation_model);
         let mut model = Model::with_annotations(image, record.annotation_model.clone());
         let image_handle = build_handle(&mut model);
+        let output_checkpoint =
+            EditorOutputCheckpoint::new(model.annotations(), EditorFrameStyle::None);
         Self {
             model,
             status: None,
             busy: false,
             window_id: None,
-            preview: None,
-            next_pin_number: 1,
+            next_pin_number,
             image_handle,
             pending_text: None,
             source_record: Some(record),
@@ -340,6 +325,7 @@ impl EditorSession {
             move_drag: None,
             width_drag_baseline: None,
             frame_style: EditorFrameStyle::None,
+            output_checkpoint,
         }
     }
 
@@ -355,6 +341,21 @@ impl EditorSession {
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status = Some(msg.into());
         self.status_set_at = Some(std::time::Instant::now());
+    }
+
+    pub fn mark_output_clean(&mut self) {
+        self.output_checkpoint =
+            EditorOutputCheckpoint::new(self.model.annotations(), self.frame_style);
+        self.clear_discard_confirmation();
+    }
+
+    pub fn has_output_changes(&self) -> bool {
+        self.output_checkpoint
+            != EditorOutputCheckpoint::new(self.model.annotations(), self.frame_style)
+    }
+
+    pub fn clear_discard_confirmation(&mut self) {
+        self.discard_pending_at = None;
     }
 
     /// "In-progress" status strings the auto-dismiss logic must
@@ -443,6 +444,18 @@ impl EditorSession {
     }
 }
 
+fn next_pin_number_after(annotations: &[Annotation]) -> u32 {
+    annotations
+        .iter()
+        .filter_map(|annotation| match annotation {
+            Annotation::NumberedPin { number, .. } => Some(*number),
+            _ => None,
+        })
+        .max()
+        .and_then(|n| n.checked_add(1))
+        .unwrap_or(1)
+}
+
 fn build_handle(model: &mut Model) -> iced::widget::image::Handle {
     let img = model.flatten();
     iced::widget::image::Handle::from_rgba(img.width(), img.height(), img.as_raw().clone())
@@ -465,7 +478,6 @@ mod tests {
         let s = EditorSession::new(solid(8, 8));
         assert!(!s.busy);
         assert!(s.window_id.is_none());
-        assert!(s.preview.is_none());
         assert_eq!(s.next_pin_number, 1);
         assert_eq!(s.zoom, EditorZoom::Fit);
     }
@@ -477,6 +489,66 @@ mod tests {
         // isn't introspectable beyond identity.
         let _ = s.image_handle.clone();
         assert_eq!(s.image_size(), (16, 32));
+    }
+
+    #[test]
+    fn history_session_continues_numbered_pin_sequence() {
+        let mut record = CaptureRecord::new(chrono::Utc::now(), 64, 64, "display-main".to_string());
+        record.annotation_model = vec![
+            Annotation::NumberedPin {
+                origin: readshot_core::PointLike::new(5.0, 5.0),
+                number: 1,
+                color: readshot_core::Rgba::OPAQUE_BLACK,
+            },
+            Annotation::NumberedPin {
+                origin: readshot_core::PointLike::new(12.0, 12.0),
+                number: 7,
+                color: readshot_core::Rgba::OPAQUE_BLACK,
+            },
+        ];
+
+        let s = EditorSession::from_history(solid(64, 64), record);
+
+        assert_eq!(s.next_pin_number, 8);
+    }
+
+    #[test]
+    fn next_pin_number_after_empty_or_saturated_history_starts_at_one() {
+        assert_eq!(next_pin_number_after(&[]), 1);
+        assert_eq!(
+            next_pin_number_after(&[Annotation::NumberedPin {
+                origin: readshot_core::PointLike::new(5.0, 5.0),
+                number: u32::MAX,
+                color: readshot_core::Rgba::OPAQUE_BLACK,
+            }]),
+            1
+        );
+    }
+
+    #[test]
+    fn frame_style_labels_describe_the_output() {
+        let labels: Vec<&str> = EditorFrameStyle::ALL
+            .iter()
+            .map(|style| style.label())
+            .collect();
+
+        assert_eq!(
+            labels,
+            vec![
+                "No Frame",
+                "Soft Shadow",
+                "Light Card",
+                "Dark Card",
+                "Minimal Border",
+                "Transparent",
+            ]
+        );
+        for label in labels {
+            assert!(
+                label.len() <= 14,
+                "frame labels should stay compact: {label}"
+            );
+        }
     }
 
     #[test]

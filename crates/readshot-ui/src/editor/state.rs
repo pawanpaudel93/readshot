@@ -143,6 +143,8 @@ impl EditorState {
     /// Append a new annotation, snapshotting the previous state to
     /// the undo stack.
     pub fn commit_annotation(&mut self, annotation: Annotation) {
+        let mut annotation = annotation;
+        self.clamp_crop_annotation_to_base(&mut annotation, CropClampMode::Resize);
         let mut next = self.history.current().to_vec();
         next.push(annotation);
         self.selected_annotation = next.len().checked_sub(1);
@@ -253,6 +255,10 @@ impl EditorState {
         let Some(idx) = self.selected_annotation() else {
             return false;
         };
+        self.replace_text_at(idx, content)
+    }
+
+    pub fn replace_text_at(&mut self, idx: usize, content: String) -> bool {
         let mut next = self.history.current().to_vec();
         let Some(Annotation::Text {
             content: existing, ..
@@ -313,6 +319,7 @@ impl EditorState {
         }
         let mut next = baseline.to_vec();
         translate_annotation(&mut next[idx], dx, dy);
+        self.clamp_crop_annotation_to_base(&mut next[idx], CropClampMode::Move);
         self.history.replace_present(next);
         self.flattened_cache = None;
         true
@@ -336,6 +343,7 @@ impl EditorState {
         if !resize_annotation(&mut next[idx], handle, dx, dy) {
             return false;
         }
+        self.clamp_crop_annotation_to_base(&mut next[idx], CropClampMode::Resize);
         self.history.replace_present(next);
         self.flattened_cache = None;
         true
@@ -377,6 +385,12 @@ impl EditorState {
         true
     }
 
+    pub fn cancel_preview_from_baseline(&mut self, baseline: Vec<Annotation>) {
+        self.history.replace_present(baseline);
+        self.clamp_selection();
+        self.flattened_cache = None;
+    }
+
     /// Render base + annotations into a single flat `RgbaImage`,
     /// cached so successive views during a single state don't re-render.
     /// The cache is cleared on every state change.
@@ -397,6 +411,23 @@ impl EditorState {
             self.selected_annotation = None;
         }
     }
+
+    fn clamp_crop_annotation_to_base(&self, annotation: &mut Annotation, mode: CropClampMode) {
+        let Annotation::Crop { rect } = annotation else {
+            return;
+        };
+        let bounds = (self.base.width() as f32, self.base.height() as f32);
+        match mode {
+            CropClampMode::Move => clamp_crop_position(rect, bounds),
+            CropClampMode::Resize => clamp_crop_edges(rect, bounds),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CropClampMode {
+    Move,
+    Resize,
 }
 
 fn annotation_hit_test(annotation: &Annotation, point: PointLike) -> bool {
@@ -688,6 +719,39 @@ fn resize_rect(rect: &mut RectLike, handle: ResizeHandle, dx: f32, dy: f32) {
     rect.height = (bottom - top).abs().max(1.0);
 }
 
+fn clamp_crop_position(rect: &mut RectLike, (base_w, base_h): (f32, f32)) {
+    if base_w <= 0.0 || base_h <= 0.0 {
+        rect.x = 0.0;
+        rect.y = 0.0;
+        rect.width = 1.0;
+        rect.height = 1.0;
+        return;
+    }
+    rect.width = rect.width.clamp(1.0, base_w);
+    rect.height = rect.height.clamp(1.0, base_h);
+    rect.x = rect.x.clamp(0.0, (base_w - rect.width).max(0.0));
+    rect.y = rect.y.clamp(0.0, (base_h - rect.height).max(0.0));
+}
+
+fn clamp_crop_edges(rect: &mut RectLike, (base_w, base_h): (f32, f32)) {
+    if base_w <= 0.0 || base_h <= 0.0 {
+        rect.x = 0.0;
+        rect.y = 0.0;
+        rect.width = 1.0;
+        rect.height = 1.0;
+        return;
+    }
+    let x0 = rect.x.clamp(0.0, base_w);
+    let y0 = rect.y.clamp(0.0, base_h);
+    let x1 = (rect.x + rect.width).clamp(0.0, base_w);
+    let y1 = (rect.y + rect.height).clamp(0.0, base_h);
+    rect.x = x0.min(x1);
+    rect.y = y0.min(y1);
+    rect.width = (x1 - x0).abs().max(1.0).min(base_w);
+    rect.height = (y1 - y0).abs().max(1.0).min(base_h);
+    clamp_crop_position(rect, (base_w, base_h));
+}
+
 fn translate_rect(rect: &mut RectLike, dx: f32, dy: f32) {
     rect.x += dx;
     rect.y += dy;
@@ -904,6 +968,23 @@ mod tests {
     }
 
     #[test]
+    fn selected_annotation_can_cancel_preview_without_undo_step() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        assert_eq!(s.select_at(PointLike::new(2.0, 2.0)), Some(0));
+
+        let undo_depth = s.undo_depth();
+        let baseline = s.annotations().to_vec();
+        assert!(s.preview_move_selected_from(&baseline, 5.0, 7.0));
+
+        s.cancel_preview_from_baseline(baseline.clone());
+
+        assert_eq!(s.annotations(), baseline.as_slice());
+        assert_eq!(s.selected_annotation(), Some(0));
+        assert_eq!(s.undo_depth(), undo_depth);
+    }
+
+    #[test]
     fn selected_rect_reports_resize_handle_at_corner() {
         let mut s = EditorState::new(solid_base(64, 64));
         s.commit_annotation(Annotation::Rectangle {
@@ -950,6 +1031,60 @@ mod tests {
                 assert_eq!(rect.height, 40.0);
             }
             other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn crop_move_preview_stays_inside_base_without_shrinking() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(Annotation::Crop {
+            rect: RectLike::new(10.0, 10.0, 20.0, 20.0),
+        });
+        assert_eq!(s.select_at(PointLike::new(12.0, 12.0)), Some(0));
+
+        let baseline = s.annotations().to_vec();
+        assert!(s.preview_move_selected_from(&baseline, -30.0, 50.0));
+
+        match &s.annotations()[0] {
+            Annotation::Crop { rect } => {
+                assert_eq!(*rect, RectLike::new(0.0, 44.0, 20.0, 20.0));
+            }
+            other => panic!("expected crop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn crop_resize_preview_clamps_to_base_edges() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(Annotation::Crop {
+            rect: RectLike::new(10.0, 10.0, 20.0, 20.0),
+        });
+        assert_eq!(s.select_at(PointLike::new(12.0, 12.0)), Some(0));
+
+        let baseline = s.annotations().to_vec();
+        assert!(s.preview_resize_selected_from(&baseline, ResizeHandle::SouthEast, 100.0, 100.0));
+
+        match &s.annotations()[0] {
+            Annotation::Crop { rect } => {
+                assert_eq!(*rect, RectLike::new(10.0, 10.0, 54.0, 54.0));
+            }
+            other => panic!("expected crop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn committed_crop_is_clamped_to_base() {
+        let mut s = EditorState::new(solid_base(64, 64));
+
+        s.commit_annotation(Annotation::Crop {
+            rect: RectLike::new(50.0, -10.0, 40.0, 30.0),
+        });
+
+        match &s.annotations()[0] {
+            Annotation::Crop { rect } => {
+                assert_eq!(*rect, RectLike::new(50.0, 0.0, 14.0, 20.0));
+            }
+            other => panic!("expected crop, got {other:?}"),
         }
     }
 
@@ -1069,6 +1204,35 @@ mod tests {
             Annotation::Text { content, .. } => assert_eq!(content, "old"),
             other => panic!("expected text, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn text_can_be_replaced_by_original_edit_index() {
+        let mut s = EditorState::new(solid_base(96, 96));
+        s.commit_annotation(Annotation::Text {
+            content: "old".into(),
+            origin: PointLike::new(10.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 16.0,
+        });
+        s.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(40.0, 40.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(s.select_at(PointLike::new(12.0, 8.0)), Some(0));
+        let edit = s.selected_text_edit().expect("selected text is editable");
+        assert_eq!(edit.index, 0);
+        assert_eq!(s.select_at(PointLike::new(45.0, 45.0)), Some(1));
+
+        assert!(s.replace_text_at(edit.index, "new".into()));
+
+        match &s.annotations()[0] {
+            Annotation::Text { content, .. } => assert_eq!(content, "new"),
+            other => panic!("expected text, got {other:?}"),
+        }
+        assert_eq!(s.selected_annotation(), Some(0));
     }
 
     #[test]

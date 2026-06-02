@@ -122,6 +122,112 @@ fn take_cli_interactive_request() -> Option<CliInteractiveRequest> {
         .and_then(|m| m.lock().ok().and_then(|mut g| g.take()))
 }
 
+#[cfg(test)]
+fn debug_editor_qa_session() -> EditorSession {
+    let image = debug_editor_qa_image();
+    let mut editor = EditorSession::new_with_display_scale(image, 2.0);
+    let annotations = debug_editor_qa_annotations();
+    editor.next_pin_number = annotations
+        .iter()
+        .filter_map(|annotation| match annotation {
+            readshot_core::Annotation::NumberedPin { number, .. } => Some(*number),
+            _ => None,
+        })
+        .max()
+        .and_then(|n| n.checked_add(1))
+        .unwrap_or(1);
+    for annotation in annotations {
+        editor.model.commit_annotation(annotation);
+    }
+    editor.refresh_image();
+    editor.mark_output_clean();
+    editor.set_status("Editor QA fixture loaded.");
+    editor
+}
+
+#[cfg(test)]
+fn debug_editor_qa_image() -> image::RgbaImage {
+    let mut img = image::RgbaImage::from_pixel(1040, 680, image::Rgba([247, 249, 252, 255]));
+    fill_rect_rgba(&mut img, 0, 0, 1040, 56, [18, 24, 38, 255]);
+    fill_rect_rgba(&mut img, 0, 56, 240, 624, [234, 238, 245, 255]);
+    fill_rect_rgba(&mut img, 280, 112, 680, 150, [255, 255, 255, 255]);
+    fill_rect_rgba(&mut img, 280, 296, 680, 248, [22, 26, 34, 255]);
+    fill_rect_rgba(&mut img, 304, 326, 632, 1, [58, 66, 82, 255]);
+    fill_rect_rgba(&mut img, 304, 372, 632, 1, [58, 66, 82, 255]);
+    fill_rect_rgba(&mut img, 304, 418, 420, 1, [58, 66, 82, 255]);
+    fill_rect_rgba(&mut img, 316, 468, 190, 38, [20, 184, 166, 255]);
+    fill_rect_rgba(&mut img, 528, 468, 146, 38, [71, 85, 105, 255]);
+    fill_rect_rgba(&mut img, 40, 112, 160, 16, [148, 163, 184, 255]);
+    fill_rect_rgba(&mut img, 40, 158, 168, 12, [203, 213, 225, 255]);
+    fill_rect_rgba(&mut img, 40, 188, 128, 12, [203, 213, 225, 255]);
+    fill_rect_rgba(&mut img, 40, 218, 184, 12, [203, 213, 225, 255]);
+    img
+}
+
+#[cfg(test)]
+fn fill_rect_rgba(
+    img: &mut image::RgbaImage,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    color: [u8; 4],
+) {
+    let x_end = x.saturating_add(width).min(img.width());
+    let y_end = y.saturating_add(height).min(img.height());
+    for yy in y..y_end {
+        for xx in x..x_end {
+            img.put_pixel(xx, yy, image::Rgba(color));
+        }
+    }
+}
+
+#[cfg(test)]
+fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
+    use readshot_core::{Annotation, PointLike, RectLike, Rgba};
+    vec![
+        Annotation::Text {
+            content: "Readshot editor QA".into(),
+            origin: PointLike::new(38.0, 34.0),
+            color: Rgba::OPAQUE_WHITE,
+            font_family: "system-ui".into(),
+            size: 24.0,
+        },
+        Annotation::Rectangle {
+            rect: RectLike::new(270.0, 102.0, 700.0, 170.0),
+            color: Rgba::new(0.08, 0.72, 0.65, 1.0),
+            line_width: 5.0,
+        },
+        Annotation::Arrow {
+            a: PointLike::new(236.0, 224.0),
+            b: PointLike::new(330.0, 142.0),
+            color: Rgba::new(0.93, 0.34, 0.34, 1.0),
+            line_width: 6.0,
+        },
+        Annotation::Highlighter {
+            points: vec![
+                PointLike::new(300.0, 500.0),
+                PointLike::new(420.0, 498.0),
+                PointLike::new(560.0, 500.0),
+            ],
+            color: Rgba::new(1.0, 0.84, 0.22, 0.38),
+            line_width: 18.0,
+        },
+        Annotation::NumberedPin {
+            origin: PointLike::new(686.0, 468.0),
+            number: 1,
+            color: Rgba::new(0.08, 0.72, 0.65, 1.0),
+        },
+        Annotation::Text {
+            content: "Move, resize, edit text, frame, copy, save.".into(),
+            origin: PointLike::new(300.0, 586.0),
+            color: Rgba::new(0.10, 0.12, 0.16, 1.0),
+            font_family: "system-ui".into(),
+            size: 19.0,
+        },
+    ]
+}
+
 use crate::app::{App, GlobalHotkeyAction, HistoryKeyboardAction, Message, WindowKind};
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::{default_provider, PermissionStatus};
@@ -469,9 +575,16 @@ fn open_editor_window_replacing(
     display_bounds: Option<(f32, f32, f32, f32)>,
 ) -> Task<Message> {
     let mut tasks: Vec<Task<Message>> = Vec::new();
-    if let Some(old_id) = state.editor.as_ref().and_then(|ed| ed.window_id) {
-        state.windows.forget(old_id);
-        tasks.push(window::close(old_id));
+    if state.editor.is_some() {
+        let coord = state.coordinator.clone();
+        if let Some(old_editor) = state.editor.as_mut() {
+            cancel_editor_previews(old_editor);
+            commit_pending_editor_text(old_editor, &coord);
+            if let Some(old_id) = old_editor.window_id {
+                state.windows.forget(old_id);
+                tasks.push(window::close(old_id));
+            }
+        }
     }
     state.editor = Some(editor);
     let (id, open_task) = window::open(editor_window_settings(display_bounds));
@@ -1829,6 +1942,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 .and_then(|ed| ed.window_id)
                 .is_some_and(|editor_id| editor_id == id)
             {
+                if let Some(ed) = state.editor.as_mut() {
+                    cancel_editor_previews(ed);
+                    commit_pending_editor_text(ed, &state.coordinator);
+                }
                 state.editor = None;
             }
             Task::none()
@@ -2356,6 +2473,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
+            if ed.busy {
+                return Task::none();
+            }
+            commit_pending_editor_text(ed, &state.coordinator);
+            cancel_editor_previews(ed);
             ed.busy = true;
             ed.set_status("Choose a save location…");
             let img = editor_output_image(ed);
@@ -2376,6 +2498,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             if let Some(ed) = state.editor.as_mut() {
                 ed.busy = false;
+                let saved = matches!(&result, Ok(Some(_)));
+                if saved {
+                    ed.mark_output_clean();
+                }
                 ed.set_status(match result {
                     Ok(Some(p)) => format!("Saved to {}", p.display()),
                     Ok(None) => "Save cancelled.".into(),
@@ -2389,6 +2515,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
+            if ed.busy {
+                return Task::none();
+            }
+            commit_pending_editor_text(ed, &state.coordinator);
+            cancel_editor_previews(ed);
             ed.busy = true;
             if ed.frame_style == EditorFrameStyle::None {
                 ed.set_status("Copying…");
@@ -2406,6 +2537,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::EditorCopyImageDone(result) => {
             if let Some(ed) = state.editor.as_mut() {
                 ed.busy = false;
+                let copied = result.is_ok();
+                if copied {
+                    ed.mark_output_clean();
+                }
                 ed.set_status(match result {
                     Ok(()) => "Copied to clipboard.".into(),
                     Err(e) => format!("Copy failed: {e}"),
@@ -2416,6 +2551,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
 
         Message::EditorFrameStyleChanged(style) => {
             if let Some(ed) = state.editor.as_mut() {
+                if ed.busy {
+                    return Task::none();
+                }
+                cancel_editor_previews(ed);
+                ed.clear_discard_confirmation();
                 ed.frame_style = style;
                 ed.set_status(match style {
                     EditorFrameStyle::None => "Frame removed.".into(),
@@ -2429,6 +2569,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
+            if ed.busy {
+                return Task::none();
+            }
+            commit_pending_editor_text(ed, &state.coordinator);
+            cancel_editor_previews(ed);
             ed.busy = true;
             ed.set_status("Recognising text…");
             let img = ed.model.flatten();
@@ -2455,14 +2600,17 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
 
         Message::EditorDiscardRequested => {
+            if state.editor.as_ref().is_some_and(|ed| ed.busy) {
+                return Task::none();
+            }
             // Two-stage discard guards against accidental data loss.
-            // Clean editors (no annotations applied) close immediately.
-            // Dirty editors require a second click within
-            // `DISCARD_CONFIRM_WINDOW` before the window actually closes.
+            // Clean editors close immediately. Editors with committed
+            // annotations or non-empty draft text require a second
+            // click within `DISCARD_CONFIRM_WINDOW` before closing.
             let dirty = state
                 .editor
                 .as_ref()
-                .map(|e| e.model.can_undo())
+                .map(editor_has_unsaved_work)
                 .unwrap_or(false);
             if dirty {
                 if let Some(ed) = state.editor.as_mut() {
@@ -2473,9 +2621,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         .unwrap_or(false);
                     if !armed {
                         ed.discard_pending_at = Some(now);
-                        ed.status = Some(
-                            "Discard unsaved annotations? Click Discard again to confirm.".into(),
-                        );
+                        ed.status =
+                            Some("Discard unsaved edits? Click Discard again to confirm.".into());
                         ed.status_set_at = Some(now);
                         return Task::none();
                     }
@@ -2498,10 +2645,15 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
+            if ed.busy {
+                return Task::none();
+            }
             match msg {
                 readshot_ui::ToolbarMessage::SelectTool(t) => {
-                    ed.move_drag = None;
-                    ed.width_drag_baseline = None;
+                    cancel_editor_previews(ed);
+                    if t != readshot_ui::editor::ToolState::Text {
+                        commit_pending_editor_text(ed, &state.coordinator);
+                    }
                     ed.model.set_tool(t);
                 }
                 readshot_ui::ToolbarMessage::SelectColor(c) => {
@@ -2511,18 +2663,20 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     apply_editor_line_width(ed, &state.coordinator, w);
                 }
                 readshot_ui::ToolbarMessage::Undo => {
-                    ed.move_drag = None;
-                    ed.width_drag_baseline = None;
+                    cancel_editor_previews(ed);
+                    commit_pending_editor_text(ed, &state.coordinator);
                     if ed.model.undo() {
                         ed.refresh_image();
+                        ed.set_status("Undid edit. ⌘⇧Z to redo.");
                         sync_editor_history(ed, &state.coordinator);
                     }
                 }
                 readshot_ui::ToolbarMessage::Redo => {
-                    ed.move_drag = None;
-                    ed.width_drag_baseline = None;
+                    cancel_editor_previews(ed);
+                    commit_pending_editor_text(ed, &state.coordinator);
                     if ed.model.redo() {
                         ed.refresh_image();
+                        ed.set_status("Redid edit. ⌘Z to undo.");
                         sync_editor_history(ed, &state.coordinator);
                     }
                 }
@@ -2534,6 +2688,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
+            if ed.busy {
+                return Task::none();
+            }
             preview_editor_line_width(ed, width);
             Task::none()
         }
@@ -2542,6 +2699,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
+            if ed.busy {
+                return Task::none();
+            }
             if let Some(baseline) = ed.width_drag_baseline.take() {
                 if ed.model.commit_preview_from_baseline(baseline) {
                     ed.refresh_image();
@@ -2562,27 +2722,37 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
+            if ed.busy {
+                return Task::none();
+            }
             match msg {
                 readshot_ui::CanvasMessage::DragStarted
                 | readshot_ui::CanvasMessage::DragMoved(_)
-                | readshot_ui::CanvasMessage::PolylineMoved(_)
-                | readshot_ui::CanvasMessage::Cancelled => {
+                | readshot_ui::CanvasMessage::PolylineMoved(_) => {
                     // Preview-only events. The canvas's own State holds
                     // the drag points; a redraw is automatic.
                 }
+                readshot_ui::CanvasMessage::Cancelled => {
+                    cancel_editor_previews(ed);
+                }
                 readshot_ui::CanvasMessage::SelectPressed(p) => {
-                    ed.pending_text = None;
-                    ed.width_drag_baseline = None;
+                    cancel_editor_previews(ed);
+                    commit_pending_editor_text(ed, &state.coordinator);
                     if let Some(handle) = ed.model.resize_handle_at(p) {
+                        let Some(selected_index) = ed.model.selected_annotation() else {
+                            return Task::none();
+                        };
                         ed.move_drag = Some(crate::editor::MoveDrag {
                             baseline: ed.model.annotations().to_vec(),
+                            selected_index,
                             start: p,
                             moved: false,
                             kind: crate::editor::MoveDragKind::Resize(handle),
                         });
-                    } else if ed.model.select_at(p).is_some() {
+                    } else if let Some(selected_index) = ed.model.select_at(p) {
                         ed.move_drag = Some(crate::editor::MoveDrag {
                             baseline: ed.model.annotations().to_vec(),
+                            selected_index,
                             start: p,
                             moved: false,
                             kind: crate::editor::MoveDragKind::Move,
@@ -2592,9 +2762,13 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     }
                 }
                 readshot_ui::CanvasMessage::SelectDragged(p) => {
+                    let mut background_without_selected = None;
                     if let Some(drag) = ed.move_drag.as_mut() {
                         let dx = p.x - drag.start.x;
                         let dy = p.y - drag.start.y;
+                        if !drag.moved && dx.abs() < 0.5 && dy.abs() < 0.5 {
+                            return Task::none();
+                        }
                         let changed = match drag.kind {
                             crate::editor::MoveDragKind::Move => {
                                 ed.model.preview_move_selected_from(&drag.baseline, dx, dy)
@@ -2603,16 +2777,28 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                                 .model
                                 .preview_resize_selected_from(&drag.baseline, handle, dx, dy),
                         };
-                        if (dx.abs() >= 0.5 || dy.abs() >= 0.5) && changed {
+                        if changed {
+                            if !drag.moved
+                                && can_preview_drag_annotation(&drag.baseline, drag.selected_index)
+                            {
+                                background_without_selected = Some(drag.selected_index);
+                            }
                             drag.moved = true;
-                            // Keep the flattened image handle stable while the
-                            // pointer is moving. Re-uploading a full RGBA
-                            // texture on every Select drag tick can briefly
-                            // reveal the dark stage behind the image.
-                            // The canvas selection overlay still follows the
-                            // model live; the bitmap is refreshed once on
-                            // release.
+                            if refresh_image_during_select_drag(&drag.baseline, drag.selected_index)
+                            {
+                                ed.refresh_image();
+                            }
+                            // For ordinary annotations, keep the flattened image
+                            // handle stable while the pointer is moving.
+                            // Re-uploading a full RGBA texture on every Select
+                            // drag tick can briefly reveal the dark stage behind
+                            // the image. Crop is the exception: it changes the
+                            // rendered output geometry, so the texture must stay
+                            // in sync with the preview dimensions.
                         }
+                    }
+                    if let Some(index) = background_without_selected {
+                        ed.image_handle = editor_image_handle_without_annotation(ed, index);
                     }
                 }
                 readshot_ui::CanvasMessage::SelectReleased => {
@@ -2620,6 +2806,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         return Task::none();
                     };
                     if !ed.model.commit_preview_from_baseline(drag.baseline) {
+                        ed.refresh_image();
                         return Task::none();
                     }
                     ed.refresh_image();
@@ -2631,6 +2818,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     sync_editor_history(ed, &state.coordinator);
                 }
                 readshot_ui::CanvasMessage::RequestText(p) => {
+                    cancel_editor_previews(ed);
+                    commit_pending_editor_text(ed, &state.coordinator);
                     // Text tool clicked — open the inline text-input
                     // banner. The eventual Annotation::Text lands at
                     // exactly the click point regardless of how long
@@ -2640,10 +2829,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         content: String::new(),
                         edit_index: None,
                     });
-                    ed.width_drag_baseline = None;
                 }
                 readshot_ui::CanvasMessage::CommitAnnotation(annotation) => {
-                    ed.width_drag_baseline = None;
+                    cancel_editor_previews(ed);
                     handle_commit_annotation(ed, annotation);
                     sync_editor_history(ed, &state.coordinator);
                 }
@@ -2655,9 +2843,12 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
+            if ed.busy {
+                return Task::none();
+            }
             if let Some(edit) = ed.model.selected_text_edit() {
-                ed.move_drag = None;
-                ed.width_drag_baseline = None;
+                cancel_editor_previews(ed);
+                ed.clear_discard_confirmation();
                 ed.pending_text = Some(crate::editor::PendingText {
                     origin: edit.origin,
                     content: edit.content,
@@ -2671,8 +2862,22 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
-            ed.move_drag = None;
-            ed.width_drag_baseline = None;
+            if ed.busy {
+                return Task::none();
+            }
+            let deleting_pending_text = matches!(
+                (
+                    ed.pending_text
+                        .as_ref()
+                        .and_then(|pending| pending.edit_index),
+                    ed.model.selected_annotation(),
+                ),
+                (Some(edit_index), Some(selected_index)) if edit_index == selected_index
+            );
+            cancel_editor_previews(ed);
+            if deleting_pending_text {
+                ed.pending_text = None;
+            }
             if ed.model.delete_selected_annotation() {
                 ed.refresh_image();
                 ed.set_status("Deleted annotation. ⌘Z to undo.");
@@ -2683,6 +2888,12 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
 
         Message::EditorTextChanged(content) => {
             if let Some(ed) = state.editor.as_mut() {
+                if ed.busy {
+                    return Task::none();
+                }
+                if ed.pending_text.is_some() {
+                    ed.clear_discard_confirmation();
+                }
                 if let Some(pending) = ed.pending_text.as_mut() {
                     pending.content = content;
                 }
@@ -2693,44 +2904,34 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
-            if let Some(pending) = ed.pending_text.take() {
-                let trimmed = pending.content.trim();
-                if !trimmed.is_empty() {
-                    if pending.edit_index.is_some() {
-                        if ed.model.replace_selected_text(trimmed.to_string()) {
-                            ed.refresh_image();
-                            ed.set_status("Updated text. ⌘Z to undo.");
-                            sync_editor_history(ed, &state.coordinator);
-                        }
-                    } else {
-                        let annotation = readshot_core::Annotation::Text {
-                            content: trimmed.to_string(),
-                            origin: pending.origin,
-                            color: ed.model.current_color(),
-                            font_family: "system-ui".to_string(),
-                            // Tie text size to the line-width slider so
-                            // it's discoverable without a separate control.
-                            size: text_size_from_line_width(ed.model.current_line_width()),
-                        };
-                        ed.model.commit_annotation(annotation);
-                        ed.refresh_image();
-                        sync_editor_history(ed, &state.coordinator);
-                    }
-                }
+            if ed.busy {
+                return Task::none();
             }
+            commit_pending_editor_text(ed, &state.coordinator);
             Task::none()
         }
         Message::EditorTextCancel => {
             if let Some(ed) = state.editor.as_mut() {
-                ed.move_drag = None;
-                ed.width_drag_baseline = None;
-                ed.model.clear_selection();
+                if ed.busy {
+                    return Task::none();
+                }
+                let keep_selection = ed
+                    .pending_text
+                    .as_ref()
+                    .is_some_and(|pending| pending.edit_index.is_some());
+                cancel_editor_previews(ed);
+                if !keep_selection {
+                    ed.model.clear_selection();
+                }
                 ed.pending_text = None;
             }
             Task::none()
         }
         Message::EditorWidthBump(delta) => {
             if let Some(ed) = state.editor.as_mut() {
+                if ed.busy {
+                    return Task::none();
+                }
                 let next = ed.model.current_line_width() + delta;
                 apply_editor_line_width(ed, &state.coordinator, next);
             }
@@ -2738,6 +2939,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::EditorColorCycle(dir) => {
             if let Some(ed) = state.editor.as_mut() {
+                if ed.busy {
+                    return Task::none();
+                }
                 let palette = readshot_ui::editor::toolbar::PALETTE;
                 let current = ed.model.current_color();
                 let idx = palette
@@ -2752,36 +2956,54 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::EditorZoomIn => {
             if let Some(ed) = state.editor.as_mut() {
+                if ed.busy {
+                    return Task::none();
+                }
                 ed.zoom = ed.zoom.zoom_in();
             }
             Task::none()
         }
         Message::EditorZoomInFromDisplayScale(scale) => {
             if let Some(ed) = state.editor.as_mut() {
+                if ed.busy {
+                    return Task::none();
+                }
                 ed.zoom = ed.zoom.zoom_in_from_display_scale(scale);
             }
             Task::none()
         }
         Message::EditorZoomOut => {
             if let Some(ed) = state.editor.as_mut() {
+                if ed.busy {
+                    return Task::none();
+                }
                 ed.zoom = ed.zoom.zoom_out();
             }
             Task::none()
         }
         Message::EditorZoomOutFromDisplayScale(scale) => {
             if let Some(ed) = state.editor.as_mut() {
+                if ed.busy {
+                    return Task::none();
+                }
                 ed.zoom = ed.zoom.zoom_out_from_display_scale(scale);
             }
             Task::none()
         }
         Message::EditorZoomActual => {
             if let Some(ed) = state.editor.as_mut() {
+                if ed.busy {
+                    return Task::none();
+                }
                 ed.zoom = ed.actual_size_zoom();
             }
             Task::none()
         }
         Message::EditorZoomFit => {
             if let Some(ed) = state.editor.as_mut() {
+                if ed.busy {
+                    return Task::none();
+                }
                 ed.zoom = crate::editor::EditorZoom::Fit;
             }
             Task::none()
@@ -2794,6 +3016,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
+            if ed.busy {
+                return Task::none();
+            }
+            commit_pending_editor_text(ed, &state.coordinator);
+            cancel_editor_previews(ed);
             let img = editor_output_image(ed);
             let size = (img.width(), img.height());
             let handle = iced::widget::image::Handle::from_rgba(
@@ -4369,18 +4596,24 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         },
     );
 
+    let width_text_alpha = if busy { 0.42 } else { 0.7 };
     let width_label = text(format!("{line_width:.0}px"))
         .size(11)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.7))
+        .color(Color::from_rgba(1.0, 1.0, 1.0, width_text_alpha))
         .width(Length::Fixed(34.0));
-    let width_slider = iced::widget::slider(
-        toolbar::MIN_LINE_WIDTH..=toolbar::MAX_LINE_WIDTH,
-        line_width,
-        Message::EditorLineWidthPreview,
-    )
-    .step(0.5)
-    .on_release(Message::EditorLineWidthCommit)
-    .width(Length::Fixed(140.0));
+    let width_control: Element<'_, Message> = if busy {
+        passive_line_width_control(line_width)
+    } else {
+        iced::widget::slider(
+            toolbar::MIN_LINE_WIDTH..=toolbar::MAX_LINE_WIDTH,
+            line_width,
+            Message::EditorLineWidthPreview,
+        )
+        .step(0.5)
+        .on_release(Message::EditorLineWidthCommit)
+        .width(Length::Fixed(140.0))
+        .into()
+    };
 
     let undo_depth = ed.model.undo_depth();
     let redo_depth = ed.model.redo_depth();
@@ -4422,7 +4655,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
         palette_row,
         toolbar_divider(),
         width_label,
-        width_slider,
+        width_control,
         IcedSpace::new().width(Length::Fill),
         undo_btn,
         redo_btn,
@@ -4453,6 +4686,13 @@ fn editor_view(state: &App) -> Element<'_, Message> {
     let zoom = ed.zoom;
     let display_scale = ed.display_scale;
     let next_pin_number = ed.next_pin_number;
+    let selected_preview = ed
+        .move_drag
+        .as_ref()
+        .filter(|drag| {
+            drag.moved && can_preview_drag_annotation(&drag.baseline, drag.selected_index)
+        })
+        .and_then(|drag| ed.model.annotations().get(drag.selected_index).cloned());
     let image_area_content = responsive(move |available| {
         let iw = image_w as f32;
         let ih = image_h as f32;
@@ -4499,6 +4739,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             } else {
                 Vec::new()
             },
+            selected_preview: selected_preview.clone(),
         };
         let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
             .width(Length::Fixed(displayed_w))
@@ -4617,7 +4858,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
                     .size(10)
                     .color(Color::from_rgba(1.0, 1.0, 1.0, 0.62)),
             )
-            .width(Length::Fixed(102.0))
+            .width(Length::Fixed(124.0))
             .padding([4, 6])
             .style(|_| iced::widget::container::Style {
                 background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.06).into()),
@@ -4636,7 +4877,7 @@ fn editor_view(state: &App) -> Element<'_, Message> {
                 Message::EditorFrameStyleChanged,
             )
             .text_size(10)
-            .width(Length::Fixed(102.0))
+            .width(Length::Fixed(124.0))
             .into()
         };
         let frame_controls = container(
@@ -4865,12 +5106,10 @@ fn editor_view(state: &App) -> Element<'_, Message> {
             .into(),
             EditorBottomLayout::Compact => column![
                 status_area,
-                row![discard, pin, save]
+                row![discard, copy_text, copy_image]
                     .spacing(6)
                     .align_y(Alignment::Center),
-                row![copy_text, copy_image]
-                    .spacing(6)
-                    .align_y(Alignment::Center),
+                row![pin, save].spacing(6).align_y(Alignment::Center),
             ]
             .spacing(8)
             .into(),
@@ -4883,20 +5122,44 @@ fn editor_view(state: &App) -> Element<'_, Message> {
 
     // ===== Text-input banner =====
     let text_banner: Element<'_, Message> = if let Some(pending) = ed.pending_text.as_ref() {
-        let input = iced::widget::text_input("Type and press Enter…", &pending.content)
-            .on_input(Message::EditorTextChanged)
-            .on_submit(Message::EditorTextCommit)
+        let commit_label = editor_text_commit_label(pending.edit_index.is_some());
+        let input: Element<'_, Message> = if busy {
+            let content = if pending.content.is_empty() {
+                "Text draft paused while working…".to_string()
+            } else {
+                pending.content.clone()
+            };
+            container(
+                text(content)
+                    .size(14)
+                    .color(Color::from_rgba(1.0, 1.0, 1.0, 0.48))
+                    .wrapping(iced::widget::text::Wrapping::Word),
+            )
             .padding(8)
-            .size(14)
-            .width(Length::Fill);
-        let commit = button(text("Add Text").size(13).color(Color::WHITE))
+            .width(Length::Fill)
+            .style(disabled_text_input_style)
+            .into()
+        } else {
+            iced::widget::text_input("Type and press Enter…", &pending.content)
+                .on_input(Message::EditorTextChanged)
+                .on_submit(Message::EditorTextCommit)
+                .padding(8)
+                .size(14)
+                .width(Length::Fill)
+                .into()
+        };
+        let mut commit = button(text(commit_label).size(13).color(Color::WHITE))
             .padding([8, 14])
-            .style(|theme, status| action_button_style(theme, status, ActionKind::Primary))
-            .on_press(Message::EditorTextCommit);
-        let cancel = button(text("Cancel").size(13).color(Color::WHITE))
+            .style(|theme, status| action_button_style(theme, status, ActionKind::Primary));
+        if !busy {
+            commit = commit.on_press(Message::EditorTextCommit);
+        }
+        let mut cancel = button(text("Cancel").size(13).color(Color::WHITE))
             .padding([8, 14])
-            .style(|theme, status| action_button_style(theme, status, ActionKind::Secondary))
-            .on_press(Message::EditorTextCancel);
+            .style(|theme, status| action_button_style(theme, status, ActionKind::Secondary));
+        if !busy {
+            cancel = cancel.on_press(Message::EditorTextCancel);
+        }
         let icon = container(crate::editor_icons::editor_icon(
             crate::editor_icons::EditorIcon::Tool(readshot_ui::editor::ToolState::Text),
             true,
@@ -5190,6 +5453,55 @@ fn toolbar_divider() -> Element<'static, Message> {
         .into()
 }
 
+fn passive_line_width_control(width: f32) -> Element<'static, Message> {
+    let fill_w = 140.0 * line_width_fraction(width);
+    container(
+        container(
+            iced::widget::Space::new()
+                .width(Length::Fixed(fill_w))
+                .height(Length::Fixed(4.0)),
+        )
+        .style(|_| container::Style {
+            background: Some(accent(0.45).into()),
+            border: iced::Border {
+                radius: 2.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+    )
+    .width(Length::Fixed(140.0))
+    .height(Length::Fixed(16.0))
+    .padding([6, 0])
+    .style(|_| container::Style {
+        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.07).into()),
+        border: iced::Border {
+            radius: 7.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+fn line_width_fraction(width: f32) -> f32 {
+    let min = readshot_ui::editor::toolbar::MIN_LINE_WIDTH;
+    let max = readshot_ui::editor::toolbar::MAX_LINE_WIDTH;
+    ((width.clamp(min, max) - min) / (max - min)).clamp(0.0, 1.0)
+}
+
+fn disabled_text_input_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.045).into()),
+        border: iced::Border {
+            color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+            width: 1.0,
+            radius: 5.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
 fn toolbar_button_style(_theme: &Theme, status: button::Status, is_active: bool) -> button::Style {
     // Active tool gets a pronounced fill *and* a 2 px accent border
     // so the active state is unambiguous against any backdrop. The
@@ -5333,6 +5645,16 @@ enum EditorBottomLayout {
     Compact,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditorBottomAction {
+    Discard,
+    CopyText,
+    CopyImage,
+    Pin,
+    Save,
+}
+
 fn editor_bottom_layout(width: f32) -> EditorBottomLayout {
     if width < 520.0 {
         EditorBottomLayout::Compact
@@ -5340,6 +5662,20 @@ fn editor_bottom_layout(width: f32) -> EditorBottomLayout {
         EditorBottomLayout::Stacked
     } else {
         EditorBottomLayout::Wide
+    }
+}
+
+#[cfg(test)]
+fn editor_bottom_action_rows(layout: EditorBottomLayout) -> Vec<Vec<EditorBottomAction>> {
+    use EditorBottomAction as A;
+    match layout {
+        EditorBottomLayout::Wide | EditorBottomLayout::Stacked => {
+            vec![vec![A::Discard, A::CopyText, A::CopyImage, A::Pin, A::Save]]
+        }
+        EditorBottomLayout::Compact => vec![
+            vec![A::Discard, A::CopyText, A::CopyImage],
+            vec![A::Pin, A::Save],
+        ],
     }
 }
 
@@ -5400,8 +5736,8 @@ fn action_button_style(_theme: &Theme, status: button::Status, kind: ActionKind)
     // mute the text. Without this the button looks identical whether
     // its `on_press` is wired or not — confusing for the user when
     // there's nothing to copy / nothing to clear.
-    let (bg, fg) = match status {
-        button::Status::Hovered => (hover, text_color),
+    let (bg, fg, border) = match status {
+        button::Status::Hovered => (hover, text_color, border_color),
         button::Status::Disabled => {
             let dim = Color {
                 a: base.a * 0.4,
@@ -5411,9 +5747,13 @@ fn action_button_style(_theme: &Theme, status: button::Status, kind: ActionKind)
                 a: 0.5,
                 ..text_color
             };
-            (dim, muted)
+            let muted_border = Color {
+                a: border_color.a * 0.45,
+                ..border_color
+            };
+            (dim, muted, muted_border)
         }
-        _ => (base, text_color),
+        _ => (base, text_color, border_color),
     };
     button::Style {
         background: Some(bg.into()),
@@ -5421,7 +5761,7 @@ fn action_button_style(_theme: &Theme, status: button::Status, kind: ActionKind)
         border: iced::Border {
             radius: 8.0.into(),
             width: 1.0,
-            color: border_color,
+            color: border,
         },
         ..Default::default()
     }
@@ -5499,7 +5839,7 @@ fn editor_key_message(
         (Key::Character(c), true, false) if c.eq_ignore_ascii_case("w") => {
             return Some(Message::EditorDiscardRequested);
         }
-        (Key::Character(c), true, false) if c == "+" || c == "=" => {
+        (Key::Character(c), true, _) if c == "+" || c == "=" => {
             return Some(Message::EditorZoomIn);
         }
         (Key::Character(c), true, false) if c == "-" => {
@@ -7182,6 +7522,33 @@ fn editor_output_image(ed: &mut EditorSession) -> image::RgbaImage {
     }
 }
 
+fn can_preview_drag_annotation(annotations: &[readshot_core::Annotation], index: usize) -> bool {
+    annotations
+        .get(index)
+        .is_some_and(|annotation| !matches!(annotation, readshot_core::Annotation::Crop { .. }))
+}
+
+fn refresh_image_during_select_drag(
+    annotations: &[readshot_core::Annotation],
+    index: usize,
+) -> bool {
+    annotations
+        .get(index)
+        .is_some_and(|annotation| matches!(annotation, readshot_core::Annotation::Crop { .. }))
+}
+
+fn editor_image_handle_without_annotation(
+    ed: &EditorSession,
+    index: usize,
+) -> iced::widget::image::Handle {
+    let (base, mut annotations) = ed.model.render_snapshot();
+    if index < annotations.len() {
+        annotations.remove(index);
+    }
+    let img = readshot_core::render(&base, &annotations);
+    iced::widget::image::Handle::from_rgba(img.width(), img.height(), img.as_raw().clone())
+}
+
 #[derive(Clone, Copy)]
 struct FramedImagePreset {
     pad: u32,
@@ -7231,8 +7598,9 @@ fn share_framed_image(img: &image::RgbaImage, style: EditorFrameStyle) -> image:
     }
 
     let preset = framed_image_preset(style);
-    let out_w = img.width().saturating_add(preset.pad * 2).max(1);
-    let out_h = img.height().saturating_add(preset.pad * 2).max(1);
+    let Some((out_w, out_h)) = framed_output_size(img.width(), img.height(), preset.pad) else {
+        return img.clone();
+    };
     let mut out = image::RgbaImage::from_pixel(out_w, out_h, image::Rgba(preset.background));
 
     if let Some(shadow) = preset.shadow {
@@ -7275,6 +7643,13 @@ fn share_framed_image(img: &image::RgbaImage, style: EditorFrameStyle) -> image:
         );
     }
     out
+}
+
+fn framed_output_size(width: u32, height: u32, pad: u32) -> Option<(u32, u32)> {
+    let pad_twice = pad.checked_mul(2)?;
+    let out_w = width.checked_add(pad_twice)?.max(1);
+    let out_h = height.checked_add(pad_twice)?.max(1);
+    Some((out_w, out_h))
 }
 
 fn framed_image_preset(style: EditorFrameStyle) -> FramedImagePreset {
@@ -7914,7 +8289,7 @@ fn apply_editor_color(
     coord: &CaptureCoordinator,
     color: readshot_core::Rgba,
 ) {
-    ed.width_drag_baseline = None;
+    cancel_editor_previews(ed);
     ed.model.set_color(color);
     if ed.model.apply_color_to_selected(color) {
         ed.refresh_image();
@@ -7928,7 +8303,7 @@ fn apply_editor_line_width(
     coord: &CaptureCoordinator,
     width: f32,
 ) {
-    ed.width_drag_baseline = None;
+    cancel_editor_previews(ed);
     ed.model.set_line_width(width);
     if ed.model.apply_line_width_to_selected(width) {
         ed.refresh_image();
@@ -7943,6 +8318,7 @@ fn preview_editor_line_width(ed: &mut crate::editor::EditorSession, width: f32) 
         ed.width_drag_baseline = None;
         return;
     }
+    ed.clear_discard_confirmation();
     let baseline = ed
         .width_drag_baseline
         .get_or_insert_with(|| ed.model.annotations().to_vec())
@@ -7951,7 +8327,88 @@ fn preview_editor_line_width(ed: &mut crate::editor::EditorSession, width: f32) 
     ed.refresh_image();
 }
 
+fn commit_pending_editor_text(
+    ed: &mut crate::editor::EditorSession,
+    coord: &CaptureCoordinator,
+) -> bool {
+    let Some(pending) = ed.pending_text.take() else {
+        return false;
+    };
+    let trimmed = pending.content.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if let Some(edit_index) = pending.edit_index {
+        if ed.model.replace_text_at(edit_index, trimmed.to_string()) {
+            ed.refresh_image();
+            ed.set_status("Updated text. ⌘Z to undo.");
+            sync_editor_history(ed, coord);
+            return true;
+        }
+        return false;
+    }
+
+    let annotation = readshot_core::Annotation::Text {
+        content: trimmed.to_string(),
+        origin: pending.origin,
+        color: ed.model.current_color(),
+        font_family: "system-ui".to_string(),
+        // Tie text size to the line-width slider so it's discoverable
+        // without a separate control.
+        size: text_size_from_line_width(ed.model.current_line_width()),
+    };
+    ed.model.commit_annotation(annotation);
+    ed.refresh_image();
+    ed.set_status("Added text. ⌘Z to undo.");
+    sync_editor_history(ed, coord);
+    true
+}
+
+fn editor_has_unsaved_work(ed: &crate::editor::EditorSession) -> bool {
+    ed.has_output_changes() || pending_text_has_unsaved_work(ed)
+}
+
+fn pending_text_has_unsaved_work(ed: &crate::editor::EditorSession) -> bool {
+    let Some(pending) = ed.pending_text.as_ref() else {
+        return false;
+    };
+    let trimmed = pending.content.trim();
+    let Some(edit_index) = pending.edit_index else {
+        return !trimmed.is_empty();
+    };
+    match ed.model.annotations().get(edit_index) {
+        Some(readshot_core::Annotation::Text { content, .. }) => content != trimmed,
+        _ => !trimmed.is_empty(),
+    }
+}
+
+fn editor_text_commit_label(is_editing: bool) -> &'static str {
+    if is_editing {
+        "Update Text"
+    } else {
+        "Add Text"
+    }
+}
+
+fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
+    let mut refresh = false;
+    if let Some(drag) = ed.move_drag.take() {
+        let restore_image_handle =
+            drag.moved && can_preview_drag_annotation(&drag.baseline, drag.selected_index);
+        ed.model.cancel_preview_from_baseline(drag.baseline);
+        refresh |= restore_image_handle;
+    }
+    if let Some(baseline) = ed.width_drag_baseline.take() {
+        ed.model.cancel_preview_from_baseline(baseline);
+        refresh = true;
+    }
+    if refresh {
+        ed.refresh_image();
+    }
+}
+
 fn sync_editor_history(ed: &mut crate::editor::EditorSession, coord: &CaptureCoordinator) {
+    ed.clear_discard_confirmation();
     let Some(record) = ed.source_record.as_mut() else {
         return;
     };
@@ -8001,6 +8458,18 @@ mod tests {
             Some(history),
         );
         App::new(coord, perms, Preferences::default())
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_editor_qa_session_is_clean_and_pin_ready() {
+        let ed = debug_editor_qa_session();
+
+        assert_eq!(ed.image_size(), (1040, 680));
+        assert_eq!(ed.next_pin_number, 2);
+        assert!(ed.model.undo_depth() > 0);
+        assert!(!editor_has_unsaved_work(&ed));
+        assert_eq!(ed.status.as_deref(), Some("Editor QA fixture loaded."));
     }
 
     fn overlay_display(id: &str) -> crate::app::OverlayDisplay {
@@ -8346,6 +8815,45 @@ mod tests {
     }
 
     #[test]
+    fn opening_replacement_editor_commits_old_pending_history_text() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(FsHistoryStore::new(dir.path().join("history")));
+        let record =
+            readshot_core::CaptureRecord::new(chrono::Utc::now(), 100, 100, "primary".to_string());
+        store.save(&record, b"png").unwrap();
+
+        let history: Arc<dyn HistoryStore> = store.clone();
+        let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), history);
+        let old_id = iced::window::Id::unique();
+        let mut old = crate::editor::EditorSession::from_history(solid(100, 100), record);
+        old.window_id = Some(old_id);
+        old.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(12.0, 18.0),
+            content: "replacement draft".into(),
+            edit_index: None,
+        });
+        app.windows.register(old_id, WindowKind::Editor);
+        app.editor = Some(old);
+
+        let new = crate::editor::EditorSession::new(solid(32, 32));
+        let _ = open_editor_window_replacing(&mut app, new, None);
+
+        assert!(app.windows.kind(old_id).is_none());
+        assert_eq!(app.editor.as_ref().unwrap().image_size(), (32, 32));
+        let from_disk = store.list().unwrap();
+        assert_eq!(from_disk[0].annotation_model.len(), 1);
+        match &from_disk[0].annotation_model[0] {
+            Annotation::Text {
+                content, origin, ..
+            } => {
+                assert_eq!(content, "replacement draft");
+                assert_eq!(*origin, PointLike::new(12.0, 18.0));
+            }
+            other => panic!("expected text annotation, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn retake_last_region_without_previous_region_sets_status() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
 
@@ -8412,6 +8920,74 @@ mod tests {
         assert_eq!(editor_bottom_layout(1000.0), EditorBottomLayout::Wide);
         assert_eq!(editor_bottom_layout(700.0), EditorBottomLayout::Stacked);
         assert_eq!(editor_bottom_layout(420.0), EditorBottomLayout::Compact);
+    }
+
+    #[test]
+    fn line_width_fraction_clamps_to_toolbar_range() {
+        assert_eq!(line_width_fraction(-10.0), 0.0);
+        assert_eq!(line_width_fraction(99.0), 1.0);
+        assert!(
+            (line_width_fraction(readshot_ui::editor::toolbar::MIN_LINE_WIDTH) - 0.0).abs()
+                < f32::EPSILON
+        );
+        assert!(
+            (line_width_fraction(readshot_ui::editor::toolbar::MAX_LINE_WIDTH) - 1.0).abs()
+                < f32::EPSILON
+        );
+    }
+
+    #[test]
+    fn disabled_action_button_does_not_keep_active_border_strength() {
+        let active =
+            action_button_style(&Theme::Dark, button::Status::Active, ActionKind::Secondary);
+        let disabled = action_button_style(
+            &Theme::Dark,
+            button::Status::Disabled,
+            ActionKind::Secondary,
+        );
+
+        assert!(disabled.text_color.a < active.text_color.a);
+        assert!(disabled.border.color.a < active.border.color.a);
+    }
+
+    #[test]
+    fn select_drag_preview_refreshes_image_only_for_crop_geometry() {
+        let annotations = vec![
+            Annotation::Rectangle {
+                rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+                color: Rgba::OPAQUE_BLACK,
+                line_width: 2.0,
+            },
+            Annotation::Crop {
+                rect: RectLike::new(4.0, 4.0, 18.0, 18.0),
+            },
+        ];
+
+        assert!(can_preview_drag_annotation(&annotations, 0));
+        assert!(!refresh_image_during_select_drag(&annotations, 0));
+        assert!(!can_preview_drag_annotation(&annotations, 1));
+        assert!(refresh_image_during_select_drag(&annotations, 1));
+        assert!(!refresh_image_during_select_drag(&annotations, 99));
+    }
+
+    #[test]
+    fn editor_bottom_actions_keep_copy_actions_together_before_pin() {
+        use EditorBottomAction as A;
+        assert_eq!(
+            editor_bottom_action_rows(EditorBottomLayout::Wide),
+            vec![vec![A::Discard, A::CopyText, A::CopyImage, A::Pin, A::Save]]
+        );
+        assert_eq!(
+            editor_bottom_action_rows(EditorBottomLayout::Stacked),
+            vec![vec![A::Discard, A::CopyText, A::CopyImage, A::Pin, A::Save]]
+        );
+        assert_eq!(
+            editor_bottom_action_rows(EditorBottomLayout::Compact),
+            vec![
+                vec![A::Discard, A::CopyText, A::CopyImage],
+                vec![A::Pin, A::Save]
+            ]
+        );
     }
 
     #[test]
@@ -9071,6 +9647,14 @@ mod tests {
     }
 
     #[test]
+    fn framed_output_size_uses_checked_padding_math() {
+        assert_eq!(framed_output_size(10, 20, 4), Some((18, 28)));
+        assert_eq!(framed_output_size(0, 0, 0), Some((1, 1)));
+        assert_eq!(framed_output_size(u32::MAX - 1, 20, 1), None);
+        assert_eq!(framed_output_size(10, 20, u32::MAX), None);
+    }
+
+    #[test]
     fn share_framed_image_soft_adds_padding_and_preserves_center_pixels() {
         let mut img = image::RgbaImage::new(64, 64);
         for px in img.pixels_mut() {
@@ -9121,6 +9705,27 @@ mod tests {
         assert_eq!((framed.width(), framed.height()), (96, 96));
         assert_eq!(*framed.get_pixel(0, 0), image::Rgba([0, 0, 0, 0]));
         assert_eq!(*framed.get_pixel(48, 48), image::Rgba([20, 120, 240, 255]));
+    }
+
+    #[test]
+    fn editor_output_image_bakes_annotations_and_selected_frame() {
+        let mut ed = crate::editor::EditorSession::new(solid(32, 32));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(6.0, 6.0, 20.0, 20.0),
+            color: Rgba::new(1.0, 0.0, 0.0, 1.0),
+            line_width: 4.0,
+        });
+        ed.frame_style = EditorFrameStyle::Minimal;
+
+        let output = editor_output_image(&mut ed);
+
+        assert_eq!((output.width(), output.height()), (80, 80));
+        assert_eq!(*output.get_pixel(0, 0), image::Rgba([255, 255, 255, 255]));
+        let annotated = *output.get_pixel(24 + 6, 24 + 6);
+        assert!(
+            annotated[0] > 180 && annotated[1] < 80 && annotated[2] < 80,
+            "expected visible red annotation pixel, got {annotated:?}"
+        );
     }
 
     #[test]
@@ -9432,6 +10037,44 @@ mod tests {
     }
 
     #[test]
+    fn window_closed_commits_pending_history_text_before_dropping_editor() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(FsHistoryStore::new(dir.path().join("history")));
+        let record =
+            readshot_core::CaptureRecord::new(chrono::Utc::now(), 100, 100, "primary".to_string());
+        store.save(&record, b"png").unwrap();
+
+        let history: Arc<dyn HistoryStore> = store.clone();
+        let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), history);
+        let id = iced::window::Id::unique();
+        let mut ed = crate::editor::EditorSession::from_history(solid(100, 100), record);
+        ed.window_id = Some(id);
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(12.0, 18.0),
+            content: "window close draft".into(),
+            edit_index: None,
+        });
+        app.windows.register(id, WindowKind::Editor);
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::WindowClosed(id));
+
+        assert!(app.editor.is_none());
+        assert!(app.windows.kind(id).is_none());
+        let from_disk = store.list().unwrap();
+        assert_eq!(from_disk[0].annotation_model.len(), 1);
+        match &from_disk[0].annotation_model[0] {
+            Annotation::Text {
+                content, origin, ..
+            } => {
+                assert_eq!(content, "window close draft");
+                assert_eq!(*origin, PointLike::new(12.0, 18.0));
+            }
+            other => panic!("expected text annotation, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn keyboard_width_bump_updates_selected_annotation() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let mut ed = crate::editor::EditorSession::new(solid(64, 64));
@@ -9448,6 +10091,971 @@ mod tests {
         let ed = app.editor.as_ref().unwrap();
         match &ed.model.annotations()[0] {
             Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 6.0),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_select_drag_cancel_restores_baseline_without_undo_step() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        let undo_depth = ed.model.undo_depth();
+        app.editor = Some(ed);
+
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
+                5.0, 5.0,
+            ))),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::SelectDragged(PointLike::new(
+                12.0, 14.0,
+            ))),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::Cancelled),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.move_drag.is_none());
+        assert_eq!(ed.model.undo_depth(), undo_depth);
+        match &ed.model.annotations()[0] {
+            Annotation::Rectangle { rect, .. } => {
+                assert_eq!(rect.x, 0.0);
+                assert_eq!(rect.y, 0.0);
+            }
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_select_subpixel_drag_release_does_not_mutate_annotation() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        let undo_depth = ed.model.undo_depth();
+        app.editor = Some(ed);
+
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
+                5.0, 5.0,
+            ))),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::SelectDragged(PointLike::new(
+                5.25, 5.25,
+            ))),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::SelectReleased),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.move_drag.is_none());
+        assert_eq!(ed.model.undo_depth(), undo_depth);
+        match &ed.model.annotations()[0] {
+            Annotation::Rectangle { rect, .. } => {
+                assert_eq!(rect.x, 0.0);
+                assert_eq!(rect.y, 0.0);
+            }
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_tool_change_commits_pending_text_when_leaving_text_tool() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.set_tool(readshot_ui::editor::ToolState::Text);
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "draft".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+                readshot_ui::editor::ToolState::Rectangle,
+            )),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        assert_eq!(ed.model.annotations().len(), 1);
+        match &ed.model.annotations()[0] {
+            Annotation::Text {
+                content, origin, ..
+            } => {
+                assert_eq!(content, "draft");
+                assert_eq!(*origin, PointLike::new(8.0, 9.0));
+            }
+            other => panic!("expected text annotation, got {other:?}"),
+        }
+        assert_eq!(
+            ed.model.active_tool(),
+            readshot_ui::editor::ToolState::Rectangle
+        );
+    }
+
+    #[test]
+    fn editor_tool_change_dismisses_empty_pending_text_without_undo_step() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        let undo_depth = ed.model.undo_depth();
+        ed.model.set_tool(readshot_ui::editor::ToolState::Text);
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "   ".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+                readshot_ui::editor::ToolState::Rectangle,
+            )),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        assert!(ed.model.annotations().is_empty());
+        assert_eq!(ed.model.undo_depth(), undo_depth);
+        assert_eq!(
+            ed.model.active_tool(),
+            readshot_ui::editor::ToolState::Rectangle
+        );
+    }
+
+    #[test]
+    fn editor_requesting_new_text_commits_existing_non_empty_draft() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.set_tool(readshot_ui::editor::ToolState::Text);
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "first note".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::RequestText(PointLike::new(
+                24.0, 25.0,
+            ))),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.annotations().len(), 1);
+        match &ed.model.annotations()[0] {
+            Annotation::Text {
+                content, origin, ..
+            } => {
+                assert_eq!(content, "first note");
+                assert_eq!(*origin, PointLike::new(8.0, 9.0));
+            }
+            other => panic!("expected text annotation, got {other:?}"),
+        }
+        let pending = ed.pending_text.as_ref().unwrap();
+        assert_eq!(pending.origin, PointLike::new(24.0, 25.0));
+        assert!(pending.content.is_empty());
+    }
+
+    #[test]
+    fn editor_requesting_new_text_dismisses_empty_draft_without_undo_step() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        let undo_depth = ed.model.undo_depth();
+        ed.model.set_tool(readshot_ui::editor::ToolState::Text);
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "   ".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::RequestText(PointLike::new(
+                24.0, 25.0,
+            ))),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.undo_depth(), undo_depth);
+        assert!(ed.model.annotations().is_empty());
+        let pending = ed.pending_text.as_ref().unwrap();
+        assert_eq!(pending.origin, PointLike::new(24.0, 25.0));
+        assert!(pending.content.is_empty());
+    }
+
+    #[test]
+    fn editor_text_commit_updates_original_edit_index_even_if_selection_changes() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(96, 96));
+        ed.model.commit_annotation(Annotation::Text {
+            content: "old".into(),
+            origin: PointLike::new(10.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 16.0,
+        });
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(40.0, 40.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(12.0, 8.0)), Some(0));
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(10.0, 20.0),
+            content: "new".into(),
+            edit_index: Some(0),
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(45.0, 45.0)), Some(1));
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorTextCommit);
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        match &ed.model.annotations()[0] {
+            Annotation::Text { content, .. } => assert_eq!(content, "new"),
+            other => panic!("expected text annotation, got {other:?}"),
+        }
+        assert!(matches!(
+            &ed.model.annotations()[1],
+            Annotation::Rectangle { .. }
+        ));
+    }
+
+    #[test]
+    fn editor_delete_selected_dismisses_pending_text_edit() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(96, 96));
+        ed.model.commit_annotation(Annotation::Text {
+            content: "old".into(),
+            origin: PointLike::new(10.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 16.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(12.0, 8.0)), Some(0));
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(10.0, 20.0),
+            content: "draft replacement".into(),
+            edit_index: Some(0),
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorDeleteSelected);
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        assert!(ed.model.annotations().is_empty());
+        assert_eq!(ed.model.selected_annotation(), None);
+        assert_eq!(
+            ed.status.as_deref(),
+            Some("Deleted annotation. ⌘Z to undo.")
+        );
+    }
+
+    #[test]
+    fn editor_delete_without_selection_keeps_new_pending_text() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(96, 96));
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(10.0, 20.0),
+            content: "draft".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorDeleteSelected);
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_some());
+        assert!(ed.model.annotations().is_empty());
+        assert_eq!(ed.status, None);
+    }
+
+    #[test]
+    fn editor_cancel_existing_text_edit_keeps_annotation_selected() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(96, 96));
+        ed.model.commit_annotation(Annotation::Text {
+            content: "old".into(),
+            origin: PointLike::new(10.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 16.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(12.0, 8.0)), Some(0));
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(10.0, 20.0),
+            content: "draft replacement".into(),
+            edit_index: Some(0),
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorTextCancel);
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        assert_eq!(ed.model.selected_annotation(), Some(0));
+        match &ed.model.annotations()[0] {
+            Annotation::Text { content, .. } => assert_eq!(content, "old"),
+            other => panic!("expected text annotation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_cancel_new_text_draft_clears_selection() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(96, 96));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(10.0, 20.0),
+            content: "new label".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorTextCancel);
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        assert_eq!(ed.model.selected_annotation(), None);
+        assert_eq!(ed.model.annotations().len(), 1);
+    }
+
+    #[test]
+    fn editor_undo_commits_then_undoes_new_pending_text() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(96, 96));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(30.0, 30.0),
+            content: "draft label".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        assert_eq!(ed.model.annotations().len(), 1);
+        assert!(matches!(
+            ed.model.annotations()[0],
+            Annotation::Rectangle { .. }
+        ));
+        assert!(ed.model.can_redo());
+        assert_eq!(ed.status.as_deref(), Some("Undid edit. ⌘⇧Z to redo."));
+    }
+
+    #[test]
+    fn editor_redo_with_pending_text_commits_new_branch_and_clears_redo() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(96, 96));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        ed.model.commit_annotation(Annotation::Ellipse {
+            rect: RectLike::new(40.0, 40.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert!(ed.model.undo());
+        assert!(ed.model.can_redo());
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(30.0, 30.0),
+            content: "new branch".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        assert_eq!(ed.model.annotations().len(), 2);
+        assert!(matches!(
+            ed.model.annotations()[0],
+            Annotation::Rectangle { .. }
+        ));
+        match &ed.model.annotations()[1] {
+            Annotation::Text {
+                content, origin, ..
+            } => {
+                assert_eq!(content, "new branch");
+                assert_eq!(*origin, PointLike::new(30.0, 30.0));
+            }
+            other => panic!("expected text annotation, got {other:?}"),
+        }
+        assert!(!ed.model.can_redo());
+        assert_eq!(ed.status.as_deref(), Some("Added text. ⌘Z to undo."));
+    }
+
+    #[test]
+    fn editor_select_press_commits_non_empty_pending_text() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "label".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
+                30.0, 30.0,
+            ))),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        assert_eq!(ed.model.annotations().len(), 1);
+        match &ed.model.annotations()[0] {
+            Annotation::Text {
+                content, origin, ..
+            } => {
+                assert_eq!(content, "label");
+                assert_eq!(*origin, PointLike::new(8.0, 9.0));
+            }
+            other => panic!("expected text annotation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_select_press_dismisses_empty_pending_text_without_undo_step() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        let undo_depth = ed.model.undo_depth();
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "   ".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
+                30.0, 30.0,
+            ))),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        assert!(ed.model.annotations().is_empty());
+        assert_eq!(ed.model.undo_depth(), undo_depth);
+    }
+
+    #[test]
+    fn editor_tool_change_cancels_line_width_preview_without_undo_step() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        let undo_depth = ed.model.undo_depth();
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+                readshot_ui::editor::ToolState::Arrow,
+            )),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.width_drag_baseline.is_none());
+        assert_eq!(ed.model.undo_depth(), undo_depth);
+        match &ed.model.annotations()[0] {
+            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 2.0),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_select_press_cancels_line_width_preview_without_committing() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        let undo_depth = ed.model.undo_depth();
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
+                30.0, 30.0,
+            ))),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.width_drag_baseline.is_none());
+        assert_eq!(ed.model.undo_depth(), undo_depth);
+        match &ed.model.annotations()[0] {
+            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 2.0),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_frame_change_cancels_line_width_preview_without_committing() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        let undo_depth = ed.model.undo_depth();
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
+        let _ = update(
+            &mut app,
+            Message::EditorFrameStyleChanged(EditorFrameStyle::Soft),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.frame_style, EditorFrameStyle::Soft);
+        assert!(ed.width_drag_baseline.is_none());
+        assert_eq!(ed.model.undo_depth(), undo_depth);
+        match &ed.model.annotations()[0] {
+            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 2.0),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_save_cancels_line_width_preview_before_output() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        let undo_depth = ed.model.undo_depth();
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
+        let _ = update(&mut app, Message::EditorSaveRequested);
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.busy);
+        assert!(ed.width_drag_baseline.is_none());
+        assert_eq!(ed.model.undo_depth(), undo_depth);
+        match &ed.model.annotations()[0] {
+            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 2.0),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_save_commits_pending_text_before_output() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: " ship this ".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorSaveRequested);
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        assert_eq!(ed.model.annotations().len(), 1);
+        match &ed.model.annotations()[0] {
+            Annotation::Text {
+                content, origin, ..
+            } => {
+                assert_eq!(content, "ship this");
+                assert_eq!(*origin, PointLike::new(8.0, 9.0));
+            }
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_save_dismisses_empty_pending_text_without_undo_step() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        let undo_depth = ed.model.undo_depth();
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "   ".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorSaveRequested);
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        assert!(ed.model.annotations().is_empty());
+        assert_eq!(ed.model.undo_depth(), undo_depth);
+    }
+
+    #[test]
+    fn editor_successful_save_marks_current_output_clean_but_keeps_undo() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        ed.frame_style = EditorFrameStyle::Soft;
+        let undo_depth = ed.model.undo_depth();
+        app.editor = Some(ed);
+
+        let dir = tempfile::tempdir().unwrap();
+        let saved_path = dir.path().join("saved.png");
+        let _ = update(&mut app, Message::EditorSaved(Ok(Some(saved_path))));
+
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.undo_depth(), undo_depth);
+        assert!(ed.model.can_undo());
+        assert!(!editor_has_unsaved_work(ed));
+
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+
+        assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn editor_successful_copy_image_marks_current_output_clean() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        ed.frame_style = EditorFrameStyle::Dark;
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorCopyImageDone(Ok(())));
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.model.can_undo());
+        assert!(!editor_has_unsaved_work(ed));
+    }
+
+    #[test]
+    fn editor_cancelled_or_failed_output_keeps_unsaved_work_dirty() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorSaved(Ok(None)));
+        assert!(editor_has_unsaved_work(app.editor.as_ref().unwrap()));
+
+        let _ = update(
+            &mut app,
+            Message::EditorCopyImageDone(Err("clipboard unavailable".into())),
+        );
+        assert!(editor_has_unsaved_work(app.editor.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn editor_discard_requires_confirmation_for_non_empty_pending_text() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "draft".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+
+        let ed = app.editor.as_ref().expect("first discard should only arm");
+        assert!(ed.discard_pending_at.is_some());
+        assert_eq!(
+            ed.status.as_deref(),
+            Some("Discard unsaved edits? Click Discard again to confirm.")
+        );
+
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+
+        assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn editor_discard_treats_empty_pending_text_as_clean() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "   ".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+
+        assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn editor_discard_treats_unchanged_text_edit_as_clean() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Text {
+            content: "same text".into(),
+            origin: PointLike::new(8.0, 9.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 16.0,
+        });
+        ed.mark_output_clean();
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: " same text ".into(),
+            edit_index: Some(0),
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+
+        assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn editor_discard_requires_confirmation_for_changed_text_edit() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Text {
+            content: "old text".into(),
+            origin: PointLike::new(8.0, 9.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 16.0,
+        });
+        ed.mark_output_clean();
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "new text".into(),
+            edit_index: Some(0),
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+
+        let ed = app.editor.as_ref().expect("first discard should only arm");
+        assert!(ed.discard_pending_at.is_some());
+        assert_eq!(
+            ed.status.as_deref(),
+            Some("Discard unsaved edits? Click Discard again to confirm.")
+        );
+    }
+
+    #[test]
+    fn editor_discard_requires_confirmation_for_selected_frame() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.frame_style = EditorFrameStyle::Soft;
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+
+        let ed = app.editor.as_ref().expect("first discard should only arm");
+        assert!(ed.discard_pending_at.is_some());
+        assert_eq!(
+            ed.status.as_deref(),
+            Some("Discard unsaved edits? Click Discard again to confirm.")
+        );
+    }
+
+    #[test]
+    fn editor_discard_confirmation_resets_after_frame_change() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+        assert!(app.editor.as_ref().unwrap().discard_pending_at.is_some());
+
+        let _ = update(
+            &mut app,
+            Message::EditorFrameStyleChanged(EditorFrameStyle::Soft),
+        );
+        assert!(app.editor.as_ref().unwrap().discard_pending_at.is_none());
+
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+
+        let ed = app.editor.as_ref().expect("discard should re-arm");
+        assert!(ed.discard_pending_at.is_some());
+    }
+
+    #[test]
+    fn editor_discard_confirmation_resets_after_annotation_change() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+        assert!(app.editor.as_ref().unwrap().discard_pending_at.is_some());
+
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                Annotation::Rectangle {
+                    rect: RectLike::new(30.0, 30.0, 12.0, 12.0),
+                    color: Rgba::OPAQUE_BLACK,
+                    line_width: 2.0,
+                },
+            )),
+        );
+        assert!(app.editor.as_ref().unwrap().discard_pending_at.is_none());
+
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+
+        let ed = app.editor.as_ref().expect("discard should re-arm");
+        assert!(ed.discard_pending_at.is_some());
+        assert_eq!(ed.model.annotations().len(), 2);
+    }
+
+    #[test]
+    fn editor_text_commit_label_matches_add_or_edit_state() {
+        assert_eq!(editor_text_commit_label(false), "Add Text");
+        assert_eq!(editor_text_commit_label(true), "Update Text");
+    }
+
+    #[test]
+    fn editor_busy_ignores_export_reentry_without_committing_pending_text() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.busy = true;
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "draft".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorSaveRequested);
+        let _ = update(&mut app, Message::EditorCopyImageRequested);
+        let _ = update(&mut app, Message::EditorCopyTextRequested);
+
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.busy);
+        assert!(ed.pending_text.is_some());
+        assert!(ed.model.annotations().is_empty());
+    }
+
+    #[test]
+    fn editor_busy_ignores_canvas_toolbar_and_zoom_mutations() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        ed.busy = true;
+        app.editor = Some(ed);
+
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+                readshot_ui::editor::ToolState::Arrow,
+            )),
+        );
+        let _ = update(&mut app, Message::EditorWidthBump(3.0));
+        let _ = update(&mut app, Message::EditorZoomIn);
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                Annotation::Rectangle {
+                    rect: RectLike::new(30.0, 30.0, 10.0, 10.0),
+                    color: Rgba::OPAQUE_BLACK,
+                    line_width: 4.0,
+                },
+            )),
+        );
+
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            ed.model.active_tool(),
+            readshot_ui::editor::ToolState::Select
+        );
+        assert_eq!(ed.model.annotations().len(), 1);
+        assert_eq!(ed.zoom, crate::editor::EditorZoom::Fit);
+        match &ed.model.annotations()[0] {
+            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 2.0),
             other => panic!("expected rectangle, got {other:?}"),
         }
     }
@@ -9529,6 +11137,41 @@ mod tests {
     }
 
     #[test]
+    fn editor_advertised_tool_shortcuts_map_to_their_tools() {
+        use readshot_ui::editor::ToolState as T;
+        let tools = [
+            T::Select,
+            T::Rectangle,
+            T::Ellipse,
+            T::Line,
+            T::Arrow,
+            T::Pen,
+            T::Highlighter,
+            T::Text,
+            T::Blur,
+            T::Pixelate,
+            T::NumberedPin,
+            T::Crop,
+        ];
+
+        for tool in tools {
+            let (_label, key) = tool_label_and_key(tool);
+            assert_eq!(tool_for_key(key), Some(tool), "shortcut drift for {tool:?}");
+            let message = editor_key_message(
+                iced::keyboard::Key::Character(key.to_string().into()),
+                iced::keyboard::Modifiers::empty(),
+                true,
+            );
+            assert!(matches!(
+                message,
+                Some(Message::EditorToolbar(
+                    readshot_ui::ToolbarMessage::SelectTool(mapped)
+                )) if mapped == tool
+            ));
+        }
+    }
+
+    #[test]
     fn editor_existing_command_shortcuts_stay_mapped() {
         let cmd = command_modifiers();
         let undo = editor_key_message(iced::keyboard::Key::Character("z".into()), cmd, false);
@@ -9547,6 +11190,12 @@ mod tests {
 
         let save = editor_key_message(iced::keyboard::Key::Character("s".into()), cmd, false);
         assert!(matches!(save, Some(Message::EditorSaveRequested)));
+
+        let mut cmd_shift = cmd;
+        cmd_shift.insert(iced::keyboard::Modifiers::SHIFT);
+        let zoom_in =
+            editor_key_message(iced::keyboard::Key::Character("=".into()), cmd_shift, false);
+        assert!(matches!(zoom_in, Some(Message::EditorZoomIn)));
 
         let close = editor_key_message(iced::keyboard::Key::Character("w".into()), cmd, false);
         assert!(matches!(close, Some(Message::EditorDiscardRequested)));
