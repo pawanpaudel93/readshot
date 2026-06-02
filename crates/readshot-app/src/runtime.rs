@@ -2605,26 +2605,30 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         };
                         if (dx.abs() >= 0.5 || dy.abs() >= 0.5) && changed {
                             drag.moved = true;
-                            ed.refresh_image();
+                            // Keep the flattened image handle stable while the
+                            // pointer is moving. Re-uploading a full RGBA
+                            // texture on every Select drag tick can briefly
+                            // reveal the dark stage behind the image.
+                            // The canvas selection overlay still follows the
+                            // model live; the bitmap is refreshed once on
+                            // release.
                         }
                     }
                 }
                 readshot_ui::CanvasMessage::SelectReleased => {
-                    if let Some(drag) = ed.move_drag.take() {
-                        if drag.moved {
-                            if ed.model.commit_preview_from_baseline(drag.baseline) {
-                                ed.refresh_image();
-                                let verb = match drag.kind {
-                                    crate::editor::MoveDragKind::Move => "Moved",
-                                    crate::editor::MoveDragKind::Resize(_) => "Resized",
-                                };
-                                ed.set_status(format!("{verb} annotation. ⌘Z to undo."));
-                                sync_editor_history(ed, &state.coordinator);
-                            } else {
-                                ed.refresh_image();
-                            }
-                        }
+                    let Some(drag) = ed.move_drag.take().filter(|drag| drag.moved) else {
+                        return Task::none();
+                    };
+                    if !ed.model.commit_preview_from_baseline(drag.baseline) {
+                        return Task::none();
                     }
+                    ed.refresh_image();
+                    let verb = match drag.kind {
+                        crate::editor::MoveDragKind::Move => "Moved",
+                        crate::editor::MoveDragKind::Resize(_) => "Resized",
+                    };
+                    ed.set_status(format!("{verb} annotation. ⌘Z to undo."));
+                    sync_editor_history(ed, &state.coordinator);
                 }
                 readshot_ui::CanvasMessage::RequestText(p) => {
                     // Text tool clicked — open the inline text-input
