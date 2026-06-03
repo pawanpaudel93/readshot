@@ -15,7 +15,7 @@ use readshot_core::{FsHistoryStore, HistoryStore};
 use readshot_mcp::McpServer;
 use readshot_ocr::default_engine;
 use serde_json::json;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tracing::Level;
 
 #[tokio::main]
@@ -142,9 +142,76 @@ fn build_server() -> McpServer {
     }
 }
 
+/// Maximum bytes buffered for a single JSON-RPC request line. The input
+/// source is an untrusted MCP host/agent, and every legitimate request to
+/// this server is tiny (a display id, a rect, a short language list) —
+/// base64 image data is only ever *output*. 8 MiB is far past any real
+/// request and exists purely to bound memory: without it a client could
+/// stream gigabytes on one newline-less line and OOM the server.
+const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Outcome of reading one newline-delimited line with a size bound.
+#[derive(Debug, PartialEq, Eq)]
+enum LineRead {
+    /// A complete line within the cap (trailing `\n`/`\r\n` stripped).
+    Line,
+    /// End of stream with no further bytes.
+    Eof,
+    /// The line exceeded the cap; its bytes were drained to the next
+    /// newline (so the stream stays in sync) but never buffered.
+    Overflow,
+}
+
+/// Read one `\n`-terminated line into `out`, buffering at most `cap`
+/// bytes. Reading from a [`BufReader`] keeps this cheap despite the
+/// byte-at-a-time loop (each read is served from the in-memory buffer,
+/// not a syscall). Over-long lines are drained without being stored, so a
+/// malicious client cannot exhaust memory and the stream resynchronises
+/// to the next request.
+async fn read_line_capped<R>(
+    reader: &mut R,
+    out: &mut Vec<u8>,
+    cap: usize,
+) -> std::io::Result<LineRead>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    out.clear();
+    let mut byte = [0u8; 1];
+    let mut overflow = false;
+    let mut saw_any = false;
+    loop {
+        if reader.read(&mut byte).await? == 0 {
+            if !saw_any {
+                return Ok(LineRead::Eof);
+            }
+            return Ok(if overflow {
+                LineRead::Overflow
+            } else {
+                LineRead::Line
+            });
+        }
+        saw_any = true;
+        if byte[0] == b'\n' {
+            if overflow {
+                return Ok(LineRead::Overflow);
+            }
+            if out.last() == Some(&b'\r') {
+                out.pop();
+            }
+            return Ok(LineRead::Line);
+        }
+        if out.len() < cap {
+            out.push(byte[0]);
+        } else {
+            // Past the cap: stop storing, keep draining to the newline.
+            overflow = true;
+        }
+    }
+}
+
 async fn serve_stdio(server: McpServer) -> std::io::Result<()> {
-    let stdin = tokio::io::stdin();
-    let mut reader = BufReader::new(stdin).lines();
+    let mut reader = BufReader::new(tokio::io::stdin());
     let mut stdout = tokio::io::stdout();
 
     tracing::info!(
@@ -153,11 +220,29 @@ async fn serve_stdio(server: McpServer) -> std::io::Result<()> {
         version = env!("CARGO_PKG_VERSION"),
     );
 
-    while let Some(line) = reader.next_line().await? {
-        if let Some(reply) = server.handle(&line).await {
-            stdout.write_all(reply.as_bytes()).await?;
-            stdout.write_all(b"\n").await?;
-            stdout.flush().await?;
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        match read_line_capped(&mut reader, &mut buf, MAX_LINE_BYTES).await? {
+            LineRead::Eof => break,
+            LineRead::Overflow => {
+                tracing::warn!(
+                    target: "readshot::mcp",
+                    "rejected oversized request line (> {MAX_LINE_BYTES} bytes)"
+                );
+                // Reply with a JSON-RPC parse error but keep serving.
+                let reply = r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error: request line exceeds maximum size"}}"#;
+                stdout.write_all(reply.as_bytes()).await?;
+                stdout.write_all(b"\n").await?;
+                stdout.flush().await?;
+            }
+            LineRead::Line => {
+                let line = String::from_utf8_lossy(&buf);
+                if let Some(reply) = server.handle(&line).await {
+                    stdout.write_all(reply.as_bytes()).await?;
+                    stdout.write_all(b"\n").await?;
+                    stdout.flush().await?;
+                }
+            }
         }
     }
 
@@ -167,4 +252,72 @@ async fn serve_stdio(server: McpServer) -> std::io::Result<()> {
 fn default_history_root() -> Option<std::path::PathBuf> {
     directories::ProjectDirs::from("np.com", "pawanpaudel", "Readshot")
         .map(|d| d.data_local_dir().join("history"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::BufReader;
+
+    #[tokio::test]
+    async fn reads_consecutive_lines_then_eof() {
+        let data = b"hello\nworld\n";
+        let mut reader = BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+
+        assert_eq!(
+            read_line_capped(&mut reader, &mut buf, 1024).await.unwrap(),
+            LineRead::Line
+        );
+        assert_eq!(buf, b"hello");
+        assert_eq!(
+            read_line_capped(&mut reader, &mut buf, 1024).await.unwrap(),
+            LineRead::Line
+        );
+        assert_eq!(buf, b"world");
+        assert_eq!(
+            read_line_capped(&mut reader, &mut buf, 1024).await.unwrap(),
+            LineRead::Eof
+        );
+    }
+
+    #[tokio::test]
+    async fn strips_trailing_carriage_return() {
+        let data = b"crlf\r\n";
+        let mut reader = BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        assert_eq!(
+            read_line_capped(&mut reader, &mut buf, 1024).await.unwrap(),
+            LineRead::Line
+        );
+        assert_eq!(buf, b"crlf");
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_line_without_buffering_and_resyncs() {
+        // A 5000-byte line under a 1024 cap must not buffer past the cap,
+        // must report Overflow, and must leave the stream positioned at
+        // the next line.
+        let mut data = vec![b'a'; 5000];
+        data.push(b'\n');
+        data.extend_from_slice(b"ok\n");
+        let mut reader = BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+
+        assert_eq!(
+            read_line_capped(&mut reader, &mut buf, 1024).await.unwrap(),
+            LineRead::Overflow
+        );
+        assert!(
+            buf.len() <= 1024,
+            "buffered {} bytes, cap was 1024",
+            buf.len()
+        );
+
+        assert_eq!(
+            read_line_capped(&mut reader, &mut buf, 1024).await.unwrap(),
+            LineRead::Line
+        );
+        assert_eq!(buf, b"ok");
+    }
 }

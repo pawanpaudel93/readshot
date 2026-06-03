@@ -218,6 +218,54 @@ pub fn default_capturer() -> Box<dyn Capturer> {
     }
 }
 
+/// How long a single OS capture call may block before we give up on it.
+///
+/// Every real capture (even a multi-display 5K grab) returns in well
+/// under a second; 30 s is purely a backstop against an OS call that
+/// never returns at all (a pending TCC prompt, a wedged window server,
+/// an asleep display). When it trips, the caller gets a typed error
+/// instead of hanging forever.
+const CAPTURE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Run a blocking per-OS capture call without wedging the async runtime.
+///
+/// The per-OS backends (`SCShareableContent::get`, `SCScreenshotManager`,
+/// `xcap::Monitor`) are fully synchronous and can block for an unbounded
+/// time. Awaiting them directly on a tokio worker parks that worker — and
+/// because their internal wait has no timeout, a stalled call hangs the
+/// whole runtime indefinitely (the historical `list-windows` /
+/// `capture-window` hang). This helper moves the work onto a dedicated
+/// blocking thread via [`tokio::task::spawn_blocking`] and bounds it with
+/// [`CAPTURE_TIMEOUT`], so a stuck OS call surfaces as
+/// [`CaptureError::Backend`] rather than freezing the app.
+pub(crate) async fn run_capture_blocking<T, F>(op: &'static str, f: F) -> Result<T, CaptureError>
+where
+    F: FnOnce() -> Result<T, CaptureError> + Send + 'static,
+    T: Send + 'static,
+{
+    run_capture_blocking_with_timeout(op, CAPTURE_TIMEOUT, f).await
+}
+
+async fn run_capture_blocking_with_timeout<T, F>(
+    op: &'static str,
+    timeout: std::time::Duration,
+    f: F,
+) -> Result<T, CaptureError>
+where
+    F: FnOnce() -> Result<T, CaptureError> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::time::timeout(timeout, tokio::task::spawn_blocking(f)).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(join_err)) => Err(CaptureError::Backend(format!(
+            "{op} capture worker thread failed: {join_err}"
+        ))),
+        Err(_elapsed) => Err(CaptureError::Backend(format!(
+            "{op} timed out after {timeout:?}; the OS screen-capture call did not return"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +280,42 @@ mod tests {
 
         async fn capture_region(&self, _req: CaptureRequest) -> Result<RgbaImage, CaptureError> {
             Ok(RgbaImage::new(1, 1))
+        }
+    }
+
+    #[tokio::test]
+    async fn run_capture_blocking_returns_value_for_fast_work() {
+        // A normal, fast OS call: its result flows straight back through.
+        let result = run_capture_blocking("fast", || Ok::<_, CaptureError>(42)).await;
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn run_capture_blocking_propagates_backend_error() {
+        let result: Result<(), CaptureError> =
+            run_capture_blocking("boom", || Err(CaptureError::Backend("kaboom".into()))).await;
+        assert!(matches!(result, Err(CaptureError::Backend(m)) if m == "kaboom"));
+    }
+
+    #[tokio::test]
+    async fn run_capture_blocking_times_out_when_os_call_never_returns() {
+        // Regression for the `list-windows` / `capture-window` hang: a
+        // blocking OS call that parks its thread without returning must
+        // surface a typed timeout error, not hang forever.
+        let result: Result<(), CaptureError> = run_capture_blocking_with_timeout(
+            "stuck",
+            std::time::Duration::from_millis(20),
+            || {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                Ok(())
+            },
+        )
+        .await;
+        match result {
+            Err(CaptureError::Backend(msg)) => {
+                assert!(msg.contains("timed out"), "unexpected message: {msg}");
+            }
+            other => panic!("expected a timeout Backend error, got {other:?}"),
         }
     }
 

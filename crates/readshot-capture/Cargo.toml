@@ -23,6 +23,10 @@ image = { workspace = true }
 readshot-core = { path = "../readshot-core" }
 readshot-test-fixtures = { path = "../readshot-test-fixtures", optional = true }
 tiny-skia = { workspace = true }
+# Used to push blocking per-OS capture FFI onto a dedicated blocking
+# thread (spawn_blocking) with a timeout, so a stalled OS screen-capture
+# call can never wedge the shared async runtime. See `run_capture_blocking`.
+tokio = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "1.5", features = ["macos_14_0"] }
@@ -37,4 +41,3 @@ xcap = "0.9"
 
 [dev-dependencies]
 readshot-test-fixtures = { path = "../readshot-test-fixtures" }
-tokio = { workspace = true }

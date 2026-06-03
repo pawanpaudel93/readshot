@@ -1956,6 +1956,30 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 }
                 state.editor = None;
             }
+            // A scroll-capture HUD or region window closing out-of-band
+            // (OS, crash, future close affordance) must tear the whole
+            // session down. Otherwise `scroll_session` stays `Some` and
+            // the frame-capture tick — gated on `scroll_session.is_some()`
+            // — keeps firing forever against dead window ids.
+            if state
+                .scroll_session
+                .as_ref()
+                .is_some_and(|s| s.hud_window_id == Some(id) || s.region_window_id == Some(id))
+            {
+                if let Some(session) = state.scroll_session.take() {
+                    let mut tasks: Vec<Task<Message>> = Vec::new();
+                    for sibling in [session.hud_window_id, session.region_window_id]
+                        .into_iter()
+                        .flatten()
+                        .filter(|&w| w != id)
+                    {
+                        state.windows.forget(sibling);
+                        tasks.push(window::close(sibling));
+                    }
+                    state.last_capture_status = Some("Scroll capture cancelled.".into());
+                    return Task::batch(tasks);
+                }
+            }
             Task::none()
         }
         Message::WindowRescaled(id, scale) => {
@@ -2308,13 +2332,25 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
 
         Message::EditorStatusTick => {
-            // View re-renders on every Message; the actual dismiss
-            // happens inline in `editor_view` by comparing
-            // `status_set_at.elapsed()` against `STATUS_AUTO_DISMISS`.
-            // Also use the tick to expire stale "Discard? Click again"
+            // Auto-dismiss stale, non-in-progress status pills *here* —
+            // the authoritative place — so the `EditorStatusTick`
+            // subscription (gated on `status.is_some() &&
+            // !status_is_in_progress()`) actually stops firing once a
+            // toast has expired. Previously the dismissal only happened
+            // locally in `editor_view`, which can't clear `ed.status`, so
+            // the 1 Hz tick + redraw ran for the entire life of the
+            // editor window. Also expire stale "Discard? Click again"
             // arms so the editor doesn't keep listening for a confirm
             // that the user has already walked away from.
             if let Some(ed) = state.editor.as_mut() {
+                if !ed.status_is_in_progress()
+                    && ed
+                        .status_set_at
+                        .is_some_and(|t| t.elapsed() > crate::editor::STATUS_AUTO_DISMISS)
+                {
+                    ed.status = None;
+                    ed.status_set_at = None;
+                }
                 if let Some(t) = ed.discard_pending_at {
                     if t.elapsed() > crate::editor::DISCARD_CONFIRM_WINDOW {
                         ed.discard_pending_at = None;
@@ -2413,7 +2449,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 session.cancel_armed_at = Some(now);
                 return Task::none();
             }
-            let session = state.scroll_session.take().expect("session checked above");
+            let Some(session) = state.scroll_session.take() else {
+                return Task::none();
+            };
             let mut tasks: Vec<Task<Message>> = Vec::new();
             for id in [session.hud_window_id, session.region_window_id]
                 .into_iter()

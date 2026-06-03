@@ -45,125 +45,141 @@ pub fn new() -> ScreenCaptureKitCapturer {
 #[async_trait]
 impl Capturer for ScreenCaptureKitCapturer {
     async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
-        let content = SCShareableContent::get().map_err(map_err)?;
-        let displays = content.displays();
-        let primary = primary_display_id();
-        Ok(displays
-            .into_iter()
-            .map(|d| display_info_from_sc(d, primary))
-            .collect())
+        crate::run_capture_blocking("list_displays", || {
+            let content = SCShareableContent::get().map_err(map_err)?;
+            let displays = content.displays();
+            let primary = primary_display_id();
+            Ok(displays
+                .into_iter()
+                .map(|d| display_info_from_sc(d, primary))
+                .collect())
+        })
+        .await
     }
 
     async fn capture_region(&self, req: CaptureRequest) -> Result<RgbaImage, CaptureError> {
-        let content = SCShareableContent::get().map_err(map_err)?;
-        let displays = content.displays();
-        let display = find_display(&displays, &req.display_id)
-            .ok_or_else(|| CaptureError::DisplayNotFound(req.display_id.clone()))?;
+        crate::run_capture_blocking("capture_region", move || {
+            let content = SCShareableContent::get().map_err(map_err)?;
+            let displays = content.displays();
+            let display = find_display(&displays, &req.display_id)
+                .ok_or_else(|| CaptureError::DisplayNotFound(req.display_id.clone()))?;
 
-        // Exclude every window owned by our own process so the
-        // scroll-capture HUD (and any pinned readshot windows that
-        // happen to be visible) never bleed into the captured image
-        // and break the stitch.
-        let own_pid = std::process::id() as i32;
-        let all_windows = content.windows();
-        let own_windows: Vec<_> = all_windows
-            .iter()
-            .filter(|w| {
-                w.owning_application()
-                    .map(|app| app.process_id() == own_pid)
-                    .unwrap_or(false)
-            })
-            .collect();
-        let filter = SCContentFilter::create()
-            .with_display(display)
-            .with_excluding_windows(&own_windows)
-            .build();
+            // Exclude every window owned by our own process so the
+            // scroll-capture HUD (and any pinned readshot windows that
+            // happen to be visible) never bleed into the captured image
+            // and break the stitch.
+            let own_pid = std::process::id() as i32;
+            let all_windows = content.windows();
+            let own_windows: Vec<_> = all_windows
+                .iter()
+                .filter(|w| {
+                    w.owning_application()
+                        .map(|app| app.process_id() == own_pid)
+                        .unwrap_or(false)
+                })
+                .collect();
+            let filter = SCContentFilter::create()
+                .with_display(display)
+                .with_excluding_windows(&own_windows)
+                .build();
 
-        let (capture_w, capture_h) =
-            native_capture_size(display.display_id(), display.width(), display.height());
-        let config = SCStreamConfiguration::new()
-            .with_width(capture_w)
-            .with_height(capture_h)
-            .with_shows_cursor(!req.hide_cursor);
+            let (capture_w, capture_h) =
+                native_capture_size(display.display_id(), display.width(), display.height());
+            let config = SCStreamConfiguration::new()
+                .with_width(capture_w)
+                .with_height(capture_h)
+                .with_shows_cursor(!req.hide_cursor);
 
-        let cg_image = SCScreenshotManager::capture_image(&filter, &config).map_err(map_err)?;
+            let cg_image = SCScreenshotManager::capture_image(&filter, &config).map_err(map_err)?;
 
-        let width = cg_image.width() as u32;
-        let height = cg_image.height() as u32;
-        let rgba = cg_image.rgba_data().map_err(map_err)?;
-        let full = RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
-            CaptureError::Backend("rgba_data length does not match width × height × 4".to_string())
-        })?;
-        let (scale_x, scale_y) =
-            capture_scales_for_image(display.display_id(), width, height, req.scale);
-        let display_bounds = display_bounds_from_cg(
-            display.display_id(),
-            display.width() as f32,
-            display.height() as f32,
-        );
-        let rect = rect_relative_to_display(req.rect, display_bounds);
-        crop_rgba(full, rect, scale_x, scale_y)
+            let width = cg_image.width() as u32;
+            let height = cg_image.height() as u32;
+            let rgba = cg_image.rgba_data().map_err(map_err)?;
+            let full = RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
+                CaptureError::Backend(
+                    "rgba_data length does not match width × height × 4".to_string(),
+                )
+            })?;
+            let (scale_x, scale_y) =
+                capture_scales_for_image(display.display_id(), width, height, req.scale);
+            let display_bounds = display_bounds_from_cg(
+                display.display_id(),
+                display.width() as f32,
+                display.height() as f32,
+            );
+            let rect = rect_relative_to_display(req.rect, display_bounds);
+            crop_rgba(full, rect, scale_x, scale_y)
+        })
+        .await
     }
 
     async fn list_windows(&self) -> Result<Vec<WindowInfo>, CaptureError> {
-        let content = SCShareableContent::get().map_err(map_err)?;
-        let primary = primary_display_id();
-        let displays = content
-            .displays()
-            .into_iter()
-            .map(|d| display_info_from_sc(d, primary))
-            .collect::<Vec<_>>();
-        Ok(content
-            .windows()
-            .into_iter()
-            .filter(|window| window.is_on_screen() && window.window_layer() == 0)
-            .filter_map(|window| window_info_from_sc(&window, &displays))
-            .collect())
+        crate::run_capture_blocking("list_windows", || {
+            let content = SCShareableContent::get().map_err(map_err)?;
+            let primary = primary_display_id();
+            let displays = content
+                .displays()
+                .into_iter()
+                .map(|d| display_info_from_sc(d, primary))
+                .collect::<Vec<_>>();
+            Ok(content
+                .windows()
+                .into_iter()
+                .filter(|window| window.is_on_screen() && window.window_layer() == 0)
+                .filter_map(|window| window_info_from_sc(&window, &displays))
+                .collect())
+        })
+        .await
     }
 
     async fn capture_window(&self, req: WindowCaptureRequest) -> Result<RgbaImage, CaptureError> {
-        let content = SCShareableContent::get().map_err(map_err)?;
-        let windows = content.windows();
-        let window = find_window(&windows, &req.window_id)
-            .ok_or_else(|| CaptureError::WindowNotFound(req.window_id.0.clone()))?;
+        crate::run_capture_blocking("capture_window", move || {
+            let content = SCShareableContent::get().map_err(map_err)?;
+            let windows = content.windows();
+            let window = find_window(&windows, &req.window_id)
+                .ok_or_else(|| CaptureError::WindowNotFound(req.window_id.0.clone()))?;
 
-        let primary = primary_display_id();
-        let displays = content
-            .displays()
-            .into_iter()
-            .map(|d| display_info_from_sc(d, primary))
-            .collect::<Vec<_>>();
-        let display = window_info_from_sc(window, &displays)
-            .and_then(|info| {
-                displays
-                    .iter()
-                    .find(|display| display.id == info.display_id)
-                    .cloned()
+            let primary = primary_display_id();
+            let displays = content
+                .displays()
+                .into_iter()
+                .map(|d| display_info_from_sc(d, primary))
+                .collect::<Vec<_>>();
+            let display = window_info_from_sc(window, &displays)
+                .and_then(|info| {
+                    displays
+                        .iter()
+                        .find(|display| display.id == info.display_id)
+                        .cloned()
+                })
+                .or_else(|| displays.iter().find(|display| display.is_primary).cloned())
+                .or_else(|| displays.first().cloned());
+            let scale = display.map(|display| display.scale).unwrap_or(1.0);
+            let frame = window.frame();
+            let size = frame.size();
+            let capture_w = (size.width as f32 * scale).round().max(1.0) as u32;
+            let capture_h = (size.height as f32 * scale).round().max(1.0) as u32;
+
+            let filter = SCContentFilter::create().with_window(window).build();
+            let config = SCStreamConfiguration::new()
+                .with_width(capture_w)
+                .with_height(capture_h)
+                .with_shows_cursor(false)
+                .with_ignores_shadows_single_window(req.ignore_shadows)
+                .with_ignore_global_clip_single_window(true);
+
+            let cg_image = SCScreenshotManager::capture_image(&filter, &config).map_err(map_err)?;
+
+            let width = cg_image.width() as u32;
+            let height = cg_image.height() as u32;
+            let rgba = cg_image.rgba_data().map_err(map_err)?;
+            RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
+                CaptureError::Backend(
+                    "rgba_data length does not match width × height × 4".to_string(),
+                )
             })
-            .or_else(|| displays.iter().find(|display| display.is_primary).cloned())
-            .or_else(|| displays.first().cloned());
-        let scale = display.map(|display| display.scale).unwrap_or(1.0);
-        let frame = window.frame();
-        let size = frame.size();
-        let capture_w = (size.width as f32 * scale).round().max(1.0) as u32;
-        let capture_h = (size.height as f32 * scale).round().max(1.0) as u32;
-
-        let filter = SCContentFilter::create().with_window(window).build();
-        let config = SCStreamConfiguration::new()
-            .with_width(capture_w)
-            .with_height(capture_h)
-            .with_shows_cursor(false)
-            .with_ignores_shadows_single_window(req.ignore_shadows)
-            .with_ignore_global_clip_single_window(true);
-
-        let cg_image = SCScreenshotManager::capture_image(&filter, &config).map_err(map_err)?;
-
-        let width = cg_image.width() as u32;
-        let height = cg_image.height() as u32;
-        let rgba = cg_image.rgba_data().map_err(map_err)?;
-        RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
-            CaptureError::Backend("rgba_data length does not match width × height × 4".to_string())
         })
+        .await
     }
 }
 

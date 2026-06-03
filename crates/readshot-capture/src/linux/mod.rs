@@ -45,30 +45,36 @@ pub fn new() -> LinuxCapturer {
 #[async_trait]
 impl Capturer for LinuxCapturer {
     async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
-        let monitors = Monitor::all().map_err(map_err)?;
-        let mut out = Vec::with_capacity(monitors.len());
-        for m in monitors {
-            out.push(monitor_to_display_info(&m)?);
-        }
-        Ok(out)
+        crate::run_capture_blocking("list_displays", || {
+            let monitors = Monitor::all().map_err(map_err)?;
+            let mut out = Vec::with_capacity(monitors.len());
+            for m in monitors {
+                out.push(monitor_to_display_info(&m)?);
+            }
+            Ok(out)
+        })
+        .await
     }
 
     async fn capture_region(&self, req: CaptureRequest) -> Result<RgbaImage, CaptureError> {
-        let id_num: u32 = req
-            .display_id
-            .parse()
-            .map_err(|_| CaptureError::DisplayNotFound(req.display_id.clone()))?;
+        crate::run_capture_blocking("capture_region", move || {
+            let id_num: u32 = req
+                .display_id
+                .parse()
+                .map_err(|_| CaptureError::DisplayNotFound(req.display_id.clone()))?;
 
-        let monitors = Monitor::all().map_err(map_err)?;
-        let monitor = monitors
-            .into_iter()
-            .find(|m| m.id().ok() == Some(id_num))
-            .ok_or_else(|| CaptureError::DisplayNotFound(req.display_id.clone()))?;
+            let monitors = Monitor::all().map_err(map_err)?;
+            let monitor = monitors
+                .into_iter()
+                .find(|m| m.id().ok() == Some(id_num))
+                .ok_or_else(|| CaptureError::DisplayNotFound(req.display_id.clone()))?;
 
-        let full = monitor.capture_image().map_err(map_err)?;
-        let display = monitor_to_display_info(&monitor)?;
-        let rect = rect_relative_to_display(req.rect, display.bounds);
-        crop_rgba(full, rect, req.scale)
+            let full = monitor.capture_image().map_err(map_err)?;
+            let display = monitor_to_display_info(&monitor)?;
+            let rect = rect_relative_to_display(req.rect, display.bounds);
+            crop_rgba(full, rect, req.scale)
+        })
+        .await
     }
 }
 
