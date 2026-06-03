@@ -1,0 +1,77 @@
+# cargo-deny configuration — supply-chain gate for Readshot.
+#
+# Run locally with `cargo deny check`. CI runs the same in
+# `.github/workflows/test.yml`. The project deliberately keeps the
+# dependency tree small (see AGENTS.md / CLAUDE.md); this file enforces
+# that posture: no known-vulnerable crates, only permissive licenses,
+# and no surprise crate sources.
+
+[advisories]
+version = 2
+# Fail on any RUSTSEC advisory; warn on yanked crates (a yank is not
+# necessarily a security issue and shouldn't block an unrelated release).
+yanked = "warn"
+# Each entry below is an *unmaintained* advisory (informational, not a
+# vulnerability) on a transitive crate with no upgrade path available.
+# Re-audit when bumping `tray-icon` / `muda` / `image`. A real
+# vulnerability advisory is NOT ignored and will still fail the gate.
+ignore = [
+    # gtk-rs GTK3 bindings — pulled in transitively by tray-icon /
+    # libappindicator for the Linux tray; the whole gtk3 binding family
+    # is unmaintained and there is no maintained drop-in replacement yet.
+    "RUSTSEC-2024-0412",
+    "RUSTSEC-2024-0413",
+    "RUSTSEC-2024-0415",
+    "RUSTSEC-2024-0416",
+    "RUSTSEC-2024-0418",
+    "RUSTSEC-2024-0419",
+    "RUSTSEC-2024-0420",
+    # paste — unmaintained proc-macro, transitive build dependency only.
+    "RUSTSEC-2024-0436",
+    # proc-macro-error — unmaintained, transitive via the gtk3 macros.
+    "RUSTSEC-2024-0370",
+]
+
+[licenses]
+version = 2
+# Permissive licenses only — Readshot ships under MIT and must stay
+# redistribution-friendly. This list is derived from the actual
+# dependency tree; add a license here (with a rationale) only after
+# confirming the crate that needs it.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unlicense",
+    # NCSA: University of Illinois/NCSA Open Source License (OSI-approved,
+    # FSF Free) — required only by `libfuzzer-sys`, pulled transitively
+    # through image → ravif → rav1e.
+    "NCSA",
+]
+confidence-threshold = 0.8
+
+[bans]
+# A second copy of a crate bloats the binary and the audit surface, but
+# the ecosystem still ships duplicate minor versions of low-level crates
+# (e.g. windows-sys, bitflags), so warn rather than deny.
+multiple-versions = "warn"
+# Warn (not deny) on wildcards: the only wildcard deps here are the
+# intra-workspace `{ path = ... }` crates, which carry no version.
+# (`allow-wildcard-paths` can't exempt them while the crates remain
+# publishable; adding `publish = false` to each crate would let this be
+# tightened back to "deny".)
+wildcards = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

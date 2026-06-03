@@ -66,6 +66,29 @@ jobs:
       - name: cargo nextest run
         run: cargo nextest run --workspace --no-fail-fast
 
+  # Supply-chain gate: no known-vulnerable crates, permissive licenses
+  # only, no unexpected crate sources (deny.toml), no unused dependencies
+  # (cargo-machete), and no test-fixture leakage into production deps.
+  # The dependency graph is platform-independent (read from Cargo.lock),
+  # so a single Linux runner covers every target.
+  supply-chain:
+    name: supply-chain
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny and cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-machete
+      - name: cargo deny check
+        run: cargo deny check
+      - name: cargo machete (unused dependencies)
+        run: cargo machete
+      - name: test-fixture dependency hygiene
+        run: ./scripts/test-dependency-hygiene.sh
+
   # Nightly job: enables `--features integration` and pre-grants
   # Screen Recording on macOS when available so the per-OS smoke tests
   # (screencapturekit, Apple Vision) can run. Capture smoke tests

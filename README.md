@@ -44,7 +44,7 @@ The installer downloads the latest matching DMG, verifies it, installs
 `Readshot.app` into `/Applications`, and links `readshot` plus
 `readshot-mcp` into `~/.local/bin`.
 
-Manual DMG, Homebrew, first-launch, and uninstall details are in
+Manual DMG, first-launch, and uninstall details are in
 [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Usage

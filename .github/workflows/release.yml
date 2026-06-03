@@ -170,6 +170,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       # ─── Homebrew Cask ──────────────────────────────────────────────────
-      - name: Bump Homebrew Cask
+      # NOT IMPLEMENTED. Readshot is not yet distributed via Homebrew —
+      # there is no homebrew-readshot tap and this step publishes nothing.
+      # It is left as a labelled placeholder so the wiring has an obvious
+      # home once a tap exists. Do not document Homebrew as a supported
+      # install path until this actually opens/updates a tap PR.
+      - name: Bump Homebrew Cask (not implemented — no-op)
         run: |
-          echo "TODO: open a PR against the homebrew-readshot tap"
+          echo "Homebrew distribution is not set up; nothing to publish."
+          echo "See docs/RELEASING.md § 'Update Homebrew Cask'."

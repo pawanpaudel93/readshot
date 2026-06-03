@@ -4567,7 +4567,6 @@ dependencies = [
  "readshot-core",
  "readshot-test-fixtures",
  "screencapturekit",
- "tiny-skia",
  "tokio",
  "xcap",
 ]
@@ -4594,7 +4593,6 @@ dependencies = [
 name = "readshot-mcp"
 version = "0.7.6"
 dependencies = [
- "async-trait",
  "base64",
  "directories",
  "image",
@@ -4603,7 +4601,6 @@ dependencies = [
  "readshot-ocr",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",

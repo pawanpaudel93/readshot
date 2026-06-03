@@ -17,7 +17,6 @@ name = "readshot-mcp"
 path = "src/main.rs"
 
 [dependencies]
-async-trait = { workspace = true }
 base64 = { workspace = true }
 directories = { workspace = true }
 image = { workspace = true }
@@ -26,7 +25,6 @@ readshot-core = { path = "../readshot-core" }
 readshot-ocr = { path = "../readshot-ocr" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "io-std", "rt-multi-thread", "macros"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

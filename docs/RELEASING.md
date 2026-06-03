@@ -201,8 +201,12 @@ installing.
 
 ### 5. Update Homebrew Cask
 
-The release workflow opens a PR against the homebrew-readshot tap
-automatically. Review and merge.
+**Not yet implemented.** Readshot is not currently distributed via
+Homebrew — there is no `homebrew-readshot` tap, and the "Bump Homebrew
+Cask" step in `release.yml` is a labelled no-op that publishes nothing.
+There is nothing to review or merge for this step today. When a tap is
+created, wire the formula-bump PR into that workflow step and update
+this section.
 
 ## Hotfix releases
 
