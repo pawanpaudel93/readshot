@@ -571,7 +571,7 @@ fn editor_window_settings(display_bounds: Option<(f32, f32, f32, f32)>) -> windo
 
 fn open_editor_window_replacing(
     state: &mut App,
-    editor: crate::editor::EditorSession,
+    mut editor: crate::editor::EditorSession,
     display_bounds: Option<(f32, f32, f32, f32)>,
 ) -> Task<Message> {
     let mut tasks: Vec<Task<Message>> = Vec::new();
@@ -586,11 +586,19 @@ fn open_editor_window_replacing(
             }
         }
     }
+    editor.source_display_bounds = display_bounds;
     state.editor = Some(editor);
     let (id, open_task) = window::open(editor_window_settings(display_bounds));
     state.windows.register(id, WindowKind::Editor);
     tasks.push(open_task.map(Message::EditorWindowReady));
     Task::batch(tasks)
+}
+
+fn editor_pin_window_settings(
+    editor: &crate::editor::EditorSession,
+    size: (u32, u32),
+) -> window::Settings {
+    pin_window_settings(size, editor.source_display_bounds)
 }
 
 fn clear_pending_capture_state(state: &mut App) {
@@ -3030,6 +3038,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             );
             // Close the editor window if any.
             let editor_id = ed.window_id;
+            let pin_settings = editor_pin_window_settings(ed, size);
             state.editor = None;
             let mut tasks: Vec<Task<Message>> = Vec::new();
             if let Some(id) = editor_id {
@@ -3039,7 +3048,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // Open the pin window. We register both kind + image
             // handle eagerly so the first `view` call paints the
             // pin instead of the "(no capture)" fallback.
-            let (id, open_task) = window::open(pin_window_settings(size, None));
+            let (id, open_task) = window::open(pin_settings);
             state.windows.register(id, WindowKind::Pin);
             state
                 .pins
@@ -8616,6 +8625,36 @@ mod tests {
                 assert_eq!(point.y, 330.0);
             }
             other => panic!("expected specific pin position, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editor_session_remembers_capture_display_bounds() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let bounds = Some((1440.0, 0.0, 1920.0, 1080.0));
+        let editor = crate::editor::EditorSession::new(solid(32, 32));
+
+        let _ = open_editor_window_replacing(&mut app, editor, bounds);
+
+        assert_eq!(
+            app.editor.as_ref().and_then(|ed| ed.source_display_bounds),
+            bounds
+        );
+    }
+
+    #[test]
+    fn editor_pin_window_centers_on_capture_display() {
+        let mut editor = crate::editor::EditorSession::new(solid(32, 32));
+        editor.source_display_bounds = Some((-1280.0, 120.0, 1280.0, 720.0));
+
+        let settings = editor_pin_window_settings(&editor, (400, 300));
+
+        match settings.position {
+            window::Position::Specific(point) => {
+                assert_eq!(point.x, -840.0);
+                assert_eq!(point.y, 330.0);
+            }
+            other => panic!("expected specific editor pin position, got {other:?}"),
         }
     }
 

@@ -94,6 +94,10 @@ pub struct EditorSession {
     /// uses this so one image pixel maps to one physical screen pixel
     /// on HiDPI displays.
     pub display_scale: f32,
+    /// Display bounds that produced this editor session, when known.
+    /// Follow-up windows opened from the editor use this to stay on
+    /// the same monitor as the captured region.
+    pub source_display_bounds: Option<(f32, f32, f32, f32)>,
     /// `Some` after the user has clicked Discard / pressed ⌘W once on
     /// an editor with unsaved work. The next Discard click inside
     /// [`DISCARD_CONFIRM_WINDOW`] commits; otherwise the flag expires
@@ -286,6 +290,7 @@ impl EditorSession {
             source_record: None,
             zoom: EditorZoom::Fit,
             display_scale: display_scale.max(f32::EPSILON),
+            source_display_bounds: None,
             discard_pending_at: None,
             status_set_at: None,
             move_drag: None,
@@ -320,6 +325,7 @@ impl EditorSession {
             source_record: Some(record),
             zoom: EditorZoom::Fit,
             display_scale: display_scale.max(f32::EPSILON),
+            source_display_bounds: None,
             discard_pending_at: None,
             status_set_at: None,
             move_drag: None,

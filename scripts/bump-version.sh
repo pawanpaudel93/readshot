@@ -14,6 +14,7 @@ Updates:
   - Cargo.lock workspace crate versions
   - packaging/macos/Info.plist bundle versions
   - packaging/linux/build-appimage.sh fallback VERSION
+  - packaging/linux/arch/PKGBUILD pkgver
   - docs/releases/v<major.minor.patch>.md release summary draft
 
 Then run release verification, commit, tag, and push.
@@ -65,6 +66,7 @@ perl -0pi -e "s/(\\[workspace\\.package\\]\\nversion = \")[^\"]+(\")/\${1}${VERS
 perl -0pi -e "s/(<key>CFBundleShortVersionString<\\/key>\\s*<string>)[^<]+(<\\/string>)/\${1}${VERSION}\${2}/" packaging/macos/Info.plist
 perl -0pi -e "s/(<key>CFBundleVersion<\\/key>\\s*<string>)[^<]+(<\\/string>)/\${1}${VERSION}\${2}/" packaging/macos/Info.plist
 perl -0pi -e "s/VERSION=\"\\\${VERSION:-[0-9]+\\.[0-9]+\\.[0-9]+}\"/VERSION=\"\\\${VERSION:-${VERSION}}\"/" packaging/linux/build-appimage.sh
+perl -0pi -e "s/^pkgver=.*/pkgver=${VERSION}/m" packaging/linux/arch/PKGBUILD
 
 mkdir -p docs/releases
 RELEASE_NOTES="docs/releases/${TAG}.md"
@@ -96,7 +98,7 @@ Next:
   cargo clippy --workspace --all-targets -- -D warnings
   cargo fmt --all -- --check
   git diff --check
-  git add Cargo.toml Cargo.lock packaging/macos/Info.plist packaging/linux/build-appimage.sh ${RELEASE_NOTES}
+  git add Cargo.toml Cargo.lock packaging/macos/Info.plist packaging/linux/build-appimage.sh packaging/linux/arch/PKGBUILD ${RELEASE_NOTES}
   git commit -m "chore: bump version to ${VERSION}"
   git tag ${TAG}
   git push origin main
