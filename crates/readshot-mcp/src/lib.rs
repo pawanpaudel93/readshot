@@ -278,17 +278,17 @@ impl McpServer {
             })?;
         let args = params.get("arguments").cloned().unwrap_or(Value::Null);
 
-        let payload = match name {
-            "list_displays" => self.tool_list_displays().await?,
-            "list_windows" => self.tool_list_windows().await?,
-            "capture_region" => self.tool_capture_region(&args).await?,
-            "capture_window" => self.tool_capture_window(&args).await?,
-            "capture_text" => self.tool_capture_text(&args).await?,
-            "capture_region_and_text" => self.tool_capture_region_and_text(&args).await?,
-            "recent_captures" => self.tool_recent_captures(&args)?,
-            "latest_capture" => self.tool_latest_capture()?,
-            "get_capture" => self.tool_get_capture(&args)?,
-            "search_captures" => self.tool_search_captures(&args)?,
+        let result = match name {
+            "list_displays" => self.tool_list_displays().await,
+            "list_windows" => self.tool_list_windows().await,
+            "capture_region" => self.tool_capture_region(&args).await,
+            "capture_window" => self.tool_capture_window(&args).await,
+            "capture_text" => self.tool_capture_text(&args).await,
+            "capture_region_and_text" => self.tool_capture_region_and_text(&args).await,
+            "recent_captures" => self.tool_recent_captures(&args),
+            "latest_capture" => self.tool_latest_capture(),
+            "get_capture" => self.tool_get_capture(&args),
+            "search_captures" => self.tool_search_captures(&args),
             other => {
                 return Err(RpcErr {
                     code: codes::METHOD_NOT_FOUND,
@@ -297,20 +297,17 @@ impl McpServer {
             }
         };
 
-        // MCP requires tool responses to wrap their content in a
-        // `content` array of typed parts. We always emit a single
-        // `text` part containing the JSON payload — clients parse
-        // it back when they want the structured result.
-        Ok(json!({
-            "content": [
-                { "type": "text", "text": payload.to_string() }
-            ],
-            "isError": false,
-            // Convenience: also surface the structured payload at
-            // the top level for clients that prefer it. Optional per
-            // MCP spec; agents that ignore unknown fields are safe.
-            "structuredContent": payload,
-        }))
+        match result {
+            Ok(payload) => Ok(tool_result_ok(payload)),
+            // A *tool execution* failure (capture/OCR/permission/history —
+            // all SERVER_ERROR) is reported back to the agent as a tool
+            // result with `isError: true` per the MCP spec, so the model
+            // sees the message and can react (e.g. ask the user to grant
+            // Screen Recording). Only *protocol* errors — bad params,
+            // unknown tool — stay as JSON-RPC errors.
+            Err(err) if err.code == codes::SERVER_ERROR => Ok(tool_result_error(err.message)),
+            Err(err) => Err(err),
+        }
     }
 
     fn history(&self) -> Result<&HistoryArchive, RpcErr> {
@@ -865,6 +862,31 @@ fn history_to_rpc(e: HistoryError) -> RpcErr {
     }
 }
 
+/// A successful `tools/call` result: the JSON payload as a text content
+/// part, `isError: false`, plus the structured payload at the top level
+/// for clients that prefer it (optional per MCP; ignorable by others).
+fn tool_result_ok(payload: Value) -> Value {
+    json!({
+        "content": [
+            { "type": "text", "text": payload.to_string() }
+        ],
+        "isError": false,
+        "structuredContent": payload,
+    })
+}
+
+/// A failed-tool-execution result: per MCP, tool runtime errors are
+/// returned as a normal result with `isError: true` (not a JSON-RPC
+/// error), so the agent can read the message and adapt.
+fn tool_result_error(message: String) -> Value {
+    json!({
+        "content": [
+            { "type": "text", "text": message }
+        ],
+        "isError": true,
+    })
+}
+
 fn ok_response(id: Value, result: Value) -> String {
     serde_json::to_string(&RpcResponseBody::Result {
         jsonrpc: "2.0",
@@ -1298,15 +1320,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_call_history_tool_without_store_returns_server_error() {
+    async fn tools_call_history_tool_without_store_returns_tool_error() {
         let s = server();
         let resp = call(
             &s,
             r#"{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"recent_captures","arguments":{}}}"#,
         )
         .await;
-        assert_eq!(resp["error"]["code"], codes::SERVER_ERROR);
-        assert!(resp["error"]["message"]
+        // A runtime failure (no history store configured) is an MCP tool
+        // error (isError:true), not a JSON-RPC protocol error.
+        assert!(resp.get("error").is_none());
+        assert_eq!(resp["result"]["isError"], true);
+        assert!(resp["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
             .contains("history store unavailable"));
@@ -1390,15 +1415,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_call_capture_window_with_unknown_window_returns_server_error() {
+    async fn tools_call_capture_window_with_unknown_window_returns_tool_error() {
         let s = server();
         let resp = call(
             &s,
             r#"{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"capture_window","arguments":{"window":"missing-window"}}}"#,
         )
         .await;
-        assert_eq!(resp["error"]["code"], codes::SERVER_ERROR);
-        assert!(resp["error"]["message"]
+        // A capture runtime failure surfaces as an MCP tool error
+        // (isError:true), not a JSON-RPC protocol error.
+        assert!(resp.get("error").is_none());
+        assert_eq!(resp["result"]["isError"], true);
+        assert!(resp["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
             .contains("window not found: missing-window"));

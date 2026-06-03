@@ -9,7 +9,9 @@
 
 app-id: np.com.pawanpaudel.readshot
 runtime: org.freedesktop.Platform
-runtime-version: "23.08"
+# Keep this on a currently-supported freedesktop runtime — Flathub
+# rejects EOL runtimes (23.08 reached end-of-life).
+runtime-version: "24.08"
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
@@ -31,6 +33,10 @@ finish-args:
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   build-args:
+    # Local-build convenience only: lets `cargo fetch` reach crates.io.
+    # Flathub forbids network access during builds — submitting there
+    # requires vendoring the crate sources (e.g. via
+    # flatpak-cargo-generator) and dropping this arg.
     - --share=network
   env:
     CARGO_HOME: /run/build/readshot/cargo

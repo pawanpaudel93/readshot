@@ -16,15 +16,18 @@
 //! ## Pixel format
 //!
 //! `SCScreenshotManager::capture_image` returns the crate's `CGImage`
-//! wrapper, which exposes `rgba_data()` as a ready-to-use straight
-//! RGBA byte buffer. We construct an `image::RgbaImage` directly from
-//! it — no manual BGRA→RGBA conversion needed.
+//! wrapper, whose `rgba_data()` is RGBA in channel order (no BGRA→RGBA
+//! swap needed) but **premultiplied alpha**. `image::RgbaImage` is
+//! straight-alpha by convention. Display/region captures are opaque
+//! (alpha 255), where premultiplied == straight, so they need no
+//! conversion. Window captures can contain translucent pixels, so
+//! `capture_window` runs [`unpremultiply`] to avoid darkened colours.
 
 use async_trait::async_trait;
 use image::RgbaImage;
 use readshot_core::error::CaptureError;
 use readshot_core::geom::Rect;
-use screencapturekit::error::SCError;
+use screencapturekit::error::{SCError, SCStreamErrorCode};
 use screencapturekit::screenshot_manager::SCScreenshotManager;
 use screencapturekit::shareable_content::{SCDisplay, SCShareableContent, SCWindow};
 use screencapturekit::stream::configuration::SCStreamConfiguration;
@@ -173,14 +176,38 @@ impl Capturer for ScreenCaptureKitCapturer {
             let width = cg_image.width() as u32;
             let height = cg_image.height() as u32;
             let rgba = cg_image.rgba_data().map_err(map_err)?;
-            RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
+            let image = RgbaImage::from_raw(width, height, rgba).ok_or_else(|| {
                 CaptureError::Backend(
                     "rgba_data length does not match width × height × 4".to_string(),
                 )
-            })
+            })?;
+            // Window captures can contain genuinely translucent pixels
+            // (rounded corners, vibrancy). ScreenCaptureKit returns those
+            // premultiplied; convert to straight alpha so colours aren't
+            // darkened. Opaque pixels are untouched.
+            Ok(unpremultiply(image))
         })
         .await
     }
+}
+
+/// Convert premultiplied-alpha RGBA (what ScreenCaptureKit returns) to the
+/// straight-alpha convention `image::RgbaImage` expects. Fully opaque
+/// (`a == 255`) and fully transparent (`a == 0`) pixels are left as-is, so
+/// opaque captures are unchanged and this is a cheap single pass.
+fn unpremultiply(mut img: RgbaImage) -> RgbaImage {
+    for px in img.pixels_mut() {
+        let a = px[3];
+        if a == 0 || a == 255 {
+            continue;
+        }
+        let a16 = u16::from(a);
+        for c in 0..3 {
+            // round(channel * 255 / a)
+            px[c] = ((u16::from(px[c]) * 255 + a16 / 2) / a16).min(255) as u8;
+        }
+    }
+    img
 }
 
 fn crop_rgba(
@@ -377,9 +404,30 @@ fn primary_display_id() -> u32 {
 }
 
 fn map_err(e: SCError) -> CaptureError {
-    let msg = format!("{e:?}");
+    // Prefer the typed variants: when Screen Recording is denied,
+    // ScreenCaptureKit reports it as PermissionDenied, NoShareableContent,
+    // or a stream error coded UserDeclined / MissingEntitlements — none of
+    // which reliably contain the substrings the heuristic below looks for.
+    match &e {
+        SCError::PermissionDenied(_)
+        | SCError::NoShareableContent(_)
+        | SCError::SCStreamError {
+            code: SCStreamErrorCode::UserDeclined | SCStreamErrorCode::MissingEntitlements,
+            ..
+        } => {
+            return CaptureError::PermissionDenied;
+        }
+        _ => {}
+    }
+    // Fallback for any other backend that still encodes the denial in its
+    // message text.
+    let msg = format!("{e}");
     let lc = msg.to_lowercase();
-    if lc.contains("permission") || lc.contains("denied") || lc.contains("not authorized") {
+    if lc.contains("permission")
+        || lc.contains("denied")
+        || lc.contains("not authorized")
+        || lc.contains("declined")
+    {
         CaptureError::PermissionDenied
     } else {
         CaptureError::Backend(msg)
@@ -392,6 +440,47 @@ mod tests {
 
     fn solid(w: u32, h: u32) -> RgbaImage {
         RgbaImage::from_fn(w, h, |x, y| image::Rgba([x as u8, y as u8, 0, 255]))
+    }
+
+    #[test]
+    fn unpremultiply_restores_straight_alpha_and_leaves_opaque_untouched() {
+        let mut img = RgbaImage::new(3, 1);
+        // Premultiplied half-transparent white → straight white.
+        img.put_pixel(0, 0, image::Rgba([128, 128, 128, 128]));
+        // Opaque pixel must pass through unchanged.
+        img.put_pixel(1, 0, image::Rgba([200, 10, 10, 255]));
+        // Fully transparent pixel must pass through unchanged (no div-by-zero).
+        img.put_pixel(2, 0, image::Rgba([0, 0, 0, 0]));
+
+        let out = unpremultiply(img);
+
+        assert_eq!(out.get_pixel(0, 0), &image::Rgba([255, 255, 255, 128]));
+        assert_eq!(out.get_pixel(1, 0), &image::Rgba([200, 10, 10, 255]));
+        assert_eq!(out.get_pixel(2, 0), &image::Rgba([0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn map_err_maps_typed_permission_variants_to_permission_denied() {
+        assert!(matches!(
+            map_err(SCError::PermissionDenied("Screen Recording".into())),
+            CaptureError::PermissionDenied
+        ));
+        assert!(matches!(
+            map_err(SCError::NoShareableContent("declined".into())),
+            CaptureError::PermissionDenied
+        ));
+        assert!(matches!(
+            map_err(SCError::SCStreamError {
+                code: SCStreamErrorCode::UserDeclined,
+                message: None,
+            }),
+            CaptureError::PermissionDenied
+        ));
+        // A non-permission error stays a backend error.
+        assert!(matches!(
+            map_err(SCError::InvalidConfiguration("bad".into())),
+            CaptureError::Backend(_)
+        ));
     }
 
     #[test]

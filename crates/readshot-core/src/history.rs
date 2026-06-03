@@ -14,7 +14,6 @@
 //! deletes orphans.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -235,9 +234,12 @@ impl HistoryStore for FsHistoryStore {
             fs::create_dir_all(parent)?;
         }
 
-        let mut f = fs::File::create(&abs_png)?;
-        f.write_all(png)?;
-        f.sync_all()?; // best-effort durability before the index update
+        // Write the PNG atomically (temp file + rename + parent fsync), the
+        // same way the JSON sidecar and index are written below. A plain
+        // create+write could leave a torn PNG that `list()` cannot detect
+        // (the JSON sidecar would still be intact and the record would load
+        // pointing at a corrupt image).
+        write_atomic(&abs_png, png)?;
         self.write_thumbnail_from_bytes(record, png);
 
         let json_content = serde_json::to_string_pretty(record)?;

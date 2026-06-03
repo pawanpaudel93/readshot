@@ -121,10 +121,20 @@ fn crop_rgba(full: RgbaImage, rect_logical: Rect, scale: f32) -> Result<RgbaImag
 
 fn map_err(e: xcap::XCapError) -> CaptureError {
     let msg = format!("{e}");
-    let lc = msg.to_lowercase();
-    if lc.contains("permission") || lc.contains("denied") || lc.contains("access is denied") {
+    if is_permission_denied(&msg) {
         CaptureError::PermissionDenied
     } else {
         CaptureError::Backend(msg)
     }
+}
+
+/// xcap surfaces capture denials as opaque error strings, so we sniff the
+/// message. The token set is shared with the Linux backend for consistency
+/// (`"denied"` already subsumes `"access is denied"`).
+fn is_permission_denied(message: &str) -> bool {
+    let lc = message.to_lowercase();
+    lc.contains("permission")
+        || lc.contains("denied")
+        || lc.contains("not authorized")
+        || lc.contains("declined")
 }

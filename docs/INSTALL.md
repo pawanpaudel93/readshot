@@ -24,10 +24,11 @@ GitHub Release DMG, verifies it against `SHA256SUMS`, installs
 quarantine from the installed app by running
 `xattr -dr com.apple.quarantine /Applications/Readshot.app`.
 
-To install a specific version:
+To pin a specific version instead of the latest, pass the version tag
+(replace `<version>` with e.g. `0.8.0`):
 
 ```bash
-curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- 0.7.6
+curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- <version>
 ```
 
 To check compatibility, release availability, and the current local
@@ -124,9 +125,10 @@ open /Applications/Readshot.app
 ### Alternative: download the DMG manually
 
 ```bash
-# Replace v0.7.6 with the version you want.
+# Downloads the latest release. For a specific version, swap
+# `latest/download` for `download/v<version>`.
 curl -L -o readshot.dmg \
-  https://github.com/pawanpaudel93/readshot/releases/download/v0.7.6/readshot-macos-aarch64.dmg
+  https://github.com/pawanpaudel93/readshot/releases/latest/download/readshot-macos-aarch64.dmg
 
 # Verify the hash against the value in the GitHub Release notes.
 shasum -a 256 readshot.dmg

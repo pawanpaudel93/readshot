@@ -163,7 +163,6 @@ main() {
   require_file "packaging/macos/Info.plist"
   require_file "packaging/macos/build-dmg.sh"
   require_file "packaging/macos/update-appcast.sh"
-  require_file "packaging/macos/sparkle-appcast.xml.tmpl"
   require_file "packaging/linux/arch/PKGBUILD"
   require_file "docs/RELEASING.md"
   require_file "docs/INSTALL.md"

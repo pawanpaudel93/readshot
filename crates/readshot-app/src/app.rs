@@ -20,8 +20,7 @@ use std::sync::Arc;
 use iced::window;
 use readshot_core::Preferences;
 use readshot_ui::{
-    ActionMessage, CanvasMessage, HotkeyMessage, SelectionMessage, SettingsMessage, ToolbarMessage,
-    TrayMessage,
+    ActionMessage, CanvasMessage, HotkeyMessage, SettingsMessage, ToolbarMessage, TrayMessage,
 };
 
 use crate::coordinator::CaptureCoordinator;
@@ -127,7 +126,6 @@ impl Windows {
 pub enum Message {
     Tray(TrayMessage),
     Hotkey(HotkeyMessage),
-    Overlay(SelectionMessage),
     EditorCanvas(CanvasMessage),
     EditorToolbar(ToolbarMessage),
     EditorAction(ActionMessage),
