@@ -505,6 +505,11 @@ pub struct App {
     /// Maps global-hotkey ids back to app actions. The upstream
     /// event channel is process-wide and only reports ids.
     pub hotkey_actions: HashMap<u32, GlobalHotkeyAction>,
+    /// Whether the user-configured capture shortcut is currently
+    /// registered. The fixed History / Settings shortcuts can still
+    /// work when this is false, so this is tracked separately from
+    /// `hotkey_manager`.
+    pub capture_hotkey_registered: bool,
     /// Live tray-icon controller. Held to keep the icon visible.
     /// Tests and CLI invocations leave this `None`.
     pub tray: Option<crate::tray::TrayController>,
@@ -779,6 +784,7 @@ pub struct OverlayDisplay {
 pub struct LastRegion {
     pub rect: readshot_core::geom::Rect,
     pub display_scale: f32,
+    pub display_bounds: Option<(f32, f32, f32, f32)>,
 }
 
 /// Runtime state for one pinned capture window.
@@ -842,6 +848,7 @@ impl App {
             last_capture_status: None,
             hotkey_manager: None,
             hotkey_actions: HashMap::new(),
+            capture_hotkey_registered: false,
             tray: None,
             editor: None,
             overlay_displays: HashMap::new(),

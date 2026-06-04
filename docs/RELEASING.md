@@ -106,7 +106,7 @@ cargo test -p readshot-capture -p readshot-core -p readshot-app -p readshot-mcp 
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 git diff --check
-git add Cargo.toml Cargo.lock packaging/macos/Info.plist packaging/linux/build-appimage.sh docs/releases/v0.2.0.md
+git add Cargo.toml Cargo.lock packaging/macos/Info.plist packaging/linux/build-appimage.sh packaging/linux/arch/PKGBUILD docs/releases/v0.2.0.md
 git commit -m "chore: bump version to 0.2.0"
 ```
 

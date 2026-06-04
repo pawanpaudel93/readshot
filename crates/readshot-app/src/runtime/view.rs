@@ -2948,12 +2948,12 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             .unwrap_or_else(|| "Press a modifier shortcut now. Escape cancels.".to_string())
     } else if let Some(status) = &state.settings_hotkey_status {
         status.clone()
-    } else if pretty.is_empty() {
+    } else if readshot_ui::hotkey::parse(&state.preferences.capture_hotkey).is_err() {
         format!(
             "Couldn't read `{}` — try `cmd+shift+x` style.",
             state.preferences.capture_hotkey
         )
-    } else if state.hotkey_manager.is_none() {
+    } else if !state.capture_hotkey_registered {
         // Parsed-OK but registration failed, e.g. another app already
         // owns the chord. Tell the user so they pick another one.
         format!("{pretty} — couldn't grab globally; try a different chord.")

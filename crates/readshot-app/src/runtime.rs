@@ -302,9 +302,10 @@ pub fn start() -> (App, Task<Message>) {
     // logged-and-swallowed: the binary remains usable from the GUI
     // button + CLI / MCP surfaces if hotkey registration fails (e.g.
     // another app already owns the chord).
-    if let Some((manager, actions)) = register_default_hotkey(&app.preferences) {
-        app.hotkey_manager = Some(manager);
-        app.hotkey_actions = actions;
+    if let Some(registration) = register_default_hotkey(&app.preferences) {
+        app.hotkey_manager = Some(registration.manager);
+        app.hotkey_actions = registration.actions;
+        app.capture_hotkey_registered = registration.capture_registered;
     }
     if app.preferences.launch_at_login {
         if let Err(e) = crate::startup::set_launch_at_login(true) {
@@ -908,6 +909,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 .get_or_insert(crate::app::CaptureIntent::Editor);
             state.pending_display_id = Some(display_id.clone());
             state.pending_display_scale = Some(last.display_scale);
+            state.pending_display_bounds = last.display_bounds;
             update(
                 state,
                 Message::CaptureRegionRequested {
@@ -998,6 +1000,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 crate::app::LastRegion {
                     rect,
                     display_scale,
+                    display_bounds,
                 },
             );
             state.last_region_display_id = Some(display_id.clone());
@@ -3617,6 +3620,37 @@ mod tests {
             app.pending_display_bounds,
             Some((1440.0, 0.0, 1920.0, 1080.0))
         );
+        assert_eq!(
+            app.last_regions
+                .get("display-a")
+                .and_then(|r| r.display_bounds),
+            Some((1440.0, 0.0, 1920.0, 1080.0))
+        );
+    }
+
+    #[test]
+    fn retake_last_region_preserves_display_context() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let display_id = "display-a".to_string();
+        let rect = readshot_core::geom::Rect::from_xywh(10.0, 20.0, 120.0, 80.0).unwrap();
+        app.last_regions.insert(
+            display_id.clone(),
+            crate::app::LastRegion {
+                rect,
+                display_scale: 2.0,
+                display_bounds: Some((1440.0, 0.0, 1920.0, 1080.0)),
+            },
+        );
+        app.last_region_display_id = Some(display_id.clone());
+
+        let _ = update(&mut app, Message::RetakeLastRegionRequested);
+
+        assert_eq!(app.pending_display_id.as_deref(), Some(display_id.as_str()));
+        assert_eq!(app.pending_display_scale, Some(2.0));
+        assert_eq!(
+            app.pending_display_bounds,
+            Some((1440.0, 0.0, 1920.0, 1080.0))
+        );
     }
 
     #[test]
@@ -4512,12 +4546,39 @@ mod tests {
     }
 
     #[test]
-    fn register_default_hotkey_returns_none_for_garbage_string() {
+    fn register_hotkey_actions_keeps_fixed_hotkeys_when_capture_hotkey_is_invalid() {
         let prefs = Preferences {
             capture_hotkey: "not a hotkey at all".into(),
             ..Preferences::default()
         };
-        assert!(register_default_hotkey(&prefs).is_none());
+        let (actions, capture_registered) = register_hotkey_actions(&prefs, |_| Ok(()));
+
+        assert!(!capture_registered);
+        assert!(actions.values().any(|a| *a == GlobalHotkeyAction::History));
+        assert!(actions.values().any(|a| *a == GlobalHotkeyAction::Settings));
+        assert!(!actions.values().any(|a| *a == GlobalHotkeyAction::Capture));
+    }
+
+    #[test]
+    fn register_hotkey_actions_keeps_fixed_hotkeys_when_capture_registration_fails() {
+        let calls = std::cell::Cell::new(0);
+        let prefs = Preferences {
+            capture_hotkey: "ctrl+shift+x".into(),
+            ..Preferences::default()
+        };
+        let (actions, capture_registered) = register_hotkey_actions(&prefs, |_| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                Err("already owned".into())
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(!capture_registered);
+        assert!(actions.values().any(|a| *a == GlobalHotkeyAction::History));
+        assert!(actions.values().any(|a| *a == GlobalHotkeyAction::Settings));
+        assert!(!actions.values().any(|a| *a == GlobalHotkeyAction::Capture));
     }
 
     #[test]
@@ -4900,14 +4961,19 @@ mod tests {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         assert!(app.hotkey_manager.is_none());
         // Garbage input — register_default_hotkey can't parse it,
-        // re-registration fails, but the user's preference still gets
-        // saved in-memory so they can fix the typo and try again.
+        // capture re-registration fails, but the user's preference
+        // still gets saved in-memory so they can fix the typo and try
+        // again. Fixed app hotkeys may still be registered.
         let _ = update(
             &mut app,
             Message::Settings(SettingsMessage::SetCaptureHotkey("not-a-real-chord".into())),
         );
         assert_eq!(app.preferences.capture_hotkey, "not-a-real-chord");
-        assert!(app.hotkey_manager.is_none());
+        assert!(!app.capture_hotkey_registered);
+        assert_eq!(
+            app.settings_hotkey_error.as_deref(),
+            Some("That shortcut could not be read."),
+        );
     }
 
     #[test]

@@ -3,12 +3,18 @@
 
 use std::collections::HashMap;
 
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+use global_hotkey::{hotkey::HotKey, GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 use readshot_core::Preferences;
 use readshot_ui::hotkey;
 
 use crate::app::{App, GlobalHotkeyAction};
+
+pub(crate) struct HotkeyRegistration {
+    pub manager: GlobalHotKeyManager,
+    pub actions: HashMap<u32, GlobalHotkeyAction>,
+    pub capture_registered: bool,
+}
 
 /// Per-platform suggested default for `Preferences::capture_hotkey`.
 /// macOS users have ⌘ muscle memory; everyone else uses Ctrl.
@@ -53,20 +59,7 @@ pub fn pretty_hotkey(s: &str) -> String {
     }
 }
 
-pub(crate) fn register_default_hotkey(
-    prefs: &Preferences,
-) -> Option<(GlobalHotKeyManager, HashMap<u32, GlobalHotkeyAction>)> {
-    let spec = match hotkey::parse(&prefs.capture_hotkey) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(
-                target: "readshot::hotkey",
-                "could not parse capture_hotkey `{}`: {e}",
-                prefs.capture_hotkey,
-            );
-            return None;
-        }
-    };
+pub(crate) fn register_default_hotkey(prefs: &Preferences) -> Option<HotkeyRegistration> {
     let manager = match GlobalHotKeyManager::new() {
         Ok(m) => m,
         Err(e) => {
@@ -74,35 +67,18 @@ pub(crate) fn register_default_hotkey(
             return None;
         }
     };
-    let capture_hotkey = spec.to_global_hotkey();
-    if let Err(e) = manager.register(capture_hotkey) {
-        tracing::warn!(
-            target: "readshot::hotkey",
-            "failed to register `{}`: {e}",
-            prefs.capture_hotkey,
-        );
-        return None;
+    let (actions, capture_registered) = register_hotkey_actions(prefs, |hotkey| {
+        manager.register(hotkey).map_err(|e| e.to_string())
+    });
+    if actions.is_empty() {
+        None
+    } else {
+        Some(HotkeyRegistration {
+            manager,
+            actions,
+            capture_registered,
+        })
     }
-    let mut actions = HashMap::new();
-    actions.insert(capture_hotkey.id(), GlobalHotkeyAction::Capture);
-    register_fixed_global_hotkey(
-        &manager,
-        &mut actions,
-        history_hotkey(),
-        GlobalHotkeyAction::History,
-    );
-    register_fixed_global_hotkey(
-        &manager,
-        &mut actions,
-        settings_hotkey(),
-        GlobalHotkeyAction::Settings,
-    );
-    tracing::info!(
-        target: "readshot::hotkey",
-        "registered global hotkey: {}",
-        prefs.capture_hotkey,
-    );
-    Some((manager, actions))
 }
 
 #[cfg(target_os = "macos")]
@@ -125,25 +101,83 @@ pub(crate) fn settings_hotkey() -> &'static str {
     "ctrl+comma"
 }
 
-pub(crate) fn register_fixed_global_hotkey(
-    manager: &GlobalHotKeyManager,
+pub(crate) fn register_hotkey_actions<F>(
+    prefs: &Preferences,
+    mut register: F,
+) -> (HashMap<u32, GlobalHotkeyAction>, bool)
+where
+    F: FnMut(HotKey) -> Result<(), String>,
+{
+    let mut actions = HashMap::new();
+    let mut capture_registered = false;
+    match hotkey::parse(&prefs.capture_hotkey) {
+        Ok(spec) => {
+            let hotkey = spec.to_global_hotkey();
+            let id = hotkey.id();
+            match register(hotkey) {
+                Ok(()) => {
+                    actions.insert(id, GlobalHotkeyAction::Capture);
+                    capture_registered = true;
+                    tracing::info!(
+                        target: "readshot::hotkey",
+                        "registered global hotkey: {}",
+                        prefs.capture_hotkey,
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "readshot::hotkey",
+                        "failed to register `{}`: {e}",
+                        prefs.capture_hotkey,
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "readshot::hotkey",
+                "could not parse capture_hotkey `{}`: {e}",
+                prefs.capture_hotkey,
+            );
+        }
+    }
+    register_fixed_global_hotkey(
+        &mut actions,
+        history_hotkey(),
+        GlobalHotkeyAction::History,
+        &mut register,
+    );
+    register_fixed_global_hotkey(
+        &mut actions,
+        settings_hotkey(),
+        GlobalHotkeyAction::Settings,
+        &mut register,
+    );
+    (actions, capture_registered)
+}
+
+pub(crate) fn register_fixed_global_hotkey<F>(
     actions: &mut HashMap<u32, GlobalHotkeyAction>,
     hotkey_string: &str,
     action: GlobalHotkeyAction,
-) {
+    register: &mut F,
+) where
+    F: FnMut(HotKey) -> Result<(), String>,
+{
     let Ok(spec) = hotkey::parse(hotkey_string) else {
         tracing::warn!(target: "readshot::hotkey", "fixed hotkey `{hotkey_string}` did not parse");
         return;
     };
     let hotkey = spec.to_global_hotkey();
-    if let Err(e) = manager.register(hotkey) {
+    let id = hotkey.id();
+    if let Err(e) = register(hotkey) {
         tracing::warn!(
             target: "readshot::hotkey",
             "failed to register fixed hotkey `{hotkey_string}`: {e}",
         );
         return;
     }
-    actions.insert(hotkey.id(), action);
+    actions.insert(id, action);
 }
 
 pub(crate) fn refresh_hotkey_registration(state: &mut App) {
@@ -152,9 +186,11 @@ pub(crate) fn refresh_hotkey_registration(state: &mut App) {
     // conflicts with another app, the field stays `None`.
     state.hotkey_manager = None;
     state.hotkey_actions.clear();
-    if let Some((manager, actions)) = register_default_hotkey(&state.preferences) {
-        state.hotkey_manager = Some(manager);
-        state.hotkey_actions = actions;
+    state.capture_hotkey_registered = false;
+    if let Some(registration) = register_default_hotkey(&state.preferences) {
+        state.hotkey_manager = Some(registration.manager);
+        state.hotkey_actions = registration.actions;
+        state.capture_hotkey_registered = registration.capture_registered;
     }
 }
 
@@ -162,9 +198,9 @@ pub(crate) fn set_hotkey_registration_notice(state: &mut App) {
     let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
     state.settings_hotkey_error = None;
     state.settings_hotkey_status = None;
-    if pretty.is_empty() {
+    if hotkey::parse(&state.preferences.capture_hotkey).is_err() {
         state.settings_hotkey_error = Some("That shortcut could not be read.".to_string());
-    } else if state.hotkey_manager.is_some() {
+    } else if state.capture_hotkey_registered {
         state.settings_hotkey_status = Some(format!("{pretty} is ready."));
     } else {
         state.settings_hotkey_error = Some(format!("{pretty} could not be registered globally."));
