@@ -194,6 +194,18 @@ impl FsHistoryStore {
             .join(format!("{}.thumb.png", record.id))
     }
 
+    /// Absolute path of a record's PNG under `root`. Shared by the
+    /// history browser and the MCP server so the layout is defined in
+    /// exactly one place.
+    pub fn abs_png_path(root: &Path, record: &CaptureRecord) -> PathBuf {
+        root.join(Self::png_path(record))
+    }
+
+    /// Absolute path of a record's thumbnail under `root`.
+    pub fn abs_thumbnail_path(root: &Path, record: &CaptureRecord) -> PathBuf {
+        root.join(Self::thumbnail_path(record))
+    }
+
     fn write_thumbnail_from_bytes(&self, record: &CaptureRecord, png: &[u8]) {
         let Ok(img) = image::load_from_memory(png) else {
             return;
@@ -416,6 +428,40 @@ impl HistoryStore for FsHistoryStore {
         self.write_index(&index)?;
         Ok(())
     }
+}
+
+/// True when `record` matches the lowercase search query `q`. Tries
+/// the OCR text, the display id, the pixel dimensions, and the
+/// timestamp formatted in the local zone — the latter lets users
+/// search "2026-04" or "14:32" naturally.
+///
+/// Single source of truth for history search: both the in-app history
+/// browser and the MCP `search_captures` tool call this, after their
+/// previously separate copies drifted apart (the MCP copy matched only
+/// OCR text and a UTC-formatted timestamp).
+pub fn record_matches_query(record: &CaptureRecord, q: &str) -> bool {
+    if let Some(ocr) = record.ocr_text.as_deref() {
+        if ocr.to_lowercase().contains(q) {
+            return true;
+        }
+    }
+    if record.display_id.to_lowercase().contains(q) {
+        return true;
+    }
+    let dims = format!(
+        "{}x{} {} {}",
+        record.width_px, record.height_px, record.width_px, record.height_px
+    );
+    if dims.contains(q) {
+        return true;
+    }
+    let stamp = record
+        .captured_at
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+        .to_lowercase();
+    stamp.contains(q)
 }
 
 #[cfg(test)]

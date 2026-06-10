@@ -36,7 +36,7 @@ fn invalid_scale_exits_usage_error_without_capture_or_log_noise() {
     );
 
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("readshot: invalid input: --scale must be a positive finite number"));
+    assert!(stderr.contains("readshot: invalid input: scale must be a positive finite number"));
     assert!(
         !stderr.contains("logging to"),
         "CLI stderr should not include routine logging: {stderr}"

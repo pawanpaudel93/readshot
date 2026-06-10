@@ -559,12 +559,9 @@ impl McpServer {
     }
 
     async fn lookup_window_bounds(&self, window_id: &WindowId) -> Result<Rect, RpcErr> {
-        let windows = self.capturer.list_windows().await.map_err(capture_to_rpc)?;
-        windows
-            .into_iter()
-            .find(|window| window.id == *window_id)
-            .map(|window| window.bounds)
-            .ok_or_else(|| capture_to_rpc(CaptureError::WindowNotFound(window_id.0.clone())))
+        readshot_capture::lookup_window_bounds(self.capturer.as_ref(), window_id)
+            .await
+            .map_err(capture_to_rpc)
     }
 }
 
@@ -578,17 +575,9 @@ fn ocr_request_from(args: &Value, image: RgbaImage) -> Result<OCRRequest, RpcErr
     })
 }
 
-/// Largest rect dimension we will accept from an MCP caller, in
-/// logical pixels. Bounds the worst-case capture buffer to roughly
-/// `MAX_RECT_DIM * MAX_RECT_DIM * 4 * MAX_SCALE^2` bytes, which keeps
-/// an adversarial caller from coercing the process into multi-GB
-/// allocations.
-const MAX_RECT_DIM: f32 = 16_384.0;
-
-/// Largest output scale factor we accept. Anything beyond 8x of the
-/// display's logical pixels is almost certainly a mistake or abuse.
-const MAX_SCALE: f32 = 8.0;
-const MAX_CAPTURE_PIXELS: f64 = 100_000_000.0;
+// Request safety limits are shared with the CLI — single source of
+// truth in readshot-capture so the two surfaces can't drift.
+use readshot_capture::{MAX_RECT_DIM, MAX_SCALE};
 
 fn validate_args_object(args: &Value, allowed: &[&str]) -> Result<(), RpcErr> {
     let Some(obj) = args.as_object() else {
@@ -612,16 +601,7 @@ fn validate_args_object(args: &Value, allowed: &[&str]) -> Result<(), RpcErr> {
 }
 
 fn validate_capture_pixels(rect: Rect, scale: f32) -> Result<(), RpcErr> {
-    let pixels = rect.width() as f64 * rect.height() as f64 * scale as f64 * scale as f64;
-    if pixels > MAX_CAPTURE_PIXELS {
-        return Err(RpcErr {
-            code: codes::INVALID_PARAMS,
-            message: format!(
-                "capture would be too large after scale ({pixels:.0} pixels > {MAX_CAPTURE_PIXELS:.0})"
-            ),
-        });
-    }
-    Ok(())
+    readshot_capture::validate_capture_pixels(rect, scale).map_err(capture_to_rpc)
 }
 
 fn parse_rect_value(v: &Value) -> Result<Rect, RpcErr> {
@@ -805,19 +785,10 @@ fn parse_limit(args: &Value, default: usize) -> Result<usize, RpcErr> {
     }
 }
 
-fn record_matches(record: &CaptureRecord, needle: &str) -> bool {
-    if let Some(ocr) = record.ocr_text.as_deref() {
-        if ocr.to_lowercase().contains(needle) {
-            return true;
-        }
-    }
-    record
-        .captured_at
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string()
-        .to_lowercase()
-        .contains(needle)
-}
+// Search semantics shared with the app's history browser — single
+// source of truth in readshot-core (the two copies had drifted: this
+// one matched only OCR text plus a UTC-formatted timestamp).
+use readshot_core::history::record_matches_query as record_matches;
 
 fn record_to_json(record: &CaptureRecord, history_root: Option<&Path>) -> Value {
     let image_path = history_root.map(|root| history_png_path(root, record));
@@ -833,7 +804,7 @@ fn record_to_json(record: &CaptureRecord, history_root: Option<&Path>) -> Value 
 }
 
 fn history_png_path(root: &Path, record: &CaptureRecord) -> PathBuf {
-    root.join(readshot_core::FsHistoryStore::png_path(record))
+    readshot_core::FsHistoryStore::abs_png_path(root, record)
 }
 
 fn capture_to_rpc(e: CaptureError) -> RpcErr {

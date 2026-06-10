@@ -75,7 +75,7 @@ pub struct EditorSession {
     /// committed annotations). iced's `view` function only gets `&App`
     /// so we can't run `model.flatten()` inside it (the renderer needs
     /// `&mut`); instead the runtime's `update` rebuilds this handle on
-    /// every model mutation via [`refresh_image`].
+    /// every model mutation via [`EditorSession::refresh_image`].
     pub image_handle: iced::widget::image::Handle,
     /// In-progress text annotation. `Some` after the user clicks with
     /// the Text tool active; the editor view renders an inline input
@@ -398,7 +398,7 @@ impl EditorSession {
             .is_actual_size_for_display_scale(self.display_scale)
     }
 
-    /// Rebuild [`image_handle`] from the model's currently-flattened
+    /// Rebuild [`Self::image_handle`] from the model's currently-flattened
     /// pixels. Call after any mutation that affects the rendered
     /// output: `commit_annotation`, `undo`, `redo`, `discard`, or
     /// when the base image changes (Crop replaces it).
@@ -411,7 +411,7 @@ impl EditorSession {
     /// renderer replays every annotation (blur included) per call;
     /// since a crop changes geometry but no pixels, render the stack
     /// once without any Crop annotation and serve each tick as a
-    /// sub-rect copy. Falls back to [`refresh_image`] when no crop
+    /// sub-rect copy. Falls back to [`Self::refresh_image`] when no crop
     /// annotation exists.
     pub fn refresh_crop_drag_preview(&mut self) {
         let Some(rect) = self.last_crop() else {
@@ -444,7 +444,7 @@ impl EditorSession {
 
     /// Pixel size of the *base* image (pre-crop). Useful for hint
     /// text and not much else; the canvas should use
-    /// [`effective_image_size`] so cursor mapping respects an
+    /// [`Self::effective_image_size`] so cursor mapping respects an
     /// active Crop annotation.
     pub fn image_size(&self) -> (u32, u32) {
         let base = self.model.base();

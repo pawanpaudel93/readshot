@@ -2,7 +2,7 @@
 //!
 //! The toolbar offers buttons for every tool plus a 12-swatch colour
 //! palette and a thickness slider. It publishes [`ToolbarMessage`]s
-//! the composition root maps to [`EditorState`] mutations.
+//! the composition root maps to [`super::EditorState`] mutations.
 //!
 //! Task 14 ships the model + tested helpers; the iced view function
 //! that materialises the buttons lives here as well, but we leave the

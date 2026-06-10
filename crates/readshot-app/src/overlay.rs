@@ -10,7 +10,7 @@
 //!
 //! 1. Empty state — drag with the mouse to define an initial rect
 //!    (Shift = constrain to a square).
-//! 2. On mouse-up the rect is *committed* into [`OverlayState::selection`]
+//! 2. On mouse-up the rect is *committed* into `OverlayState::selection`
 //!    but **not** confirmed. Eight resize handles (4 corners, 4
 //!    edges) appear and the cursor becomes hover-aware.
 //! 3. Refine: drag a handle to resize, or drag the body to translate.

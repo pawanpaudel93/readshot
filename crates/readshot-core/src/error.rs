@@ -18,7 +18,9 @@ pub enum CoreError {
     Export(#[from] ExportError),
 }
 
-/// Errors from any [`crate::Capturer`] implementation.
+/// Errors from any `Capturer` implementation (the trait lives in
+/// `readshot-capture`; the error type lives here so every crate can
+/// name it without a capture dependency).
 #[derive(Debug, Error)]
 pub enum CaptureError {
     /// macOS Screen Recording or Linux xdg-desktop-portal ScreenCast consent
@@ -57,7 +59,8 @@ pub enum CaptureError {
     InvalidRegion(String),
 }
 
-/// Errors from any [`crate::OCREngine`] implementation. `NoText` is the only
+/// Errors from any `OCREngine` implementation (trait in `readshot-ocr`;
+/// error type here for the same reason as [`CaptureError`]). `NoText` is the only
 /// non-error semantic outcome that still uses this enum — callers that want
 /// to treat empty results as success (the MCP server does) match the variant
 /// before propagating.

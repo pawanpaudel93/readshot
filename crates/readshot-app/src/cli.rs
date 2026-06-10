@@ -414,9 +414,9 @@ pub fn exit_code(err: &CliError) -> i32 {
 /// values to `Duration::from_secs_f64`, which panics near
 /// `Duration::MAX`.
 const MAX_DELAY_SECS: f64 = 3600.0;
-const MAX_RECT_DIM: f32 = 16_384.0;
-const MAX_SCALE: f32 = 8.0;
-const MAX_CAPTURE_PIXELS: f64 = 100_000_000.0;
+// Request safety limits are shared with the MCP server — single source
+// of truth in readshot-capture so the two surfaces can't drift.
+use readshot_capture::MAX_RECT_DIM;
 
 fn parse_delay(s: &str) -> Result<f64, String> {
     let delay = s
@@ -982,40 +982,31 @@ async fn build_capture_request(
     })
 }
 
-fn validate_capture_pixels(rect: Rect, scale: f32) -> Result<(), CliError> {
-    let pixels = rect.width() as f64 * rect.height() as f64 * scale as f64 * scale as f64;
-    if pixels > MAX_CAPTURE_PIXELS {
-        return Err(CliError::InvalidInput(format!(
-            "capture would be too large after scale ({pixels:.0} pixels > {MAX_CAPTURE_PIXELS:.0})"
-        )));
+/// Map the shared limit validators' typed rejection into the CLI's
+/// usage-error class (exit code 64) — these are bad arguments, not
+/// capture failures.
+fn limit_err_to_cli(e: CaptureError) -> CliError {
+    match e {
+        CaptureError::InvalidRegion(msg) => CliError::InvalidInput(msg),
+        other => CliError::Capture(other),
     }
-    Ok(())
+}
+
+fn validate_capture_pixels(rect: Rect, scale: f32) -> Result<(), CliError> {
+    readshot_capture::validate_capture_pixels(rect, scale).map_err(limit_err_to_cli)
 }
 
 fn validate_scale(scale: f32) -> Result<(), CliError> {
-    if !scale.is_finite() || scale <= 0.0 {
-        return Err(CliError::InvalidInput(
-            "--scale must be a positive finite number".into(),
-        ));
-    }
-    if scale > MAX_SCALE {
-        return Err(CliError::InvalidInput(format!(
-            "--scale must not exceed {MAX_SCALE}"
-        )));
-    }
-    Ok(())
+    readshot_capture::validate_scale(scale).map_err(limit_err_to_cli)
 }
 
 async fn lookup_window_bounds(
     capturer: &dyn Capturer,
     window_id: &WindowId,
 ) -> Result<Rect, CliError> {
-    let windows = capturer.list_windows().await?;
-    windows
-        .into_iter()
-        .find(|window| window.id == *window_id)
-        .map(|window| window.bounds)
-        .ok_or_else(|| CliError::Capture(CaptureError::WindowNotFound(window_id.0.clone())))
+    readshot_capture::lookup_window_bounds(capturer, window_id)
+        .await
+        .map_err(CliError::Capture)
 }
 
 fn write_displays_table(out: &mut dyn Write, displays: &[DisplayInfo]) -> std::io::Result<()> {
@@ -2260,7 +2251,7 @@ mod tests {
         let mut out = Vec::new();
         let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
 
-        assert!(matches!(err, CliError::InvalidInput(ref s) if s.contains("--scale")));
+        assert!(matches!(err, CliError::InvalidInput(ref s) if s.contains("scale")));
         assert_eq!(exit_code(&err), 64);
     }
 
@@ -2279,7 +2270,7 @@ mod tests {
         let mut out = Vec::new();
         let err = cli.run(cap, ocr, &mut out).await.unwrap_err();
 
-        assert!(matches!(err, CliError::InvalidInput(ref s) if s.contains("--scale")));
+        assert!(matches!(err, CliError::InvalidInput(ref s) if s.contains("scale")));
         assert_eq!(exit_code(&err), 64);
     }
 

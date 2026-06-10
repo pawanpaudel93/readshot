@@ -21,7 +21,7 @@
 //! straight-alpha by convention. Display/region captures are opaque
 //! (alpha 255), where premultiplied == straight, so they need no
 //! conversion. Window captures can contain translucent pixels, so
-//! `capture_window` runs [`unpremultiply`] to avoid darkened colours.
+//! `capture_window` runs `unpremultiply` to avoid darkened colours.
 
 use async_trait::async_trait;
 use image::RgbaImage;

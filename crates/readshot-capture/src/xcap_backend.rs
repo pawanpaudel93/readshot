@@ -1,25 +1,28 @@
-//! Windows Capturer.
+//! Shared xcap-based Capturer for Windows and Linux.
 //!
-//! Wraps the [`xcap`](https://crates.io/crates/xcap) crate (≥ 0.9), which
-//! itself sits on top of modern `Windows.Graphics.Capture` with a DXGI
-//! Desktop Duplication fallback. Versus hand-rolling the
-//! `windows`-crate D3D11 staging-texture dance directly, this:
+//! Both platforms wrap the [`xcap`](https://crates.io/crates/xcap)
+//! crate (≥ 0.9): on Windows it sits on `Windows.Graphics.Capture`
+//! with a DXGI Desktop Duplication fallback; on Linux it routes to the
+//! `xdg-desktop-portal` ScreenCast portal on Wayland and XGetImage on
+//! X11 (selected automatically from `$WAYLAND_DISPLAY` / `$DISPLAY`).
+//! Versus hand-rolling the per-OS FFI this eliminates hundreds of
+//! lines of unsafe code we cannot validate without those hosts, and
+//! inherits xcap's permission handling.
 //!
-//! 1. Eliminates ~300 LOC of unsafe FFI we cannot validate without a
-//!    Windows host.
-//! 2. Inherits xcap's permission-checking and error mapping, which has
-//!    been hardened across many downstream consumers.
-//! 3. Leaves the trait surface unchanged — a future revision can swap
-//!    to `windows::Graphics::Capture` directly with no public API
-//!    impact.
+//! The two backends used to be near-verbatim copies in `windows.rs`
+//! and `linux/mod.rs`; the only real platform difference is how
+//! monitor bounds are normalised to logical pixels (Windows reports
+//! physical pixels that must be divided by the scale factor, Linux
+//! reports logical values already) — captured in [`logical_bounds`].
 //!
 //! ## Permission semantics
 //!
-//! Windows does not require an explicit Screen Recording grant for
-//! non-elevated apps capturing non-elevated content. Capturing a
-//! UAC-elevated window from a non-elevated process returns an empty /
-//! protected frame; the user-facing fix is to elevate Readshot itself.
-//! That asymmetry is documented in spec §3.12.
+//! * Windows: no explicit grant for non-elevated apps capturing
+//!   non-elevated content. Capturing a UAC-elevated window from a
+//!   non-elevated process returns an empty / protected frame; the fix
+//!   is to elevate Readshot itself (spec §3.12).
+//! * Linux/Wayland: the portal consent dialog is the grant; the token
+//!   is reused for the rest of the session. X11 has no consent step.
 
 use async_trait::async_trait;
 use image::RgbaImage;
@@ -29,15 +32,15 @@ use xcap::Monitor;
 
 use crate::{rect_relative_to_display, CaptureRequest, Capturer, DisplayInfo};
 
-/// Production Windows Capturer.
-pub struct WindowsGraphicsCapturer;
+/// Production Capturer for Windows and Linux, backed by xcap.
+pub struct XcapCapturer;
 
-pub fn new() -> WindowsGraphicsCapturer {
-    WindowsGraphicsCapturer
+pub fn new() -> XcapCapturer {
+    XcapCapturer
 }
 
 #[async_trait]
-impl Capturer for WindowsGraphicsCapturer {
+impl Capturer for XcapCapturer {
     async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
         crate::run_capture_blocking("list_displays", || {
             let monitors = Monitor::all().map_err(map_err)?;
@@ -78,18 +81,12 @@ fn monitor_to_display_info(m: &Monitor) -> Result<DisplayInfo, CaptureError> {
     let id = m.id().map_err(map_err)?.to_string();
     let x = m.x().map_err(map_err)? as f32;
     let y = m.y().map_err(map_err)? as f32;
+    let w = m.width().map_err(map_err)? as f32;
+    let h = m.height().map_err(map_err)? as f32;
     let scale = m.scale_factor().map_err(map_err)?;
-    let safe_scale = if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        1.0
-    };
-    let x = x / safe_scale;
-    let y = y / safe_scale;
-    let w = m.width().map_err(map_err)? as f32 / safe_scale;
-    let h = m.height().map_err(map_err)? as f32 / safe_scale;
     let name = m.friendly_name().or_else(|_| m.name()).map_err(map_err)?;
     let is_primary = m.is_primary().map_err(map_err)?;
+    let (x, y, w, h) = logical_bounds(x, y, w, h, scale);
     let bounds = Rect::from_xywh(x, y, w.max(1.0), h.max(1.0))
         .unwrap_or_else(|| Rect::from_xywh(0.0, 0.0, 1.0, 1.0).unwrap());
     Ok(DisplayInfo {
@@ -99,6 +96,29 @@ fn monitor_to_display_info(m: &Monitor) -> Result<DisplayInfo, CaptureError> {
         name,
         is_primary,
     })
+}
+
+/// Windows reports monitor geometry in physical pixels; divide by the
+/// scale factor to get the logical bounds [`DisplayInfo`] promises.
+#[cfg(target_os = "windows")]
+fn logical_bounds(x: f32, y: f32, w: f32, h: f32, scale: f32) -> (f32, f32, f32, f32) {
+    let safe_scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    (
+        x / safe_scale,
+        y / safe_scale,
+        w / safe_scale,
+        h / safe_scale,
+    )
+}
+
+/// Linux already reports logical values.
+#[cfg(target_os = "linux")]
+fn logical_bounds(x: f32, y: f32, w: f32, h: f32, _scale: f32) -> (f32, f32, f32, f32) {
+    (x, y, w, h)
 }
 
 /// Crop a full-monitor `RgbaImage` to the requested logical rect, scaled
@@ -128,8 +148,8 @@ fn map_err(e: xcap::XCapError) -> CaptureError {
     }
 }
 
-/// xcap surfaces capture denials as opaque error strings, so we sniff the
-/// message. The token set is shared with the Linux backend for consistency
+/// xcap surfaces capture denials (Windows access errors, Wayland portal
+/// declines) as opaque error strings, so we sniff the message
 /// (`"denied"` already subsumes `"access is denied"`).
 fn is_permission_denied(message: &str) -> bool {
     let lc = message.to_lowercase();

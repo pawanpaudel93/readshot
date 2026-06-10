@@ -1,14 +1,14 @@
 //! Per-OS screen capture for Readshot.
 //!
-//! The public API is the [`Capturer`] trait plus three platform-specific
+//! The public API is the [`Capturer`] trait plus platform-specific
 //! implementations selected at compile time:
 //!
-//! * [`macos::ScreenCaptureKitCapturer`] — `screencapturekit` crate
-//!   (Task 7 fills in the body).
-//! * [`windows::WindowsGraphicsCapturer`] — `windows` crate's
-//!   `Graphics::Capture` (Task 8).
-//! * [`linux::LinuxCapturer`] — `ashpd` portal on Wayland with `x11rb`
-//!   fallback (Task 9).
+//! * `macos::ScreenCaptureKitCapturer` — ScreenCaptureKit via a small
+//!   Swift shim.
+//! * `xcap_backend::XcapCapturer` — Windows and Linux, both wrapping
+//!   the `xcap` crate (Windows.Graphics.Capture / DXGI on Windows;
+//!   the xdg-desktop-portal ScreenCast portal on Wayland with an
+//!   XGetImage fallback on X11).
 //!
 //! The optional `test-fixtures` feature exposes `fake::FakeCapturer`,
 //! a deterministic fixture so higher crate tests can substitute
@@ -26,12 +26,10 @@ use readshot_core::geom::Rect;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fake;
 
-#[cfg(target_os = "linux")]
-pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
-#[cfg(target_os = "windows")]
-pub mod windows;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub mod xcap_backend;
 
 /// Opaque OS handle for a display. macOS uses `CGDirectDisplayID` as a
 /// decimal string; Windows uses the monitor's interface id; Linux uses
@@ -112,6 +110,64 @@ fn capture_axis_scale(image_pixels: u32, logical_extent: f32) -> f32 {
     } else {
         1.0
     }
+}
+
+/// Shared safety limits for capture requests built from untrusted
+/// input (CLI arguments, MCP tool calls). These live here — next to
+/// [`CaptureRequest`] — as the single source of truth so the two
+/// surfaces cannot silently drift apart.
+///
+/// Largest rect coordinate/dimension accepted, in logical pixels.
+/// Bounds the worst-case capture buffer to roughly
+/// `MAX_RECT_DIM² * 4 * MAX_SCALE²` bytes, keeping an adversarial
+/// caller from coercing the process into multi-GB allocations.
+pub const MAX_RECT_DIM: f32 = 16_384.0;
+
+/// Largest output scale factor accepted. Anything beyond 8x of the
+/// display's logical pixels is almost certainly a mistake or abuse.
+pub const MAX_SCALE: f32 = 8.0;
+
+/// Hard cap on `width * height * scale²` for one capture.
+pub const MAX_CAPTURE_PIXELS: f64 = 100_000_000.0;
+
+/// Reject a request whose post-scale pixel count exceeds
+/// [`MAX_CAPTURE_PIXELS`].
+pub fn validate_capture_pixels(rect: Rect, scale: f32) -> Result<(), CaptureError> {
+    let pixels = rect.width() as f64 * rect.height() as f64 * scale as f64 * scale as f64;
+    if pixels > MAX_CAPTURE_PIXELS {
+        return Err(CaptureError::InvalidRegion(format!(
+            "capture would be too large after scale ({pixels:.0} pixels > {MAX_CAPTURE_PIXELS:.0})"
+        )));
+    }
+    Ok(())
+}
+
+/// Reject a non-finite, non-positive, or over-limit scale factor.
+pub fn validate_scale(scale: f32) -> Result<(), CaptureError> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(CaptureError::InvalidRegion(
+            "scale must be a positive finite number".into(),
+        ));
+    }
+    if scale > MAX_SCALE {
+        return Err(CaptureError::InvalidRegion(format!(
+            "scale must not exceed {MAX_SCALE}"
+        )));
+    }
+    Ok(())
+}
+
+/// Find a window's logical bounds by id via [`Capturer::list_windows`].
+pub async fn lookup_window_bounds(
+    capturer: &dyn Capturer,
+    window_id: &WindowId,
+) -> Result<Rect, CaptureError> {
+    let windows = capturer.list_windows().await?;
+    windows
+        .into_iter()
+        .find(|window| window.id == *window_id)
+        .map(|window| window.bounds)
+        .ok_or_else(|| CaptureError::WindowNotFound(window_id.0.clone()))
 }
 
 /// Information about an attached display, returned by
@@ -202,13 +258,9 @@ pub fn default_capturer() -> Box<dyn Capturer> {
     {
         return Box::new(macos::new());
     }
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
-        return Box::new(windows::new());
-    }
-    #[cfg(target_os = "linux")]
-    {
-        return Box::new(linux::new());
+        return Box::new(xcap_backend::new());
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {

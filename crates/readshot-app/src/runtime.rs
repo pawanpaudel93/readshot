@@ -385,7 +385,7 @@ pub fn title(state: &App, id: window::Id) -> String {
 const OVERLAY_THEME_NAME: &str = "readshot-overlay-transparent";
 
 /// Theme: Readshot-branded dark by default. Overlay windows get a custom theme whose
-/// `name()` is [`OVERLAY_THEME_NAME`] so [`style`] can identify them
+/// `name()` is `OVERLAY_THEME_NAME` so `style` can identify them
 /// and return a transparent base style. The palette colors don't
 /// matter for the canvas-only overlay view, so we copy `Theme::Dark`
 /// to avoid widget surprises if iced ever consults them.

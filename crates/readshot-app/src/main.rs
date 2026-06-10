@@ -1,7 +1,7 @@
 //! Readshot binary — composition root.
 //!
 //! This file is intentionally thin: it constructs the per-OS
-//! services, builds an [`App`], and hands control to the iced daemon.
+//! services, builds an `App`, and hands control to the iced daemon.
 //! All testable logic lives under `lib.rs`.
 //!
 //! The full iced runtime wiring (multi-window overlay spawning,

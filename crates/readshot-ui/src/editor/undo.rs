@@ -74,7 +74,7 @@ impl History {
         Some(&self.present)
     }
 
-    /// Inverse of [`undo`]. Pops from `future`, pushes the current
+    /// Inverse of [`History::undo`]. Pops from `future`, pushes the current
     /// state to `past`.
     pub fn redo(&mut self) -> Option<&[Annotation]> {
         let next = self.future.pop()?;

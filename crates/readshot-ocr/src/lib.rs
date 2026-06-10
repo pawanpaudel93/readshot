@@ -5,9 +5,9 @@
 //!
 //! * [`macos::AppleVisionEngine`] — `objc2-vision`'s `VNRecognizeTextRequest`
 //!   (Task 11 fills in the body).
-//! * [`windows::WindowsMediaOcrEngine`] — `windows` crate's
+//! * `windows::WindowsMediaOcrEngine` — `windows` crate's
 //!   `Windows::Media::Ocr` (Task 12).
-//! * [`linux::OcrsEngine`] — the pure-Rust `ocrs` engine over its two
+//! * `linux::OcrsEngine` — the pure-Rust `ocrs` engine over its two
 //!   `.rten` model files (this task).
 //!
 //! The optional `test-fixtures` feature exposes `fake::FakeOcrEngine`,

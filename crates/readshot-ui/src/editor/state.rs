@@ -3,8 +3,8 @@
 //! [`EditorState`] owns the captured base image, the annotation
 //! [`History`] stack, the active [`ToolState`], the current colour,
 //! and the line-width slider. It exposes a small surface
-//! ([`commit_annotation`], [`set_tool`], [`set_color`], etc.) plus
-//! `undo`/`redo` and `flatten` (re-renders via [`readshot_core::render`]).
+//! (`commit_annotation`, `set_tool`, `set_color`, etc.) plus
+//! `undo`/`redo` and `flatten` (re-renders via [`readshot_core::render()`]).
 //!
 //! Splitting the model from the iced view (the Canvas widget in
 //! `canvas.rs`) means every state transition is unit-testable without

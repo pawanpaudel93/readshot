@@ -939,33 +939,9 @@ pub(crate) fn history_row_actions<'a>(
     .into()
 }
 
-/// True when `record` matches the lowercase search query `q`. Tries
-/// the OCR text and the timestamp formatted in the local zone — the
-/// latter lets users search "2026-04" or "14:32" naturally.
-pub(crate) fn record_matches(record: &readshot_core::CaptureRecord, q: &str) -> bool {
-    if let Some(ocr) = record.ocr_text.as_deref() {
-        if ocr.to_lowercase().contains(q) {
-            return true;
-        }
-    }
-    if record.display_id.to_lowercase().contains(q) {
-        return true;
-    }
-    let dims = format!(
-        "{}x{} {} {}",
-        record.width_px, record.height_px, record.width_px, record.height_px
-    );
-    if dims.contains(q) {
-        return true;
-    }
-    let stamp = record
-        .captured_at
-        .with_timezone(&chrono::Local)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string()
-        .to_lowercase();
-    stamp.contains(q)
-}
+// Search semantics live in readshot-core (shared with the MCP
+// server's search_captures tool) so the two surfaces can't drift.
+pub(crate) use readshot_core::history::record_matches_query as record_matches;
 
 pub(crate) fn visible_history_ids(
     records: &[readshot_core::CaptureRecord],
@@ -1071,14 +1047,14 @@ pub(crate) fn history_png_path(
     root: &std::path::Path,
     record: &readshot_core::CaptureRecord,
 ) -> PathBuf {
-    root.join(readshot_core::FsHistoryStore::png_path(record))
+    readshot_core::FsHistoryStore::abs_png_path(root, record)
 }
 
 pub(crate) fn history_thumbnail_path(
     root: &std::path::Path,
     record: &readshot_core::CaptureRecord,
 ) -> PathBuf {
-    root.join(readshot_core::FsHistoryStore::thumbnail_path(record))
+    readshot_core::FsHistoryStore::abs_thumbnail_path(root, record)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

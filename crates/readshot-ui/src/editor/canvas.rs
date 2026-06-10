@@ -2,7 +2,7 @@
 //! annotation by clicking and dragging on the captured image.
 //!
 //! The widget translates mouse events into [`CanvasMessage`] variants
-//! the runtime maps onto [`EditorState`] mutations. Three interaction
+//! the runtime maps onto [`super::EditorState`] mutations. Three interaction
 //! modes are supported, keyed off the active [`ToolState`]:
 //!
 //! * **Rect tools** (Rectangle, Ellipse, Blur, Pixelate, Crop) and

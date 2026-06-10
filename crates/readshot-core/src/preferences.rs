@@ -158,7 +158,7 @@ impl Preferences {
     ///
     /// A missing file is *not* an error — callers handle "first launch"
     /// by checking with `path.exists()` themselves before calling, or by
-    /// using [`load_or_default`].
+    /// using [`Preferences::load_or_default`].
     pub fn load(path: &Path) -> Result<Preferences, PreferencesError> {
         let content = std::fs::read_to_string(path)?;
         let mut prefs: Preferences = toml::from_str(&content)?;
