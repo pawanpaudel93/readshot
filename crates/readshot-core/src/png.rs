@@ -13,16 +13,38 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ColorType, ImageEncoder, ImageResult, RgbaImage};
 
 pub fn encode(img: &RgbaImage) -> ImageResult<Vec<u8>> {
-    let bytes_per_pixel = if is_opaque(img) { 3 } else { 4 };
+    encode_with(img, CompressionType::Best)
+}
+
+/// Fast-compression encode for in-memory handoffs (e.g. feeding the
+/// bytes straight into Apple Vision) where the PNG is decoded
+/// immediately and never hits disk: compression ratio is irrelevant
+/// there, while the encode CPU sits directly on hotkey latency.
+pub fn encode_fast(img: &RgbaImage) -> ImageResult<Vec<u8>> {
+    encode_with(img, CompressionType::Fast)
+}
+
+fn encode_with(img: &RgbaImage, compression: CompressionType) -> ImageResult<Vec<u8>> {
+    let opaque = is_opaque(img);
+    let bytes_per_pixel = if opaque { 3 } else { 4 };
     let mut out =
         Vec::with_capacity(img.width() as usize * img.height() as usize * bytes_per_pixel);
-    write(img, &mut out)?;
+    write_with(img, &mut out, compression, opaque)?;
     Ok(out)
 }
 
 pub fn write<W: Write>(img: &RgbaImage, writer: W) -> ImageResult<()> {
-    let encoder = PngEncoder::new_with_quality(writer, CompressionType::Best, FilterType::Adaptive);
-    if is_opaque(img) {
+    write_with(img, writer, CompressionType::Best, is_opaque(img))
+}
+
+fn write_with<W: Write>(
+    img: &RgbaImage,
+    writer: W,
+    compression: CompressionType,
+    opaque: bool,
+) -> ImageResult<()> {
+    let encoder = PngEncoder::new_with_quality(writer, compression, FilterType::Adaptive);
+    if opaque {
         let mut rgb = Vec::with_capacity(img.width() as usize * img.height() as usize * 3);
         for pixel in img.pixels() {
             rgb.extend_from_slice(&pixel.0[..3]);

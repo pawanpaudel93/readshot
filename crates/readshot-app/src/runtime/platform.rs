@@ -36,7 +36,10 @@ pub(crate) fn pick_primary(displays: &[DisplayInfo]) -> Option<&DisplayInfo> {
         .or_else(|| displays.first())
 }
 
-pub(crate) fn quit_readshot() -> Task<Message> {
+pub(crate) fn quit_readshot(coord: &crate::coordinator::CaptureCoordinator) -> Task<Message> {
+    // Drain queued history sidecar writes first so quitting straight
+    // after an annotation edit can't lose the trailing write.
+    coord.flush_history_updates();
     #[cfg(target_os = "macos")]
     {
         // Menu-bar apps can otherwise linger as an LSUIElement process

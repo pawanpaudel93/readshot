@@ -126,6 +126,12 @@ pub struct EditorSession {
     /// saved editor can still undo while closing without a stale
     /// "unsaved edits" warning.
     output_checkpoint: EditorOutputCheckpoint,
+    /// Cached uncropped flatten used while a Crop annotation is being
+    /// dragged. Cropping changes output geometry but no pixels, so the
+    /// annotation stack (blur included) renders once per drag and each
+    /// tick serves a sub-rect copy instead of a full re-render per
+    /// mouse-move event. Cleared by [`refresh_image`].
+    crop_drag_flat: Option<image::RgbaImage>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -297,6 +303,7 @@ impl EditorSession {
             width_drag_baseline: None,
             frame_style: EditorFrameStyle::None,
             output_checkpoint,
+            crop_drag_flat: None,
         }
     }
 
@@ -332,6 +339,7 @@ impl EditorSession {
             width_drag_baseline: None,
             frame_style: EditorFrameStyle::None,
             output_checkpoint,
+            crop_drag_flat: None,
         }
     }
 
@@ -395,7 +403,43 @@ impl EditorSession {
     /// output: `commit_annotation`, `undo`, `redo`, `discard`, or
     /// when the base image changes (Crop replaces it).
     pub fn refresh_image(&mut self) {
+        self.crop_drag_flat = None;
         self.image_handle = build_handle(&mut self.model);
+    }
+
+    /// Cheap image-handle refresh for Crop drag ticks. The full
+    /// renderer replays every annotation (blur included) per call;
+    /// since a crop changes geometry but no pixels, render the stack
+    /// once without any Crop annotation and serve each tick as a
+    /// sub-rect copy. Falls back to [`refresh_image`] when no crop
+    /// annotation exists.
+    pub fn refresh_crop_drag_preview(&mut self) {
+        let Some(rect) = self.last_crop() else {
+            self.refresh_image();
+            return;
+        };
+        if self.crop_drag_flat.is_none() {
+            let uncropped: Vec<_> = self
+                .model
+                .annotations()
+                .iter()
+                .filter(|a| !matches!(a, readshot_core::Annotation::Crop { .. }))
+                .cloned()
+                .collect();
+            self.crop_drag_flat = Some(readshot_core::render(self.model.base(), &uncropped));
+        }
+        let flat = self.crop_drag_flat.as_ref().expect("cache filled above");
+        // Mirror `render`'s crop clamping so the preview matches the
+        // dimensions the committed render will produce.
+        let x0 = rect.x.max(0.0);
+        let y0 = rect.y.max(0.0);
+        let x1 = (rect.x + rect.width).min(flat.width() as f32);
+        let y1 = (rect.y + rect.height).min(flat.height() as f32);
+        let w = (x1 - x0).max(1.0).round() as u32;
+        let h = (y1 - y0).max(1.0).round() as u32;
+        let img = image::imageops::crop_imm(flat, x0 as u32, y0 as u32, w, h).to_image();
+        self.image_handle =
+            iced::widget::image::Handle::from_rgba(img.width(), img.height(), img.into_raw());
     }
 
     /// Pixel size of the *base* image (pre-crop). Useful for hint

@@ -849,7 +849,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 }
                 Task::none()
             }
-            crate::tray::TrayAction::Quit => quit_readshot(),
+            crate::tray::TrayAction::Quit => quit_readshot(&state.coordinator),
         },
 
         Message::CaptureFullPrimaryRequested => {
@@ -2265,7 +2265,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                             drag.moved = true;
                             if refresh_image_during_select_drag(&drag.baseline, drag.selected_index)
                             {
-                                ed.refresh_image();
+                                ed.refresh_crop_drag_preview();
                             }
                             // For ordinary annotations, keep the flattened image
                             // handle stable while the pointer is moving.
@@ -2582,7 +2582,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
         },
 
-        Message::QuitRequested => quit_readshot(),
+        Message::QuitRequested => quit_readshot(&state.coordinator),
 
         Message::RestartRequested => {
             // macOS Screen Recording's TCC grant is cached per-process
@@ -2929,9 +2929,12 @@ async fn write_cli_interactive_capture(
         .save_with_format(&tmp, image::ImageFormat::Png)
         .map_err(CaptureRunError::from)
         .and_then(|_| std::fs::rename(&tmp, &output).map_err(CaptureRunError::from));
+    // On failure clean up only the temp file. The destination is
+    // either untouched (write/rename never happened) or was replaced
+    // atomically by the rename — never delete a pre-existing file the
+    // capture failed to overwrite.
     if write_result.is_err() {
         let _ = std::fs::remove_file(&tmp);
-        let _ = std::fs::remove_file(&output);
     }
     write_result?;
     Ok(())
@@ -4148,6 +4151,9 @@ mod tests {
             Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(annotation)),
         );
 
+        // The sidecar write runs on the coordinator's background
+        // writer; wait for it before reading the store.
+        app.coordinator.flush_history_updates();
         let from_disk = store.list().unwrap();
         assert_eq!(from_disk[0].annotation_model.len(), 1);
         assert_eq!(from_disk[0].ocr_text.as_deref(), Some("before"));
@@ -5047,6 +5053,9 @@ mod tests {
 
         assert!(app.editor.is_none());
         assert!(app.windows.kind(id).is_none());
+        // The sidecar write runs on the coordinator's background
+        // writer; wait for it before reading the store.
+        app.coordinator.flush_history_updates();
         let from_disk = store.list().unwrap();
         assert_eq!(from_disk[0].annotation_model.len(), 1);
         match &from_disk[0].annotation_model[0] {

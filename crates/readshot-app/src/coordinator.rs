@@ -50,6 +50,23 @@ pub struct CaptureCoordinator {
     ocr: Arc<dyn OCREngine>,
     permissions: Arc<dyn PermissionsProvider>,
     history: Option<Arc<dyn HistoryStore>>,
+    /// Ordered background writer for sidecar updates. The editor syncs
+    /// history on every commit/undo/redo; `HistoryStore::update` fsyncs,
+    /// so doing it synchronously inside iced's `update` janks the UI
+    /// thread. A single worker thread consuming an mpsc channel keeps
+    /// writes off the UI thread *and* in dispatch order (concurrent
+    /// fire-and-forget tasks could land out of order and persist stale
+    /// annotations). The thread exits when the last coordinator clone
+    /// drops its sender.
+    history_update_tx: Option<std::sync::mpsc::Sender<HistoryUpdate>>,
+}
+
+/// Message for the background history writer thread.
+enum HistoryUpdate {
+    Write(CaptureRecord),
+    /// Rendezvous: acknowledged once everything queued before it has
+    /// been written. Lets shutdown (and tests) wait for durability.
+    Flush(std::sync::mpsc::SyncSender<()>),
 }
 
 impl CaptureCoordinator {
@@ -59,11 +76,37 @@ impl CaptureCoordinator {
         permissions: Arc<dyn PermissionsProvider>,
         history: Option<Arc<dyn HistoryStore>>,
     ) -> Self {
+        let history_update_tx = history.as_ref().and_then(|store| {
+            let store = Arc::clone(store);
+            let (tx, rx) = std::sync::mpsc::channel::<HistoryUpdate>();
+            std::thread::Builder::new()
+                .name("history-sync".into())
+                .spawn(move || {
+                    while let Ok(msg) = rx.recv() {
+                        match msg {
+                            HistoryUpdate::Write(record) => {
+                                if let Err(e) = store.update(&record) {
+                                    tracing::warn!(
+                                        target: "readshot::history",
+                                        "background history update failed: {e}"
+                                    );
+                                }
+                            }
+                            HistoryUpdate::Flush(ack) => {
+                                let _ = ack.send(());
+                            }
+                        }
+                    }
+                })
+                .ok()
+                .map(|_| tx)
+        });
         Self {
             capturer,
             ocr,
             permissions,
             history,
+            history_update_tx,
         }
     }
 
@@ -123,6 +166,42 @@ impl CaptureCoordinator {
         match &self.history {
             Some(h) => h.update(record),
             None => Ok(()),
+        }
+    }
+
+    /// Queue a sidecar update on the ordered background writer.
+    /// Returns immediately; the write lands in dispatch order and
+    /// failures are logged by the worker. Falls back to a synchronous
+    /// write if the worker is unavailable. No-op when no history store
+    /// is wired.
+    pub fn update_history_async(&self, record: CaptureRecord) {
+        let record = match &self.history_update_tx {
+            Some(tx) => match tx.send(HistoryUpdate::Write(record)) {
+                Ok(()) => return,
+                Err(std::sync::mpsc::SendError(msg)) => match msg {
+                    HistoryUpdate::Write(record) => record,
+                    HistoryUpdate::Flush(_) => return,
+                },
+            },
+            None => record,
+        };
+        if let Err(e) = self.update_history(&record) {
+            tracing::warn!(target: "readshot::history", "history update failed: {e}");
+        }
+    }
+
+    /// Block until every history update queued before this call has
+    /// been written. Bounded wait so a wedged disk can't hang the
+    /// caller. Used on shutdown so a quit straight after an annotation
+    /// edit can't lose the trailing write; tests use it to make the
+    /// async writer deterministic.
+    pub fn flush_history_updates(&self) {
+        let Some(tx) = &self.history_update_tx else {
+            return;
+        };
+        let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
+        if tx.send(HistoryUpdate::Flush(ack_tx)).is_ok() {
+            let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(5));
         }
     }
 

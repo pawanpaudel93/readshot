@@ -175,36 +175,42 @@ pub fn stitch_scrolling(
         });
     }
 
-    // Paste the first frame in full at the top.
-    let mut out = RgbaImage::new(w, total_h);
-    image::imageops::overlay(&mut out, &frames[0], 0, 0);
-    let mut y_cursor = h as i64;
+    // The sticky footer must render exactly once, at the very end of
+    // the stitched output. Trim it off the base frame, exclude it from
+    // every pasted strip, and re-append it after the loop. When no
+    // frame contributes (no accepted motion) the base frame is kept
+    // whole, footer in its natural place.
+    let has_motion = accepted.iter().any(|&dy| dy > 0);
+    let bottom = if has_motion { sticky.bottom_rows } else { 0 };
 
-    // For each accepted frame, paste its bottom `dy` rows directly
-    // beneath the previous content. Skip the bottom-sticky strip on
-    // every frame except the last so the sticky footer doesn't
-    // appear multiple times mid-stitch.
+    // Paste the first frame at the top, minus the sticky footer.
+    let mut out = RgbaImage::new(w, total_h);
+    let base_h = h - bottom;
+    let base = image::imageops::crop_imm(&frames[0], 0, 0, w, base_h).to_image();
+    image::imageops::overlay(&mut out, &base, 0, 0);
+    let mut y_cursor = base_h as i64;
+    let mut last_contributing = 0usize;
+
+    // For each accepted frame, paste the `dy` rows of newly revealed
+    // content. New content lives just above the sticky footer: rows
+    // `[h - bottom - dy .. h - bottom)`.
     for (i, &dy) in accepted.iter().enumerate() {
         if dy == 0 {
             continue;
         }
         let frame = &frames[i + 1];
-        let is_last_accepted = accepted[i + 1..].iter().all(|&n| n == 0);
-        let bottom_trim = if is_last_accepted {
-            0
-        } else {
-            sticky.bottom_rows.min(dy)
-        };
-        let strip_h = dy.saturating_sub(bottom_trim);
+        // Clamp to the scroll region so a large dy can't reach into
+        // the sticky header.
+        let src_y = (h - bottom).saturating_sub(dy).max(sticky.top_rows);
+        let strip_h = (h - bottom).saturating_sub(src_y);
         if strip_h == 0 {
             continue;
         }
-        // Source rows `[h - dy - overlap .. h - dy)` should overlap
-        // the output's tail. Feather those rows first so tiny
+        // Source rows `[src_y - overlap .. src_y)` should overlap the
+        // output's tail. Feather those rows first so tiny
         // anti-aliasing / fractional-scroll differences don't become
         // visible horizontal boundary lines. Then append the truly
-        // new rows `[h - dy .. h - bottom_trim)`.
-        let src_y = h - dy;
+        // new rows `[src_y .. h - bottom)`.
         let overlap_h = config
             .seam_blend_rows
             .min(src_y.saturating_sub(sticky.top_rows))
@@ -224,10 +230,20 @@ pub fn stitch_scrolling(
         let strip = image::imageops::crop_imm(frame, 0, src_y, w, strip_h).to_image();
         image::imageops::overlay(&mut out, &strip, 0, y_cursor);
         y_cursor += strip_h as i64;
+        last_contributing = i + 1;
     }
 
-    // If we shaved a sticky footer off every intermediate frame, the
-    // canvas is now `bottom_trim_total` rows too tall — clip.
+    // Re-append the sticky footer once, from the last contributing frame.
+    if bottom > 0 {
+        let footer =
+            image::imageops::crop_imm(&frames[last_contributing], 0, h - bottom, w, bottom)
+                .to_image();
+        image::imageops::overlay(&mut out, &footer, 0, y_cursor);
+        y_cursor += bottom as i64;
+    }
+
+    // If any strip was clamped, the canvas is taller than the pasted
+    // content — clip.
     let final_h = (y_cursor.max(0) as u32).min(total_h);
     if final_h < total_h {
         let cropped = image::imageops::crop_imm(&out, 0, 0, w, final_h).to_image();
@@ -363,7 +379,9 @@ fn detect_sticky(frames: &[RgbaImage], config: &StitchConfig) -> StickyMask {
         return StickyMask::default();
     }
     let h = frames[0].height();
-    let max_check = h * config.sticky_search_fraction_quarter / 4;
+    // Clamp to `h` so an oversized `sticky_search_fraction_quarter`
+    // can't push the bottom-scan offset past the frame.
+    let max_check = (h * config.sticky_search_fraction_quarter / 4).min(h);
     let mut top = 0u32;
     for y in 0..max_check {
         if rows_stable(frames, y, config.sticky_tolerance) {
@@ -546,6 +564,51 @@ mod tests {
         let config = StitchConfig::default();
         let dy = estimate_scroll(&a, &b, &StickyMask::default(), &config).unwrap();
         assert!((10..=14).contains(&dy), "expected dy near 12, got {dy}");
+    }
+
+    /// Stripe frame with a solid-blue sticky footer overlaid on the
+    /// bottom `footer` rows (same in every frame, like a fixed bar).
+    fn footer_frame(w: u32, h: u32, offset: u32, footer: u32) -> RgbaImage {
+        let mut img = stripe_frame(w, h, offset);
+        for y in h - footer..h {
+            for x in 0..w {
+                img.put_pixel(x, y, Rgba([0, 0, 255, 255]));
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn sticky_footer_renders_once_at_bottom_without_dropping_content() {
+        let w = 32;
+        let h = 64;
+        let footer = 6;
+        let frames: Vec<RgbaImage> = (0..3).map(|i| footer_frame(w, h, i * 12, footer)).collect();
+        let config = StitchConfig {
+            min_motion: 4,
+            ..StitchConfig::default()
+        };
+        let out = stitch_scrolling(&frames, config).unwrap();
+
+        // Two accepted scrolls of 12 px each: 64 + 12 + 12.
+        assert_eq!(out.height(), 88, "expected full content height");
+
+        // The footer appears exactly once, as the bottom rows.
+        let is_footer_row = |y: u32| (0..w).all(|x| out.get_pixel(x, y).0 == [0, 0, 255, 255]);
+        for y in out.height() - footer..out.height() {
+            assert!(is_footer_row(y), "row {y} should be the sticky footer");
+        }
+        for y in 0..out.height() - footer {
+            assert!(!is_footer_row(y), "sticky footer duplicated at row {y}");
+        }
+
+        // Content is continuous: stitched row `y` carries stripe value
+        // `y` (the stripe pattern aligns across seams, so feathering is
+        // value-preserving here).
+        for y in [0u32, 30, 57, 60, 70, 81] {
+            let v = out.get_pixel(0, y).0[0];
+            assert_eq!(v as u32, y % 256, "content discontinuity at row {y}");
+        }
     }
 
     #[test]

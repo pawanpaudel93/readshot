@@ -32,7 +32,9 @@ pub use history::{
     CaptureRecord, FsHistoryStore, HistoryIndex, HistoryIndexEntry, HistoryStore,
     HISTORY_INDEX_FILENAME, HISTORY_SCHEMA_VERSION,
 };
-pub use png::{encode as encode_png, save as save_png, write as write_png};
+pub use png::{
+    encode as encode_png, encode_fast as encode_png_fast, save as save_png, write as write_png,
+};
 // Downstream callers need `Uuid` to address records by id (delete,
 // open-from-history, etc.). Re-export so they don't need a separate
 // dependency on `uuid`.

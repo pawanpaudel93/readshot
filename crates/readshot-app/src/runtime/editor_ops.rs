@@ -186,8 +186,9 @@ pub(crate) fn sync_editor_history(
         return;
     };
     record.annotation_model = ed.model.annotations().to_vec();
-    if let Err(e) = coord.update_history(record) {
-        tracing::warn!(target: "readshot::history", "annotation update failed: {e}");
-        ed.set_status(format!("History sync failed: {e}"));
-    }
+    // Queued on the coordinator's ordered background writer: the
+    // sidecar write fsyncs, and this runs on every commit/undo/redo —
+    // a synchronous write would jank the UI thread. Failures are
+    // logged by the worker.
+    coord.update_history_async(record.clone());
 }

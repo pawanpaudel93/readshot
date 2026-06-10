@@ -99,6 +99,10 @@ pub trait HistoryStore: Send + Sync {
     /// alone — `update` is for filling in OCR text or annotations
     /// after the original capture has already landed.
     ///
+    /// `ocr_text: None` means "leave the stored text unchanged", not
+    /// "clear it": callers that never ran OCR must not erase text a
+    /// concurrent OCR pass already persisted.
+    ///
     /// Best-effort by default: a record that's been retention-pruned
     /// before `update` runs is silently ignored. Implementations that
     /// can do better should override.
@@ -365,13 +369,26 @@ impl HistoryStore for FsHistoryStore {
         if !abs_json.exists() {
             return Ok(());
         }
-        let json_content = serde_json::to_string_pretty(record)?;
+        // `ocr_text: None` means "unchanged", not "clear": callers that
+        // never ran OCR (e.g. the editor's annotation sync, whose record
+        // predates the background OCR pass) must not wipe text another
+        // writer already persisted. Merging here, under the index lock,
+        // keeps the two writers race-free in-process.
+        let mut merged = record.clone();
+        if merged.ocr_text.is_none() {
+            if let Some(prev) = fs::read_to_string(&abs_json)
+                .ok()
+                .and_then(|s| serde_json::from_str::<CaptureRecord>(&s).ok())
+            {
+                merged.ocr_text = prev.ocr_text;
+            }
+        }
+        let json_content = serde_json::to_string_pretty(&merged)?;
         write_atomic(&abs_json, json_content.as_bytes())?;
-        // Bump the index's updated_at so callers can see the archive
-        // has changed; the index entry's captured_at is immutable.
-        let mut index = self.read_index()?;
-        index.updated_at = Some(Utc::now());
-        self.write_index(&index)?;
+        // The index is deliberately not touched: `update` changes only
+        // the sidecar, nothing reads the index's `updated_at`, and the
+        // editor calls this on every annotation edit — a full index
+        // read-rewrite (two more fsyncs) per keystroke is pure waste.
         Ok(())
     }
 
@@ -505,6 +522,33 @@ mod tests {
         s.update(&r).unwrap();
         let list = s.list().unwrap();
         assert_eq!(list[0].ocr_text.as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn update_without_ocr_text_preserves_stored_text() {
+        // The editor's annotation sync carries a record whose
+        // `ocr_text` is still `None` (it predates the background OCR
+        // pass). Its update must not wipe the text OCR already wrote.
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        s.save(&r, &fake_png()).unwrap();
+
+        r.ocr_text = Some("recognised text".into());
+        s.update(&r).unwrap();
+
+        let mut annotated = r.clone();
+        annotated.ocr_text = None;
+        annotated.annotation_model = vec![crate::Annotation::Arrow {
+            a: crate::PointLike::new(1.0, 2.0),
+            b: crate::PointLike::new(3.0, 4.0),
+            color: crate::Rgba::new(1.0, 0.0, 0.0, 1.0),
+            line_width: 2.0,
+        }];
+        s.update(&annotated).unwrap();
+
+        let list = s.list().unwrap();
+        assert_eq!(list[0].ocr_text.as_deref(), Some("recognised text"));
+        assert_eq!(list[0].annotation_model.len(), 1);
     }
 
     #[test]

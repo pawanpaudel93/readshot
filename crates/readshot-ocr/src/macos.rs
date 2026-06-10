@@ -67,10 +67,36 @@ impl OCREngine for AppleVisionEngine {
     }
 
     async fn recognise(&self, req: OCRRequest) -> Result<OCRResult, OCRError> {
-        let png_bytes = encode_png(&req.image)?;
-        run_request(png_bytes, &req.languages, req.use_language_correction)
+        // The Vision call (and the PNG encode feeding it) is fully
+        // synchronous and can take seconds on large captures. Running it
+        // inline would park a tokio worker — the same failure mode
+        // readshot-capture isolates with `run_capture_blocking` — so move
+        // the work to a blocking thread and bound it with a timeout.
+        let OCRRequest {
+            image,
+            languages,
+            use_language_correction,
+        } = req;
+        let work = tokio::task::spawn_blocking(move || {
+            let png_bytes = encode_png(&image)?;
+            run_request(png_bytes, &languages, use_language_correction)
+        });
+        match tokio::time::timeout(VISION_TIMEOUT, work).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(join_err)) => Err(OCRError::Backend(format!(
+                "Vision OCR worker thread failed: {join_err}"
+            ))),
+            Err(_elapsed) => Err(OCRError::Backend(format!(
+                "Vision OCR timed out after {VISION_TIMEOUT:?}; the OS text-recognition call did not return"
+            ))),
+        }
     }
 }
+
+/// Upper bound on one Vision request. Accurate-mode OCR on a Retina
+/// region is normally well under a second; this is a backstop against
+/// a wedged OS call, not a tuning knob.
+const VISION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn run_request(
     png_bytes: Vec<u8>,
@@ -191,6 +217,9 @@ unsafe fn take_vision_string(ptr: *mut c_char) -> Option<String> {
 }
 
 fn encode_png(img: &RgbaImage) -> Result<Vec<u8>, OCRError> {
-    readshot_core::encode_png(img)
+    // Fast compression: the bytes only cross the FFI boundary and are
+    // decoded by Vision immediately — Best-compression zlib here would
+    // burn seconds of CPU on large captures for nothing.
+    readshot_core::encode_png_fast(img)
         .map_err(|e| OCRError::Backend(format!("PNG encode for Vision: {e}")))
 }
