@@ -1433,6 +1433,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tools_call_capture_text_ocr_failure_returns_tool_error() {
+        let s = McpServer::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::failing("vision crashed")),
+        );
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"capture_text","arguments":{"rect":{"x":0,"y":0,"width":32,"height":32}}}}"#,
+        )
+        .await;
+        // An OCR backend failure surfaces as an MCP tool error
+        // (isError:true) carrying the backend message, not a JSON-RPC
+        // protocol error — mirrors the capture-failure contract.
+        assert!(resp.get("error").is_none());
+        assert_eq!(resp["result"]["isError"], true);
+        assert!(resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("vision crashed"));
+    }
+
+    #[tokio::test]
     async fn tools_call_capture_text_returns_text() {
         let s = server();
         let resp = call(

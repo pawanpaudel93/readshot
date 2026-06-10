@@ -242,7 +242,7 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 
 use crate::app::{App, GlobalHotkeyAction, HistoryKeyboardAction, Message, WindowKind};
 use crate::coordinator::CaptureCoordinator;
-use crate::permissions::{default_provider, PermissionStatus};
+use crate::permissions::default_provider;
 use crate::welcome::WelcomeState;
 
 /// Bootstrap: build the App, open the welcome window, and return
@@ -2810,11 +2810,6 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             });
             Task::none()
         }
-
-        // Phase B+ (overlay, editor, tray, hotkey, URL scheme) —
-        // ignore for now so the daemon is well-behaved if a stray
-        // message slips through during testing.
-        _ => Task::none(),
     }
 }
 
@@ -3312,20 +3307,11 @@ fn ocr_request_for_image(
     }
 }
 
-/// Helper for the previous synchronous status check used by tests.
-#[allow(dead_code)]
-pub(crate) fn permission_status_blurb(s: PermissionStatus) -> &'static str {
-    match s {
-        PermissionStatus::Granted => "granted",
-        PermissionStatus::Denied => "denied",
-        PermissionStatus::NotApplicable => "not applicable",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::permissions::fake::FakePermissions;
+    use crate::permissions::PermissionStatus;
     use async_trait::async_trait;
     use global_hotkey::HotKeyState;
     use iced::widget::button;

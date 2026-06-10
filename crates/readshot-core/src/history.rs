@@ -525,6 +525,45 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_index_surfaces_error_for_list_and_save() {
+        // A torn or corrupted index file is the worst history failure
+        // mode: read_index propagates the parse error, which blocks
+        // both reads *and* all future saves. Pin that behavior so any
+        // future recovery branch is a deliberate change.
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &fake_png()).unwrap();
+
+        fs::write(s.root().join(HISTORY_INDEX_FILENAME), b"{not json").unwrap();
+
+        assert!(s.list().is_err(), "list should surface the parse error");
+        let newer = record_at(Utc::now());
+        assert!(
+            s.save(&newer, &fake_png()).is_err(),
+            "save should surface the parse error rather than clobber the index"
+        );
+    }
+
+    #[test]
+    fn list_skips_record_with_corrupt_sidecar_content() {
+        // Sidecar corruption (invalid JSON, truncated write) must skip
+        // only the damaged record — distinct from the deleted-file skip
+        // branch, which is covered separately.
+        let (_dir, s) = store();
+        let damaged = record_at(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
+        let survivor = record_at(Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap());
+        s.save(&damaged, &fake_png()).unwrap();
+        s.save(&survivor, &fake_png()).unwrap();
+
+        let (_png, rel_json) = FsHistoryStore::record_paths(&damaged);
+        fs::write(s.root().join(&rel_json), b"{truncated").unwrap();
+
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, survivor.id);
+    }
+
+    #[test]
     fn update_without_ocr_text_preserves_stored_text() {
         // The editor's annotation sync carries a record whose
         // `ocr_text` is still `None` (it predates the background OCR

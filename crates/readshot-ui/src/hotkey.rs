@@ -247,14 +247,6 @@ impl HotkeySpec {
     }
 }
 
-/// Typed message the iced subscription publishes when the user's
-/// global shortcut fires. The composition root maps it to a
-/// "start capture" application message.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HotkeyMessage {
-    CapturePressed,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

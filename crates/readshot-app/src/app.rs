@@ -19,9 +19,7 @@ use std::sync::Arc;
 
 use iced::window;
 use readshot_core::Preferences;
-use readshot_ui::{
-    ActionMessage, CanvasMessage, HotkeyMessage, SettingsMessage, ToolbarMessage, TrayMessage,
-};
+use readshot_ui::{CanvasMessage, SettingsMessage, ToolbarMessage};
 
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::PermissionsProvider;
@@ -124,11 +122,8 @@ impl Windows {
 /// or background task funnels through this enum.
 #[derive(Clone, Debug)]
 pub enum Message {
-    Tray(TrayMessage),
-    Hotkey(HotkeyMessage),
     EditorCanvas(CanvasMessage),
     EditorToolbar(ToolbarMessage),
-    EditorAction(ActionMessage),
     Settings(SettingsMessage),
     /// Permission-status poll fired on a timer.
     PermissionPoll(crate::permissions::PermissionStatus),
@@ -477,10 +472,6 @@ pub enum Message {
     CliToolsCopyRequested(crate::cli_tools::Shell),
     /// Command-line setup instructions were copied, or failed to copy.
     CliToolsCopyDone(crate::cli_tools::Shell, Result<(), String>),
-    /// Capture coordinator finished a `capture_region` call.
-    CaptureCompleted(Result<image::RgbaImage, String>),
-    /// OCR engine finished a `recognise` call.
-    OcrCompleted(Result<String, String>),
     /// User invoked the URL scheme.
     UrlActionReceived(crate::url_scheme::UrlAction),
 }
