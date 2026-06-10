@@ -1,6 +1,8 @@
 // Extracted from runtime.rs (pure code-move). `use super::*` pulls in
 // sibling/parent items; the explicit imports mirror runtime.rs's preamble.
 
+use super::*;
+
 use crate::app::Message;
 use iced::Task;
 
@@ -216,4 +218,176 @@ pub(crate) async fn stitch_frames_async(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Every scroll-capture message arm, extracted from `runtime::update` so the
+/// top-level dispatcher stays navigable. Routed from `update`'s
+/// grouped arm; the trailing `unreachable!` only fires if a
+/// non-scroll-capture message is mis-routed here.
+pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<Message> {
+    match message {
+        Message::ScrollHudWindowReady(id) => {
+            if let Some(session) = state.scroll_session.as_mut() {
+                session.hud_window_id = Some(id);
+            }
+            Task::none()
+        }
+
+        Message::ScrollRegionWindowReady(id) => {
+            // Enable mouse passthrough so scroll wheel events fall
+            // through to the page underneath. Without this, the
+            // always-on-top transparent window would swallow scrolls.
+            window::enable_mouse_passthrough(id)
+        }
+
+        Message::ScrollHudDragRequested => {
+            match state.scroll_session.as_ref().and_then(|s| s.hud_window_id) {
+                Some(id) => window::drag(id),
+                None => Task::none(),
+            }
+        }
+
+        Message::ScrollCaptureTick => {
+            let Some(session) = state.scroll_session.as_mut() else {
+                return Task::none();
+            };
+            if session.stopping || session.capture_in_flight >= SCROLL_MAX_CONCURRENT_CAPTURES {
+                return Task::none();
+            }
+            if session.frames.len() >= SCROLL_MAX_FRAMES {
+                return Task::done(Message::ScrollCaptureStopRequested);
+            }
+            session.capture_in_flight += 1;
+            session.next_capture_seq = session.next_capture_seq.saturating_add(1);
+            let seq = session.next_capture_seq;
+            let coord = state.coordinator.clone();
+            let request = readshot_capture::CaptureRequest {
+                display_id: session.display_id.clone(),
+                rect: session.rect,
+                scale: session.scale,
+                hide_cursor: true,
+            };
+            Task::perform(
+                async move { coord.capture_region(request).await },
+                move |result| Message::ScrollCaptureFrame {
+                    seq,
+                    result: result.map_err(|e| e.to_string()),
+                },
+            )
+        }
+
+        Message::ScrollCaptureFrame { seq, result } => {
+            let Some(session) = state.scroll_session.as_mut() else {
+                return Task::none();
+            };
+            session.capture_in_flight = session.capture_in_flight.saturating_sub(1);
+            if seq < session.next_frame_seq_to_process {
+                return Task::none();
+            }
+            session.pending_frames.insert(seq, result);
+            drain_ready_scroll_frames(session)
+        }
+
+        Message::ScrollFrameJudged { seq, image, moved } => {
+            let Some(session) = state.scroll_session.as_mut() else {
+                return Task::none();
+            };
+            // A verdict from a cancelled/replaced session is stale.
+            if session.judge_in_flight != Some(seq) {
+                return Task::none();
+            }
+            session.judge_in_flight = None;
+            match image {
+                Some(image) if moved => accept_scroll_frame(session, image),
+                _ => session.no_motion_count += 1,
+            }
+            drain_ready_scroll_frames(session)
+        }
+
+        Message::ScrollCaptureCancelRequested => {
+            // Two-click cancel guard. Discarding a session that
+            // already accumulated frames is destructive (the captured
+            // frames are dropped on the floor), so the first click
+            // arms the cancel and updates the HUD copy to confirm.
+            // A second click inside `CANCEL_ARM_WINDOW` actually
+            // discards. The arm expires on the OverlayTick if the
+            // user changes their mind.
+            const CANCEL_ARM_WINDOW: std::time::Duration = std::time::Duration::from_millis(2500);
+            let Some(session) = state.scroll_session.as_mut() else {
+                return Task::none();
+            };
+            // Pristine sessions (only the first auto-captured frame)
+            // skip the confirm — nothing of value to lose.
+            let has_real_content = session.frames.len() > 1;
+            let now = std::time::Instant::now();
+            let armed = session
+                .cancel_armed_at
+                .map(|t| now.duration_since(t) < CANCEL_ARM_WINDOW)
+                .unwrap_or(false);
+            if has_real_content && !armed {
+                session.cancel_armed_at = Some(now);
+                return Task::none();
+            }
+            let Some(session) = state.scroll_session.take() else {
+                return Task::none();
+            };
+            let mut tasks: Vec<Task<Message>> = Vec::new();
+            for id in [session.hud_window_id, session.region_window_id]
+                .into_iter()
+                .flatten()
+            {
+                state.windows.forget(id);
+                tasks.push(window::close(id));
+            }
+            state.last_capture_status = Some("Scroll capture cancelled.".into());
+            Task::batch(tasks)
+        }
+
+        Message::ScrollCaptureStopRequested => {
+            let Some(session) = state.scroll_session.as_mut() else {
+                return Task::none();
+            };
+            if session.stopping {
+                return Task::none();
+            }
+            session.stopping = true;
+            let frames = std::mem::take(&mut session.frames);
+            let hud_id = session.hud_window_id;
+            let region_id = session.region_window_id;
+            // Close session windows now — the stitch task runs on its
+            // own and the HUD / region overlay are no longer useful.
+            let mut tasks: Vec<Task<Message>> = Vec::new();
+            for id in [hud_id, region_id].into_iter().flatten() {
+                state.windows.forget(id);
+                tasks.push(window::close(id));
+            }
+            tasks.push(Task::perform(stitch_frames_async(frames), |r| {
+                Message::ScrollCaptureStitched(r.map_err(|e| e.to_string()))
+            }));
+            Task::batch(tasks)
+        }
+
+        Message::ScrollCaptureStitched(result) => {
+            let session = state.scroll_session.take();
+            let display_scale = session.as_ref().map(|s| s.scale).unwrap_or(1.0);
+            let display_bounds = session.as_ref().and_then(|s| s.display_size);
+            match result {
+                Ok(image) => {
+                    let (w, h) = (image.width(), image.height());
+                    let mut ed =
+                        crate::editor::EditorSession::new_with_display_scale(image, display_scale);
+                    ed.set_status(format!("Scrolling capture stitched into {w} × {h}px."));
+                    open_editor_window_replacing(state, ed, display_bounds)
+                }
+                Err(e) => {
+                    state.last_capture_status = Some(format!("Scroll capture failed: {e}"));
+                    tracing::warn!(target: "readshot::scroll", "stitch failed: {e}");
+                    Task::none()
+                }
+            }
+        }
+        other => unreachable!(
+            "non-scroll-capture message routed to the scroll-capture handler: {other:?}"
+        ),
+    }
 }

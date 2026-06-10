@@ -856,8 +856,8 @@ async fn interactive_capture(show_cursor: bool) -> Result<RgbaImage, CliError> {
 
 fn interactive_capture_blocking(show_cursor: bool) -> Result<RgbaImage, CliError> {
     cleanup_stale_interactive_temp_files();
-    let path = unique_temp_png_path();
-    let _ = std::fs::remove_file(&path);
+    let dir = private_handoff_dir()?;
+    let path = dir.join("capture.png");
     let exe = std::env::current_exe()?;
     let mut command = std::process::Command::new(exe);
     for arg in interactive_capture_child_args(&path, show_cursor) {
@@ -870,12 +870,12 @@ fn interactive_capture_blocking(show_cursor: bool) -> Result<RgbaImage, CliError
 
     let status = command.status()?;
     if !status.success() {
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
         return Err(interactive_capture_cancelled());
     }
 
     let result = read_interactive_capture_file(&path);
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&dir);
     result
 }
 
@@ -894,15 +894,35 @@ fn interactive_capture_child_args(
     args
 }
 
-fn unique_temp_png_path() -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    std::env::temp_dir().join(format!(
-        "readshot-interactive-{}-{nanos}.png",
-        std::process::id()
-    ))
+/// Create a fresh owner-only directory under the system temp dir for
+/// the parent↔child capture handoff.
+///
+/// The handoff path travels on the child's command line, where any
+/// local user can read it (`/proc/<pid>/cmdline` on Linux), and the
+/// child writes the PNG with default permissions. On systems with a
+/// shared `/tmp` (Linux — macOS gives each user a private `$TMPDIR`)
+/// a bare temp file would let another local user read the screenshot
+/// or pre-plant a symlink at the predictable path. A `0700` directory
+/// closes both: the path may be known, but nothing inside it is
+/// reachable by other users. Anything already at the path (stale run
+/// with a recycled pid, or a hostile pre-created entry) is deleted and
+/// the directory recreated fresh; a create race fails closed.
+fn private_handoff_dir() -> Result<PathBuf, CliError> {
+    let dir = std::env::temp_dir().join(format!("readshot-interactive-{}", std::process::id()));
+    match std::fs::symlink_metadata(&dir) {
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&dir)?,
+        Ok(_) => std::fs::remove_file(&dir)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&dir)?;
+    Ok(dir)
 }
 
 fn cleanup_stale_interactive_temp_files() {
@@ -917,7 +937,9 @@ fn cleanup_stale_interactive_temp_files() {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if !name.starts_with("readshot-interactive-") || !name.ends_with(".png") {
+        // Current layout: `readshot-interactive-<pid>/` directories.
+        // The `.png` suffix matches files left behind by older builds.
+        if !name.starts_with("readshot-interactive-") {
             continue;
         }
         let Ok(metadata) = entry.metadata() else {
@@ -927,7 +949,11 @@ fn cleanup_stale_interactive_temp_files() {
             continue;
         };
         if modified < stale_before {
-            let _ = std::fs::remove_file(path);
+            if metadata.is_dir() {
+                let _ = std::fs::remove_dir_all(path);
+            } else {
+                let _ = std::fs::remove_file(path);
+            }
         }
     }
 }
@@ -1586,13 +1612,27 @@ mod tests {
     }
 
     #[test]
-    fn unique_interactive_temp_path_uses_readshot_prefix() {
-        let path = unique_temp_png_path();
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap();
-
+    fn private_handoff_dir_is_fresh_and_owner_only() {
+        let dir = private_handoff_dir().unwrap();
+        let name = dir.file_name().and_then(|n| n.to_str()).unwrap();
         assert!(name.starts_with("readshot-interactive-"));
-        assert!(name.ends_with(".png"));
-        assert_eq!(path.parent(), Some(std::env::temp_dir().as_path()));
+        assert_eq!(dir.parent(), Some(std::env::temp_dir().as_path()));
+        assert!(dir.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "handoff dir must be owner-only");
+        }
+
+        // A pre-existing entry at the path (here: a stale dir with
+        // leftover contents) is replaced, not reused.
+        std::fs::write(dir.join("stale.png"), b"old").unwrap();
+        let fresh = private_handoff_dir().unwrap();
+        assert_eq!(fresh, dir);
+        assert!(!fresh.join("stale.png").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
