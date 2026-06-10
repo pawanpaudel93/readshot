@@ -1035,6 +1035,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     next_capture_seq: 0,
                     next_frame_seq_to_process: 1,
                     pending_frames: std::collections::BTreeMap::new(),
+                    judge_in_flight: None,
                     stopping: false,
                     started_at: std::time::Instant::now(),
                     last_frame_at: None,
@@ -1191,11 +1192,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         }
                         crate::app::CaptureIntent::Pin => {
                             let size = (image.width(), image.height());
-                            let handle = iced::widget::image::Handle::from_rgba(
-                                image.width(),
-                                image.height(),
-                                image.as_raw().clone(),
-                            );
+                            let handle = rgba_handle(image);
                             let (id, open_task) =
                                 window::open(pin_window_settings(size, display_bounds));
                             state.windows.register(id, WindowKind::Pin);
@@ -1231,7 +1228,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                                 last.rect,
                                 display_scale,
                             );
-                            session.frames.push(image);
+                            accept_scroll_frame(&mut session, image);
                             session.display_size = display_bounds;
                             state.scroll_session = Some(session);
                             // Open the click-through region indicator
@@ -1276,10 +1273,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     // the browser if it's open so the new text is
                     // searchable / visible.
                     if state.history_window_id.is_some() {
-                        let coord = state.coordinator.clone();
-                        return Task::perform(async move { coord.history_list() }, |r| {
-                            Message::HistoryListLoaded(r.map_err(|e| e.to_string()))
-                        });
+                        return history_list_task(state.coordinator.clone());
                     }
                 }
                 Ok(false) => {} // history off or OCR failed (already logged)
@@ -1292,24 +1286,18 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // Single-instance — if the window already exists just
             // refocus it and refresh the list.
             if let Some(id) = state.history_window_id {
-                let coord = state.coordinator.clone();
                 return Task::batch([
                     window::gain_focus(id),
-                    Task::perform(async move { coord.history_list() }, |r| {
-                        Message::HistoryListLoaded(r.map_err(|e| e.to_string()))
-                    }),
+                    history_list_task(state.coordinator.clone()),
                 ]);
             }
             let (id, open_task) = window::open(history_window_settings());
             state.windows.register(id, WindowKind::History);
             state.history_window_id = Some(id);
             state.history_status = None;
-            let coord = state.coordinator.clone();
             Task::batch([
                 open_task.map(Message::HistoryWindowReady),
-                Task::perform(async move { coord.history_list() }, |r| {
-                    Message::HistoryListLoaded(r.map_err(|e| e.to_string()))
-                }),
+                history_list_task(state.coordinator.clone()),
             ])
         }
         Message::HistoryWindowReady(id) => {
@@ -1691,11 +1679,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::HistoryPinReady(result) => match result {
             Ok(image) => {
                 let size = (image.width(), image.height());
-                let handle = iced::widget::image::Handle::from_rgba(
-                    image.width(),
-                    image.height(),
-                    image.as_raw().clone(),
-                );
+                let handle = rgba_handle(image);
                 let (wid, open_task) = window::open(pin_window_settings(size, None));
                 state.windows.register(wid, WindowKind::Pin);
                 state
@@ -1714,10 +1698,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 return Task::none();
             }
             // Reload the list so the deleted record disappears.
-            let coord = state.coordinator.clone();
-            Task::perform(async move { coord.history_list() }, |r| {
-                Message::HistoryListLoaded(r.map_err(|e| e.to_string()))
-            })
+            history_list_task(state.coordinator.clone())
         }
 
         Message::OverlayCopyDone(result) => {
@@ -1854,8 +1835,23 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 return Task::none();
             }
             session.pending_frames.insert(seq, result);
-            drain_ready_scroll_frames(session);
-            Task::none()
+            drain_ready_scroll_frames(session)
+        }
+
+        Message::ScrollFrameJudged { seq, image, moved } => {
+            let Some(session) = state.scroll_session.as_mut() else {
+                return Task::none();
+            };
+            // A verdict from a cancelled/replaced session is stale.
+            if session.judge_in_flight != Some(seq) {
+                return Task::none();
+            }
+            session.judge_in_flight = None;
+            match image {
+                Some(image) if moved => accept_scroll_frame(session, image),
+                _ => session.no_motion_count += 1,
+            }
+            drain_ready_scroll_frames(session)
         }
 
         Message::ScrollCaptureCancelRequested => {
@@ -2502,11 +2498,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             cancel_editor_previews(ed);
             let img = editor_output_image(ed);
             let size = (img.width(), img.height());
-            let handle = iced::widget::image::Handle::from_rgba(
-                img.width(),
-                img.height(),
-                img.as_raw().clone(),
-            );
+            let handle = rgba_handle(img);
             // Close the editor window if any.
             let editor_id = ed.window_id;
             let pin_settings = editor_pin_window_settings(ed, size);
@@ -3071,7 +3063,17 @@ fn persist_history_task(
                 return Ok(false);
             };
             let now = record.captured_at;
-            let buf = readshot_core::encode_png(&img).map_err(|e| format!("png encode: {e}"))?;
+            // Best-compression encode is CPU-heavy on large captures —
+            // keep it off the async workers. The image is threaded
+            // through the closure (OCR still needs it) to avoid a
+            // multi-megabyte clone.
+            let (img, buf) = tokio::task::spawn_blocking(move || {
+                let buf = readshot_core::encode_png(&img);
+                (img, buf)
+            })
+            .await
+            .map_err(|e| format!("png encode worker: {e}"))?;
+            let buf = buf.map_err(|e| format!("png encode: {e}"))?;
             // Save with empty OCR first so the capture is visible in
             // the browser immediately (OCR is the slow bit).
             coord.record_history(record.clone(), buf, policy, now).await;
@@ -3082,7 +3084,10 @@ fn persist_history_task(
             let ocr_req = ocr_request_for_image(img, &preferences);
             match coord.recognise(ocr_req).await {
                 Ok(text) => {
-                    if let Ok(records) = coord.history_list() {
+                    let list_coord = coord.clone();
+                    let listed =
+                        tokio::task::spawn_blocking(move || list_coord.history_list()).await;
+                    if let Ok(Ok(records)) = listed {
                         if let Some(latest) = records.into_iter().find(|r| r.id == record.id) {
                             record.annotation_model = latest.annotation_model;
                         }
@@ -3214,6 +3219,29 @@ fn default_save_filename(template: &str, when: chrono::DateTime<chrono::Utc>) ->
     filename
 }
 
+/// Move an owned image's buffer into an iced handle without cloning
+/// the (multi-megabyte) pixel buffer.
+fn rgba_handle(img: image::RgbaImage) -> iced::widget::image::Handle {
+    let (w, h) = (img.width(), img.height());
+    iced::widget::image::Handle::from_rgba(w, h, img.into_raw())
+}
+
+/// Load the history list on a blocking thread. `FsHistoryStore::list`
+/// is synchronous fs work that can decode full PNGs to backfill
+/// missing thumbnails; running it inline on the async executor would
+/// stall a tokio worker for seconds on a large archive.
+fn history_list_task(coord: CaptureCoordinator) -> Task<Message> {
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || coord.history_list())
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())
+        },
+        Message::HistoryListLoaded,
+    )
+}
+
 fn editor_output_image(ed: &mut EditorSession) -> image::RgbaImage {
     let img = ed.model.flatten();
     match ed.frame_style {
@@ -3246,7 +3274,7 @@ fn editor_image_handle_without_annotation(
         annotations.remove(index);
     }
     let img = readshot_core::render(&base, &annotations);
-    iced::widget::image::Handle::from_rgba(img.width(), img.height(), img.as_raw().clone())
+    rgba_handle(img)
 }
 
 /// Push an RGBA image to the system clipboard. Runs the arboard
@@ -3448,9 +3476,10 @@ mod tests {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let rect = readshot_core::geom::Rect::from_xywh(0.0, 0.0, 80.0, 120.0).unwrap();
         let mut session = crate::app::ScrollSession::new("display-a".into(), rect, 1.0);
-        session.frames.push(scrolling_texture(80, 120, 0));
+        session.frames.push(Arc::new(scrolling_texture(80, 120, 0)));
         app.scroll_session = Some(session);
 
+        // Out-of-order arrival: seq 2 buffers until seq 1 lands.
         let _ = update(
             &mut app,
             Message::ScrollCaptureFrame {
@@ -3461,7 +3490,10 @@ mod tests {
         let session = app.scroll_session.as_ref().unwrap();
         assert_eq!(session.frames.len(), 1);
         assert_eq!(session.pending_frames.len(), 1);
+        assert_eq!(session.judge_in_flight, None);
 
+        // Seq 1 arrives: draining dispatches a motion judge for it and
+        // pauses (the verdict task isn't executed in tests).
         let _ = update(
             &mut app,
             Message::ScrollCaptureFrame {
@@ -3470,9 +3502,74 @@ mod tests {
             },
         );
         let session = app.scroll_session.as_ref().unwrap();
-        assert_eq!(session.frames.len(), 3);
+        assert_eq!(session.frames.len(), 1);
+        assert_eq!(session.judge_in_flight, Some(1));
+        assert_eq!(session.pending_frames.len(), 1);
+
+        // Verdict for seq 1 accepts the frame and dispatches the judge
+        // for the buffered seq 2.
+        let _ = update(
+            &mut app,
+            Message::ScrollFrameJudged {
+                seq: 1,
+                image: Some(scrolling_texture(80, 120, 14)),
+                moved: true,
+            },
+        );
+        let session = app.scroll_session.as_ref().unwrap();
+        assert_eq!(session.frames.len(), 2);
+        assert_eq!(session.judge_in_flight, Some(2));
         assert!(session.pending_frames.is_empty());
+
+        let _ = update(
+            &mut app,
+            Message::ScrollFrameJudged {
+                seq: 2,
+                image: Some(scrolling_texture(80, 120, 28)),
+                moved: true,
+            },
+        );
+        let session = app.scroll_session.as_ref().unwrap();
+        assert_eq!(session.frames.len(), 3);
+        assert_eq!(session.judge_in_flight, None);
         assert_eq!(session.next_frame_seq_to_process, 3);
+    }
+
+    #[test]
+    fn scroll_judge_rejection_counts_no_motion_and_stale_verdicts_drop() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let rect = readshot_core::geom::Rect::from_xywh(0.0, 0.0, 80.0, 120.0).unwrap();
+        let mut session = crate::app::ScrollSession::new("display-a".into(), rect, 1.0);
+        session.frames.push(Arc::new(scrolling_texture(80, 120, 0)));
+        session.judge_in_flight = Some(7);
+        app.scroll_session = Some(session);
+
+        // Stale verdict (wrong seq) is dropped entirely.
+        let _ = update(
+            &mut app,
+            Message::ScrollFrameJudged {
+                seq: 3,
+                image: Some(scrolling_texture(80, 120, 14)),
+                moved: true,
+            },
+        );
+        let session = app.scroll_session.as_ref().unwrap();
+        assert_eq!(session.frames.len(), 1);
+        assert_eq!(session.judge_in_flight, Some(7));
+
+        // A "no motion" verdict bumps the counter without appending.
+        let _ = update(
+            &mut app,
+            Message::ScrollFrameJudged {
+                seq: 7,
+                image: Some(scrolling_texture(80, 120, 0)),
+                moved: false,
+            },
+        );
+        let session = app.scroll_session.as_ref().unwrap();
+        assert_eq!(session.frames.len(), 1);
+        assert_eq!(session.no_motion_count, 1);
+        assert_eq!(session.judge_in_flight, None);
     }
 
     #[test]

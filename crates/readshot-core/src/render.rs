@@ -162,19 +162,45 @@ fn compute_output_geometry(
 }
 
 fn blit_base(pixmap: &mut Pixmap, base: &RgbaImage, offset: (f32, f32)) {
-    let (ox, oy) = offset;
+    let ox = offset.0 as i32;
+    let oy = offset.1 as i32;
     let pw = pixmap.width() as i32;
     let ph = pixmap.height() as i32;
     let bw = base.width() as i32;
     let bh = base.height() as i32;
     let data = pixmap.data_mut();
-    for py in 0..ph {
-        for px in 0..pw {
-            let bx = px - ox as i32;
-            let by = py - oy as i32;
-            if bx < 0 || by < 0 || bx >= bw || by >= bh {
-                continue;
-            }
+
+    // Pixmap rows that overlap the (offset) base image.
+    let px0 = ox.max(0);
+    let px1 = (ox + bw).min(pw);
+    let py0 = oy.max(0);
+    let py1 = (oy + bh).min(ph);
+    if px1 <= px0 || py1 <= py0 {
+        return;
+    }
+
+    // Screenshots are almost always fully opaque, and at alpha 255 the
+    // straight→premultiplied conversion is the identity — each
+    // overlapping row is then a plain memcpy instead of per-pixel
+    // multiply/divide over the whole frame.
+    let opaque = base.as_raw().chunks_exact(4).all(|p| p[3] == u8::MAX);
+    if opaque {
+        let row_len = ((px1 - px0) as usize) * 4;
+        let src_data = base.as_raw();
+        for py in py0..py1 {
+            let by = py - oy;
+            let src_start = ((by * bw) + (px0 - ox)) as usize * 4;
+            let dst_start = (py * pw + px0) as usize * 4;
+            data[dst_start..dst_start + row_len]
+                .copy_from_slice(&src_data[src_start..src_start + row_len]);
+        }
+        return;
+    }
+
+    for py in py0..py1 {
+        for px in px0..px1 {
+            let bx = px - ox;
+            let by = py - oy;
             let pixel = base.get_pixel(bx as u32, by as u32);
             let [r, g, b, a] = pixel.0;
             // image::RgbaImage is straight (non-premultiplied) RGBA; the
@@ -196,8 +222,15 @@ fn blit_base(pixmap: &mut Pixmap, base: &RgbaImage, offset: (f32, f32)) {
 fn pixmap_to_image(pixmap: &Pixmap) -> RgbaImage {
     let w = pixmap.width();
     let h = pixmap.height();
-    let mut img = RgbaImage::new(w, h);
     let data = pixmap.data();
+    // Fully-opaque output (the common screenshot case): premultiplied
+    // and straight RGBA are byte-identical, so the conversion is one
+    // buffer copy.
+    if data.chunks_exact(4).all(|p| p[3] == u8::MAX) {
+        return RgbaImage::from_raw(w, h, data.to_vec())
+            .expect("pixmap buffer matches its own dimensions");
+    }
+    let mut img = RgbaImage::new(w, h);
     for (i, p) in img.pixels_mut().enumerate() {
         let pr = data[i * 4];
         let pg = data[i * 4 + 1];

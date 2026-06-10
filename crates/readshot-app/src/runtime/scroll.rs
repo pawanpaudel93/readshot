@@ -1,6 +1,9 @@
 // Extracted from runtime.rs (pure code-move). `use super::*` pulls in
 // sibling/parent items; the explicit imports mirror runtime.rs's preamble.
 
+use crate::app::Message;
+use iced::Task;
+
 /// Returns the captured image instead of saving — the editor flow
 /// uses this so the user can choose what to do with the bytes.
 ///
@@ -29,46 +32,79 @@ pub(crate) const SCROLL_MIN_ACCEPTED_MOTION_PX: u32 = 8;
 /// `capture_region` future supports.
 pub(crate) const SCROLL_FRAME_INTERVAL_MS: u64 = 120;
 
-pub(crate) fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession) {
+/// Process in-order completed captures. Frames needing a motion
+/// verdict are compared against the previous accepted frame on a
+/// blocking worker — the SAD scan over a Retina-sized region is tens
+/// of milliseconds of pixel reads, far too much for the UI thread at
+/// 8 fps. Draining pauses while a verdict is outstanding (so frames
+/// stay chronological) and resumes from the `ScrollFrameJudged` arm.
+pub(crate) fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession) -> Task<Message> {
+    if session.judge_in_flight.is_some() {
+        return Task::none();
+    }
     while let Some(result) = session
         .pending_frames
         .remove(&session.next_frame_seq_to_process)
     {
-        session.next_frame_seq_to_process = session.next_frame_seq_to_process.saturating_add(1);
+        let seq = session.next_frame_seq_to_process;
+        session.next_frame_seq_to_process = seq.saturating_add(1);
         match result {
-            Ok(image) => accept_scroll_frame_if_moved(session, image),
+            Ok(image) => {
+                let Some(prev) = session.frames.last().cloned() else {
+                    // First frame — accepted unconditionally.
+                    accept_scroll_frame(session, image);
+                    continue;
+                };
+                session.judge_in_flight = Some(seq);
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            let moved = frame_has_scroll_motion(&prev, &image);
+                            (image, moved)
+                        })
+                        .await
+                        .ok()
+                    },
+                    move |judged| match judged {
+                        Some((image, moved)) => Message::ScrollFrameJudged {
+                            seq,
+                            image: Some(image),
+                            moved,
+                        },
+                        None => Message::ScrollFrameJudged {
+                            seq,
+                            image: None,
+                            moved: false,
+                        },
+                    },
+                );
+            }
             Err(e) => {
                 tracing::warn!(target: "readshot::scroll", "frame capture failed: {e}");
                 session.no_motion_count += 1;
             }
         }
     }
+    Task::none()
 }
 
-pub(crate) fn accept_scroll_frame_if_moved(
+/// Append an accepted frame and refresh the HUD preview state.
+pub(crate) fn accept_scroll_frame(
     session: &mut crate::app::ScrollSession,
     image: image::RgbaImage,
 ) {
-    let moved = match session.frames.last() {
-        Some(prev) => frame_has_scroll_motion(prev, &image),
-        None => true,
-    };
-    if moved {
-        // Cache an iced Handle once per accepted frame so the HUD's
-        // live preview doesn't re-clone ~8 MB of RGBA on every redraw.
-        let handle = iced::widget::image::Handle::from_rgba(
-            image.width(),
-            image.height(),
-            image.as_raw().clone(),
-        );
-        session.no_motion_count = 0;
-        session.frames.push(image);
-        session.frame_tick = session.frame_tick.wrapping_add(1);
-        session.last_frame_at = Some(std::time::Instant::now());
-        session.last_frame_handle = Some(handle);
-    } else {
-        session.no_motion_count += 1;
-    }
+    // Cache an iced Handle once per accepted frame so the HUD's
+    // live preview doesn't re-clone ~8 MB of RGBA on every redraw.
+    let handle = iced::widget::image::Handle::from_rgba(
+        image.width(),
+        image.height(),
+        image.as_raw().clone(),
+    );
+    session.no_motion_count = 0;
+    session.frames.push(std::sync::Arc::new(image));
+    session.frame_tick = session.frame_tick.wrapping_add(1);
+    session.last_frame_at = Some(std::time::Instant::now());
+    session.last_frame_handle = Some(handle);
     // Session never auto-stops on stillness — the user explicitly
     // clicks Stop & Stitch (or Cancel) when they're done.
 }
@@ -162,9 +198,16 @@ pub(crate) fn diff_u8(a: u8, b: u8) -> u32 {
 /// block the iced event loop. Stitching a long scroll can take a
 /// hundred ms or two — fine in a worker, not fine on the UI thread.
 pub(crate) async fn stitch_frames_async(
-    frames: Vec<image::RgbaImage>,
+    frames: Vec<std::sync::Arc<image::RgbaImage>>,
 ) -> Result<image::RgbaImage, String> {
     tokio::task::spawn_blocking(move || {
+        // By stop time the session is the only owner of almost every
+        // frame Arc, so unwrapping is copy-free; a frame still held by
+        // an in-flight judge task falls back to one clone.
+        let frames: Vec<image::RgbaImage> = frames
+            .into_iter()
+            .map(|f| std::sync::Arc::try_unwrap(f).unwrap_or_else(|arc| (*arc).clone()))
+            .collect();
         readshot_core::scroll_stitch::stitch_scrolling(
             &frames,
             readshot_core::scroll_stitch::StitchConfig::default(),

@@ -53,28 +53,40 @@ pub fn blur_rect(
     }
 }
 
+// Both passes use a sliding-window running sum, so each pass is
+// O(width × height) regardless of radius: stepping the window drops
+// the element leaving on the left and adds the one entering on the
+// right. Reads are edge-clamped to the rect, identical to the previous
+// per-pixel implementation (the window always holds 2r+1 clamped
+// samples), just without re-summing the whole window per pixel.
+
 fn box_blur_horizontal(pixmap: &mut Pixmap, x0: i32, y0: i32, x1: i32, y1: i32, r: i32) {
     let pw = pixmap.width() as i32;
     let data = pixmap.data_mut();
     let mut row = vec![0u8; ((x1 - x0) as usize) * 4];
+    let count = (2 * r + 1) as u32;
     for y in y0..y1 {
+        let base = (y * pw) as usize * 4;
+        let mut acc = [0u32; 4];
+        for dx in -r..=r {
+            let sx = (x0 + dx).clamp(x0, x1 - 1);
+            let i = base + sx as usize * 4;
+            acc[0] += data[i] as u32;
+            acc[1] += data[i + 1] as u32;
+            acc[2] += data[i + 2] as u32;
+            acc[3] += data[i + 3] as u32;
+        }
         for x in x0..x1 {
-            let mut acc = [0u32; 4];
-            let mut count = 0u32;
-            for dx in -r..=r {
-                let sx = (x + dx).clamp(x0, x1 - 1);
-                let i = (y * pw + sx) as usize * 4;
-                acc[0] += data[i] as u32;
-                acc[1] += data[i + 1] as u32;
-                acc[2] += data[i + 2] as u32;
-                acc[3] += data[i + 3] as u32;
-                count += 1;
-            }
             let dst = ((x - x0) as usize) * 4;
             row[dst] = (acc[0] / count) as u8;
             row[dst + 1] = (acc[1] / count) as u8;
             row[dst + 2] = (acc[2] / count) as u8;
             row[dst + 3] = (acc[3] / count) as u8;
+            let drop_i = base + (x - r).clamp(x0, x1 - 1) as usize * 4;
+            let add_i = base + (x + r + 1).clamp(x0, x1 - 1) as usize * 4;
+            for c in 0..4 {
+                acc[c] = acc[c] + data[add_i + c] as u32 - data[drop_i + c] as u32;
+            }
         }
         for x in x0..x1 {
             let dst = (y * pw + x) as usize * 4;
@@ -91,24 +103,28 @@ fn box_blur_vertical(pixmap: &mut Pixmap, x0: i32, y0: i32, x1: i32, y1: i32, r:
     let pw = pixmap.width() as i32;
     let data = pixmap.data_mut();
     let mut col = vec![0u8; ((y1 - y0) as usize) * 4];
+    let count = (2 * r + 1) as u32;
     for x in x0..x1 {
+        let mut acc = [0u32; 4];
+        for dy in -r..=r {
+            let sy = (y0 + dy).clamp(y0, y1 - 1);
+            let i = (sy * pw + x) as usize * 4;
+            acc[0] += data[i] as u32;
+            acc[1] += data[i + 1] as u32;
+            acc[2] += data[i + 2] as u32;
+            acc[3] += data[i + 3] as u32;
+        }
         for y in y0..y1 {
-            let mut acc = [0u32; 4];
-            let mut count = 0u32;
-            for dy in -r..=r {
-                let sy = (y + dy).clamp(y0, y1 - 1);
-                let i = (sy * pw + x) as usize * 4;
-                acc[0] += data[i] as u32;
-                acc[1] += data[i + 1] as u32;
-                acc[2] += data[i + 2] as u32;
-                acc[3] += data[i + 3] as u32;
-                count += 1;
-            }
             let dst = ((y - y0) as usize) * 4;
             col[dst] = (acc[0] / count) as u8;
             col[dst + 1] = (acc[1] / count) as u8;
             col[dst + 2] = (acc[2] / count) as u8;
             col[dst + 3] = (acc[3] / count) as u8;
+            let drop_i = ((y - r).clamp(y0, y1 - 1) * pw + x) as usize * 4;
+            let add_i = ((y + r + 1).clamp(y0, y1 - 1) * pw + x) as usize * 4;
+            for c in 0..4 {
+                acc[c] = acc[c] + data[add_i + c] as u32 - data[drop_i + c] as u32;
+            }
         }
         for y in y0..y1 {
             let dst = (y * pw + x) as usize * 4;

@@ -240,12 +240,22 @@ impl CaptureCoordinator {
         let Some(history) = &self.history else {
             return;
         };
-        if let Err(e) = history.save(&record, &png_bytes) {
-            tracing::warn!(target: readshot_core::log::cat::HISTORY, "history save failed: {e}");
-            return;
-        }
-        if let Err(e) = history.apply_retention(policy, now) {
-            tracing::warn!(target: readshot_core::log::cat::HISTORY, "retention apply failed: {e}");
+        // `save` writes the PNG, decodes it again to render a
+        // thumbnail, and fsyncs — synchronous fs/CPU work that would
+        // otherwise stall a tokio worker for the duration.
+        let history = Arc::clone(history);
+        let join = tokio::task::spawn_blocking(move || {
+            if let Err(e) = history.save(&record, &png_bytes) {
+                tracing::warn!(target: readshot_core::log::cat::HISTORY, "history save failed: {e}");
+                return;
+            }
+            if let Err(e) = history.apply_retention(policy, now) {
+                tracing::warn!(target: readshot_core::log::cat::HISTORY, "retention apply failed: {e}");
+            }
+        })
+        .await;
+        if let Err(e) = join {
+            tracing::warn!(target: readshot_core::log::cat::HISTORY, "history save worker failed: {e}");
         }
     }
 }

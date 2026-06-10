@@ -223,6 +223,15 @@ pub enum Message {
         seq: u64,
         result: Result<image::RgbaImage, String>,
     },
+    /// Background motion-judge verdict for the frame at `seq`. `image`
+    /// is the candidate frame handed back from the worker (`None` only
+    /// if the worker died); `moved` says whether it scrolled vs the
+    /// previous accepted frame and should join the session.
+    ScrollFrameJudged {
+        seq: u64,
+        image: Option<image::RgbaImage>,
+        moved: bool,
+    },
     /// User clicked Stop in the HUD (or pressed Esc / hit an auto-
     /// stop limit). Closes the HUD and kicks off stitching of the
     /// captured frames.
@@ -661,8 +670,10 @@ pub struct ScrollSession {
     pub scale: f32,
     /// Frames captured so far. Frames come from timer ticks and are
     /// appended in capture sequence order even when backend futures
-    /// complete out of order.
-    pub frames: Vec<image::RgbaImage>,
+    /// complete out of order. `Arc` so the background motion-judge
+    /// task can borrow the previous frame without a multi-megabyte
+    /// clone per comparison.
+    pub frames: Vec<std::sync::Arc<image::RgbaImage>>,
     /// Number of consecutive timer ticks that produced a frame with
     /// no detectable vertical scroll vs. the previous accepted frame.
     /// Surfaced for diagnostics; the user explicitly stops the
@@ -695,6 +706,12 @@ pub struct ScrollSession {
     pub next_frame_seq_to_process: u64,
     /// Completed capture responses waiting for earlier sequence ids.
     pub pending_frames: BTreeMap<u64, Result<image::RgbaImage, String>>,
+    /// `Some(seq)` while a frame is being compared against the
+    /// previous accepted frame on a blocking worker (the SAD scan is
+    /// too expensive for the UI thread). Draining pauses until the
+    /// verdict (`Message::ScrollFrameJudged`) comes back so frames
+    /// stay in chronological order.
+    pub judge_in_flight: Option<u64>,
     /// True after the user has clicked Stop / pressed Esc / hit a
     /// limit. The next tick observes this and kicks off stitching
     /// instead of capturing another frame.
@@ -740,6 +757,7 @@ impl ScrollSession {
             next_capture_seq: 0,
             next_frame_seq_to_process: 1,
             pending_frames: BTreeMap::new(),
+            judge_in_flight: None,
             stopping: false,
             cancel_armed_at: None,
             started_at: std::time::Instant::now(),

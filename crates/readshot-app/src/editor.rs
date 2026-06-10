@@ -507,8 +507,11 @@ fn next_pin_number_after(annotations: &[Annotation]) -> u32 {
 }
 
 fn build_handle(model: &mut Model) -> iced::widget::image::Handle {
+    // `flatten` already returns an owned copy of the cached image —
+    // hand its buffer to the handle instead of cloning it again.
     let img = model.flatten();
-    iced::widget::image::Handle::from_rgba(img.width(), img.height(), img.as_raw().clone())
+    let (w, h) = (img.width(), img.height());
+    iced::widget::image::Handle::from_rgba(w, h, img.into_raw())
 }
 
 #[cfg(test)]
