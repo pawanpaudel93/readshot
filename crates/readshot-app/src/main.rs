@@ -60,12 +60,17 @@ fn main() -> iced::Result {
         .get(1)
         .filter(|a| a.starts_with("readshot://"))
         .cloned();
-    // Parse CLI second. If argv[1] is a readshot:// URL, skip clap so
-    // the GUI path can handle it after logging is ready. Any
-    // subcommand routes to the headless surface and exits with a
-    // stable status code.
-    let cli = if url_arg.is_some() {
-        // Skip clap when argv[1] is a URL — clap would reject it.
+    // The login LaunchAgent starts us with this marker (see
+    // `startup::launch_agent_plist`). It tells the runtime to settle
+    // into the menu bar silently instead of popping the ready window
+    // on every boot. It's a GUI launch, never a subcommand.
+    let launched_at_login = argv.iter().any(|a| a == "--launched-at-login");
+    // Parse CLI second. If argv[1] is a readshot:// URL or this is a
+    // login launch, skip clap so the GUI path takes over after logging
+    // is ready. Any subcommand routes to the headless surface and exits
+    // with a stable status code.
+    let cli = if url_arg.is_some() || launched_at_login {
+        // Skip clap for the URL / login-marker argv — clap would reject it.
         Cli { command: None }
     } else {
         Cli::parse()
@@ -86,6 +91,9 @@ fn main() -> iced::Result {
     }
 
     init_app_logging();
+    if launched_at_login {
+        runtime::set_launched_at_login();
+    }
     if let Some(arg) = url_arg.as_deref() {
         match url_scheme::parse(arg) {
             Ok(action) => runtime::set_initial_url_action(action),

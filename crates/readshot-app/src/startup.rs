@@ -101,6 +101,8 @@ fn launch_agent_plist(app_bundle_path: &Path) -> String {
   <array>
     <string>/usr/bin/open</string>
     <string>{bundle}</string>
+    <string>--args</string>
+    <string>--launched-at-login</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -146,6 +148,11 @@ mod tests {
         assert!(plist.contains("<string>np.com.pawanpaudel.readshot.login</string>"));
         assert!(plist.contains("<string>/usr/bin/open</string>"));
         assert!(plist.contains("<string>/Applications/Readshot.app</string>"));
+        // The login-launch marker lets the app skip the ready window and
+        // settle silently into the menu bar instead of popping a window
+        // on every boot.
+        assert!(plist.contains("<string>--args</string>"));
+        assert!(plist.contains("<string>--launched-at-login</string>"));
         assert!(plist.contains("<key>RunAtLoad</key>"));
         assert!(plist.contains("<true/>"));
     }

@@ -64,6 +64,11 @@ pub(crate) use frame_render::*;
 /// task on boot, before the welcome window even has time to paint.
 static INITIAL_URL_ACTION: OnceLock<Mutex<Option<UrlAction>>> = OnceLock::new();
 static CLI_INTERACTIVE_REQUEST: OnceLock<Mutex<Option<CliInteractiveRequest>>> = OnceLock::new();
+/// Set by `main.rs` when the binary was started by the login
+/// LaunchAgent (which passes `--launched-at-login`). A login launch
+/// settles silently into the menu bar instead of opening the ready
+/// window — see `needs_welcome_window_on_boot`.
+static LAUNCHED_AT_LOGIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static READSHOT_THEME: OnceLock<Theme> = OnceLock::new();
 
 const READSHOT_THEME_NAME: &str = "readshot";
@@ -119,6 +124,16 @@ fn take_initial_url_action() -> Option<UrlAction> {
     INITIAL_URL_ACTION
         .get()
         .and_then(|m| m.lock().ok().and_then(|mut g| g.take()))
+}
+
+/// Record that the binary was started by the login LaunchAgent. Call
+/// from `main.rs` before the daemon takes over.
+pub fn set_launched_at_login() {
+    LAUNCHED_AT_LOGIN.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn launched_at_login() -> bool {
+    LAUNCHED_AT_LOGIN.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Configure the daemon as a hidden one-shot child used by
@@ -335,14 +350,18 @@ pub fn start() -> (App, Task<Message>) {
     // The welcome window is a *first-run permission gate*, not the
     // app's main UI. Once Screen Recording is granted the user lives
     // inside the menu-bar tray icon + global hotkey, which is what
-    // `LSUIElement=true` apps are supposed to look like. Still open
-    // the window once after the grant is visible so macOS's "Quit &
-    // Reopen" flow has an obvious result instead of relaunching into
-    // a silent menu-bar-only state.
+    // `LSUIElement=true` apps are supposed to look like. A *manual*
+    // relaunch still opens the window once so macOS's "Quit & Reopen"
+    // flow has an obvious result; a *login* launch deliberately does
+    // not, so the app just appears in the menu bar at every boot
+    // instead of popping a window in the user's face.
     let initial_url_action = take_initial_url_action();
     let mut tasks: Vec<Task<Message>> = Vec::new();
-    let needs_welcome_window =
-        needs_welcome_window_on_boot(app.welcome, initial_url_action.is_some());
+    let needs_welcome_window = needs_welcome_window_on_boot(
+        app.welcome,
+        initial_url_action.is_some(),
+        launched_at_login(),
+    );
     if needs_welcome_window {
         let (id, open_task) = window::open(welcome_window_settings());
         app.windows.register(id, WindowKind::Welcome);
@@ -363,8 +382,20 @@ pub fn start() -> (App, Task<Message>) {
     (app, Task::batch(tasks))
 }
 
-fn needs_welcome_window_on_boot(welcome: WelcomeState, has_initial_url_action: bool) -> bool {
-    welcome.should_show() || !has_initial_url_action
+fn needs_welcome_window_on_boot(
+    welcome: WelcomeState,
+    has_initial_url_action: bool,
+    launched_at_login: bool,
+) -> bool {
+    // The permission gate always shows until Screen Recording is granted.
+    if welcome.should_show() {
+        return true;
+    }
+    // Granted: a URL action drives the boot (no window), and a login
+    // launch settles silently into the menu bar (tray icon + the
+    // "running in the menu bar" notification are the feedback). Only a
+    // manual relaunch opens the ready window.
+    !has_initial_url_action && !launched_at_login
 }
 
 /// Per-window title.
@@ -3774,18 +3805,52 @@ mod tests {
     }
 
     #[test]
-    fn boot_opens_ready_window_for_normal_granted_launch() {
-        assert!(needs_welcome_window_on_boot(WelcomeState::Granted, false));
+    fn boot_opens_ready_window_for_manual_granted_launch() {
+        assert!(needs_welcome_window_on_boot(
+            WelcomeState::Granted,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn boot_skips_ready_window_for_login_launch_when_granted() {
+        // The whole point of the fix: a login launch settles into the
+        // menu bar instead of popping the ready window every boot.
+        assert!(!needs_welcome_window_on_boot(
+            WelcomeState::Granted,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn boot_still_opens_permission_window_for_login_launch_when_blocked() {
+        // Permission still missing → the gate must show even at login,
+        // otherwise the user has no way to grant access.
+        assert!(needs_welcome_window_on_boot(
+            WelcomeState::Pending,
+            false,
+            true
+        ));
     }
 
     #[test]
     fn boot_skips_ready_window_for_url_launch_when_granted() {
-        assert!(!needs_welcome_window_on_boot(WelcomeState::Granted, true));
+        assert!(!needs_welcome_window_on_boot(
+            WelcomeState::Granted,
+            true,
+            false
+        ));
     }
 
     #[test]
     fn boot_still_opens_permission_window_for_url_launch_when_blocked() {
-        assert!(needs_welcome_window_on_boot(WelcomeState::Pending, true));
+        assert!(needs_welcome_window_on_boot(
+            WelcomeState::Pending,
+            true,
+            false
+        ));
     }
 
     #[test]
