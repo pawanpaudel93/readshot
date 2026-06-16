@@ -1205,14 +1205,16 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 &[ToolState::Crop],
             ];
 
-            let mut tool_row = row![].spacing(3).align_y(Alignment::Center);
-            for (idx, group) in tool_groups.iter().enumerate() {
-                if idx > 0 {
-                    tool_row = tool_row.push(toolbar_divider());
-                }
+            // Group tools into recessed rounded "segments" so related
+            // tools (shapes, marker/pen/text, redaction…) read as one
+            // cluster instead of a flat strip separated by hairlines.
+            let mut tool_row = row![].spacing(6).align_y(Alignment::Center);
+            for group in tool_groups.iter() {
+                let mut segment = row![].spacing(3).align_y(Alignment::Center);
                 for t in group.iter() {
-                    tool_row = tool_row.push(tool_button(*t, active_tool, busy));
+                    segment = segment.push(tool_button(*t, active_tool, busy));
                 }
+                tool_row = tool_row.push(toolbar_segment(segment.into()));
             }
 
             let palette_row = toolbar::PALETTE.iter().fold(
@@ -1712,8 +1714,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let hint_str = if let Some(kind) = ed.model.selected_kind_label() {
         editor_selected_hint(kind, ed.model.selected_text_edit().is_some())
     } else if ed.model.annotations().is_empty() && ed.status.is_none() {
-        "Press V / R / O / L / A / P / H / T / B / X / N / C to pick a tool · ⌘Z to undo"
-            .to_string()
+        "Pick a tool above — hover any tool to see its shortcut · ⌘Z to undo".to_string()
     } else {
         tool_hint(active_tool).to_string()
     };
@@ -1731,163 +1732,170 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         }
         (s, _) => s,
     };
-    let bottom_row: Element<'_, Message> = container(responsive(move |available| {
-        let layout = editor_bottom_layout(available.width);
-        let compact = layout == EditorBottomLayout::Compact;
-        let dims = text(format!("{img_w} × {img_h} px"))
-            .size(11)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55));
-        let hint_copy = if compact {
-            editor_compact_hint(active_tool).to_string()
-        } else {
-            hint_text.clone()
-        };
-        let hint = text(hint_copy)
-            .size(11)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
-            .width(Length::Fill)
-            .wrapping(if compact {
-                iced::widget::text::Wrapping::Word
+    let bottom_row: Element<'_, Message> = container(
+        responsive(move |available| {
+            let layout = editor_bottom_layout(available.width);
+            let compact = layout == EditorBottomLayout::Compact;
+            let dims = text(format!("{img_w} × {img_h} px"))
+                .size(11)
+                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55));
+            let hint_copy = if compact {
+                editor_compact_hint(active_tool).to_string()
             } else {
-                iced::widget::text::Wrapping::None
-            });
-        let toast: Element<'_, Message> = match status_text.clone() {
-            Some(s) => {
-                let lower = s.to_lowercase();
-                let is_error = lower.contains("fail") || lower.contains("error");
-                let in_progress = lower.starts_with("copying") || lower.contains("recognising");
-                let (bg, fg) = if is_error {
-                    (
-                        Color::from_rgba(0.85, 0.32, 0.32, 0.22),
-                        Color::from_rgba(1.0, 0.78, 0.78, 1.0),
-                    )
-                } else if in_progress {
-                    (
-                        Color::from_rgba(1.0, 1.0, 1.0, 0.10),
-                        Color::from_rgba(1.0, 1.0, 1.0, 0.85),
-                    )
+                hint_text.clone()
+            };
+            let hint = text(hint_copy)
+                .size(11)
+                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
+                .width(Length::Fill)
+                .wrapping(if compact {
+                    iced::widget::text::Wrapping::Word
                 } else {
-                    (
-                        Color::from_rgba(0.30, 0.65, 0.45, 0.24),
-                        Color::from_rgba(0.78, 1.0, 0.88, 1.0),
+                    iced::widget::text::Wrapping::None
+                });
+            let toast: Element<'_, Message> = match status_text.clone() {
+                Some(s) => {
+                    let lower = s.to_lowercase();
+                    let is_error = lower.contains("fail") || lower.contains("error");
+                    let in_progress = lower.starts_with("copying") || lower.contains("recognising");
+                    let (bg, fg) = if is_error {
+                        (
+                            Color::from_rgba(0.85, 0.32, 0.32, 0.22),
+                            Color::from_rgba(1.0, 0.78, 0.78, 1.0),
+                        )
+                    } else if in_progress {
+                        (
+                            Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+                            Color::from_rgba(1.0, 1.0, 1.0, 0.85),
+                        )
+                    } else {
+                        (
+                            Color::from_rgba(0.30, 0.65, 0.45, 0.24),
+                            Color::from_rgba(0.78, 1.0, 0.88, 1.0),
+                        )
+                    };
+                    container(
+                        text(s)
+                            .size(11)
+                            .color(fg)
+                            .wrapping(iced::widget::text::Wrapping::Word),
                     )
-                };
-                container(
-                    text(s)
-                        .size(11)
-                        .color(fg)
-                        .wrapping(iced::widget::text::Wrapping::Word),
-                )
-                .padding([3, 8])
-                .style(move |_| iced::widget::container::Style {
-                    background: Some(bg.into()),
-                    border: iced::Border {
-                        radius: 9.0.into(),
+                    .padding([3, 8])
+                    .style(move |_| iced::widget::container::Style {
+                        background: Some(bg.into()),
+                        border: iced::Border {
+                            radius: 9.0.into(),
+                            ..Default::default()
+                        },
                         ..Default::default()
-                    },
-                    ..Default::default()
-                })
-                .into()
-            }
-            None => IcedSpace::new().height(Length::Fixed(0.0)).into(),
-        };
-        let status_area = if compact {
-            container(column![dims, hint, toast].spacing(3))
+                    })
+                    .into()
+                }
+                None => IcedSpace::new().height(Length::Fixed(0.0)).into(),
+            };
+            let status_area = if compact {
+                container(column![dims, hint, toast].spacing(3))
+                    .width(Length::Fill)
+                    .clip(true)
+            } else {
+                let bullet = text("·")
+                    .size(11)
+                    .color(Color::from_rgba(1.0, 1.0, 1.0, 0.35));
+                container(
+                    row![
+                        dims,
+                        IcedSpace::new().width(Length::Fixed(8.0)),
+                        bullet,
+                        IcedSpace::new().width(Length::Fixed(8.0)),
+                        hint,
+                        IcedSpace::new().width(Length::Fixed(8.0)),
+                        toast,
+                    ]
+                    .spacing(0)
+                    .align_y(Alignment::Center),
+                )
                 .width(Length::Fill)
                 .clip(true)
-        } else {
-            let bullet = text("·")
-                .size(11)
-                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.35));
-            container(
-                row![
-                    dims,
-                    IcedSpace::new().width(Length::Fixed(8.0)),
-                    bullet,
-                    IcedSpace::new().width(Length::Fixed(8.0)),
-                    hint,
-                    IcedSpace::new().width(Length::Fixed(8.0)),
-                    toast,
-                ]
-                .spacing(0)
-                .align_y(Alignment::Center),
-            )
-            .width(Length::Fill)
-            .clip(true)
-        };
+            };
 
-        let discard = editor_action_button(
-            "Discard",
-            Message::EditorDiscardRequested,
-            ActionKind::Danger,
-            busy,
-            "Close this editor. Dirty edits ask for a second click.",
-        );
-        let pin = editor_action_button(
-            "Pin",
-            Message::EditorPinRequested,
-            ActionKind::Secondary,
-            busy,
-            "Keep this capture floating above other windows.",
-        );
-        let copy_text = editor_action_button(
-            "Copy Text",
-            Message::EditorCopyTextRequested,
-            ActionKind::Secondary,
-            busy,
-            "Run OCR and copy the recognized text.",
-        );
-        let copy_image = editor_action_button(
-            "Copy Image",
-            Message::EditorCopyImageRequested,
-            ActionKind::Secondary,
-            busy,
-            "Copy the annotated image using the selected frame option.",
-        );
-        let save = editor_action_button(
-            "Save",
-            Message::EditorSaveRequested,
-            ActionKind::Primary,
-            busy,
-            "Save the annotated image using the selected frame option.",
-        );
+            let discard = editor_action_button(
+                "Discard",
+                Message::EditorDiscardRequested,
+                ActionKind::Danger,
+                busy,
+                "Close this editor. Dirty edits ask for a second click.  ⌘W",
+            );
+            let pin = editor_action_button(
+                "Pin",
+                Message::EditorPinRequested,
+                ActionKind::Secondary,
+                busy,
+                "Keep this capture floating above other windows.  ⌘P",
+            );
+            let copy_text = editor_action_button(
+                "Copy Text",
+                Message::EditorCopyTextRequested,
+                ActionKind::Secondary,
+                busy,
+                "Run OCR and copy the recognized text.  ⌘⇧C",
+            );
+            let copy_image = editor_action_button(
+                "Copy Image",
+                Message::EditorCopyImageRequested,
+                ActionKind::Secondary,
+                busy,
+                "Copy the annotated image using the selected frame option.  ⌘C",
+            );
+            let save = editor_action_button(
+                "Save",
+                Message::EditorSaveRequested,
+                ActionKind::Primary,
+                busy,
+                "Save the annotated image using the selected frame option.  ⌘S",
+            );
 
-        match layout {
-            EditorBottomLayout::Wide => row![
-                status_area,
-                row![
-                    discard,
-                    IcedSpace::new().width(Length::Fixed(8.0)),
-                    copy_text,
-                    copy_image,
-                    pin,
-                    save,
-                ]
-                .spacing(6)
-                .align_y(Alignment::Center)
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .into(),
-            EditorBottomLayout::Stacked => column![
-                status_area,
-                row![discard, copy_text, copy_image, pin, save]
+            match layout {
+                EditorBottomLayout::Wide => row![
+                    status_area,
+                    row![
+                        discard,
+                        IcedSpace::new().width(Length::Fixed(8.0)),
+                        copy_text,
+                        copy_image,
+                        pin,
+                        toolbar_divider(),
+                        save,
+                    ]
                     .spacing(6)
                     .align_y(Alignment::Center)
-            ]
-            .spacing(8)
-            .into(),
-            EditorBottomLayout::Compact => column![
-                status_area,
-                row![discard, copy_text, copy_image]
-                    .spacing(6)
-                    .align_y(Alignment::Center),
-                row![pin, save].spacing(6).align_y(Alignment::Center),
-            ]
-            .spacing(8)
-            .into(),
-        }
-    }))
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .into(),
+                EditorBottomLayout::Stacked => column![
+                    status_area,
+                    row![discard, copy_text, copy_image, pin, toolbar_divider(), save]
+                        .spacing(6)
+                        .align_y(Alignment::Center)
+                ]
+                .spacing(8)
+                .into(),
+                EditorBottomLayout::Compact => column![
+                    status_area,
+                    row![discard, copy_text, copy_image]
+                        .spacing(6)
+                        .align_y(Alignment::Center),
+                    row![pin, save].spacing(6).align_y(Alignment::Center),
+                ]
+                .spacing(8)
+                .into(),
+            }
+        })
+        // Same trap as the toolbar: `responsive` defaults to Fill height and
+        // would split the editor column with the image area. Pin the widget to
+        // Shrink so the bottom bar hugs its content.
+        .height(Length::Shrink),
+    )
     .padding([8, 10])
     .style(editor_chrome_style)
     .height(Length::Shrink)
@@ -2148,6 +2156,22 @@ where
         });
     tooltip::Tooltip::new(b, pop, tooltip::Position::Bottom)
         .gap(4)
+        .into()
+}
+
+/// Recessed rounded backing for a cluster of related toolbar buttons.
+/// Groups tools visually without the noise of per-button hairlines.
+pub(crate) fn toolbar_segment<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
+    container(content)
+        .padding([2, 4])
+        .style(|_theme: &Theme| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.22).into()),
+            border: iced::Border {
+                radius: 9.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
         .into()
 }
 
