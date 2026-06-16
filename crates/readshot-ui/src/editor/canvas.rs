@@ -135,6 +135,12 @@ pub struct EditorCanvas {
     /// background texture stable and ask the canvas to draw only this
     /// transient overlay.
     pub selected_preview: Option<Annotation>,
+    /// Shared tessellated-geometry cache, owned by the editor session.
+    /// `draw` reuses the stored geometry unless the canvas size changed
+    /// or the session explicitly cleared it (on editor messages). This
+    /// keeps the background polling ticks from re-tessellating the
+    /// annotations on every idle redraw.
+    pub cache: std::rc::Rc<canvas::Cache>,
 }
 
 /// Display scale for the editor image. Fit mode scales the image to
@@ -543,166 +549,180 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let preview_scale =
-            display_scale_for_bounds(bounds, self.image_size, self.display_scale).unwrap_or(1.0);
-        let preview_width = preview_stroke_width(self.line_width, preview_scale);
-        let stroke_color = Color::from_rgba(self.color.r, self.color.g, self.color.b, 1.0);
-        let preview_stroke = Stroke::default()
-            .with_color(stroke_color)
-            .with_width(preview_width)
-            .with_line_cap(LineCap::Round)
-            .with_line_join(LineJoin::Round);
+        // Cache the tessellated geometry. iced redraws every window on
+        // each background tick (hotkey/tray/url drains); without this
+        // the annotation set would re-tessellate ~20×/sec while idle.
+        // The cache auto-invalidates on size change; the editor session
+        // clears it on any editor message, so live drags still update.
+        let geometry = self.cache.draw(renderer, bounds.size(), |frame| {
+            let preview_scale =
+                display_scale_for_bounds(bounds, self.image_size, self.display_scale)
+                    .unwrap_or(1.0);
+            let preview_width = preview_stroke_width(self.line_width, preview_scale);
+            let stroke_color = Color::from_rgba(self.color.r, self.color.g, self.color.b, 1.0);
+            let preview_stroke = Stroke::default()
+                .with_color(stroke_color)
+                .with_width(preview_width)
+                .with_line_cap(LineCap::Round)
+                .with_line_join(LineJoin::Round);
 
-        match state {
-            DrawState::Idle => {}
-            DrawState::Selecting { .. } => {}
-            DrawState::Dragging {
-                anchor,
-                cursor: cur,
-                tool_at_press,
-            } => {
-                let rect = rect_from_points(*anchor, *cur);
-                if rect.width.abs() < 0.5 || rect.height.abs() < 0.5 {
-                    // Don't draw anything for sub-pixel drags; iced's
-                    // canvas can't represent them and they'd flash on
-                    // the first cursor-moved tick anyway.
-                } else {
-                    match tool_at_press {
-                        ToolState::Rectangle | ToolState::Crop => {
-                            let path = Path::rectangle(
-                                Point::new(rect.x, rect.y),
-                                iced::Size::new(rect.width, rect.height),
-                            );
-                            if *tool_at_press == ToolState::Crop {
-                                shade_crop_outside(&mut frame, bounds, rect);
+            match state {
+                DrawState::Idle => {}
+                DrawState::Selecting { .. } => {}
+                DrawState::Dragging {
+                    anchor,
+                    cursor: cur,
+                    tool_at_press,
+                } => {
+                    let rect = rect_from_points(*anchor, *cur);
+                    if rect.width.abs() < 0.5 || rect.height.abs() < 0.5 {
+                        // Don't draw anything for sub-pixel drags; iced's
+                        // canvas can't represent them and they'd flash on
+                        // the first cursor-moved tick anyway.
+                    } else {
+                        match tool_at_press {
+                            ToolState::Rectangle | ToolState::Crop => {
+                                let path = Path::rectangle(
+                                    Point::new(rect.x, rect.y),
+                                    iced::Size::new(rect.width, rect.height),
+                                );
+                                if *tool_at_press == ToolState::Crop {
+                                    shade_crop_outside(frame, bounds, rect);
+                                }
+                                frame.stroke(&path, preview_stroke);
                             }
-                            frame.stroke(&path, preview_stroke);
+                            ToolState::Ellipse => {
+                                let center = Point::new(
+                                    rect.x + rect.width * 0.5,
+                                    rect.y + rect.height * 0.5,
+                                );
+                                let radii = (rect.width * 0.5, rect.height * 0.5);
+                                let path = Path::new(|builder| {
+                                    ellipse_path(builder, center, radii);
+                                });
+                                frame.stroke(&path, preview_stroke);
+                            }
+                            ToolState::Line => {
+                                let path = Path::line(*anchor, *cur);
+                                frame.stroke(&path, preview_stroke);
+                            }
+                            ToolState::Arrow => {
+                                // Shaft + simple arrowhead. The committed
+                                // annotation gets a polished arrowhead via
+                                // readshot-core::arrowhead; the preview is
+                                // a hint, not the final stroke.
+                                let path = Path::line(*anchor, *cur);
+                                frame.stroke(&path, preview_stroke);
+                                let head = arrowhead_path(*anchor, *cur, preview_width.max(2.0));
+                                frame.stroke(&head, preview_stroke);
+                            }
+                            ToolState::Blur | ToolState::Pixelate => {
+                                // Visualise the area that will be blurred /
+                                // pixelated as a translucent rectangle so
+                                // the user sees what they'd hide.
+                                let path = Path::rectangle(
+                                    Point::new(rect.x, rect.y),
+                                    iced::Size::new(rect.width, rect.height),
+                                );
+                                frame.fill(
+                                    &path,
+                                    Color::from_rgba(
+                                        self.color.r,
+                                        self.color.g,
+                                        self.color.b,
+                                        0.18,
+                                    ),
+                                );
+                                frame.stroke(&path, preview_stroke);
+                            }
+                            _ => {}
                         }
-                        ToolState::Ellipse => {
-                            let center =
-                                Point::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
-                            let radii = (rect.width * 0.5, rect.height * 0.5);
-                            let path = Path::new(|builder| {
-                                ellipse_path(builder, center, radii);
-                            });
-                            frame.stroke(&path, preview_stroke);
+                        if let Some(label) = preview_drag_label(
+                            *tool_at_press,
+                            *anchor,
+                            *cur,
+                            bounds,
+                            self.image_size,
+                            self.display_scale,
+                        ) {
+                            draw_preview_badge(frame, bounds, rect, label);
                         }
-                        ToolState::Line => {
-                            let path = Path::line(*anchor, *cur);
-                            frame.stroke(&path, preview_stroke);
-                        }
-                        ToolState::Arrow => {
-                            // Shaft + simple arrowhead. The committed
-                            // annotation gets a polished arrowhead via
-                            // readshot-core::arrowhead; the preview is
-                            // a hint, not the final stroke.
-                            let path = Path::line(*anchor, *cur);
-                            frame.stroke(&path, preview_stroke);
-                            let head = arrowhead_path(*anchor, *cur, preview_width.max(2.0));
-                            frame.stroke(&head, preview_stroke);
-                        }
-                        ToolState::Blur | ToolState::Pixelate => {
-                            // Visualise the area that will be blurred /
-                            // pixelated as a translucent rectangle so
-                            // the user sees what they'd hide.
-                            let path = Path::rectangle(
-                                Point::new(rect.x, rect.y),
-                                iced::Size::new(rect.width, rect.height),
-                            );
-                            frame.fill(
-                                &path,
-                                Color::from_rgba(self.color.r, self.color.g, self.color.b, 0.18),
-                            );
-                            frame.stroke(&path, preview_stroke);
-                        }
-                        _ => {}
                     }
-                    if let Some(label) = preview_drag_label(
-                        *tool_at_press,
-                        *anchor,
-                        *cur,
+                }
+                DrawState::Drawing {
+                    points,
+                    tool_at_press,
+                } => {
+                    if points.len() >= 2 {
+                        let path = Path::new(|builder| {
+                            builder.move_to(points[0]);
+                            for p in points.iter().skip(1) {
+                                builder.line_to(*p);
+                            }
+                        });
+                        let stroke = match tool_at_press {
+                            ToolState::Highlighter => {
+                                // Wider, semi-transparent so it reads as a
+                                // highlight even at preview time.
+                                Stroke::default()
+                                    .with_color(Color::from_rgba(
+                                        self.color.r,
+                                        self.color.g,
+                                        self.color.b,
+                                        0.45,
+                                    ))
+                                    .with_width(highlighter_preview_stroke_width(
+                                        self.line_width,
+                                        preview_scale,
+                                    ))
+                                    .with_line_cap(LineCap::Round)
+                                    .with_line_join(LineJoin::Round)
+                            }
+                            _ => preview_stroke,
+                        };
+                        frame.stroke(&path, stroke);
+                    }
+                }
+            }
+
+            if let Some(annotation) = &self.selected_preview {
+                draw_annotation_preview(
+                    frame,
+                    annotation,
+                    bounds,
+                    self.image_size,
+                    self.image_offset,
+                    self.display_scale,
+                );
+            }
+
+            if self.selected_preview.is_none() {
+                if let Some(rect) = self.selected_bounds.and_then(|r| {
+                    base_rect_to_canvas(
+                        r,
                         bounds,
                         self.image_size,
+                        self.image_offset,
+                        self.display_scale,
+                    )
+                }) {
+                    draw_selection_bounds(frame, rect);
+                }
+                for (_, handle) in &self.selected_handles {
+                    if let Some(point) = base_point_to_canvas(
+                        *handle,
+                        bounds,
+                        self.image_size,
+                        self.image_offset,
                         self.display_scale,
                     ) {
-                        draw_preview_badge(&mut frame, bounds, rect, label);
+                        draw_selection_handle(frame, point);
                     }
                 }
             }
-            DrawState::Drawing {
-                points,
-                tool_at_press,
-            } => {
-                if points.len() >= 2 {
-                    let path = Path::new(|builder| {
-                        builder.move_to(points[0]);
-                        for p in points.iter().skip(1) {
-                            builder.line_to(*p);
-                        }
-                    });
-                    let stroke = match tool_at_press {
-                        ToolState::Highlighter => {
-                            // Wider, semi-transparent so it reads as a
-                            // highlight even at preview time.
-                            Stroke::default()
-                                .with_color(Color::from_rgba(
-                                    self.color.r,
-                                    self.color.g,
-                                    self.color.b,
-                                    0.45,
-                                ))
-                                .with_width(highlighter_preview_stroke_width(
-                                    self.line_width,
-                                    preview_scale,
-                                ))
-                                .with_line_cap(LineCap::Round)
-                                .with_line_join(LineJoin::Round)
-                        }
-                        _ => preview_stroke,
-                    };
-                    frame.stroke(&path, stroke);
-                }
-            }
-        }
+        });
 
-        if let Some(annotation) = &self.selected_preview {
-            draw_annotation_preview(
-                &mut frame,
-                annotation,
-                bounds,
-                self.image_size,
-                self.image_offset,
-                self.display_scale,
-            );
-        }
-
-        if self.selected_preview.is_none() {
-            if let Some(rect) = self.selected_bounds.and_then(|r| {
-                base_rect_to_canvas(
-                    r,
-                    bounds,
-                    self.image_size,
-                    self.image_offset,
-                    self.display_scale,
-                )
-            }) {
-                draw_selection_bounds(&mut frame, rect);
-            }
-            for (_, handle) in &self.selected_handles {
-                if let Some(point) = base_point_to_canvas(
-                    *handle,
-                    bounds,
-                    self.image_size,
-                    self.image_offset,
-                    self.display_scale,
-                ) {
-                    draw_selection_handle(&mut frame, point);
-                }
-            }
-        }
-
-        vec![frame.into_geometry()]
+        vec![geometry]
     }
 
     /// Tool-aware cursor — crosshair for shape / line / drag tools,
@@ -1537,6 +1557,7 @@ mod tests {
             selected_bounds: None,
             selected_handles: Vec::new(),
             selected_preview: None,
+            cache: std::rc::Rc::new(canvas::Cache::default()),
         };
         let bounds = Rectangle {
             x: 0.0,
@@ -1576,6 +1597,7 @@ mod tests {
             selected_bounds: Some(RectLike::new(10.0, 10.0, 40.0, 30.0)),
             selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
             selected_preview: None,
+            cache: std::rc::Rc::new(canvas::Cache::default()),
         };
         let bounds = Rectangle {
             x: 0.0,
@@ -1620,6 +1642,7 @@ mod tests {
             selected_bounds: Some(RectLike::new(10.0, 10.0, 40.0, 30.0)),
             selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
             selected_preview: None,
+            cache: std::rc::Rc::new(canvas::Cache::default()),
         };
         let bounds = Rectangle {
             x: 0.0,

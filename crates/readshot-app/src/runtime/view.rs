@@ -1431,6 +1431,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 Vec::new()
             },
             selected_preview: selected_preview.clone(),
+            cache: ed.canvas_cache.clone(),
         };
         let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
             .width(Length::Fixed(displayed_w))

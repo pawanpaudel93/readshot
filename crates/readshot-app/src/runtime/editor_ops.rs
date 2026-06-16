@@ -198,6 +198,17 @@ pub(crate) fn sync_editor_history(
 /// grouped arm; the trailing `unreachable!` only fires if a
 /// non-editor message is mis-routed here.
 pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<Message> {
+    // An editor message is the only thing that can change what the
+    // annotation canvas paints, so invalidate its geometry cache here.
+    // The high-frequency background ticks (hotkey / tray / url drains)
+    // are handled elsewhere and never reach this function, so the
+    // canvas reuses cached geometry on those idle redraws instead of
+    // re-tessellating every annotation ~20×/sec. Over-clearing (e.g. on
+    // a Save result) is harmless — it only costs one extra tessellation
+    // on the next draw.
+    if let Some(ed) = state.editor.as_ref() {
+        ed.canvas_cache.clear();
+    }
     match message {
         Message::EditorKeyPressed {
             window,

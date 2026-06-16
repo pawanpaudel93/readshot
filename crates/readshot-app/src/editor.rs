@@ -121,6 +121,15 @@ pub struct EditorSession {
     /// Optional presentation frame applied to image outputs from this
     /// editor window. `No Frame` keeps Save / Copy / Pin pixel-exact.
     pub frame_style: EditorFrameStyle,
+    /// Tessellated-geometry cache for the annotation canvas. Shared
+    /// (cheap-clone `Rc`) into the freshly-built `EditorCanvas` program
+    /// each `view()`. Background polling subscriptions (hotkey / tray /
+    /// url drains) force iced to redraw every window on each tick; with
+    /// this cache those idle redraws reuse the previous geometry instead
+    /// of re-tessellating every annotation. The runtime clears it on
+    /// editor messages (which is the only path that changes what the
+    /// canvas paints), so live drags still re-render.
+    pub canvas_cache: std::rc::Rc<iced::widget::canvas::Cache>,
     /// Last editor output state that was successfully produced for
     /// the user (saved/copied). Kept separate from undo history so a
     /// saved editor can still undo while closing without a stale
@@ -302,6 +311,7 @@ impl EditorSession {
             move_drag: None,
             width_drag_baseline: None,
             frame_style: EditorFrameStyle::None,
+            canvas_cache: std::rc::Rc::new(iced::widget::canvas::Cache::default()),
             output_checkpoint,
             crop_drag_flat: None,
         }
@@ -338,6 +348,7 @@ impl EditorSession {
             move_drag: None,
             width_drag_baseline: None,
             frame_style: EditorFrameStyle::None,
+            canvas_cache: std::rc::Rc::new(iced::widget::canvas::Cache::default()),
             output_checkpoint,
             crop_drag_flat: None,
         }
