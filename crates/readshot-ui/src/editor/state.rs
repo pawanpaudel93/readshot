@@ -18,7 +18,7 @@ use super::tool_state::ToolState;
 use super::undo::History;
 
 const DEFAULT_LINE_WIDTH: f32 = 3.0;
-const HANDLE_HIT_RADIUS: f32 = 8.0;
+pub(crate) const HANDLE_HIT_RADIUS: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResizeHandle {
@@ -124,9 +124,6 @@ impl EditorState {
 
     pub fn set_tool(&mut self, tool: ToolState) {
         self.active_tool = tool;
-        if tool != ToolState::Select {
-            self.selected_annotation = None;
-        }
     }
 
     pub fn set_color(&mut self, color: Rgba) {
@@ -939,6 +936,23 @@ mod tests {
         assert_eq!(s.selected_annotation(), None);
         assert!(s.undo());
         assert_eq!(s.annotations().len(), 2);
+    }
+
+    #[test]
+    fn switching_drawing_tools_preserves_selection_for_toolbar_edits() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        assert_eq!(s.select_at(PointLike::new(2.0, 2.0)), Some(0));
+
+        s.set_tool(ToolState::Arrow);
+
+        assert_eq!(s.active_tool(), ToolState::Arrow);
+        assert_eq!(s.selected_annotation(), Some(0));
+        assert!(s.apply_line_width_to_selected(9.0));
+        match &s.annotations()[0] {
+            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 9.0),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
     }
 
     #[test]

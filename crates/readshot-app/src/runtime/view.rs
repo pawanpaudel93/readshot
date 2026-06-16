@@ -1161,114 +1161,16 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let active_color = ed.model.current_color();
     let line_width = ed.model.current_line_width();
     let busy = ed.busy;
+    let has_selected_annotation = ed.model.selected_annotation().is_some();
 
-    // ===== Toolbar — slim, icon-only =====
-    // Tools are grouped: Select | shapes | freehand | effects | pin |
-    // crop. Each button is a 32×32 square wrapped in a tooltip that
-    // shows the long name + keyboard shortcut, so the visible
-    // toolbar can stay compact without losing affordance.
-    let tool_groups: &[&[ToolState]] = &[
-        &[ToolState::Select],
-        &[
-            ToolState::Rectangle,
-            ToolState::Ellipse,
-            ToolState::Line,
-            ToolState::Arrow,
-        ],
-        &[ToolState::Pen, ToolState::Highlighter, ToolState::Text],
-        &[ToolState::Blur, ToolState::Pixelate],
-        &[ToolState::NumberedPin],
-        &[ToolState::Crop],
-    ];
-
-    let mut tool_row = row![].spacing(3).align_y(Alignment::Center);
-    for (idx, group) in tool_groups.iter().enumerate() {
-        if idx > 0 {
-            tool_row = tool_row.push(toolbar_divider());
-        }
-        for t in group.iter() {
-            tool_row = tool_row.push(tool_button(*t, active_tool, busy));
-        }
-    }
-
-    // ===== Color palette — 26×26 swatches =====
-    let palette_row = toolbar::PALETTE.iter().fold(
-        row![].spacing(5).align_y(Alignment::Center),
-        |row, swatch| {
-            let is_selected = swatch_eq(*swatch, active_color);
-            let color = Color::from_rgba(swatch.r, swatch.g, swatch.b, swatch.a);
-            let mut btn = button(
-                IcedSpace::new()
-                    .width(Length::Fixed(20.0))
-                    .height(Length::Fixed(20.0)),
-            )
-            .padding(0)
-            .style(move |_theme, status| {
-                // Swap the selected ring colour to a dark stroke when the
-                // swatch itself is bright, otherwise white-on-white makes
-                // the selected swatch invisible. sRGB relative luminance.
-                let lum = 0.2126 * swatch.r + 0.7152 * swatch.g + 0.0722 * swatch.b;
-                let selected_ring = if lum > 0.72 {
-                    Color::from_rgba(0.0, 0.0, 0.0, 0.85)
-                } else {
-                    Color::WHITE
-                };
-                let border = if is_selected {
-                    iced::Border {
-                        color: selected_ring,
-                        width: 2.5,
-                        radius: 6.0.into(),
-                    }
-                } else if matches!(status, button::Status::Hovered) {
-                    iced::Border {
-                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.55),
-                        width: 1.5,
-                        radius: 6.0.into(),
-                    }
-                } else {
-                    iced::Border {
-                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    }
-                };
-                button::Style {
-                    background: Some(color.into()),
-                    text_color: Color::TRANSPARENT,
-                    border,
-                    ..Default::default()
-                }
-            });
-            if !busy {
-                btn = btn.on_press(Message::EditorToolbar(
-                    readshot_ui::ToolbarMessage::SelectColor(*swatch),
-                ));
-            }
-            row.push(btn)
-        },
-    );
-
-    let width_text_alpha = if busy { 0.42 } else { 0.7 };
-    let width_label = text(format!("{line_width:.0}px"))
-        .size(11)
-        .color(Color::from_rgba(1.0, 1.0, 1.0, width_text_alpha))
-        .width(Length::Fixed(34.0));
-    let width_control: Element<'_, Message> = if busy {
-        passive_line_width_control(line_width)
-    } else {
-        iced::widget::slider(
-            toolbar::MIN_LINE_WIDTH..=toolbar::MAX_LINE_WIDTH,
-            line_width,
-            Message::EditorLineWidthPreview,
-        )
-        .step(0.5)
-        .on_release(Message::EditorLineWidthCommit)
-        .width(Length::Fixed(140.0))
-        .into()
-    };
-
+    // ===== Toolbar — adaptive, icon-only =====
+    // Tools stay available in every layout. Secondary controls split
+    // into more rows as width tightens so the editor does not need a
+    // horizontal scrollbar just to expose color / size / undo.
     let undo_depth = ed.model.undo_depth();
     let redo_depth = ed.model.redo_depth();
+    let can_undo = ed.model.can_undo();
+    let can_redo = ed.model.can_redo();
     let undo_tip = if undo_depth > 0 {
         format!(
             "Undo (⌘Z) · {undo_depth} action{}",
@@ -1285,45 +1187,178 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     } else {
         "Redo (⌘⇧Z)".to_string()
     };
-    let undo_btn = ghost_icon_button(
-        crate::editor_icons::EditorIcon::Undo,
-        undo_tip,
-        !busy && ed.model.can_undo(),
-        || Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
-    );
-    let redo_btn = ghost_icon_button(
-        crate::editor_icons::EditorIcon::Redo,
-        redo_tip,
-        !busy && ed.model.can_redo(),
-        || Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
-    );
-
-    // Single combined toolbar: tools | divider | colors | width |
-    // spacer | undo redo. Keep it horizontally scrollable so narrow
-    // editor windows do not crush the controls into the image area.
-    let toolbar_inner = row![
-        tool_row,
-        toolbar_divider(),
-        palette_row,
-        toolbar_divider(),
-        width_label,
-        width_control,
-        IcedSpace::new().width(Length::Fill),
-        undo_btn,
-        redo_btn,
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center)
-    .padding([6, 10]);
 
     let toolbar_row = container(
-        scrollable(toolbar_inner)
-            .direction(iced::widget::scrollable::Direction::Horizontal(
-                slim_scrollbar(),
-            ))
-            .height(Length::Shrink)
-            .width(Length::Fill),
+        responsive(move |available| {
+            let layout = editor_toolbar_layout(available.width);
+            let tool_groups: &[&[ToolState]] = &[
+                &[ToolState::Select],
+                &[
+                    ToolState::Rectangle,
+                    ToolState::Ellipse,
+                    ToolState::Line,
+                    ToolState::Arrow,
+                ],
+                &[ToolState::Pen, ToolState::Highlighter, ToolState::Text],
+                &[ToolState::Blur, ToolState::Pixelate],
+                &[ToolState::NumberedPin],
+                &[ToolState::Crop],
+            ];
+
+            let mut tool_row = row![].spacing(3).align_y(Alignment::Center);
+            for (idx, group) in tool_groups.iter().enumerate() {
+                if idx > 0 {
+                    tool_row = tool_row.push(toolbar_divider());
+                }
+                for t in group.iter() {
+                    tool_row = tool_row.push(tool_button(*t, active_tool, busy));
+                }
+            }
+
+            let palette_row = toolbar::PALETTE.iter().fold(
+                row![].spacing(5).align_y(Alignment::Center),
+                |row, swatch| {
+                    let is_selected = swatch_eq(*swatch, active_color);
+                    let color = Color::from_rgba(swatch.r, swatch.g, swatch.b, swatch.a);
+                    let mut btn = button(
+                        IcedSpace::new()
+                            .width(Length::Fixed(20.0))
+                            .height(Length::Fixed(20.0)),
+                    )
+                    .padding(0)
+                    .style(move |_theme, status| {
+                        // Swap the selected ring colour to a dark stroke when the
+                        // swatch itself is bright, otherwise white-on-white makes
+                        // the selected swatch invisible. sRGB relative luminance.
+                        let lum = 0.2126 * swatch.r + 0.7152 * swatch.g + 0.0722 * swatch.b;
+                        let selected_ring = if lum > 0.72 {
+                            Color::from_rgba(0.0, 0.0, 0.0, 0.85)
+                        } else {
+                            Color::WHITE
+                        };
+                        let border = if is_selected {
+                            iced::Border {
+                                color: selected_ring,
+                                width: 2.5,
+                                radius: 6.0.into(),
+                            }
+                        } else if matches!(status, button::Status::Hovered) {
+                            iced::Border {
+                                color: Color::from_rgba(1.0, 1.0, 1.0, 0.55),
+                                width: 1.5,
+                                radius: 6.0.into(),
+                            }
+                        } else {
+                            iced::Border {
+                                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
+                                width: 1.0,
+                                radius: 6.0.into(),
+                            }
+                        };
+                        button::Style {
+                            background: Some(color.into()),
+                            text_color: Color::TRANSPARENT,
+                            border,
+                            ..Default::default()
+                        }
+                    });
+                    if !busy {
+                        btn = btn.on_press(Message::EditorToolbar(
+                            readshot_ui::ToolbarMessage::SelectColor(*swatch),
+                        ));
+                    }
+                    row.push(btn)
+                },
+            );
+
+            let width_text_alpha = if busy { 0.42 } else { 0.7 };
+            let width_prefix = if has_selected_annotation {
+                "Sel"
+            } else {
+                "New"
+            };
+            let width_label = text(format!("{width_prefix} {line_width:.0}px"))
+                .size(11)
+                .color(Color::from_rgba(1.0, 1.0, 1.0, width_text_alpha))
+                .width(Length::Fixed(54.0));
+            let width_control_width = editor_width_control_width(layout);
+            let width_control: Element<'_, Message> = if busy {
+                passive_line_width_control_sized(line_width, width_control_width)
+            } else {
+                iced::widget::slider(
+                    toolbar::MIN_LINE_WIDTH..=toolbar::MAX_LINE_WIDTH,
+                    line_width,
+                    Message::EditorLineWidthPreview,
+                )
+                .step(0.5)
+                .on_release(Message::EditorLineWidthCommit)
+                .width(Length::Fixed(width_control_width))
+                .into()
+            };
+            let undo_btn = ghost_icon_button(
+                crate::editor_icons::EditorIcon::Undo,
+                undo_tip.clone(),
+                !busy && can_undo,
+                || Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+            );
+            let redo_btn = ghost_icon_button(
+                crate::editor_icons::EditorIcon::Redo,
+                redo_tip.clone(),
+                !busy && can_redo,
+                || Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
+            );
+            let width_row = row![
+                width_label,
+                width_control,
+                IcedSpace::new().width(Length::Fill),
+                undo_btn,
+                redo_btn,
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .width(Length::Fill);
+
+            let toolbar_inner: Element<'_, Message> = match layout {
+                EditorToolbarLayout::Wide => row![
+                    tool_row,
+                    toolbar_divider(),
+                    palette_row,
+                    toolbar_divider(),
+                    width_row,
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center)
+                .padding([6, 10])
+                .width(Length::Fill)
+                .into(),
+                EditorToolbarLayout::Stacked => column![
+                    tool_row,
+                    row![palette_row, toolbar_divider(), width_row]
+                        .spacing(10)
+                        .align_y(Alignment::Center)
+                ]
+                .spacing(6)
+                .padding([6, 10])
+                .width(Length::Fill)
+                .into(),
+                EditorToolbarLayout::Compact => column![tool_row, palette_row, width_row]
+                    .spacing(6)
+                    .padding([6, 10])
+                    .width(Length::Fill)
+                    .into(),
+            };
+
+            toolbar_inner
+        })
+        // The `responsive` widget defaults to Fill on both axes, so without an
+        // explicit Shrink height it claims half the editor column (it and the
+        // image area are both Fill-height children). Constrain the widget itself —
+        // a Shrink wrapper alone is ineffective because the Fill child still
+        // resolves to the full available height.
+        .height(Length::Shrink),
     )
+    .width(Length::Fill)
+    .height(Length::Shrink)
     .style(editor_chrome_style);
 
     // ===== Image area — letterboxed image with canvas overlay =====
@@ -1338,6 +1373,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let zoom = ed.zoom;
     let display_scale = ed.display_scale;
     let next_pin_number = ed.next_pin_number;
+    let pending_text = ed.pending_text.clone();
     let selected_preview = ed
         .move_drag
         .as_ref()
@@ -1383,10 +1419,11 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             image_size: (image_w, image_h),
             image_offset,
             display_scale: Some(scale),
-            selected_bounds: (active_tool == ToolState::Select)
+            selected_bounds: editor_show_selection_chrome(active_tool, has_selected_annotation)
                 .then(|| ed.model.selected_bounds())
                 .flatten(),
-            selected_handles: if active_tool == ToolState::Select {
+            selected_handles: if editor_show_selection_chrome(active_tool, has_selected_annotation)
+            {
                 ed.model.selected_handles()
             } else {
                 Vec::new()
@@ -1402,7 +1439,78 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             .width(Length::Fixed(displayed_w))
             .height(Length::Fixed(displayed_h));
 
-        let editable_stack: Element<'_, Message> = container(stack![image_layer, canvas_layer])
+        let editable_layers: Element<'_, Message> = if let Some(pending) = pending_text.clone() {
+            let geom = inline_text_editor_geometry(
+                pending.origin,
+                (image_w, image_h),
+                image_offset,
+                scale,
+            );
+            let input: Element<'_, Message> = if busy {
+                let content = if pending.content.is_empty() {
+                    "Text draft paused while working...".to_string()
+                } else {
+                    pending.content.clone()
+                };
+                container(
+                    text(content)
+                        .size(14)
+                        .color(Color::from_rgba(1.0, 1.0, 1.0, 0.58))
+                        .wrapping(iced::widget::text::Wrapping::Word),
+                )
+                .padding(8)
+                .width(Length::Fill)
+                .style(disabled_text_input_style)
+                .into()
+            } else {
+                iced::widget::text_input("Type text...", &pending.content)
+                    .on_input(Message::EditorTextChanged)
+                    .on_submit(Message::EditorTextCommit)
+                    .padding(8)
+                    .size(14)
+                    .width(Length::Fill)
+                    .into()
+            };
+            let commit_label = editor_text_commit_label(pending.edit_index.is_some());
+            let mut commit = button(text(commit_label).size(12).color(Color::WHITE))
+                .padding([7, 10])
+                .style(|theme, status| action_button_style(theme, status, ActionKind::Primary));
+            if !busy {
+                commit = commit.on_press(Message::EditorTextCommit);
+            }
+            let mut cancel = button(text("Cancel").size(12).color(Color::WHITE))
+                .padding([7, 10])
+                .style(|theme, status| action_button_style(theme, status, ActionKind::Secondary));
+            if !busy {
+                cancel = cancel.on_press(Message::EditorTextCancel);
+            }
+            let editor = container(
+                row![input, commit, cancel]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+            )
+            .padding(6)
+            .width(Length::Fixed(geom.width))
+            .style(|_theme: &Theme| {
+                let mut style = editor_chrome_style(_theme);
+                style.background = Some(Color::from_rgba(0.02, 0.025, 0.025, 0.88).into());
+                style.border.color = accent(0.75);
+                style.border.width = 1.5;
+                style
+            });
+            let inline_layer = container(column![
+                IcedSpace::new().height(Length::Fixed(geom.y)),
+                row![IcedSpace::new().width(Length::Fixed(geom.x)), editor]
+            ])
+            .width(Length::Fixed(displayed_w))
+            .height(Length::Fixed(displayed_h));
+
+            stack![image_layer, canvas_layer, inline_layer].into()
+        } else {
+            stack![image_layer, canvas_layer].into()
+        };
+
+        let editable_stack: Element<'_, Message> = container(editable_layers)
             .width(Length::Fixed(displayed_w))
             .height(Length::Fixed(displayed_h))
             .clip(true)
@@ -1559,13 +1667,30 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             .align_x(Alignment::End)
             .align_y(Alignment::Start);
 
-        let scroll_layer = scrollable(content)
-            .direction(iced::widget::scrollable::Direction::Both {
-                vertical: slim_scrollbar(),
-                horizontal: slim_scrollbar(),
-            })
-            .width(Length::Fill)
-            .height(Length::Fill);
+        let needs_horizontal_scroll = output_w > available.width + 0.5;
+        let needs_vertical_scroll = output_h > available.height + 0.5;
+        let scroll_layer: Element<'_, Message> = if needs_horizontal_scroll || needs_vertical_scroll
+        {
+            let scroll_direction = match (needs_horizontal_scroll, needs_vertical_scroll) {
+                (true, true) => iced::widget::scrollable::Direction::Both {
+                    vertical: slim_scrollbar(),
+                    horizontal: slim_scrollbar(),
+                },
+                (true, false) => iced::widget::scrollable::Direction::Horizontal(slim_scrollbar()),
+                (false, true) => iced::widget::scrollable::Direction::Vertical(slim_scrollbar()),
+                (false, false) => unreachable!("scroll layer only wraps overflowing content"),
+            };
+            scrollable(content)
+                .direction(scroll_direction)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else {
+            container(content)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        };
 
         stack![scroll_layer, zoom_layer, frame_layer].into()
     })
@@ -1574,7 +1699,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let image_area = container(image_area_content)
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding(12)
+        .padding(8)
         .style(editor_stage_style);
 
     // ===== Bottom row — dims/hint + actions =====
@@ -1584,15 +1709,11 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     // in place of the per-tool guidance — the keyboard shortcuts
     // aren't visible anywhere in the chrome until the user hovers
     // a tool button, so this is the surface that surfaces them.
-    let hint_str = if active_tool == ToolState::Select {
-        if let Some(kind) = ed.model.selected_kind_label() {
-            editor_selected_hint(kind, ed.model.selected_text_edit().is_some())
-        } else if ed.model.annotations().is_empty() && ed.status.is_none() {
-            "Press V / R / O / L / A / P / H / T / B / X / N / C to pick a tool · ⌘Z to undo"
-                .to_string()
-        } else {
-            tool_hint(active_tool).to_string()
-        }
+    let hint_str = if let Some(kind) = ed.model.selected_kind_label() {
+        editor_selected_hint(kind, ed.model.selected_text_edit().is_some())
+    } else if ed.model.annotations().is_empty() && ed.status.is_none() {
+        "Press V / R / O / L / A / P / H / T / B / X / N / C to pick a tool · ⌘Z to undo"
+            .to_string()
     } else {
         tool_hint(active_tool).to_string()
     };
@@ -1772,73 +1893,10 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     .height(Length::Shrink)
     .into();
 
-    // ===== Text-input banner =====
-    let text_banner: Element<'_, Message> = if let Some(pending) = ed.pending_text.as_ref() {
-        let commit_label = editor_text_commit_label(pending.edit_index.is_some());
-        let input: Element<'_, Message> = if busy {
-            let content = if pending.content.is_empty() {
-                "Text draft paused while working…".to_string()
-            } else {
-                pending.content.clone()
-            };
-            container(
-                text(content)
-                    .size(14)
-                    .color(Color::from_rgba(1.0, 1.0, 1.0, 0.48))
-                    .wrapping(iced::widget::text::Wrapping::Word),
-            )
-            .padding(8)
-            .width(Length::Fill)
-            .style(disabled_text_input_style)
-            .into()
-        } else {
-            iced::widget::text_input("Type and press Enter…", &pending.content)
-                .on_input(Message::EditorTextChanged)
-                .on_submit(Message::EditorTextCommit)
-                .padding(8)
-                .size(14)
-                .width(Length::Fill)
-                .into()
-        };
-        let mut commit = button(text(commit_label).size(13).color(Color::WHITE))
-            .padding([8, 14])
-            .style(|theme, status| action_button_style(theme, status, ActionKind::Primary));
-        if !busy {
-            commit = commit.on_press(Message::EditorTextCommit);
-        }
-        let mut cancel = button(text("Cancel").size(13).color(Color::WHITE))
-            .padding([8, 14])
-            .style(|theme, status| action_button_style(theme, status, ActionKind::Secondary));
-        if !busy {
-            cancel = cancel.on_press(Message::EditorTextCancel);
-        }
-        let icon = container(crate::editor_icons::editor_icon(
-            crate::editor_icons::EditorIcon::Tool(readshot_ui::editor::ToolState::Text),
-            true,
-        ))
-        .width(Length::Fixed(22.0))
-        .height(Length::Fixed(22.0));
-        container(
-            row![icon, input, commit, cancel]
-                .spacing(8)
-                .align_y(Alignment::Center)
-                .padding(6),
-        )
-        .style(|_theme: &Theme| {
-            let mut style = editor_chrome_style(_theme);
-            style.border.color = accent(0.75);
-            style.border.width = 1.5;
-            style
-        })
-        .into()
-    } else {
-        IcedSpace::new().height(Length::Fixed(0.0)).into()
-    };
-
     container(
-        column![toolbar_row, image_area, text_banner, bottom_row]
-            .spacing(10)
-            .padding(12)
+        column![toolbar_row, image_area, bottom_row]
+            .spacing(8)
+            .padding(10)
             .align_x(Alignment::Start),
     )
     .width(Length::Fill)
@@ -2105,8 +2163,11 @@ pub(crate) fn toolbar_divider() -> Element<'static, Message> {
         .into()
 }
 
-pub(crate) fn passive_line_width_control(width: f32) -> Element<'static, Message> {
-    let fill_w = 140.0 * line_width_fraction(width);
+pub(crate) fn passive_line_width_control_sized(
+    width: f32,
+    control_width: f32,
+) -> Element<'static, Message> {
+    let fill_w = control_width * line_width_fraction(width);
     container(
         container(
             iced::widget::Space::new()
@@ -2122,7 +2183,7 @@ pub(crate) fn passive_line_width_control(width: f32) -> Element<'static, Message
             ..Default::default()
         }),
     )
-    .width(Length::Fixed(140.0))
+    .width(Length::Fixed(control_width))
     .height(Length::Fixed(16.0))
     .padding([6, 0])
     .style(|_| container::Style {
@@ -2134,6 +2195,30 @@ pub(crate) fn passive_line_width_control(width: f32) -> Element<'static, Message
         ..Default::default()
     })
     .into()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EditorToolbarLayout {
+    Wide,
+    Stacked,
+    Compact,
+}
+
+pub(crate) fn editor_toolbar_layout(width: f32) -> EditorToolbarLayout {
+    if width < 640.0 {
+        EditorToolbarLayout::Compact
+    } else if width < 940.0 {
+        EditorToolbarLayout::Stacked
+    } else {
+        EditorToolbarLayout::Wide
+    }
+}
+
+pub(crate) fn editor_width_control_width(layout: EditorToolbarLayout) -> f32 {
+    match layout {
+        EditorToolbarLayout::Wide | EditorToolbarLayout::Stacked => 140.0,
+        EditorToolbarLayout::Compact => 108.0,
+    }
 }
 
 pub(crate) fn line_width_fraction(width: f32) -> f32 {
@@ -2625,6 +2710,51 @@ pub(crate) fn editor_image_filter(
         iced::widget::image::FilterMethod::Nearest
     } else {
         iced::widget::image::FilterMethod::Linear
+    }
+}
+
+pub(crate) fn editor_show_selection_chrome(
+    _tool: readshot_ui::editor::ToolState,
+    has_selection: bool,
+) -> bool {
+    has_selection
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct InlineTextEditorGeometry {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
+}
+
+const INLINE_TEXT_EDITOR_WIDTH: f32 = 260.0;
+const INLINE_TEXT_EDITOR_HEIGHT: f32 = 46.0;
+const INLINE_TEXT_EDITOR_MARGIN: f32 = 8.0;
+
+pub(crate) fn inline_text_editor_geometry(
+    origin: readshot_core::PointLike,
+    image_size: (u32, u32),
+    image_offset: (f32, f32),
+    scale: f32,
+) -> InlineTextEditorGeometry {
+    let scale = scale.max(f32::EPSILON);
+    let display_w = (image_size.0 as f32 * scale).max(1.0);
+    let display_h = (image_size.1 as f32 * scale).max(1.0);
+    let max_width = (display_w - INLINE_TEXT_EDITOR_MARGIN * 2.0).max(1.0);
+    let width = INLINE_TEXT_EDITOR_WIDTH.min(max_width);
+    let height =
+        INLINE_TEXT_EDITOR_HEIGHT.min((display_h - INLINE_TEXT_EDITOR_MARGIN * 2.0).max(1.0));
+    let desired_x = (origin.x - image_offset.0) * scale;
+    let desired_y = (origin.y - image_offset.1) * scale;
+    let max_x = (display_w - width - INLINE_TEXT_EDITOR_MARGIN).max(INLINE_TEXT_EDITOR_MARGIN);
+    let max_y = (display_h - height - INLINE_TEXT_EDITOR_MARGIN).max(INLINE_TEXT_EDITOR_MARGIN);
+
+    InlineTextEditorGeometry {
+        x: desired_x.clamp(INLINE_TEXT_EDITOR_MARGIN, max_x),
+        y: desired_y.clamp(INLINE_TEXT_EDITOR_MARGIN, max_y),
+        width,
+        height,
     }
 }
 

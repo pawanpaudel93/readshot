@@ -27,7 +27,7 @@ use iced::{mouse::Cursor, Color, Point, Rectangle, Renderer, Theme};
 
 use readshot_core::{Annotation, PointLike, RectLike, Rgba as CoreRgba};
 
-use super::state::ResizeHandle;
+use super::state::{ResizeHandle, HANDLE_HIT_RADIUS};
 use super::tool_state::ToolState;
 
 /// Canvas state: tracks the kind of in-progress interaction so the
@@ -288,8 +288,9 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 // where the user clicked.
                 let image_point =
                     Point::new(local.x + self.image_offset.0, local.y + self.image_offset.1);
-                if self.active_tool == ToolState::Select {
-                    let base = PointLike::new(image_point.x, image_point.y);
+                let base = PointLike::new(image_point.x, image_point.y);
+                let pressed_selected_handle = self.selected_handle_at(base).is_some();
+                if self.active_tool == ToolState::Select || pressed_selected_handle {
                     *state = DrawState::Selecting { last: base };
                     return Some(
                         canvas::Action::publish(CanvasMessage::SelectPressed(base)).and_capture(),
@@ -721,12 +722,48 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
         if canvas_to_image(point, bounds, self.image_size, self.display_scale).is_none() {
             return iced::mouse::Interaction::default();
         }
+        if let Some(handle) = canvas_to_base(
+            point,
+            bounds,
+            self.image_size,
+            self.image_offset,
+            self.display_scale,
+        )
+        .map(|p| PointLike::new(p.x, p.y))
+        .and_then(|base| self.selected_handle_at(base))
+        {
+            return resize_handle_cursor(handle);
+        }
 
         match self.active_tool {
             ToolState::Select => iced::mouse::Interaction::default(),
             ToolState::Text => iced::mouse::Interaction::Text,
             _ => iced::mouse::Interaction::Crosshair,
         }
+    }
+}
+
+fn resize_handle_cursor(handle: ResizeHandle) -> iced::mouse::Interaction {
+    match handle {
+        ResizeHandle::North | ResizeHandle::South => iced::mouse::Interaction::ResizingVertically,
+        ResizeHandle::East | ResizeHandle::West => iced::mouse::Interaction::ResizingHorizontally,
+        ResizeHandle::NorthWest | ResizeHandle::SouthEast => {
+            iced::mouse::Interaction::ResizingDiagonallyDown
+        }
+        ResizeHandle::NorthEast | ResizeHandle::SouthWest => {
+            iced::mouse::Interaction::ResizingDiagonallyUp
+        }
+        ResizeHandle::Start | ResizeHandle::End => iced::mouse::Interaction::Move,
+    }
+}
+
+impl EditorCanvas {
+    fn selected_handle_at(&self, point: PointLike) -> Option<ResizeHandle> {
+        self.selected_handles.iter().find_map(|(handle, center)| {
+            let dx = point.x - center.x;
+            let dy = point.y - center.y;
+            (dx.hypot(dy) <= HANDLE_HIT_RADIUS).then_some(*handle)
+        })
     }
 }
 
@@ -1523,6 +1560,81 @@ mod tests {
                 Cursor::Available(Point::new(400.0, 120.0))
             ),
             iced::mouse::Interaction::default()
+        );
+    }
+
+    #[test]
+    fn selected_handle_press_routes_to_selection_even_with_drawing_tool_active() {
+        let canvas = EditorCanvas {
+            active_tool: ToolState::Rectangle,
+            color: CoreRgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            next_pin_number: 1,
+            image_size: (200, 100),
+            image_offset: (0.0, 0.0),
+            display_scale: Some(2.0),
+            selected_bounds: Some(RectLike::new(10.0, 10.0, 40.0, 30.0)),
+            selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
+            selected_preview: None,
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let mut state = DrawState::Idle;
+
+        let action = canvas
+            .update(
+                &mut state,
+                &Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)),
+                bounds,
+                Cursor::Available(Point::new(300.0, 280.0)),
+            )
+            .expect("selected handle press should publish selection message");
+        let (message, _, _) = action.into_inner();
+
+        assert_eq!(
+            state,
+            DrawState::Selecting {
+                last: PointLike::new(50.0, 40.0)
+            }
+        );
+        assert_eq!(
+            message,
+            Some(CanvasMessage::SelectPressed(PointLike::new(50.0, 40.0)))
+        );
+    }
+
+    #[test]
+    fn selected_handle_cursor_overrides_drawing_cursor() {
+        let canvas = EditorCanvas {
+            active_tool: ToolState::Rectangle,
+            color: CoreRgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            next_pin_number: 1,
+            image_size: (200, 100),
+            image_offset: (0.0, 0.0),
+            display_scale: Some(2.0),
+            selected_bounds: Some(RectLike::new(10.0, 10.0, 40.0, 30.0)),
+            selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
+            selected_preview: None,
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+
+        assert_eq!(
+            canvas.mouse_interaction(
+                &DrawState::Idle,
+                bounds,
+                Cursor::Available(Point::new(300.0, 280.0))
+            ),
+            iced::mouse::Interaction::ResizingDiagonallyDown
         );
     }
 }

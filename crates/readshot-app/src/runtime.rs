@@ -2667,6 +2667,9 @@ mod tests {
 
         assert!(app.windows.kind(old_id).is_none());
         assert_eq!(app.editor.as_ref().unwrap().image_size(), (32, 32));
+        // The sidecar write runs on the coordinator's background
+        // writer; wait for it before reading the store.
+        app.coordinator.flush_history_updates();
         let from_disk = store.list().unwrap();
         assert_eq!(from_disk[0].annotation_model.len(), 1);
         match &from_disk[0].annotation_model[0] {
@@ -2750,6 +2753,18 @@ mod tests {
     }
 
     #[test]
+    fn editor_toolbar_layout_splits_before_controls_crowd() {
+        assert_eq!(editor_toolbar_layout(1000.0), EditorToolbarLayout::Wide);
+        assert_eq!(editor_toolbar_layout(800.0), EditorToolbarLayout::Stacked);
+        assert_eq!(editor_toolbar_layout(520.0), EditorToolbarLayout::Compact);
+        assert_eq!(editor_width_control_width(EditorToolbarLayout::Wide), 140.0);
+        assert_eq!(
+            editor_width_control_width(EditorToolbarLayout::Compact),
+            108.0
+        );
+    }
+
+    #[test]
     fn line_width_fraction_clamps_to_toolbar_range() {
         assert_eq!(line_width_fraction(-10.0), 0.0);
         assert_eq!(line_width_fraction(99.0), 1.0);
@@ -2798,6 +2813,35 @@ mod tests {
     }
 
     #[test]
+    fn editor_selection_chrome_stays_visible_for_drawing_tools() {
+        use readshot_ui::editor::ToolState as T;
+
+        assert!(!editor_show_selection_chrome(T::Rectangle, false));
+        assert!(editor_show_selection_chrome(T::Select, true));
+        assert!(editor_show_selection_chrome(T::Rectangle, true));
+        assert!(editor_show_selection_chrome(T::Arrow, true));
+        assert!(editor_show_selection_chrome(T::Text, true));
+    }
+
+    #[test]
+    fn inline_text_editor_geometry_anchors_to_clicked_image_point() {
+        let geom =
+            inline_text_editor_geometry(PointLike::new(60.0, 40.0), (200, 100), (10.0, 20.0), 2.0);
+
+        assert_eq!(geom.x, 100.0);
+        assert_eq!(geom.y, 40.0);
+    }
+
+    #[test]
+    fn inline_text_editor_geometry_clamps_near_image_edges() {
+        let geom =
+            inline_text_editor_geometry(PointLike::new(198.0, 98.0), (200, 100), (0.0, 0.0), 2.0);
+
+        assert!(geom.x + geom.width <= 400.0);
+        assert!(geom.y + geom.height <= 200.0);
+    }
+
+    #[test]
     fn editor_bottom_actions_keep_copy_actions_together_before_pin() {
         use EditorBottomAction as A;
         assert_eq!(
@@ -2821,15 +2865,15 @@ mod tests {
     fn editor_selected_hint_special_cases_crop_and_text() {
         assert_eq!(
             editor_selected_hint("Crop", false),
-            "Selected Crop — drag or resize frame · Delete or ⌘Z restores full image"
+            "Selected Crop — drag frame or handles · Delete restores full image"
         );
         assert_eq!(
             editor_selected_hint("Text", true),
-            "Selected Text — Enter edits text · color/size update selected · Delete removes"
+            "Selected Text — edit inline · color/size apply here · Delete removes"
         );
         assert_eq!(
             editor_selected_hint("Rectangle", false),
-            "Selected Rectangle — drag to move · handles resize · color/size update selected · Delete removes"
+            "Selected Rectangle — drag to move · handles resize · drag elsewhere to draw"
         );
     }
 
@@ -4888,8 +4932,8 @@ mod tests {
 
     #[test]
     fn editor_text_commit_label_matches_add_or_edit_state() {
-        assert_eq!(editor_text_commit_label(false), "Add Text");
-        assert_eq!(editor_text_commit_label(true), "Update Text");
+        assert_eq!(editor_text_commit_label(false), "Add");
+        assert_eq!(editor_text_commit_label(true), "Update");
     }
 
     #[test]

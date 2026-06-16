@@ -41,15 +41,13 @@ pub(crate) fn handle_commit_annotation(
 pub(crate) fn editor_selected_hint(kind: &str, text_editable: bool) -> String {
     match (kind, text_editable) {
         ("Crop", _) => {
-            "Selected Crop — drag or resize frame · Delete or ⌘Z restores full image".to_string()
+            "Selected Crop — drag frame or handles · Delete restores full image".to_string()
         }
         (_, true) => {
-            format!(
-                "Selected {kind} — Enter edits text · color/size update selected · Delete removes"
-            )
+            format!("Selected {kind} — edit inline · color/size apply here · Delete removes")
         }
         _ => {
-            format!("Selected {kind} — drag to move · handles resize · color/size update selected · Delete removes")
+            format!("Selected {kind} — drag to move · handles resize · drag elsewhere to draw")
         }
     }
 }
@@ -154,9 +152,9 @@ pub(crate) fn pending_text_has_unsaved_work(ed: &crate::editor::EditorSession) -
 
 pub(crate) fn editor_text_commit_label(is_editing: bool) -> &'static str {
     if is_editing {
-        "Update Text"
+        "Update"
     } else {
-        "Add Text"
+        "Add"
     }
 }
 
