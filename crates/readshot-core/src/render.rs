@@ -429,12 +429,25 @@ fn draw_text(
     offset: (f32, f32),
     font: &FontRef<'static>,
 ) {
+    let pw = pixmap.width() as i32;
+    let ph = pixmap.height() as i32;
+    // Clamp the glyph scale before it reaches ab_glyph. `size` can come
+    // from a corrupt/hand-edited history sidecar with no upper bound, and
+    // ab_glyph allocates a per-glyph coverage bitmap ~size×size — a huge
+    // value overflows the raster dimensions and aborts the process (an
+    // allocator abort can't even be caught). A glyph larger than the
+    // canvas can't display anyway, so cap to the pixmap; non-finite sizes
+    // can't render at all, so skip. Legit editor sizes (≤96px) are far
+    // below the cap and unaffected.
+    let size = if size.is_finite() {
+        size.clamp(1.0, pw.max(ph).max(1) as f32)
+    } else {
+        return;
+    };
     let scaled = font.as_scaled(PxScale::from(size));
     let baseline = shift_point(origin, offset);
     let mut x = baseline.x;
 
-    let pw = pixmap.width() as i32;
-    let ph = pixmap.height() as i32;
     let data = pixmap.data_mut();
     let color_rgba_u8 = [
         (color.r.clamp(0.0, 1.0) * 255.0) as u8,
@@ -615,6 +628,28 @@ mod tests {
         let base = solid_base(16, 16, [200, 100, 50]);
         let out = render(&base, &[]);
         assert_eq!(base.as_raw(), out.as_raw());
+    }
+
+    #[test]
+    fn text_survives_huge_and_nonfinite_size() {
+        // A corrupt/hand-edited history sidecar can carry an absurd or
+        // non-finite text size; rendering it must not overflow the glyph
+        // raster dimensions or trigger a multi-petabyte allocation abort.
+        let base = solid_base(32, 32, [255, 255, 255]);
+        for size in [1.0e9_f32, f32::INFINITY, f32::NAN] {
+            let out = render(
+                &base,
+                &[Annotation::Text {
+                    content: "hello".into(),
+                    origin: PointLike::new(2.0, 16.0),
+                    color: Rgba::OPAQUE_BLACK,
+                    font_family: "system-ui".into(),
+                    size,
+                }],
+            );
+            assert_eq!(out.width(), 32);
+            assert_eq!(out.height(), 32);
+        }
     }
 
     #[test]
