@@ -39,12 +39,24 @@ pub fn blur_rect(
     let ph = pixmap.height() as i32;
     let x0 = rect_x.max(0);
     let y0 = rect_y.max(0);
-    let x1 = (rect_x + rect_w).min(pw);
-    let y1 = (rect_y + rect_h).min(ph);
+    // `saturating_add`: rect dims come from `f32 as i32` (saturating), so a
+    // corrupt/hand-edited history sidecar can pass i32::MAX and a plain `+`
+    // would overflow (panic in debug, wrap in release).
+    let x1 = rect_x.saturating_add(rect_w).min(pw);
+    let y1 = rect_y.saturating_add(rect_h).min(ph);
     if x1 <= x0 || y1 <= y0 {
         return;
     }
-    let r = radius.round().max(1.0) as i32;
+    // Clamp the radius to the rect span. Reads are edge-clamped to the rect,
+    // so any radius >= its larger dimension is visually identical; this
+    // bounds the O(radius) window-seeding loop and keeps `2r+1` in range
+    // when the radius is huge or non-finite (untrusted on-disk input).
+    let max_r = (x1 - x0).max(y1 - y0);
+    let r = if radius.is_finite() {
+        (radius.round().max(1.0) as i32).min(max_r)
+    } else {
+        1
+    };
 
     // Three passes of horizontal-then-vertical box blur.
     for _ in 0..3 {
@@ -169,12 +181,22 @@ pub fn pixelate_rect(
     let ph = pixmap.height() as i32;
     let x0 = rect_x.max(0);
     let y0 = rect_y.max(0);
-    let x1 = (rect_x + rect_w).min(pw);
-    let y1 = (rect_y + rect_h).min(ph);
+    // See `blur_rect`: saturating add guards against overflow from
+    // i32::MAX rect dims supplied by a corrupt history sidecar.
+    let x1 = rect_x.saturating_add(rect_w).min(pw);
+    let y1 = rect_y.saturating_add(rect_h).min(ph);
     if x1 <= x0 || y1 <= y0 {
         return;
     }
-    let block = block.round().max(2.0) as i32;
+    // Clamp the block to the rect span (a block larger than the rect is one
+    // cell) so a huge/non-finite `block_size` can't overflow `bx + block`
+    // or spin the loop. `block >= 1` keeps `bx += block` progressing.
+    let max_b = (x1 - x0).max(y1 - y0);
+    let block = if block.is_finite() {
+        (block.round().max(2.0) as i32).min(max_b)
+    } else {
+        2
+    };
     let data = pixmap.data_mut();
 
     let mut by = y0;
@@ -271,6 +293,37 @@ mod tests {
         pixelate_rect(&mut p, 0, 0, 5, 1, 3.0);
         let data = p.data();
         for px in data.chunks_exact(4) {
+            assert_eq!(px, &[10, 20, 30, 255]);
+        }
+    }
+
+    // A corrupt/hand-edited history sidecar can deserialize an annotation
+    // with an absurd or non-finite radius/block_size and rect dims. These
+    // must not overflow (panic in debug/test) or spin a multi-billion
+    // iteration loop (freeze in release). The clamp makes them no worse
+    // than a full-rect kernel.
+    #[test]
+    fn blur_survives_huge_and_nonfinite_radius() {
+        let mut p = solid_pixmap(8, 8, [128, 64, 32, 255]);
+        blur_rect(&mut p, 0, 0, 8, 8, 1.0e30);
+        blur_rect(&mut p, 0, 0, 8, 8, f32::INFINITY);
+        blur_rect(&mut p, 0, 0, 8, 8, f32::NAN);
+        // Uniform image stays uniform regardless of the (clamped) radius.
+        for px in p.data().chunks_exact(4) {
+            assert_eq!(px, &[128, 64, 32, 255]);
+        }
+    }
+
+    #[test]
+    fn pixelate_survives_huge_and_nonfinite_block_and_rect() {
+        let mut p = solid_pixmap(8, 8, [10, 20, 30, 255]);
+        pixelate_rect(&mut p, 0, 0, 8, 8, 1.0e30);
+        pixelate_rect(&mut p, 0, 0, 8, 8, f32::INFINITY);
+        pixelate_rect(&mut p, 0, 0, 8, 8, f32::NAN);
+        // Saturated rect dimensions must not overflow the bounds math.
+        pixelate_rect(&mut p, 0, 0, i32::MAX, i32::MAX, 4.0);
+        blur_rect(&mut p, 0, 0, i32::MAX, i32::MAX, 4.0);
+        for px in p.data().chunks_exact(4) {
             assert_eq!(px, &[10, 20, 30, 255]);
         }
     }

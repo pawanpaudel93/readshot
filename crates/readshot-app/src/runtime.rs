@@ -3183,7 +3183,9 @@ mod tests {
     fn reveal_command_uses_explorer_selection_on_windows() {
         let command = reveal_command_for_path(std::path::Path::new("C:\\tmp\\capture.png"));
         assert_eq!(command.program, "explorer");
-        assert_eq!(command.args, vec!["/select,", "C:\\tmp\\capture.png"]);
+        // explorer.exe needs `/select,` and the path in ONE argv token,
+        // otherwise it ignores the selection.
+        assert_eq!(command.args, vec!["/select,C:\\tmp\\capture.png"]);
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]

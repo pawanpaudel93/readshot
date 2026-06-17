@@ -1074,9 +1074,12 @@ pub(crate) fn reveal_command_for_path(path: &Path) -> RevealCommand {
     }
     #[cfg(target_os = "windows")]
     {
+        // explorer.exe needs the path in the SAME token as `/select,`
+        // (`/select,C:\dir\file.png`). Passed as two separate argv entries
+        // Explorer ignores the selection and just opens the default folder.
         RevealCommand {
             program: "explorer",
-            args: vec!["/select,".into(), path_string],
+            args: vec![format!("/select,{path_string}")],
         }
     }
     #[cfg(all(unix, not(target_os = "macos")))]
