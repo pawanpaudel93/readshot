@@ -301,6 +301,26 @@ impl EditorState {
         true
     }
 
+    /// Move the selected annotation by `(dx, dy)` base-image pixels as a
+    /// single undoable edit. Used by arrow-key nudging. Returns false
+    /// when nothing is selected.
+    pub fn nudge_selected(&mut self, dx: f32, dy: f32) -> bool {
+        let Some(idx) = self.selected_annotation() else {
+            return false;
+        };
+        let mut next = self.history.current().to_vec();
+        if idx >= next.len() {
+            self.selected_annotation = None;
+            return false;
+        }
+        translate_annotation(&mut next[idx], dx, dy);
+        self.clamp_crop_annotation_to_base(&mut next[idx], CropClampMode::Move);
+        self.history.push(next);
+        self.selected_annotation = Some(idx);
+        self.flattened_cache = None;
+        true
+    }
+
     pub fn preview_move_selected_from(
         &mut self,
         baseline: &[Annotation],
@@ -979,6 +999,42 @@ mod tests {
             }
             other => panic!("expected rectangle, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn nudge_selected_moves_annotation_as_one_undo_step() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        assert_eq!(s.select_at(PointLike::new(2.0, 2.0)), Some(0));
+        let depth_before = s.undo_depth();
+
+        assert!(s.nudge_selected(1.0, -1.0));
+        assert!(s.nudge_selected(1.0, 0.0));
+        match &s.annotations()[0] {
+            Annotation::Rectangle { rect, .. } => {
+                assert_eq!(rect.x, 2.0);
+                assert_eq!(rect.y, -1.0);
+            }
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+        // Each nudge is its own undoable edit, and selection survives.
+        assert_eq!(s.undo_depth(), depth_before + 2);
+        assert_eq!(s.selected_annotation(), Some(0));
+        assert!(s.undo());
+        match &s.annotations()[0] {
+            Annotation::Rectangle { rect, .. } => assert_eq!(rect.x, 1.0),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nudge_selected_is_noop_without_selection() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        s.clear_selection();
+        let depth_before = s.undo_depth();
+        assert!(!s.nudge_selected(1.0, 1.0));
+        assert_eq!(s.undo_depth(), depth_before);
     }
 
     #[test]

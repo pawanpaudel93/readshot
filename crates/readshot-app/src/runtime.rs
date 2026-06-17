@@ -1430,6 +1430,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorCanvas(..)
         | Message::EditorEditSelectedText
         | Message::EditorDeleteSelected
+        | Message::EditorNudgeSelected(..)
         | Message::EditorTextChanged(..)
         | Message::EditorTextCommit
         | Message::EditorTextCancel
@@ -2885,7 +2886,7 @@ mod tests {
         );
         assert_eq!(
             editor_selected_hint("Rectangle", false),
-            "Selected Rectangle — drag to move · handles resize · drag elsewhere to draw"
+            "Selected Rectangle — drag to move · arrows nudge · handles resize · drag elsewhere to draw"
         );
     }
 
@@ -5154,6 +5155,28 @@ mod tests {
 
         let close = editor_key_message(iced::keyboard::Key::Character("w".into()), cmd, false);
         assert!(matches!(close, Some(Message::EditorDiscardRequested)));
+    }
+
+    #[test]
+    fn editor_arrow_keys_nudge_selection_with_shift_coarsening() {
+        use iced::keyboard::{key::Named, Key, Modifiers};
+
+        fn nudge(key: Named, mods: Modifiers, status_ignored: bool) -> (f32, f32) {
+            match editor_key_message(Key::Named(key), mods, status_ignored) {
+                Some(Message::EditorNudgeSelected(dx, dy)) => (dx, dy),
+                other => panic!("expected nudge, got {other:?}"),
+            }
+        }
+
+        let none = Modifiers::empty();
+        assert_eq!(nudge(Named::ArrowLeft, none, true), (-1.0, 0.0));
+        assert_eq!(nudge(Named::ArrowRight, none, true), (1.0, 0.0));
+        assert_eq!(nudge(Named::ArrowUp, none, true), (0.0, -1.0));
+        assert_eq!(nudge(Named::ArrowDown, none, true), (0.0, 1.0));
+        // Shift coarsens the step to 10px for fast positioning.
+        assert_eq!(nudge(Named::ArrowDown, Modifiers::SHIFT, true), (0.0, 10.0));
+        // While typing in a text field (status not ignored) arrows do nothing.
+        assert!(editor_key_message(Key::Named(Named::ArrowLeft), none, false).is_none());
     }
 
     #[test]

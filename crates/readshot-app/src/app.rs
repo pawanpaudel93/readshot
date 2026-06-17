@@ -422,6 +422,9 @@ pub enum Message {
     EditorTextCancel,
     /// Delete the currently selected editor annotation, if any.
     EditorDeleteSelected,
+    /// Nudge the selected annotation by `(dx, dy)` base-image pixels via
+    /// the arrow keys (Shift = larger step). Each press is one undo step.
+    EditorNudgeSelected(f32, f32),
     /// Edit the selected text annotation, if one is selected.
     EditorEditSelectedText,
     /// Keyboard event observed while an editor exists. Runtime filters

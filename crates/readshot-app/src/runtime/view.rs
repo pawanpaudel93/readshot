@@ -2643,6 +2643,22 @@ pub(crate) fn editor_key_message(
         if matches!(key, Key::Named(Named::Enter)) {
             return Some(Message::EditorEditSelectedText);
         }
+        // Arrow keys nudge the selected annotation a pixel at a time
+        // (Shift = 10px for coarse positioning). The runtime no-ops when
+        // nothing is selected, so this is safe to emit unconditionally.
+        let nudge_step = if modifiers.shift() { 10.0 } else { 1.0 };
+        if matches!(key, Key::Named(Named::ArrowLeft)) {
+            return Some(Message::EditorNudgeSelected(-nudge_step, 0.0));
+        }
+        if matches!(key, Key::Named(Named::ArrowRight)) {
+            return Some(Message::EditorNudgeSelected(nudge_step, 0.0));
+        }
+        if matches!(key, Key::Named(Named::ArrowUp)) {
+            return Some(Message::EditorNudgeSelected(0.0, -nudge_step));
+        }
+        if matches!(key, Key::Named(Named::ArrowDown)) {
+            return Some(Message::EditorNudgeSelected(0.0, nudge_step));
+        }
         if let Key::Character(c) = &key {
             if let Some(t) = tool_for_key(c.as_str()) {
                 return Some(Message::EditorToolbar(

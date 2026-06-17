@@ -742,17 +742,28 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
         if canvas_to_image(point, bounds, self.image_size, self.display_scale).is_none() {
             return iced::mouse::Interaction::default();
         }
-        if let Some(handle) = canvas_to_base(
+        let base = canvas_to_base(
             point,
             bounds,
             self.image_size,
             self.image_offset,
             self.display_scale,
         )
-        .map(|p| PointLike::new(p.x, p.y))
-        .and_then(|base| self.selected_handle_at(base))
-        {
-            return resize_handle_cursor(handle);
+        .map(|p| PointLike::new(p.x, p.y));
+
+        if let Some(base) = base {
+            // Resize handles win over the body so corner/edge grabs stay
+            // discoverable even where they overlap the selection bounds.
+            if let Some(handle) = self.selected_handle_at(base) {
+                return resize_handle_cursor(handle);
+            }
+            // Hovering the selected annotation's body offers a move
+            // affordance, mirroring the handle cursors above.
+            if self.active_tool == ToolState::Select
+                && self.selected_bounds.is_some_and(|b| point_in_rect(base, b))
+            {
+                return iced::mouse::Interaction::Move;
+            }
         }
 
         match self.active_tool {
@@ -761,6 +772,15 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
             _ => iced::mouse::Interaction::Crosshair,
         }
     }
+}
+
+/// Point-in-rect test tolerant of rects stored with negative extents.
+fn point_in_rect(p: PointLike, r: RectLike) -> bool {
+    let x0 = r.x.min(r.x + r.width);
+    let x1 = r.x.max(r.x + r.width);
+    let y0 = r.y.min(r.y + r.height);
+    let y1 = r.y.max(r.y + r.height);
+    p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1
 }
 
 fn resize_handle_cursor(handle: ResizeHandle) -> iced::mouse::Interaction {
@@ -1658,6 +1678,49 @@ mod tests {
                 Cursor::Available(Point::new(300.0, 280.0))
             ),
             iced::mouse::Interaction::ResizingDiagonallyDown
+        );
+    }
+
+    #[test]
+    fn move_cursor_over_selected_body_with_select_tool() {
+        let canvas = EditorCanvas {
+            active_tool: ToolState::Select,
+            color: CoreRgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            next_pin_number: 1,
+            image_size: (200, 100),
+            image_offset: (0.0, 0.0),
+            display_scale: Some(2.0),
+            selected_bounds: Some(RectLike::new(10.0, 10.0, 40.0, 30.0)),
+            selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
+            selected_preview: None,
+            cache: std::rc::Rc::new(canvas::Cache::default()),
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+
+        // Canvas (260, 250) → base (30, 25), inside the selection body and
+        // clear of the handles → move affordance.
+        assert_eq!(
+            canvas.mouse_interaction(
+                &DrawState::Idle,
+                bounds,
+                Cursor::Available(Point::new(260.0, 250.0))
+            ),
+            iced::mouse::Interaction::Move
+        );
+        // Canvas (210, 210) → base (5, 5), outside the selection → default.
+        assert_eq!(
+            canvas.mouse_interaction(
+                &DrawState::Idle,
+                bounds,
+                Cursor::Available(Point::new(210.0, 210.0))
+            ),
+            iced::mouse::Interaction::default()
         );
     }
 }

@@ -47,7 +47,9 @@ pub(crate) fn editor_selected_hint(kind: &str, text_editable: bool) -> String {
             format!("Selected {kind} — edit inline · color/size apply here · Delete removes")
         }
         _ => {
-            format!("Selected {kind} — drag to move · handles resize · drag elsewhere to draw")
+            format!(
+                "Selected {kind} — drag to move · arrows nudge · handles resize · drag elsewhere to draw"
+            )
         }
     }
 }
@@ -672,6 +674,24 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if ed.model.delete_selected_annotation() {
                 ed.refresh_image();
                 ed.set_status("Deleted annotation. ⌘Z to undo.");
+                sync_editor_history(ed, &state.coordinator);
+            }
+            Task::none()
+        }
+
+        Message::EditorNudgeSelected(dx, dy) => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            if ed.busy {
+                return Task::none();
+            }
+            // Settle any in-flight preview first, then move the selection
+            // by the keyboard step as one undoable edit. No status toast:
+            // arrow presses are rapid and would spam the chrome.
+            cancel_editor_previews(ed);
+            if ed.model.nudge_selected(dx, dy) {
+                ed.refresh_image();
                 sync_editor_history(ed, &state.coordinator);
             }
             Task::none()
