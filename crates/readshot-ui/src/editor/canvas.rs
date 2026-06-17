@@ -27,7 +27,7 @@ use iced::{mouse::Cursor, Color, Point, Rectangle, Renderer, Theme};
 
 use readshot_core::{Annotation, PointLike, RectLike, Rgba as CoreRgba};
 
-use super::state::{ResizeHandle, HANDLE_HIT_RADIUS};
+use super::state::{annotation_hit_test, ResizeHandle, HANDLE_HIT_RADIUS};
 use super::tool_state::ToolState;
 
 /// Canvas state: tracks the kind of in-progress interaction so the
@@ -126,6 +126,11 @@ pub struct EditorCanvas {
     /// coordinates. The canvas paints this as a lightweight selection
     /// outline over the flattened image.
     pub selected_bounds: Option<RectLike>,
+    /// The currently selected annotation (base coords), used only to
+    /// decide the hover/move cursor. We hit-test against the real
+    /// geometry — not just `selected_bounds` — so a thin line/pen shows
+    /// the move cursor over its stroke, not its empty bounding box.
+    pub selected_annotation: Option<Annotation>,
     /// Editable handle centers in base-image coordinates. Rectangular
     /// annotations expose eight handles; line / arrow expose the two
     /// endpoints.
@@ -758,9 +763,15 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 return resize_handle_cursor(handle);
             }
             // Hovering the selected annotation's body offers a move
-            // affordance, mirroring the handle cursors above.
+            // affordance, mirroring the handle cursors above. Hit-test the
+            // real geometry (same rule as `select_at`) so the cursor only
+            // promises a move where a press would actually grab it — a thin
+            // line shows the move cursor over its stroke, not its bbox.
             if self.active_tool == ToolState::Select
-                && self.selected_bounds.is_some_and(|b| point_in_rect(base, b))
+                && self
+                    .selected_annotation
+                    .as_ref()
+                    .is_some_and(|a| annotation_hit_test(a, base))
             {
                 return iced::mouse::Interaction::Move;
             }
@@ -772,15 +783,6 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
             _ => iced::mouse::Interaction::Crosshair,
         }
     }
-}
-
-/// Point-in-rect test tolerant of rects stored with negative extents.
-fn point_in_rect(p: PointLike, r: RectLike) -> bool {
-    let x0 = r.x.min(r.x + r.width);
-    let x1 = r.x.max(r.x + r.width);
-    let y0 = r.y.min(r.y + r.height);
-    let y1 = r.y.max(r.y + r.height);
-    p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1
 }
 
 fn resize_handle_cursor(handle: ResizeHandle) -> iced::mouse::Interaction {
@@ -1576,6 +1578,7 @@ mod tests {
             display_scale: Some(2.0),
             selected_bounds: None,
             selected_handles: Vec::new(),
+            selected_annotation: None,
             selected_preview: None,
             cache: std::rc::Rc::new(canvas::Cache::default()),
         };
@@ -1616,6 +1619,7 @@ mod tests {
             display_scale: Some(2.0),
             selected_bounds: Some(RectLike::new(10.0, 10.0, 40.0, 30.0)),
             selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
+            selected_annotation: None,
             selected_preview: None,
             cache: std::rc::Rc::new(canvas::Cache::default()),
         };
@@ -1661,6 +1665,7 @@ mod tests {
             display_scale: Some(2.0),
             selected_bounds: Some(RectLike::new(10.0, 10.0, 40.0, 30.0)),
             selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
+            selected_annotation: None,
             selected_preview: None,
             cache: std::rc::Rc::new(canvas::Cache::default()),
         };
@@ -1693,6 +1698,11 @@ mod tests {
             display_scale: Some(2.0),
             selected_bounds: Some(RectLike::new(10.0, 10.0, 40.0, 30.0)),
             selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
+            selected_annotation: Some(Annotation::Rectangle {
+                rect: RectLike::new(10.0, 10.0, 40.0, 30.0),
+                color: CoreRgba::OPAQUE_BLACK,
+                line_width: 2.0,
+            }),
             selected_preview: None,
             cache: std::rc::Rc::new(canvas::Cache::default()),
         };
@@ -1713,12 +1723,65 @@ mod tests {
             ),
             iced::mouse::Interaction::Move
         );
-        // Canvas (210, 210) → base (5, 5), outside the selection → default.
+        // Canvas (320, 320) → base (60, 60), well outside the rect + the
+        // 6px hit tolerance → default arrow.
         assert_eq!(
             canvas.mouse_interaction(
                 &DrawState::Idle,
                 bounds,
-                Cursor::Available(Point::new(210.0, 210.0))
+                Cursor::Available(Point::new(320.0, 320.0))
+            ),
+            iced::mouse::Interaction::default()
+        );
+    }
+
+    #[test]
+    fn move_cursor_uses_stroke_hit_test_not_bbox_for_lines() {
+        // A diagonal line: its bounding box has large empty corners that a
+        // press would NOT grab. The move cursor must follow the stroke, not
+        // the bbox, so it doesn't promise a drag the click won't deliver.
+        let canvas = EditorCanvas {
+            active_tool: ToolState::Select,
+            color: CoreRgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            next_pin_number: 1,
+            image_size: (200, 100),
+            image_offset: (0.0, 0.0),
+            display_scale: Some(2.0),
+            selected_bounds: Some(RectLike::new(4.0, 4.0, 52.0, 42.0)),
+            selected_handles: Vec::new(),
+            selected_annotation: Some(Annotation::Line {
+                a: PointLike::new(10.0, 10.0),
+                b: PointLike::new(50.0, 40.0),
+                color: CoreRgba::OPAQUE_BLACK,
+                line_width: 2.0,
+            }),
+            selected_preview: None,
+            cache: std::rc::Rc::new(canvas::Cache::default()),
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+
+        // Canvas (260, 250) → base (30, 25): on the stroke → move.
+        assert_eq!(
+            canvas.mouse_interaction(
+                &DrawState::Idle,
+                bounds,
+                Cursor::Available(Point::new(260.0, 250.0))
+            ),
+            iced::mouse::Interaction::Move
+        );
+        // Canvas (296, 224) → base (48, 12): inside the bbox but far from
+        // the stroke → default (the pre-fix bbox test would wrongly show Move).
+        assert_eq!(
+            canvas.mouse_interaction(
+                &DrawState::Idle,
+                bounds,
+                Cursor::Available(Point::new(296.0, 224.0))
             ),
             iced::mouse::Interaction::default()
         );

@@ -447,7 +447,11 @@ enum CropClampMode {
     Resize,
 }
 
-fn annotation_hit_test(annotation: &Annotation, point: PointLike) -> bool {
+/// True when `point` (base-image coords) lands on the annotation per the
+/// same rule `select_at` uses to pick it: stroke distance for line/pen
+/// kinds, a radius for pins, bbox-with-tolerance for everything else. The
+/// canvas reuses this so the hover/move cursor matches what a press does.
+pub(crate) fn annotation_hit_test(annotation: &Annotation, point: PointLike) -> bool {
     const TOLERANCE: f32 = 6.0;
     match annotation {
         Annotation::Line {

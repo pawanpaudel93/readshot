@@ -1421,11 +1421,17 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             image_size: (image_w, image_h),
             image_offset,
             display_scale: Some(scale),
-            selected_bounds: editor_show_selection_chrome(active_tool, has_selected_annotation)
+            selected_bounds: editor_show_selection_chrome(has_selected_annotation)
                 .then(|| ed.model.selected_bounds())
                 .flatten(),
-            selected_handles: if editor_show_selection_chrome(active_tool, has_selected_annotation)
-            {
+            selected_annotation: editor_show_selection_chrome(has_selected_annotation)
+                .then(|| {
+                    ed.model
+                        .selected_annotation()
+                        .and_then(|idx| ed.model.annotations().get(idx).cloned())
+                })
+                .flatten(),
+            selected_handles: if editor_show_selection_chrome(has_selected_annotation) {
                 ed.model.selected_handles()
             } else {
                 Vec::new()
@@ -2754,10 +2760,12 @@ pub(crate) fn editor_image_filter(
     }
 }
 
-pub(crate) fn editor_show_selection_chrome(
-    _tool: readshot_ui::editor::ToolState,
-    has_selection: bool,
-) -> bool {
+/// Whether to draw the selection outline / handles. Deliberately
+/// independent of the active tool: a selection stays visible and
+/// editable even after switching to a drawing tool, so the color/size
+/// controls keep targeting it. Kept as a named predicate so that intent
+/// is explicit at the call sites.
+pub(crate) fn editor_show_selection_chrome(has_selection: bool) -> bool {
     has_selection
 }
 

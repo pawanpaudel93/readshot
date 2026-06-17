@@ -41,10 +41,13 @@ pub(crate) fn handle_commit_annotation(
 pub(crate) fn editor_selected_hint(kind: &str, text_editable: bool) -> String {
     match (kind, text_editable) {
         ("Crop", _) => {
-            "Selected Crop — drag frame or handles · Delete restores full image".to_string()
+            "Selected Crop — drag frame or handles · arrows nudge · Delete restores full image"
+                .to_string()
         }
         (_, true) => {
-            format!("Selected {kind} — edit inline · color/size apply here · Delete removes")
+            format!(
+                "Selected {kind} — edit inline · color/size apply here · arrows nudge · Delete removes"
+            )
         }
         _ => {
             format!(

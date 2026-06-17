@@ -2826,14 +2826,12 @@ mod tests {
     }
 
     #[test]
-    fn editor_selection_chrome_stays_visible_for_drawing_tools() {
-        use readshot_ui::editor::ToolState as T;
-
-        assert!(!editor_show_selection_chrome(T::Rectangle, false));
-        assert!(editor_show_selection_chrome(T::Select, true));
-        assert!(editor_show_selection_chrome(T::Rectangle, true));
-        assert!(editor_show_selection_chrome(T::Arrow, true));
-        assert!(editor_show_selection_chrome(T::Text, true));
+    fn editor_selection_chrome_follows_selection_presence() {
+        // Chrome shows iff something is selected — independent of the
+        // active tool, so a selection stays editable after switching to a
+        // drawing tool.
+        assert!(editor_show_selection_chrome(true));
+        assert!(!editor_show_selection_chrome(false));
     }
 
     #[test]
@@ -2878,11 +2876,11 @@ mod tests {
     fn editor_selected_hint_special_cases_crop_and_text() {
         assert_eq!(
             editor_selected_hint("Crop", false),
-            "Selected Crop — drag frame or handles · Delete restores full image"
+            "Selected Crop — drag frame or handles · arrows nudge · Delete restores full image"
         );
         assert_eq!(
             editor_selected_hint("Text", true),
-            "Selected Text — edit inline · color/size apply here · Delete removes"
+            "Selected Text — edit inline · color/size apply here · arrows nudge · Delete removes"
         );
         assert_eq!(
             editor_selected_hint("Rectangle", false),
