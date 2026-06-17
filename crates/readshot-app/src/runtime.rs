@@ -461,24 +461,36 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // is essentially a no-op syscall.
         subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::PermissionTick));
     }
+    // These four drains poll OS-event sources (crossbeam channels /
+    // AppKit-fed queues) that have no async wakeup, so they run on a
+    // timer for the whole app lifetime. Every tick is an iced message,
+    // and iced redraws *every* open window on any message — so while an
+    // editor window is open these timers repaint it at their combined
+    // rate even when nothing changed. They're kept deliberately slow:
+    // the canvas geometry cache already makes those redraws cheap (no
+    // re-tessellation), and a few hundred ms of latency on a hotkey /
+    // tray click is imperceptible, so the win is far fewer idle wake-ups
+    // rather than snappier polling.
     if state.hotkey_manager.is_some() {
-        // 50 ms drain — `try_recv` is a non-blocking peek at the
-        // crossbeam channel `global-hotkey` writes to from its OS
-        // event handler. Cheap when there are no events.
-        subs.push(iced::time::every(Duration::from_millis(50)).map(|_| Message::HotkeyTick));
+        // 250 ms drain — `try_recv` is a non-blocking peek at the
+        // crossbeam channel `global-hotkey` writes to from its OS event
+        // handler. Latency from keypress to capture stays well under the
+        // threshold where a global hotkey feels laggy.
+        subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::HotkeyTick));
     }
     if state.tray.is_some() {
-        // 100 ms is fine for tray clicks — humans can't tell the
-        // difference between a 50 ms and 100 ms tray menu response.
-        subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::TrayTick));
+        // 250 ms is fine for tray clicks — humans can't tell the
+        // difference between a 100 ms and 250 ms tray menu response.
+        subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::TrayTick));
     }
     #[cfg(target_os = "macos")]
     {
         // macOS delivers URL + reopen AppleEvents to AppKit callbacks
-        // while the app is already running. Those callbacks queue
-        // work; these ticks drain them back into iced.
-        subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::UrlTick));
-        subs.push(iced::time::every(Duration::from_millis(100)).map(|_| Message::AppReopenTick));
+        // while the app is already running. Those callbacks queue work;
+        // these ticks drain them back into iced. Both are rare, external,
+        // user-initiated events, so a slower poll costs nothing.
+        subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::UrlTick));
+        subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::AppReopenTick));
     }
     if state.scroll_session.is_some() {
         // Drive the scrolling-capture frame loop. The capture
