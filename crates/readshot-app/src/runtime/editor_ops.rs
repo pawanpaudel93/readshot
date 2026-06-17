@@ -689,6 +689,15 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if ed.busy {
                 return Task::none();
             }
+            // Don't hijack the keys when another input mode owns them:
+            // while a text draft/edit is open the arrows belong to the
+            // text caret (iced's single-line input ignores Up/Down, so
+            // they'd otherwise reach here and move the annotation being
+            // typed), and during an in-progress mouse move/resize drag a
+            // nudge would cancel the drag mid-gesture.
+            if ed.pending_text.is_some() || ed.move_drag.is_some() {
+                return Task::none();
+            }
             // Settle any in-flight preview first, then move the selection
             // by the keyboard step as one undoable edit. No status toast:
             // arrow presses are rapid and would spam the chrome.

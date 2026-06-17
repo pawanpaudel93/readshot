@@ -4332,6 +4332,43 @@ mod tests {
     }
 
     #[test]
+    fn editor_nudge_is_suppressed_while_editing_text() {
+        // iced's single-line text input ignores Up/Down, so those arrows
+        // reach the global key tap while a text draft is open. The nudge
+        // handler must drop them rather than move the annotation being
+        // typed (which would also desync the inline editor box).
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(96, 96));
+        ed.model.commit_annotation(Annotation::Text {
+            content: "hi".into(),
+            origin: PointLike::new(10.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 16.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(12.0, 8.0)), Some(0));
+        let undo_before = ed.model.undo_depth();
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(10.0, 20.0),
+            content: "hi".into(),
+            edit_index: Some(0),
+        });
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorNudgeSelected(0.0, 5.0));
+
+        let ed = app.editor.as_ref().unwrap();
+        match &ed.model.annotations()[0] {
+            Annotation::Text { origin, .. } => {
+                assert_eq!(origin.x, 10.0);
+                assert_eq!(origin.y, 20.0);
+            }
+            other => panic!("expected text, got {other:?}"),
+        }
+        assert_eq!(ed.model.undo_depth(), undo_before);
+    }
+
+    #[test]
     fn editor_delete_without_selection_keeps_new_pending_text() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let mut ed = crate::editor::EditorSession::new(solid(96, 96));
