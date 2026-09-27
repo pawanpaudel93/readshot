@@ -49,8 +49,13 @@ pub struct EditorState {
     current_color: Rgba,
     current_line_width: f32,
     selected_annotation: Option<usize>,
-    /// Cached flattened image. Invalidated whenever `history`,
-    /// `current_color`, or `current_line_width` change.
+    /// Cached flattened image. Invalidated (reset to `None`) whenever the
+    /// annotation `history` changes — commit, undo/redo, delete, discard,
+    /// nudge, drag previews, and the selected-annotation colour/width/text
+    /// edits (which all push a new history entry). Changing the *current*
+    /// tool colour (`set_color`) or line width (`set_line_width`) does not
+    /// touch it: those only style the next annotation, not the rendered
+    /// stack, so the flattened image is unchanged.
     flattened_cache: Option<RgbaImage>,
 }
 
