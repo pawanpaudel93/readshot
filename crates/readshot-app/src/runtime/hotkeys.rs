@@ -3,7 +3,10 @@
 
 use std::collections::HashMap;
 
-use global_hotkey::{hotkey::HotKey, GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+use global_hotkey::{
+    hotkey::{Code, HotKey},
+    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
+};
 
 use readshot_core::Preferences;
 use readshot_ui::hotkey;
@@ -40,35 +43,150 @@ pub(crate) fn default_capture_hotkey() -> &'static str {
     "ctrl+shift+x"
 }
 
-/// Render a hotkey string like "cmd+shift+x" as the macOS-native
-/// glyph form "⌘⇧X". Falls back to the input string if there's no
-/// recognisable component (so parse failures still display
-/// *something* instead of an empty label).
+/// Render a hotkey string like "cmd+shift+x" as a human label. On macOS
+/// this is the native glyph form "⌘⇧X" (modifiers in ⌘⇧⌥⌃ order, no
+/// separators); elsewhere it's "Ctrl+Shift+X". Named
+/// keys render with their proper symbol ("," "↩" "←" …) instead of a
+/// raw token like "COMMA".
+///
+/// The whole string is parsed with the *real* parser
+/// ([`readshot_ui::hotkey::parse`]) so this can never disagree with what
+/// is actually registered. If parsing fails, the trimmed input is
+/// returned so the user still sees *something* rather than an empty
+/// label.
 pub fn pretty_hotkey(s: &str) -> String {
-    let lower = s.trim().to_lowercase();
-    if lower.is_empty() {
-        return String::new();
+    match hotkey::parse(s) {
+        Ok(spec) => format_chord(spec.modifiers, pretty_key_label(spec.code)),
+        Err(_) => s.trim().to_string(),
     }
-    let mut modifiers = String::new();
-    let mut keys: Vec<String> = Vec::new();
-    for raw in lower.split('+') {
-        let p = raw.trim();
-        if p.is_empty() {
-            continue;
-        }
-        match p {
-            "cmd" | "command" | "meta" | "super" | "win" => modifiers.push('\u{2318}'),
-            "ctrl" | "control" => modifiers.push('\u{2303}'),
-            "shift" => modifiers.push('\u{21E7}'),
-            "alt" | "option" | "opt" => modifiers.push('\u{2325}'),
-            other => keys.push(other.to_uppercase()),
-        }
+}
+
+#[cfg(target_os = "macos")]
+fn format_chord(m: hotkey::HotkeyModifiers, key: &str) -> String {
+    // ⌘⇧⌥⌃ order, matching the glyphs Readshot has always shown.
+    let mut out = String::new();
+    if m.meta {
+        out.push('\u{2318}'); // ⌘
     }
-    let pretty: String = format!("{modifiers}{}", keys.join(""));
-    if pretty.is_empty() {
-        s.to_string()
-    } else {
-        pretty
+    if m.shift {
+        out.push('\u{21E7}'); // ⇧
+    }
+    if m.alt {
+        out.push('\u{2325}'); // ⌥
+    }
+    if m.control {
+        out.push('\u{2303}'); // ⌃
+    }
+    out.push_str(key);
+    out
+}
+
+#[cfg(not(target_os = "macos"))]
+fn format_chord(m: hotkey::HotkeyModifiers, key: &str) -> String {
+    // Ctrl+Shift+Alt+Super order — Ctrl first is the PC convention.
+    let mut parts: Vec<&str> = Vec::new();
+    if m.control {
+        parts.push("Ctrl");
+    }
+    if m.shift {
+        parts.push("Shift");
+    }
+    if m.alt {
+        parts.push("Alt");
+    }
+    if m.meta {
+        parts.push("Super");
+    }
+    let mut out = parts.join("+");
+    if !out.is_empty() {
+        out.push('+');
+    }
+    out.push_str(key);
+    out
+}
+
+/// Human label for a single key code: glyphs for the named editing keys,
+/// bare characters for letters/digits, "F1".."F24" for function keys.
+fn pretty_key_label(code: Code) -> &'static str {
+    match code {
+        Code::KeyA => "A",
+        Code::KeyB => "B",
+        Code::KeyC => "C",
+        Code::KeyD => "D",
+        Code::KeyE => "E",
+        Code::KeyF => "F",
+        Code::KeyG => "G",
+        Code::KeyH => "H",
+        Code::KeyI => "I",
+        Code::KeyJ => "J",
+        Code::KeyK => "K",
+        Code::KeyL => "L",
+        Code::KeyM => "M",
+        Code::KeyN => "N",
+        Code::KeyO => "O",
+        Code::KeyP => "P",
+        Code::KeyQ => "Q",
+        Code::KeyR => "R",
+        Code::KeyS => "S",
+        Code::KeyT => "T",
+        Code::KeyU => "U",
+        Code::KeyV => "V",
+        Code::KeyW => "W",
+        Code::KeyX => "X",
+        Code::KeyY => "Y",
+        Code::KeyZ => "Z",
+        Code::Digit0 => "0",
+        Code::Digit1 => "1",
+        Code::Digit2 => "2",
+        Code::Digit3 => "3",
+        Code::Digit4 => "4",
+        Code::Digit5 => "5",
+        Code::Digit6 => "6",
+        Code::Digit7 => "7",
+        Code::Digit8 => "8",
+        Code::Digit9 => "9",
+        Code::F1 => "F1",
+        Code::F2 => "F2",
+        Code::F3 => "F3",
+        Code::F4 => "F4",
+        Code::F5 => "F5",
+        Code::F6 => "F6",
+        Code::F7 => "F7",
+        Code::F8 => "F8",
+        Code::F9 => "F9",
+        Code::F10 => "F10",
+        Code::F11 => "F11",
+        Code::F12 => "F12",
+        Code::F13 => "F13",
+        Code::F14 => "F14",
+        Code::F15 => "F15",
+        Code::F16 => "F16",
+        Code::F17 => "F17",
+        Code::F18 => "F18",
+        Code::F19 => "F19",
+        Code::F20 => "F20",
+        Code::F21 => "F21",
+        Code::F22 => "F22",
+        Code::F23 => "F23",
+        Code::F24 => "F24",
+        Code::Comma => ",",
+        Code::Enter => "\u{21A9}",  // ↩
+        Code::Escape => "\u{238B}", // ⎋
+        Code::Tab => "\u{21E5}",    // ⇥
+        Code::Space => "Space",
+        Code::Backspace => "\u{232B}",  // ⌫
+        Code::Delete => "\u{2326}",     // ⌦
+        Code::ArrowLeft => "\u{2190}",  // ←
+        Code::ArrowRight => "\u{2192}", // →
+        Code::ArrowUp => "\u{2191}",    // ↑
+        Code::ArrowDown => "\u{2193}",  // ↓
+        Code::Home => "Home",
+        Code::End => "End",
+        Code::PageUp => "PgUp",
+        Code::PageDown => "PgDn",
+        Code::Insert => "Ins",
+        // Any other code the parser might yield in future: best-effort.
+        _ => "?",
     }
 }
 

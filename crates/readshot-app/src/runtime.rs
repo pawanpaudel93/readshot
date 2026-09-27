@@ -3708,7 +3708,8 @@ mod tests {
     #[test]
     fn pretty_hotkey_renders_macos_glyphs() {
         assert_eq!(pretty_hotkey("cmd+shift+x"), "\u{2318}\u{21E7}X");
-        assert_eq!(pretty_hotkey("ctrl+alt+y"), "\u{2303}\u{2325}Y");
+        // ⌘⇧⌥⌃ order: alt then control here.
+        assert_eq!(pretty_hotkey("ctrl+alt+y"), "\u{2325}\u{2303}Y");
         assert_eq!(pretty_hotkey("CMD+Shift+Z"), "\u{2318}\u{21E7}Z");
     }
 
