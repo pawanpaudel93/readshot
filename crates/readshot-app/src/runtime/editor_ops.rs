@@ -782,7 +782,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if ed.busy {
                     return Task::none();
                 }
-                ed.zoom = ed.zoom.zoom_in();
+                // Keyboard zoom (⌘+) must use the same display-scale-
+                // aware ladder as the toolbar "+" button
+                // (`EditorZoomInFromDisplayScale`); the hardcoded 1.0
+                // path made ⌘+/⌘- diverge from the buttons on HiDPI.
+                ed.zoom = ed.zoom.zoom_in_from_display_scale(ed.display_scale);
             }
             Task::none()
         }
@@ -800,7 +804,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if ed.busy {
                     return Task::none();
                 }
-                ed.zoom = ed.zoom.zoom_out();
+                // See `EditorZoomIn` — mirror the toolbar "-" button's
+                // display-scale-aware ladder for ⌘-.
+                ed.zoom = ed.zoom.zoom_out_from_display_scale(ed.display_scale);
             }
             Task::none()
         }

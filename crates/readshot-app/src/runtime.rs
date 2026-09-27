@@ -5054,6 +5054,39 @@ mod tests {
     }
 
     #[test]
+    fn editor_keyboard_zoom_is_display_scale_aware() {
+        // ⌘+/⌘- must follow the same display-scale-aware ladder as the
+        // toolbar zoom buttons; on a HiDPI (2.0) display the hardcoded
+        // 1.0 path used to diverge from the buttons.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let ed = crate::editor::EditorSession::new_with_display_scale(solid(64, 64), 2.0);
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::EditorZoomIn);
+        let after_in = app.editor.as_ref().unwrap().zoom;
+        assert_eq!(
+            after_in,
+            crate::editor::EditorZoom::Fit.zoom_in_from_display_scale(2.0),
+            "keyboard zoom-in should match the display-scale-aware button path"
+        );
+        assert_ne!(
+            after_in,
+            crate::editor::EditorZoom::Fit.zoom_in(),
+            "keyboard zoom-in must not use the hardcoded 1.0 ladder on HiDPI"
+        );
+
+        let _ = update(&mut app, Message::EditorZoomActual);
+        let _ = update(&mut app, Message::EditorZoomOut);
+        let after_out = app.editor.as_ref().unwrap().zoom;
+        let expected_out =
+            crate::editor::EditorZoom::actual_size(2.0).zoom_out_from_display_scale(2.0);
+        assert_eq!(
+            after_out, expected_out,
+            "keyboard zoom-out should match the display-scale-aware button path"
+        );
+    }
+
+    #[test]
     fn editor_key_events_ignore_non_editor_windows() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let editor_id = iced::window::Id::unique();
