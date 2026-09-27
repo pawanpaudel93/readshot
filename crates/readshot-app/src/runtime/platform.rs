@@ -47,6 +47,7 @@ pub(crate) fn quit_readshot(coord: &crate::coordinator::CaptureCoordinator) -> T
         // the next Finder/open launch deliver a reopen AppleEvent to a
         // non-visible instance instead of starting cleanly.
         tracing::info!(target: "readshot::lifecycle", "quit requested; terminating process");
+        disarm_relaunch_on_system_quit();
         std::process::exit(0);
     }
     #[cfg(not(target_os = "macos"))]
@@ -76,6 +77,22 @@ pub(crate) enum CaptureRunError {
 /// executable) so the user's installed location is honoured.
 #[cfg(target_os = "macos")]
 pub(crate) fn relaunch_via_launch_services() -> std::io::Result<()> {
+    spawn_relaunch(RelaunchMode::NewInstance)
+}
+
+/// `NewInstance` (`open -n`) is for our own Restart button, where this
+/// process is about to exit. `ReuseRunning` (plain `open`) is for the
+/// system-quit safety net: if macOS already reopened Readshot, `open`
+/// just brings that copy forward instead of starting a second one.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RelaunchMode {
+    NewInstance,
+    ReuseRunning,
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_relaunch(mode: RelaunchMode) -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
     // .../Readshot.app/Contents/MacOS/readshot → .../Readshot.app
     let bundle = exe
@@ -84,7 +101,7 @@ pub(crate) fn relaunch_via_launch_services() -> std::io::Result<()> {
         .and_then(|p| p.parent()) // *.app
         .map(|p| p.to_path_buf())
         .unwrap_or(exe);
-    let command = relaunch_command_for_bundle(&bundle);
+    let command = relaunch_command_for_bundle(&bundle, mode);
     // Fully detach the helper so it survives this process exiting.
     std::process::Command::new(command.program)
         .args(command.args)
@@ -95,6 +112,69 @@ pub(crate) fn relaunch_via_launch_services() -> std::io::Result<()> {
     Ok(())
 }
 
+// ---- Relaunch after macOS "Quit & Reopen" -------------------------------
+//
+// After the user grants Screen Recording, macOS offers "Quit & Reopen".
+// On some systems it quits Readshot but never reopens it, leaving the
+// user with no app. If this process started without the permission and
+// is then quit by anything other than our own Quit / Restart, relaunch
+// on the way out. `atexit` runs for both NSApp's terminate path and
+// `std::process::exit`.
+#[cfg(target_os = "macos")]
+static STARTED_WITHOUT_PERMISSION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static EXIT_IS_OURS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static RELAUNCH_HOOK: std::sync::Once = std::sync::Once::new();
+
+/// Arm the safety net when the process starts without Screen Recording.
+pub(crate) fn arm_relaunch_on_system_quit(started_without_permission: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        use std::sync::atomic::Ordering;
+        if !started_without_permission {
+            return;
+        }
+        STARTED_WITHOUT_PERMISSION.store(true, Ordering::SeqCst);
+        RELAUNCH_HOOK.call_once(|| {
+            // SAFETY: `relaunch_on_exit` is a plain `extern "C" fn()` with
+            // no captured state; registering it has no other effect.
+            unsafe {
+                libc::atexit(relaunch_on_exit);
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = started_without_permission;
+}
+
+/// Our own Quit and Restart exits are deliberate — don't relaunch.
+pub(crate) fn disarm_relaunch_on_system_quit() {
+    #[cfg(target_os = "macos")]
+    EXIT_IS_OURS.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn should_relaunch_on_exit(
+    started_without_permission: bool,
+    exit_is_ours: bool,
+) -> bool {
+    started_without_permission && !exit_is_ours
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn relaunch_on_exit() {
+    use std::sync::atomic::Ordering;
+    if should_relaunch_on_exit(
+        STARTED_WITHOUT_PERMISSION.load(Ordering::SeqCst),
+        EXIT_IS_OURS.load(Ordering::SeqCst),
+    ) {
+        // Best effort: nothing useful to do on failure this late.
+        let _ = spawn_relaunch(RelaunchMode::ReuseRunning);
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RelaunchCommand {
@@ -103,12 +183,16 @@ pub(crate) struct RelaunchCommand {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn relaunch_command_for_bundle(bundle: &Path) -> RelaunchCommand {
+pub(crate) fn relaunch_command_for_bundle(bundle: &Path, mode: RelaunchMode) -> RelaunchCommand {
+    let script = match mode {
+        RelaunchMode::NewInstance => "sleep 0.35; exec /usr/bin/open -n \"$1\"",
+        RelaunchMode::ReuseRunning => "sleep 0.6; exec /usr/bin/open \"$1\"",
+    };
     RelaunchCommand {
         program: "/bin/sh",
         args: vec![
             "-c".into(),
-            "sleep 0.35; exec /usr/bin/open -n \"$1\"".into(),
+            script.into(),
             "readshot-relaunch".into(),
             bundle.to_string_lossy().to_string(),
         ],

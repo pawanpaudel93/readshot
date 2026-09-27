@@ -308,11 +308,16 @@ pub fn start() -> (App, Task<Message>) {
     // Surface the initial permission state in the log so users
     // (and us, when triaging issues) can see whether macOS TCC is
     // already returning Granted before the welcome window appears.
+    let initial_permission = app.coordinator.pre_capture_gate();
     tracing::info!(
         target: "readshot::permissions",
         "initial status: {:?}",
-        app.coordinator.pre_capture_gate(),
+        initial_permission,
     );
+    arm_relaunch_on_system_quit(matches!(
+        initial_permission,
+        crate::permissions::PermissionStatus::Denied
+    ));
 
     if cli_interactive_request.is_some() {
         let task = if app.welcome.should_show() {
@@ -1619,6 +1624,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // finished by the time the new instance comes up).
             #[cfg(target_os = "macos")]
             {
+                disarm_relaunch_on_system_quit();
                 match relaunch_via_launch_services() {
                     Ok(()) => {
                         tracing::info!(target: "readshot::permissions", "respawned via Launch Services; exiting");
@@ -2866,6 +2872,24 @@ mod tests {
         assert_eq!(editor_bottom_layout(420.0), EditorBottomLayout::Compact);
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn relaunch_on_exit_only_for_system_quit_while_awaiting_permission() {
+        // macOS "Quit & Reopen" after a grant: relaunch ourselves.
+        assert!(should_relaunch_on_exit(true, false));
+        // Our own Quit / Restart: never.
+        assert!(!should_relaunch_on_exit(true, true));
+        // Started with permission already granted: never.
+        assert!(!should_relaunch_on_exit(false, false));
+        let reuse = relaunch_command_for_bundle(
+            std::path::Path::new("/Applications/Readshot.app"),
+            RelaunchMode::ReuseRunning,
+        );
+        // Plain `open` so a copy macOS already reopened is reused, not doubled.
+        assert!(reuse.args[1].contains("exec /usr/bin/open \"$1\""));
+        assert!(!reuse.args[1].contains("-n"));
+    }
+
     #[test]
     fn history_timestamp_label_is_relative_to_today() {
         use chrono::TimeZone;
@@ -3434,8 +3458,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn relaunch_command_waits_then_forces_a_fresh_instance() {
-        let command =
-            relaunch_command_for_bundle(std::path::Path::new("/Applications/Readshot.app"));
+        let command = relaunch_command_for_bundle(
+            std::path::Path::new("/Applications/Readshot.app"),
+            RelaunchMode::NewInstance,
+        );
 
         assert_eq!(command.program, "/bin/sh");
         assert!(command.args[1].contains("sleep 0.35"));
