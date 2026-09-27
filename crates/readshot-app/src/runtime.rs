@@ -1466,6 +1466,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorDeleteSelected
         | Message::EditorNudgeSelected(..)
         | Message::EditorTextChanged(..)
+        | Message::EditorTextAction(..)
         | Message::EditorTextCommit
         | Message::EditorTextCancel
         | Message::EditorWidthBump(..)
@@ -4867,6 +4868,52 @@ mod tests {
         let _ = update(&mut app, Message::EditorDiscardRequested);
 
         assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn editor_text_action_supports_multi_line_and_commits_newline() {
+        use iced::widget::text_editor::{Action, Edit};
+
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.begin_text_edit(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 20.0),
+            content: String::new(),
+            edit_index: None,
+        });
+        assert!(ed.text_edit_content.is_some());
+        app.editor = Some(ed);
+
+        // Type "ab", press Enter (newline), type "cd".
+        for action in [
+            Action::Edit(Edit::Insert('a')),
+            Action::Edit(Edit::Insert('b')),
+            Action::Edit(Edit::Enter),
+            Action::Edit(Edit::Insert('c')),
+            Action::Edit(Edit::Insert('d')),
+        ] {
+            let _ = update(&mut app, Message::EditorTextAction(action));
+        }
+
+        let pending = app
+            .editor
+            .as_ref()
+            .unwrap()
+            .pending_text
+            .as_ref()
+            .expect("draft still open");
+        assert_eq!(pending.content, "ab\ncd", "Enter should insert a newline");
+
+        // Commit builds a multi-line Annotation::Text and tears down the
+        // inline editor's backing store.
+        let _ = update(&mut app, Message::EditorTextCommit);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pending_text.is_none());
+        assert!(ed.text_edit_content.is_none());
+        match ed.model.annotations().last().expect("text committed") {
+            Annotation::Text { content, .. } => assert_eq!(content, "ab\ncd"),
+            other => panic!("expected multi-line text, got {other:?}"),
+        }
     }
 
     #[test]

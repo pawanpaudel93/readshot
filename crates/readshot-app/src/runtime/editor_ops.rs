@@ -107,6 +107,9 @@ pub(crate) fn commit_pending_editor_text(
     let Some(pending) = ed.pending_text.take() else {
         return false;
     };
+    // Drop the inline editor's backing store together with the draft so
+    // the two never disagree once the draft is committed/dismissed.
+    ed.text_edit_content = None;
     let trimmed = pending.content.trim();
     if trimmed.is_empty() {
         return false;
@@ -620,7 +623,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     // banner. The eventual Annotation::Text lands at
                     // exactly the click point regardless of how long
                     // the user takes to type.
-                    ed.pending_text = Some(crate::editor::PendingText {
+                    ed.begin_text_edit(crate::editor::PendingText {
                         origin: p,
                         content: String::new(),
                         edit_index: None,
@@ -645,7 +648,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if let Some(edit) = ed.model.selected_text_edit() {
                 cancel_editor_previews(ed);
                 ed.clear_discard_confirmation();
-                ed.pending_text = Some(crate::editor::PendingText {
+                ed.begin_text_edit(crate::editor::PendingText {
                     origin: edit.origin,
                     content: edit.content,
                     edit_index: Some(edit.index),
@@ -672,7 +675,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             );
             cancel_editor_previews(ed);
             if deleting_pending_text {
-                ed.pending_text = None;
+                ed.clear_text_edit();
             }
             if ed.model.delete_selected_annotation() {
                 ed.refresh_image();
@@ -718,7 +721,31 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     ed.clear_discard_confirmation();
                 }
                 if let Some(pending) = ed.pending_text.as_mut() {
-                    pending.content = content;
+                    pending.content = content.clone();
+                }
+                // Keep the multi-line backing store in sync so a
+                // programmatic content change (e.g. tests) is reflected
+                // if the inline editor re-renders.
+                ed.text_edit_content =
+                    Some(iced::widget::text_editor::Content::with_text(&content));
+            }
+            Task::none()
+        }
+        Message::EditorTextAction(action) => {
+            if let Some(ed) = state.editor.as_mut() {
+                if ed.busy {
+                    return Task::none();
+                }
+                if let Some(content) = ed.text_edit_content.as_mut() {
+                    content.perform(action);
+                    // Normalise line endings so the model (render /
+                    // bounds) only ever sees `\n`, regardless of the
+                    // platform default the widget inserts.
+                    let text = content.text().replace("\r\n", "\n").replace('\r', "\n");
+                    if let Some(pending) = ed.pending_text.as_mut() {
+                        pending.content = text;
+                    }
+                    ed.clear_discard_confirmation();
                 }
             }
             Task::none()
@@ -746,7 +773,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if !keep_selection {
                     ed.model.clear_selection();
                 }
-                ed.pending_text = None;
+                ed.clear_text_edit();
             }
             Task::none()
         }

@@ -446,7 +446,11 @@ fn draw_text(
     };
     let scaled = font.as_scaled(PxScale::from(size));
     let baseline = shift_point(origin, offset);
-    let mut x = baseline.x;
+    // Multi-line text: `content` may contain `\n`. `origin` is the
+    // baseline of the first line; each subsequent line drops by the
+    // font's line height. Normalise CRLF/CR so a Windows-authored
+    // sidecar renders the same as one written on macOS/Linux.
+    let line_height = scaled.height() + scaled.line_gap();
 
     let data = pixmap.data_mut();
     let color_rgba_u8 = [
@@ -456,27 +460,41 @@ fn draw_text(
         (color.a.clamp(0.0, 1.0) * 255.0) as u8,
     ];
 
-    let mut last_glyph: Option<ab_glyph::GlyphId> = None;
-    for c in content.chars() {
-        let glyph_id = scaled.glyph_id(c);
-        if let Some(prev) = last_glyph {
-            x += scaled.kern(prev, glyph_id);
+    for (line_idx, line) in content
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .split('\n')
+        .enumerate()
+    {
+        let line_baseline_y = baseline.y + line_idx as f32 * line_height;
+        let mut x = baseline.x;
+        let mut last_glyph: Option<ab_glyph::GlyphId> = None;
+        for c in line.chars() {
+            let glyph_id = scaled.glyph_id(c);
+            if let Some(prev) = last_glyph {
+                x += scaled.kern(prev, glyph_id);
+            }
+            let glyph = glyph_id
+                .with_scale_and_position(PxScale::from(size), ab_glyph::point(x, line_baseline_y));
+            if let Some(outlined) = font.outline_glyph(glyph) {
+                let bounds = outlined.px_bounds();
+                outlined.draw(|gx, gy, alpha| {
+                    let px = bounds.min.x as i32 + gx as i32;
+                    let py = bounds.min.y as i32 + gy as i32;
+                    if px < 0 || py < 0 || px >= pw || py >= ph {
+                        return;
+                    }
+                    composite_premultiplied(
+                        data,
+                        (py * pw + px) as usize * 4,
+                        color_rgba_u8,
+                        alpha,
+                    );
+                });
+            }
+            x += scaled.h_advance(glyph_id);
+            last_glyph = Some(glyph_id);
         }
-        let glyph =
-            glyph_id.with_scale_and_position(PxScale::from(size), ab_glyph::point(x, baseline.y));
-        if let Some(outlined) = font.outline_glyph(glyph) {
-            let bounds = outlined.px_bounds();
-            outlined.draw(|gx, gy, alpha| {
-                let px = bounds.min.x as i32 + gx as i32;
-                let py = bounds.min.y as i32 + gy as i32;
-                if px < 0 || py < 0 || px >= pw || py >= ph {
-                    return;
-                }
-                composite_premultiplied(data, (py * pw + px) as usize * 4, color_rgba_u8, alpha);
-            });
-        }
-        x += scaled.h_advance(glyph_id);
-        last_glyph = Some(glyph_id);
     }
 }
 
@@ -650,6 +668,85 @@ mod tests {
             assert_eq!(out.width(), 32);
             assert_eq!(out.height(), 32);
         }
+    }
+
+    #[test]
+    fn multiline_text_draws_a_second_line_below_the_first() {
+        // A `\n` in the content must lay the second line below the
+        // first, not overprint it on the same baseline.
+        let base = solid_base(96, 96, [255, 255, 255]);
+
+        let ink_y_extent = |img: &RgbaImage| -> Option<(u32, u32)> {
+            let mut min_y = None;
+            let mut max_y = 0u32;
+            for y in 0..img.height() {
+                for x in 0..img.width() {
+                    let p = img.get_pixel(x, y);
+                    // Any non-near-white pixel counts as ink.
+                    if p[0] < 200 || p[1] < 200 || p[2] < 200 {
+                        min_y.get_or_insert(y);
+                        max_y = y;
+                        break;
+                    }
+                }
+            }
+            min_y.map(|mn| (mn, max_y))
+        };
+
+        let single = render(
+            &base,
+            &[Annotation::Text {
+                content: "Eg".into(),
+                origin: PointLike::new(4.0, 20.0),
+                color: Rgba::OPAQUE_BLACK,
+                font_family: "system-ui".into(),
+                size: 18.0,
+            }],
+        );
+        let multi = render(
+            &base,
+            &[Annotation::Text {
+                content: "Eg\nEg".into(),
+                origin: PointLike::new(4.0, 20.0),
+                color: Rgba::OPAQUE_BLACK,
+                font_family: "system-ui".into(),
+                size: 18.0,
+            }],
+        );
+
+        let (_single_min, single_max) = ink_y_extent(&single).expect("single line should draw ink");
+        let (_multi_min, multi_max) = ink_y_extent(&multi).expect("multi line should draw ink");
+
+        // The second line must extend the inked region well below where
+        // the single line ends.
+        assert!(
+            multi_max > single_max + 5,
+            "multi-line ink should extend below single-line (single_max={single_max}, multi_max={multi_max})"
+        );
+    }
+
+    #[test]
+    fn multiline_text_normalises_crlf_to_lf() {
+        // A Windows-authored sidecar may store CRLF; it must render the
+        // same as LF (two lines), never as a stray glyph or one line.
+        let base = solid_base(96, 96, [255, 255, 255]);
+        let render_content = |content: &str| {
+            render(
+                &base,
+                &[Annotation::Text {
+                    content: content.into(),
+                    origin: PointLike::new(4.0, 20.0),
+                    color: Rgba::OPAQUE_BLACK,
+                    font_family: "system-ui".into(),
+                    size: 18.0,
+                }],
+            )
+        };
+        assert_eq!(
+            render_content("Eg\r\nEg").as_raw(),
+            render_content("Eg\nEg").as_raw(),
+            "CRLF content should render identically to LF content"
+        );
     }
 
     #[test]

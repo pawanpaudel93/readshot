@@ -141,6 +141,14 @@ pub struct EditorSession {
     /// tick serves a sub-rect copy instead of a full re-render per
     /// mouse-move event. Cleared by [`refresh_image`].
     crop_drag_flat: Option<image::RgbaImage>,
+    /// Backing store for the inline multi-line text editor widget. Text
+    /// annotations support `\n`, so the inline editor is an
+    /// `iced::widget::text_editor` whose `Content` must persist across
+    /// `view()` calls. It mirrors [`PendingText::content`] (the String
+    /// remains the source of truth for commit / bounds); this field only
+    /// exists while `pending_text` is `Some`. Not `Clone`, which is why
+    /// [`EditorSession`] itself is not `Clone`.
+    pub text_edit_content: Option<iced::widget::text_editor::Content>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -334,6 +342,7 @@ impl EditorSession {
             canvas_cache: std::rc::Rc::new(iced::widget::canvas::Cache::default()),
             output_checkpoint,
             crop_drag_flat: None,
+            text_edit_content: None,
         }
     }
 
@@ -371,6 +380,7 @@ impl EditorSession {
             canvas_cache: std::rc::Rc::new(iced::widget::canvas::Cache::default()),
             output_checkpoint,
             crop_drag_flat: None,
+            text_edit_content: None,
         }
     }
 
@@ -386,6 +396,25 @@ impl EditorSession {
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status = Some(msg.into());
         self.status_set_at = Some(std::time::Instant::now());
+    }
+
+    /// Open the inline text editor for `pending`, seeding the
+    /// `text_editor::Content` from its current string so the widget and
+    /// [`PendingText::content`] start in sync. Use this everywhere a
+    /// text draft/edit begins so the multi-line backing store is never
+    /// missing while `pending_text` is `Some`.
+    pub fn begin_text_edit(&mut self, pending: PendingText) {
+        self.text_edit_content = Some(iced::widget::text_editor::Content::with_text(
+            &pending.content,
+        ));
+        self.pending_text = Some(pending);
+    }
+
+    /// Tear down the inline text editor: drop both the draft and its
+    /// backing `Content` together so they never disagree.
+    pub fn clear_text_edit(&mut self) {
+        self.pending_text = None;
+        self.text_edit_content = None;
     }
 
     pub fn mark_output_clean(&mut self) {
@@ -560,12 +589,21 @@ mod tests {
     #[test]
     fn status_classifiers_agree_across_in_progress_error_and_success() {
         // In-progress: kept on screen, neutral style.
-        for s in ["Saving…", "Choose a save location…", "Copying…", "Recognising text…"] {
+        for s in [
+            "Saving…",
+            "Choose a save location…",
+            "Copying…",
+            "Recognising text…",
+        ] {
             assert!(status_str_is_in_progress(s), "{s:?} should be in-progress");
             assert!(!status_str_is_error(s), "{s:?} should not be an error");
         }
         // Errors: kept on screen, error style.
-        for s in ["Save failed: disk full", "Copy text failed: no OCR", "Unexpected error"] {
+        for s in [
+            "Save failed: disk full",
+            "Copy text failed: no OCR",
+            "Unexpected error",
+        ] {
             assert!(status_str_is_error(s), "{s:?} should be an error");
             assert!(
                 !status_str_is_in_progress(s),

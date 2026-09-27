@@ -592,12 +592,24 @@ fn annotation_bounds(annotation: &Annotation) -> Option<RectLike> {
             size,
             ..
         } => {
-            let width = (content.chars().count() as f32 * *size * 0.6).max(*size);
+            // Multi-line text: width is the widest line, height grows
+            // one line per `\n`. `origin` is the first line's baseline,
+            // so the box starts `size` above it (cap height) and each
+            // line adds `size * 1.35` (matches the render line height).
+            let line_height = *size * 1.35;
+            let mut line_count = 0usize;
+            let mut max_chars = 0usize;
+            for line in content.split('\n') {
+                line_count += 1;
+                max_chars = max_chars.max(line.chars().count());
+            }
+            let line_count = line_count.max(1) as f32;
+            let width = (max_chars as f32 * *size * 0.6).max(*size);
             Some(RectLike::new(
                 origin.x,
                 origin.y - *size,
                 width,
-                *size * 1.35,
+                line_height * line_count,
             ))
         }
         Annotation::NumberedPin { origin, .. } => {
@@ -1250,6 +1262,58 @@ mod tests {
             Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 1.0),
             other => panic!("expected rectangle, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn multiline_text_bounds_grow_per_line_and_hit_test_lower_lines() {
+        let origin = PointLike::new(10.0, 20.0);
+        let size = 16.0;
+
+        let mut single = EditorState::new(solid_base(96, 96));
+        single.commit_annotation(Annotation::Text {
+            content: "one".into(),
+            origin,
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size,
+        });
+        assert_eq!(single.select_at(origin), Some(0));
+        let single_bounds = single.selected_bounds().expect("single-line bounds");
+
+        let mut multi = EditorState::new(solid_base(96, 96));
+        multi.commit_annotation(Annotation::Text {
+            content: "one\ntwo\nthree".into(),
+            origin,
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size,
+        });
+        assert_eq!(multi.select_at(origin), Some(0));
+        let multi_bounds = multi.selected_bounds().expect("multi-line bounds");
+
+        // Three lines are ~3x the single-line height.
+        assert!(
+            (multi_bounds.height - single_bounds.height * 3.0).abs() < 0.01,
+            "three-line height {} should be 3x single-line height {}",
+            multi_bounds.height,
+            single_bounds.height
+        );
+        // Width tracks the widest line ("three" > "one").
+        assert!(multi_bounds.width > single_bounds.width);
+
+        // A point on the third line hits the multi-line text but falls
+        // outside a single-line box.
+        let third_line = PointLike::new(12.0, origin.y + size * 1.35 * 2.0);
+        assert_eq!(multi.select_at(third_line), Some(0));
+        let mut single_again = EditorState::new(solid_base(96, 96));
+        single_again.commit_annotation(Annotation::Text {
+            content: "one".into(),
+            origin,
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size,
+        });
+        assert_eq!(single_again.select_at(third_line), None);
     }
 
     #[test]

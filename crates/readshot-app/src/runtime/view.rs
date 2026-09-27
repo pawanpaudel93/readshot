@@ -1479,14 +1479,30 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .width(Length::Fill)
                 .style(disabled_text_input_style)
                 .into()
-            } else {
-                iced::widget::text_input("Type text...", &pending.content)
-                    .on_input(Message::EditorTextChanged)
-                    .on_submit(Message::EditorTextCommit)
+            } else if let Some(content) = ed.text_edit_content.as_ref() {
+                // Multi-line text: `text_editor` lets Enter insert a
+                // newline. `key_binding` remaps Escape → cancel and
+                // Cmd/Ctrl+Enter → commit; plain Enter falls through to
+                // the default (newline). Clicking a button also commits
+                // / cancels (below).
+                iced::widget::text_editor(content)
+                    .placeholder("Type text… (⌘↵ to commit, Esc to cancel)")
+                    .on_action(Message::EditorTextAction)
+                    .key_binding(editor_text_key_binding)
                     .padding(8)
                     .size(14)
-                    .width(Length::Fill)
                     .into()
+            } else {
+                // `text_edit_content` is always `Some` while a draft is
+                // open; this fallback only guards a torn state.
+                container(
+                    text(pending.content.clone())
+                        .size(14)
+                        .wrapping(iced::widget::text::Wrapping::Word),
+                )
+                .padding(8)
+                .width(Length::Fill)
+                .into()
             };
             let commit_label = editor_text_commit_label(pending.edit_index.is_some());
             let mut commit = button(text(commit_label).size(12).color(Color::WHITE))
@@ -1780,8 +1796,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                     // with the success (green) style instead of the
                     // neutral in-progress style.
                     let is_error = crate::editor::status_str_is_error(&s);
-                    let in_progress =
-                        !is_error && crate::editor::status_str_is_in_progress(&s);
+                    let in_progress = !is_error && crate::editor::status_str_is_in_progress(&s);
                     let (bg, fg) = if is_error {
                         (
                             Color::from_rgba(0.85, 0.32, 0.32, 0.22),
@@ -2797,6 +2812,31 @@ pub(crate) struct InlineTextEditorGeometry {
 const INLINE_TEXT_EDITOR_WIDTH: f32 = 260.0;
 const INLINE_TEXT_EDITOR_HEIGHT: f32 = 46.0;
 const INLINE_TEXT_EDITOR_MARGIN: f32 = 8.0;
+
+/// Key bindings for the inline multi-line text editor.
+///
+/// - `Escape` cancels the draft (parity with the old single-line input
+///   and the Cancel button).
+/// - `Cmd`/`Ctrl` + `Enter` commits the draft (the Enter key alone
+///   inserts a newline, which is the whole point of the multi-line
+///   editor).
+/// - Everything else uses `text_editor`'s default binding, so plain
+///   `Enter` breaks the line and motion/edit keys behave normally.
+pub(crate) fn editor_text_key_binding(
+    key_press: iced::widget::text_editor::KeyPress,
+) -> Option<iced::widget::text_editor::Binding<Message>> {
+    use iced::keyboard::key::Named;
+    use iced::keyboard::Key;
+    use iced::widget::text_editor::Binding;
+
+    if matches!(key_press.key, Key::Named(Named::Enter)) && key_press.modifiers.command() {
+        return Some(Binding::Custom(Message::EditorTextCommit));
+    }
+    if matches!(key_press.key, Key::Named(Named::Escape)) {
+        return Some(Binding::Custom(Message::EditorTextCancel));
+    }
+    Binding::from_key_press(key_press)
+}
 
 pub(crate) fn inline_text_editor_geometry(
     origin: readshot_core::PointLike,

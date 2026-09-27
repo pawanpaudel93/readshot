@@ -420,6 +420,10 @@ pub enum Message {
     /// Text-tool inline input — content typed by the user. Empty
     /// means the input is cleared.
     EditorTextChanged(String),
+    /// An edit action from the inline multi-line text editor widget.
+    /// The handler applies it to the backing `text_editor::Content` and
+    /// mirrors the result into `PendingText::content`.
+    EditorTextAction(iced::widget::text_editor::Action),
     /// User pressed Enter / clicked Commit on the text input. Builds
     /// an `Annotation::Text` from the pending state and commits it.
     EditorTextCommit,
