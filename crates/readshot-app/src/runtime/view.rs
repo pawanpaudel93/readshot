@@ -497,6 +497,12 @@ pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
     .into()
 }
 
+/// Thumbnail width and row content height for History list items. The
+/// thumbnail fills the full content height (16:10, matching the
+/// 320×200 thumbnails the history store writes).
+const HISTORY_THUMB_WIDTH: f32 = 150.0;
+const HISTORY_ROW_CONTENT_HEIGHT: f32 = 94.0;
+
 pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     use iced::widget::{image as image_widget, mouse_area, text_input};
 
@@ -659,20 +665,19 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                 } else {
                     png_path
                 };
-                // Letterbox the thumbnail inside a fixed 132×92 frame
-                // with a dim background so tall portrait captures don't
-                // sit flush against the row text — the dim border reads
-                // as deliberate framing rather than image stretching.
+                // Fill the whole row height and crop (Cover) rather than
+                // letterboxing (Contain): wide captures used to collapse
+                // into a thin strip in the middle of the row. The image
+                // widget clips Cover overflow to its bounds.
                 container(
                     image_widget(image_widget::Handle::from_path(path))
-                        .width(Length::Fixed(132.0))
-                        .height(Length::Fixed(92.0))
-                        .content_fit(iced::ContentFit::Contain),
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .content_fit(iced::ContentFit::Cover)
+                        .border_radius(6.0),
                 )
-                .width(Length::Fixed(132.0))
-                .height(Length::Fixed(92.0))
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
+                .width(Length::Fixed(HISTORY_THUMB_WIDTH))
+                .height(Length::Fill)
                 .style(|_| iced::widget::container::Style {
                     background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.22).into()),
                     border: iced::Border {
@@ -685,9 +690,9 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                 .into()
             } else {
                 container(text("Missing"))
-                    .width(Length::Fixed(132.0))
-                    .height(Length::Fixed(92.0))
-                    .center_x(Length::Fill)
+                    .width(Length::Fixed(HISTORY_THUMB_WIDTH))
+                    .height(Length::Fill)
+                    .center_x(Length::Fixed(HISTORY_THUMB_WIDTH))
                     .center_y(Length::Fill)
                     .into()
             };
@@ -703,12 +708,20 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
             ]
             .spacing(4)
             .width(Length::Fill);
+            // Fixed row height so the thumbnail's Fill height has a
+            // definite size; a long OCR snippet is clipped instead of
+            // stretching the row past the thumbnail.
+            let meta = container(meta)
+                .height(Length::Fill)
+                .center_y(Length::Fill)
+                .clip(true);
 
             let is_selected = state.history_selected_id == Some(r.id);
             let actions = history_row_actions(r.id, is_selected);
             let row_widget = container(
                 row![thumb, meta, actions]
                     .spacing(12)
+                    .height(Length::Fixed(HISTORY_ROW_CONTENT_HEIGHT))
                     .align_y(Alignment::Center),
             )
             .padding(10)
