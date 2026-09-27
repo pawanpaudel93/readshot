@@ -611,6 +611,58 @@ mod tests {
         }
     }
 
+    /// Stripe frame with a solid-red sticky header overlaid on the top
+    /// `header` rows (same in every frame, like a fixed nav bar).
+    fn header_frame(w: u32, h: u32, offset: u32, header: u32) -> RgbaImage {
+        let mut img = stripe_frame(w, h, offset);
+        for y in 0..header {
+            for x in 0..w {
+                img.put_pixel(x, y, Rgba([255, 0, 0, 255]));
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn sticky_top_header_is_not_re_pasted_below_the_scroll_region() {
+        // Exercises the sticky-*header* path through the full stitcher:
+        // detect_sticky reports `top_rows`, estimate clamps its search to
+        // `lo_y_b = top_rows`, and the paste loop's
+        // `src_y = (h - bottom).saturating_sub(dy).max(sticky.top_rows)`
+        // (the header clamp at ~204) keeps a strip from reaching up into
+        // the header. The header stays a single band at the very top and
+        // the scroll region below stitches normally.
+        let w = 32;
+        let h = 64;
+        let header = 6;
+        let frames: Vec<RgbaImage> = (0..3).map(|i| header_frame(w, h, i * 12, header)).collect();
+        let config = StitchConfig {
+            min_motion: 4,
+            ..StitchConfig::default()
+        };
+
+        // Sanity: the header is detected as a sticky top band.
+        let mask = detect_sticky(&frames, &config);
+        assert_eq!(mask.top_rows, header);
+        assert_eq!(mask.bottom_rows, 0);
+
+        let out = stitch_scrolling(&frames, config).unwrap();
+        // 64 + two accepted 12px scrolls.
+        assert_eq!(out.height(), 88);
+
+        let is_header_row = |y: u32| (0..w).all(|x| out.get_pixel(x, y).0 == [255, 0, 0, 255]);
+        // The header band renders exactly once, at the top.
+        for y in 0..header {
+            assert!(is_header_row(y), "row {y} should be the sticky header");
+        }
+        for y in header..out.height() {
+            assert!(
+                !is_header_row(y),
+                "header duplicated into scroll region at row {y}"
+            );
+        }
+    }
+
     #[test]
     fn stitch_feathers_shared_overlap_before_appending_new_rows() {
         let w = 32;

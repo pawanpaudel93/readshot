@@ -650,6 +650,47 @@ mod tests {
     }
 
     #[test]
+    fn nan_coordinates_do_not_panic() {
+        // A misbehaving backend could hand us NaN bounding boxes. Sorting
+        // (partial_cmp), median/em math, and the indent cast must all
+        // degrade gracefully rather than panic, and the text must survive.
+        let n = f32::NAN;
+        let lines = vec![
+            line("alpha", n, n, n, n),
+            line("beta", 0.0, n, 0.05, n),
+            line("gamma", n, 0.2, n, 0.04),
+        ];
+        let out = reconstruct(&lines);
+        assert!(out.contains("alpha"));
+        assert!(out.contains("beta"));
+        assert!(out.contains("gamma"));
+    }
+
+    #[test]
+    fn infinite_coordinates_do_not_panic() {
+        // ±inf indents cast to a saturating usize and are clamped to 80;
+        // this must not panic or allocate unboundedly.
+        let inf = f32::INFINITY;
+        let neg = f32::NEG_INFINITY;
+        let lines = vec![
+            line("left", 0.0, 0.10, 0.04, 0.04),
+            line("far", inf, 0.20, 0.03, 0.04),
+            line("back", neg, 0.30, 0.03, 0.04),
+            line("huge", 0.0, 0.40, inf, 0.04),
+        ];
+        let out = reconstruct(&lines);
+        assert!(out.contains("left"));
+        assert!(out.contains("far"));
+        assert!(out.contains("back"));
+        assert!(out.contains("huge"));
+        // No line should exceed the 80-space indent clamp plus its text.
+        for l in out.lines() {
+            let leading = l.len() - l.trim_start().len();
+            assert!(leading <= 80, "indent {leading} exceeded the clamp");
+        }
+    }
+
+    #[test]
     fn inconsistent_column_counts_remain_plain_text() {
         let lines = vec![
             line("Name", 0.00, 0.10, 0.04, 0.04),
