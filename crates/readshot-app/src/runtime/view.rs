@@ -427,6 +427,25 @@ pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
         .into()
 }
 
+/// A dark rounded code panel for a command block: matches the editor
+/// stage background with a subtle 1px border and radius-6 corners, and
+/// renders its contents in the bundled monospace family.
+fn cli_code_panel<'a>(commands: impl Into<String>) -> Element<'a, Message> {
+    container(text(commands.into()).size(13).font(mono_font()))
+        .padding(12)
+        .width(Length::Fill)
+        .style(|_: &Theme| container::Style {
+            background: Some(Color::from_rgb8(16, 20, 20).into()),
+            border: iced::Border {
+                color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
 pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
     let common = crate::cli_tools::common_commands();
     let verify = crate::cli_tools::verify_commands();
@@ -443,17 +462,13 @@ pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
                                 text(format!("For {}", shell.label())).size(18),
                                 Space::new().width(Length::Fill),
                                 button(text(format!("Copy {} Commands", shell.label())).size(13))
+                                    .padding([6, 12])
+                                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                                     .on_press(Message::CliToolsCopyRequested(shell)),
                             ]
                             .spacing(12)
                             .align_y(Alignment::Center),
-                            container(
-                                text(crate::cli_tools::shell_commands(shell))
-                                    .size(13)
-                                    .font(mono_font())
-                            )
-                            .padding(12)
-                            .width(Length::Fill),
+                            cli_code_panel(crate::cli_tools::shell_commands(shell)),
                         ]
                         .spacing(8),
                     )
@@ -464,20 +479,18 @@ pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
 
     container(
         column![
-            text("Command Line Tools").size(28),
-            text("Choose your shell and copy only that command block into Terminal.").size(14),
+            text("Command Line Tools").size(30),
+            text("Choose your shell and copy only that command block into Terminal.")
+                .size(13)
+                .color(settings_muted_text()),
             text(status).size(13),
             scrollable(
                 column![
                     text("Run for every shell").size(18),
-                    container(text(common).size(13).font(mono_font()))
-                        .padding(12)
-                        .width(Length::Fill),
+                    cli_code_panel(common),
                     shell_sections,
                     text("Verify").size(18),
-                    container(text(verify).size(13).font(mono_font()))
-                        .padding(12)
-                        .width(Length::Fill),
+                    cli_code_panel(verify),
                 ]
                 .spacing(12)
             )
