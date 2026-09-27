@@ -3198,7 +3198,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
 /// enum but don't render until they have content worth showing.
 pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     use iced::widget::{button, pick_list, text_input, toggler};
-    use readshot_core::{ExportFormat, HistoryRetention, OcrEngineChoice, UpdateChannel};
+    use readshot_core::{ExportFormat, HistoryRetention, OcrEngineChoice};
 
     // `pick_list` borrows its options for the duration of the
     // returned `Element`, so a `'static` slice keeps the lifetime
@@ -3213,7 +3213,6 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         [ExportFormat::Png, ExportFormat::Jpeg, ExportFormat::Webp];
     const ENGINE_OPTIONS: [OcrEngineChoice; 2] =
         [OcrEngineChoice::Native, OcrEngineChoice::Tesseract];
-    const CHANNEL_OPTIONS: [UpdateChannel; 2] = [UpdateChannel::Stable, UpdateChannel::Beta];
 
     let header = row![
         column![
@@ -3516,7 +3515,9 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     );
 
     // --- Advanced ------------------------------------------------------
-    let update_channel = state.preferences.update_channel;
+    // No update-channel picker: the appcast publishes no channel-tagged
+    // items and the Sparkle bridge sets no `allowedChannels`, so a
+    // Stable/Beta choice would change nothing.
     let debug_logging = state.preferences.debug_logging;
     let debug_toggle: Element<'_, Message> = toggler(debug_logging)
         .label("Verbose debug logging")
@@ -3524,22 +3525,12 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         .into();
     let advanced_section = settings_section(
         "Advanced",
-        "Updates and diagnostics",
-        column![
-            settings_field(
-                "Update channel",
-                "Beta receives pre-release builds sooner. Takes effect after restart.",
-                pick_list(&CHANNEL_OPTIONS[..], Some(update_channel), |c| {
-                    Message::Settings(SettingsMessage::SetUpdateChannel(c))
-                })
-                .into(),
-            ),
-            settings_field(
-                "Diagnostics",
-                "Logs at DEBUG level. Takes effect after restart.",
-                debug_toggle,
-            ),
-        ]
+        "Diagnostics",
+        column![settings_field(
+            "Diagnostics",
+            "Logs at DEBUG level. Takes effect after restart.",
+            debug_toggle,
+        ),]
         .spacing(14)
         .into(),
     );
