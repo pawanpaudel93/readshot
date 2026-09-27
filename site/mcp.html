@@ -20,7 +20,7 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <a class="skip-link" href="#main">Skip to Content</a>
+    <a class="skip-link" href="#main">Skip to content</a>
     <header class="shell">
       <nav class="nav" aria-label="Main navigation">
         <a class="brand" href="index.html">
@@ -42,7 +42,6 @@
     <main id="main">
       <section class="shell hero compact">
         <div class="hero-inner">
-          <p class="eyebrow">Documentation</p>
           <h1>MCP</h1>
           <p class="hero-copy">
             <code translate="no">readshot-mcp</code> lets AI agent hosts capture screenshots,
@@ -52,9 +51,23 @@
       </section>
 
       <div class="shell doc-layout">
+        <aside class="doc-nav" aria-label="MCP sections">
+          <strong>On this page</strong>
+          <div class="doc-nav-links">
+          <a href="#binary">Binary path</a>
+          <a href="#tools">Tools</a>
+          <a href="#arguments">Arguments</a>
+          <a href="#host-config">Host config</a>
+          <a href="#tool-calls">Tool calls</a>
+          <a href="#permissions">Permissions</a>
+          <a href="#verify">Verify</a>
+          <a href="#troubleshooting">Troubleshooting</a>
+          </div>
+        </aside>
+
         <article class="doc-main">
           <section class="doc-section" id="binary">
-            <h2>Binary Path</h2>
+            <h2>Binary path</h2>
             <p>
               The one-line macOS installer creates a
               <code translate="no">readshot-mcp</code> symlink in
@@ -73,7 +86,7 @@
               <tbody>
                 <tr>
                   <td>macOS</td>
-                  <td><code translate="no">/Applications/Readshot.app/Contents/MacOS/readshot-mcp</code></td>
+                  <td><code translate="no">/Applications/<wbr />Readshot.app/<wbr />Contents/<wbr />MacOS/<wbr />readshot-mcp</code></td>
                 </tr>
                 <tr>
                   <td>Source build</td>
@@ -111,7 +124,7 @@
                 </tr>
                 <tr>
                   <td><code translate="no">capture_text</code></td>
-                  <td>Capture a region or window and return OCR text.</td>
+                  <td>Capture a display region and return OCR text.</td>
                 </tr>
                 <tr>
                   <td><code translate="no">capture_region_and_text</code></td>
@@ -149,7 +162,7 @@
             <div class="code-panel">
               <pre><code translate="no">{ "x": 100, "y": 100, "width": 800, "height": 600 }</code></pre>
             </div>
-            <h3>Region Capture</h3>
+            <h3>Region capture</h3>
             <table class="data-table">
               <thead>
                 <tr>
@@ -177,7 +190,7 @@
               </tbody>
             </table>
 
-            <h3>Window Capture</h3>
+            <h3>Window capture</h3>
             <table class="data-table">
               <thead>
                 <tr>
@@ -201,7 +214,7 @@
               </tbody>
             </table>
 
-            <h3>OCR and History</h3>
+            <h3>OCR and history</h3>
             <table class="data-table">
               <thead>
                 <tr>
@@ -231,7 +244,7 @@
           </section>
 
           <section class="doc-section" id="host-config">
-            <h2>Host Config</h2>
+            <h2>Host config</h2>
             <p>
               Generate the standard JSON snippet from the CLI:
             </p>
@@ -304,7 +317,7 @@ command = "/Applications/Readshot.app/Contents/MacOS/readshot-mcp"</code></pre>
           </section>
 
           <section class="doc-section" id="tool-calls">
-            <h2>Tool Call Examples</h2>
+            <h2>Tool call examples</h2>
             <p>Capture a region and return both pixels and OCR text:</p>
             <div class="code-panel">
               <pre><code translate="no">{
@@ -427,17 +440,6 @@ printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' \
           </section>
         </article>
 
-        <aside class="doc-nav" aria-label="MCP sections">
-          <strong>On this page</strong>
-          <a href="#binary">Binary path</a>
-          <a href="#tools">Tools</a>
-          <a href="#arguments">Arguments</a>
-          <a href="#host-config">Host config</a>
-          <a href="#tool-calls">Tool calls</a>
-          <a href="#permissions">Permissions</a>
-          <a href="#verify">Verify</a>
-          <a href="#troubleshooting">Troubleshooting</a>
-        </aside>
       </div>
       <span class="copy-status" aria-live="polite"></span>
     </main>

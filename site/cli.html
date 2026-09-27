@@ -20,7 +20,7 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <a class="skip-link" href="#main">Skip to Content</a>
+    <a class="skip-link" href="#main">Skip to content</a>
     <header class="shell">
       <nav class="nav" aria-label="Main navigation">
         <a class="brand" href="index.html">
@@ -42,7 +42,6 @@
     <main id="main">
       <section class="shell hero compact">
         <div class="hero-inner">
-          <p class="eyebrow">Documentation</p>
           <h1>CLI</h1>
           <p class="hero-copy">
             The <code translate="no">readshot</code> command ships inside the macOS app.
@@ -52,9 +51,27 @@
       </section>
 
       <div class="shell doc-layout">
+        <aside class="doc-nav" aria-label="CLI sections">
+          <strong>On this page</strong>
+          <div class="doc-nav-links">
+          <a href="#common">Common commands</a>
+          <a href="#commands">Commands</a>
+          <a href="#interactive">Interactive capture</a>
+          <a href="#targets">Targets</a>
+          <a href="#image-output">Image output</a>
+          <a href="#text-output">Text output</a>
+          <a href="#combined">Image and OCR</a>
+          <a href="#mcp-config">MCP config</a>
+          <a href="#json-output">JSON output</a>
+          <a href="#completions">Completions</a>
+          <a href="#options">Options</a>
+          <a href="#destinations">Destinations</a>
+          </div>
+        </aside>
+
         <article class="doc-main">
           <section class="doc-section" id="common">
-            <h2>Common Commands</h2>
+            <h2>Common commands</h2>
             <p>These cover the usual capture, OCR, clipboard, and window workflows.</p>
             <div class="code-panel">
               <div class="code-panel-header">
@@ -146,7 +163,7 @@ readshot completions zsh</code></pre>
           </section>
 
           <section class="doc-section" id="interactive">
-            <h2>Interactive Capture</h2>
+            <h2>Interactive capture</h2>
             <p>
               <code translate="no">--interactive</code> opens the same Readshot region selector used by the app.
               Drag a region and release to capture immediately. Press <code>Enter</code>
@@ -186,7 +203,7 @@ readshot capture-window --window 11474 --rect 40,40,900,600 --output panel.png</
           </section>
 
           <section class="doc-section" id="image-output">
-            <h2>Image Output</h2>
+            <h2>Image output</h2>
             <p>
               <code translate="no">capture</code> and
               <code translate="no">capture-window</code> write PNG by default.
@@ -218,11 +235,11 @@ readshot capture --interactive --clipboard --json</code></pre>
           </section>
 
           <section class="doc-section" id="text-output">
-            <h2>Text Output</h2>
+            <h2>Text output</h2>
             <p>
               <code translate="no">capture-text</code> captures a region, runs OCR,
               and writes recognized text. <code translate="no">ocr</code> runs OCR
-              on an existing image. OCR uses automatic language detection by default.
+              on an existing image. Without <code translate="no">--languages</code>, OCR uses the engine's default languages.
             </p>
             <div class="code-panel">
               <pre><code translate="no">readshot capture-text --interactive
@@ -252,7 +269,7 @@ readshot ocr --input capture.png --json</code></pre>
           </section>
 
           <section class="doc-section" id="combined">
-            <h2>Combined Image and OCR</h2>
+            <h2>Combined image and OCR</h2>
             <p>
               <code translate="no">capture-and-ocr</code> writes OCR text and can save
               the captured image at the same time.
@@ -265,7 +282,7 @@ readshot capture-and-ocr --interactive --also-image capture.png --json</code></p
           </section>
 
           <section class="doc-section" id="mcp-config">
-            <h2>MCP Config</h2>
+            <h2>MCP config</h2>
             <p>
               <code translate="no">mcp-config</code> prints a standard
               <code translate="no">mcpServers</code> JSON snippet for MCP stdio hosts.
@@ -279,7 +296,7 @@ readshot mcp-config --command /Applications/Readshot.app/Contents/MacOS/readshot
           </section>
 
           <section class="doc-section" id="json-output">
-            <h2>JSON Output</h2>
+            <h2>JSON output</h2>
             <p>
               <code translate="no">--json</code> returns stable metadata for scripts.
               Capture JSON includes <code translate="no">kind</code>, image size,
@@ -295,7 +312,7 @@ readshot ocr --input capture.png --json</code></pre>
           </section>
 
           <section class="doc-section" id="completions">
-            <h2>Shell Completions</h2>
+            <h2>Shell completions</h2>
             <p>
               Generate zsh, bash, fish, PowerShell, or Elvish completions from
               the same command tree used by <code translate="no">readshot --help</code>.
@@ -308,7 +325,7 @@ readshot completions fish &gt; readshot.fish</code></pre>
           </section>
 
           <section class="doc-section" id="options">
-            <h2>Timing, Cursor, and Window Options</h2>
+            <h2>Timing, cursor, and window options</h2>
             <p>
               Use <code translate="no">--delay SECONDS</code> for menus, popovers,
               hover states, or other transient UI. The cursor is hidden by default;
@@ -327,7 +344,7 @@ readshot capture-window --window 11474 --no-window-shadow --output tight.png</co
           </section>
 
           <section class="doc-section" id="destinations">
-            <h2>Output Destinations</h2>
+            <h2>Output destinations</h2>
             <table class="data-table">
               <thead>
                 <tr>
@@ -365,21 +382,6 @@ readshot capture-window --window 11474 --no-window-shadow --output tight.png</co
           </section>
         </article>
 
-        <aside class="doc-nav" aria-label="CLI sections">
-          <strong>On this page</strong>
-          <a href="#common">Common commands</a>
-          <a href="#commands">Commands</a>
-          <a href="#interactive">Interactive capture</a>
-          <a href="#targets">Targets</a>
-          <a href="#image-output">Image output</a>
-          <a href="#text-output">Text output</a>
-          <a href="#combined">Image and OCR</a>
-          <a href="#mcp-config">MCP config</a>
-          <a href="#json-output">JSON output</a>
-          <a href="#completions">Completions</a>
-          <a href="#options">Options</a>
-          <a href="#destinations">Destinations</a>
-        </aside>
       </div>
       <span class="copy-status" aria-live="polite"></span>
     </main>

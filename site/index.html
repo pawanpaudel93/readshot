@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Readshot</title>
+    <title>Readshot: screenshots and OCR for macOS</title>
     <meta
       name="description"
       content="Readshot is a free offline screenshot, scrolling-capture, and OCR app for macOS."
@@ -20,7 +20,7 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <a class="skip-link" href="#main">Skip to Content</a>
+    <a class="skip-link" href="#main">Skip to content</a>
     <header class="shell">
       <nav class="nav" aria-label="Main navigation">
         <a class="brand" href="index.html">
@@ -30,7 +30,7 @@
           <span>Readshot</span>
         </a>
         <div class="nav-links">
-          <a href="#install" aria-current="page">Install</a>
+          <a href="#install">Install</a>
           <a href="#features">Features</a>
           <a href="cli.html">CLI</a>
           <a href="mcp.html">MCP</a>
@@ -40,24 +40,25 @@
     </header>
 
     <main id="main">
-      <section class="shell hero" id="install">
+      <section class="shell hero hero-split" id="install">
         <div class="hero-inner">
-          <p class="eyebrow">Offline Screenshot OCR</p>
-          <h1>Readshot</h1>
+          <h1>Screenshots you can copy text from</h1>
           <p class="hero-copy">
-            Capture regions or scrolling pages, annotate screenshots, copy recognized text,
-            and search local history. No image data leaves your Mac.
+            Readshot captures a region, a window, or a whole scrolling page, reads the
+            text with on-device OCR, and keeps a searchable history. Nothing leaves your Mac.
           </p>
           <div class="actions">
-            <a class="button primary" href="https://github.com/pawanpaudel93/readshot/releases"
-              >Download</a
+            <a class="button primary" href="https://github.com/pawanpaudel93/readshot/releases/latest"
+              >Download for macOS</a
             >
             <a class="button secondary" href="https://github.com/pawanpaudel93/readshot"
-              >Source</a
+              >View source</a
             >
           </div>
+          <p class="requirements">Free and open source. macOS 14 or later, Apple Silicon or Intel.</p>
           <div class="install">
-            <div class="command">
+            <p class="install-label" id="install-label">Or install from Terminal</p>
+            <div class="command" role="group" aria-labelledby="install-label">
               <code class="desktop-command" translate="no"
                 >curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash</code
               >
@@ -74,61 +75,65 @@
                 data-copy="curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash"
               >
                 <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <rect
-                    x="9"
-                    y="9"
-                    width="11"
-                    height="11"
-                    rx="2"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  />
-                  <path
-                    d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-linecap="round"
-                    stroke-width="2"
-                  />
+                  <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" />
                 </svg>
                 <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path
-                    d="M20 6 9 17l-5-5"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2.4"
-                  />
+                  <path d="M20 6 9 17l-5-5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.4" />
                 </svg>
               </button>
             </div>
             <span class="copy-status" aria-live="polite"></span>
           </div>
         </div>
+
+        <figure class="demo">
+          <div class="demo-screen" aria-hidden="true">
+            <div class="demo-bar"><span></span><span></span><span></span></div>
+            <div class="demo-slide">
+              <p class="demo-slide-title">Q3 planning review</p>
+              <div class="demo-selected">
+                <p class="demo-line">Ship offline OCR to all users by October 14.</p>
+                <p class="demo-line">Scrolling capture: stitch pages up to 40 frames.</p>
+                <div class="demo-marquee">
+                  <span class="demo-handle tl"></span><span class="demo-handle tr"></span>
+                  <span class="demo-handle bl"></span><span class="demo-handle br"></span>
+                  <span class="demo-size">412 × 96</span>
+                </div>
+              </div>
+              <p class="demo-line">History search must stay under 50 ms.</p>
+            </div>
+          </div>
+          <div class="demo-result">
+            <p class="demo-result-label">Copied text</p>
+            <p class="demo-result-text" translate="no">Ship offline OCR to all users by October 14.<br />Scrolling capture: stitch pages up to 40 frames.</p>
+          </div>
+          <figcaption class="sr-only">
+            Illustration: a region of a slide is selected and its text is recognized and copied.
+          </figcaption>
+        </figure>
       </section>
 
-      <section class="shell section" id="features">
-        <h2>Features</h2>
-        <div class="grid">
-          <div class="card">
-            <strong>Capture</strong>
-            <p>Menu-bar capture, global hotkey, window capture, and multi-monitor support.</p>
+      <section class="shell section" id="features" aria-labelledby="features-title">
+        <h2 id="features-title">What it does</h2>
+        <dl class="feature-list">
+          <div>
+            <dt>Capture</dt>
+            <dd>Grab a region, a window, or a full display from the menu bar or a global hotkey. Works across multiple monitors.</dd>
           </div>
-          <div class="card">
-            <strong>Scrolling capture</strong>
-            <p>Lock a region, scroll the page, and Readshot stitches the frames into one tall image.</p>
+          <div>
+            <dt>Scrolling capture</dt>
+            <dd>Lock a region, scroll the page, and Readshot stitches the frames into one tall image.</dd>
           </div>
-          <div class="card">
-            <strong>Edit</strong>
-            <p>Arrows, shapes, pen, highlighter, blur, pixelate, crop, undo, and redo.</p>
+          <div>
+            <dt>Annotate</dt>
+            <dd>Arrows, shapes, text, pen, highlighter, blur, pixelate, and crop, with undo and redo.</dd>
           </div>
-          <div class="card">
-            <strong>Search</strong>
-            <p>Apple Vision OCR indexes captures locally for searchable history.</p>
+          <div>
+            <dt>Copy and search text</dt>
+            <dd>Apple Vision reads the text on your Mac. Copy it right away, or find any past capture by what it says.</dd>
           </div>
-        </div>
+        </dl>
       </section>
 
       <section class="shell section" aria-labelledby="automation-title">
@@ -140,9 +145,8 @@
               Use Readshot from shell scripts for capture, OCR, clipboard output,
               delay timers, and image format conversion.
             </p>
-            <div class="terminal">
-              <code translate="no">readshot capture --interactive -o capture.png --json<br />readshot completions zsh</code>
-            </div>
+            <pre class="terminal"><code translate="no">readshot capture --interactive -o capture.png
+readshot capture-text --interactive --clipboard</code></pre>
             <p class="card-action"><a href="cli.html">Read CLI documentation</a></p>
           </div>
           <div class="card">
@@ -151,9 +155,8 @@
               Connect agent clients to local screenshot, OCR, window capture, and
               history search tools over stdio.
             </p>
-            <div class="terminal">
-              <code translate="no">readshot mcp-config<br />readshot-mcp --check</code>
-            </div>
+            <pre class="terminal"><code translate="no">readshot mcp-config
+readshot-mcp --check</code></pre>
             <p class="card-action"><a href="mcp.html">Read MCP documentation</a></p>
           </div>
         </div>
