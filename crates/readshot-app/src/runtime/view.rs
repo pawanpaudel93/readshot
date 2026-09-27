@@ -3799,9 +3799,12 @@ pub(crate) fn ocr_language_control(
         let checked = selected.iter().any(|l| l == &lang);
         let selected_now = selected.to_vec();
         let toggle_lang = lang.clone();
+        // Show a human-readable name (e.g. "Chinese (Simplified)") but
+        // keep storing the raw BCP-47 code that Vision reports.
+        let display = ocr_language_display_name(&lang);
         items.push(
             iced::widget::checkbox(checked)
-                .label(lang)
+                .label(display)
                 .size(16)
                 .text_size(13)
                 .on_toggle(move |now| {
@@ -3819,6 +3822,48 @@ pub(crate) fn ocr_language_control(
         );
     }
     iced::widget::Column::with_children(items).spacing(6).into()
+}
+
+/// Human-readable display name for a BCP-47 language code that Apple
+/// Vision reports from `supportedRecognitionLanguages`. The stored
+/// preference keeps the raw code; this only affects what the OCR
+/// language checkboxes show. Unknown codes fall back to the raw code so
+/// a new OS language never renders blank.
+pub(crate) fn ocr_language_display_name(code: &str) -> String {
+    let name = match code {
+        "en-US" => "English (US)",
+        "fr-FR" => "French",
+        "it-IT" => "Italian",
+        "de-DE" => "German",
+        "es-ES" => "Spanish",
+        "pt-BR" => "Portuguese (Brazil)",
+        "zh-Hans" => "Chinese (Simplified)",
+        "zh-Hant" => "Chinese (Traditional)",
+        "yue-Hans" => "Cantonese (Simplified)",
+        "yue-Hant" => "Cantonese (Traditional)",
+        "ko-KR" => "Korean",
+        "ja-JP" => "Japanese",
+        "ru-RU" => "Russian",
+        "uk-UA" => "Ukrainian",
+        "th-TH" => "Thai",
+        "vi-VT" | "vi-VN" => "Vietnamese",
+        "ar-SA" => "Arabic",
+        "ars-SA" => "Arabic (Najdi)",
+        "tr-TR" => "Turkish",
+        "id-ID" => "Indonesian",
+        "cs-CZ" => "Czech",
+        "da-DK" => "Danish",
+        "nl-NL" => "Dutch",
+        "no-NO" => "Norwegian",
+        "nb-NO" => "Norwegian Bokmål",
+        "nn-NO" => "Norwegian Nynorsk",
+        "ms-MY" => "Malay",
+        "pl-PL" => "Polish",
+        "ro-RO" => "Romanian",
+        "sv-SE" => "Swedish",
+        other => other,
+    };
+    name.to_string()
 }
 
 pub(crate) fn setting_value_box(value: String, active: bool) -> Element<'static, Message> {
@@ -4164,4 +4209,30 @@ pub(crate) fn welcome_button_label<'a>(
     .align_x(iced::alignment::Horizontal::Center)
     .align_y(iced::alignment::Vertical::Center)
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ocr_language_display_name;
+
+    #[test]
+    fn ocr_language_display_name_maps_known_codes() {
+        assert_eq!(ocr_language_display_name("en-US"), "English (US)");
+        assert_eq!(ocr_language_display_name("zh-Hans"), "Chinese (Simplified)");
+        assert_eq!(
+            ocr_language_display_name("zh-Hant"),
+            "Chinese (Traditional)"
+        );
+        assert_eq!(ocr_language_display_name("pt-BR"), "Portuguese (Brazil)");
+        assert_eq!(ocr_language_display_name("nb-NO"), "Norwegian Bokmål");
+        assert_eq!(ocr_language_display_name("vi-VN"), "Vietnamese");
+        assert_eq!(ocr_language_display_name("vi-VT"), "Vietnamese");
+    }
+
+    #[test]
+    fn ocr_language_display_name_falls_back_to_raw_code() {
+        // An unrecognised / future OS code renders verbatim, never blank.
+        assert_eq!(ocr_language_display_name("xx-YY"), "xx-YY");
+        assert_eq!(ocr_language_display_name(""), "");
+    }
 }
