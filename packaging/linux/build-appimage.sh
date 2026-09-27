@@ -33,9 +33,11 @@ chmod +x "${APP_DIR}/usr/bin/readshot"
 cp packaging/linux/readshot.desktop "${APP_DIR}/readshot.desktop"
 cp packaging/linux/readshot.desktop "${APP_DIR}/usr/share/applications/readshot.desktop"
 
-cp packaging/linux/readshot.png "${APP_DIR}/readshot.png" 2>/dev/null || \
+# The AppDir root icon must be named after the desktop file's
+# `Icon=np.com.pawanpaudel.readshot` key; appimagetool derives .DirIcon
+# from it. A mismatched name (readshot.png) leaves the AppImage iconless.
+cp packaging/linux/readshot.png "${APP_DIR}/np.com.pawanpaudel.readshot.png" 2>/dev/null || \
   echo "warning: packaging/linux/readshot.png missing — AppImage will be iconless"
-cp packaging/linux/readshot.png "${APP_DIR}/usr/share/icons/hicolor/512x512/apps/readshot.png" 2>/dev/null || true
 cp packaging/linux/readshot.png \
   "${APP_DIR}/usr/share/icons/hicolor/512x512/apps/np.com.pawanpaudel.readshot.png" \
   2>/dev/null || true
