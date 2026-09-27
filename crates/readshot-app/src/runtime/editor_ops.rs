@@ -537,7 +537,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 readshot_ui::CanvasMessage::SelectPressed(p) => {
                     cancel_editor_previews(ed);
                     commit_pending_editor_text(ed, &state.coordinator);
-                    if let Some(handle) = ed.model.resize_handle_at(p) {
+                    let scale = ed.render_scale.get();
+                    if let Some(handle) = ed.model.resize_handle_at_scaled(p, scale) {
                         let Some(selected_index) = ed.model.selected_annotation() else {
                             return Task::none();
                         };
@@ -548,7 +549,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                             moved: false,
                             kind: crate::editor::MoveDragKind::Resize(handle),
                         });
-                    } else if let Some(selected_index) = ed.model.select_at(p) {
+                    } else if let Some(selected_index) = ed.model.select_at_scaled(p, scale) {
                         ed.move_drag = Some(crate::editor::MoveDrag {
                             baseline: ed.model.annotations().to_vec(),
                             selected_index,

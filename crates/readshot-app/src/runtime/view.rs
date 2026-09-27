@@ -1391,11 +1391,17 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             drag.moved && can_preview_drag_annotation(&drag.baseline, drag.selected_index)
         })
         .and_then(|drag| ed.model.annotations().get(drag.selected_index).cloned());
+    // Interior-mutable handle so the responsive closure can record the
+    // scale it renders at; the runtime reads it back to hit-test grabs.
+    let render_scale = ed.render_scale.clone();
     let image_area_content = responsive(move |available| {
         let iw = image_w as f32;
         let ih = image_h as f32;
         let fit_scale = editor_fit_scale(available, image_w, image_h);
         let scale = zoom.explicit_scale().unwrap_or(fit_scale);
+        // Record the scale this frame renders at so the runtime's press
+        // handlers hit-test handles/bodies with a screen-constant radius.
+        render_scale.set(scale);
         let displayed_w = (iw * scale).max(1.0);
         let displayed_h = (ih * scale).max(1.0);
         let frame_preset =

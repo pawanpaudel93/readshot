@@ -18,7 +18,27 @@ use super::tool_state::ToolState;
 use super::undo::History;
 
 const DEFAULT_LINE_WIDTH: f32 = 3.0;
-pub(crate) const HANDLE_HIT_RADIUS: f32 = 8.0;
+
+/// Resize-handle grab radius in *screen* pixels. Hit-testing scales this
+/// by the canvas→base display scale so the grab target stays a constant
+/// size on screen at any zoom (mirrors the overlay's `HANDLE_HIT = 14.0`).
+/// The old fixed base-pixel radius grabbed only ~2 screen px when a 4K
+/// capture was fitted (scale ~0.25) and a huge area at 400% zoom.
+pub(crate) const HANDLE_HIT_RADIUS_SCREEN: f32 = 14.0;
+
+/// Annotation body / stroke hit tolerance in *screen* pixels, scaled the
+/// same way as the handle radius so clicking near an edge or thin stroke
+/// stays equally forgiving regardless of zoom.
+pub(crate) const HIT_TOLERANCE_SCREEN: f32 = 6.0;
+
+/// Convert a screen-pixel tolerance into base-image pixels for hit-testing
+/// against annotation geometry (which is stored in base coords). `scale`
+/// is displayed-pixels per base-pixel; a smaller scale (fitted-down large
+/// capture) yields a larger base-pixel tolerance so the on-screen target
+/// is constant.
+pub(crate) fn hit_tolerance_base(screen: f32, scale: f32) -> f32 {
+    (screen / scale.max(f32::EPSILON)).max(0.5)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResizeHandle {
@@ -201,19 +221,37 @@ impl EditorState {
         annotation_resize_handles(&self.history.current()[idx])
     }
 
+    /// Hit-test the selected annotation's resize handles at the default
+    /// 1:1 display scale. Prefer [`resize_handle_at_scaled`] from the
+    /// interactive canvas so the grab radius stays constant on screen.
     pub fn resize_handle_at(&self, point: PointLike) -> Option<ResizeHandle> {
+        self.resize_handle_at_scaled(point, 1.0)
+    }
+
+    /// Hit-test resize handles with the current canvas→base display
+    /// `scale` (displayed px per base px) so the grab radius is constant
+    /// in screen pixels regardless of zoom.
+    pub fn resize_handle_at_scaled(&self, point: PointLike, scale: f32) -> Option<ResizeHandle> {
         let idx = self.selected_annotation()?;
-        annotation_resize_handle_at(&self.history.current()[idx], point)
+        annotation_resize_handle_at(&self.history.current()[idx], point, scale)
     }
 
     pub fn select_at(&mut self, point: PointLike) -> Option<usize> {
+        self.select_at_scaled(point, 1.0)
+    }
+
+    /// Select the topmost annotation under `point`, using the current
+    /// display `scale` to keep the hit tolerance constant on screen.
+    pub fn select_at_scaled(&mut self, point: PointLike, scale: f32) -> Option<usize> {
         let hit = self
             .history
             .current()
             .iter()
             .enumerate()
             .rev()
-            .find_map(|(idx, annotation)| annotation_hit_test(annotation, point).then_some(idx));
+            .find_map(|(idx, annotation)| {
+                annotation_hit_test(annotation, point, scale).then_some(idx)
+            });
         self.selected_annotation = hit;
         hit
     }
@@ -456,26 +494,30 @@ enum CropClampMode {
 /// same rule `select_at` uses to pick it: stroke distance for line/pen
 /// kinds, a radius for pins, bbox-with-tolerance for everything else. The
 /// canvas reuses this so the hover/move cursor matches what a press does.
-pub(crate) fn annotation_hit_test(annotation: &Annotation, point: PointLike) -> bool {
-    const TOLERANCE: f32 = 6.0;
+pub(crate) fn annotation_hit_test(annotation: &Annotation, point: PointLike, scale: f32) -> bool {
+    // Tolerance is a constant number of *screen* pixels; convert to base
+    // pixels for the current display scale. The stroke half-width part
+    // (`line_width * 0.5`) stays in base coords because the drawn stroke
+    // scales with the image; only the extra grab slack is screen-constant.
+    let tolerance = hit_tolerance_base(HIT_TOLERANCE_SCREEN, scale);
     match annotation {
         Annotation::Line {
             a, b, line_width, ..
         }
         | Annotation::Arrow {
             a, b, line_width, ..
-        } => distance_to_segment(point, *a, *b) <= (*line_width * 0.5).max(TOLERANCE),
+        } => distance_to_segment(point, *a, *b) <= (*line_width * 0.5).max(tolerance),
         Annotation::Pen {
             points, line_width, ..
         }
         | Annotation::Highlighter {
             points, line_width, ..
         } => points.windows(2).any(|pair| {
-            distance_to_segment(point, pair[0], pair[1]) <= (*line_width * 0.5).max(TOLERANCE)
+            distance_to_segment(point, pair[0], pair[1]) <= (*line_width * 0.5).max(tolerance)
         }),
         Annotation::NumberedPin { origin, .. } => distance(point, *origin) <= 16.0,
         _ => {
-            annotation_bounds(annotation).is_some_and(|rect| rect_contains(rect, point, TOLERANCE))
+            annotation_bounds(annotation).is_some_and(|rect| rect_contains(rect, point, tolerance))
         }
     }
 }
@@ -623,10 +665,15 @@ fn annotation_bounds(annotation: &Annotation) -> Option<RectLike> {
     }
 }
 
-fn annotation_resize_handle_at(annotation: &Annotation, point: PointLike) -> Option<ResizeHandle> {
+fn annotation_resize_handle_at(
+    annotation: &Annotation,
+    point: PointLike,
+    scale: f32,
+) -> Option<ResizeHandle> {
+    let radius = hit_tolerance_base(HANDLE_HIT_RADIUS_SCREEN, scale);
     annotation_resize_handles(annotation)
         .into_iter()
-        .find_map(|(handle, p)| (distance(point, p) <= HANDLE_HIT_RADIUS).then_some(handle))
+        .find_map(|(handle, p)| (distance(point, p) <= radius).then_some(handle))
 }
 
 fn annotation_resize_handles(annotation: &Annotation) -> Vec<(ResizeHandle, PointLike)> {
@@ -1392,5 +1439,50 @@ mod tests {
         // Suppress unused-import-of-PointLike when only some test
         // bodies reference it; this keeps imports symmetric.
         let _ = PointLike::new(0.0, 0.0);
+    }
+
+    #[test]
+    fn handle_hit_radius_is_constant_in_screen_pixels() {
+        let mut s = EditorState::new(solid_base(256, 256));
+        // A large rect so its eight handles are far apart and a probe near
+        // one corner can only match that corner.
+        s.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(20.0, 20.0, 200.0, 200.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+        });
+        assert_eq!(s.select_at(PointLike::new(30.0, 30.0)), Some(0));
+
+        // SE corner is at (220, 220); probe 12 base px east of it. The next
+        // nearest handle (E or S) is ~100 base px away.
+        let probe = PointLike::new(232.0, 220.0);
+
+        // Fitted-down 4K-style view (scale 0.25): the 14 screen-px radius is
+        // 56 base px, so 12 base px is a comfortable grab.
+        assert_eq!(
+            s.resize_handle_at_scaled(probe, 0.25),
+            Some(ResizeHandle::SouthEast)
+        );
+
+        // Zoomed in 4x: the radius shrinks to 3.5 base px, so 12 base px
+        // (48 screen px) is out of reach — no accidental grab.
+        assert_eq!(s.resize_handle_at_scaled(probe, 4.0), None);
+    }
+
+    #[test]
+    fn select_tolerance_scales_with_display_scale() {
+        let mut s = EditorState::new(solid_base(256, 256));
+        s.commit_annotation(Annotation::Line {
+            a: PointLike::new(20.0, 20.0),
+            b: PointLike::new(200.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+        });
+
+        // 10 base px off the stroke. At scale 1.0 the 6-screen-px tolerance
+        // is 6 base px → miss. At scale 0.25 it becomes 24 base px → hit.
+        let probe = PointLike::new(100.0, 30.0);
+        assert_eq!(s.select_at_scaled(probe, 1.0), None);
+        assert_eq!(s.select_at_scaled(probe, 0.25), Some(0));
     }
 }

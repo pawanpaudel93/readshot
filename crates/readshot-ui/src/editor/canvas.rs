@@ -27,7 +27,9 @@ use iced::{mouse::Cursor, Color, Point, Rectangle, Renderer, Theme};
 
 use readshot_core::{Annotation, PointLike, RectLike, Rgba as CoreRgba};
 
-use super::state::{annotation_hit_test, ResizeHandle, HANDLE_HIT_RADIUS};
+use super::state::{
+    annotation_hit_test, hit_tolerance_base, ResizeHandle, HANDLE_HIT_RADIUS_SCREEN,
+};
 use super::tool_state::ToolState;
 
 /// Canvas state: tracks the kind of in-progress interaction so the
@@ -300,7 +302,9 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 let image_point =
                     Point::new(local.x + self.image_offset.0, local.y + self.image_offset.1);
                 let base = PointLike::new(image_point.x, image_point.y);
-                let pressed_selected_handle = self.selected_handle_at(base).is_some();
+                let scale = display_scale_for_bounds(bounds, self.image_size, self.display_scale)
+                    .unwrap_or(1.0);
+                let pressed_selected_handle = self.selected_handle_at(base, scale).is_some();
                 if self.active_tool == ToolState::Select || pressed_selected_handle {
                     *state = DrawState::Selecting { last: base };
                     return Some(
@@ -756,10 +760,12 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
         )
         .map(|p| PointLike::new(p.x, p.y));
 
+        let scale =
+            display_scale_for_bounds(bounds, self.image_size, self.display_scale).unwrap_or(1.0);
         if let Some(base) = base {
             // Resize handles win over the body so corner/edge grabs stay
             // discoverable even where they overlap the selection bounds.
-            if let Some(handle) = self.selected_handle_at(base) {
+            if let Some(handle) = self.selected_handle_at(base, scale) {
                 return resize_handle_cursor(handle);
             }
             // Hovering the selected annotation's body offers a move
@@ -771,7 +777,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 && self
                     .selected_annotation
                     .as_ref()
-                    .is_some_and(|a| annotation_hit_test(a, base))
+                    .is_some_and(|a| annotation_hit_test(a, base, scale))
             {
                 return iced::mouse::Interaction::Move;
             }
@@ -800,11 +806,15 @@ fn resize_handle_cursor(handle: ResizeHandle) -> iced::mouse::Interaction {
 }
 
 impl EditorCanvas {
-    fn selected_handle_at(&self, point: PointLike) -> Option<ResizeHandle> {
+    /// Hit-test the selected annotation's handles. `scale` is the
+    /// canvas→base display scale so the grab radius is a constant number
+    /// of screen pixels at any zoom.
+    fn selected_handle_at(&self, point: PointLike, scale: f32) -> Option<ResizeHandle> {
+        let radius = hit_tolerance_base(HANDLE_HIT_RADIUS_SCREEN, scale);
         self.selected_handles.iter().find_map(|(handle, center)| {
             let dx = point.x - center.x;
             let dy = point.y - center.y;
-            (dx.hypot(dy) <= HANDLE_HIT_RADIUS).then_some(*handle)
+            (dx.hypot(dy) <= radius).then_some(*handle)
         })
     }
 }

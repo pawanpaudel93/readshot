@@ -121,6 +121,22 @@ pub struct EditorSession {
     /// Optional presentation frame applied to image outputs from this
     /// editor window. `No Frame` keeps Save / Copy / Pin pixel-exact.
     pub frame_style: EditorFrameStyle,
+    /// True while a shape/freehand drag is in progress on the canvas
+    /// (between `DragStarted` and its `Cancelled`/`CommitAnnotation`).
+    /// Escape uses this to decide whether to cancel the drag or fall
+    /// through to the discard shortcut.
+    pub canvas_drag_active: bool,
+    /// Monotonic counter bumped when Escape cancels a live canvas drag.
+    /// Threaded into the `EditorCanvas` program so the widget can drop the
+    /// drag on its next event — iced 0.14 never delivers the Escape key to
+    /// the canvas itself.
+    pub drag_cancel_seq: u64,
+    /// The displayed-pixels-per-base-pixel scale used by the most recent
+    /// `view()`. The canvas hit-tests handle/body grabs in base coords, so
+    /// the runtime feeds this back into `select_at_scaled` /
+    /// `resize_handle_at_scaled` to keep grab targets constant on screen.
+    /// Interior-mutable so `view()` (which takes `&self`) can record it.
+    pub render_scale: std::rc::Rc<std::cell::Cell<f32>>,
     /// Tessellated-geometry cache for the annotation canvas. Shared
     /// (cheap-clone `Rc`) into the freshly-built `EditorCanvas` program
     /// each `view()`. Background polling subscriptions (hotkey / tray /
@@ -339,6 +355,9 @@ impl EditorSession {
             move_drag: None,
             width_drag_baseline: None,
             frame_style: EditorFrameStyle::None,
+            canvas_drag_active: false,
+            drag_cancel_seq: 0,
+            render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
             canvas_cache: std::rc::Rc::new(iced::widget::canvas::Cache::default()),
             output_checkpoint,
             crop_drag_flat: None,
@@ -377,6 +396,9 @@ impl EditorSession {
             move_drag: None,
             width_drag_baseline: None,
             frame_style: EditorFrameStyle::None,
+            canvas_drag_active: false,
+            drag_cancel_seq: 0,
+            render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
             canvas_cache: std::rc::Rc::new(iced::widget::canvas::Cache::default()),
             output_checkpoint,
             crop_drag_flat: None,
