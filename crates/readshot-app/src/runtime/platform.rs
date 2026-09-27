@@ -144,7 +144,7 @@ pub(crate) fn notify_running_in_menu_bar(hotkey: &str) {
 pub(crate) fn notify_update_check_started() {
     #[cfg(target_os = "macos")]
     {
-        show_macos_notification("Readshot updates", "Checking for updates...");
+        show_macos_notification("Readshot updates", "Checking for updates…");
     }
 }
 

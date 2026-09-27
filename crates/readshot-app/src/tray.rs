@@ -110,7 +110,11 @@ fn menu_items(_hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<
 }
 
 fn capture_menu_label() -> &'static str {
-    "Capture"
+    // macOS convention: a trailing ellipsis marks a command that needs
+    // more input before it completes. Both Capture and Scrolling Capture
+    // open the interactive overlay for the user to drag out a region, so
+    // both take "…". Retake Last Region acts immediately and does not.
+    "Capture…"
 }
 
 fn capture_menu_accelerator(raw_hotkey: Option<&str>) -> Option<Accelerator> {
@@ -524,8 +528,10 @@ mod tests {
     }
 
     #[test]
-    fn capture_menu_label_stays_plain_when_hotkey_known() {
-        assert_eq!(capture_menu_label(), "Capture");
+    fn capture_menu_label_uses_ellipsis_for_interactive_flow() {
+        // The overlay asks for a region before the capture completes, so
+        // the menu entry follows the macOS "… means more input" rule.
+        assert_eq!(capture_menu_label(), "Capture…");
     }
 
     #[test]

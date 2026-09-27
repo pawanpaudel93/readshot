@@ -271,14 +271,16 @@ pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
         .into(),
     };
 
-    // Frame counter — big number plus capacity tail. The number
-    // grows + tints blue for ~220 ms each time a new frame lands so
-    // the user gets a clear "scroll registered" pulse without
-    // staring at the digits.
+    // Frame counter — big number plus capacity tail. The number tints
+    // toward the teal accent for ~220 ms each time a new frame lands so
+    // the user gets a clear "scroll registered" pulse without staring at
+    // the digits.
     let counter_color = if pop_active {
-        let r = 1.0 - 0.35 * pop_eased;
-        let g = 1.0 - 0.22 * pop_eased;
-        let b = 1.0;
+        // Lerp white → accent by the eased pop amount.
+        let a = READSHOT_ACCENT;
+        let r = 1.0 - (1.0 - a.r) * pop_eased;
+        let g = 1.0 - (1.0 - a.g) * pop_eased;
+        let b = 1.0 - (1.0 - a.b) * pop_eased;
         Color::from_rgba(r, g, b, 1.0)
     } else {
         Color::WHITE
@@ -2229,7 +2231,7 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
     .height(Length::Fixed(28.0))
     .style(|_, status| {
         let bg = match status {
-            button::Status::Hovered => Color::from_rgba(0.85, 0.25, 0.25, 0.95),
+            button::Status::Hovered => READSHOT_DANGER,
             _ => Color::from_rgba(0.0, 0.0, 0.0, 0.55),
         };
         button::Style {
@@ -4107,7 +4109,10 @@ pub(crate) fn welcome_card_with_tone<'a>(
 
 pub(crate) fn welcome_pending_card<'a>() -> Element<'a, Message> {
     let body = column![
-        text("Allow Screen Recording").size(18),
+        // Heading names the missing permission; the button below carries
+        // the "Allow Screen Recording" call to action, so the two no
+        // longer repeat the same words.
+        text("Screen Recording access needed").size(18),
         text(
             "macOS will pop a permission prompt. Click \"Open System Settings\" \
              inside it and toggle Readshot on — that's all we need."
