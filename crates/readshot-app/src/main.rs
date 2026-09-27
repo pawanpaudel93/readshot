@@ -131,23 +131,35 @@ fn main() -> iced::Result {
 /// `/dev/null`, so the file fallback is what makes triage possible
 /// when the user double-clicks the bundle from Finder.
 fn init_app_logging() {
-    init_logging(true);
+    init_logging(true, saved_debug_logging());
+}
+
+/// The Settings "Verbose debug logging" toggle. Read straight from the
+/// preferences file because logging starts before the runtime loads
+/// preferences; any read/parse problem just means "off".
+fn saved_debug_logging() -> bool {
+    runtime::default_preferences_path()
+        .and_then(|p| readshot_core::Preferences::load(&p).ok())
+        .is_some_and(|prefs| prefs.debug_logging)
 }
 
 /// Initialise quiet logging for headless CLI invocations. CLI output
 /// should stay script-friendly: data goes to stdout, errors go to
 /// stderr, and routine tracing stays in the log file when available.
 fn init_cli_logging() {
-    init_logging(false);
+    init_logging(false, false);
 }
 
-fn init_logging(log_to_stderr: bool) {
+fn init_logging(log_to_stderr: bool, debug: bool) {
     use tracing_subscriber::fmt;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::EnvFilter;
 
-    let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // RUST_LOG still wins; otherwise the saved preference picks the level.
+    let default_level = if debug { "debug" } else { "info" };
+    let filter =
+        || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
 
     let stderr_layer =
         log_to_stderr.then(|| fmt::layer().with_writer(std::io::stderr).with_target(true));
