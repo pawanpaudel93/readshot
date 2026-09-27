@@ -1371,7 +1371,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::HistoryDelete(..)
         | Message::HistoryDeleteConfirmed(..)
         | Message::HistoryDeleteCancelled
-        | Message::HistoryRecordSaved) => history_ops::handle_history_message(state, msg),
+        | Message::HistoryRecordSaved
+        | Message::HistoryShowMore) => history_ops::handle_history_message(state, msg),
         Message::WindowCloseRequested(id) => {
             // Only the editor window opts out of auto-close. If the
             // close request is for it, route through the same two-stage
@@ -3315,6 +3316,22 @@ mod tests {
             update(&mut app, Message::HistoryRecordPersisted(Ok(false))).units(),
             0
         );
+    }
+
+    // ---- #10: pagination bounds the rendered list ----
+
+    #[test]
+    fn history_show_more_grows_page_and_search_resets_it() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        assert_eq!(app.history_page_limit, crate::app::HISTORY_PAGE_SIZE);
+
+        let _ = update(&mut app, Message::HistoryShowMore);
+        assert_eq!(app.history_page_limit, crate::app::HISTORY_PAGE_SIZE * 2);
+
+        // A search change resets paging to the first page so the new
+        // result set starts from the top.
+        let _ = update(&mut app, Message::HistorySearchChanged("q".into()));
+        assert_eq!(app.history_page_limit, crate::app::HISTORY_PAGE_SIZE);
     }
 
     #[cfg(target_os = "macos")]

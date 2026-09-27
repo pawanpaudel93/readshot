@@ -25,6 +25,12 @@ use crate::coordinator::CaptureCoordinator;
 use crate::permissions::PermissionsProvider;
 use crate::welcome::WelcomeState;
 
+/// Number of matching history rows the browser renders per page. The
+/// list widget tree is built eagerly, so this bounds open time and
+/// memory for large (Unlimited-retention) histories. "Show more"
+/// grows the visible window in these increments.
+pub const HISTORY_PAGE_SIZE: usize = 50;
+
 /// Distinct purposes a top-level iced window can serve. The runtime
 /// uses this to dispatch `view` and `title` per `window::Id`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -360,6 +366,9 @@ pub enum Message {
     /// runs). Refreshes the open browser so the new row appears right
     /// away instead of only after OCR completes.
     HistoryRecordSaved,
+    /// User clicked "Show more" in the history browser — reveal the
+    /// next page of matching rows.
+    HistoryShowMore,
     /// Async region-capture finished — `Ok(image)` opens an editor
     /// window with the captured pixels; `Err` toasts the failure on
     /// the welcome window.
@@ -653,6 +662,13 @@ pub struct App {
     /// "Clear All" guard. Cleared on confirm, cancel, Escape, a search
     /// change, or moving the selection.
     pub history_delete_pending: Option<readshot_core::Uuid>,
+    /// How many matching rows the browser renders at once. The list
+    /// is built eagerly (iced 0.14 has no virtual list), so an
+    /// Unlimited-retention history would otherwise build thousands of
+    /// image widgets on open. Capped to a page; "Show more" grows it,
+    /// and a search change resets it. The search filter itself still
+    /// scans every record.
+    pub history_page_limit: usize,
     /// On-disk path the user's preferences are read from at startup
     /// and written back to whenever a `Message::Settings` mutation
     /// flips a field. `None` in tests and when the OS can't supply a
@@ -924,6 +940,7 @@ impl App {
             history_search: String::new(),
             history_selected_id: None,
             history_delete_pending: None,
+            history_page_limit: HISTORY_PAGE_SIZE,
             preferences_path: None,
             settings_window_id: None,
             settings_recording_hotkey: false,

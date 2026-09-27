@@ -56,6 +56,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             state.history_window_id = Some(id);
             state.history_status = None;
             state.history_delete_pending = None;
+            state.history_page_limit = crate::app::HISTORY_PAGE_SIZE;
             Task::batch([
                 open_task.map(Message::HistoryWindowReady),
                 history_list_task(state.coordinator.clone()),
@@ -94,6 +95,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             state.history_status = None;
             state.history_selected_id = None;
             state.history_delete_pending = None;
+            state.history_page_limit = crate::app::HISTORY_PAGE_SIZE;
             match id {
                 Some(id) => {
                     state.windows.forget(id);
@@ -104,8 +106,10 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
         }
         Message::HistorySearchChanged(q) => {
             // A search change (Escape maps here too) cancels an armed
-            // delete.
+            // delete and resets paging so the first page of the new
+            // result set is shown.
             state.history_delete_pending = None;
+            state.history_page_limit = crate::app::HISTORY_PAGE_SIZE;
             state.history_search = q;
             state.history_selected_id = preferred_history_selection(
                 &state.history_records,
@@ -395,6 +399,12 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
         Message::HistoryDeleteConfirmed(id) => delete_history_record(state, id),
         Message::HistoryDeleteCancelled => {
             state.history_delete_pending = None;
+            Task::none()
+        }
+        Message::HistoryShowMore => {
+            state.history_page_limit = state
+                .history_page_limit
+                .saturating_add(crate::app::HISTORY_PAGE_SIZE);
             Task::none()
         }
         other => unreachable!("non-history message routed to the history handler: {other:?}"),

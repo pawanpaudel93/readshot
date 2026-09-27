@@ -625,7 +625,13 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
             };
             col = col.push(container(empty).padding([28, 0]));
         }
-        for r in &visible {
+        // Render at most a page of rows. The whole widget tree is
+        // built eagerly (iced 0.14 has no virtual list), so without
+        // this an Unlimited-retention history would build a thumbnail
+        // widget for every record on open. The search filter above
+        // still scans every record; only the rendered slice is capped.
+        let page_limit = state.history_page_limit.max(1);
+        for r in visible.iter().take(page_limit) {
             let png_path = history_png_path(root, r);
             let preview_path = history_thumbnail_path(root, r);
             let stamp = r
@@ -731,6 +737,22 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                     .on_press(Message::HistorySelect(r.id))
                     .on_double_click(Message::HistoryOpenInEditor(r.id))
                     .interaction(iced::mouse::Interaction::Pointer),
+            );
+        }
+        // "Show more" pager — appears whenever matches exceed the
+        // rendered page. Bounded incremental loading keeps open time
+        // and memory flat for very large histories.
+        let remaining = visible.len().saturating_sub(page_limit);
+        if remaining > 0 {
+            col = col.push(
+                container(
+                    button(text(format!("Show more ({remaining} more)")).size(12))
+                        .padding([8, 14])
+                        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                        .on_press(Message::HistoryShowMore),
+                )
+                .center_x(Length::Fill)
+                .padding([4, 0]),
             );
         }
     } else {
