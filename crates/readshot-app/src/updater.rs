@@ -38,6 +38,19 @@ mod platform {
     static CONTROLLER: OnceLock<usize> = OnceLock::new();
     static LAST_INSTALL_ERROR: OnceLock<Mutex<Option<UpdaterError>>> = OnceLock::new();
 
+    /// The Sparkle controller is a main-thread-only Objective-C object.
+    /// We store it as a raw `usize` in a `OnceLock`, which erases the
+    /// `!Send`/`!Sync` markers that would otherwise stop it being touched
+    /// off the main thread — so assert the invariant at runtime in debug
+    /// builds. `MainThreadMarker::new()` is `Some` only on the main
+    /// thread. Behaviour in release builds is unchanged.
+    fn assert_main_thread() {
+        debug_assert!(
+            objc2::MainThreadMarker::new().is_some(),
+            "Sparkle updater controller accessed off the main thread"
+        );
+    }
+
     const SPARKLE_CONTROLLER_CLASS: &CStr = c"SPUStandardUpdaterController";
     const FRAMEWORK_CANDIDATES: &[&str] = &[
         "@executable_path/../Frameworks/Sparkle.framework/Sparkle",
@@ -51,6 +64,7 @@ mod platform {
     }
 
     fn install_controller() -> Result<(), UpdaterError> {
+        assert_main_thread();
         if CONTROLLER.get().is_some() {
             return Ok(());
         }
@@ -102,6 +116,7 @@ mod platform {
     }
 
     fn invoke_check_for_updates() -> Result<(), UpdaterError> {
+        assert_main_thread();
         let raw = *CONTROLLER.get().ok_or(UpdaterError::NotInstalled)?;
 
         // SAFETY: `raw` is a process-lifetime +1 retained

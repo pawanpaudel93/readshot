@@ -46,6 +46,18 @@ mod platform {
 
     static HANDLER: OnceLock<usize> = OnceLock::new();
 
+    /// The reopen AppleEvent handler is a main-thread-only Objective-C
+    /// object, stored as a raw `usize` in a `OnceLock` (which erases the
+    /// `!Send`/`!Sync` markers). Assert the invariant at runtime in debug
+    /// builds; `MainThreadMarker::new()` is `Some` only on the main
+    /// thread. Release behaviour is unchanged.
+    fn assert_main_thread() {
+        debug_assert!(
+            objc2::MainThreadMarker::new().is_some(),
+            "reopen AppleEvent handler installed off the main thread"
+        );
+    }
+
     // AppleEvents.h: kCoreEventClass = 'aevt', kAEReopenApplication = 'rapp'.
     const K_CORE_EVENT_CLASS: u32 = 0x6165_7674;
     const K_AE_REOPEN_APPLICATION: u32 = 0x7261_7070;
@@ -74,6 +86,7 @@ mod platform {
     }
 
     pub fn install() -> Result<(), AppEventInstallError> {
+        assert_main_thread();
         if HANDLER.get().is_some() {
             return Ok(());
         }
