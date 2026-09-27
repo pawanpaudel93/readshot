@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Applied only when Readshot is signed without an Apple Team ID
+  (the self-signed release identity or ad-hoc local builds).
+
+  Under the hardened runtime, library validation only loads code signed
+  by Apple or by the same Team ID. A certificate without a Team ID can
+  never satisfy that, so dlopen of the bundled Sparkle.framework failed
+  with "different Team IDs" and "Check for Updates…" never worked.
+  Developer ID builds share a Team ID with the Sparkle they re-sign and
+  do not need this.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

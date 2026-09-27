@@ -160,10 +160,16 @@ if [[ -n "${APPLE_DEVELOPER_ID_P12_BASE64:-}" ]]; then
   CERT_BASE64="${APPLE_DEVELOPER_ID_P12_BASE64}"
   CERT_PASSWORD="${APPLE_DEVELOPER_ID_P12_PASSWORD:?APPLE_DEVELOPER_ID_P12_PASSWORD required when APPLE_DEVELOPER_ID_P12_BASE64 is set}"
   SIGNING_IDENTITY="${MACOS_SIGNING_IDENTITY:-Developer ID Application}"
+  # Developer ID shares a Team ID with the re-signed Sparkle, so the
+  # hardened runtime's library validation passes as-is.
+  ENTITLEMENT_ARGS=()
 else
   CERT_BASE64="${MACOS_SELF_SIGN_CERT_BASE64:?MACOS_SELF_SIGN_CERT_BASE64 required when Developer ID cert is absent}"
   CERT_PASSWORD="${MACOS_SELF_SIGN_CERT_PASSWORD:?MACOS_SELF_SIGN_CERT_PASSWORD required when Developer ID cert is absent}"
   SIGNING_IDENTITY="${MACOS_SIGNING_IDENTITY:-Readshot Project Self-Signed}"
+  # A self-signed certificate has no Team ID, so library validation
+  # would refuse to load the bundled Sparkle.framework.
+  ENTITLEMENT_ARGS=(--entitlements packaging/macos/Readshot.entitlements)
 fi
 
 CERT_PATH="$(mktemp -t readshot-cert).p12"
@@ -199,6 +205,7 @@ for bin in readshot-mcp readshot; do
 done
 
 codesign --force --options runtime \
+  ${ENTITLEMENT_ARGS[@]+"${ENTITLEMENT_ARGS[@]}"} \
   --sign "${SIGNING_IDENTITY}" \
   "${APP_BUNDLE}"
 

@@ -105,6 +105,13 @@ copy (see "How in-app updates work" below).
   "Check for Updates…" shows Sparkle's error dialog. Nothing in the
   app can work around that; making the repo public fixes every already
   installed copy at once because the feed URL is baked into each build.
+* Builds signed without an Apple Team ID (the self-signed release
+  identity, or ad-hoc local builds) carry
+  `packaging/macos/Readshot.entitlements`
+  (`com.apple.security.cs.disable-library-validation`). Without it the
+  hardened runtime refuses to load the bundled Sparkle.framework
+  ("different Team IDs") and "Check for Updates…" cannot work — every
+  release up to and including 0.7.7 shipped with that failure.
 * Checks are manual only (`SUEnableAutomaticChecks` is false and the
   bridge in `crates/readshot-app/src/updater.rs` disables automatic
   checks); the tray's "Check for Updates…" starts one.

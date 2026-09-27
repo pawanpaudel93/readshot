@@ -198,7 +198,11 @@ for bin in readshot-mcp readshot; do
   codesign --force --options runtime --sign - \
     "${APP_BUNDLE}/Contents/MacOS/${bin}"
 done
-codesign --force --options runtime --sign - "${APP_BUNDLE}"
+# Ad-hoc signatures have no Team ID; without this entitlement the
+# hardened runtime refuses to load the bundled Sparkle.framework.
+codesign --force --options runtime \
+  --entitlements "${REPO_ROOT}/packaging/macos/Readshot.entitlements" \
+  --sign - "${APP_BUNDLE}"
 codesign --verify --deep "${APP_BUNDLE}"
 
 if [[ "${INSTALL}" -eq 0 ]]; then
