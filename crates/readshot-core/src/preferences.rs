@@ -229,7 +229,15 @@ impl Preferences {
         if original_version < 2 && self.ocr_languages == ["en"] {
             self.ocr_languages.clear();
         }
-        if (1..3).contains(&original_version) {
+        // `onboarding_completed` was introduced in schema v3. `migrate`
+        // only ever runs on a file that already exists on disk (a fresh
+        // user has no file and gets `Default`, which is already v3), so
+        // *any* pre-v3 file belongs to an existing user who has already
+        // been onboarded — including v0 (a file whose `schema_version`
+        // predates the field, deserialised to 0). The previous
+        // `(1..3)` range excluded v0 and re-showed onboarding to those
+        // users.
+        if original_version < 3 {
             self.onboarding_completed = true;
         }
         if self.schema_version < PREFERENCES_SCHEMA_VERSION {
@@ -329,6 +337,23 @@ ocr_languages = ["en"]
 
         let prefs = Preferences::load(&path).unwrap();
 
+        assert_eq!(prefs.schema_version, PREFERENCES_SCHEMA_VERSION);
+        assert!(prefs.onboarding_completed);
+    }
+
+    #[test]
+    fn migration_marks_schema_v0_users_onboarded() {
+        // An explicit `schema_version = 0` file is still an existing
+        // user's file (migrate only runs on a file that exists on disk),
+        // so it must not re-show onboarding. The old `(1..3)` range
+        // wrongly excluded v0; `onboarding_completed` was introduced in
+        // v3 so every pre-v3 file should be marked onboarded.
+        let (_dir, path) = temp_path();
+        std::fs::write(&path, "schema_version = 0\ncapture_hotkey = \"f1\"\n").unwrap();
+
+        let prefs = Preferences::load(&path).unwrap();
+
+        // migrate stamps the version forward and marks the user onboarded.
         assert_eq!(prefs.schema_version, PREFERENCES_SCHEMA_VERSION);
         assert!(prefs.onboarding_completed);
     }
