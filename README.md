@@ -18,16 +18,20 @@ find it later by searching the text inside the screenshot.
 
 ## Features
 
-- Region capture from the menu bar or global hotkey.
+- Region, window, and full-display capture from the menu bar or a
+  global hotkey.
 - Scrolling capture — lock a region, scroll the page, get one tall
   stitched image with a live HUD preview.
 - Multi-monitor capture with Retina-quality output.
-- Annotation editor with shapes, arrows, pen, highlighter, text, blur,
-  pixelate, numbered pins, crop, undo, and redo.
-- Offline OCR via Apple Vision with layout-aware copied text.
+- Annotation editor with shapes, arrows, pen, highlighter, multi-line
+  text, blur, pixelate, numbered pins, crop, undo, and redo. Hold Shift
+  for squares, circles, and 45° lines.
+- Offline OCR via Apple Vision with layout-aware copied text and a
+  choice of recognition languages.
 - Searchable capture history with open, reveal, copy, pin, and delete
   actions.
 - Pin captures as always-on-top reference windows.
+- In-app updates via "Check for Updates…" in the menu bar.
 - Scriptable CLI with interactive capture, clipboard output, OCR,
   delay timers, image formats, and bundled MCP server for AI-agent
   workflows.
@@ -101,7 +105,7 @@ Run checks:
 ```bash
 cargo fmt --all -- --check
 cargo nextest run --workspace
-cargo clippy --workspace -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 Useful docs:
