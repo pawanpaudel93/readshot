@@ -1370,7 +1370,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::HistoryPinReady(..)
         | Message::HistoryDelete(..)
         | Message::HistoryDeleteConfirmed(..)
-        | Message::HistoryDeleteCancelled) => history_ops::handle_history_message(state, msg),
+        | Message::HistoryDeleteCancelled
+        | Message::HistoryRecordSaved) => history_ops::handle_history_message(state, msg),
         Message::WindowCloseRequested(id) => {
             // Only the editor window opts out of auto-close. If the
             // close request is for it, route through the same two-stage
@@ -1909,9 +1910,12 @@ fn reset_settings_to_defaults(state: &mut App) {
 /// update sidecar with the recognised text. Each stage logs its own
 /// failures and the user-visible flow never blocks on this work.
 ///
-/// Returns `Ok(true)` when the OCR-and-update step completed (the
-/// browser should reload to pick up the new text), `Ok(false)` when
-/// history was disabled or OCR failed.
+/// Emits two messages so an open browser stays live:
+/// * [`Message::HistoryRecordSaved`] the moment the record hits disk
+///   (empty OCR) — the new row shows up without waiting on OCR;
+/// * [`Message::HistoryRecordPersisted`] once OCR resolves —
+///   `Ok(true)` when text landed (reload to show it), `Ok(false)` when
+///   history was disabled or OCR failed/empty.
 fn persist_history_task(
     coord: CaptureCoordinator,
     img: image::RgbaImage,
@@ -1919,35 +1923,51 @@ fn persist_history_task(
     policy: readshot_core::HistoryRetention,
     preferences: Preferences,
 ) -> Task<Message> {
-    Task::perform(
-        async move {
+    use iced::futures::SinkExt;
+    Task::stream(iced::stream::channel(
+        2,
+        move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
             if matches!(policy, readshot_core::HistoryRetention::Off) {
-                return Ok::<bool, String>(false);
+                return;
             }
             let Some(mut record) = record else {
-                return Ok(false);
+                return;
             };
             let now = record.captured_at;
             // Best-compression encode is CPU-heavy on large captures —
             // keep it off the async workers. The image is threaded
             // through the closure (OCR still needs it) to avoid a
             // multi-megabyte clone.
-            let (img, buf) = tokio::task::spawn_blocking(move || {
+            let encoded = tokio::task::spawn_blocking(move || {
                 let buf = readshot_core::encode_png(&img);
                 (img, buf)
             })
-            .await
-            .map_err(|e| format!("png encode worker: {e}"))?;
-            let buf = buf.map_err(|e| format!("png encode: {e}"))?;
-            // Save with empty OCR first so the capture is visible in
-            // the browser immediately (OCR is the slow bit).
+            .await;
+            let (img, buf) = match encoded {
+                Ok(pair) => pair,
+                Err(e) => {
+                    tracing::warn!(target: "readshot::history", "png encode worker: {e}");
+                    return;
+                }
+            };
+            let buf = match buf {
+                Ok(buf) => buf,
+                Err(e) => {
+                    tracing::warn!(target: "readshot::history", "png encode: {e}");
+                    return;
+                }
+            };
+            // Save with empty OCR first so the capture is visible in the
+            // browser immediately (OCR is the slow bit).
             coord.record_history(record.clone(), buf, policy, now).await;
+            // Nudge the browser to show the freshly-saved (text-less) row.
+            let _ = output.send(Message::HistoryRecordSaved).await;
 
-            // Background OCR — fills `ocr_text` so the search index
-            // has something to match. Failure is logged but
-            // non-fatal: the record is still useful without text.
+            // Background OCR — fills `ocr_text` so the search index has
+            // something to match. Failure is logged but non-fatal: the
+            // record is still useful (and already listed) without text.
             let ocr_req = ocr_request_for_image(img, &preferences);
-            match coord.recognise(ocr_req).await {
+            let persisted = match coord.recognise(ocr_req).await {
                 Ok(text) => {
                     let list_coord = coord.clone();
                     let listed =
@@ -1960,18 +1980,21 @@ fn persist_history_task(
                     record.ocr_text = Some(text);
                     if let Err(e) = coord.update_history(&record) {
                         tracing::warn!(target: "readshot::history", "ocr update failed: {e}");
-                        return Ok(false);
+                        false
+                    } else {
+                        true
                     }
-                    Ok(true)
                 }
                 Err(e) => {
                     tracing::warn!(target: "readshot::history", "ocr failed: {e}");
-                    Ok(false)
+                    false
                 }
-            }
+            };
+            let _ = output
+                .send(Message::HistoryRecordPersisted(Ok(persisted)))
+                .await;
         },
-        Message::HistoryRecordPersisted,
-    )
+    ))
 }
 
 fn history_record_for_capture(
@@ -3259,6 +3282,39 @@ mod tests {
 
         // Nothing was ever removed while only arming/cancelling.
         assert_eq!(store.list().unwrap().len(), 2);
+    }
+
+    // ---- #7: open browser refreshes on save and on OCR result ----
+
+    #[test]
+    fn history_record_saved_refreshes_only_when_browser_open() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+
+        // Closed browser: no reload work is scheduled.
+        app.history_window_id = None;
+        assert_eq!(update(&mut app, Message::HistoryRecordSaved).units(), 0);
+
+        // Open browser: the fresh (text-less) row triggers a reload.
+        app.history_window_id = Some(iced::window::Id::unique());
+        assert_eq!(update(&mut app, Message::HistoryRecordSaved).units(), 1);
+    }
+
+    #[test]
+    fn history_persisted_refreshes_on_text_but_not_on_ocr_failure() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.history_window_id = Some(iced::window::Id::unique());
+
+        // OCR landed text → reload to surface it.
+        assert_eq!(
+            update(&mut app, Message::HistoryRecordPersisted(Ok(true))).units(),
+            1
+        );
+        // OCR failed/empty → row already shown via HistoryRecordSaved,
+        // text won't change, so no extra reload.
+        assert_eq!(
+            update(&mut app, Message::HistoryRecordPersisted(Ok(false))).units(),
+            0
+        );
     }
 
     #[cfg(target_os = "macos")]

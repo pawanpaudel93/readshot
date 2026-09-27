@@ -356,6 +356,10 @@ pub enum Message {
     HistoryDeleteConfirmed(readshot_core::Uuid),
     /// Cancel the armed single-capture delete without touching disk.
     HistoryDeleteCancelled,
+    /// A freshly-captured record was written to disk (before OCR
+    /// runs). Refreshes the open browser so the new row appears right
+    /// away instead of only after OCR completes.
+    HistoryRecordSaved,
     /// Async region-capture finished — `Ok(image)` opens an editor
     /// window with the captured pixels; `Err` toasts the failure on
     /// the welcome window.

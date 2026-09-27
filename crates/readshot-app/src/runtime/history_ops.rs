@@ -11,6 +11,17 @@ use super::*;
 /// non-history message is mis-routed here.
 pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<Message> {
     match message {
+        Message::HistoryRecordSaved => {
+            // The record's PNG + sidecar have landed on disk (OCR is
+            // still pending). Refresh an open browser so the new row
+            // shows immediately instead of only once OCR finishes.
+            // Skipped when the browser is closed so a background
+            // capture never triggers a pointless list read.
+            if state.history_window_id.is_some() {
+                return history_list_task(state.coordinator.clone());
+            }
+            Task::none()
+        }
         Message::HistoryRecordPersisted(result) => {
             match result {
                 Ok(true) => {
@@ -21,7 +32,11 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                         return history_list_task(state.coordinator.clone());
                     }
                 }
-                Ok(false) => {} // history off or OCR failed (already logged)
+                // `Ok(false)` = history off, or OCR failed/empty. The
+                // row (if any) already appeared via `HistoryRecordSaved`
+                // and its text won't change, so there's nothing to
+                // refresh here.
+                Ok(false) => {}
                 Err(e) => tracing::warn!(target: "readshot::history", "persist failed: {e}"),
             }
             Task::none()
