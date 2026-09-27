@@ -74,8 +74,10 @@ fn draw_editor_icon(frame: &mut Frame, icon: EditorIcon, color: Color) {
         EditorIcon::Tool(T::Pixelate) => draw_pixelate_icon(frame, color),
         EditorIcon::Tool(T::NumberedPin) => draw_numbered_pin_icon(frame, color),
         EditorIcon::Tool(T::Crop) => draw_crop_icon(frame, color),
-        EditorIcon::Undo => draw_history_icon(frame, color, false),
-        EditorIcon::Redo => draw_history_icon(frame, color, true),
+        // Undo is the counter-clockwise ↺ (arrowhead at top-left),
+        // redo the clockwise ↻ — they were drawn the other way round.
+        EditorIcon::Undo => draw_history_icon(frame, color, true),
+        EditorIcon::Redo => draw_history_icon(frame, color, false),
     }
 }
 
