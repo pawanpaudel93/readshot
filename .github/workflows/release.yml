@@ -36,6 +36,17 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
 
+      # The appcast's <sparkle:version> comes from the tag while the
+      # app's CFBundleVersion comes from Cargo.toml. If they differ,
+      # Sparkle either never offers the update or offers it forever.
+      - name: Verify tag matches Cargo version
+        run: |
+          cargo_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [ "v${cargo_version}" != "${RELEASE_TAG}" ]; then
+            echo "error: tag ${RELEASE_TAG} does not match Cargo.toml version ${cargo_version}" >&2
+            exit 1
+          fi
+
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
