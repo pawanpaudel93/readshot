@@ -358,6 +358,10 @@ impl EditorState {
         }
         translate_annotation(&mut next[idx], dx, dy);
         self.clamp_crop_annotation_to_base(&mut next[idx], CropClampMode::Move);
+        // Keep non-Crop annotations at least partly on the image so a
+        // burst of nudges can't strand one entirely off-canvas where it
+        // can no longer be selected. Crop is already clamped above.
+        self.clamp_annotation_into_base(&mut next[idx]);
         self.history.push(next);
         self.selected_annotation = Some(idx);
         self.flattened_cache = None;
@@ -469,6 +473,40 @@ impl EditorState {
             .is_some_and(|idx| idx >= self.history.current().len())
         {
             self.selected_annotation = None;
+        }
+    }
+
+    /// Nudge a non-Crop annotation back toward the image if a move has
+    /// pushed its bounding box fully off the base, so at least
+    /// [`MIN_ON_IMAGE`] base pixels of it remain grabbable. Crop is
+    /// handled by its own edge/position clamps and is skipped here.
+    fn clamp_annotation_into_base(&self, annotation: &mut Annotation) {
+        if matches!(annotation, Annotation::Crop { .. }) {
+            return;
+        }
+        let Some(bounds) = annotation_bounds(annotation) else {
+            return;
+        };
+        let base_w = self.base.width() as f32;
+        let base_h = self.base.height() as f32;
+        if base_w <= 0.0 || base_h <= 0.0 {
+            return;
+        }
+        const MIN_ON_IMAGE: f32 = 8.0;
+        let keep_x = MIN_ON_IMAGE.min(bounds.width);
+        let keep_y = MIN_ON_IMAGE.min(bounds.height);
+        // Allowed range for the bounding box's top-left corner such that a
+        // sliver of width/height `keep_*` always overlaps the image.
+        let x_lo = keep_x - bounds.width;
+        let x_hi = base_w - keep_x;
+        let y_lo = keep_y - bounds.height;
+        let y_hi = base_h - keep_y;
+        let clamped_x = bounds.x.clamp(x_lo.min(x_hi), x_lo.max(x_hi));
+        let clamped_y = bounds.y.clamp(y_lo.min(y_hi), y_lo.max(y_hi));
+        let dx = clamped_x - bounds.x;
+        let dy = clamped_y - bounds.y;
+        if dx != 0.0 || dy != 0.0 {
+            translate_annotation(annotation, dx, dy);
         }
     }
 
@@ -1484,5 +1522,35 @@ mod tests {
         let probe = PointLike::new(100.0, 30.0);
         assert_eq!(s.select_at_scaled(probe, 1.0), None);
         assert_eq!(s.select_at_scaled(probe, 0.25), Some(0));
+    }
+
+    #[test]
+    fn nudge_keeps_non_crop_annotation_partly_on_image() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(10.0)); // 10x10 rect at (10, 0)
+        assert_eq!(s.select_at(PointLike::new(12.0, 2.0)), Some(0));
+
+        // Shove it far off to the right and down in one big nudge.
+        assert!(s.nudge_selected(1000.0, 1000.0));
+        match &s.annotations()[0] {
+            Annotation::Rectangle { rect, .. } => {
+                // At least 8 px of the 10 px-wide rect stays on the image.
+                assert!(rect.x <= 64.0 - 8.0, "rect.x = {}", rect.x);
+                assert!(rect.y <= 64.0 - 8.0, "rect.y = {}", rect.y);
+                assert!(rect.x + rect.width >= 8.0);
+                assert!(rect.y + rect.height >= 8.0);
+            }
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+
+        // And far off to the top-left.
+        assert!(s.nudge_selected(-1000.0, -1000.0));
+        match &s.annotations()[0] {
+            Annotation::Rectangle { rect, .. } => {
+                assert!(rect.x + rect.width >= 8.0, "rect.x = {}", rect.x);
+                assert!(rect.y + rect.height >= 8.0, "rect.y = {}", rect.y);
+            }
+            other => panic!("expected rectangle, got {other:?}"),
+        }
     }
 }
