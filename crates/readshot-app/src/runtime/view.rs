@@ -3618,15 +3618,19 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         .label("Verbose debug logging")
         .on_toggle(|v| Message::Settings(SettingsMessage::SetDebugLogging(v)))
         .into();
+    // Section title, subtitle, and the toggle's own label previously all
+    // said some variant of "Diagnostics"; drop the redundant field label
+    // and keep a single caption noting the restart requirement.
     let advanced_section = settings_section(
-        "Advanced",
         "Diagnostics",
-        column![settings_field(
-            "Diagnostics",
-            "Logs at DEBUG level. Takes effect after restart.",
+        "Logs for troubleshooting",
+        column![
             debug_toggle,
-        ),]
-        .spacing(14)
+            text("Logs at DEBUG level. Takes effect after restart.")
+                .size(11)
+                .color(settings_muted_text()),
+        ]
+        .spacing(7)
         .into(),
     );
 
