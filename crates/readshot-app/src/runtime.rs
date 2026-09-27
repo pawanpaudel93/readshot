@@ -1103,6 +1103,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // for the ~100-200 ms ScreenCaptureKit round-trip.
             if matches!(intent, crate::app::CaptureIntent::ScrollCapture) {
                 let Some(bounds) = display_bounds else {
+                    // We set pending_intent/display_id/display_scale/
+                    // display_bounds above; a scroll capture with no known
+                    // display bounds can't proceed, so clear that state
+                    // instead of leaving it dangling for the next flow.
+                    clear_pending_capture_state(state);
                     return Task::batch(tasks);
                 };
                 let session = crate::app::ScrollSession {
