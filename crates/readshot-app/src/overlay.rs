@@ -713,7 +713,13 @@ impl Program<Message> for OverlayProgram {
             let badge_w = 8.0 + label.chars().count() as f32 * 7.0;
             let badge_h = 18.0;
             let (bx, by) = size_badge_origin(bounds, rect, badge_w, badge_h);
-            let badge_path = Path::rectangle(Point::new(bx, by), iced::Size::new(badge_w, badge_h));
+            // Rounded corners (radius 6) match the hint pill; the badge
+            // text already uses the bundled monospace family.
+            let badge_path = Path::rounded_rectangle(
+                Point::new(bx, by),
+                iced::Size::new(badge_w, badge_h),
+                6.0.into(),
+            );
             frame.fill(&badge_path, Color::from_rgba(0.0, 0.0, 0.0, 0.7));
             frame.fill_text(CanvasText {
                 content: label,
