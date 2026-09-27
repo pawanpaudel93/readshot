@@ -3645,14 +3645,18 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         };
         let label = text(copy).size(12).color(settings_muted_text());
 
+        // Idle and armed buttons share the Settings size (13) and
+        // padding ([6, 12]) so the control keeps a constant height across
+        // states. Idle is an outlined-red arming step (DangerQuiet); the
+        // confirm step is the loud filled-red Danger.
         if reset_pending {
             let actions = row![
-                button(text("Reset all").size(13)).padding([6, 12])
-                    .padding([8, 14])
+                button(text("Confirm Reset").size(13))
+                    .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Danger))
                     .on_press(Message::SettingsResetAllConfirmed),
-                button(text("Cancel").size(13)).padding([6, 12])
-                    .padding([8, 14])
+                button(text("Cancel").size(13))
+                    .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                     .on_press(Message::SettingsResetAllCancelled),
             ]
@@ -3668,8 +3672,10 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
                     .into()
             }
         } else {
-            let action =
-                button(text("Reset all settings").size(13)).padding([6, 12]).on_press(Message::SettingsResetAllRequested);
+            let action = button(text("Reset All Settings").size(13))
+                .padding([6, 12])
+                .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
+                .on_press(Message::SettingsResetAllRequested);
             if available.width < 460.0 {
                 column![label, action].spacing(8).into()
             } else {
@@ -3682,11 +3688,10 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     })
     .height(Length::Shrink)
     .into();
-    let app_section = settings_section(
-        "App",
-        "Startup behavior",
-        column![startup_row, reset_controls].spacing(12).into(),
-    );
+    let app_section = settings_section("App", "Startup behavior", startup_row);
+    // Reset lives in its own section at the bottom so a destructive
+    // control never sits next to the everyday startup toggle.
+    let reset_section = settings_section("Reset", "Restore defaults", reset_controls);
 
     let body = container(
         column![
@@ -3698,6 +3703,7 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             export_section,
             advanced_section,
             app_section,
+            reset_section,
         ]
         .spacing(16)
         .max_width(720),
