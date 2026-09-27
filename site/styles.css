@@ -773,6 +773,13 @@ footer a {
   max-width: 46ch;
 }
 
+@media (max-width: 900px) {
+  /* Two automation cards are too narrow for their commands below this. */
+  .grid.two {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 860px) {
   .doc-layout {
     grid-template-columns: 1fr;
