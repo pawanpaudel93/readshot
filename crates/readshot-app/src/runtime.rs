@@ -1529,7 +1529,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::PinLockToggled(..)) => editor_ops::handle_editor_message(state, msg),
         Message::OverlayCopyDone(result) => {
             state.last_capture_status = Some(match result {
-                Ok(()) => "Copied to clipboard.".into(),
+                Ok(()) => "Copied image to clipboard.".into(),
                 Err(e) => format!("Copy failed: {e}"),
             });
             Task::none()
@@ -1541,7 +1541,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 }
             }
             state.last_capture_status = Some(match result {
-                Ok(Some(p)) => format!("Saved to {}", p.display()),
+                Ok(Some(p)) => format!("Saved to {}.", p.display()),
                 Ok(None) => "Save cancelled.".into(),
                 Err(e) => format!("Save failed: {e}"),
             });
@@ -1586,7 +1586,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::CaptureSaved(result) => {
             state.capture_in_flight = false;
             state.last_capture_status = Some(match &result {
-                Ok(path) => format!("Saved to {}", path.display()),
+                Ok(path) => format!("Saved to {}.", path.display()),
                 Err(e) => format!("Capture failed: {e}"),
             });
             Task::none()

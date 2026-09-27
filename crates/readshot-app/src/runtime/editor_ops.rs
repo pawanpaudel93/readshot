@@ -322,7 +322,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     ed.mark_output_clean();
                 }
                 ed.set_status(match result {
-                    Ok(Some(p)) => format!("Saved to {}", p.display()),
+                    Ok(Some(p)) => format!("Saved to {}.", p.display()),
                     Ok(None) => "Save cancelled.".into(),
                     Err(e) => format!("Save failed: {e}"),
                 });
@@ -361,7 +361,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     ed.mark_output_clean();
                 }
                 ed.set_status(match result {
-                    Ok(()) => "Copied to clipboard.".into(),
+                    Ok(()) => "Copied image to clipboard.".into(),
                     Err(e) => format!("Copy failed: {e}"),
                 });
             }
