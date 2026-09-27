@@ -2868,10 +2868,16 @@ mod tests {
 
     #[test]
     fn editor_toolbar_layout_splits_before_controls_crowd() {
-        assert_eq!(editor_toolbar_layout(1000.0), EditorToolbarLayout::Wide);
+        assert_eq!(editor_toolbar_layout(1100.0), EditorToolbarLayout::Wide);
+        // Undo/redo used to be clipped here in the one-row layout.
+        assert_eq!(editor_toolbar_layout(1000.0), EditorToolbarLayout::Stacked);
         assert_eq!(editor_toolbar_layout(800.0), EditorToolbarLayout::Stacked);
         assert_eq!(editor_toolbar_layout(520.0), EditorToolbarLayout::Compact);
-        assert_eq!(editor_width_control_width(EditorToolbarLayout::Wide), 140.0);
+        assert_eq!(editor_width_control_width(EditorToolbarLayout::Wide), 110.0);
+        assert_eq!(
+            editor_width_control_width(EditorToolbarLayout::Stacked),
+            140.0
+        );
         assert_eq!(
             editor_width_control_width(EditorToolbarLayout::Compact),
             108.0

@@ -523,8 +523,10 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     let shown = visible.len();
 
     // Header: search box + count line + status.
+    // The empty-history card below already explains what to do, so the
+    // header stays silent instead of repeating it.
     let count_line = if total == 0 {
-        "No captures yet — take one and it shows up here.".to_string()
+        String::new()
     } else if q.is_empty() {
         format!("{total} capture{}", if total == 1 { "" } else { "s" })
     } else {
@@ -556,7 +558,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     } else {
         let b = button(text("Clear All").size(12))
             .padding([8, 10])
-            .style(|t, s| action_button_style(t, s, ActionKind::Danger));
+            .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet));
         if total > 0 {
             b.on_press(Message::HistoryClearAllRequested).into()
         } else {
@@ -591,21 +593,26 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
             selected.is_some() && state.history_delete_pending == selected.map(|r| r.id);
         history_selected_panel(selected, delete_pending)
     };
-    let header = container(
-        column![
-            search_row,
-            text(count_line).size(12),
-            state
-                .history_status
-                .as_deref()
-                .map(|s| text(s).size(12).color(Color::from_rgb(0.95, 0.55, 0.25)))
-                .unwrap_or_else(|| text("")),
-            selected_panel,
-        ]
-        .spacing(6),
-    )
-    .padding([12, 16])
-    .style(editor_chrome_style);
+    // Only push the count / status lines when they have something to
+    // say; an empty `text("")` still reserves a line plus spacing.
+    let mut header_col = column![search_row].spacing(6);
+    if !count_line.is_empty() {
+        header_col = header_col.push(
+            text(count_line)
+                .size(12)
+                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.62)),
+        );
+    }
+    if let Some(status) = state.history_status.as_deref() {
+        header_col = header_col.push(
+            text(status)
+                .size(12)
+                .color(Color::from_rgb(0.95, 0.55, 0.25)),
+        );
+    }
+    let header = container(header_col.push(selected_panel))
+        .padding([12, 16])
+        .style(editor_chrome_style);
 
     // Records list — filtered.
     let mut col = column![].spacing(8).padding(iced::Padding {
@@ -643,7 +650,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
             let stamp = r
                 .captured_at
                 .with_timezone(&chrono::Local)
-                .format("%Y-%m-%d  %H:%M:%S")
+                .format("%Y-%m-%d %H:%M:%S")
                 .to_string();
             let dims = format!("{} × {} px", r.width_px, r.height_px);
             let snippet = r
@@ -830,7 +837,7 @@ pub(crate) fn history_selected_panel<'a>(
                 .size(11)
                 .color(settings_muted_text()),
             text(format!(
-                "{} · {} x {} px · {} OCR chars",
+                "{} · {} × {} px · {} OCR chars",
                 stamp, record.width_px, record.height_px, text_count
             ))
             .size(12),
@@ -886,7 +893,7 @@ pub(crate) fn history_selected_panel<'a>(
         } else {
             button(text("Delete").size(12))
                 .padding([6, 9])
-                .style(|t, s| action_button_style(t, s, ActionKind::Danger))
+                .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
                 .on_press(Message::HistoryDelete(id))
                 .into()
         };
@@ -928,23 +935,16 @@ pub(crate) fn history_selected_panel<'a>(
 }
 
 /// Shared accent colour for the history row's selected state — used
-/// by the row background, the "Selected" chip, the selected border,
-/// and the chip's foreground text so all three read as the same
-/// accent rather than three sibling blues drifting apart.
+/// by the row background, the selected border, and the chevron so
+/// they read as one accent rather than sibling blues drifting apart.
 pub(crate) const HISTORY_SELECTED_RGB: (f32, f32, f32) =
     (READSHOT_ACCENT.r, READSHOT_ACCENT.g, READSHOT_ACCENT.b);
 pub(crate) const HISTORY_SELECTED_FILL_ALPHA: f32 = 0.14;
-pub(crate) const HISTORY_SELECTED_CHIP_ALPHA: f32 = 0.20;
 pub(crate) const HISTORY_SELECTED_BORDER_ALPHA: f32 = 0.55;
 
 pub(crate) fn history_selected_fill() -> Color {
     let (r, g, b) = HISTORY_SELECTED_RGB;
     Color::from_rgba(r, g, b, HISTORY_SELECTED_FILL_ALPHA)
-}
-
-pub(crate) fn history_selected_chip() -> Color {
-    let (r, g, b) = HISTORY_SELECTED_RGB;
-    Color::from_rgba(r, g, b, HISTORY_SELECTED_CHIP_ALPHA)
 }
 
 pub(crate) fn history_selected_border() -> Color {
@@ -965,38 +965,21 @@ pub(crate) fn history_selected_panel_style(_theme: &Theme) -> iced::widget::cont
 }
 
 /// Compact row-level affordance. The whole row is already pressable
-/// via `mouse_area`, so non-selected rows just show a chevron hint
-/// that the row leads somewhere; selected rows show a labelled chip
-/// so the active row is unambiguous. The real Open / Copy / Reveal
+/// via `mouse_area`, so every row shows a chevron hint; the selected
+/// row's chevron takes the accent colour to match its fill and border. The real Open / Copy / Reveal
 /// commands live in the selected-capture panel above the list.
 pub(crate) fn history_row_actions<'a>(
     _id: readshot_core::Uuid,
     is_selected: bool,
 ) -> Element<'a, Message> {
-    if is_selected {
-        return container(
-            text("Selected")
-                .size(12)
-                .color(Color::from_rgb8(214, 255, 247)),
-        )
-        .padding([6, 10])
-        .style(|_| iced::widget::container::Style {
-            background: Some(history_selected_chip().into()),
-            border: iced::Border {
-                radius: 6.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .into();
-    }
-    container(
-        text("›")
-            .size(18)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.35)),
-    )
-    .padding([6, 12])
-    .into()
+    let chevron = if is_selected {
+        history_selected_border()
+    } else {
+        Color::from_rgba(1.0, 1.0, 1.0, 0.35)
+    };
+    container(text("›").size(18).color(chevron))
+        .padding([6, 12])
+        .into()
 }
 
 // Search semantics live in readshot-core (shared with the MCP
@@ -1281,14 +1264,14 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             }
 
             let palette_row = toolbar::PALETTE.iter().fold(
-                row![].spacing(5).align_y(Alignment::Center),
+                row![].spacing(4).align_y(Alignment::Center),
                 |row, swatch| {
                     let is_selected = swatch_eq(*swatch, active_color);
                     let color = Color::from_rgba(swatch.r, swatch.g, swatch.b, swatch.a);
                     let mut btn = button(
                         IcedSpace::new()
-                            .width(Length::Fixed(20.0))
-                            .height(Length::Fixed(20.0)),
+                            .width(Length::Fixed(18.0))
+                            .height(Length::Fixed(18.0)),
                     )
                     .padding(0)
                     .style(move |_theme, status| {
@@ -1342,15 +1325,33 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             );
 
             let width_text_alpha = if busy { 0.42 } else { 0.7 };
-            let width_prefix = if has_selected_annotation {
-                "Sel"
+            // Stroke width readout. Whether it applies to the selection
+            // or to new shapes is in the tooltip, not a cryptic prefix.
+            let width_tip = if has_selected_annotation {
+                "Stroke width of the selected annotation"
             } else {
-                "New"
+                "Stroke width for new annotations"
             };
-            let width_label = text(format!("{width_prefix} {line_width:.0}px"))
-                .size(11)
-                .color(Color::from_rgba(1.0, 1.0, 1.0, width_text_alpha))
-                .width(Length::Fixed(54.0));
+            let width_label = iced::widget::tooltip(
+                text(format!("{line_width:.0} px"))
+                    .size(11)
+                    .color(Color::from_rgba(1.0, 1.0, 1.0, width_text_alpha))
+                    .width(Length::Fixed(38.0))
+                    .align_x(iced::alignment::Horizontal::Right),
+                container(text(width_tip).size(11))
+                    .padding([4, 8])
+                    .style(|_| container::Style {
+                        background: Some(Color::from_rgba(0.06, 0.07, 0.07, 0.96).into()),
+                        border: iced::Border {
+                            radius: 6.0.into(),
+                            color: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
+                            width: 1.0,
+                        },
+                        text_color: Some(Color::WHITE),
+                        ..Default::default()
+                    }),
+                iced::widget::tooltip::Position::Bottom,
+            );
             let width_control_width = editor_width_control_width(layout);
             let width_control: Element<'_, Message> = if busy {
                 passive_line_width_control_sized(line_width, width_control_width)
@@ -1456,7 +1457,13 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     // Interior-mutable handle so the responsive closure can record the
     // scale it renders at; the runtime reads it back to hit-test grabs.
     let render_scale = ed.render_scale.clone();
-    let image_area_content = responsive(move |available| {
+    let image_area_content = responsive(move |stage| {
+        // Zoom and frame controls sit in a strip under the image rather
+        // than floating over it, so they never hide part of the capture.
+        let available = iced::Size::new(
+            stage.width,
+            (stage.height - EDITOR_STAGE_CONTROLS_HEIGHT).max(1.0),
+        );
         let iw = image_w as f32;
         let ih = image_h as f32;
         let fit_scale = editor_fit_scale(available, image_w, image_h);
@@ -1656,18 +1663,21 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .size(11)
                 .color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)),
             zoom_button(
-                "-",
+                "−",
                 "Zoom out",
                 Message::EditorZoomOutFromDisplayScale(scale),
                 zoom.can_zoom_out_from_display_scale(scale),
                 false,
                 busy,
             ),
-            text(zoom.label_for_display_scale(display_scale))
-                .size(11)
-                .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
-                .width(Length::Fixed(50.0))
-                .align_x(iced::alignment::Horizontal::Center),
+            text(format!(
+                "{:.0}%",
+                scale * display_scale.max(f32::EPSILON) * 100.0
+            ))
+            .size(11)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.72))
+            .width(Length::Fixed(50.0))
+            .align_x(iced::alignment::Horizontal::Center),
         ];
         let zoom_controls = container(
             zoom_row
@@ -1708,12 +1718,6 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             },
             ..Default::default()
         });
-        let zoom_layer = container(zoom_controls)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(10)
-            .align_x(Alignment::Start)
-            .align_y(Alignment::End);
 
         let frame_picker: Element<'_, Message> = if busy {
             container(
@@ -1763,12 +1767,6 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             },
             ..Default::default()
         });
-        let frame_layer = container(frame_controls)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(8)
-            .align_x(Alignment::End)
-            .align_y(Alignment::Start);
 
         let needs_horizontal_scroll = output_w > available.width + 0.5;
         let needs_vertical_scroll = output_h > available.height + 0.5;
@@ -1795,7 +1793,31 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .into()
         };
 
-        stack![scroll_layer, zoom_layer, frame_layer].into()
+        let controls_strip = container(
+            row![
+                zoom_controls,
+                IcedSpace::new().width(Length::Fill),
+                frame_controls
+            ]
+            .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(EDITOR_STAGE_CONTROLS_HEIGHT))
+        .padding(iced::Padding {
+            top: 6.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        })
+        .align_y(Alignment::End);
+
+        column![
+            container(scroll_layer)
+                .width(Length::Fill)
+                .height(Length::Fixed(available.height)),
+            controls_strip
+        ]
+        .into()
     })
     .width(Length::Fill)
     .height(Length::Fill);
@@ -1930,7 +1952,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             let discard = editor_action_button(
                 "Discard",
                 Message::EditorDiscardRequested,
-                ActionKind::Danger,
+                ActionKind::DangerQuiet,
                 busy,
                 "Close this editor. Dirty edits ask for a second click.  ⌘W",
             );
@@ -2337,10 +2359,16 @@ pub(crate) enum EditorToolbarLayout {
     Compact,
 }
 
+/// Height of the zoom / frame strip under the editor image.
+pub(crate) const EDITOR_STAGE_CONTROLS_HEIGHT: f32 = 36.0;
+
 pub(crate) fn editor_toolbar_layout(width: f32) -> EditorToolbarLayout {
+    // The one-row layout needs ~1060 pt: 14 tool buttons, 12 swatches,
+    // the width control, and undo/redo. Below that undo/redo were pushed
+    // off the right edge, so switch to two rows instead.
     if width < 640.0 {
         EditorToolbarLayout::Compact
-    } else if width < 940.0 {
+    } else if width < 1060.0 {
         EditorToolbarLayout::Stacked
     } else {
         EditorToolbarLayout::Wide
@@ -2349,7 +2377,8 @@ pub(crate) fn editor_toolbar_layout(width: f32) -> EditorToolbarLayout {
 
 pub(crate) fn editor_width_control_width(layout: EditorToolbarLayout) -> f32 {
     match layout {
-        EditorToolbarLayout::Wide | EditorToolbarLayout::Stacked => 140.0,
+        EditorToolbarLayout::Wide => 110.0,
+        EditorToolbarLayout::Stacked => 140.0,
         EditorToolbarLayout::Compact => 108.0,
     }
 }
@@ -2513,7 +2542,11 @@ pub(crate) fn zoom_button_style(
 pub(crate) enum ActionKind {
     Primary,
     Secondary,
+    /// Filled red: the confirming step of a destructive action.
     Danger,
+    /// Outlined red: a destructive action's first, arming step. Keeps
+    /// Discard / Delete / Clear All from being the loudest control.
+    DangerQuiet,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2614,6 +2647,12 @@ pub(crate) fn action_button_style(
             Color::from_rgba(0.72, 0.18, 0.18, 0.98),
             Color::WHITE,
             Color::from_rgba(1.0, 0.40, 0.40, 0.22),
+        ),
+        ActionKind::DangerQuiet => (
+            Color::from_rgba(1.0, 1.0, 1.0, 0.04),
+            Color::from_rgba(0.72, 0.18, 0.18, 0.30),
+            Color::from_rgb(1.0, 0.62, 0.62),
+            Color::from_rgba(1.0, 0.40, 0.40, 0.38),
         ),
     };
     // Disabled state: dim the background to ~40% of its base alpha and
@@ -3250,7 +3289,7 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         // owns the chord. Tell the user so they pick another one.
         format!("{pretty} — couldn't grab globally; try a different chord.")
     } else {
-        format!("Currently bound to {pretty}.")
+        String::new()
     };
     // A fixed hotkey (History / Settings) that couldn't be registered is
     // surfaced here so the failure isn't silent.
@@ -3261,8 +3300,12 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         } else {
             "shortcut"
         };
-        hotkey_hint =
-            format!("{hotkey_hint}  ⚠ The {names} {plural} couldn't be registered globally.");
+        let warning = format!("⚠ The {names} {plural} couldn't be registered globally.");
+        hotkey_hint = if hotkey_hint.is_empty() {
+            warning
+        } else {
+            format!("{hotkey_hint}  {warning}")
+        };
     }
     let hotkey_label = if state.settings_recording_hotkey {
         "Press shortcut…".to_string()
@@ -3298,19 +3341,26 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             return status.into();
         }
 
-        let open_button = button(text("Open Settings"))
+        let open_button = button(text("Open Settings").size(13))
+            .padding([6, 12])
             .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
             .on_press(Message::OpenPermissionSettingsRequested);
         // Recheck button forces a fresh permission poll so the user
         // can confirm a System Settings change without quitting and
         // relaunching the app. Drives the existing PermissionPoll
         // handler with the latest probe result.
-        let recheck_button = button(text("Recheck"))
-            .style(|t, s| action_button_style(t, s, ActionKind::Primary))
+        let recheck_button = button(text("Recheck").size(13))
+            .padding([6, 12])
+            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
             .on_press(Message::PermissionTick);
-        let actions = row![recheck_button, open_button]
-            .spacing(8)
-            .align_y(Alignment::Center);
+        // Once access is granted there is nothing to recheck.
+        let actions = if matches!(permission_status, PermissionStatus::Granted) {
+            row![open_button]
+        } else {
+            row![recheck_button, open_button]
+        }
+        .spacing(8)
+        .align_y(Alignment::Center);
         if available.width < 460.0 {
             column![status, actions].spacing(10).into()
         } else {
@@ -3338,17 +3388,20 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
                     // armed, leaving Esc as the only way out (and Esc
                     // wasn't documented).
                     let primary_btn = if settings_recording_hotkey {
-                        button(text("Cancel"))
+                        button(text("Cancel").size(13))
+                            .padding([6, 12])
                             .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                             .on_press(Message::SettingsHotkeyRecordingCancelled)
                     } else {
-                        button(text("Record"))
-                            .style(|t, s| action_button_style(t, s, ActionKind::Primary))
+                        button(text("Record").size(13))
+                            .padding([6, 12])
+                            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                             .on_press(Message::SettingsStartHotkeyRecording)
                     };
                     let actions = row![
                         primary_btn,
-                        button(text("Reset"))
+                        button(text("Reset").size(13))
+                            .padding([6, 12])
                             .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                             .on_press(Message::Settings(SettingsMessage::SetCaptureHotkey(
                                 default_capture_hotkey().into()
@@ -3386,6 +3439,8 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
                 pick_list(&RETENTION_OPTIONS[..], Some(history_retention), |r| {
                     Message::Settings(SettingsMessage::SetHistoryRetention(r))
                 })
+                .text_size(13)
+                .padding([7, 10])
                 .into();
             let retention_row = settings_field(
                 "History retention",
@@ -3415,13 +3470,13 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             let save_folder_control: Element<'_, Message> = column![
                 setting_value_box(save_folder_value.clone(), false),
                 row![
-                    button(text("Choose"))
-                        .style(|t, s| action_button_style(t, s, ActionKind::Primary))
+                    button(text("Choose").size(13)).padding([6, 12])
+                        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                         .on_press(Message::SettingsChooseSaveFolderRequested),
-                    button(text("Open"))
+                    button(text("Open").size(13)).padding([6, 12])
                         .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                         .on_press(Message::SettingsOpenSaveFolderRequested),
-                    button(text("Reset"))
+                    button(text("Reset").size(13)).padding([6, 12])
                         .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                         .on_press(Message::Settings(SettingsMessage::SetSaveFolder(
                             PathBuf::new()
@@ -3440,6 +3495,7 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             let filename_input =
                 text_input("Screenshot {YYYY-MM-DD at HH.mm.ss}", &filename_template)
                     .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
+                    .size(13)
                     .padding([8, 10]);
             let preview_template = if filename_template.trim().is_empty() {
                 "Screenshot {YYYY-MM-DD at HH.mm.ss}".to_string()
@@ -3487,6 +3543,8 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
                 pick_list(&ENGINE_OPTIONS[..], Some(ocr_engine), |c| {
                     Message::Settings(SettingsMessage::SetOcrEngine(c))
                 })
+                .text_size(13)
+                .padding([7, 10])
                 .into(),
             ),
             settings_field(
@@ -3510,6 +3568,8 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             pick_list(&FORMAT_OPTIONS[..], Some(default_format), |f| {
                 Message::Settings(SettingsMessage::SetDefaultFormat(f))
             })
+            .text_size(13)
+            .padding([7, 10])
             .into(),
         ),
     );
@@ -3552,11 +3612,11 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
 
         if reset_pending {
             let actions = row![
-                button(text("Reset all"))
+                button(text("Reset all").size(13)).padding([6, 12])
                     .padding([8, 14])
                     .style(|t, s| action_button_style(t, s, ActionKind::Danger))
                     .on_press(Message::SettingsResetAllConfirmed),
-                button(text("Cancel"))
+                button(text("Cancel").size(13)).padding([6, 12])
                     .padding([8, 14])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                     .on_press(Message::SettingsResetAllCancelled),
@@ -3574,7 +3634,7 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             }
         } else {
             let action =
-                button(text("Reset all settings")).on_press(Message::SettingsResetAllRequested);
+                button(text("Reset all settings").size(13)).padding([6, 12]).on_press(Message::SettingsResetAllRequested);
             if available.width < 460.0 {
                 column![label, action].spacing(8).into()
             } else {
@@ -3674,13 +3734,13 @@ pub(crate) fn settings_field<'a>(
     hint: impl Into<String>,
     control: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    column![
-        text(label).size(13),
-        control,
-        text(hint.into()).size(11).color(settings_muted_text()),
-    ]
-    .spacing(7)
-    .into()
+    let hint = hint.into();
+    let mut col = column![text(label).size(13), control].spacing(7);
+    // No empty caption line when a field has nothing to add.
+    if !hint.is_empty() {
+        col = col.push(text(hint).size(11).color(settings_muted_text()));
+    }
+    col.into()
 }
 
 /// Simple multi-select for OCR languages: one checkbox per language the
@@ -3729,7 +3789,7 @@ pub(crate) fn ocr_language_control(
 pub(crate) fn setting_value_box(value: String, active: bool) -> Element<'static, Message> {
     container(
         text(value)
-            .size(14)
+            .size(13)
             .color(if active {
                 Color::from_rgb8(214, 255, 247)
             } else {
