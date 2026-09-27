@@ -28,8 +28,28 @@ use crate::preferences::HistoryRetention;
 
 pub const HISTORY_SCHEMA_VERSION: u32 = 1;
 pub const HISTORY_INDEX_FILENAME: &str = "history.index.json";
+/// Sidecar lock file guarding cross-process index read-modify-writes.
+const HISTORY_LOCK_FILENAME: &str = "history.index.lock";
 const THUMBNAIL_MAX_WIDTH: u32 = 320;
 const THUMBNAIL_MAX_HEIGHT: u32 = 200;
+
+/// Join `rel` onto `root` only when `rel` is a safe *relative* path:
+/// no absolute paths, and every component must be `Normal` (rejecting
+/// `..`, a root, or a Windows prefix). Returns `None` for anything that
+/// could escape `root`, so a tampered or corrupt `history.index.json`
+/// cannot steer `list`/thumbnail I/O at arbitrary files on disk.
+fn safe_relative_join(root: &Path, rel: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    if rel.as_os_str().is_empty() || rel.is_absolute() {
+        return None;
+    }
+    for component in rel.components() {
+        if !matches!(component, Component::Normal(_)) {
+            return None;
+        }
+    }
+    Some(root.join(rel))
+}
 
 /// One captured screenshot with metadata. The PNG bytes themselves live
 /// alongside the sidecar JSON, not inside the record.
@@ -152,11 +172,95 @@ impl FsHistoryStore {
             });
         }
         let content = fs::read_to_string(&path)?;
-        let mut index: HistoryIndex = serde_json::from_str(&content)?;
+        // A corrupt index used to permanently wedge every future save
+        // (the parse error propagated out of `read_index`, which every
+        // read-modify-write calls first). Self-heal instead: quarantine
+        // the bad file and rebuild the index from the sidecar JSON files
+        // that are the real source of truth.
+        let mut index: HistoryIndex = match serde_json::from_str(&content) {
+            Ok(index) => index,
+            Err(_) => return Ok(self.recover_corrupt_index(&path)),
+        };
         if index.schema_version < HISTORY_SCHEMA_VERSION {
             index.schema_version = HISTORY_SCHEMA_VERSION;
         }
         Ok(index)
+    }
+
+    /// Move a corrupt `history.index.json` aside (renamed with a
+    /// timestamp) and rebuild a fresh index from the on-disk sidecars.
+    /// Best-effort: rename/write failures degrade to an in-memory
+    /// rebuild that is still correct for the current call.
+    fn recover_corrupt_index(&self, path: &Path) -> HistoryIndex {
+        let ts = Utc::now().format("%Y%m%dT%H%M%S%.6f");
+        let quarantine = self
+            .root
+            .join(format!("{HISTORY_INDEX_FILENAME}.corrupt-{ts}"));
+        let _ = fs::rename(path, &quarantine);
+        let rebuilt = self.rebuild_index_from_disk();
+        // Persist so the next read starts clean; the in-memory rebuild
+        // is still returned even if this write fails.
+        let _ = self.write_index(&rebuilt);
+        // Redaction policy (see `log.rs`): log the count and the fact,
+        // never the $HOME-rooted path or any record content.
+        tracing::warn!(
+            target: crate::log::cat::HISTORY,
+            "history index was corrupt; quarantined it and rebuilt {} record(s) from sidecars",
+            rebuilt.records.len()
+        );
+        rebuilt
+    }
+
+    /// Reconstruct the index by scanning `<root>/YYYY/MM/*.json`
+    /// sidecars. Each sidecar is the source of truth for one record, and
+    /// the derived png/json paths are always the canonical, safe
+    /// relative layout.
+    fn rebuild_index_from_disk(&self) -> HistoryIndex {
+        let mut records = Vec::new();
+        if let Ok(year_iter) = fs::read_dir(&self.root) {
+            for year in year_iter.flatten() {
+                let ypath = year.path();
+                if !ypath.is_dir() {
+                    continue;
+                }
+                let Ok(month_iter) = fs::read_dir(&ypath) else {
+                    continue;
+                };
+                for month in month_iter.flatten() {
+                    let mpath = month.path();
+                    if !mpath.is_dir() {
+                        continue;
+                    }
+                    let Ok(file_iter) = fs::read_dir(&mpath) else {
+                        continue;
+                    };
+                    for file in file_iter.flatten() {
+                        let fpath = file.path();
+                        if fpath.extension().and_then(|e| e.to_str()) != Some("json") {
+                            continue;
+                        }
+                        let Ok(content) = fs::read_to_string(&fpath) else {
+                            continue;
+                        };
+                        let Ok(record) = serde_json::from_str::<CaptureRecord>(&content) else {
+                            continue;
+                        };
+                        let (rel_png, rel_json) = Self::record_paths(&record);
+                        records.push(HistoryIndexEntry {
+                            id: record.id,
+                            captured_at: record.captured_at,
+                            png_path: rel_png,
+                            json_path: rel_json,
+                        });
+                    }
+                }
+            }
+        }
+        HistoryIndex {
+            schema_version: HISTORY_SCHEMA_VERSION,
+            updated_at: Some(Utc::now()),
+            records,
+        }
     }
 
     fn write_index(&self, index: &HistoryIndex) -> Result<(), HistoryError> {
@@ -233,11 +337,51 @@ impl FsHistoryStore {
         let _ = crate::save_png(&thumb.to_rgba8(), &abs_thumb);
     }
 
-    fn lock_index(&self) -> Result<std::sync::MutexGuard<'_, ()>, HistoryError> {
+    /// Acquire the in-process mutex only. Used by `clear_all`, which
+    /// wipes the whole root (including the on-disk lock file) and so
+    /// can't meaningfully hold a file lock on it.
+    fn lock_mutex(&self) -> Result<std::sync::MutexGuard<'_, ()>, HistoryError> {
         self.index_lock
             .lock()
             .map_err(|_| HistoryError::Io("history index lock poisoned".into()))
     }
+
+    /// Acquire the full index guard for one read-modify-write cycle: the
+    /// in-process mutex *and* a cross-process advisory lock on
+    /// `<root>/history.index.lock`.
+    ///
+    /// The mutex is taken first so at most one thread in this process
+    /// contends for the file lock; the file lock then serialises
+    /// separate processes that share the same history root (e.g. the GUI
+    /// app and a `readshot capture` CLI invocation running at once).
+    /// Without it, two processes could interleave the read → mutate →
+    /// write of `history.index.json` and lose entries.
+    fn lock_index(&self) -> Result<IndexGuard<'_>, HistoryError> {
+        let mutex = self.lock_mutex()?;
+        fs::create_dir_all(&self.root)?;
+        let lock_path = self.root.join(HISTORY_LOCK_FILENAME);
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)?;
+        // Blocks until any other process holding the lock releases it.
+        file.lock()
+            .map_err(|e| HistoryError::Io(format!("history index file lock: {e}")))?;
+        Ok(IndexGuard {
+            _file: file,
+            _mutex: mutex,
+        })
+    }
+}
+
+/// Guard for one history read-modify-write cycle. Field order matters:
+/// `_file` is dropped first, releasing the OS advisory lock (by closing
+/// the handle) before `_mutex` releases the in-process lock.
+struct IndexGuard<'a> {
+    _file: fs::File,
+    _mutex: std::sync::MutexGuard<'a, ()>,
 }
 
 impl HistoryStore for FsHistoryStore {
@@ -282,18 +426,32 @@ impl HistoryStore for FsHistoryStore {
 
         let mut out = Vec::with_capacity(entries.len());
         for entry in entries {
-            let path = self.root.join(&entry.json_path);
+            // Validate the stored relative paths before joining them to
+            // the root: reject absolute paths and any `..`/root/prefix
+            // component so a tampered or corrupt index can't make list /
+            // thumbnail I/O touch files outside the history directory.
+            let (Some(json_abs), Some(png_abs)) = (
+                safe_relative_join(&self.root, &entry.json_path),
+                safe_relative_join(&self.root, &entry.png_path),
+            ) else {
+                tracing::warn!(
+                    target: crate::log::cat::HISTORY,
+                    "skipping history index entry {} whose stored path escapes the history root",
+                    entry.id
+                );
+                continue;
+            };
             // Skip orphaned index entries — the file was deleted by the
             // user or a torn write left the index ahead of the data.
-            if !path.exists() {
+            if !json_abs.exists() {
                 continue;
             }
-            let content = match fs::read_to_string(&path) {
+            let content = match fs::read_to_string(&json_abs) {
                 Ok(c) => c,
                 Err(_) => continue,
             };
             if let Ok(record) = serde_json::from_str::<CaptureRecord>(&content) {
-                self.backfill_thumbnail_from_png_path(&record, &self.root.join(&entry.png_path));
+                self.backfill_thumbnail_from_png_path(&record, &png_abs);
                 out.push(record);
             }
         }
@@ -358,7 +516,7 @@ impl HistoryStore for FsHistoryStore {
     }
 
     fn clear_all(&self) -> Result<(), HistoryError> {
-        let _index_guard = self.lock_index()?;
+        let _index_guard = self.lock_mutex()?;
         if self.root.exists() {
             fs::remove_dir_all(&self.root)?;
         }
@@ -571,23 +729,101 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_index_surfaces_error_for_list_and_save() {
-        // A torn or corrupted index file is the worst history failure
-        // mode: read_index propagates the parse error, which blocks
-        // both reads *and* all future saves. Pin that behavior so any
-        // future recovery branch is a deliberate change.
+    fn corrupt_index_self_heals_by_rebuilding_from_sidecars() {
+        // A torn or corrupted index file used to permanently wedge the
+        // store (read_index propagated the parse error, blocking both
+        // reads and all future saves). Now it self-heals: the corrupt
+        // file is quarantined and the index is rebuilt from the sidecar
+        // JSON files that are the real source of truth.
         let (_dir, s) = store();
         let r = record_at(Utc::now());
         s.save(&r, &fake_png()).unwrap();
 
         fs::write(s.root().join(HISTORY_INDEX_FILENAME), b"{not json").unwrap();
 
-        assert!(s.list().is_err(), "list should surface the parse error");
+        // list recovers the record from its sidecar.
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, r.id);
+
+        // The corrupt file was moved aside, not left in place.
+        let quarantined = fs::read_dir(s.root()).unwrap().flatten().any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{HISTORY_INDEX_FILENAME}.corrupt-"))
+        });
+        assert!(quarantined, "corrupt index should be quarantined aside");
+
+        // save works again rather than surfacing a parse error.
         let newer = record_at(Utc::now());
-        assert!(
-            s.save(&newer, &fake_png()).is_err(),
-            "save should surface the parse error rather than clobber the index"
-        );
+        s.save(&newer, &fake_png()).unwrap();
+        assert_eq!(s.list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn cross_instance_saves_keep_every_index_entry() {
+        // Separate FsHistoryStore instances on the same root approximate
+        // separate processes: they don't share the in-process mutex, so
+        // only the cross-process advisory file lock serialises their
+        // read-modify-write cycles. Without it, concurrent saves would
+        // clobber each other's index entries.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("history");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            let root = root.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                let store = FsHistoryStore::new(&root);
+                let record = record_at(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, i).unwrap());
+                barrier.wait();
+                store.save(&record, &fake_png()).unwrap();
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!(FsHistoryStore::new(&root).list().unwrap().len(), 8);
+    }
+
+    #[test]
+    fn list_skips_entries_with_unsafe_paths() {
+        // A tampered or corrupt index must not be able to steer file I/O
+        // outside the history root: entries with absolute paths or `..`
+        // traversal are skipped, and the well-formed entry survives.
+        let (_dir, s) = store();
+        let good = record_at(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
+        s.save(&good, &fake_png()).unwrap();
+
+        let mut index = s.read_index().unwrap();
+        index.records.push(HistoryIndexEntry {
+            id: Uuid::new_v4(),
+            captured_at: Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
+            png_path: PathBuf::from("/etc/passwd"),
+            json_path: PathBuf::from("/etc/passwd"),
+        });
+        index.records.push(HistoryIndexEntry {
+            id: Uuid::new_v4(),
+            captured_at: Utc.with_ymd_and_hms(2026, 1, 3, 0, 0, 0).unwrap(),
+            png_path: PathBuf::from("../../../etc/shadow"),
+            json_path: PathBuf::from("../../../etc/shadow"),
+        });
+        s.write_index(&index).unwrap();
+
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, good.id);
+    }
+
+    #[test]
+    fn safe_relative_join_rejects_escapes_and_accepts_normal_paths() {
+        let root = Path::new("/history/root");
+        assert!(safe_relative_join(root, Path::new("2026/01/x.json")).is_some());
+        assert!(safe_relative_join(root, Path::new("/etc/passwd")).is_none());
+        assert!(safe_relative_join(root, Path::new("../escape")).is_none());
+        assert!(safe_relative_join(root, Path::new("2026/../../escape")).is_none());
+        assert!(safe_relative_join(root, Path::new("")).is_none());
     }
 
     #[test]
