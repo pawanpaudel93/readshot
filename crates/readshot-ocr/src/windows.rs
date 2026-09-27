@@ -66,8 +66,7 @@ impl OCREngine for WindowsMediaOcrEngine {
     async fn recognise(&self, req: OCRRequest) -> Result<OCRResult, OCRError> {
         let bitmap = make_bitmap(&req.image)
             .map_err(|e| OCRError::Backend(format!("SoftwareBitmap: {e}")))?;
-        let engine = create_engine(&req.languages)
-            .map_err(|e| OCRError::Backend(format!("OcrEngine: {e}")))?;
+        let engine = create_engine(&req.languages)?;
 
         let async_op = engine
             .RecognizeAsync(&bitmap)
@@ -115,11 +114,39 @@ fn make_bitmap(rgba: &RgbaImage) -> Result<SoftwareBitmap, windows::core::Error>
     )
 }
 
-fn create_engine(languages: &[String]) -> Result<OcrEngine, windows::core::Error> {
+fn create_engine(languages: &[String]) -> Result<OcrEngine, OCRError> {
     if let Some(first) = languages.first() {
         let lang_tag = HSTRING::from(first.as_str());
-        let lang = Language::CreateLanguage(&lang_tag)?;
-        return OcrEngine::TryCreateFromLanguage(&lang);
+        let lang = Language::CreateLanguage(&lang_tag).map_err(|e| {
+            OCRError::Backend(format!("could not create OCR language `{first}`: {e}"))
+        })?;
+        return OcrEngine::TryCreateFromLanguage(&lang)
+            .map_err(|e| engine_unavailable_error(e, Some(first)));
     }
-    OcrEngine::TryCreateFromUserProfileLanguages()
+    OcrEngine::TryCreateFromUserProfileLanguages().map_err(|e| engine_unavailable_error(e, None))
+}
+
+/// Translate a failed `OcrEngine::TryCreate*` into an actionable typed
+/// error.
+///
+/// When no matching OCR language pack is installed, both
+/// `TryCreateFromLanguage` and `TryCreateFromUserProfileLanguages`
+/// return a null engine, which windows-core 0.62 maps to
+/// `Error::empty()` — an HRESULT of `S_OK` with a blank message. Left
+/// alone that surfaces as a useless "OcrEngine: " string. Rewrite that
+/// case to name the requested language (or say none is installed) and
+/// point at the fix; a genuine HRESULT failure keeps its message.
+fn engine_unavailable_error(err: windows::core::Error, requested: Option<&str>) -> OCRError {
+    let base = match requested {
+        Some(lang) => format!("no OCR language pack installed for `{lang}`"),
+        None => "no OCR language installed".to_string(),
+    };
+    if err.code().is_ok() {
+        OCRError::Backend(format!(
+            "{base}; install a Windows OCR language pack \
+             (Settings \u{2192} Time & Language \u{2192} Language & region)"
+        ))
+    } else {
+        OCRError::Backend(format!("{base}: {err}"))
+    }
 }
