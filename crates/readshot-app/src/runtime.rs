@@ -333,6 +333,7 @@ pub fn start() -> (App, Task<Message>) {
         app.hotkey_manager = Some(registration.manager);
         app.hotkey_actions = registration.actions;
         app.capture_hotkey_registered = registration.capture_registered;
+        app.fixed_hotkey_failures = registration.failed_fixed;
     }
     if app.preferences.launch_at_login {
         if let Err(e) = crate::startup::set_launch_at_login(true) {
@@ -3724,7 +3725,11 @@ mod tests {
             capture_hotkey: "not a hotkey at all".into(),
             ..Preferences::default()
         };
-        let (actions, capture_registered) = register_hotkey_actions(&prefs, |_| Ok(()));
+        let HotkeyActions {
+            actions,
+            capture_registered,
+            ..
+        } = register_hotkey_actions(&prefs, |_| Ok(()));
 
         assert!(!capture_registered);
         assert!(actions.values().any(|a| *a == GlobalHotkeyAction::History));
@@ -3739,7 +3744,13 @@ mod tests {
             capture_hotkey: "ctrl+shift+x".into(),
             ..Preferences::default()
         };
-        let (actions, capture_registered) = register_hotkey_actions(&prefs, |_| {
+        // Capture is registered first; the first call fails so capture is
+        // dropped, and the two later fixed registrations succeed.
+        let HotkeyActions {
+            actions,
+            capture_registered,
+            failed_fixed,
+        } = register_hotkey_actions(&prefs, |_| {
             calls.set(calls.get() + 1);
             if calls.get() == 1 {
                 Err("already owned".into())
@@ -3749,9 +3760,56 @@ mod tests {
         });
 
         assert!(!capture_registered);
+        assert!(failed_fixed.is_empty());
         assert!(actions.values().any(|a| *a == GlobalHotkeyAction::History));
         assert!(actions.values().any(|a| *a == GlobalHotkeyAction::Settings));
         assert!(!actions.values().any(|a| *a == GlobalHotkeyAction::Capture));
+    }
+
+    #[test]
+    fn register_hotkey_actions_rejects_capture_chord_that_conflicts_with_fixed() {
+        // A capture chord equal to the reserved Settings hotkey must not
+        // be registered (and must not clobber the fixed one).
+        let prefs = Preferences {
+            capture_hotkey: settings_hotkey().into(),
+            ..Preferences::default()
+        };
+        let attempts = std::cell::Cell::new(0);
+        let HotkeyActions {
+            actions,
+            capture_registered,
+            failed_fixed,
+        } = register_hotkey_actions(&prefs, |_| {
+            attempts.set(attempts.get() + 1);
+            Ok(())
+        });
+
+        assert!(!capture_registered, "conflicting capture must not register");
+        assert!(!actions.values().any(|a| *a == GlobalHotkeyAction::Capture));
+        assert!(actions.values().any(|a| *a == GlobalHotkeyAction::Settings));
+        assert!(actions.values().any(|a| *a == GlobalHotkeyAction::History));
+        assert!(failed_fixed.is_empty());
+        // Only the two fixed hotkeys were ever handed to the OS.
+        assert_eq!(attempts.get(), 2);
+        assert_eq!(capture_hotkey_conflict(settings_hotkey()), Some("Settings"));
+    }
+
+    #[test]
+    fn register_hotkey_actions_reports_failed_fixed_hotkeys() {
+        let prefs = Preferences {
+            capture_hotkey: "ctrl+shift+x".into(),
+            ..Preferences::default()
+        };
+        // Fail every registration: capture drops, and both fixed hotkeys
+        // are reported as failures.
+        let HotkeyActions {
+            capture_registered,
+            failed_fixed,
+            ..
+        } = register_hotkey_actions(&prefs, |_| Err("denied".into()));
+
+        assert!(!capture_registered);
+        assert_eq!(failed_fixed, vec!["History", "Settings"]);
     }
 
     #[test]

@@ -97,6 +97,17 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
         }
         Message::SettingsHotkeyRecorded(shortcut) => {
             state.settings_recording_hotkey = false;
+            // Reject a chord that collides with a reserved fixed hotkey
+            // (History / Settings) instead of silently disabling one of
+            // them. Keep the previous capture hotkey and tell the user.
+            if let Some(reserved) = capture_hotkey_conflict(&shortcut) {
+                let pretty = pretty_hotkey(&shortcut);
+                state.settings_hotkey_status = None;
+                state.settings_hotkey_error = Some(format!(
+                    "{pretty} is reserved for the {reserved} shortcut. Pick another chord."
+                ));
+                return Task::none();
+            }
             state.settings_hotkey_error = None;
             update(
                 state,

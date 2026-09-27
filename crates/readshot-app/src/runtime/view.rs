@@ -3215,11 +3215,15 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     .align_y(Alignment::Center);
 
     let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
-    let hotkey_hint = if state.settings_recording_hotkey {
+    let mut hotkey_hint = if state.settings_recording_hotkey {
         state
             .settings_hotkey_error
             .clone()
             .unwrap_or_else(|| "Press a modifier shortcut now. Escape cancels.".to_string())
+    } else if let Some(err) = &state.settings_hotkey_error {
+        // A rejected chord (e.g. a conflict with a reserved hotkey) or a
+        // registration failure. Show it even when recording has ended.
+        err.clone()
     } else if let Some(status) = &state.settings_hotkey_status {
         status.clone()
     } else if readshot_ui::hotkey::parse(&state.preferences.capture_hotkey).is_err() {
@@ -3227,6 +3231,8 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             "Couldn't read `{}` — try `cmd+shift+x` style.",
             state.preferences.capture_hotkey
         )
+    } else if let Some(reserved) = capture_hotkey_conflict(&state.preferences.capture_hotkey) {
+        format!("{pretty} is reserved for the {reserved} shortcut. Pick another chord.")
     } else if !state.capture_hotkey_registered {
         // Parsed-OK but registration failed, e.g. another app already
         // owns the chord. Tell the user so they pick another one.
@@ -3234,6 +3240,18 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     } else {
         format!("Currently bound to {pretty}.")
     };
+    // A fixed hotkey (History / Settings) that couldn't be registered is
+    // surfaced here so the failure isn't silent.
+    if !state.fixed_hotkey_failures.is_empty() {
+        let names = state.fixed_hotkey_failures.join(" and ");
+        let plural = if state.fixed_hotkey_failures.len() > 1 {
+            "shortcuts"
+        } else {
+            "shortcut"
+        };
+        hotkey_hint =
+            format!("{hotkey_hint}  ⚠ The {names} {plural} couldn't be registered globally.");
+    }
     let hotkey_label = if state.settings_recording_hotkey {
         "Press shortcut…".to_string()
     } else {
