@@ -34,6 +34,19 @@ pub enum ExportFormat {
     Webp,
 }
 
+/// User-facing labels for the export format, so the settings `pick_list`
+/// renders human names ("PNG", "JPEG", "WebP") rather than debug output.
+impl fmt::Display for ExportFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            ExportFormat::Png => "PNG",
+            ExportFormat::Jpeg => "JPEG",
+            ExportFormat::Webp => "WebP",
+        };
+        f.write_str(label)
+    }
+}
+
 /// Capture-history retention policy. `Off` is the default, matching the
 /// spec's privacy-first stance — the user has to opt in explicitly.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +85,17 @@ pub enum OcrEngineChoice {
     Tesseract,
 }
 
+/// User-facing labels for the OCR engine choice.
+impl fmt::Display for OcrEngineChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            OcrEngineChoice::Native => "System default",
+            OcrEngineChoice::Tesseract => "Tesseract",
+        };
+        f.write_str(label)
+    }
+}
+
 /// Sparkle / self-check / Flatpak update channel.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -79,6 +103,17 @@ pub enum UpdateChannel {
     #[default]
     Stable,
     Beta,
+}
+
+/// User-facing labels for the update channel.
+impl fmt::Display for UpdateChannel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            UpdateChannel::Stable => "Stable",
+            UpdateChannel::Beta => "Beta",
+        };
+        f.write_str(label)
+    }
 }
 
 /// Top-level user preferences, persisted as `preferences.toml`.

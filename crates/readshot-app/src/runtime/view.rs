@@ -3185,7 +3185,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
 /// enum but don't render until they have content worth showing.
 pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     use iced::widget::{button, pick_list, text_input, toggler};
-    use readshot_core::HistoryRetention;
+    use readshot_core::{ExportFormat, HistoryRetention, OcrEngineChoice, UpdateChannel};
 
     // `pick_list` borrows its options for the duration of the
     // returned `Element`, so a `'static` slice keeps the lifetime
@@ -3196,6 +3196,11 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         HistoryRetention::Last30Days,
         HistoryRetention::Unlimited,
     ];
+    const FORMAT_OPTIONS: [ExportFormat; 3] =
+        [ExportFormat::Png, ExportFormat::Jpeg, ExportFormat::Webp];
+    const ENGINE_OPTIONS: [OcrEngineChoice; 2] =
+        [OcrEngineChoice::Native, OcrEngineChoice::Tesseract];
+    const CHANNEL_OPTIONS: [UpdateChannel; 2] = [UpdateChannel::Stable, UpdateChannel::Beta];
 
     let header = row![
         column![
@@ -3438,6 +3443,76 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         .height(Length::Shrink)
         .into(),
     );
+    // --- Text recognition (OCR) ---------------------------------------
+    let ocr_engine = state.preferences.ocr_engine_choice;
+    let ocr_supported = state.coordinator.supported_languages();
+    let ocr_selected = state.preferences.ocr_languages.clone();
+    let ocr_section = settings_section(
+        "Text recognition",
+        "OCR engine and languages",
+        column![
+            settings_field(
+                "OCR engine",
+                "System default uses your platform's built-in recognizer. Takes effect after restart.",
+                pick_list(&ENGINE_OPTIONS[..], Some(ocr_engine), |c| {
+                    Message::Settings(SettingsMessage::SetOcrEngine(c))
+                })
+                .into(),
+            ),
+            settings_field(
+                "Recognition languages",
+                "Leave all off to let the recognizer choose. Applies to your next capture.",
+                ocr_language_control(&ocr_supported, &ocr_selected),
+            ),
+        ]
+        .spacing(14)
+        .into(),
+    );
+
+    // --- Export --------------------------------------------------------
+    let default_format = state.preferences.default_format;
+    let export_section = settings_section(
+        "Export",
+        "Default image format",
+        settings_field(
+            "Default format",
+            "Format used when you Save a capture.",
+            pick_list(&FORMAT_OPTIONS[..], Some(default_format), |f| {
+                Message::Settings(SettingsMessage::SetDefaultFormat(f))
+            })
+            .into(),
+        ),
+    );
+
+    // --- Advanced ------------------------------------------------------
+    let update_channel = state.preferences.update_channel;
+    let debug_logging = state.preferences.debug_logging;
+    let debug_toggle: Element<'_, Message> = toggler(debug_logging)
+        .label("Verbose debug logging")
+        .on_toggle(|v| Message::Settings(SettingsMessage::SetDebugLogging(v)))
+        .into();
+    let advanced_section = settings_section(
+        "Advanced",
+        "Updates and diagnostics",
+        column![
+            settings_field(
+                "Update channel",
+                "Beta receives pre-release builds sooner. Takes effect after restart.",
+                pick_list(&CHANNEL_OPTIONS[..], Some(update_channel), |c| {
+                    Message::Settings(SettingsMessage::SetUpdateChannel(c))
+                })
+                .into(),
+            ),
+            settings_field(
+                "Diagnostics",
+                "Logs at DEBUG level. Takes effect after restart.",
+                debug_toggle,
+            ),
+        ]
+        .spacing(14)
+        .into(),
+    );
+
     let reset_pending = state.settings_reset_all_pending;
     let reset_status = state
         .settings_status
@@ -3502,6 +3577,9 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             permission_section,
             capture_section,
             files_section,
+            ocr_section,
+            export_section,
+            advanced_section,
             app_section,
         ]
         .spacing(16)
@@ -3581,6 +3659,49 @@ pub(crate) fn settings_field<'a>(
     ]
     .spacing(7)
     .into()
+}
+
+/// Simple multi-select for OCR languages: one checkbox per language the
+/// active engine reports as supported. Toggling rebuilds the ordered list
+/// (insertion order becomes recognition priority). An empty supported
+/// list — e.g. the Linux ocrs engine, which reports a single language —
+/// renders an explanatory note instead.
+pub(crate) fn ocr_language_control(
+    supported: &[String],
+    selected: &[String],
+) -> Element<'static, Message> {
+    if supported.is_empty() {
+        return setting_value_box(
+            "No languages reported by the recognizer.".to_string(),
+            false,
+        );
+    }
+    let mut items: Vec<Element<'static, Message>> = Vec::with_capacity(supported.len());
+    for lang in supported {
+        let lang = lang.clone();
+        let checked = selected.iter().any(|l| l == &lang);
+        let selected_now = selected.to_vec();
+        let toggle_lang = lang.clone();
+        items.push(
+            iced::widget::checkbox(checked)
+                .label(lang)
+                .size(16)
+                .text_size(13)
+                .on_toggle(move |now| {
+                    let mut next = selected_now.clone();
+                    if now {
+                        if !next.iter().any(|l| l == &toggle_lang) {
+                            next.push(toggle_lang.clone());
+                        }
+                    } else {
+                        next.retain(|l| l != &toggle_lang);
+                    }
+                    Message::Settings(SettingsMessage::SetOcrLanguages(next))
+                })
+                .into(),
+        );
+    }
+    iced::widget::Column::with_children(items).spacing(6).into()
 }
 
 pub(crate) fn setting_value_box(value: String, active: bool) -> Element<'static, Message> {
