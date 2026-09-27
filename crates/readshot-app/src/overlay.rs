@@ -277,21 +277,48 @@ fn draw_crosshair(frame: &mut Frame<Renderer>, bounds: Rectangle, point: Point) 
     }
 }
 
+/// Approximate advance width of one glyph in the hint pill, in logical
+/// pixels. Used both to size the pill background and to decide how many
+/// characters of the label actually fit inside it.
+const HINT_CHAR_W: f32 = 7.0;
+
+/// Truncate `label` so it occupies at most `max_chars` glyph cells,
+/// appending an ellipsis when characters are dropped. Returns the label
+/// unchanged when it already fits.
+fn truncate_with_ellipsis(label: &str, max_chars: usize) -> String {
+    if label.chars().count() <= max_chars {
+        return label.to_string();
+    }
+    match max_chars {
+        0 => String::new(),
+        1 => "…".to_string(),
+        _ => {
+            let mut s: String = label.chars().take(max_chars - 1).collect();
+            s.push('…');
+            s
+        }
+    }
+}
+
 fn draw_overlay_hint(frame: &mut Frame<Renderer>, bounds: Rectangle, cli_interactive: bool) {
     let label = if cli_interactive {
         "CLI mode · Drag to capture · mouse-up commits · Shift = square · Esc cancels"
     } else {
         "Drag to select · Shift = square · Enter = full screen · Esc cancels"
     };
-    let text_w = (label.chars().count() as f32 * 7.0).min((bounds.width - 48.0).max(160.0));
+    let text_w = (label.chars().count() as f32 * HINT_CHAR_W).min((bounds.width - 48.0).max(160.0));
     let box_w = text_w + 24.0;
     let box_h = 30.0;
     let x = ((bounds.width - box_w) / 2.0).max(16.0);
     let y = 24.0;
     let bg = Path::rounded_rectangle(Point::new(x, y), iced::Size::new(box_w, box_h), 6.0.into());
     frame.fill(&bg, Color::from_rgba(0.0, 0.0, 0.0, 0.58));
+    // `text_w` is capped to the available width, but the untruncated
+    // label can be wider — draw a truncated copy so the glyphs never
+    // spill past the pill background on narrow displays.
+    let max_chars = (text_w / HINT_CHAR_W).floor() as usize;
     frame.fill_text(CanvasText {
-        content: label.to_string(),
+        content: truncate_with_ellipsis(label, max_chars),
         position: Point::new(x + 12.0, y + 8.0),
         color: Color::WHITE,
         size: iced::Pixels(13.0),
@@ -725,6 +752,38 @@ fn overlay_crosshair_interaction() -> mouse::Interaction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_with_ellipsis_leaves_short_labels_untouched() {
+        assert_eq!(
+            truncate_with_ellipsis("Drag to select", 20),
+            "Drag to select"
+        );
+        assert_eq!(truncate_with_ellipsis("exact", 5), "exact");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_adds_ellipsis_and_respects_budget() {
+        let out = truncate_with_ellipsis("Drag to select · Shift = square", 10);
+        assert_eq!(out.chars().count(), 10);
+        assert!(out.ends_with('…'));
+        assert_eq!(out, "Drag to s…");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_handles_tiny_budgets() {
+        assert_eq!(truncate_with_ellipsis("hello", 0), "");
+        assert_eq!(truncate_with_ellipsis("hello", 1), "…");
+        assert_eq!(truncate_with_ellipsis("hello", 2), "h…");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_counts_unicode_by_char() {
+        // Multi-byte chars must be counted as single cells, not bytes.
+        let out = truncate_with_ellipsis("café ● ○ ◐ ◑ ◒", 4);
+        assert_eq!(out.chars().count(), 4);
+        assert_eq!(out, "caf…");
+    }
 
     #[test]
     fn rectangle_from_two_points_handles_top_left_to_bottom_right() {
