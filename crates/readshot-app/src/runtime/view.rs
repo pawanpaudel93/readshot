@@ -1736,11 +1736,14 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let hint_text = hint_str;
     // Auto-dismiss old success / info status text so the chrome
     // doesn't stay loud forever after a successful save / copy.
-    // In-progress strings (Saving…, Copying…, Recognising text…)
-    // are kept until the next transition overwrites them.
+    // In-progress strings (Saving…, Copying…, Recognising text…) and
+    // errors are kept until the next transition overwrites them — an
+    // error the user didn't act on shouldn't vanish after 4s.
     let status_text = match (ed.status.clone(), ed.status_set_at) {
         (Some(s), Some(t))
-            if !ed.status_is_in_progress() && t.elapsed() > crate::editor::STATUS_AUTO_DISMISS =>
+            if !ed.status_is_in_progress()
+                && !ed.status_is_error()
+                && t.elapsed() > crate::editor::STATUS_AUTO_DISMISS =>
         {
             tracing::trace!(target: "readshot::editor", "auto-dismissed status: {s}");
             None

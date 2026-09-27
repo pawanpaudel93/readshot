@@ -167,6 +167,26 @@ pub const DISCARD_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::fro
 /// they're overwritten.
 pub const STATUS_AUTO_DISMISS: std::time::Duration = std::time::Duration::from_secs(4);
 
+/// A status string is "in progress" when it ends with `…` or starts
+/// with one of the known in-flight prefixes ("Saving", "Copying",
+/// "Recognising", "Choose"). Kept as a free function so the view can
+/// classify a toast string identically to [`EditorSession`] without
+/// re-implementing (and drifting from) the rule.
+pub fn status_str_is_in_progress(s: &str) -> bool {
+    s.ends_with('…')
+        || s.starts_with("Saving")
+        || s.starts_with("Copying")
+        || s.starts_with("Recognising")
+        || s.starts_with("Choose")
+}
+
+/// A status string is an error when it mentions "fail" or "error"
+/// (case-insensitive). Errors are never auto-dismissed.
+pub fn status_str_is_error(s: &str) -> bool {
+    let lower = s.to_lowercase();
+    lower.contains("fail") || lower.contains("error")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EditorZoom {
     Fit,
@@ -385,19 +405,19 @@ impl EditorSession {
 
     /// "In-progress" status strings the auto-dismiss logic must
     /// leave alone — clearing "Saving…" before the save actually
-    /// completes would look broken. Any message that ends with `…`
-    /// or starts with one of these prefixes counts as in-progress.
+    /// completes would look broken.
     pub fn status_is_in_progress(&self) -> bool {
-        match self.status.as_deref() {
-            None => false,
-            Some(s) => {
-                s.ends_with('…')
-                    || s.starts_with("Saving")
-                    || s.starts_with("Copying")
-                    || s.starts_with("Recognising")
-                    || s.starts_with("Choose")
-            }
-        }
+        self.status
+            .as_deref()
+            .is_some_and(status_str_is_in_progress)
+    }
+
+    /// Whether the current status toast is an error. Errors stay on
+    /// screen (never auto-dismissed) and render with the error style;
+    /// this is the single classifier the runtime and view share so the
+    /// auto-dismiss window and the toast colour never disagree.
+    pub fn status_is_error(&self) -> bool {
+        self.status.as_deref().is_some_and(status_str_is_error)
     }
 
     pub fn zoom_label(&self) -> String {
@@ -535,6 +555,45 @@ mod tests {
             *px = image::Rgba([255, 255, 255, 255]);
         }
         img
+    }
+
+    #[test]
+    fn status_classifiers_agree_across_in_progress_error_and_success() {
+        // In-progress: kept on screen, neutral style.
+        for s in ["Saving…", "Choose a save location…", "Copying…", "Recognising text…"] {
+            assert!(status_str_is_in_progress(s), "{s:?} should be in-progress");
+            assert!(!status_str_is_error(s), "{s:?} should not be an error");
+        }
+        // Errors: kept on screen, error style.
+        for s in ["Save failed: disk full", "Copy text failed: no OCR", "Unexpected error"] {
+            assert!(status_str_is_error(s), "{s:?} should be an error");
+            assert!(
+                !status_str_is_in_progress(s),
+                "{s:?} should not be in-progress"
+            );
+        }
+        // Success / info: eligible for auto-dismiss, success style.
+        for s in ["Saved to ~/Desktop/shot.png", "Added text. ⌘Z to undo."] {
+            assert!(!status_str_is_error(s), "{s:?} should not be an error");
+            assert!(
+                !status_str_is_in_progress(s),
+                "{s:?} should not be in-progress"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_session_status_helpers_match_free_classifiers() {
+        let mut s = EditorSession::new(solid(8, 8));
+        s.set_status("Save failed: disk full");
+        assert!(s.status_is_error());
+        assert!(!s.status_is_in_progress());
+        s.set_status("Saving…");
+        assert!(s.status_is_in_progress());
+        assert!(!s.status_is_error());
+        s.set_status("Saved to disk");
+        assert!(!s.status_is_error());
+        assert!(!s.status_is_in_progress());
     }
 
     #[test]
