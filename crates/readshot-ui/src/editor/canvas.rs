@@ -45,6 +45,12 @@ pub enum DrawState {
         anchor: Point,
         cursor: Point,
         tool_at_press: ToolState,
+        /// The editor's drag-cancel sequence at the moment this drag
+        /// started. If the program is later rebuilt with a bumped
+        /// sequence (Escape pressed while the drag is live), the next
+        /// canvas event drops the drag instead of committing it — iced
+        /// 0.14 doesn't route the Escape key into the canvas itself.
+        cancel_seq: u64,
     },
     /// Polyline accumulator — Pen, Highlighter. Each `CursorMoved` on
     /// a held button appends a point. The preview renders the entire
@@ -52,6 +58,8 @@ pub enum DrawState {
     Drawing {
         points: Vec<Point>,
         tool_at_press: ToolState,
+        /// See [`DrawState::Dragging::cancel_seq`].
+        cancel_seq: u64,
     },
     /// Select-tool drag in base-image coordinates. The runtime owns
     /// hit testing and live move preview; the canvas only streams
@@ -142,6 +150,18 @@ pub struct EditorCanvas {
     /// background texture stable and ask the canvas to draw only this
     /// transient overlay.
     pub selected_preview: Option<Annotation>,
+    /// Runtime-tracked Shift state. iced 0.14 does not route keyboard
+    /// events into canvas widgets, so the editor listens globally and
+    /// passes the current modifier state in here on each `view()`. When
+    /// set, an in-progress shape drag is constrained: Rectangle/Ellipse
+    /// snap to a square, Line/Arrow snap to 45° increments.
+    pub shift_held: bool,
+    /// The editor's drag-cancel sequence. The editor bumps this when
+    /// Escape is pressed during a live drag; the canvas compares it
+    /// against the value captured at drag start and cancels the drag on
+    /// the next event when they differ. (Keyboard events never reach the
+    /// canvas in iced 0.14, so the cancellation has to be threaded in.)
+    pub cancel_seq: u64,
     /// Shared tessellated-geometry cache, owned by the editor session.
     /// `draw` reuses the stored geometry unless the canvas size changed
     /// or the session explicitly cleared it (on editor messages). This
@@ -344,6 +364,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                     *state = DrawState::Drawing {
                         points: vec![point],
                         tool_at_press: self.active_tool,
+                        cancel_seq: self.cancel_seq,
                     };
                     return Some(canvas::Action::publish(CanvasMessage::DragStarted).and_capture());
                 }
@@ -352,6 +373,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                     anchor: point,
                     cursor: point,
                     tool_at_press: self.active_tool,
+                    cancel_seq: self.cancel_seq,
                 };
                 Some(canvas::Action::publish(CanvasMessage::DragStarted).and_capture())
             }
@@ -359,11 +381,20 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 DrawState::Dragging {
                     anchor,
                     cursor: cur,
-                    ..
+                    tool_at_press,
+                    cancel_seq,
                 } => {
+                    if *cancel_seq != self.cancel_seq {
+                        *state = DrawState::Idle;
+                        return Some(
+                            canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
+                        );
+                    }
                     if let Some(point) = cursor.position_in(bounds) {
                         *cur = point;
-                        let preview_rect = rect_from_points(*anchor, point);
+                        let constrained =
+                            constrain_drag(*tool_at_press, *anchor, point, self.shift_held);
+                        let preview_rect = rect_from_points(*anchor, constrained);
                         return Some(
                             canvas::Action::publish(CanvasMessage::DragMoved(preview_rect))
                                 .and_capture(),
@@ -371,7 +402,15 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                     }
                     None
                 }
-                DrawState::Drawing { points, .. } => {
+                DrawState::Drawing {
+                    points, cancel_seq, ..
+                } => {
+                    if *cancel_seq != self.cancel_seq {
+                        *state = DrawState::Idle;
+                        return Some(
+                            canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
+                        );
+                    }
                     if let Some(point) = cursor.position_in(bounds) {
                         // Drop near-duplicate points so the polyline
                         // doesn't blow up to thousands of nodes for a
@@ -424,7 +463,17 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                         anchor,
                         cursor: cur,
                         tool_at_press,
+                        cancel_seq,
                     } => {
+                        if cancel_seq != self.cancel_seq {
+                            return Some(
+                                canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
+                            );
+                        }
+                        // Apply the Shift constraint (square / 45°) to the
+                        // release point so the committed shape matches the
+                        // constrained preview the user saw.
+                        let cur = constrain_drag(tool_at_press, anchor, cur, self.shift_held);
                         let dx = anchor.x - cur.x;
                         let dy = anchor.y - cur.y;
                         let len_sq = dx * dx + dy * dy;
@@ -473,7 +522,13 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                     DrawState::Drawing {
                         points,
                         tool_at_press,
+                        cancel_seq,
                     } => {
+                        if cancel_seq != self.cancel_seq {
+                            return Some(
+                                canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
+                            );
+                        }
                         if points.len() < 2 {
                             return Some(
                                 canvas::Action::publish(CanvasMessage::Cancelled).and_capture(),
@@ -580,9 +635,13 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 DrawState::Selecting { .. } => {}
                 DrawState::Dragging {
                     anchor,
-                    cursor: cur,
+                    cursor: raw_cur,
                     tool_at_press,
+                    ..
                 } => {
+                    // Draw the preview at the Shift-constrained cursor so the
+                    // hint matches the shape that will be committed.
+                    let cur = &constrain_drag(*tool_at_press, *anchor, *raw_cur, self.shift_held);
                     let rect = rect_from_points(*anchor, *cur);
                     if rect.width.abs() < 0.5 || rect.height.abs() < 0.5 {
                         // Don't draw anything for sub-pixel drags; iced's
@@ -661,6 +720,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 DrawState::Drawing {
                     points,
                     tool_at_press,
+                    ..
                 } => {
                     if points.len() >= 2 {
                         let path = Path::new(|builder| {
@@ -1345,6 +1405,53 @@ pub fn annotation_for_drag(
     }
 }
 
+/// Apply the "hold Shift to constrain" rule to a shape drag's far point.
+/// Rectangle / Ellipse snap to a perfect square (the longer axis wins);
+/// Line / Arrow snap the direction to the nearest 45° increment while
+/// keeping the drawn length. All other tools pass through unchanged. iced
+/// 0.14 doesn't deliver keyboard events to canvas widgets, so `shift` is
+/// threaded in from the runtime's global modifier watcher.
+fn constrain_drag(tool: ToolState, anchor: Point, cursor: Point, shift: bool) -> Point {
+    if !shift {
+        return cursor;
+    }
+    match tool {
+        ToolState::Rectangle | ToolState::Ellipse => square_target(anchor, cursor),
+        ToolState::Line | ToolState::Arrow => snap_to_45(anchor, cursor),
+        _ => cursor,
+    }
+}
+
+/// Snap the far corner so the resulting rect is a perfect square; the
+/// longer axis determines the side length, and the sign per axis keeps the
+/// square on the same side of the anchor as the raw cursor.
+fn square_target(anchor: Point, cursor: Point) -> Point {
+    let dx = cursor.x - anchor.x;
+    let dy = cursor.y - anchor.y;
+    let size = dx.abs().max(dy.abs());
+    let sx = if dx >= 0.0 { 1.0 } else { -1.0 };
+    let sy = if dy >= 0.0 { 1.0 } else { -1.0 };
+    Point::new(anchor.x + sx * size, anchor.y + sy * size)
+}
+
+/// Snap the drag direction to the nearest multiple of 45° while preserving
+/// the drag length, so lines / arrows lock to horizontal, vertical, or the
+/// diagonals.
+fn snap_to_45(anchor: Point, cursor: Point) -> Point {
+    let dx = cursor.x - anchor.x;
+    let dy = cursor.y - anchor.y;
+    let len = dx.hypot(dy);
+    if len <= f32::EPSILON {
+        return cursor;
+    }
+    let step = std::f32::consts::FRAC_PI_4;
+    let snapped = (dy.atan2(dx) / step).round() * step;
+    Point::new(
+        anchor.x + len * snapped.cos(),
+        anchor.y + len * snapped.sin(),
+    )
+}
+
 fn rect_from_points(a: Point, b: Point) -> Rectangle {
     Rectangle {
         x: a.x.min(b.x),
@@ -1590,6 +1697,8 @@ mod tests {
             selected_handles: Vec::new(),
             selected_annotation: None,
             selected_preview: None,
+            shift_held: false,
+            cancel_seq: 0,
             cache: std::rc::Rc::new(canvas::Cache::default()),
         };
         let bounds = Rectangle {
@@ -1631,6 +1740,8 @@ mod tests {
             selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
             selected_annotation: None,
             selected_preview: None,
+            shift_held: false,
+            cancel_seq: 0,
             cache: std::rc::Rc::new(canvas::Cache::default()),
         };
         let bounds = Rectangle {
@@ -1677,6 +1788,8 @@ mod tests {
             selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
             selected_annotation: None,
             selected_preview: None,
+            shift_held: false,
+            cancel_seq: 0,
             cache: std::rc::Rc::new(canvas::Cache::default()),
         };
         let bounds = Rectangle {
@@ -1714,6 +1827,8 @@ mod tests {
                 line_width: 2.0,
             }),
             selected_preview: None,
+            shift_held: false,
+            cancel_seq: 0,
             cache: std::rc::Rc::new(canvas::Cache::default()),
         };
         let bounds = Rectangle {
@@ -1746,6 +1861,91 @@ mod tests {
     }
 
     #[test]
+    fn shift_constrains_rectangle_drag_to_a_square() {
+        // Wider-than-tall drag: the longer (x) axis sets the side length.
+        let target = constrain_drag(ToolState::Rectangle, pt(0.0, 0.0), pt(100.0, 40.0), true);
+        assert_eq!(target, pt(100.0, 100.0));
+        // Sign is preserved per-axis so the square follows the cursor's
+        // quadrant (here up-and-left).
+        let target = constrain_drag(ToolState::Ellipse, pt(50.0, 50.0), pt(10.0, 20.0), true);
+        assert_eq!(target, pt(10.0, 10.0));
+        // Without Shift the cursor passes straight through.
+        assert_eq!(
+            constrain_drag(ToolState::Rectangle, pt(0.0, 0.0), pt(100.0, 40.0), false),
+            pt(100.0, 40.0)
+        );
+    }
+
+    #[test]
+    fn shift_snaps_line_drag_to_45_degree_increments() {
+        // A near-horizontal drag snaps to exactly horizontal, length kept.
+        let target = constrain_drag(ToolState::Line, pt(0.0, 0.0), pt(100.0, 10.0), true);
+        assert!((target.x - 100.4987).abs() < 0.01, "x = {}", target.x);
+        assert!(target.y.abs() < 0.01, "y = {}", target.y);
+
+        // A ~45° drag snaps onto the diagonal.
+        let target = constrain_drag(ToolState::Arrow, pt(0.0, 0.0), pt(50.0, 40.0), true);
+        let len = (50.0_f32).hypot(40.0);
+        let expected = len / std::f32::consts::SQRT_2;
+        assert!((target.x - expected).abs() < 0.01, "x = {}", target.x);
+        assert!((target.y - expected).abs() < 0.01, "y = {}", target.y);
+
+        // Non-shape tools ignore Shift.
+        assert_eq!(
+            constrain_drag(ToolState::Blur, pt(0.0, 0.0), pt(100.0, 10.0), true),
+            pt(100.0, 10.0)
+        );
+    }
+
+    #[test]
+    fn bumped_cancel_seq_drops_an_in_progress_drag_on_release() {
+        // A live drag whose cancel_seq no longer matches the program's
+        // (Escape was pressed) must publish Cancelled, not commit.
+        let canvas = EditorCanvas {
+            active_tool: ToolState::Rectangle,
+            color: CoreRgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            next_pin_number: 1,
+            image_size: (200, 100),
+            image_offset: (0.0, 0.0),
+            display_scale: Some(2.0),
+            selected_bounds: None,
+            selected_handles: Vec::new(),
+            selected_annotation: None,
+            selected_preview: None,
+            shift_held: false,
+            cancel_seq: 1,
+            cache: std::rc::Rc::new(canvas::Cache::default()),
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        // Drag started under cancel_seq 0; the program now carries 1.
+        let mut state = DrawState::Dragging {
+            anchor: Point::new(100.0, 120.0),
+            cursor: Point::new(300.0, 320.0),
+            tool_at_press: ToolState::Rectangle,
+            cancel_seq: 0,
+        };
+
+        let action = canvas
+            .update(
+                &mut state,
+                &Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left,
+                )),
+                bounds,
+                Cursor::Available(Point::new(300.0, 320.0)),
+            )
+            .expect("release should publish a message");
+        let (message, _, _) = action.into_inner();
+        assert_eq!(message, Some(CanvasMessage::Cancelled));
+    }
+
+    #[test]
     fn move_cursor_uses_stroke_hit_test_not_bbox_for_lines() {
         // A diagonal line: its bounding box has large empty corners that a
         // press would NOT grab. The move cursor must follow the stroke, not
@@ -1767,6 +1967,8 @@ mod tests {
                 line_width: 2.0,
             }),
             selected_preview: None,
+            shift_held: false,
+            cancel_seq: 0,
             cache: std::rc::Rc::new(canvas::Cache::default()),
         };
         let bounds = Rectangle {

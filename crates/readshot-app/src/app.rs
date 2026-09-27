@@ -445,6 +445,11 @@ pub enum Message {
         modifiers: iced::keyboard::Modifiers,
         status_ignored: bool,
     },
+    /// Current Shift state while an editor is open. iced 0.14 doesn't
+    /// route keyboard events into canvas widgets, so the runtime watches
+    /// modifiers globally and forwards them to the editor canvas, which
+    /// uses them to constrain shape drags (square / 45°).
+    EditorShiftChanged(bool),
     /// Preview selected-annotation width while the toolbar slider is dragged.
     EditorLineWidthPreview(f32),
     /// Commit the toolbar slider's selected-annotation width preview.
@@ -598,6 +603,11 @@ pub struct App {
     /// subscription and threads it back into each `OverlayProgram` on
     /// view().
     pub overlay_shift_held: bool,
+    /// Tracks whether Shift is held while an editor window is open. Same
+    /// rationale as `overlay_shift_held`: iced 0.14 doesn't route keyboard
+    /// events into canvas widgets, so the runtime tracks Shift globally and
+    /// threads it into the editor canvas to constrain shape drags.
+    pub editor_shift_held: bool,
     /// Last directory the user saved into. The editor's save picker
     /// seeds itself there next time so a burst of related captures
     /// lands in the same place. Reset whenever the user picks a new
@@ -888,6 +898,7 @@ impl App {
             pins: HashMap::new(),
             overlay_tick: 0,
             overlay_shift_held: false,
+            editor_shift_held: false,
             last_save_dir: None,
             history_root: None,
             history_records: Vec::new(),

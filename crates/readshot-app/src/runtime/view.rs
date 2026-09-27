@@ -1384,6 +1384,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let display_scale = ed.display_scale;
     let next_pin_number = ed.next_pin_number;
     let pending_text = ed.pending_text.clone();
+    let editor_shift_held = state.editor_shift_held;
+    let drag_cancel_seq = ed.drag_cancel_seq;
     let selected_preview = ed
         .move_drag
         .as_ref()
@@ -1451,6 +1453,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 Vec::new()
             },
             selected_preview: selected_preview.clone(),
+            shift_held: editor_shift_held,
+            cancel_seq: drag_cancel_seq,
             cache: ed.canvas_cache.clone(),
         };
         let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)

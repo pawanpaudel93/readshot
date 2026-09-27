@@ -587,6 +587,21 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             }
             None
         }));
+        // Global Shift watcher for the editor — iced 0.14 doesn't pipe
+        // keyboard events into canvas widgets, so the editor canvas's
+        // "hold Shift = constrain" relies on this forwarding modifier
+        // state into App.editor_shift_held (mirrors the overlay watcher).
+        subs.push(iced::event::listen_with(|event, _status, _window| {
+            use iced::keyboard::Event as KbEvent;
+            match event {
+                iced::Event::Keyboard(KbEvent::KeyPressed { modifiers, .. })
+                | iced::Event::Keyboard(KbEvent::KeyReleased { modifiers, .. })
+                | iced::Event::Keyboard(KbEvent::ModifiersChanged(modifiers)) => {
+                    Some(Message::EditorShiftChanged(modifiers.shift()))
+                }
+                _ => None,
+            }
+        }));
     }
     if state.settings_recording_hotkey {
         subs.push(iced::event::listen_with(|event, _status, _window| {
@@ -1443,6 +1458,19 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     if was_actual {
                         ed.zoom = ed.actual_size_zoom();
                     }
+                }
+            }
+            Task::none()
+        }
+        Message::EditorShiftChanged(held) => {
+            // Only react on an actual change so the per-keystroke modifier
+            // stream doesn't force a canvas re-tessellation each key.
+            if state.editor_shift_held != held {
+                state.editor_shift_held = held;
+                if let Some(ed) = state.editor.as_ref() {
+                    // Re-tessellate so a live drag preview reflects the new
+                    // constraint on the next redraw.
+                    ed.canvas_cache.clear();
                 }
             }
             Task::none()
@@ -5269,6 +5297,65 @@ mod tests {
             },
         );
         assert!(app.editor.as_ref().unwrap().model.annotations().is_empty());
+    }
+
+    #[test]
+    fn escape_cancels_live_canvas_drag_before_discarding() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let editor_id = iced::window::Id::unique();
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.window_id = Some(editor_id);
+        // A committed annotation makes the editor "dirty" so the eventual
+        // discard is the two-stage confirm (keeps the window open) rather
+        // than an immediate clean close — lets us assert on it afterward.
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        // A shape drag is in flight (canvas published DragStarted).
+        ed.canvas_drag_active = true;
+        let seq_before = ed.drag_cancel_seq;
+        app.editor = Some(ed);
+
+        let escape = iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape);
+        let _ = update(
+            &mut app,
+            Message::EditorKeyPressed {
+                window: editor_id,
+                key: escape.clone(),
+                modifiers: iced::keyboard::Modifiers::empty(),
+                status_ignored: true,
+            },
+        );
+
+        // Escape cancelled the drag (seq bumped, flag cleared) and did NOT
+        // discard the editor.
+        let ed = app.editor.as_ref().expect("editor still open after cancel");
+        assert!(!ed.canvas_drag_active);
+        assert_eq!(ed.drag_cancel_seq, seq_before.wrapping_add(1));
+
+        // A second Escape with no drag in progress falls through to the
+        // discard shortcut (two-stage: first arms the confirmation).
+        let _ = update(
+            &mut app,
+            Message::EditorKeyPressed {
+                window: editor_id,
+                key: escape,
+                modifiers: iced::keyboard::Modifiers::empty(),
+                status_ignored: true,
+            },
+        );
+        let ed = app
+            .editor
+            .as_ref()
+            .expect("dirty editor arms discard, stays open");
+        // The discard path doesn't touch the drag-cancel sequence.
+        assert_eq!(ed.drag_cancel_seq, seq_before.wrapping_add(1));
+        assert!(
+            ed.discard_pending_at.is_some(),
+            "second Escape should arm the discard confirmation"
+        );
     }
 
     #[test]

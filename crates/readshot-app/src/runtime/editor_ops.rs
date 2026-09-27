@@ -228,6 +228,26 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if editor_window != Some(window) {
                 return Task::none();
             }
+            // Escape cancels an in-progress shape/freehand drag before it
+            // can fall through to the discard shortcut. iced 0.14 never
+            // routes Escape into the canvas, so we bump the cancel sequence
+            // here; the canvas drops the drag on its next event. Only when
+            // no drag is live does Escape reach the discard flow.
+            if status_ignored
+                && matches!(
+                    key,
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+                )
+            {
+                if let Some(ed) = state.editor.as_mut() {
+                    if ed.canvas_drag_active {
+                        ed.canvas_drag_active = false;
+                        ed.drag_cancel_seq = ed.drag_cancel_seq.wrapping_add(1);
+                        cancel_editor_previews(ed);
+                        return Task::none();
+                    }
+                }
+            }
             match editor_key_message(key, modifiers, status_ignored) {
                 Some(message) => update(state, message),
                 None => Task::none(),
@@ -525,13 +545,18 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 return Task::none();
             }
             match msg {
-                readshot_ui::CanvasMessage::DragStarted
-                | readshot_ui::CanvasMessage::DragMoved(_)
+                readshot_ui::CanvasMessage::DragStarted => {
+                    // A shape/freehand drag is now live; Escape should cancel
+                    // it rather than trigger discard.
+                    ed.canvas_drag_active = true;
+                }
+                readshot_ui::CanvasMessage::DragMoved(_)
                 | readshot_ui::CanvasMessage::PolylineMoved(_) => {
                     // Preview-only events. The canvas's own State holds
                     // the drag points; a redraw is automatic.
                 }
                 readshot_ui::CanvasMessage::Cancelled => {
+                    ed.canvas_drag_active = false;
                     cancel_editor_previews(ed);
                 }
                 readshot_ui::CanvasMessage::SelectPressed(p) => {
@@ -631,6 +656,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     });
                 }
                 readshot_ui::CanvasMessage::CommitAnnotation(annotation) => {
+                    ed.canvas_drag_active = false;
                     cancel_editor_previews(ed);
                     handle_commit_annotation(ed, annotation);
                     sync_editor_history(ed, &state.coordinator);
