@@ -1773,9 +1773,15 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 });
             let toast: Element<'_, Message> = match status_text.clone() {
                 Some(s) => {
-                    let lower = s.to_lowercase();
-                    let is_error = lower.contains("fail") || lower.contains("error");
-                    let in_progress = lower.starts_with("copying") || lower.contains("recognising");
+                    // Use the shared classifiers so the toast colour
+                    // agrees with the auto-dismiss rule. The old local
+                    // check only matched "copying"/"recognising", so
+                    // "Saving…" and "Choose a save location…" rendered
+                    // with the success (green) style instead of the
+                    // neutral in-progress style.
+                    let is_error = crate::editor::status_str_is_error(&s);
+                    let in_progress =
+                        !is_error && crate::editor::status_str_is_in_progress(&s);
                     let (bg, fg) = if is_error {
                         (
                             Color::from_rgba(0.85, 0.32, 0.32, 0.22),
