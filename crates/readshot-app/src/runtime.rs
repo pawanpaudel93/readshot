@@ -3334,6 +3334,34 @@ mod tests {
         assert_eq!(app.history_page_limit, crate::app::HISTORY_PAGE_SIZE);
     }
 
+    // ---- #32: user-facing statuses are human-readable ----
+
+    #[test]
+    fn friendly_errors_hide_raw_internals_and_keep_hints() {
+        use readshot_core::HistoryError;
+
+        // Permission-denied io errors keep a useful, plain hint and
+        // never leak the raw Display string into the status line.
+        let denied = HistoryError::Io("Permission denied (os error 13)".into());
+        let msg = history_ops::friendly_history_error("delete this capture", &denied);
+        assert!(msg.contains("permission denied"), "{msg}");
+        assert!(!msg.contains("os error 13"), "{msg}");
+
+        // Unclassified io errors fall back to a generic message.
+        let other = HistoryError::Io("broken pipe".into());
+        let msg = history_ops::friendly_history_error("clear the history", &other);
+        assert!(msg.starts_with("Couldn't clear the history"), "{msg}");
+        assert!(!msg.contains("broken pipe"), "{msg}");
+
+        // String-typed (clipboard / file-manager) errors: not-found
+        // hint, and no raw text leaked otherwise.
+        let nf = history_ops::friendly_string_error("open the save folder", "No such file");
+        assert!(nf.contains("already gone"), "{nf}");
+        let generic =
+            history_ops::friendly_string_error("copy the image to the clipboard", "weird backend");
+        assert!(!generic.contains("weird backend"), "{generic}");
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn reveal_command_uses_finder_selection_on_macos() {

@@ -80,7 +80,10 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
         Message::SettingsOpenSaveFolderDone(result) => {
             state.settings_status = Some(match result {
                 Ok(()) => "Opened save folder.".to_string(),
-                Err(e) => format!("Could not open save folder: {e}"),
+                Err(e) => {
+                    tracing::warn!(target: "readshot::settings", "open save folder failed: {e}");
+                    super::history_ops::friendly_string_error("open the save folder", &e)
+                }
             });
             Task::none()
         }

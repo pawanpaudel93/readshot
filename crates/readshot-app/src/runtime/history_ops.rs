@@ -203,7 +203,8 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             state.history_clear_all_pending = false;
             state.history_delete_pending = None;
             if let Err(e) = state.coordinator.clear_history() {
-                state.history_status = Some(format!("Clear history failed: {e}"));
+                tracing::warn!(target: "readshot::history", "clear history failed: {e}");
+                state.history_status = Some(friendly_history_error("clear the history", &e));
                 return Task::none();
             }
             let n = state.history_records.len();
@@ -282,7 +283,10 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
         Message::HistoryCopyImageDone(result) => {
             state.history_status = Some(match result {
                 Ok(()) => "Copied image to clipboard.".into(),
-                Err(e) => format!("Copy image failed: {e}"),
+                Err(e) => {
+                    tracing::warn!(target: "readshot::history", "copy image failed: {e}");
+                    friendly_string_error("copy the image to the clipboard", &e)
+                }
             });
             Task::none()
         }
@@ -417,9 +421,55 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
 fn delete_history_record(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
     state.history_delete_pending = None;
     if let Err(e) = state.coordinator.delete_history(id) {
-        state.history_status = Some(format!("Delete failed: {e}"));
+        tracing::warn!(target: "readshot::history", "delete failed: {e}");
+        state.history_status = Some(friendly_history_error("delete this capture", &e));
         return Task::none();
     }
     // Reload the list so the deleted record disappears.
     history_list_task(state.coordinator.clone())
+}
+
+/// Turn a typed [`HistoryError`] into a short, human-readable status
+/// line. The raw error is logged separately via tracing; the user sees
+/// plain language plus a hint (permission denied / not found) when the
+/// underlying io error exposes one.
+pub(crate) fn friendly_history_error(action: &str, e: &readshot_core::HistoryError) -> String {
+    use readshot_core::HistoryError;
+    let hint = match e {
+        HistoryError::Io(msg) => io_reason_hint(msg),
+        // Parse/serialise failures mean the on-disk history index is
+        // damaged — surface that rather than a raw serde string.
+        HistoryError::Parse(_) | HistoryError::Serialize(_) => {
+            Some("the history data looks damaged")
+        }
+    };
+    match hint {
+        Some(reason) => format!("Couldn't {action} — {reason}."),
+        None => format!("Couldn't {action}. See the log for details."),
+    }
+}
+
+/// Map a raw io-error string to a short human reason, when it carries a
+/// recognisable one. `None` for anything unclassified (the caller then
+/// falls back to a generic message + the log).
+pub(crate) fn io_reason_hint(raw: &str) -> Option<&'static str> {
+    let lower = raw.to_lowercase();
+    if lower.contains("permission denied") {
+        Some("permission denied")
+    } else if lower.contains("not found") || lower.contains("no such file") {
+        Some("the file was already gone")
+    } else {
+        None
+    }
+}
+
+/// Friendly status for the string-typed errors that come back from the
+/// clipboard / file-manager tasks (they've already been `to_string`d
+/// at the task boundary). Logs the raw error and returns plain text
+/// with a hint where one is recognisable.
+pub(crate) fn friendly_string_error(action: &str, raw: &str) -> String {
+    match io_reason_hint(raw) {
+        Some(reason) => format!("Couldn't {action} — {reason}."),
+        None => format!("Couldn't {action}. See the log for details."),
+    }
 }
