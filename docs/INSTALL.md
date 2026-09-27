@@ -92,7 +92,7 @@ readshot capture --interactive --output capture.png
 ```
 
 Readshot does not run shell setup automatically; use the commands above
-if you install the app outside Homebrew and want terminal access.
+if you want terminal access.
 
 ### First launch
 
