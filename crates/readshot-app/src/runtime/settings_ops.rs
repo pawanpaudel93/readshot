@@ -118,7 +118,8 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             state.settings_recording_hotkey = true;
             state.settings_hotkey_status = None;
             state.settings_hotkey_error = Some(
-                "Use at least one modifier, such as Command, Control, Option, or Shift."
+                "That key can't be used. Combine a modifier (Command, Control, Option, or Shift) \
+                 with a letter, number, arrow, or function key."
                     .to_string(),
             );
             Task::none()

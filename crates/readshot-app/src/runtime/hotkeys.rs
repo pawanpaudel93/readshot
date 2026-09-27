@@ -455,75 +455,325 @@ pub(crate) fn shortcut_cancelled_by_keypress(
         && !modifiers.shift()
 }
 
-pub(crate) fn hotkey_token_for_key(key: &iced::keyboard::Key) -> Option<&'static str> {
+/// True for keys that are *only* modifiers (Shift, Ctrl, …). While the
+/// recorder is armed the user typically holds a modifier before pressing
+/// the real key; those intermediate presses must be ignored instead of
+/// being reported as an invalid shortcut (which is what left the recorder
+/// feeling "stuck").
+pub(crate) fn is_modifier_key(key: &iced::keyboard::Key) -> bool {
     use iced::keyboard::key::Named;
+    use iced::keyboard::Key;
+    matches!(
+        key,
+        Key::Named(
+            Named::Shift
+                | Named::Control
+                | Named::Alt
+                | Named::AltGraph
+                | Named::Super
+                | Named::Meta
+                | Named::Hyper
+                | Named::Fn
+                | Named::Symbol
+        )
+    )
+}
+
+/// Map an iced key press to the parser token it represents, or `None`
+/// when the key can't be part of a shortcut. This is the recorder half
+/// of the recorder/parser contract; every token returned here is one
+/// [`readshot_ui::hotkey::parse`] accepts (enforced by the tests below,
+/// cross-checked against [`readshot_ui::hotkey::RECORDABLE_TOKENS`]).
+pub(crate) fn hotkey_token_for_key(key: &iced::keyboard::Key) -> Option<&'static str> {
     use iced::keyboard::Key;
 
     match key {
         Key::Character(c) => {
             let mut chars = c.chars();
             let ch = chars.next()?;
-            if chars.next().is_none() && ch.is_ascii_alphanumeric() {
-                Some(match ch.to_ascii_lowercase() {
-                    'a' => "a",
-                    'b' => "b",
-                    'c' => "c",
-                    'd' => "d",
-                    'e' => "e",
-                    'f' => "f",
-                    'g' => "g",
-                    'h' => "h",
-                    'i' => "i",
-                    'j' => "j",
-                    'k' => "k",
-                    'l' => "l",
-                    'm' => "m",
-                    'n' => "n",
-                    'o' => "o",
-                    'p' => "p",
-                    'q' => "q",
-                    'r' => "r",
-                    's' => "s",
-                    't' => "t",
-                    'u' => "u",
-                    'v' => "v",
-                    'w' => "w",
-                    'x' => "x",
-                    'y' => "y",
-                    'z' => "z",
-                    '0' => "0",
-                    '1' => "1",
-                    '2' => "2",
-                    '3' => "3",
-                    '4' => "4",
-                    '5' => "5",
-                    '6' => "6",
-                    '7' => "7",
-                    '8' => "8",
-                    '9' => "9",
-                    _ => return None,
-                })
-            } else {
-                None
+            if chars.next().is_some() {
+                return None;
+            }
+            character_token(ch)
+        }
+        Key::Named(named) => named_key_token(*named),
+        _ => None,
+    }
+}
+
+fn character_token(ch: char) -> Option<&'static str> {
+    Some(match ch.to_ascii_lowercase() {
+        'a' => "a",
+        'b' => "b",
+        'c' => "c",
+        'd' => "d",
+        'e' => "e",
+        'f' => "f",
+        'g' => "g",
+        'h' => "h",
+        'i' => "i",
+        'j' => "j",
+        'k' => "k",
+        'l' => "l",
+        'm' => "m",
+        'n' => "n",
+        'o' => "o",
+        'p' => "p",
+        'q' => "q",
+        'r' => "r",
+        's' => "s",
+        't' => "t",
+        'u' => "u",
+        'v' => "v",
+        'w' => "w",
+        'x' => "x",
+        'y' => "y",
+        'z' => "z",
+        '0' => "0",
+        '1' => "1",
+        '2' => "2",
+        '3' => "3",
+        '4' => "4",
+        '5' => "5",
+        '6' => "6",
+        '7' => "7",
+        '8' => "8",
+        '9' => "9",
+        // The comma key reports as a character, not a `Named` key.
+        ',' => "comma",
+        _ => return None,
+    })
+}
+
+fn named_key_token(named: iced::keyboard::key::Named) -> Option<&'static str> {
+    use iced::keyboard::key::Named;
+    Some(match named {
+        Named::Enter => "enter",
+        Named::Escape => "escape",
+        Named::Tab => "tab",
+        Named::Space => "space",
+        Named::Backspace => "backspace",
+        Named::Delete => "delete",
+        Named::Insert => "insert",
+        Named::Home => "home",
+        Named::End => "end",
+        Named::PageUp => "pageup",
+        Named::PageDown => "pagedown",
+        Named::ArrowLeft => "left",
+        Named::ArrowRight => "right",
+        Named::ArrowUp => "up",
+        Named::ArrowDown => "down",
+        Named::F1 => "f1",
+        Named::F2 => "f2",
+        Named::F3 => "f3",
+        Named::F4 => "f4",
+        Named::F5 => "f5",
+        Named::F6 => "f6",
+        Named::F7 => "f7",
+        Named::F8 => "f8",
+        Named::F9 => "f9",
+        Named::F10 => "f10",
+        Named::F11 => "f11",
+        Named::F12 => "f12",
+        Named::F13 => "f13",
+        Named::F14 => "f14",
+        Named::F15 => "f15",
+        Named::F16 => "f16",
+        Named::F17 => "f17",
+        Named::F18 => "f18",
+        Named::F19 => "f19",
+        Named::F20 => "f20",
+        Named::F21 => "f21",
+        Named::F22 => "f22",
+        Named::F23 => "f23",
+        Named::F24 => "f24",
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod recorder_tests {
+    use super::*;
+    use iced::keyboard::key::Named;
+    use iced::keyboard::Key;
+    use std::collections::BTreeSet;
+
+    /// Every `Named` key the recorder is expected to translate. Kept in
+    /// sync with `named_key_token`; the coverage test below fails if the
+    /// recorder starts emitting a token outside the parser's set.
+    const NAMED_CANDIDATES: &[Named] = &[
+        Named::Enter,
+        Named::Escape,
+        Named::Tab,
+        Named::Space,
+        Named::Backspace,
+        Named::Delete,
+        Named::Insert,
+        Named::Home,
+        Named::End,
+        Named::PageUp,
+        Named::PageDown,
+        Named::ArrowLeft,
+        Named::ArrowRight,
+        Named::ArrowUp,
+        Named::ArrowDown,
+        Named::F1,
+        Named::F2,
+        Named::F3,
+        Named::F4,
+        Named::F5,
+        Named::F6,
+        Named::F7,
+        Named::F8,
+        Named::F9,
+        Named::F10,
+        Named::F11,
+        Named::F12,
+        Named::F13,
+        Named::F14,
+        Named::F15,
+        Named::F16,
+        Named::F17,
+        Named::F18,
+        Named::F19,
+        Named::F20,
+        Named::F21,
+        Named::F22,
+        Named::F23,
+        Named::F24,
+    ];
+
+    /// Collect the full set of tokens the recorder can produce from the
+    /// character keys and the named keys above.
+    fn recorder_emitted_tokens() -> BTreeSet<&'static str> {
+        let mut out = BTreeSet::new();
+        for ch in ('a'..='z').chain('0'..='9').chain([',']) {
+            if let Some(tok) = hotkey_token_for_key(&Key::Character(ch.to_string().into())) {
+                out.insert(tok);
             }
         }
-        Key::Named(Named::Enter) => Some("enter"),
-        Key::Named(Named::Escape) => Some("escape"),
-        Key::Named(Named::Tab) => Some("tab"),
-        Key::Named(Named::Space) => Some("space"),
-        Key::Named(Named::Backspace) => Some("backspace"),
-        Key::Named(Named::F1) => Some("f1"),
-        Key::Named(Named::F2) => Some("f2"),
-        Key::Named(Named::F3) => Some("f3"),
-        Key::Named(Named::F4) => Some("f4"),
-        Key::Named(Named::F5) => Some("f5"),
-        Key::Named(Named::F6) => Some("f6"),
-        Key::Named(Named::F7) => Some("f7"),
-        Key::Named(Named::F8) => Some("f8"),
-        Key::Named(Named::F9) => Some("f9"),
-        Key::Named(Named::F10) => Some("f10"),
-        Key::Named(Named::F11) => Some("f11"),
-        Key::Named(Named::F12) => Some("f12"),
-        _ => None,
+        for named in NAMED_CANDIDATES {
+            if let Some(tok) = hotkey_token_for_key(&Key::Named(*named)) {
+                out.insert(tok);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn recorder_covers_exactly_the_parser_token_set() {
+        let emitted = recorder_emitted_tokens();
+        let expected: BTreeSet<&'static str> = readshot_ui::hotkey::RECORDABLE_TOKENS
+            .iter()
+            .copied()
+            .collect();
+
+        // Every parser-accepted token must be recordable …
+        for tok in &expected {
+            assert!(emitted.contains(tok), "token `{tok}` is not recordable");
+        }
+        // … and the recorder must not emit anything the parser rejects.
+        for tok in &emitted {
+            assert!(
+                expected.contains(tok),
+                "recorder emits `{tok}` which the parser does not accept"
+            );
+        }
+        assert_eq!(emitted, expected);
+    }
+
+    #[test]
+    fn every_recorded_token_round_trips_through_the_parser() {
+        for tok in recorder_emitted_tokens() {
+            assert!(
+                readshot_ui::hotkey::parse(&format!("ctrl+{tok}")).is_ok(),
+                "parser rejected recorded token `{tok}`"
+            );
+        }
+    }
+
+    #[test]
+    fn pure_modifier_presses_are_ignored() {
+        for named in [
+            Named::Shift,
+            Named::Control,
+            Named::Alt,
+            Named::Super,
+            Named::Meta,
+        ] {
+            let key = Key::Named(named);
+            assert!(
+                is_modifier_key(&key),
+                "{named:?} should count as a modifier"
+            );
+            assert!(
+                hotkey_token_for_key(&key).is_none(),
+                "{named:?} should not yield a token"
+            );
+        }
+    }
+
+    #[test]
+    fn newly_supported_keys_record() {
+        // Regression guard for #8: these were accepted by the parser but
+        // previously unrecordable.
+        assert_eq!(
+            hotkey_token_for_key(&Key::Character(",".into())),
+            Some("comma")
+        );
+        assert_eq!(
+            hotkey_token_for_key(&Key::Named(Named::ArrowLeft)),
+            Some("left")
+        );
+        assert_eq!(hotkey_token_for_key(&Key::Named(Named::F13)), Some("f13"));
+        assert_eq!(
+            hotkey_token_for_key(&Key::Named(Named::PageDown)),
+            Some("pagedown")
+        );
+    }
+}
+
+#[cfg(test)]
+mod pretty_hotkey_tests {
+    use super::*;
+
+    #[test]
+    fn parse_failure_falls_back_to_trimmed_input() {
+        assert_eq!(pretty_hotkey("  not a hotkey!!  "), "not a hotkey!!");
+        assert_eq!(pretty_hotkey(""), "");
+    }
+
+    #[test]
+    fn named_keys_render_symbols_not_raw_tokens() {
+        // Whatever the platform, the raw token must never leak through.
+        let comma = pretty_hotkey("cmd+comma");
+        assert!(
+            comma.ends_with(','),
+            "expected trailing comma, got {comma:?}"
+        );
+        assert!(!comma.to_uppercase().contains("COMMA"));
+
+        let left = pretty_hotkey("cmd+left");
+        assert!(left.ends_with('\u{2190}'), "expected ←, got {left:?}");
+        assert!(!left.to_uppercase().contains("LEFT"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_uses_glyph_form() {
+        // ⌘⇧X (modifiers rendered in ⌘⇧⌥⌃ order).
+        assert_eq!(pretty_hotkey("cmd+shift+x"), "\u{2318}\u{21E7}X");
+        // ⌘⇧⌥⌃, — full modifier stack with the comma key.
+        assert_eq!(
+            pretty_hotkey("ctrl+alt+shift+cmd+comma"),
+            "\u{2318}\u{21E7}\u{2325}\u{2303},"
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn non_macos_uses_word_form() {
+        assert_eq!(pretty_hotkey("ctrl+shift+x"), "Ctrl+Shift+X");
+        assert_eq!(pretty_hotkey("ctrl+comma"), "Ctrl+,");
     }
 }

@@ -611,6 +611,12 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                 if shortcut_cancelled_by_keypress(&key, modifiers) {
                     return Some(Message::SettingsHotkeyRecordingCancelled);
                 }
+                // Ignore bare modifier presses: the user is mid-chord,
+                // holding Cmd/Ctrl/Shift before the real key. Reporting
+                // those as invalid is what made recording feel stuck.
+                if is_modifier_key(&key) {
+                    return None;
+                }
                 return Some(
                     shortcut_string_from_keypress(&key, modifiers)
                         .map(Message::SettingsHotkeyRecorded)

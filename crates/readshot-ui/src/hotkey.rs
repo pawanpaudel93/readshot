@@ -101,6 +101,94 @@ pub fn parse(input: &str) -> Result<HotkeySpec, HotkeyParseError> {
     Ok(HotkeySpec { modifiers, code })
 }
 
+/// Canonical, de-duplicated set of key tokens the parser accepts as the
+/// *main* key of a chord: ASCII letters `a..z`, digits `0..9`, function
+/// keys `f1..f24`, and the named keys below (one canonical spelling
+/// each; the parser also accepts the synonyms documented on [`parse`]).
+///
+/// The hotkey *recorder* in `readshot-app` is cross-checked against this
+/// list in its tests so the two can never silently drift: every token
+/// here must be producible by the recorder, and the recorder must not
+/// emit anything outside it.
+pub const RECORDABLE_TOKENS: &[&str] = &[
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "g",
+    "h",
+    "i",
+    "j",
+    "k",
+    "l",
+    "m",
+    "n",
+    "o",
+    "p",
+    "q",
+    "r",
+    "s",
+    "t",
+    "u",
+    "v",
+    "w",
+    "x",
+    "y",
+    "z", //
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9", //
+    "f1",
+    "f2",
+    "f3",
+    "f4",
+    "f5",
+    "f6",
+    "f7",
+    "f8",
+    "f9",
+    "f10",
+    "f11",
+    "f12",
+    "f13",
+    "f14",
+    "f15",
+    "f16",
+    "f17",
+    "f18",
+    "f19",
+    "f20",
+    "f21",
+    "f22",
+    "f23",
+    "f24", //
+    "comma",
+    "enter",
+    "escape",
+    "tab",
+    "space",
+    "backspace",
+    "delete",
+    "left",
+    "right",
+    "up",
+    "down",
+    "home",
+    "end",
+    "pageup",
+    "pagedown",
+    "insert",
+];
+
 fn parse_key_code(token: &str) -> Option<Code> {
     let lower = token.to_ascii_lowercase();
     // Letters
@@ -321,6 +409,18 @@ mod tests {
     fn case_insensitive() {
         assert_eq!(parse("CTRL+SHIFT+X").unwrap().code, Code::KeyX);
         assert_eq!(parse("Ctrl+Shift+X").unwrap().code, Code::KeyX);
+    }
+
+    #[test]
+    fn every_recordable_token_parses() {
+        // Guards the parser side of the recorder/parser contract: every
+        // token the recorder may emit must be accepted here.
+        for tok in RECORDABLE_TOKENS {
+            assert!(
+                parse(&format!("ctrl+{tok}")).is_ok(),
+                "parser rejected recordable token `{tok}`"
+            );
+        }
     }
 
     #[test]
