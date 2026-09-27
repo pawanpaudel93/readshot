@@ -286,6 +286,12 @@ pub enum Message {
     /// The handler forgets the id from `Windows` and runs any
     /// kind-specific cleanup (e.g. clearing history-browser state).
     WindowClosed(iced::window::Id),
+    /// OS requested a window close (X button / ⌘W) but the window has
+    /// `exit_on_close_request: false`, so iced has NOT closed it yet.
+    /// The handler decides whether to close: the editor routes through
+    /// the same unsaved-work confirmation as the in-app Discard button;
+    /// every other window closes immediately.
+    WindowCloseRequested(iced::window::Id),
     /// User typed in the history browser's search box. Empty string
     /// resets to "show every record".
     HistorySearchChanged(String),

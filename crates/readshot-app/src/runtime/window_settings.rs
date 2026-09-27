@@ -49,6 +49,11 @@ pub(crate) fn editor_window_settings(
         decorations: true,
         transparent: false,
         visible: true,
+        // The editor holds unsaved annotation work, so an OS-initiated
+        // close (red X / ⌘W) must be intercepted and routed through the
+        // unsaved-work confirmation instead of dropping the session.
+        // `Message::WindowCloseRequested` performs the actual close.
+        exit_on_close_request: false,
         ..Default::default()
     }
 }

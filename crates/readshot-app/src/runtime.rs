@@ -676,6 +676,12 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     // `show_or_focus_welcome` end up calling `gain_focus` on dead
     // windows (silent no-op) instead of opening a fresh one.
     subs.push(window::close_events().map(Message::WindowClosed));
+    // The editor window opts out of iced's auto-close
+    // (`exit_on_close_request: false`) so an OS close (red X / ⌘W) can
+    // be routed through the unsaved-work confirmation. Every other
+    // window auto-closes and only needs `close_events`; this handler
+    // ignores them.
+    subs.push(window::close_requests().map(Message::WindowCloseRequested));
     Subscription::batch(subs)
 }
 
@@ -1348,6 +1354,24 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::HistoryPin(..)
         | Message::HistoryPinReady(..)
         | Message::HistoryDelete(..)) => history_ops::handle_history_message(state, msg),
+        Message::WindowCloseRequested(id) => {
+            // Only the editor window opts out of auto-close. If the
+            // close request is for it, route through the same two-stage
+            // unsaved-work confirmation as the in-app Discard button:
+            // clean editors (and the confirmed second request) close
+            // immediately; a dirty editor arms the confirmation and
+            // stays open. Every other window uses iced's default
+            // auto-close, so there is nothing to do here.
+            let is_editor = state
+                .editor
+                .as_ref()
+                .and_then(|ed| ed.window_id)
+                .is_some_and(|editor_id| editor_id == id);
+            if is_editor {
+                return update(state, Message::EditorDiscardRequested);
+            }
+            Task::none()
+        }
         Message::WindowClosed(id) => {
             // Always drop the id from `Windows` so helpers that
             // probe the live-window map (e.g. `show_or_focus_welcome`)
@@ -4843,6 +4867,71 @@ mod tests {
         let _ = update(&mut app, Message::EditorDiscardRequested);
 
         assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn editor_os_close_request_confirms_unsaved_work() {
+        // OS close (red X / ⌘W) on a dirty editor must route through the
+        // two-stage confirmation, not silently drop the session.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let editor_id = iced::window::Id::unique();
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.window_id = Some(editor_id);
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        app.editor = Some(ed);
+
+        // First request arms the confirmation and keeps the editor open.
+        let _ = update(&mut app, Message::WindowCloseRequested(editor_id));
+        let ed = app
+            .editor
+            .as_ref()
+            .expect("first OS close should only arm, not drop the editor");
+        assert!(ed.discard_pending_at.is_some());
+        assert_eq!(
+            ed.status.as_deref(),
+            Some("Discard unsaved edits? Click Discard again to confirm.")
+        );
+
+        // Second request within the confirm window closes it.
+        let _ = update(&mut app, Message::WindowCloseRequested(editor_id));
+        assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn editor_os_close_request_closes_clean_editor_immediately() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let editor_id = iced::window::Id::unique();
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.window_id = Some(editor_id);
+        app.editor = Some(ed);
+
+        let _ = update(&mut app, Message::WindowCloseRequested(editor_id));
+        assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn os_close_request_for_non_editor_window_leaves_editor_untouched() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let editor_id = iced::window::Id::unique();
+        let other_id = iced::window::Id::unique();
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.window_id = Some(editor_id);
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        app.editor = Some(ed);
+
+        // A close request for some other window must not touch the
+        // editor session (those windows auto-close on their own).
+        let _ = update(&mut app, Message::WindowCloseRequested(other_id));
+        assert!(app.editor.is_some());
+        assert!(app.editor.as_ref().unwrap().discard_pending_at.is_none());
     }
 
     #[test]
