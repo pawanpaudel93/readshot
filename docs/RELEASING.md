@@ -74,10 +74,12 @@ with a documented SmartScreen-bypass note. Both are acceptable per
 spec §Architectural Decisions; the Apple Developer Program is **not**
 joined.
 
-### 4. Set up the GitHub Pages branch
+### 4. Set up the `gh-pages` appcast branch
 
-The release workflow pushes `appcast.xml` to a `gh-pages` branch.
-Create it once:
+The release workflow keeps the canonical `appcast.xml` on a `gh-pages`
+branch: each release reads the previous items from there, adds the new
+ones, commits it back, and also uploads the same file as a GitHub
+Release asset. Create the branch once:
 
 ```bash
 git checkout --orphan gh-pages
@@ -89,7 +91,33 @@ git push origin gh-pages
 git checkout main
 ```
 
-In repository settings, point GitHub Pages at the `gh-pages` branch.
+Enabling GitHub Pages is optional — the app does not read the Pages
+copy (see "How in-app updates work" below).
+
+### 5. How in-app updates work
+
+* The app's feed is `SUFeedURL` in `packaging/macos/Info.plist`:
+  `https://github.com/pawanpaudel93/readshot/releases/latest/download/appcast.xml`,
+  i.e. the `appcast.xml` asset on the latest non-prerelease GitHub
+  Release. The enclosure URLs point at that release's DMGs.
+* Those URLs are only reachable anonymously while the repository is
+  **public**. While it is private, every install gets a 404 and
+  "Check for Updates…" shows Sparkle's error dialog. Nothing in the
+  app can work around that; making the repo public fixes every already
+  installed copy at once because the feed URL is baked into each build.
+* Checks are manual only (`SUEnableAutomaticChecks` is false and the
+  bridge in `crates/readshot-app/src/updater.rs` disables automatic
+  checks); the tray's "Check for Updates…" starts one.
+* Sparkle accepts an update only if the DMG's EdDSA signature matches
+  `SUPublicEDKey`. Keep `SPARKLE_ED_KEY_BASE64` forever; never rotate it
+  in the same release as the code-signing certificate.
+* Keep `MACOS_SELF_SIGN_CERT_BASE64` stable too. macOS ties the Screen
+  Recording grant to the app's code-signing requirement, so a new
+  certificate makes every updated user re-grant Screen Recording
+  (this happened once between 0.7.6 and 0.7.7).
+* `<sparkle:version>` comes from the tag and `CFBundleVersion` from
+  `Cargo.toml`; the release workflow and `scripts/check-release.sh`
+  both refuse to publish when they differ.
 
 ## Per-release procedure
 
@@ -134,7 +162,7 @@ git push origin v0.2.0
 
 The `release.yml` workflow fires on the tag push, builds macOS
 artefacts, creates the GitHub Release, and publishes the Sparkle
-appcast to `gh-pages`.
+appcast to `gh-pages` and as the release's `appcast.xml` asset.
 
 The GitHub Release is the canonical distribution point. It publishes:
 
