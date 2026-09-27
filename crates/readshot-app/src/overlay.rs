@@ -77,6 +77,11 @@ pub struct OverlayState {
     /// `KeyPressed` / `KeyReleased`. Only used to constrain the
     /// initial drag to a perfect square.
     pub(crate) shift_held: bool,
+    /// Set when the last drag was released below the minimum committable
+    /// size. Keeps the overlay open and swaps the hint pill to a "drag a
+    /// larger area" prompt so the discard isn't silent. Cleared as soon
+    /// as the user starts another drag.
+    pub(crate) too_small_hint: bool,
     /// Static full-window dim veil. It only changes when the overlay
     /// size changes, so keep it out of the cursor-move redraw path.
     veil_cache: Cache<Renderer>,
@@ -123,6 +128,16 @@ const HANDLE_HIT: f32 = 14.0;
 /// Half-length of the drawn crosshair arms. Kept small so it reads
 /// like a precise selector, not a full-screen guide.
 const CROSSHAIR_ARM: f32 = 9.0;
+/// Minimum width and height (logical px) a released drag must reach to
+/// be committed. Anything smaller is treated as an accidental click
+/// rather than a 1×1 selection.
+const MIN_DRAG_SIZE: f32 = 4.0;
+
+/// Whether a released drag rect is large enough to commit as a
+/// selection. Sub-threshold drags are almost always accidental clicks.
+fn drag_meets_min_size(r: Rectangle) -> bool {
+    r.width >= MIN_DRAG_SIZE && r.height >= MIN_DRAG_SIZE
+}
 
 impl OverlayState {
     /// The rect to draw / inspect *right now*. During InitialDrag this
@@ -300,8 +315,15 @@ fn truncate_with_ellipsis(label: &str, max_chars: usize) -> String {
     }
 }
 
-fn draw_overlay_hint(frame: &mut Frame<Renderer>, bounds: Rectangle, cli_interactive: bool) {
-    let label = if cli_interactive {
+fn draw_overlay_hint(
+    frame: &mut Frame<Renderer>,
+    bounds: Rectangle,
+    cli_interactive: bool,
+    too_small: bool,
+) {
+    let label = if too_small {
+        "Drag to select a larger area · Esc cancels"
+    } else if cli_interactive {
         "CLI mode · Drag to capture · mouse-up commits · Shift = square · Esc cancels"
     } else {
         "Drag to select · Shift = square · Enter = full screen · Esc cancels"
@@ -493,6 +515,7 @@ impl Program<Message> for OverlayProgram {
                     // and start a fresh drag from the click point.
                     // Tell the runtime the toolbar should disappear.
                     state.selection = None;
+                    state.too_small_hint = false;
                     state.active = Some(Active::InitialDrag {
                         anchor: p,
                         current: p,
@@ -505,6 +528,7 @@ impl Program<Message> for OverlayProgram {
                         .and_capture(),
                     );
                 }
+                state.too_small_hint = false;
                 state.active = Some(Active::InitialDrag {
                     anchor: p,
                     current: p,
@@ -552,9 +576,10 @@ impl Program<Message> for OverlayProgram {
                     Some(Active::InitialDrag { anchor, current }) => {
                         let target = constrain_target(anchor, current, state.shift_held);
                         let r = rectangle_from_two_points(anchor, target);
-                        // Discard sub-pixel "clicks" — the user almost
-                        // certainly didn't mean to commit a 1×1 region.
-                        if r.width >= 4.0 && r.height >= 4.0 {
+                        // Discard sub-threshold "clicks" — the user almost
+                        // certainly didn't mean to commit a tiny region.
+                        if drag_meets_min_size(r) {
+                            state.too_small_hint = false;
                             if let Some(intent) = self.auto_confirm_intent {
                                 state.selection = None;
                                 if let Some(domain) = rect_to_domain(r) {
@@ -584,6 +609,12 @@ impl Program<Message> for OverlayProgram {
                         }
                         if self.auto_confirm_intent.is_some() {
                             return Some(Action::publish(Message::OverlayCancelled).and_capture());
+                        }
+                        // Too-small drag with no auto-confirm: keep the
+                        // overlay open and flag the hint so the user sees
+                        // *why* nothing was selected instead of guessing.
+                        if state.selection.is_none() {
+                            state.too_small_hint = true;
                         }
                         Some(Action::request_redraw().and_capture())
                     }
@@ -623,6 +654,7 @@ impl Program<Message> for OverlayProgram {
                 &mut frame,
                 bounds,
                 self.auto_confirm_intent == Some(CaptureIntent::CliInteractive),
+                state.too_small_hint,
             );
         }
 
@@ -783,6 +815,33 @@ mod tests {
         let out = truncate_with_ellipsis("café ● ○ ◐ ◑ ◒", 4);
         assert_eq!(out.chars().count(), 4);
         assert_eq!(out, "caf…");
+    }
+
+    #[test]
+    fn drag_meets_min_size_rejects_sub_threshold_drags() {
+        // A near-zero "click" drag is discarded.
+        assert!(!drag_meets_min_size(rectangle_from_two_points(
+            Point::new(10.0, 10.0),
+            Point::new(11.0, 11.0),
+        )));
+        // Tall-but-thin (and its transpose) are also rejected.
+        assert!(!drag_meets_min_size(Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 2.0,
+            height: 50.0,
+        }));
+        // Exactly at the threshold, and comfortably above it, commit.
+        assert!(drag_meets_min_size(Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: MIN_DRAG_SIZE,
+            height: MIN_DRAG_SIZE,
+        }));
+        assert!(drag_meets_min_size(rectangle_from_two_points(
+            Point::new(10.0, 10.0),
+            Point::new(60.0, 40.0),
+        )));
     }
 
     #[test]
