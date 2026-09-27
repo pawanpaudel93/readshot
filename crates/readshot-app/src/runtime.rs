@@ -103,6 +103,16 @@ fn accent(alpha: f32) -> Color {
     }
 }
 
+/// Scale a colour's alpha by `factor` (clamped 0..=1). Used to dim
+/// controls — e.g. colour swatches — while an editor task is in
+/// flight and they carry no `on_press`.
+fn fade(color: Color, factor: f32) -> Color {
+    Color {
+        a: (color.a * factor).clamp(0.0, 1.0),
+        ..color
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CliInteractiveRequest {
     pub output: PathBuf,

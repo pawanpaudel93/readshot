@@ -1241,13 +1241,18 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                         } else {
                             Color::WHITE
                         };
+                        // While a save / copy / ocr task is in flight the
+                        // swatch has no `on_press`; dim it to match the
+                        // other disabled controls so it doesn't read as
+                        // clickable.
+                        let dim = if busy { 0.4 } else { 1.0 };
                         let border = if is_selected {
                             iced::Border {
-                                color: selected_ring,
+                                color: fade(selected_ring, dim),
                                 width: 2.5,
                                 radius: 6.0.into(),
                             }
-                        } else if matches!(status, button::Status::Hovered) {
+                        } else if !busy && matches!(status, button::Status::Hovered) {
                             iced::Border {
                                 color: Color::from_rgba(1.0, 1.0, 1.0, 0.55),
                                 width: 1.5,
@@ -1255,13 +1260,13 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                             }
                         } else {
                             iced::Border {
-                                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18),
+                                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18 * dim),
                                 width: 1.0,
                                 radius: 6.0.into(),
                             }
                         };
                         button::Style {
-                            background: Some(color.into()),
+                            background: Some(fade(color, dim).into()),
                             text_color: Color::TRANSPARENT,
                             border,
                             ..Default::default()
