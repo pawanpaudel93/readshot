@@ -581,7 +581,9 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     let selected_panel: Element<'_, Message> = if visible.is_empty() {
         Space::new().height(Length::Fixed(0.0)).into()
     } else {
-        history_selected_panel(selected)
+        let delete_pending =
+            selected.is_some() && state.history_delete_pending == selected.map(|r| r.id);
+        history_selected_panel(selected, delete_pending)
     };
     let header = container(
         column![
@@ -760,6 +762,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
 
 pub(crate) fn history_selected_panel<'a>(
     record: Option<&'a readshot_core::CaptureRecord>,
+    delete_pending: bool,
 ) -> Element<'a, Message> {
     let Some(record) = record else {
         return container(
@@ -827,13 +830,35 @@ pub(crate) fn history_selected_panel<'a>(
         ]
         .spacing(6)
         .align_y(Alignment::Center);
-        let secondary_actions = row![
-            secondary("Copy Image", Message::HistoryCopyImage(id)),
-            secondary("Pin", Message::HistoryPin(id)),
+        // Two-stage single delete, mirroring "Clear All": the idle
+        // button just arms the prompt; while armed it splits into a
+        // Danger "Confirm delete?" and a Secondary "Cancel" so a
+        // capture can't vanish on a single stray click or keypress.
+        let delete_control: Element<'_, Message> = if delete_pending {
+            row![
+                button(text("Confirm delete?").size(12))
+                    .padding([6, 9])
+                    .style(|t, s| action_button_style(t, s, ActionKind::Danger))
+                    .on_press(Message::HistoryDeleteConfirmed(id)),
+                button(text("Cancel").size(12))
+                    .padding([6, 9])
+                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                    .on_press(Message::HistoryDeleteCancelled),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into()
+        } else {
             button(text("Delete").size(12))
                 .padding([6, 9])
                 .style(|t, s| action_button_style(t, s, ActionKind::Danger))
-                .on_press(Message::HistoryDelete(id)),
+                .on_press(Message::HistoryDelete(id))
+                .into()
+        };
+        let secondary_actions = row![
+            secondary("Copy Image", Message::HistoryCopyImage(id)),
+            secondary("Pin", Message::HistoryPin(id)),
+            delete_control,
         ]
         .spacing(6)
         .align_y(Alignment::Center);

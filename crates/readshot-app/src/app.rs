@@ -346,9 +346,16 @@ pub enum Message {
     HistoryPin(readshot_core::Uuid),
     /// Async PNG-decode finished for the row that asked to pin.
     HistoryPinReady(Result<image::RgbaImage, String>),
-    /// Per-row "Delete" — remove PNG + sidecar + index entry from
-    /// disk and refresh the list.
+    /// Per-row "Delete" — first press arms the destructive prompt for
+    /// that capture (the row's button flips to "Confirm delete?"). A
+    /// second press for the same id confirms; selecting another row,
+    /// changing the search, or pressing Escape cancels.
     HistoryDelete(readshot_core::Uuid),
+    /// Confirm the armed single-capture delete — actually removes the
+    /// PNG + sidecar + index entry from disk and refreshes the list.
+    HistoryDeleteConfirmed(readshot_core::Uuid),
+    /// Cancel the armed single-capture delete without touching disk.
+    HistoryDeleteCancelled,
     /// Async region-capture finished — `Ok(image)` opens an editor
     /// window with the captured pixels; `Err` toasts the failure on
     /// the welcome window.
@@ -636,6 +643,12 @@ pub struct App {
     /// currently-visible filtered list, so keyboard navigation and
     /// selected-row actions have a deterministic target.
     pub history_selected_id: Option<readshot_core::Uuid>,
+    /// Capture whose single-row delete is armed (awaiting a confirm
+    /// press). `Some(id)` flips that row's Delete button to a
+    /// two-stage "Confirm delete? / Cancel" prompt, mirroring the
+    /// "Clear All" guard. Cleared on confirm, cancel, Escape, a search
+    /// change, or moving the selection.
+    pub history_delete_pending: Option<readshot_core::Uuid>,
     /// On-disk path the user's preferences are read from at startup
     /// and written back to whenever a `Message::Settings` mutation
     /// flips a field. `None` in tests and when the OS can't supply a
@@ -906,6 +919,7 @@ impl App {
             history_status: None,
             history_search: String::new(),
             history_selected_id: None,
+            history_delete_pending: None,
             preferences_path: None,
             settings_window_id: None,
             settings_recording_hotkey: false,

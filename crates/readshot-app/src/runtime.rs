@@ -1368,7 +1368,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::HistoryCopyVisibleTextDone(..)
         | Message::HistoryPin(..)
         | Message::HistoryPinReady(..)
-        | Message::HistoryDelete(..)) => history_ops::handle_history_message(state, msg),
+        | Message::HistoryDelete(..)
+        | Message::HistoryDeleteConfirmed(..)
+        | Message::HistoryDeleteCancelled) => history_ops::handle_history_message(state, msg),
         Message::WindowCloseRequested(id) => {
             // Only the editor window opts out of auto-close. If the
             // close request is for it, route through the same two-stage
@@ -3183,6 +3185,80 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .starts_with("Cleared "));
+    }
+
+    // ---- #6: single-capture delete needs a confirm ----
+
+    fn app_with_two_saved_records() -> (
+        tempfile::TempDir,
+        Arc<FsHistoryStore>,
+        App,
+        readshot_core::CaptureRecord,
+        readshot_core::CaptureRecord,
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(FsHistoryStore::new(dir.path().join("history")));
+        let older =
+            readshot_core::CaptureRecord::new(chrono::Utc::now(), 100, 100, "primary".to_string());
+        let newer =
+            readshot_core::CaptureRecord::new(chrono::Utc::now(), 120, 90, "primary".to_string());
+        store.save(&older, b"png").unwrap();
+        store.save(&newer, b"png").unwrap();
+        let history: Arc<dyn HistoryStore> = store.clone();
+        let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), history);
+        app.history_records = vec![newer.clone(), older.clone()];
+        app.history_selected_id = Some(newer.id);
+        (dir, store, app, newer, older)
+    }
+
+    #[test]
+    fn single_delete_arms_before_removing_anything() {
+        let (_dir, store, mut app, newer, _older) = app_with_two_saved_records();
+
+        // First press only arms the prompt; nothing is removed.
+        let _ = update(&mut app, Message::HistoryDelete(newer.id));
+        assert_eq!(app.history_delete_pending, Some(newer.id));
+        assert_eq!(store.list().unwrap().len(), 2);
+
+        // Explicit confirm removes exactly the armed record.
+        let _ = update(&mut app, Message::HistoryDeleteConfirmed(newer.id));
+        assert_eq!(app.history_delete_pending, None);
+        let remaining = store.list().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining.iter().all(|r| r.id != newer.id));
+    }
+
+    #[test]
+    fn single_delete_second_press_confirms() {
+        // Delete-key path: a repeat press for the same id confirms.
+        let (_dir, store, mut app, newer, _older) = app_with_two_saved_records();
+        let _ = update(&mut app, Message::HistoryDelete(newer.id));
+        let _ = update(&mut app, Message::HistoryDelete(newer.id));
+        assert_eq!(app.history_delete_pending, None);
+        assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn single_delete_cancelled_by_other_actions() {
+        let (_dir, store, mut app, newer, older) = app_with_two_saved_records();
+
+        // Selecting another row cancels the armed delete.
+        let _ = update(&mut app, Message::HistoryDelete(newer.id));
+        let _ = update(&mut app, Message::HistorySelect(older.id));
+        assert_eq!(app.history_delete_pending, None);
+
+        // A search change (Escape maps here too) cancels it.
+        let _ = update(&mut app, Message::HistoryDelete(newer.id));
+        let _ = update(&mut app, Message::HistorySearchChanged("x".into()));
+        assert_eq!(app.history_delete_pending, None);
+
+        // Explicit cancel clears it as well.
+        let _ = update(&mut app, Message::HistoryDelete(newer.id));
+        let _ = update(&mut app, Message::HistoryDeleteCancelled);
+        assert_eq!(app.history_delete_pending, None);
+
+        // Nothing was ever removed while only arming/cancelling.
+        assert_eq!(store.list().unwrap().len(), 2);
     }
 
     #[cfg(target_os = "macos")]
