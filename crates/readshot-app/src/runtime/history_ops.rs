@@ -48,6 +48,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             if let Some(id) = state.history_window_id {
                 return Task::batch([
                     window::gain_focus(id),
+                    focus_history_search(),
                     history_list_task(state.coordinator.clone()),
                 ]);
             }
@@ -67,7 +68,8 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             // ready callback just records the id in case iced hands
             // back a different one.
             state.history_window_id = Some(id);
-            window::gain_focus(id)
+            // Typing right away searches, like Spotlight or Finder.
+            Task::batch([window::gain_focus(id), focus_history_search()])
         }
         Message::HistoryListLoaded(result) => {
             match result {
@@ -472,4 +474,10 @@ pub(crate) fn friendly_string_error(action: &str, raw: &str) -> String {
         Some(reason) => format!("Couldn't {action} — {reason}."),
         None => format!("Couldn't {action}. See the log for details."),
     }
+}
+
+fn focus_history_search() -> Task<Message> {
+    iced::widget::operation::focus(iced::widget::Id::new(
+        crate::runtime::view::HISTORY_SEARCH_ID,
+    ))
 }

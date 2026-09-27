@@ -2867,6 +2867,31 @@ mod tests {
     }
 
     #[test]
+    fn history_timestamp_label_is_relative_to_today() {
+        use chrono::TimeZone;
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 9, 27, 18, 0, 0)
+            .unwrap();
+        let at = |y, m, d, h, min| chrono::Local.with_ymd_and_hms(y, m, d, h, min, 0).unwrap();
+        assert_eq!(
+            view::history_timestamp_label(at(2026, 9, 27, 14, 3), now),
+            "Today 14:03"
+        );
+        assert_eq!(
+            view::history_timestamp_label(at(2026, 9, 26, 9, 10), now),
+            "Yesterday 09:10"
+        );
+        assert_eq!(
+            view::history_timestamp_label(at(2026, 3, 5, 7, 45), now),
+            "Mar 5, 07:45"
+        );
+        assert_eq!(
+            view::history_timestamp_label(at(2025, 12, 31, 23, 0), now),
+            "Dec 31, 2025"
+        );
+    }
+
+    #[test]
     fn editor_toolbar_layout_splits_before_controls_crowd() {
         assert_eq!(editor_toolbar_layout(1100.0), EditorToolbarLayout::Wide);
         // Undo/redo used to be clipped here in the one-row layout.

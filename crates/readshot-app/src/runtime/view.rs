@@ -503,6 +503,30 @@ pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
 const HISTORY_THUMB_WIDTH: f32 = 150.0;
 const HISTORY_ROW_CONTENT_HEIGHT: f32 = 94.0;
 
+/// Widget id of the History search field, focused when the window opens.
+pub(crate) const HISTORY_SEARCH_ID: &str = "history-search";
+
+/// Human timestamp for History: "Today 14:03", "Yesterday 09:10",
+/// "Sep 25, 14:03" this year, "Sep 25, 2025" for older captures. The
+/// search still matches the full ISO-style timestamp.
+pub(crate) fn history_timestamp_label(
+    at: chrono::DateTime<chrono::Local>,
+    now: chrono::DateTime<chrono::Local>,
+) -> String {
+    use chrono::Datelike;
+    let day = at.date_naive();
+    let today = now.date_naive();
+    if day == today {
+        format!("Today {}", at.format("%H:%M"))
+    } else if today.pred_opt() == Some(day) {
+        format!("Yesterday {}", at.format("%H:%M"))
+    } else if day.year() == today.year() {
+        at.format("%b %-d, %H:%M").to_string()
+    } else {
+        at.format("%b %-d, %Y").to_string()
+    }
+}
+
 pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     use iced::widget::{image as image_widget, mouse_area, text_input};
 
@@ -533,6 +557,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
         format!("{shown} of {total} match \u{201C}{q}\u{201D}")
     };
     let search_box = text_input("Search OCR text or timestamp…", &state.history_search)
+        .id(iced::widget::Id::new(HISTORY_SEARCH_ID))
         .on_input(Message::HistorySearchChanged)
         .width(Length::Fill)
         .padding(8)
@@ -647,11 +672,10 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
         for r in visible.iter().take(page_limit) {
             let png_path = history_png_path(root, r);
             let preview_path = history_thumbnail_path(root, r);
-            let stamp = r
-                .captured_at
-                .with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string();
+            let stamp = history_timestamp_label(
+                r.captured_at.with_timezone(&chrono::Local),
+                chrono::Local::now(),
+            );
             let dims = format!("{} × {} px", r.width_px, r.height_px);
             let snippet = r
                 .ocr_text
@@ -818,11 +842,10 @@ pub(crate) fn history_selected_panel<'a>(
         .into();
     };
 
-    let stamp = record
-        .captured_at
-        .with_timezone(&chrono::Local)
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
+    let stamp = history_timestamp_label(
+        record.captured_at.with_timezone(&chrono::Local),
+        chrono::Local::now(),
+    );
     let text_count = record
         .ocr_text
         .as_deref()
@@ -1749,7 +1772,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         };
         let frame_controls = container(
             row![
-                text("Frame:")
+                text("Frame")
                     .size(10)
                     .color(Color::from_rgba(1.0, 1.0, 1.0, 0.48)),
                 frame_picker
@@ -2005,9 +2028,18 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .into(),
                 EditorBottomLayout::Stacked => column![
                     status_area,
-                    row![discard, copy_text, copy_image, pin, toolbar_divider(), save]
-                        .spacing(6)
-                        .align_y(Alignment::Center)
+                    row![
+                        discard,
+                        IcedSpace::new().width(Length::Fill),
+                        copy_text,
+                        copy_image,
+                        pin,
+                        toolbar_divider(),
+                        save
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                    .width(Length::Fill)
                 ]
                 .spacing(8)
                 .into(),
@@ -2016,7 +2048,10 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                     row![discard, copy_text, copy_image]
                         .spacing(6)
                         .align_y(Alignment::Center),
-                    row![pin, save].spacing(6).align_y(Alignment::Center),
+                    row![IcedSpace::new().width(Length::Fill), pin, save]
+                        .spacing(6)
+                        .align_y(Alignment::Center)
+                        .width(Length::Fill),
                 ]
                 .spacing(8)
                 .into(),
