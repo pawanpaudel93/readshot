@@ -315,19 +315,30 @@ fn truncate_with_ellipsis(label: &str, max_chars: usize) -> String {
     }
 }
 
+/// The hint-pill copy for the current overlay state. The escape clause
+/// goes first so that, when the pill is truncated to fit a narrow
+/// display, "Esc to cancel" is the last thing dropped rather than the
+/// first. This hint is only drawn before a selection exists (the caller
+/// gates on `current_rect().is_none()`), so "Enter for full screen" is
+/// always accurate here — once a region is committed, Enter captures
+/// that region and the hint is hidden.
+fn overlay_hint_label(cli_interactive: bool, too_small: bool) -> &'static str {
+    if too_small {
+        "Esc to cancel · Drag to select a larger area"
+    } else if cli_interactive {
+        "Esc to cancel · Drag to capture · Mouse-up commits · Shift for square"
+    } else {
+        "Esc to cancel · Drag to select · Shift for square · Enter for full screen"
+    }
+}
+
 fn draw_overlay_hint(
     frame: &mut Frame<Renderer>,
     bounds: Rectangle,
     cli_interactive: bool,
     too_small: bool,
 ) {
-    let label = if too_small {
-        "Drag to select a larger area · Esc cancels"
-    } else if cli_interactive {
-        "CLI mode · Drag to capture · mouse-up commits · Shift = square · Esc cancels"
-    } else {
-        "Drag to select · Shift = square · Enter = full screen · Esc cancels"
-    };
+    let label = overlay_hint_label(cli_interactive, too_small);
     let text_w = (label.chars().count() as f32 * HINT_CHAR_W).min((bounds.width - 48.0).max(160.0));
     let box_w = text_w + 24.0;
     let box_h = 30.0;
@@ -784,6 +795,32 @@ fn overlay_crosshair_interaction() -> mouse::Interaction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_hint_label_always_leads_with_escape() {
+        for (cli, too_small) in [(false, false), (true, false), (false, true), (true, true)] {
+            let label = overlay_hint_label(cli, too_small);
+            assert!(
+                label.starts_with("Esc to cancel"),
+                "hint {label:?} must lead with the escape clause"
+            );
+        }
+    }
+
+    #[test]
+    fn overlay_hint_label_advertises_full_screen_only_without_selection() {
+        // The default (idle, roomy) hint is the only one that mentions the
+        // full-screen fallback, and it is exactly what Enter does before a
+        // selection exists.
+        assert!(overlay_hint_label(false, false).contains("Enter for full screen"));
+        // The too-small hint drops the Enter clause entirely.
+        assert!(!overlay_hint_label(false, true).contains("full screen"));
+    }
+
+    #[test]
+    fn overlay_hint_label_keeps_too_small_guidance() {
+        assert!(overlay_hint_label(false, true).contains("larger area"));
+    }
 
     #[test]
     fn truncate_with_ellipsis_leaves_short_labels_untouched() {
