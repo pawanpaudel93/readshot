@@ -1000,6 +1000,12 @@ impl App {
         match message {
             Message::PermissionPoll(status) => self.welcome.observe(status),
             Message::GrantPermissionRequested => {
+                // Clear any decision macOS still holds for an earlier,
+                // differently signed build first. Otherwise its stale row
+                // ("Failed to match existing code requirement") means no
+                // prompt appears and switching Readshot on never applies to
+                // this build. With no existing row this is a no-op.
+                self.permissions.reset();
                 self.permissions.request();
                 self.welcome = WelcomeState::AwaitingGrant;
                 true
@@ -1137,6 +1143,14 @@ mod tests {
         // In-memory mutation still works; we just don't write to disk.
         assert!(changed);
         assert!(app.preferences.debug_logging);
+    }
+
+    #[test]
+    fn allow_screen_recording_clears_stale_grant_before_asking() {
+        let (mut app, perms) = build_app(Arc::new(FakePermissions::denied()));
+        app.update_sync(Message::GrantPermissionRequested);
+        assert_eq!(perms.reset_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(perms.request_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
