@@ -64,6 +64,7 @@
           <a href="#mcp-config">MCP config</a>
           <a href="#json-output">JSON output</a>
           <a href="#completions">Completions</a>
+          <a href="#uninstall">Uninstall</a>
           <a href="#options">Options</a>
           <a href="#destinations">Destinations</a>
           </div>
@@ -157,6 +158,10 @@ readshot completions zsh</code></pre>
                 <tr>
                   <td><code translate="no">completions</code></td>
                   <td>Generates shell completions from the current CLI.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">uninstall</code></td>
+                  <td>Removes Readshot from this Mac (app, CLI symlinks, login item, permission). Add <code translate="no">--purge</code> for data.</td>
                 </tr>
               </tbody>
             </table>
@@ -322,6 +327,31 @@ readshot ocr --input capture.png --json</code></pre>
 readshot completions bash &gt; readshot.bash
 readshot completions fish &gt; readshot.fish</code></pre>
             </div>
+          </section>
+
+          <section class="doc-section" id="uninstall">
+            <h2>Uninstall</h2>
+            <p>
+              <code translate="no">uninstall</code> removes Readshot from this Mac: it
+              deletes the launch-at-login item, removes the
+              <code translate="no">readshot</code> and <code translate="no">readshot-mcp</code>
+              command-line symlinks (only when they point into a
+              <code translate="no">Readshot.app</code> bundle — never a regular file or a
+              link elsewhere), resets the Screen Recording permission, and moves the app
+              bundle to the Trash.
+            </p>
+            <div class="code-panel">
+              <pre><code translate="no">readshot uninstall --dry-run
+readshot uninstall
+readshot uninstall --yes
+readshot uninstall --purge</code></pre>
+            </div>
+            <p>
+              <code translate="no">--dry-run</code> prints the plan and changes nothing.
+              Without <code translate="no">--yes</code>, it confirms on a terminal and refuses
+              to run non-interactively. <code translate="no">--purge</code> also deletes your
+              history, logs, and preferences.
+            </p>
           </section>
 
           <section class="doc-section" id="options">

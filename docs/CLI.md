@@ -36,6 +36,7 @@ readshot completions zsh
 | `readshot ocr` | Runs OCR on an existing image. |
 | `readshot mcp-config` | Prints a ready-to-paste MCP stdio config snippet. |
 | `readshot completions` | Generates zsh, bash, fish, PowerShell, or Elvish completions. |
+| `readshot uninstall` | Removes Readshot from this Mac (app, CLI symlinks, login item, permission). |
 
 Use `--json` when scripts need stable machine-readable output. See
 [JSON output](#json-output) below for the full schema.
@@ -197,6 +198,29 @@ readshot completions fish > readshot.fish
 ```
 
 Use `readshot completions --help` to see every supported shell.
+
+## Uninstall
+
+`uninstall` removes Readshot from this Mac. It unloads and deletes the
+launch-at-login item (current and legacy), removes the `readshot` and
+`readshot-mcp` command-line symlinks — but only when they are symlinks
+that point into a `Readshot.app` bundle, never a regular file or a link
+elsewhere — resets the Screen Recording permission, and moves the app
+bundle to the Trash (only when you run it from inside the installed
+`.app`).
+
+```bash
+readshot uninstall --dry-run     # print the plan, change nothing
+readshot uninstall               # confirm interactively, then remove
+readshot uninstall --yes         # skip the confirmation prompt
+readshot uninstall --purge       # also delete history, logs, preferences
+```
+
+`--dry-run` prints the ordered plan and exits without touching anything.
+Without `--yes`, `uninstall` asks for confirmation on a terminal and
+refuses to run in a non-interactive session (pass `--yes` for scripts).
+Add `--purge` to also delete your history, logs, and preferences; without
+it, that data is left in place.
 
 ## Timing, Cursor, and Window Options
 

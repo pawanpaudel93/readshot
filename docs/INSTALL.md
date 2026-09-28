@@ -155,6 +155,65 @@ If you accidentally denied: open **System Settings → Privacy &
 Security → Screen Recording**, find Readshot, toggle it on, and
 restart the app.
 
+## Uninstalling
+
+Readshot can remove itself, so you never have to hunt down the pieces
+it installs (the app bundle, the `readshot` / `readshot-mcp` symlinks,
+the launch-at-login item, and the Screen Recording permission).
+
+### In the app
+
+Open **Settings → Uninstall → Uninstall Readshot…**. A confirmation
+step appears with an **Also delete history and preferences** checkbox;
+tick it to remove your data too. Click **Uninstall** and Readshot
+performs the cleanup and quits.
+
+### With the CLI
+
+```bash
+readshot uninstall --dry-run     # preview the plan, change nothing
+readshot uninstall               # confirm interactively, then remove
+readshot uninstall --purge       # also delete history, logs, preferences
+readshot uninstall --yes         # skip the confirmation prompt (scripts)
+```
+
+`--dry-run` prints exactly what would be removed. Without `--yes`, the
+command asks for confirmation on a terminal and refuses to run
+non-interactively.
+
+### With the installer script
+
+The same installer can uninstall:
+
+```bash
+curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- --uninstall
+curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- --uninstall --purge
+```
+
+If you installed into custom locations, pass the same `--install-dir`
+and `--bin-dir` you used to install.
+
+### Manually
+
+```bash
+# Launch-at-login item (current and, if present, the legacy id).
+launchctl bootout "gui/$(id -u)/np.com.pawanpaudel.readshot.login" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/np.com.pawanpaudel.readshot.login.plist"
+rm -f "$HOME/Library/LaunchAgents/dev.pawanpaudel93.readshot.login.plist"
+
+# Command-line symlinks (only if they point into Readshot.app).
+rm -f "$HOME/.local/bin/readshot" "$HOME/.local/bin/readshot-mcp"
+
+# Screen Recording permission.
+tccutil reset ScreenCapture np.com.pawanpaudel.readshot
+
+# The app itself.
+rm -rf /Applications/Readshot.app
+
+# Optional: history, logs, and preferences.
+rm -rf "$HOME/Library/Application Support/np.com.pawanpaudel.Readshot"
+```
+
 ## Windows and Linux
 
 There are no official Windows or Linux packages yet. Do not expect a
