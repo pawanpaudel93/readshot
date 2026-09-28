@@ -366,6 +366,27 @@ pub enum Command {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+
+    /// Uninstall Readshot from this Mac.
+    ///
+    /// Removes the launch-at-login item, the `readshot` / `readshot-mcp`
+    /// command-line symlinks (only when they point into a Readshot.app
+    /// bundle), resets the Screen Recording permission, and moves the
+    /// app bundle to the Trash. Add `--purge` to also delete history,
+    /// logs, and preferences.
+    Uninstall {
+        /// Also delete history, logs, and preferences.
+        #[arg(long)]
+        purge: bool,
+
+        /// Print what would be removed and exit without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip the interactive confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// Errors surfaced by the CLI. We map these to non-zero exit codes
@@ -391,6 +412,8 @@ pub enum CliError {
     InvalidInput(String),
     #[error("invalid rect `{got}`: {reason}")]
     InvalidRect { got: String, reason: String },
+    #[error("uninstall failed: {0}")]
+    Uninstall(String),
 }
 
 /// Map [`CliError`] to a stable exit code so callers (CI scripts,
@@ -406,6 +429,7 @@ pub fn exit_code(err: &CliError) -> i32 {
         CliError::DisplayNotFound(_) | CliError::NoDisplays => 66, // EX_NOINPUT
         CliError::InvalidInput(_) | CliError::InvalidRect { .. } => 64, // EX_USAGE
         CliError::Io(_) | CliError::Image(_) | CliError::Clipboard(_) => 74, // EX_IOERR
+        CliError::Uninstall(_) => 74,                            // EX_IOERR
     }
 }
 
@@ -768,9 +792,85 @@ impl Cli {
             Command::Completions { shell } => {
                 write_completions(stdout, shell)?;
             }
+            Command::Uninstall {
+                purge,
+                dry_run,
+                yes,
+            } => {
+                run_uninstall(purge, dry_run, yes, stdout)?;
+            }
         }
         Ok(())
     }
+}
+
+/// Drive the built-in uninstall from the CLI: print the plan in plain
+/// language, confirm on a TTY (unless `--yes`), then execute and report
+/// each step. `--dry-run` prints the plan and exits without changes.
+fn run_uninstall(
+    purge: bool,
+    dry_run: bool,
+    yes: bool,
+    stdout: &mut dyn Write,
+) -> Result<(), CliError> {
+    use std::io::IsTerminal;
+
+    let paths = crate::uninstall::default_uninstall_paths();
+    let plan = crate::uninstall::plan_uninstall(&paths, purge);
+    write!(stdout, "{}", crate::uninstall::render_plan(&plan))?;
+
+    if dry_run {
+        writeln!(stdout, "\nDry run — nothing was changed.")?;
+        return Ok(());
+    }
+    if plan.is_empty() {
+        return Ok(());
+    }
+
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            return Err(CliError::InvalidInput(
+                "refusing to uninstall without confirmation; re-run with --yes \
+                 (or --dry-run to preview)"
+                    .into(),
+            ));
+        }
+        write!(stdout, "\nType 'yes' to uninstall Readshot: ")?;
+        stdout.flush()?;
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if answer.trim() != "yes" {
+            writeln!(stdout, "Aborted. Nothing was changed.")?;
+            return Ok(());
+        }
+    }
+
+    let system = crate::uninstall::RealSystem;
+    let reports = crate::uninstall::execute(&plan, &system);
+    writeln!(stdout)?;
+    let mut failures = 0usize;
+    for report in &reports {
+        match &report.outcome {
+            Ok(crate::uninstall::ActionStatus::Done) => {
+                writeln!(stdout, "  ok       {}", report.action.describe())?;
+            }
+            Ok(crate::uninstall::ActionStatus::Skipped(why)) => {
+                writeln!(stdout, "  skipped  {} ({why})", report.action.describe())?;
+            }
+            Err(e) => {
+                failures += 1;
+                writeln!(stdout, "  FAILED   {} — {e}", report.action.describe())?;
+            }
+        }
+    }
+
+    if failures > 0 {
+        return Err(CliError::Uninstall(format!(
+            "{failures} step(s) could not be completed; see the list above"
+        )));
+    }
+    writeln!(stdout, "\nReadshot has been removed.")?;
+    Ok(())
 }
 
 trait ClipboardSink {
@@ -1455,6 +1555,40 @@ mod tests {
             cli.command,
             Some(Command::ListWindows { json: false })
         ));
+    }
+
+    #[test]
+    fn parses_uninstall_subcommand_with_flags() {
+        let cli = Cli::try_parse_from(["readshot", "uninstall", "--purge", "--dry-run", "--yes"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Uninstall {
+                purge: true,
+                dry_run: true,
+                yes: true,
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["readshot", "uninstall"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Uninstall {
+                purge: false,
+                dry_run: false,
+                yes: false,
+            })
+        ));
+    }
+
+    #[test]
+    fn uninstall_dry_run_reports_plan_and_changes_nothing() {
+        let paths = crate::uninstall::default_uninstall_paths();
+        let plan = crate::uninstall::plan_uninstall(&paths, false);
+        // Dry-run always includes the permission-reset step, so the plan
+        // is never empty and the rendered text is stable to assert on.
+        let rendered = crate::uninstall::render_plan(&plan);
+        assert!(rendered.contains("Screen Recording"));
     }
 
     #[test]
