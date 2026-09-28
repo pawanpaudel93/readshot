@@ -380,11 +380,12 @@ pub enum Command {
         purge: bool,
 
         /// Print what would be removed and exit without changing anything.
-        #[arg(long)]
+        #[arg(short = 'n', long)]
         dry_run: bool,
 
-        /// Skip the interactive confirmation prompt.
-        #[arg(long)]
+        /// Assume yes: skip the confirmation prompt (required when not
+        /// running in a terminal).
+        #[arg(short = 'y', long)]
         yes: bool,
     },
 }
@@ -804,6 +805,11 @@ impl Cli {
     }
 }
 
+/// `y` / `yes` in any case confirms; anything else (including Enter) is No.
+fn confirms_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
 /// Drive the built-in uninstall from the CLI: print the plan in plain
 /// language, confirm on a TTY (unless `--yes`), then execute and report
 /// each step. `--dry-run` prints the plan and exits without changes.
@@ -830,16 +836,17 @@ fn run_uninstall(
     if !yes {
         if !std::io::stdin().is_terminal() {
             return Err(CliError::InvalidInput(
-                "refusing to uninstall without confirmation; re-run with --yes \
-                 (or --dry-run to preview)"
+                "refusing to uninstall without confirmation; re-run with -y/--yes \
+                 (or -n/--dry-run to preview)"
                     .into(),
             ));
         }
-        write!(stdout, "\nType 'yes' to uninstall Readshot: ")?;
+        // Conventional prompt: default is No, `y` / `yes` confirms.
+        write!(stdout, "\nContinue? [y/N] ")?;
         stdout.flush()?;
         let mut answer = String::new();
         std::io::stdin().read_line(&mut answer)?;
-        if answer.trim() != "yes" {
+        if !confirms_yes(&answer) {
             writeln!(stdout, "Aborted. Nothing was changed.")?;
             return Ok(());
         }
@@ -1497,6 +1504,28 @@ mod tests {
             *self.text.lock().unwrap() = Some(text.to_string());
             Ok(())
         }
+    }
+
+    #[test]
+    fn uninstall_prompt_defaults_to_no() {
+        assert!(confirms_yes("y\n"));
+        assert!(confirms_yes("Yes\n"));
+        assert!(!confirms_yes("\n"));
+        assert!(!confirms_yes("no\n"));
+        assert!(!confirms_yes("yeah\n"));
+    }
+
+    #[test]
+    fn uninstall_accepts_short_flags() {
+        let cli = Cli::try_parse_from(["readshot", "uninstall", "-n", "-y", "--purge"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Uninstall {
+                purge: true,
+                dry_run: true,
+                yes: true
+            })
+        ));
     }
 
     #[test]

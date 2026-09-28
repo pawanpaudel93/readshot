@@ -360,8 +360,12 @@ impl UninstallSystem for RealSystem {
     fn reset_screen_recording(&self, bundle_id: &str) -> io::Result<()> {
         #[cfg(target_os = "macos")]
         {
+            // Quiet: our own report line says what happened; tccutil's
+            // "Successfully reset…" chatter would duplicate it.
             let status = std::process::Command::new("/usr/bin/tccutil")
                 .args(["reset", "ScreenCapture", bundle_id])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status()?;
             if status.success() {
                 Ok(())
@@ -592,7 +596,12 @@ fn home_dir() -> PathBuf {
 /// The `*.app` bundle the running binary lives in, if any:
 /// `…/Readshot.app/Contents/MacOS/readshot` → `…/Readshot.app`.
 fn current_app_bundle() -> Option<PathBuf> {
+    // Resolve symlinks: users usually run the CLI through
+    // `~/.local/bin/readshot`, and on macOS `current_exe` reports that
+    // link rather than the binary inside the bundle, which silently
+    // dropped the "move the app to the Trash" step.
     let exe = std::env::current_exe().ok()?;
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
     let macos = exe.parent()?;
     if macos.file_name()? != std::ffi::OsStr::new("MacOS") {
         return None;
