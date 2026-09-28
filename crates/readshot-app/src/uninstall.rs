@@ -48,6 +48,22 @@ const LOGIN_AGENTS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Bundle ids whose macOS-managed per-app storage a purge clears: the
+/// current id and the legacy one from before the rename.
+const APP_STORAGE_IDS: &[&str] = &[BUNDLE_ID, "dev.pawanpaudel93.readshot"];
+
+/// Per-app locations macOS (and Sparkle, via URLSession / WebKit) create
+/// under `~/Library` for a bundle id, relative to `~/Library`. `{id}` is
+/// substituted. Sparkle's download cache also uses the product name.
+const APP_STORAGE_PATHS: &[&str] = &[
+    "Caches/{id}",
+    "HTTPStorages/{id}",
+    "HTTPStorages/{id}.binarycookies",
+    "WebKit/{id}",
+    "Saved Application State/{id}.savedState",
+];
+const EXTRA_STORAGE_PATHS: &[&str] = &["Caches/np.com.pawanpaudel.Readshot"];
+
 /// Command-line entry points the installer symlinks into `--bin-dir`.
 const CLI_BIN_NAMES: &[&str] = &["readshot", "readshot-mcp"];
 
@@ -75,6 +91,9 @@ pub struct UninstallPaths {
     pub data_dir: PathBuf,
     /// The user's Trash directory (`~/.Trash`).
     pub trash_dir: PathBuf,
+    /// The user's `~/Library`, for macOS-managed per-app storage
+    /// (defaults plist, caches, HTTP/WebKit storage) cleared on purge.
+    pub library_dir: PathBuf,
 }
 
 /// What a purge-deletion covers, for plain-language descriptions.
@@ -97,6 +116,13 @@ pub enum UninstallAction {
     ResetScreenRecording { bundle_id: String },
     /// Delete a user-data directory (only planned under `purge`).
     DeleteDir { path: PathBuf, kind: DataKind },
+    /// Clear the app's macOS defaults domain (`~/Library/Preferences/<id>.plist`,
+    /// where Sparkle keeps its state). Goes through `defaults delete` so
+    /// `cfprefsd` doesn't write a cached copy back. Purge only.
+    ClearAppDefaults { domain: String, plist: PathBuf },
+    /// Delete a macOS-managed per-app cache / storage file or directory
+    /// (Caches, HTTPStorages, WebKit, saved state). Purge only.
+    DeleteAppStorage { path: PathBuf },
     /// Move the app bundle to the Trash.
     TrashAppBundle { bundle: PathBuf, trash_dir: PathBuf },
 }
@@ -122,6 +148,12 @@ impl UninstallAction {
                     format!("Delete preferences, history, and logs ({})", path.display())
                 }
             },
+            UninstallAction::ClearAppDefaults { plist, .. } => {
+                format!("Delete app settings ({})", plist.display())
+            }
+            UninstallAction::DeleteAppStorage { path } => {
+                format!("Delete cached data ({})", path.display())
+            }
             UninstallAction::TrashAppBundle { bundle, .. } => {
                 format!("Move {} to the Trash", bundle.display())
             }
@@ -174,6 +206,34 @@ pub fn plan_uninstall(paths: &UninstallPaths, purge: bool) -> Vec<UninstallActio
                 path: paths.data_dir.clone(),
                 kind: DataKind::Data,
             });
+        }
+    }
+
+    // 4b. macOS-managed per-app storage (purge only, and only what exists).
+    if purge {
+        for id in APP_STORAGE_IDS {
+            let plist = paths
+                .library_dir
+                .join("Preferences")
+                .join(format!("{id}.plist"));
+            if plist.exists() {
+                actions.push(UninstallAction::ClearAppDefaults {
+                    domain: (*id).to_string(),
+                    plist,
+                });
+            }
+            for rel in APP_STORAGE_PATHS {
+                let path = paths.library_dir.join(rel.replace("{id}", id));
+                if std::fs::symlink_metadata(&path).is_ok() {
+                    actions.push(UninstallAction::DeleteAppStorage { path });
+                }
+            }
+        }
+        for rel in EXTRA_STORAGE_PATHS {
+            let path = paths.library_dir.join(rel);
+            if std::fs::symlink_metadata(&path).is_ok() {
+                actions.push(UninstallAction::DeleteAppStorage { path });
+            }
         }
     }
 
@@ -242,6 +302,10 @@ pub trait UninstallSystem {
 
     /// Reset the Screen Recording TCC grant for `bundle_id`.
     fn reset_screen_recording(&self, bundle_id: &str) -> io::Result<()>;
+
+    /// Clear the app's defaults domain so `cfprefsd` drops its cached
+    /// copy (best-effort; the plist file is removed afterwards too).
+    fn clear_defaults(&self, domain: &str) -> io::Result<()>;
 }
 
 /// Production [`UninstallSystem`] that shells out to macOS tooling.
@@ -271,6 +335,24 @@ impl UninstallSystem for RealSystem {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = (label, plist);
+            Ok(())
+        }
+    }
+
+    fn clear_defaults(&self, domain: &str) -> io::Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            // Non-zero just means the domain was already empty.
+            let _ = std::process::Command::new("/usr/bin/defaults")
+                .args(["delete", domain])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = domain;
             Ok(())
         }
     }
@@ -383,6 +465,18 @@ fn execute_one(
             Ok(ActionStatus::Done)
         }
         UninstallAction::DeleteDir { path, .. } => remove_dir_if_present(path),
+        UninstallAction::ClearAppDefaults { domain, plist } => {
+            let _ = system.clear_defaults(domain);
+            remove_file_if_present(plist)
+        }
+        UninstallAction::DeleteAppStorage { path } => {
+            // Files (e.g. `.binarycookies`) and directories both appear here.
+            match std::fs::symlink_metadata(path) {
+                Ok(meta) if meta.is_dir() => remove_dir_if_present(path),
+                Ok(_) => remove_file_if_present(path),
+                Err(_) => Ok(ActionStatus::Skipped("already gone")),
+            }
+        }
         UninstallAction::TrashAppBundle { bundle, trash_dir } => trash_bundle(bundle, trash_dir),
     }
 }
@@ -485,6 +579,7 @@ pub fn default_uninstall_paths() -> UninstallPaths {
         config_dir,
         data_dir,
         trash_dir: home.join(".Trash"),
+        library_dir: home.join("Library"),
     }
 }
 
@@ -524,6 +619,7 @@ mod tests {
     struct RecordingSystem {
         unloaded: Mutex<Vec<String>>,
         tcc_reset: Mutex<Vec<String>>,
+        defaults_cleared: Mutex<Vec<String>>,
     }
 
     impl UninstallSystem for RecordingSystem {
@@ -535,6 +631,61 @@ mod tests {
             self.tcc_reset.lock().unwrap().push(bundle_id.to_string());
             Ok(())
         }
+        fn clear_defaults(&self, domain: &str) -> io::Result<()> {
+            self.defaults_cleared
+                .lock()
+                .unwrap()
+                .push(domain.to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn purge_clears_macos_app_storage_but_only_what_exists() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = paths_in(root.path(), None);
+        let lib = &paths.library_dir;
+        std::fs::create_dir_all(lib.join("Preferences")).unwrap();
+        std::fs::write(
+            lib.join("Preferences/np.com.pawanpaudel.readshot.plist"),
+            b"x",
+        )
+        .unwrap();
+        std::fs::create_dir_all(lib.join("Caches/np.com.pawanpaudel.readshot")).unwrap();
+        std::fs::create_dir_all(lib.join("HTTPStorages")).unwrap();
+        std::fs::write(
+            lib.join("HTTPStorages/np.com.pawanpaudel.readshot.binarycookies"),
+            b"x",
+        )
+        .unwrap();
+        std::fs::create_dir_all(lib.join("HTTPStorages/dev.pawanpaudel93.readshot")).unwrap();
+        // Unrelated app storage must never be touched.
+        std::fs::create_dir_all(lib.join("Caches/com.example.other")).unwrap();
+
+        // Without purge nothing under ~/Library is planned.
+        assert!(!plan_uninstall(&paths, false).iter().any(|a| matches!(
+            a,
+            UninstallAction::ClearAppDefaults { .. } | UninstallAction::DeleteAppStorage { .. }
+        )));
+
+        let plan = plan_uninstall(&paths, true);
+        let system = RecordingSystem::default();
+        for report in execute(&plan, &system) {
+            assert!(report.outcome.is_ok(), "{:?}", report);
+        }
+        assert!(!lib
+            .join("Preferences/np.com.pawanpaudel.readshot.plist")
+            .exists());
+        assert!(!lib.join("Caches/np.com.pawanpaudel.readshot").exists());
+        assert!(!lib
+            .join("HTTPStorages/np.com.pawanpaudel.readshot.binarycookies")
+            .exists());
+        assert!(!lib.join("HTTPStorages/dev.pawanpaudel93.readshot").exists());
+        assert!(lib.join("Caches/com.example.other").exists());
+        assert_eq!(
+            system.defaults_cleared.lock().unwrap().as_slice(),
+            &["np.com.pawanpaudel.readshot".to_string()]
+        );
     }
 
     fn make_symlink(link: &Path, target: &Path) {
@@ -552,6 +703,7 @@ mod tests {
             config_dir: root.join("config"),
             data_dir: root.join("data"),
             trash_dir: root.join("Trash"),
+            library_dir: root.join("Library"),
         }
     }
 

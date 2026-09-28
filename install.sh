@@ -384,6 +384,31 @@ uninstall_readshot() {
       rm -rf "${app_support}"
       log "  Deleted ${app_support}"
     fi
+    # macOS-managed per-app storage (defaults plist with Sparkle state,
+    # caches, HTTP/WebKit storage, saved state) for the current and the
+    # legacy bundle id. Mirrors DeleteAppStorage in uninstall.rs.
+    local id rel path
+    for id in "${BUNDLE_ID}" dev.pawanpaudel93.readshot; do
+      if [[ -e "${HOME}/Library/Preferences/${id}.plist" ]]; then
+        if [[ "${READSHOT_UNINSTALL_SKIP_SYSTEM:-0}" != "1" ]]; then
+          /usr/bin/defaults delete "${id}" >/dev/null 2>&1 || true
+        fi
+        rm -f "${HOME}/Library/Preferences/${id}.plist"
+        log "  Deleted app settings (${id})"
+      fi
+      for rel in "Caches/${id}" "HTTPStorages/${id}" "HTTPStorages/${id}.binarycookies" \
+        "WebKit/${id}" "Saved Application State/${id}.savedState"; do
+        path="${HOME}/Library/${rel}"
+        if [[ -e "${path}" || -L "${path}" ]]; then
+          rm -rf "${path}"
+          log "  Deleted ${path}"
+        fi
+      done
+    done
+    if [[ -e "${HOME}/Library/Caches/np.com.pawanpaudel.Readshot" ]]; then
+      rm -rf "${HOME}/Library/Caches/np.com.pawanpaudel.Readshot"
+      log "  Deleted ${HOME}/Library/Caches/np.com.pawanpaudel.Readshot"
+    fi
   fi
 
   # 5. The app bundle → Trash.
