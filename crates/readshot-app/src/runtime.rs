@@ -1705,6 +1705,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::SettingsResetAllRequested
         | Message::SettingsResetAllCancelled
         | Message::SettingsResetAllConfirmed
+        | Message::SettingsUninstallRequested
+        | Message::SettingsUninstallCancelled
+        | Message::SettingsUninstallPurgeToggled(..)
+        | Message::SettingsUninstallConfirmed
+        | Message::SettingsUninstallFinished
         | Message::SettingsWindowReady(..)
         | Message::OpenCliToolsRequested
         | Message::CliToolsWindowReady(..)

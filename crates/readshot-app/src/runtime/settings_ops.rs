@@ -25,6 +25,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
                 state.settings_hotkey_status = None;
             }
             state.settings_reset_all_pending = false;
+            state.settings_uninstall_pending = false;
             state.update_sync(Message::Settings(submsg));
             if needs_rehotkey {
                 refresh_hotkey_registration(state);
@@ -132,6 +133,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
         }
         Message::SettingsResetAllRequested => {
             state.settings_reset_all_pending = true;
+            state.settings_uninstall_pending = false;
             state.settings_hotkey_error = None;
             state.settings_hotkey_status = None;
             state.settings_status = None;
@@ -162,6 +164,52 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
                 }
             }
             Task::none()
+        }
+        Message::SettingsUninstallRequested
+        | Message::SettingsUninstallCancelled
+        | Message::SettingsUninstallPurgeToggled(_) => {
+            // Pure arming / cancel / checkbox transitions — handled in
+            // `App::update_sync` so the state machine is unit-testable.
+            state.update_sync(message);
+            Task::none()
+        }
+        Message::SettingsUninstallConfirmed => {
+            state.settings_uninstall_pending = false;
+            // Build the plan on the UI thread (read-only, fast), then run
+            // the I/O-heavy executor on a blocking worker so moving the
+            // bundle to Trash and deleting data dirs can't stall the UI.
+            let purge = state.settings_uninstall_purge;
+            let paths = crate::uninstall::default_uninstall_paths();
+            let plan = crate::uninstall::plan_uninstall(&paths, purge);
+            Task::perform(
+                async move {
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let reports =
+                            crate::uninstall::execute(&plan, &crate::uninstall::RealSystem);
+                        for report in &reports {
+                            match &report.outcome {
+                                Ok(status) => tracing::info!(
+                                    target: "readshot::uninstall",
+                                    "{}: {status:?}",
+                                    report.action.describe(),
+                                ),
+                                Err(e) => tracing::warn!(
+                                    target: "readshot::uninstall",
+                                    "{} failed: {e}",
+                                    report.action.describe(),
+                                ),
+                            }
+                        }
+                    })
+                    .await;
+                },
+                |()| Message::SettingsUninstallFinished,
+            )
+        }
+        Message::SettingsUninstallFinished => {
+            // Use the existing quit path so the relaunch-on-system-quit
+            // safety net is disarmed before the process exits.
+            quit_readshot(&state.coordinator)
         }
         Message::SettingsWindowReady(id) => {
             // Belt-and-braces: window-open already records the id, but

@@ -3719,6 +3719,64 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     // control never sits next to the everyday startup toggle.
     let reset_section = settings_section("Reset", "Restore defaults", reset_controls);
 
+    // Uninstall is the loudest destructive control, so it sits last in
+    // its own section, following the same two-step arm/confirm pattern.
+    let uninstall_pending = state.settings_uninstall_pending;
+    let uninstall_purge = state.settings_uninstall_purge;
+    let uninstall_controls: Element<'_, Message> = responsive(move |available| {
+        if uninstall_pending {
+            let explanation = text(
+                "Removes the launch-at-login item, the readshot command-line tools, and the \
+                 Screen Recording permission, then moves Readshot to the Trash.",
+            )
+            .size(12)
+            .color(settings_muted_text());
+            let purge_checkbox = iced::widget::checkbox(uninstall_purge)
+                .label("Also delete history and preferences")
+                .size(16)
+                .text_size(13)
+                .on_toggle(Message::SettingsUninstallPurgeToggled);
+            let actions = row![
+                button(text("Uninstall").size(13))
+                    .padding([6, 12])
+                    .style(|t, s| action_button_style(t, s, ActionKind::Danger))
+                    .on_press(Message::SettingsUninstallConfirmed),
+                button(text("Cancel").size(13))
+                    .padding([6, 12])
+                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                    .on_press(Message::SettingsUninstallCancelled),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center);
+            column![explanation, purge_checkbox, actions]
+                .spacing(10)
+                .into()
+        } else {
+            let label = text("Remove Readshot and its command-line tools from this Mac.")
+                .size(12)
+                .color(settings_muted_text());
+            let action = button(text("Uninstall Readshot…").size(13))
+                .padding([6, 12])
+                .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
+                .on_press(Message::SettingsUninstallRequested);
+            if available.width < 460.0 {
+                column![label, action].spacing(8).into()
+            } else {
+                row![label, Space::new().width(Length::Fill), action]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .into()
+            }
+        }
+    })
+    .height(Length::Shrink)
+    .into();
+    let uninstall_section = settings_section(
+        "Uninstall",
+        "Remove Readshot from this Mac",
+        uninstall_controls,
+    );
+
     let body = container(
         column![
             header,
@@ -3730,6 +3788,7 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             advanced_section,
             app_section,
             reset_section,
+            uninstall_section,
         ]
         .spacing(16)
         .max_width(720),

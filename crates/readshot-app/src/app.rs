@@ -514,6 +514,18 @@ pub enum Message {
     SettingsResetAllConfirmed,
     /// User cancelled reset-all-settings.
     SettingsResetAllCancelled,
+    /// User clicked "Uninstall Readshot…" — arms the confirm prompt.
+    SettingsUninstallRequested,
+    /// User cancelled the armed uninstall prompt.
+    SettingsUninstallCancelled,
+    /// User toggled the "Also delete history and preferences" checkbox
+    /// in the armed uninstall prompt.
+    SettingsUninstallPurgeToggled(bool),
+    /// User confirmed the uninstall — runs the executor off the UI
+    /// thread, then quits.
+    SettingsUninstallConfirmed,
+    /// The uninstall executor finished; drives the app quit.
+    SettingsUninstallFinished,
     /// First `view` call after the settings window is opened. Records
     /// the `window::Id` so close + focus paths work.
     SettingsWindowReady(iced::window::Id),
@@ -705,6 +717,13 @@ pub struct App {
     /// True after the user asks to reset settings and before they
     /// confirm or cancel.
     pub settings_reset_all_pending: bool,
+    /// True after the user clicks "Uninstall Readshot…" in Settings and
+    /// before they confirm or cancel. Drives the two-stage destructive
+    /// prompt that guards the built-in uninstall.
+    pub settings_uninstall_pending: bool,
+    /// Whether the armed uninstall's "Also delete history and
+    /// preferences" checkbox is ticked.
+    pub settings_uninstall_purge: bool,
     /// True after the user clicks "Clear All" in the history browser
     /// and before they confirm or cancel. Drives the two-stage
     /// destructive prompt that guards against accidentally nuking
@@ -964,6 +983,8 @@ impl App {
             settings_hotkey_status: None,
             settings_status: None,
             settings_reset_all_pending: false,
+            settings_uninstall_pending: false,
+            settings_uninstall_purge: false,
             history_clear_all_pending: false,
             cli_tools_window_id: None,
             cli_tools_status: None,
@@ -1036,6 +1057,22 @@ impl App {
                 if changed {
                     self.persist_preferences_if_configured();
                 }
+                changed
+            }
+            Message::SettingsUninstallRequested => {
+                // Only one destructive prompt armed at a time.
+                self.settings_reset_all_pending = false;
+                self.settings_uninstall_pending = true;
+                true
+            }
+            Message::SettingsUninstallCancelled => {
+                let was_armed = self.settings_uninstall_pending;
+                self.settings_uninstall_pending = false;
+                was_armed
+            }
+            Message::SettingsUninstallPurgeToggled(purge) => {
+                let changed = self.settings_uninstall_purge != purge;
+                self.settings_uninstall_purge = purge;
                 changed
             }
             // The other message variants drive UI flows that need
@@ -1115,6 +1152,33 @@ mod tests {
         assert!(changed);
         assert!(!app.preferences.onboarding_completed);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn uninstall_prompt_arms_and_cancels_without_executing() {
+        let (mut app, _) = build_app(Arc::new(FakePermissions::granted()));
+        assert!(!app.settings_uninstall_pending);
+
+        // Arming an uninstall clears any reset prompt and sets pending.
+        app.settings_reset_all_pending = true;
+        let changed = app.update_sync(Message::SettingsUninstallRequested);
+        assert!(changed);
+        assert!(app.settings_uninstall_pending);
+        assert!(!app.settings_reset_all_pending);
+
+        // The purge checkbox toggles independently of the armed state.
+        let changed = app.update_sync(Message::SettingsUninstallPurgeToggled(true));
+        assert!(changed);
+        assert!(app.settings_uninstall_purge);
+        // Toggling to the same value reports no change.
+        assert!(!app.update_sync(Message::SettingsUninstallPurgeToggled(true)));
+
+        // Cancelling disarms without touching anything else.
+        let changed = app.update_sync(Message::SettingsUninstallCancelled);
+        assert!(changed);
+        assert!(!app.settings_uninstall_pending);
+        // A second cancel is a no-op.
+        assert!(!app.update_sync(Message::SettingsUninstallCancelled));
     }
 
     #[test]
