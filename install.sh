@@ -332,11 +332,10 @@ main() {
   sums_path="${work_dir}/SHA256SUMS"
   target_app="${INSTALL_DIR%/}/${APP_BUNDLE}"
 
-  cleanup() {
-    hdiutil detach "${mount_dir}" -quiet >/dev/null 2>&1 || true
-    rm -rf "${work_dir}"
-  }
-  trap cleanup EXIT
+  # The EXIT trap fires after this function returns, when its locals are
+  # gone (`set -u` then aborted with "mount_dir: unbound variable" and the
+  # temp dir leaked). Bake the paths in now; mktemp paths contain no quotes.
+  trap "hdiutil detach '${mount_dir}' -quiet >/dev/null 2>&1 || true; rm -rf '${work_dir}'" EXIT
 
   log "Installing Readshot ${version} for macOS ${arch}"
   log "Downloading ${artifact}"
