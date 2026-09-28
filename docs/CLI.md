@@ -206,21 +206,25 @@ launch-at-login item (current and legacy), removes the `readshot` and
 `readshot-mcp` command-line symlinks — but only when they are symlinks
 that point into a `Readshot.app` bundle, never a regular file or a link
 elsewhere — resets the Screen Recording permission, and moves the app
-bundle to the Trash (only when you run it from inside the installed
-`.app`).
+bundle to the Trash. This works through the `~/.local/bin/readshot`
+link too; when run from a source build (`cargo run`) there is no app
+bundle and that step is skipped.
 
 ```bash
-readshot uninstall --dry-run     # print the plan, change nothing
-readshot uninstall               # confirm interactively, then remove
-readshot uninstall --yes         # skip the confirmation prompt
-readshot uninstall --purge       # also delete history, logs, preferences
+readshot uninstall -n            # --dry-run: print the plan, change nothing
+readshot uninstall               # show the plan, then "Continue? [y/N]"
+readshot uninstall -y            # --yes: skip the prompt (scripts)
+readshot uninstall --purge       # also delete history, logs, preferences, caches
 ```
 
-`--dry-run` prints the ordered plan and exits without touching anything.
-Without `--yes`, `uninstall` asks for confirmation on a terminal and
-refuses to run in a non-interactive session (pass `--yes` for scripts).
-Add `--purge` to also delete your history, logs, and preferences; without
-it, that data is left in place.
+`-n` / `--dry-run` prints the ordered plan and exits without touching
+anything. Without `-y` / `--yes`, `uninstall` asks `Continue? [y/N]` on a
+terminal (Enter means no) and refuses to run in a non-interactive
+session. Add `--purge` to also delete your history, logs, and
+preferences, plus the per-app files macOS keeps for Readshot (app
+settings, caches, HTTP and WebKit storage); without it, that data is
+left in place. The exit code is non-zero if any step fails, and every
+step is listed as `ok`, `skipped`, or `FAILED`.
 
 ## Timing, Cursor, and Window Options
 

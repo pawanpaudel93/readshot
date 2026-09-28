@@ -32,6 +32,8 @@ find it later by searching the text inside the screenshot.
   actions.
 - Pin captures as always-on-top reference windows.
 - In-app updates via "Check for Updates…" in the menu bar.
+- Clean uninstall from Settings, `readshot uninstall`, or the installer
+  script — including the login item, CLI links, and permission.
 - Scriptable CLI with interactive capture, clipboard output, OCR,
   delay timers, image formats, and bundled MCP server for AI-agent
   workflows.
@@ -50,6 +52,10 @@ The installer downloads the latest matching DMG, verifies it, installs
 
 Manual DMG, first-launch, and uninstall details are in
 [docs/INSTALL.md](docs/INSTALL.md).
+
+To uninstall, use **Settings → Uninstall Readshot…**, or run
+`readshot uninstall` (add `--purge` to also delete history and
+preferences).
 
 ## Usage
 

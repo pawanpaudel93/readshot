@@ -341,16 +341,18 @@ readshot completions fish &gt; readshot.fish</code></pre>
               bundle to the Trash.
             </p>
             <div class="code-panel">
-              <pre><code translate="no">readshot uninstall --dry-run
+              <pre><code translate="no">readshot uninstall -n
 readshot uninstall
-readshot uninstall --yes
+readshot uninstall -y
 readshot uninstall --purge</code></pre>
             </div>
             <p>
-              <code translate="no">--dry-run</code> prints the plan and changes nothing.
-              Without <code translate="no">--yes</code>, it confirms on a terminal and refuses
-              to run non-interactively. <code translate="no">--purge</code> also deletes your
-              history, logs, and preferences.
+              <code translate="no">-n</code> / <code translate="no">--dry-run</code> prints the plan
+              and changes nothing. Without <code translate="no">-y</code> /
+              <code translate="no">--yes</code>, it asks <code translate="no">Continue? [y/N]</code>
+              on a terminal and refuses to run non-interactively.
+              <code translate="no">--purge</code> also deletes your history, logs, and
+              preferences, plus the settings and caches macOS keeps for Readshot.
             </p>
           </section>
 

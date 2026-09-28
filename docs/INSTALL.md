@@ -171,15 +171,15 @@ performs the cleanup and quits.
 ### With the CLI
 
 ```bash
-readshot uninstall --dry-run     # preview the plan, change nothing
-readshot uninstall               # confirm interactively, then remove
-readshot uninstall --purge       # also delete history, logs, preferences
-readshot uninstall --yes         # skip the confirmation prompt (scripts)
+readshot uninstall -n            # --dry-run: preview the plan, change nothing
+readshot uninstall               # show the plan, then "Continue? [y/N]"
+readshot uninstall --purge       # also delete history, logs, preferences, caches
+readshot uninstall -y            # --yes: skip the prompt (scripts)
 ```
 
-`--dry-run` prints exactly what would be removed. Without `--yes`, the
-command asks for confirmation on a terminal and refuses to run
-non-interactively.
+`-n` / `--dry-run` prints exactly what would be removed. Without
+`-y` / `--yes`, the command asks for confirmation on a terminal and
+refuses to run non-interactively.
 
 ### With the installer script
 
@@ -212,6 +212,14 @@ rm -rf /Applications/Readshot.app
 
 # Optional: history, logs, and preferences.
 rm -rf "$HOME/Library/Application Support/np.com.pawanpaudel.Readshot"
+
+# Optional: per-app files macOS and the updater keep for Readshot.
+defaults delete np.com.pawanpaudel.readshot 2>/dev/null || true
+rm -rf "$HOME/Library/Preferences/np.com.pawanpaudel.readshot.plist" \
+  "$HOME/Library/Caches/np.com.pawanpaudel.readshot" \
+  "$HOME/Library/HTTPStorages/np.com.pawanpaudel.readshot" \
+  "$HOME/Library/HTTPStorages/np.com.pawanpaudel.readshot.binarycookies" \
+  "$HOME/Library/WebKit/np.com.pawanpaudel.readshot"
 ```
 
 ## Windows and Linux
