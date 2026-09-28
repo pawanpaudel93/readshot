@@ -8,6 +8,7 @@ pub struct FakePermissions {
     granted: AtomicBool,
     pub request_calls: AtomicU32,
     pub open_settings_calls: AtomicU32,
+    pub reset_calls: AtomicU32,
 }
 
 impl FakePermissions {
@@ -16,6 +17,7 @@ impl FakePermissions {
             granted: AtomicBool::new(true),
             request_calls: AtomicU32::new(0),
             open_settings_calls: AtomicU32::new(0),
+            reset_calls: AtomicU32::new(0),
         }
     }
 
@@ -24,6 +26,7 @@ impl FakePermissions {
             granted: AtomicBool::new(false),
             request_calls: AtomicU32::new(0),
             open_settings_calls: AtomicU32::new(0),
+            reset_calls: AtomicU32::new(0),
         }
     }
 
@@ -47,5 +50,9 @@ impl PermissionsProvider for FakePermissions {
 
     fn open_settings(&self) {
         self.open_settings_calls.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn reset(&self) {
+        self.reset_calls.fetch_add(1, Ordering::SeqCst);
     }
 }

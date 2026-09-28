@@ -57,6 +57,13 @@ pub trait PermissionsProvider: Send + Sync {
     /// Open the platform's settings UI at the screen-recording pane.
     /// Used by the editor's "permission denied" toast.
     fn open_settings(&self);
+
+    /// Forget any stored Screen Recording decision for this app so the
+    /// next request registers the *current* code signature. macOS keys a
+    /// grant to the signature it was given to, so after an update signed
+    /// differently the old row stays "on" in System Settings but no longer
+    /// applies. No-op where the platform has no such store.
+    fn reset(&self) {}
 }
 
 /// Construct the platform-default provider.

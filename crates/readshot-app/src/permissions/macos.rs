@@ -30,6 +30,9 @@ use super::{PermissionStatus, PermissionsProvider};
 
 pub struct MacOsPermissions;
 
+/// Must match `CFBundleIdentifier` in packaging/macos/Info.plist.
+const BUNDLE_ID: &str = "np.com.pawanpaudel.readshot";
+
 impl PermissionsProvider for MacOsPermissions {
     fn status(&self) -> PermissionStatus {
         let access = ScreenCaptureAccess;
@@ -68,6 +71,24 @@ impl PermissionsProvider for MacOsPermissions {
             target: "readshot::permissions",
             "request() — no-op on macOS; SCK does registration via the coordinator",
         );
+    }
+
+    fn reset(&self) {
+        // `tccutil reset <service> <bundle id>` only touches this app's
+        // own row and needs no admin rights.
+        let status = std::process::Command::new("/usr/bin/tccutil")
+            .args(["reset", "ScreenCapture", BUNDLE_ID])
+            .status();
+        match status {
+            Ok(s) if s.success() => tracing::info!(
+                target: "readshot::permissions",
+                "reset stored Screen Recording decision",
+            ),
+            _ => tracing::warn!(
+                target: "readshot::permissions",
+                "could not reset Screen Recording decision via tccutil",
+            ),
+        }
     }
 
     fn open_settings(&self) {

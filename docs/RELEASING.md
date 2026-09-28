@@ -118,6 +118,11 @@ copy (see "How in-app updates work" below).
 * Sparkle accepts an update only if the DMG's EdDSA signature matches
   `SUPublicEDKey`. Keep `SPARKLE_ED_KEY_BASE64` forever; never rotate it
   in the same release as the code-signing certificate.
+* The release certificate is pinned in `packaging/macos/signing-cert.sha1`
+  (SHA-1 of the signing certificate). `build-dmg.sh` fails if a self-signed
+  build is signed with anything else. The CI secret
+  `MACOS_SELF_SIGN_CERT_BASE64` and the local `.env` must hold this same
+  certificate: 0.7.7 (CI) used a different one than 0.7.6/0.8.0 (local).
 * Keep `MACOS_SELF_SIGN_CERT_BASE64` stable too. macOS ties the Screen
   Recording grant to the app's code-signing requirement, so a new
   certificate makes every updated user re-grant Screen Recording

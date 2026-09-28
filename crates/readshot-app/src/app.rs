@@ -142,6 +142,9 @@ pub enum Message {
     GrantPermissionRequested,
     /// User clicked "Open Settings" in the denied state.
     OpenPermissionSettingsRequested,
+    /// User clicked "Reset Permission": clear a stale grant left for an
+    /// older code signature, then ask again.
+    ResetPermissionRequested,
     /// User clicked "Quit" — graceful exit so the next launch picks
     /// up newly-granted TCC permissions.
     QuitRequested,
@@ -1005,6 +1008,12 @@ impl App {
                 self.permissions.open_settings();
                 false
             }
+            Message::ResetPermissionRequested => {
+                self.permissions.reset();
+                self.permissions.request();
+                self.welcome = WelcomeState::AwaitingGrant;
+                true
+            }
             Message::Settings(msg) => {
                 let changed = readshot_ui::settings::apply(&mut self.preferences, msg);
                 if changed {
@@ -1128,6 +1137,16 @@ mod tests {
         // In-memory mutation still works; we just don't write to disk.
         assert!(changed);
         assert!(app.preferences.debug_logging);
+    }
+
+    #[test]
+    fn reset_permission_clears_stale_grant_and_asks_again() {
+        let (mut app, perms) = build_app(Arc::new(FakePermissions::denied()));
+        let changed = app.update_sync(Message::ResetPermissionRequested);
+        assert!(changed);
+        assert_eq!(perms.reset_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(perms.request_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(app.welcome, WelcomeState::AwaitingGrant);
     }
 
     #[test]

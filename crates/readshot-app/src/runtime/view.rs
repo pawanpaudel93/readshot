@@ -3403,11 +3403,17 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             .padding([6, 12])
             .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
             .on_press(Message::PermissionTick);
-        // Once access is granted there is nothing to recheck.
+        // Clears a grant macOS still holds for an earlier, differently
+        // signed version, then asks again.
+        let reset_button = button(text("Reset Permission").size(13))
+            .padding([6, 12])
+            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+            .on_press(Message::ResetPermissionRequested);
+        // Once access is granted there is nothing to recheck or reset.
         let actions = if matches!(permission_status, PermissionStatus::Granted) {
             row![open_button]
         } else {
-            row![recheck_button, open_button]
+            row![recheck_button, reset_button, open_button]
         }
         .spacing(8)
         .align_y(Alignment::Center);
@@ -4160,6 +4166,15 @@ pub(crate) fn welcome_awaiting_card<'a>(state: WelcomeState) -> Element<'a, Mess
                 .on_press(Message::RestartRequested),
         ]
         .spacing(8),
+        // After an update signed differently, System Settings can show
+        // Readshot switched on while macOS still denies this build.
+        text("Already on in System Settings but still blocked?")
+            .size(12)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.6)),
+        button(text("Reset Permission").size(13))
+            .padding([6, 12])
+            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+            .on_press(Message::ResetPermissionRequested),
     ]
     .spacing(10)
     .align_x(Alignment::Center);
@@ -4175,7 +4190,7 @@ pub(crate) fn welcome_permission_guidance(state: WelcomeState) -> (&'static str,
     match state {
         WelcomeState::Denied => (
             "Permission still blocked",
-            "If Readshot is already toggled on in System Settings, restart now so macOS gives this process the new Screen Recording grant. Otherwise open System Settings and enable Readshot first.",
+            "Switch Readshot on in System Settings, then restart Readshot. If it is already on, the grant may belong to an earlier version — use Reset Permission and switch it on again.",
         ),
         _ => (
             "Waiting for permission",

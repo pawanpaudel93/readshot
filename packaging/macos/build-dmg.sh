@@ -211,6 +211,30 @@ codesign --force --options runtime \
 
 codesign --verify --deep --strict "${APP_BUNDLE}"
 
+# Refuse to ship a self-signed build signed with a different certificate
+# than earlier releases. macOS ties the Screen Recording grant to the
+# signing certificate, so a change makes every updated user grant it
+# again (0.7.7 was built with one certificate, 0.7.6/0.8.0 with another).
+# Developer ID builds are exempt: that switch is a deliberate, one-time move.
+EXPECTED_CERT_FILE="packaging/macos/signing-cert.sha1"
+if [[ -z "${APPLE_DEVELOPER_ID_P12_BASE64:-}" && -f "${EXPECTED_CERT_FILE}" ]]; then
+  CERT_DIR="$(mktemp -d -t readshot-cert-check)"
+  APP_ABS="$(pwd)/${APP_BUNDLE}"
+  ( cd "${CERT_DIR}" && codesign -d --extract-certificates "${APP_ABS}" 2>/dev/null )
+  ACTUAL_CERT="$(openssl x509 -inform DER -in "${CERT_DIR}/codesign0" -noout -fingerprint -sha1 \
+    | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f')"
+  rm -rf "${CERT_DIR}"
+  EXPECTED_CERT="$(tr -d '[:space:]' < "${EXPECTED_CERT_FILE}" | tr 'A-F' 'a-f')"
+  if [[ "${ACTUAL_CERT}" != "${EXPECTED_CERT}" ]]; then
+    echo "error: app signed with certificate ${ACTUAL_CERT}, expected ${EXPECTED_CERT}" >&2
+    echo "       (${EXPECTED_CERT_FILE}). Using a different certificate resets every" >&2
+    echo "       user's Screen Recording permission on update. Sign with the pinned" >&2
+    echo "       certificate, or update the pin deliberately." >&2
+    exit 1
+  fi
+  echo "→ signing certificate matches the pinned release certificate"
+fi
+
 # 5. Build a standard drag-to-Applications DMG.
 rm -f "${DMG_PATH}"
 rm -rf "${DMG_STAGING}"

@@ -1663,6 +1663,20 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             )
         }
 
+        // Clear the stale row, re-register this signature with macOS (the
+        // SCK probe inside `list_displays` does that), and open the pane
+        // so the user can switch Readshot on for this build.
+        Message::ResetPermissionRequested => {
+            state.update_sync(Message::ResetPermissionRequested);
+            let coord = state.coordinator.clone();
+            Task::perform(
+                async move {
+                    let _ = coord.list_displays().await;
+                },
+                |()| Message::OpenPermissionSettingsRequested,
+            )
+        }
+
         // Synchronous transitions — reuse the existing handler.
         msg @ (Message::PermissionPoll(_) | Message::OpenPermissionSettingsRequested) => {
             state.update_sync(msg);
