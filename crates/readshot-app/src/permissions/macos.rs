@@ -73,6 +73,17 @@ impl PermissionsProvider for MacOsPermissions {
         );
     }
 
+    fn status_quiet(&self) -> PermissionStatus {
+        // CoreGraphics preflight never prompts. A grant made after this
+        // process started is not visible until relaunch anyway, which the
+        // Quit & Reopen path (and our relaunch safety net) provides.
+        if ScreenCaptureAccess.preflight() {
+            PermissionStatus::Granted
+        } else {
+            PermissionStatus::Denied
+        }
+    }
+
     fn reset(&self) {
         // `tccutil reset <service> <bundle id>` only touches this app's
         // own row and needs no admin rights.

@@ -138,6 +138,9 @@ pub enum Message {
     /// tests can drive `PermissionPoll` directly without faking the
     /// timer.
     PermissionTick,
+    /// Periodic poll tick. Uses the non-prompting status check so the
+    /// system permission alert isn't re-raised every interval.
+    PermissionPollTick,
     /// User clicked "Grant" in the welcome window.
     GrantPermissionRequested,
     /// User clicked "Open Settings" in the denied state.
@@ -532,6 +535,9 @@ pub struct App {
     pub permissions: Arc<dyn PermissionsProvider>,
     pub preferences: Preferences,
     pub welcome: WelcomeState,
+    /// Last observed Screen Recording status. Views read this instead of
+    /// probing, since a probe from `view()` would run on every redraw.
+    pub permission_status: crate::permissions::PermissionStatus,
     pub windows: Windows,
     /// `true` while a capture-and-save task is in flight; the welcome
     /// window's button is disabled in that state.
@@ -909,12 +915,14 @@ impl App {
         permissions: Arc<dyn PermissionsProvider>,
         preferences: Preferences,
     ) -> Self {
-        let welcome = WelcomeState::from_status(coordinator.pre_capture_gate());
+        let permission_status = coordinator.pre_capture_gate();
+        let welcome = WelcomeState::from_status(permission_status);
         Self {
             coordinator,
             permissions,
             preferences,
             welcome,
+            permission_status,
             windows: Windows::default(),
             capture_in_flight: false,
             last_capture_status: None,
@@ -998,7 +1006,10 @@ impl App {
     /// state-machine portion that's testable today.
     pub fn update_sync(&mut self, message: Message) -> bool {
         match message {
-            Message::PermissionPoll(status) => self.welcome.observe(status),
+            Message::PermissionPoll(status) => {
+                self.permission_status = status;
+                self.welcome.observe(status)
+            }
             Message::GrantPermissionRequested => {
                 // Clear any decision macOS still holds for an earlier,
                 // differently signed build first. Otherwise its stale row

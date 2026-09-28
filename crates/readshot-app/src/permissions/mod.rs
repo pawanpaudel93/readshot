@@ -64,6 +64,15 @@ pub trait PermissionsProvider: Send + Sync {
     /// differently the old row stays "on" in System Settings but no longer
     /// applies. No-op where the platform has no such store.
     fn reset(&self) {}
+
+    /// Status check that must never make the OS show a permission prompt.
+    /// Used by the periodic poll: on macOS the full `status()` falls back to
+    /// a ScreenCaptureKit probe, and while access is denied every probe
+    /// re-raises the system "would like to record" alert, so polling it
+    /// twice a second pinned that alert on screen.
+    fn status_quiet(&self) -> PermissionStatus {
+        self.status()
+    }
 }
 
 /// Construct the platform-default provider.

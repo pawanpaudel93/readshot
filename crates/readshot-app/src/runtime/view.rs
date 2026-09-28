@@ -3374,7 +3374,8 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         state.preferences.save_folder.display().to_string()
     };
     let filename_template = state.preferences.filename_template.clone();
-    let permission_status = state.coordinator.pre_capture_gate();
+    // Never probe from view(): it runs on every redraw.
+    let permission_status = state.permission_status;
     let (permission_title, permission_hint) = permission_settings_summary(permission_status);
 
     let history_retention = state.preferences.history_retention;

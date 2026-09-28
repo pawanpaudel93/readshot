@@ -308,7 +308,8 @@ pub fn start() -> (App, Task<Message>) {
     // Surface the initial permission state in the log so users
     // (and us, when triaging issues) can see whether macOS TCC is
     // already returning Granted before the welcome window appears.
-    let initial_permission = app.coordinator.pre_capture_gate();
+    // Already probed once in `App::new`; don't probe (and maybe prompt) again.
+    let initial_permission = app.permission_status;
     tracing::info!(
         target: "readshot::permissions",
         "initial status: {:?}",
@@ -475,7 +476,9 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // Polling at 500 ms keeps the UI responsive without burning
         // CPU. The TCC db is already cached in-process so each poll
         // is essentially a no-op syscall.
-        subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::PermissionTick));
+        subs.push(
+            iced::time::every(Duration::from_millis(500)).map(|_| Message::PermissionPollTick),
+        );
     }
     // These four drains poll OS-event sources (crossbeam channels /
     // AppKit-fed queues) that have no async wakeup, so they run on a
@@ -747,8 +750,14 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             window::gain_focus(id)
         }
 
-        Message::PermissionTick => {
-            let status = state.permissions.status();
+        // Explicit checks (Recheck, after Allow) may probe; the periodic
+        // tick must not, or macOS re-raises its permission alert each time.
+        tick @ (Message::PermissionTick | Message::PermissionPollTick) => {
+            let status = if matches!(tick, Message::PermissionPollTick) {
+                state.permissions.status_quiet()
+            } else {
+                state.permissions.status()
+            };
             let was_showing = state.welcome.should_show();
             let was_onboarding_completed = state.preferences.onboarding_completed;
             // Reuse the existing synchronous handler — it drives the
@@ -2725,6 +2734,16 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("backend unavailable"));
+    }
+
+    #[test]
+    fn periodic_poll_notices_grant_without_probing() {
+        let perms = Arc::new(FakePermissions::denied());
+        let mut app = build_app(perms.clone());
+        assert!(app.welcome.should_show());
+        perms.flip_to_granted();
+        let _ = update(&mut app, Message::PermissionPollTick);
+        assert_eq!(app.permission_status, PermissionStatus::Granted);
     }
 
     #[test]
