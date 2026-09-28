@@ -16,6 +16,17 @@ INSTALL_DIR="/Applications"
 BIN_DIR="${HOME}/.local/bin"
 TARGET_VERSION="latest"
 CHECK_ONLY=0
+UNINSTALL=0
+PURGE=0
+
+# Screen Recording TCC bundle id — must match packaging/macos/Info.plist.
+BUNDLE_ID="np.com.pawanpaudel.readshot"
+# Login LaunchAgent labels Readshot may have installed: current, then a
+# legacy id from before the bundle id changed. Both are removed.
+LOGIN_AGENT_LABELS=(
+  "np.com.pawanpaudel.readshot.login"
+  "dev.pawanpaudel93.readshot.login"
+)
 
 usage() {
   cat <<'EOF'
@@ -25,12 +36,16 @@ Options:
   --install-dir DIR          Install Readshot.app into DIR. Default: /Applications
   --bin-dir DIR              Symlink readshot and readshot-mcp into DIR. Default: ~/.local/bin
   --check                    Check compatibility, release availability, and current install state
+  --uninstall                Remove Readshot (app, CLI symlinks, login item, permission)
+  --purge                    With --uninstall, also delete history, logs, and preferences
   --help                     Show this help
 
 Examples:
   curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash
   curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- 0.6.0
   curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- --check
+  curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- --uninstall
+  curl -fsSL https://readshot.pawanpaudel.com.np/install.sh | bash -s -- --uninstall --purge
 EOF
 }
 
@@ -48,6 +63,8 @@ parse_args() {
   BIN_DIR="${HOME}/.local/bin"
   TARGET_VERSION="latest"
   CHECK_ONLY=0
+  UNINSTALL=0
+  PURGE=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -63,6 +80,14 @@ parse_args() {
         ;;
       --check)
         CHECK_ONLY=1
+        shift
+        ;;
+      --uninstall)
+        UNINSTALL=1
+        shift
+        ;;
+      --purge)
+        PURGE=1
         shift
         ;;
       --help|-h)
@@ -258,6 +283,116 @@ For bash:
 EOF
 }
 
+# --- Uninstall ---------------------------------------------------------
+#
+# The system-affecting commands (tccutil, launchctl) go through these two
+# wrappers so the test suite can neutralise them with
+# READSHOT_UNINSTALL_SKIP_SYSTEM=1 and never touch the live machine. Every
+# other step operates on plain paths, which the tests point at temp dirs.
+
+reset_screen_recording_permission() {
+  if [[ "${READSHOT_UNINSTALL_SKIP_SYSTEM:-0}" == "1" ]]; then
+    return 0
+  fi
+  tccutil reset ScreenCapture "${BUNDLE_ID}" >/dev/null 2>&1 || true
+}
+
+unload_login_agent() {
+  local label="$1"
+  local plist="$2"
+  if [[ "${READSHOT_UNINSTALL_SKIP_SYSTEM:-0}" == "1" ]]; then
+    return 0
+  fi
+  launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 \
+    || launchctl unload "${plist}" >/dev/null 2>&1 \
+    || true
+}
+
+# Remove a CLI entry ONLY when it is a symlink pointing into a
+# Readshot.app bundle. A regular file, or a link that points elsewhere,
+# is left untouched — the same safety rule the in-app uninstall applies.
+remove_cli_symlink() {
+  local link="$1"
+  local target
+
+  if [[ -L "${link}" ]]; then
+    target="$(readlink "${link}")"
+    case "${target}" in
+      */"${APP_BUNDLE}"/*)
+        rm -f "${link}"
+        log "  Removed ${link}"
+        ;;
+      *)
+        log "  Left ${link} (symlink does not point into ${APP_BUNDLE})"
+        ;;
+    esac
+  elif [[ -e "${link}" ]]; then
+    log "  Left ${link} (not a symlink)"
+  fi
+}
+
+# Move a bundle to the Trash under a unique name (never rm -rf it).
+trash_app_bundle() {
+  local bundle="$1"
+  local trash="${HOME}/.Trash"
+  local dest
+
+  [[ -d "${bundle}" ]] || return 0
+  mkdir -p "${trash}"
+  dest="${trash}/${APP_BUNDLE}"
+  if [[ -e "${dest}" ]]; then
+    dest="${trash}/${APP_NAME} $(date +%s).app"
+  fi
+  if mv "${bundle}" "${dest}"; then
+    log "  Moved ${bundle} to the Trash"
+  else
+    log "  Could not move ${bundle} to the Trash"
+  fi
+}
+
+uninstall_readshot() {
+  require_macos
+
+  local target_app="${INSTALL_DIR%/}/${APP_BUNDLE}"
+  local app_support="${HOME}/Library/Application Support/np.com.pawanpaudel.Readshot"
+  local label
+  local plist
+
+  log "Uninstalling Readshot"
+
+  # 1. Launch-at-login items (current + legacy).
+  for label in "${LOGIN_AGENT_LABELS[@]}"; do
+    plist="${HOME}/Library/LaunchAgents/${label}.plist"
+    unload_login_agent "${label}" "${plist}"
+    if [[ -e "${plist}" ]]; then
+      rm -f "${plist}"
+      log "  Removed login item ${label}"
+    fi
+  done
+
+  # 2. Command-line symlinks (Readshot-owned only).
+  remove_cli_symlink "${BIN_DIR}/readshot"
+  remove_cli_symlink "${BIN_DIR}/readshot-mcp"
+
+  # 3. Screen Recording permission.
+  reset_screen_recording_permission
+  log "  Reset Screen Recording permission (${BUNDLE_ID})"
+
+  # 4. History, logs, and preferences (purge only).
+  if [[ "${PURGE}" == "1" ]]; then
+    if [[ -e "${app_support}" ]]; then
+      rm -rf "${app_support}"
+      log "  Deleted ${app_support}"
+    fi
+  fi
+
+  # 5. The app bundle → Trash.
+  trash_app_bundle "${target_app}"
+
+  log ""
+  log "Readshot has been removed."
+}
+
 check_install() {
   require_macos
   require_supported_macos_version
@@ -299,6 +434,13 @@ EOF
 main() {
   parse_args "$@"
   require_macos
+  if [[ "${UNINSTALL}" == "1" ]]; then
+    uninstall_readshot
+    exit 0
+  fi
+  if [[ "${PURGE}" == "1" ]]; then
+    die "--purge is only valid together with --uninstall"
+  fi
   require_supported_macos_version
   if [[ "${CHECK_ONLY}" == "1" ]]; then
     check_install

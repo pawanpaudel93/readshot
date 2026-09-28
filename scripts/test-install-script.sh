@@ -28,6 +28,11 @@ assert_eq() {
   fi
 }
 
+assert_true() {
+  # $1: a test-command result already captured as "yes"/"no"
+  assert_eq "yes" "$1" "$2"
+}
+
 assert_eq "aarch64" "$(release_arch_for_machine arm64)" "arm64 maps to release arch"
 assert_eq "aarch64" "$(release_arch_for_machine aarch64)" "aarch64 maps to release arch"
 assert_eq "x86_64" "$(release_arch_for_machine x86_64)" "x86_64 maps to release arch"
@@ -68,6 +73,66 @@ assert_eq \
   "checksum lookup matches aarch64 artifact by basename"
 
 rm -f "${sha_file}"
+
+# --- Uninstall path (entirely inside temp dirs; system calls stubbed) ---
+#
+# READSHOT_UNINSTALL_SKIP_SYSTEM=1 makes tccutil / launchctl no-ops, and
+# every path below points at a throwaway HOME / install-dir / bin-dir, so
+# this never touches the real machine. uninstall_readshot requires macOS
+# (require_macos), so skip the block elsewhere.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+uninstall_root="$(mktemp -d)"
+export READSHOT_UNINSTALL_SKIP_SYSTEM=1
+HOME="${uninstall_root}/home"
+INSTALL_DIR="${uninstall_root}/apps"
+BIN_DIR="${uninstall_root}/bin"
+PURGE=1
+
+fake_app="${INSTALL_DIR}/Readshot.app"
+app_support="${HOME}/Library/Application Support/np.com.pawanpaudel.Readshot"
+login_plist="${HOME}/Library/LaunchAgents/np.com.pawanpaudel.readshot.login.plist"
+
+mkdir -p "${fake_app}/Contents/MacOS"
+printf 'bin\n' > "${fake_app}/Contents/MacOS/readshot"
+mkdir -p "${BIN_DIR}"
+# A Readshot-owned symlink (should be removed) ...
+ln -s "${fake_app}/Contents/MacOS/readshot" "${BIN_DIR}/readshot"
+# ... and a regular file at the other CLI name (must be preserved).
+printf 'not a link\n' > "${BIN_DIR}/readshot-mcp"
+mkdir -p "$(dirname "${login_plist}")"
+printf '<plist/>\n' > "${login_plist}"
+mkdir -p "${app_support}"
+printf 'x\n' > "${app_support}/preferences.toml"
+
+uninstall_readshot >/dev/null 2>&1
+
+assert_true "$([[ ! -L "${BIN_DIR}/readshot" ]] && echo yes || echo no)" \
+  "uninstall removes the Readshot-owned CLI symlink"
+assert_true "$([[ -f "${BIN_DIR}/readshot-mcp" ]] && echo yes || echo no)" \
+  "uninstall leaves a regular file at the CLI path alone"
+assert_true "$([[ ! -d "${fake_app}" ]] && echo yes || echo no)" \
+  "uninstall moves the app bundle out of the install dir"
+assert_true "$([[ -d "${HOME}/.Trash/Readshot.app" ]] && echo yes || echo no)" \
+  "uninstall moves the app bundle into the Trash"
+assert_true "$([[ ! -e "${login_plist}" ]] && echo yes || echo no)" \
+  "uninstall removes the login agent plist"
+assert_true "$([[ ! -d "${app_support}" ]] && echo yes || echo no)" \
+  "uninstall --purge deletes the app support directory"
+
+# A foreign symlink at a CLI path is never removed.
+rm -rf "${BIN_DIR}"
+mkdir -p "${BIN_DIR}" "${uninstall_root}/other"
+printf 'other\n' > "${uninstall_root}/other/readshot"
+ln -s "${uninstall_root}/other/readshot" "${BIN_DIR}/readshot"
+remove_cli_symlink "${BIN_DIR}/readshot" >/dev/null 2>&1
+assert_true "$([[ -L "${BIN_DIR}/readshot" ]] && echo yes || echo no)" \
+  "a symlink not pointing into Readshot.app is preserved"
+
+rm -rf "${uninstall_root}"
+unset READSHOT_UNINSTALL_SKIP_SYSTEM
+else
+  echo "ok - uninstall path tests skipped (not macOS)"
+fi
 
 if [[ "${failures}" -ne 0 ]]; then
   exit 1
