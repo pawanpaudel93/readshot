@@ -569,6 +569,8 @@ pub enum Message {
     /// macOS/Windows appearance changed (or the initial query returned).
     /// `Mode::None` means "unknown" and falls back to dark.
     SystemThemeChanged(iced::theme::Mode),
+    /// 1s tick; `update()` re-reads the OS appearance on the app thread.
+    ThemePollTick,
 }
 
 /// Top-level application state.

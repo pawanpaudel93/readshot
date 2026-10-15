@@ -532,12 +532,10 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     // iced pins each open window's appearance to its theme, so winit
     // suppresses theme-change events for those windows; poll the OS too.
     // The handler is idempotent, so identical repeats are free.
-    subs.push(iced::time::every(Duration::from_secs(1)).map(|_| {
-        Message::SystemThemeChanged(match os_theme_mode() {
-            ThemeMode::Light => iced::theme::Mode::Light,
-            ThemeMode::Dark => iced::theme::Mode::Dark,
-        })
-    }));
+    // The map closure runs on the tokio executor, where `os_theme_mode`
+    // (main-thread only) would always read Dark, so emit a bare tick and
+    // read the OS appearance in `update()`.
+    subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::ThemePollTick));
     if state.welcome.should_show() {
         // Polling at 500 ms keeps the UI responsive without burning
         // CPU. The TCC db is already cached in-process so each poll
@@ -1773,6 +1771,13 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::ThemePollTick => {
+            let os = os_theme_mode();
+            if os != state.theme_mode {
+                state.theme_mode = os;
+            }
+            Task::none()
+        }
         Message::SystemThemeChanged(mode) => {
             state.theme_mode = match mode {
                 iced::theme::Mode::Light => ThemeMode::Light,
@@ -2506,6 +2511,15 @@ mod tests {
             Message::SystemThemeChanged(iced::theme::Mode::None),
         );
         assert_eq!(app.theme_mode, ThemeMode::Dark);
+    }
+
+    #[test]
+    fn theme_poll_tick_reads_os_mode_on_update_thread() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.theme_mode = ThemeMode::Light;
+        let _ = update(&mut app, Message::ThemePollTick);
+        // Off the main thread (tests) `os_theme_mode` reports Dark.
+        assert_eq!(app.theme_mode, os_theme_mode());
     }
 
     fn build_app(perms: Arc<FakePermissions>) -> App {
