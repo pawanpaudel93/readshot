@@ -3,6 +3,7 @@
 //! the moved arms compile unchanged.
 
 use super::*;
+use crate::app::SettingsPane;
 
 /// Every settings message arm, extracted from `runtime::update` so the
 /// top-level dispatcher stays navigable. Settings
@@ -218,6 +219,12 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             window::gain_focus(id)
         }
         Message::SettingsPaneSelected(pane) => {
+            // A recording armed on Capture must not keep listening once
+            // its prompt is off-screen, or the next chord would silently
+            // become the capture hotkey.
+            if pane != SettingsPane::Capture && state.settings_recording_hotkey {
+                let _ = update(state, Message::SettingsHotkeyRecordingCancelled);
+            }
             state.settings_pane = pane;
             Task::none()
         }
@@ -234,6 +241,15 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             let Some(action) = settings_key_action(&key, modifiers) else {
                 return Task::none();
             };
+            // Show the pane that owns the setting before changing it.
+            // Remember whether the App pane (with any armed destructive
+            // prompt) was already on screen.
+            let prompt_visible = state.settings_pane == SettingsPane::App;
+            if let Some(pane) = action.owning_pane() {
+                if state.settings_pane != pane {
+                    let _ = update(state, Message::SettingsPaneSelected(pane));
+                }
+            }
             match action {
                 SettingsKeyAction::Close => {
                     state.windows.forget(window);
@@ -276,8 +292,13 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
                 }
                 // Destructive: the key arms the two-stage prompt, and a
                 // second press confirms. A single keypress can never wipe.
+                // A confirm only proceeds when its prompt was already
+                // visible; from another pane the press just shows it.
                 SettingsKeyAction::ResetAll => {
                     if state.settings_reset_all_pending {
+                        if !prompt_visible {
+                            return Task::none();
+                        }
                         update(state, Message::SettingsResetAllConfirmed)
                     } else {
                         update(state, Message::SettingsResetAllRequested)
@@ -288,6 +309,9 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
                 }
                 SettingsKeyAction::Uninstall => {
                     if state.settings_uninstall_pending {
+                        if !prompt_visible {
+                            return Task::none();
+                        }
                         update(state, Message::SettingsUninstallConfirmed)
                     } else {
                         update(state, Message::SettingsUninstallRequested)

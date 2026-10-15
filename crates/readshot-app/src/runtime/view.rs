@@ -3203,6 +3203,21 @@ pub(crate) enum SettingsKeyAction {
     SelectPane(SettingsPane),
 }
 
+impl SettingsKeyAction {
+    /// The pane that shows the setting this shortcut changes. The
+    /// runtime switches there first so a change is never off-screen.
+    pub(crate) fn owning_pane(self) -> Option<SettingsPane> {
+        match self {
+            Self::ToggleLaunchAtLogin | Self::ResetAll | Self::Uninstall => Some(SettingsPane::App),
+            Self::ToggleDebugLogging => Some(SettingsPane::Diagnostics),
+            Self::CycleRetention => Some(SettingsPane::Capture),
+            Self::CycleEngine => Some(SettingsPane::TextRecognition),
+            Self::CycleFormat => Some(SettingsPane::Export),
+            Self::Close | Self::SelectPane(_) => None,
+        }
+    }
+}
+
 /// Map a key press in the settings window to a [`SettingsKeyAction`].
 /// Every shortcut is ⌘-prefixed (so plain typing in the filename field
 /// is never stolen) except Esc, which closes. The destructive commands
@@ -3755,6 +3770,8 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     }
     let footer = column![
         row![
+            key_chip("esc"),
+            text("/").size(TYPE_CAPTION).style(text_t3),
             key_chip("⌘W"),
             text("Close").size(TYPE_CAPTION).style(text_t3)
         ]

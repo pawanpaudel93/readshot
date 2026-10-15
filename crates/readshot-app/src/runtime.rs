@@ -6642,6 +6642,8 @@ mod tests {
             Some(SettingsKeyAction::SelectPane(SettingsPane::App))
         ));
         assert!(settings_key_action(&k("8"), Modifiers::COMMAND).is_none());
+        // A bare digit is typing (e.g. in the filename field), not a pane switch.
+        assert!(settings_key_action(&k("3"), Modifiers::empty()).is_none());
     }
 
     #[test]
@@ -6669,6 +6671,108 @@ mod tests {
             Message::SettingsPaneSelected(SettingsPane::Export),
         );
         assert_eq!(app.settings_pane, SettingsPane::Export);
+    }
+
+    /// Open-settings app plus a helper that presses `key` with ⌘ (and ⇧
+    /// when `shift`) in the settings window.
+    fn settings_app() -> (App, iced::window::Id) {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = iced::window::Id::unique();
+        app.settings_window_id = Some(id);
+        (app, id)
+    }
+
+    fn press_settings_key(app: &mut App, id: iced::window::Id, key: &str, shift: bool) {
+        let mut modifiers = command_modifiers();
+        if shift {
+            modifiers.insert(iced::keyboard::Modifiers::SHIFT);
+        }
+        let _ = update(
+            app,
+            Message::SettingsKeyPressed {
+                window: id,
+                key: iced::keyboard::Key::Character(key.into()),
+                modifiers,
+            },
+        );
+    }
+
+    #[test]
+    fn destructive_shortcut_from_another_pane_arms_and_shows_app() {
+        for (key, armed) in [
+            (
+                "r",
+                (|a: &App| a.settings_reset_all_pending) as fn(&App) -> bool,
+            ),
+            ("u", |a: &App| a.settings_uninstall_pending),
+        ] {
+            let (mut app, id) = settings_app();
+            app.settings_pane = SettingsPane::Permissions;
+            press_settings_key(&mut app, id, key, true);
+            assert_eq!(app.settings_pane, SettingsPane::App, "⇧⌘{key}");
+            assert!(armed(&app), "⇧⌘{key} arms");
+        }
+    }
+
+    #[test]
+    fn reset_confirm_from_another_pane_only_shows_the_prompt() {
+        let (mut app, id) = settings_app();
+        app.preferences.debug_logging = true;
+        app.settings_reset_all_pending = true;
+        app.settings_pane = SettingsPane::Capture;
+        press_settings_key(&mut app, id, "r", true);
+        assert_eq!(app.settings_pane, SettingsPane::App);
+        assert!(app.settings_reset_all_pending, "still armed, not confirmed");
+        assert!(app.preferences.debug_logging, "preferences not wiped");
+    }
+
+    #[test]
+    fn reset_confirm_on_app_pane_still_resets() {
+        let (mut app, id) = settings_app();
+        app.preferences.debug_logging = true;
+        app.settings_reset_all_pending = true;
+        app.settings_pane = SettingsPane::App;
+        press_settings_key(&mut app, id, "r", true);
+        assert!(!app.settings_reset_all_pending);
+        assert_eq!(
+            app.preferences.debug_logging,
+            Preferences::default().debug_logging
+        );
+    }
+
+    #[test]
+    fn uninstall_confirm_from_another_pane_only_shows_the_prompt() {
+        let (mut app, id) = settings_app();
+        app.settings_uninstall_pending = true;
+        app.settings_pane = SettingsPane::Files;
+        press_settings_key(&mut app, id, "u", true);
+        assert_eq!(app.settings_pane, SettingsPane::App);
+        assert!(app.settings_uninstall_pending, "still armed, not confirmed");
+    }
+
+    #[test]
+    fn setting_shortcut_switches_to_its_pane() {
+        let (mut app, id) = settings_app();
+        app.settings_pane = SettingsPane::Permissions;
+        let before = app.preferences.debug_logging;
+        press_settings_key(&mut app, id, "d", false);
+        assert_eq!(app.settings_pane, SettingsPane::Diagnostics);
+        assert_ne!(app.preferences.debug_logging, before);
+    }
+
+    #[test]
+    fn leaving_capture_pane_cancels_hotkey_recording() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.settings_pane = SettingsPane::Capture;
+        app.settings_recording_hotkey = true;
+        let _ = update(
+            &mut app,
+            Message::SettingsPaneSelected(SettingsPane::Capture),
+        );
+        assert!(app.settings_recording_hotkey, "staying on Capture keeps it");
+        let _ = update(&mut app, Message::SettingsPaneSelected(SettingsPane::Files));
+        assert!(!app.settings_recording_hotkey);
+        assert_eq!(app.settings_pane, SettingsPane::Files);
     }
 
     #[test]
