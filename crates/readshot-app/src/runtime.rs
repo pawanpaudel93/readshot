@@ -75,7 +75,6 @@ static CLI_INTERACTIVE_REQUEST: OnceLock<Mutex<Option<CliInteractiveRequest>>> =
 static LAUNCHED_AT_LOGIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 const READSHOT_THEME_NAME: &str = "readshot";
-const READSHOT_ACCENT: Color = Color::from_rgb8(20, 184, 166);
 
 pub(crate) const LIGHT_THEME_NAME: &str = "readshot-light";
 static READSHOT_DARK: OnceLock<Theme> = OnceLock::new();
@@ -143,13 +142,6 @@ pub(crate) fn register_window(state: &mut App, id: window::Id, kind: WindowKind)
     state.windows.register(id, kind);
     if follows_system_theme(kind) {
         state.theme_mode = os_theme_mode();
-    }
-}
-
-fn accent(alpha: f32) -> Color {
-    Color {
-        a: alpha,
-        ..READSHOT_ACCENT
     }
 }
 
@@ -2510,6 +2502,28 @@ mod tests {
             ThemeMode::Light
         );
         assert_eq!(theme_mode_for(None, ThemeMode::Dark), ThemeMode::Dark);
+    }
+
+    #[test]
+    fn inline_text_editor_styles_follow_the_palette() {
+        for (mode, p) in [(ThemeMode::Light, &LIGHT), (ThemeMode::Dark, &DARK)] {
+            let theme = readshot_theme_for(mode);
+            let chrome = editor_chrome_style(&theme);
+            assert_eq!(chrome.background, Some(p.float.into()), "{mode:?}");
+            assert_eq!(chrome.border.color, p.border, "{mode:?}");
+            let boxed = inline_text_box_style(&theme);
+            assert_eq!(boxed.background, Some(p.float.into()), "{mode:?}");
+            assert_eq!(boxed.border.color, p.acc, "{mode:?}");
+            let ed = inline_text_editor_style(&theme, iced::widget::text_editor::Status::Active);
+            assert_eq!(ed.value, p.t1, "{mode:?}");
+            assert_eq!(ed.placeholder, p.t3, "{mode:?}");
+            assert_eq!(ed.selection, p.acc_tint, "{mode:?}");
+            let disabled = disabled_text_input_style(&theme);
+            assert_eq!(disabled.background, Some(p.hover.into()), "{mode:?}");
+            assert_eq!(disabled.border.color, p.border, "{mode:?}");
+            let track = line_width_track_style(&theme);
+            assert_eq!(track.background, Some(p.hover.into()), "{mode:?}");
+        }
     }
 
     #[test]

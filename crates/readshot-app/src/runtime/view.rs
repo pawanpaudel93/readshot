@@ -2249,7 +2249,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 container(
                     text(content)
                         .size(TEXT_BODY)
-                        .style(text_t3)
+                        .style(text_t2)
                         .wrapping(iced::widget::text::Wrapping::Word),
                 )
                 .padding(8)
@@ -2268,6 +2268,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                     .key_binding(editor_text_key_binding)
                     .padding(8)
                     .size(TEXT_BODY)
+                    .style(inline_text_editor_style)
                     .into()
             } else {
                 // `text_edit_content` is always `Some` while a draft is
@@ -2275,6 +2276,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 container(
                     text(pending.content.clone())
                         .size(TEXT_BODY)
+                        .style(text_t1)
                         .wrapping(iced::widget::text::Wrapping::Word),
                 )
                 .padding(8)
@@ -2301,13 +2303,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             )
             .padding(6)
             .width(Length::Fixed(geom.width))
-            .style(|_theme: &Theme| {
-                let mut style = editor_chrome_style(_theme);
-                style.background = Some(Color::from_rgba(0.02, 0.025, 0.025, 0.88).into());
-                style.border.color = accent(0.75);
-                style.border.width = 1.5;
-                style
-            });
+            .style(inline_text_box_style);
             let inline_layer = container(column![
                 IcedSpace::new().height(Length::Fixed(geom.y)),
                 row![IcedSpace::new().width(Length::Fixed(geom.x)), editor]
@@ -3039,15 +3035,45 @@ fn frame_popover<'a>(
     .into()
 }
 
-pub(crate) fn editor_chrome_style(_theme: &Theme) -> container::Style {
+pub(crate) fn editor_chrome_style(theme: &Theme) -> container::Style {
+    let p = palette_for(theme);
     container::Style {
-        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.055).into()),
+        background: Some(p.float.into()),
         border: iced::Border {
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+            color: p.border,
             width: 1.0,
             radius: 8.0.into(),
         },
         ..Default::default()
+    }
+}
+
+/// The floating box around the inline text editor: editor chrome with
+/// a focus-colored (teal) border, readable over any image.
+pub(crate) fn inline_text_box_style(theme: &Theme) -> container::Style {
+    let mut style = editor_chrome_style(theme);
+    style.border.color = palette_for(theme).acc;
+    style.border.width = 1.5;
+    style
+}
+
+/// The inline `text_editor` itself: transparent over the box, palette
+/// text colors so it reads in light and dark.
+pub(crate) fn inline_text_editor_style(
+    theme: &Theme,
+    _status: iced::widget::text_editor::Status,
+) -> iced::widget::text_editor::Style {
+    let p = palette_for(theme);
+    iced::widget::text_editor::Style {
+        background: Color::TRANSPARENT.into(),
+        border: iced::Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 5.0.into(),
+        },
+        placeholder: p.t3,
+        value: p.t1,
+        selection: p.acc_tint,
     }
 }
 
@@ -3232,8 +3258,14 @@ pub(crate) fn passive_line_width_control_sized(
                 .width(Length::Fixed(fill_w))
                 .height(Length::Fixed(4.0)),
         )
-        .style(|_| container::Style {
-            background: Some(accent(0.45).into()),
+        .style(|theme: &Theme| container::Style {
+            background: Some(
+                Color {
+                    a: 0.45,
+                    ..palette_for(theme).acc
+                }
+                .into(),
+            ),
             border: iced::Border {
                 radius: 2.0.into(),
                 ..Default::default()
@@ -3244,15 +3276,20 @@ pub(crate) fn passive_line_width_control_sized(
     .width(Length::Fixed(control_width))
     .height(Length::Fixed(16.0))
     .padding([6, 0])
-    .style(|_| container::Style {
-        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.07).into()),
+    .style(line_width_track_style)
+    .into()
+}
+
+/// Track behind the busy line-width bar.
+pub(crate) fn line_width_track_style(theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(palette_for(theme).hover.into()),
         border: iced::Border {
             radius: 7.0.into(),
             ..Default::default()
         },
         ..Default::default()
-    })
-    .into()
+    }
 }
 
 pub(crate) fn line_width_fraction(width: f32) -> f32 {
@@ -3261,11 +3298,12 @@ pub(crate) fn line_width_fraction(width: f32) -> f32 {
     ((width.clamp(min, max) - min) / (max - min)).clamp(0.0, 1.0)
 }
 
-pub(crate) fn disabled_text_input_style(_theme: &Theme) -> container::Style {
+pub(crate) fn disabled_text_input_style(theme: &Theme) -> container::Style {
+    let p = palette_for(theme);
     container::Style {
-        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.045).into()),
+        background: Some(p.hover.into()),
         border: iced::Border {
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+            color: p.border,
             width: 1.0,
             radius: 5.0.into(),
         },
