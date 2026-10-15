@@ -1894,6 +1894,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::SettingsUninstallConfirmed
         | Message::SettingsUninstallFinished
         | Message::SettingsWindowReady(..)
+        | Message::SettingsPaneSelected(..)
         | Message::SettingsKeyPressed { .. }
         | Message::OpenCliToolsRequested
         | Message::CliToolsWindowReady(..)
@@ -2457,6 +2458,7 @@ fn ocr_request_for_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::SettingsPane;
     use crate::permissions::fake::FakePermissions;
     use crate::permissions::PermissionStatus;
     use async_trait::async_trait;
@@ -6625,5 +6627,73 @@ mod tests {
             settings_key_action(&Key::Character("l".into()), Modifiers::empty()),
             None
         );
+    }
+
+    #[test]
+    fn command_digits_select_settings_panes() {
+        use iced::keyboard::{Key, Modifiers};
+        let k = |c: &str| Key::Character(c.into());
+        assert!(matches!(
+            settings_key_action(&k("1"), Modifiers::COMMAND),
+            Some(SettingsKeyAction::SelectPane(SettingsPane::Permissions))
+        ));
+        assert!(matches!(
+            settings_key_action(&k("7"), Modifiers::COMMAND),
+            Some(SettingsKeyAction::SelectPane(SettingsPane::App))
+        ));
+        assert!(settings_key_action(&k("8"), Modifiers::COMMAND).is_none());
+    }
+
+    #[test]
+    fn pane_labels_follow_the_spec_order() {
+        let labels: Vec<_> = SettingsPane::ALL.iter().map(|p| p.label()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Permissions",
+                "Capture",
+                "Files",
+                "Text Recognition",
+                "Export",
+                "Diagnostics",
+                "App"
+            ]
+        );
+    }
+
+    #[test]
+    fn selecting_a_pane_is_remembered() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let _ = update(
+            &mut app,
+            Message::SettingsPaneSelected(SettingsPane::Export),
+        );
+        assert_eq!(app.settings_pane, SettingsPane::Export);
+    }
+
+    #[test]
+    fn command_digit_in_settings_window_switches_pane() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = iced::window::Id::unique();
+        app.settings_window_id = Some(id);
+        let _ = update(
+            &mut app,
+            Message::SettingsKeyPressed {
+                window: id,
+                key: iced::keyboard::Key::Character("3".into()),
+                modifiers: command_modifiers(),
+            },
+        );
+        assert_eq!(app.settings_pane, SettingsPane::Files);
+        // Another window's key press is ignored.
+        let _ = update(
+            &mut app,
+            Message::SettingsKeyPressed {
+                window: iced::window::Id::unique(),
+                key: iced::keyboard::Key::Character("7".into()),
+                modifiers: command_modifiers(),
+            },
+        );
+        assert_eq!(app.settings_pane, SettingsPane::Files);
     }
 }

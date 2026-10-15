@@ -10,7 +10,7 @@ use iced::{Alignment, Color, Element, Length, Theme};
 
 use readshot_ui::SettingsMessage;
 
-use crate::app::{App, Message};
+use crate::app::{App, Message, SettingsPane};
 use crate::editor::EditorFrameStyle;
 use crate::permissions::PermissionStatus;
 use crate::welcome::WelcomeState;
@@ -3199,6 +3199,8 @@ pub(crate) enum SettingsKeyAction {
     ResetAll,
     /// Arm "Uninstall Readshot"; a second press confirms.
     Uninstall,
+    /// ⌘1–⌘7: show that sidebar page.
+    SelectPane(SettingsPane),
 }
 
 /// Map a key press in the settings window to a [`SettingsKeyAction`].
@@ -3240,6 +3242,9 @@ pub(crate) fn settings_key_action(
         "r" => Some(SettingsKeyAction::CycleRetention),
         "e" => Some(SettingsKeyAction::CycleEngine),
         "f" => Some(SettingsKeyAction::CycleFormat),
+        d if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {
+            SettingsPane::from_digit(d.as_bytes()[0] - b'0').map(SettingsKeyAction::SelectPane)
+        }
         _ => None,
     }
 }

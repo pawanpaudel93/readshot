@@ -217,6 +217,10 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             state.settings_window_id = Some(id);
             window::gain_focus(id)
         }
+        Message::SettingsPaneSelected(pane) => {
+            state.settings_pane = pane;
+            Task::none()
+        }
         Message::SettingsKeyPressed {
             window,
             key,
@@ -278,6 +282,9 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
                     } else {
                         update(state, Message::SettingsResetAllRequested)
                     }
+                }
+                SettingsKeyAction::SelectPane(pane) => {
+                    update(state, Message::SettingsPaneSelected(pane))
                 }
                 SettingsKeyAction::Uninstall => {
                     if state.settings_uninstall_pending {

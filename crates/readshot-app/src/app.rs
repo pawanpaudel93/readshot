@@ -126,6 +126,64 @@ impl Windows {
     }
 }
 
+/// One page of the Settings window's sidebar. ⌘1–⌘7 select them in
+/// this order. `pub` (not `pub(crate)`) because the public [`Message`]
+/// carries it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SettingsPane {
+    #[default]
+    Permissions,
+    Capture,
+    Files,
+    TextRecognition,
+    Export,
+    Diagnostics,
+    App,
+}
+
+#[allow(dead_code)] // label/icon feed the sidebar view (next commit)
+impl SettingsPane {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Permissions,
+        Self::Capture,
+        Self::Files,
+        Self::TextRecognition,
+        Self::Export,
+        Self::Diagnostics,
+        Self::App,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Permissions => "Permissions",
+            Self::Capture => "Capture",
+            Self::Files => "Files",
+            Self::TextRecognition => "Text Recognition",
+            Self::Export => "Export",
+            Self::Diagnostics => "Diagnostics",
+            Self::App => "App",
+        }
+    }
+
+    pub(crate) fn icon(self) -> crate::icons::AppIcon {
+        use crate::icons::AppIcon as I;
+        match self {
+            Self::Permissions => I::Shield,
+            Self::Capture => I::Crosshair,
+            Self::Files => I::Folder,
+            Self::TextRecognition => I::ScanText,
+            Self::Export => I::Image,
+            Self::Diagnostics => I::Terminal,
+            Self::App => I::Power,
+        }
+    }
+
+    /// `1` → the first pane … `7` → the last; anything else → `None`.
+    pub(crate) fn from_digit(d: u8) -> Option<Self> {
+        Self::ALL.get(d.checked_sub(1)? as usize).copied()
+    }
+}
+
 /// Top-level application message — every event from every UI surface
 /// or background task funnels through this enum.
 #[derive(Clone, Debug)]
@@ -554,6 +612,8 @@ pub enum Message {
     /// First `view` call after the settings window is opened. Records
     /// the `window::Id` so close + focus paths work.
     SettingsWindowReady(iced::window::Id),
+    /// User picked a page in the Settings sidebar (click or ⌘1–⌘7).
+    SettingsPaneSelected(SettingsPane),
     /// Keyboard event observed while the settings window is open. iced
     /// 0.14 buttons / togglers / pick-lists can't take focus, so the
     /// runtime taps keys globally and validates `window` against
@@ -765,6 +825,9 @@ pub struct App {
     /// Whether the armed uninstall's "Also delete history and
     /// preferences" checkbox is ticked.
     pub settings_uninstall_purge: bool,
+    /// Settings sidebar page on screen. Kept across window reopenings
+    /// (not persisted across launches).
+    pub settings_pane: SettingsPane,
     /// True after the user clicks "Clear All" in the history browser
     /// and before they confirm or cancel. Drives the two-stage
     /// destructive prompt that guards against accidentally nuking
@@ -1034,6 +1097,7 @@ impl App {
             settings_reset_all_pending: false,
             settings_uninstall_pending: false,
             settings_uninstall_purge: false,
+            settings_pane: SettingsPane::default(),
             history_clear_all_pending: false,
             cli_tools_window_id: None,
             cli_tools_status: None,
