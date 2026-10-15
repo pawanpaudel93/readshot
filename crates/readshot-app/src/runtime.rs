@@ -2802,8 +2802,8 @@ mod tests {
         // body line + padding) ends below the image's bottom inset.
         const HINT_LINE: f32 = 18.0;
         const TOAST_HEIGHT: f32 = 34.0;
-        assert!(EDITOR_HINT_TOP + HINT_LINE <= EDITOR_STAGE_PAD_TOP);
-        assert!(EDITOR_TOAST_BOTTOM + TOAST_HEIGHT <= EDITOR_STAGE_PAD_BOTTOM);
+        const { assert!(EDITOR_HINT_TOP + HINT_LINE <= EDITOR_STAGE_PAD_TOP) };
+        const { assert!(EDITOR_TOAST_BOTTOM + TOAST_HEIGHT <= EDITOR_STAGE_PAD_BOTTOM) };
         assert_eq!(EDITOR_STAGE_PAD_TOP, 138.0);
     }
 
