@@ -410,7 +410,7 @@ pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
             .on_press(Message::ScrollCaptureStopRequested)
             .into()
     };
-    // Cancel button flips to a Danger-styled "Discard N frames?" the
+    // Cancel button flips to a Danger-styled "Discard N Frames" the
     // moment the user clicks it once on a session with content, so
     // the second click reads as an explicit destructive confirm
     // rather than a benign close.
@@ -420,7 +420,7 @@ pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     } else if cancel_armed {
         button(
             text(format!(
-                "Discard {} frame{}?",
+                "Discard {} Frame{}",
                 frame_count,
                 if frame_count == 1 { "" } else { "s" }
             ))
@@ -730,7 +730,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
             let empty = if total == 0 {
                 empty_state_card(
                     "No captures yet",
-                    "Take a screenshot and it will appear here with its image, OCR text, and quick actions.",
+                    "Take a capture and it appears here with its image, OCR text, and quick actions.",
                     Some(("Capture", Message::OpenOverlayRequested)),
                 )
             } else {
@@ -799,12 +799,16 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                 })
                 .into()
             } else {
-                container(text("Missing"))
-                    .width(Length::Fixed(HISTORY_THUMB_WIDTH))
-                    .height(Length::Fill)
-                    .center_x(Length::Fixed(HISTORY_THUMB_WIDTH))
-                    .center_y(Length::Fill)
-                    .into()
+                container(
+                    text("Image file missing")
+                        .size(TEXT_CAPTION)
+                        .color(TEXT_SECONDARY),
+                )
+                .width(Length::Fixed(HISTORY_THUMB_WIDTH))
+                .height(Length::Fill)
+                .center_x(Length::Fixed(HISTORY_THUMB_WIDTH))
+                .center_y(Length::Fill)
+                .into()
             };
 
             let meta = column![
@@ -858,14 +862,14 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                     .interaction(iced::mouse::Interaction::Pointer),
             );
         }
-        // "Show more" pager — appears whenever matches exceed the
+        // "Show More" pager — appears whenever matches exceed the
         // rendered page. Bounded incremental loading keeps open time
         // and memory flat for very large histories.
         let remaining = visible.len().saturating_sub(page_limit);
         if remaining > 0 {
             col = col.push(
                 container(
-                    button(text(format!("Show more ({remaining} more)")).size(TEXT_CAPTION))
+                    button(text(format!("Show More ({remaining} more)")).size(TEXT_CAPTION))
                         .padding([8, 14])
                         .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                         .on_press(Message::HistoryShowMore),
@@ -972,11 +976,11 @@ pub(crate) fn history_selected_panel<'a>(
         .align_y(Alignment::Center);
         // Two-stage single delete, mirroring "Clear All": the idle
         // button just arms the prompt; while armed it splits into a
-        // Danger "Confirm delete?" and a Secondary "Cancel" so a
+        // Danger "Delete Capture" and a Secondary "Cancel" so a
         // capture can't vanish on a single stray click or keypress.
         let delete_control: Element<'_, Message> = if delete_pending {
             row![
-                button(text("Confirm delete?").size(TEXT_CAPTION))
+                button(text("Delete Capture").size(TEXT_CAPTION))
                     .padding([6, 9])
                     .style(|t, s| action_button_style(t, s, ActionKind::Danger))
                     .on_press(Message::HistoryDeleteConfirmed(id)),
@@ -2058,7 +2062,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 Message::EditorDiscardRequested,
                 ActionKind::DangerQuiet,
                 busy,
-                "Close this editor. Dirty edits ask for a second click.  ⌘W",
+                "Close this editor. Unsaved edits ask for a second click.  ⌘W",
             );
             let pin = editor_action_button(
                 "Pin",
@@ -3565,7 +3569,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             },
         ),
         make_btn(
-            "Scroll Capture",
+            "Scrolling Capture",
             "Scrolling capture — capture this region repeatedly as you scroll, then stitch into one tall image",
             Message::OverlaySelected {
                 display_id: display_id.clone(),
@@ -4411,7 +4415,7 @@ pub(crate) fn permission_settings_summary(
     match status {
         PermissionStatus::Granted => (
             "Screen Recording is allowed",
-            "Readshot can open the capture overlay and recognise text from screenshots.",
+            "Readshot can open the capture overlay and recognize text from screenshots.",
         ),
         PermissionStatus::Denied => (
             "Screen Recording needs attention",

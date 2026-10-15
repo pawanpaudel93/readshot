@@ -123,6 +123,19 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   `Cmd+S` save, `Cmd+P` pin, `Cmd+Z` / `Cmd+Shift+Z` undo and redo.
 - **History window:** `↑` / `↓` move between captures, `Enter` opens the
   selected one, `Delete` removes it, `Esc` clears the search.
+- **Settings window:** `Esc` / `Cmd+W` close; `Cmd+L` toggles launch-at-login
+  and `Cmd+D` toggles debug logging; `Cmd+R`, `Cmd+E`, `Cmd+F` cycle retention,
+  OCR engine, and format; `Cmd+Shift+R` resets and `Cmd+Shift+U` uninstalls
+  (press twice to confirm).
+- **Scrolling-capture HUD:** `Esc` stops and stitches the session;
+  `Shift+Esc` or `Cmd+.` discards it (press twice to confirm).
+- **Pinned windows:** `Esc` / `Cmd+W` close, `L` lock, `-` / `+` adjust opacity,
+  arrow keys move the window (hold `Shift` for 1-pixel steps).
+- **Welcome screen:** `Enter` triggers the primary action (Allow / Open System
+  Settings / Capture).
+
+Readshot also respects the system Reduce Motion setting, dropping non-essential
+animation when it is enabled.
 
 ## Development
 

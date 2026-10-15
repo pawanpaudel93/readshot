@@ -408,7 +408,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             commit_pending_editor_text(ed, &state.coordinator);
             cancel_editor_previews(ed);
             ed.busy = true;
-            ed.set_status("Recognising text…");
+            ed.set_status("Recognizing text…");
             let img = ed.model.flatten();
             let coord = state.coordinator.clone();
             let prefs = state.preferences.clone();
@@ -420,7 +420,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if let Some(ed) = state.editor.as_mut() {
                 ed.busy = false;
                 ed.set_status(match result {
-                    Ok(text) if text.is_empty() => "No text recognised.".into(),
+                    Ok(text) if text.is_empty() => "No text recognized.".into(),
                     Ok(text) => format!(
                         "Copied {} character{} of text.",
                         text.chars().count(),

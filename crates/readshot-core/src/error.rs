@@ -67,9 +67,9 @@ pub enum CaptureError {
 #[derive(Debug, Error)]
 pub enum OCRError {
     /// The engine ran successfully but found no recognisable text. Editor
-    /// surfaces this as a "No text recognised" toast; the MCP server
+    /// surfaces this as a "No text recognized" toast; the MCP server
     /// converts it to `text: ""` rather than a tool error.
-    #[error("no text recognised in the input image")]
+    #[error("no text recognized in the input image")]
     NoText,
 
     /// Any other failure from the underlying OCR engine. Maps to CLI exit

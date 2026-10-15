@@ -964,7 +964,7 @@ fn tool_descriptors() -> Value {
         },
         {
             "name": "capture_text",
-            "description": "Capture a region and return the OCR-recognised text.",
+            "description": "Capture a region and return the OCR-recognized text.",
             "inputSchema": capture_text_args.clone()
         },
         {

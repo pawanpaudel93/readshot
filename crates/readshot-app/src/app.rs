@@ -27,7 +27,7 @@ use crate::welcome::WelcomeState;
 
 /// Number of matching history rows the browser renders per page. The
 /// list widget tree is built eagerly, so this bounds open time and
-/// memory for large (Unlimited-retention) histories. "Show more"
+/// memory for large (Unlimited-retention) histories. "Show More"
 /// grows the visible window in these increments.
 pub const HISTORY_PAGE_SIZE: usize = 50;
 
@@ -359,7 +359,7 @@ pub enum Message {
     /// Async PNG-decode finished for the row that asked to pin.
     HistoryPinReady(Result<image::RgbaImage, String>),
     /// Per-row "Delete" — first press arms the destructive prompt for
-    /// that capture (the row's button flips to "Confirm delete?"). A
+    /// that capture (the row's button flips to "Delete Capture"). A
     /// second press for the same id confirms; selecting another row,
     /// changing the search, or pressing Escape cancels.
     HistoryDelete(readshot_core::Uuid),
@@ -372,7 +372,7 @@ pub enum Message {
     /// runs). Refreshes the open browser so the new row appears right
     /// away instead of only after OCR completes.
     HistoryRecordSaved,
-    /// User clicked "Show more" in the history browser — reveal the
+    /// User clicked "Show More" in the history browser — reveal the
     /// next page of matching rows.
     HistoryShowMore,
     /// Async region-capture finished — `Ok(image)` opens an editor
@@ -710,14 +710,14 @@ pub struct App {
     pub history_selected_id: Option<readshot_core::Uuid>,
     /// Capture whose single-row delete is armed (awaiting a confirm
     /// press). `Some(id)` flips that row's Delete button to a
-    /// two-stage "Confirm delete? / Cancel" prompt, mirroring the
+    /// two-stage "Delete Capture / Cancel" prompt, mirroring the
     /// "Clear All" guard. Cleared on confirm, cancel, Escape, a search
     /// change, or moving the selection.
     pub history_delete_pending: Option<readshot_core::Uuid>,
     /// How many matching rows the browser renders at once. The list
     /// is built eagerly (iced 0.14 has no virtual list), so an
     /// Unlimited-retention history would otherwise build thousands of
-    /// image widgets on open. Capped to a page; "Show more" grows it,
+    /// image widgets on open. Capped to a page; "Show More" grows it,
     /// and a search change resets it. The search filter itself still
     /// scans every record.
     pub history_page_limit: usize,

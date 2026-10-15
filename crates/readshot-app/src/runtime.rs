@@ -1008,7 +1008,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     // session instead of routing to the editor. The
                     // quick-action toolbar still shows so the user
                     // can change their mind, but they no longer have
-                    // to hunt for the Scroll Capture button — the default
+                    // to hunt for the Scrolling Capture button — the default
                     // matches the menu entry they clicked.
                     state.pending_intent = Some(crate::app::CaptureIntent::ScrollCapture);
                     update(state, Message::OpenOverlayRequested)
@@ -1679,7 +1679,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::OverlayCopyTextDone(result) => {
             state.last_capture_status = Some(match result {
-                Ok(text) if text.is_empty() => "No text recognised.".into(),
+                Ok(text) if text.is_empty() => "No text recognized.".into(),
                 Ok(text) => {
                     let n = text.chars().count();
                     format!(

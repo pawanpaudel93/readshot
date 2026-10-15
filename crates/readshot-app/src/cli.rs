@@ -214,7 +214,7 @@ pub enum Command {
         output: PathBuf,
     },
 
-    /// Capture a region, run OCR, and write recognised text to stdout.
+    /// Capture a region, run OCR, and write recognized text to stdout.
     CaptureText {
         /// Target display id (as printed by `list-displays`). Defaults
         /// to the first reported display.
@@ -247,7 +247,7 @@ pub enum Command {
         #[arg(long, default_value_t = 0.0, value_parser = parse_delay)]
         delay: f64,
 
-        /// Copy recognised text to the clipboard instead of writing output.
+        /// Copy recognized text to the clipboard instead of writing output.
         #[arg(long)]
         clipboard: bool,
 
@@ -268,7 +268,7 @@ pub enum Command {
         language_correction: bool,
     },
 
-    /// Recognise text in an existing image.
+    /// Recognize text in an existing image.
     Ocr {
         /// Input image path. Use `-` for stdin.
         #[arg(long, short = 'i')]
@@ -278,7 +278,7 @@ pub enum Command {
         #[arg(long, short = 'o', default_value = "-", conflicts_with = "clipboard")]
         output: PathBuf,
 
-        /// Copy recognised text to the clipboard instead of writing output.
+        /// Copy recognized text to the clipboard instead of writing output.
         #[arg(long)]
         clipboard: bool,
 
@@ -295,7 +295,7 @@ pub enum Command {
         language_correction: bool,
     },
 
-    /// Capture a region and recognise text in one shot.
+    /// Capture a region and recognize text in one shot.
     CaptureAndOcr {
         /// Target display id (as printed by `list-displays`). Defaults
         /// to the first reported display.
@@ -1974,7 +1974,7 @@ mod tests {
             .to_string();
 
         assert!(help.contains("Capture a region, run OCR"));
-        assert!(help.contains("write recognised text to stdout"));
+        assert!(help.contains("write recognized text to stdout"));
     }
 
     #[test]

@@ -193,14 +193,14 @@ pub const STATUS_AUTO_DISMISS: std::time::Duration = std::time::Duration::from_s
 
 /// A status string is "in progress" when it ends with `…` or starts
 /// with one of the known in-flight prefixes ("Saving", "Copying",
-/// "Recognising", "Choose"). Kept as a free function so the view can
+/// "Recognizing", "Choose"). Kept as a free function so the view can
 /// classify a toast string identically to [`EditorSession`] without
 /// re-implementing (and drifting from) the rule.
 pub fn status_str_is_in_progress(s: &str) -> bool {
     s.ends_with('…')
         || s.starts_with("Saving")
         || s.starts_with("Copying")
-        || s.starts_with("Recognising")
+        || s.starts_with("Recognizing")
         || s.starts_with("Choose")
 }
 
@@ -616,7 +616,7 @@ mod tests {
             "Saving…",
             "Choose a save location…",
             "Copying…",
-            "Recognising text…",
+            "Recognizing text…",
         ] {
             assert!(status_str_is_in_progress(s), "{s:?} should be in-progress");
             assert!(!status_str_is_error(s), "{s:?} should not be an error");
