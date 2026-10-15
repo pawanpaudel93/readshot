@@ -1438,11 +1438,16 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     );
     let tool_bar = tool_bar
         .push(vsep())
-        .push(tooltip_with_key(color_btn, "Color", None, Position::Bottom))
+        .push(tooltip_with_key(
+            color_btn,
+            "Color",
+            Some(", ."),
+            Position::Bottom,
+        ))
         .push(tooltip_with_key(
             width_btn,
             "Line width",
-            None,
+            Some("[ ]"),
             Position::Bottom,
         ));
     let tool_layer = container(container(tool_bar).padding(4).style(floating_bar_style))
@@ -1716,94 +1721,33 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
 
     // --- Title row: capture size + zoom ---
     let (img_w, img_h) = ed.effective_image_size();
-    // The stage records the scale it rendered at; in Fit mode that is the
-    // only place the fit scale is known (it depends on the stage size).
-    let shown_scale = zoom
-        .explicit_scale()
-        .unwrap_or_else(|| ed.render_scale.get());
-    let can_zoom_out = !busy && zoom.can_zoom_out_from_display_scale(shown_scale);
-    let can_zoom_in = !busy && zoom.can_zoom_in_from_display_scale(shown_scale);
-    let actual_on = zoom.is_actual_size_for_display_scale(display_scale);
-    let fit_on = zoom.is_fit();
-    let zoom_segment = row![
-        icon_button(
-            AppIcon::Minus,
-            icon_color(can_zoom_out),
-            "Zoom out",
-            Some("⌘−"),
-            can_zoom_out.then_some(Message::EditorZoomOutFromDisplayScale(shown_scale)),
-            false,
-            ICON_BTN_SM,
-            Position::Bottom,
-        ),
-        text(format!(
-            "{:.0}%",
-            shown_scale * display_scale.max(f32::EPSILON) * 100.0
-        ))
-        .font(mono)
-        .size(TYPE_CAPTION)
-        .style(text_t2)
-        .width(Length::Fixed(48.0))
-        .align_x(iced::alignment::Horizontal::Center),
-        icon_button(
-            AppIcon::Plus,
-            icon_color(can_zoom_in),
-            "Zoom in",
-            Some("⌘="),
-            can_zoom_in.then_some(Message::EditorZoomInFromDisplayScale(shown_scale)),
-            false,
-            ICON_BTN_SM,
-            Position::Bottom,
-        ),
-        vsep(),
-        tooltip_with_key(
-            bar_button(
-                text("1:1").size(ButtonSize::Xs.text_size()).into(),
-                if actual_on {
-                    ButtonKind::Secondary
-                } else {
-                    ButtonKind::Ghost
-                },
-                ButtonSize::Xs,
-                (!busy).then_some(Message::EditorZoomActual),
-            ),
-            "Actual pixels",
-            Some("⌘0"),
-            Position::Bottom,
-        ),
-        tooltip_with_key(
-            bar_button(
-                text("Fit").size(ButtonSize::Xs.text_size()).into(),
-                if fit_on {
-                    ButtonKind::Secondary
-                } else {
-                    ButtonKind::Ghost
-                },
-                ButtonSize::Xs,
-                (!busy).then_some(Message::EditorZoomFit),
-            ),
-            "Fit to view",
-            None,
-            Position::Bottom,
-        ),
-    ]
-    .spacing(2)
-    .align_y(Alignment::Center);
-    let title_content = row![
-        text("Capture").size(TYPE_BODY).style(text_t2),
-        text(format!("{img_w} × {img_h} px"))
-            .font(mono)
-            .size(TYPE_CAPTION)
-            .style(text_t3),
-        IcedSpace::new().width(Length::Fill),
-        zoom_segment,
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center)
-    .padding(iced::Padding {
-        left: TITLEBAR_INSET_LEFT,
-        right: 12.0,
-        ..iced::Padding::ZERO
+    // In Fit mode the scale is only known once the stage has laid out
+    // (it depends on the stage size), and iced re-runs layout — not
+    // `view` — on a window resize. So the zoom readout is built inside a
+    // `responsive`, which runs during layout after the stage (the stack's
+    // first layer) has recorded its scale.
+    let live_scale = ed.render_scale.clone();
+    let title_content = responsive(move |_size| {
+        let shown_scale = zoom.explicit_scale().unwrap_or_else(|| live_scale.get());
+        row![
+            text("Capture").size(TYPE_BODY).style(text_t2),
+            text(format!("{img_w} × {img_h} px"))
+                .font(mono)
+                .size(TYPE_CAPTION)
+                .style(text_t3),
+            IcedSpace::new().width(Length::Fill),
+            editor_zoom_segment(shown_scale, zoom, display_scale, busy, p, mono),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center)
+        .padding(iced::Padding {
+            left: TITLEBAR_INSET_LEFT,
+            right: 12.0,
+            ..iced::Padding::ZERO
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(TITLEBAR_HEIGHT))
+        .into()
     })
     .width(Length::Fill)
     .height(Length::Fixed(TITLEBAR_HEIGHT));
@@ -2060,10 +2004,12 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         .into()
 }
 
-/// Stage insets: title row 44 + tool bar 48 + gap 12 on top; the
-/// action bar's band at the bottom; breathing room at the sides.
-pub(crate) const EDITOR_STAGE_PAD_TOP: f32 = 104.0;
-pub(crate) const EDITOR_STAGE_PAD_BOTTOM: f32 = 80.0;
+/// Stage insets. Top: title row, tool bar and the hint line above the
+/// image (design-editor.html puts the image top at 138). Bottom: the
+/// action bar plus the status toast above it, so neither covers the
+/// image edge. Sides: breathing room.
+pub(crate) const EDITOR_STAGE_PAD_TOP: f32 = 138.0;
+pub(crate) const EDITOR_STAGE_PAD_BOTTOM: f32 = 104.0;
 pub(crate) const EDITOR_STAGE_PAD_SIDE: f32 = 46.0;
 /// Tool hint sits under the tool bar.
 pub(crate) const EDITOR_HINT_TOP: f32 = 104.0;
@@ -2073,6 +2019,96 @@ pub(crate) const EDITOR_POPOVER_TOP: f32 = 100.0;
 pub(crate) const EDITOR_ACTION_BAR_BOTTOM: f32 = 20.0;
 /// Toasts and the frame popover sit just above the action bar.
 pub(crate) const EDITOR_TOAST_BOTTOM: f32 = 66.0;
+
+/// Title-row zoom controls: − % + | 1:1 Fit. `shown_scale` is the scale
+/// the stage is displaying (explicit zoom, or the live fit scale).
+fn editor_zoom_segment(
+    shown_scale: f32,
+    zoom: crate::editor::EditorZoom,
+    display_scale: f32,
+    busy: bool,
+    p: &'static Palette,
+    mono: iced::Font,
+) -> Element<'static, Message> {
+    use crate::icons::AppIcon;
+    use iced::widget::tooltip::Position;
+    let icon_color = |enabled: bool| {
+        if enabled {
+            p.t2
+        } else {
+            Color {
+                a: p.t2.a * 0.45,
+                ..p.t2
+            }
+        }
+    };
+    let can_zoom_out = !busy && zoom.can_zoom_out_from_display_scale(shown_scale);
+    let can_zoom_in = !busy && zoom.can_zoom_in_from_display_scale(shown_scale);
+    let selected_kind = |on: bool| {
+        if on {
+            ButtonKind::Secondary
+        } else {
+            ButtonKind::Ghost
+        }
+    };
+    row![
+        icon_button(
+            AppIcon::Minus,
+            icon_color(can_zoom_out),
+            "Zoom out",
+            Some("⌘−"),
+            can_zoom_out.then_some(Message::EditorZoomOut),
+            false,
+            ICON_BTN_SM,
+            Position::Bottom,
+        ),
+        text(format!(
+            "{:.0}%",
+            shown_scale * display_scale.max(f32::EPSILON) * 100.0
+        ))
+        .font(mono)
+        .size(TYPE_CAPTION)
+        .style(text_t2)
+        .width(Length::Fixed(48.0))
+        .align_x(iced::alignment::Horizontal::Center),
+        icon_button(
+            AppIcon::Plus,
+            icon_color(can_zoom_in),
+            "Zoom in",
+            Some("⌘="),
+            can_zoom_in.then_some(Message::EditorZoomIn),
+            false,
+            ICON_BTN_SM,
+            Position::Bottom,
+        ),
+        vsep(),
+        tooltip_with_key(
+            bar_button(
+                text("1:1").size(ButtonSize::Xs.text_size()).into(),
+                selected_kind(zoom.is_actual_size_for_display_scale(display_scale)),
+                ButtonSize::Xs,
+                (!busy).then_some(Message::EditorZoomActual),
+            ),
+            "Actual pixels",
+            Some("⌘0"),
+            Position::Bottom,
+        ),
+        tooltip_with_key(
+            bar_button(
+                text("Fit").size(ButtonSize::Xs.text_size()).into(),
+                selected_kind(zoom.is_fit()),
+                ButtonSize::Xs,
+                (!busy).then_some(Message::EditorZoomFit),
+            ),
+            "Fit to view",
+            None,
+            Position::Bottom,
+        ),
+    ]
+    .spacing(2)
+    .align_y(Alignment::Center)
+    .into()
+}
 
 fn swatch_color(c: readshot_core::Rgba) -> Color {
     Color::from_rgba(c.r, c.g, c.b, c.a)
@@ -2628,7 +2664,9 @@ pub(crate) fn editor_key_message(
         (Key::Named(Named::Escape), _, _) if status_ignored => {
             return Some(Message::EditorDiscardRequested);
         }
-        (Key::Named(Named::Escape), _, _) => return Some(Message::EditorTextCancel),
+        // A widget already handled this Escape (the inline text editor's
+        // key binding emits its own EditorTextCancel); don't repeat it.
+        (Key::Named(Named::Escape), _, _) => return None,
         _ => {}
     }
 

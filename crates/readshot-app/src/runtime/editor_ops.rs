@@ -183,6 +183,23 @@ pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
     }
 }
 
+/// Close the open popover, if any; returns whether one was open. A
+/// line-width slider preview still live in the Width popover is
+/// cancelled (Esc semantics), so its baseline can't linger and revert
+/// the width later.
+pub(crate) fn close_editor_popover(ed: &mut crate::editor::EditorSession) -> bool {
+    let Some(was) = ed.popover.take() else {
+        return false;
+    };
+    if was == crate::editor::EditorPopover::Width {
+        if let Some(baseline) = ed.width_drag_baseline.take() {
+            ed.model.cancel_preview_from_baseline(baseline);
+            ed.refresh_image();
+        }
+    }
+    true
+}
+
 pub(crate) fn sync_editor_history(
     ed: &mut crate::editor::EditorSession,
     coord: &CaptureCoordinator,
@@ -228,14 +245,21 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if editor_window != Some(window) {
                 return Task::none();
             }
-            // An open popover owns Escape: close it before Esc can cancel a
-            // drag or fall through to the discard shortcut.
-            if matches!(
-                key,
-                iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
-            ) {
+            // An open popover owns an unhandled Escape: close it before Esc
+            // can cancel a drag or fall through to the discard shortcut.
+            // When a widget already handled Escape (`!status_ignored`: the
+            // inline text editor, whose key binding emits its own
+            // `EditorTextCancel`), that message closes the popover instead
+            // — handling it here too would let one press close the popover
+            // *and* cancel the draft.
+            if status_ignored
+                && matches!(
+                    key,
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+                )
+            {
                 if let Some(ed) = state.editor.as_mut() {
-                    if ed.popover.take().is_some() {
+                    if close_editor_popover(ed) {
                         return Task::none();
                     }
                 }
@@ -295,17 +319,18 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         }
         Message::EditorPopoverToggled(which) => {
             if let Some(ed) = state.editor.as_mut() {
-                ed.popover = if ed.popover == Some(which) {
-                    None
+                if ed.popover == Some(which) {
+                    close_editor_popover(ed);
                 } else {
-                    Some(which)
-                };
+                    close_editor_popover(ed);
+                    ed.popover = Some(which);
+                }
             }
             Task::none()
         }
         Message::EditorPopoverClosed => {
             if let Some(ed) = state.editor.as_mut() {
-                ed.popover = None;
+                close_editor_popover(ed);
             }
             Task::none()
         }
@@ -840,7 +865,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         }
         Message::EditorTextCancel => {
             if let Some(ed) = state.editor.as_mut() {
-                if ed.popover.take().is_some() {
+                if close_editor_popover(ed) {
                     return Task::none();
                 }
                 if ed.busy {
@@ -890,20 +915,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if ed.busy {
                     return Task::none();
                 }
-                // Keyboard zoom (⌘+) must use the same display-scale-
-                // aware ladder as the toolbar "+" button
-                // (`EditorZoomInFromDisplayScale`); the hardcoded 1.0
-                // path made ⌘+/⌘- diverge from the buttons on HiDPI.
-                ed.zoom = ed.zoom.zoom_in_from_display_scale(ed.display_scale);
-            }
-            Task::none()
-        }
-        Message::EditorZoomInFromDisplayScale(scale) => {
-            if let Some(ed) = state.editor.as_mut() {
-                if ed.busy {
-                    return Task::none();
-                }
-                ed.zoom = ed.zoom.zoom_in_from_display_scale(scale);
+                // Keyboard (⌘=) and the title-row "+" share this path. In
+                // Fit mode the step starts from the scale the stage last
+                // rendered at, resolved now: a view built before a window
+                // resize would carry a stale scale.
+                ed.zoom = ed.zoom.zoom_in_from_display_scale(ed.render_scale.get());
             }
             Task::none()
         }
@@ -912,18 +928,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if ed.busy {
                     return Task::none();
                 }
-                // See `EditorZoomIn` — mirror the toolbar "-" button's
-                // display-scale-aware ladder for ⌘-.
-                ed.zoom = ed.zoom.zoom_out_from_display_scale(ed.display_scale);
-            }
-            Task::none()
-        }
-        Message::EditorZoomOutFromDisplayScale(scale) => {
-            if let Some(ed) = state.editor.as_mut() {
-                if ed.busy {
-                    return Task::none();
-                }
-                ed.zoom = ed.zoom.zoom_out_from_display_scale(scale);
+                // See `EditorZoomIn`.
+                ed.zoom = ed.zoom.zoom_out_from_display_scale(ed.render_scale.get());
             }
             Task::none()
         }

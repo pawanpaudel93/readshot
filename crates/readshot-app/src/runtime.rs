@@ -1662,9 +1662,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorWidthBump(..)
         | Message::EditorColorCycle(..)
         | Message::EditorZoomIn
-        | Message::EditorZoomInFromDisplayScale(..)
         | Message::EditorZoomOut
-        | Message::EditorZoomOutFromDisplayScale(..)
         | Message::EditorZoomActual
         | Message::EditorZoomFit
         | Message::EditorPinRequested
@@ -2644,6 +2642,132 @@ mod tests {
         assert_eq!(line_width_label(3.0), "3");
         assert_eq!(line_width_label(2.5), "2.5");
         assert_eq!(line_width_label(0.5), "0.5");
+    }
+
+    fn editor_with_focused_draft_and_color_popover(app: &mut App) -> iced::window::Id {
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        ed.begin_text_edit(crate::editor::PendingText {
+            origin: PointLike::new(10.0, 10.0),
+            content: "hello".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+        let _ = update(
+            app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        id
+    }
+
+    fn focused_escape(id: iced::window::Id) -> Message {
+        Message::EditorKeyPressed {
+            window: id,
+            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            modifiers: iced::keyboard::Modifiers::empty(),
+            status_ignored: false,
+        }
+    }
+
+    #[test]
+    fn one_esc_in_the_text_editor_closes_the_popover_but_keeps_the_draft() {
+        // The focused text_editor's key binding emits EditorTextCancel and
+        // the keyboard subscription also reports the (handled) Esc.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = editor_with_focused_draft_and_color_popover(&mut app);
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let _ = update(&mut app, focused_escape(id));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.popover, None);
+        assert!(ed.pending_text.is_some());
+
+        // Same press, the two messages in the other order.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = editor_with_focused_draft_and_color_popover(&mut app);
+        let _ = update(&mut app, focused_escape(id));
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.popover, None);
+        assert!(ed.pending_text.is_some());
+
+        // With no popover open, the next Esc cancels the draft once.
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let _ = update(&mut app, focused_escape(id));
+        assert!(app.editor.as_ref().unwrap().pending_text.is_none());
+    }
+
+    #[test]
+    fn esc_closing_the_width_popover_cancels_a_live_width_preview() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        let undo_depth = ed.model.undo_depth();
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Width),
+        );
+        let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
+        assert!(app.editor.as_ref().unwrap().width_drag_baseline.is_some());
+        let _ = update(
+            &mut app,
+            Message::EditorKeyPressed {
+                window: id,
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                modifiers: iced::keyboard::Modifiers::empty(),
+                status_ignored: true,
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.popover, None);
+        assert!(ed.width_drag_baseline.is_none());
+        assert_eq!(ed.model.undo_depth(), undo_depth);
+        match &ed.model.annotations()[0] {
+            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 2.0),
+            other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn zoom_steps_from_fit_use_the_scale_rendered_at_update_time() {
+        // The view can be stale after a resize (iced relayouts without a
+        // rebuild), so the step resolves the Fit scale when handled.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let ed = crate::editor::EditorSession::new_with_display_scale(solid(64, 64), 2.0);
+        ed.render_scale.set(0.4);
+        app.editor = Some(ed);
+        // Window grew after the last view build: fit is now 0.8.
+        app.editor.as_ref().unwrap().render_scale.set(0.8);
+        let _ = update(&mut app, Message::EditorZoomIn);
+        assert_eq!(
+            app.editor.as_ref().unwrap().zoom,
+            crate::editor::EditorZoom::Percent(0.8 * crate::editor::EditorZoom::STEP)
+        );
+        let _ = update(&mut app, Message::EditorZoomFit);
+        let _ = update(&mut app, Message::EditorZoomOut);
+        assert_eq!(
+            app.editor.as_ref().unwrap().zoom,
+            crate::editor::EditorZoom::Percent(0.8 / crate::editor::EditorZoom::STEP)
+        );
+    }
+
+    #[test]
+    fn editor_chrome_layers_clear_the_stage() {
+        // Hint (one caption line) ends above the image; the toast (one
+        // body line + padding) ends below the image's bottom inset.
+        const HINT_LINE: f32 = 18.0;
+        const TOAST_HEIGHT: f32 = 34.0;
+        assert!(EDITOR_HINT_TOP + HINT_LINE <= EDITOR_STAGE_PAD_TOP);
+        assert!(EDITOR_TOAST_BOTTOM + TOAST_HEIGHT <= EDITOR_STAGE_PAD_BOTTOM);
+        assert_eq!(EDITOR_STAGE_PAD_TOP, 138.0);
     }
 
     #[test]
@@ -5910,11 +6034,13 @@ mod tests {
         let ed = crate::editor::EditorSession::new_with_display_scale(solid(64, 64), 2.0);
         app.editor = Some(ed);
 
+        // In Fit mode both start from the scale the stage rendered at.
+        app.editor.as_ref().unwrap().render_scale.set(0.5);
         let _ = update(&mut app, Message::EditorZoomIn);
         let after_in = app.editor.as_ref().unwrap().zoom;
         assert_eq!(
             after_in,
-            crate::editor::EditorZoom::Fit.zoom_in_from_display_scale(2.0),
+            crate::editor::EditorZoom::Fit.zoom_in_from_display_scale(0.5),
             "keyboard zoom-in should match the display-scale-aware button path"
         );
         assert_ne!(
@@ -6168,14 +6294,16 @@ mod tests {
     }
 
     #[test]
-    fn editor_escape_keeps_canvas_cancellation_when_already_handled() {
-        let cancel = editor_key_message(
+    fn editor_escape_already_handled_by_a_widget_is_not_handled_twice() {
+        // Only the inline text editor captures Escape in the editor
+        // window, and its key binding already emits EditorTextCancel.
+        let handled = editor_key_message(
             iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
             iced::keyboard::Modifiers::empty(),
             false,
         );
 
-        assert!(matches!(cancel, Some(Message::EditorTextCancel)));
+        assert!(handled.is_none());
     }
 
     #[test]

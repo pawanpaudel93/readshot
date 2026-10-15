@@ -445,14 +445,8 @@ pub enum Message {
     EditorColorCycle(i32),
     /// Zoom editor preview in one step.
     EditorZoomIn,
-    /// Zoom editor preview in one step from the currently displayed
-    /// scale. Used by the on-screen controls when `Fit` is active.
-    EditorZoomInFromDisplayScale(f32),
     /// Zoom editor preview out one step.
     EditorZoomOut,
-    /// Zoom editor preview out one step from the currently displayed
-    /// scale. Used by the on-screen controls when `Fit` is active.
-    EditorZoomOutFromDisplayScale(f32),
     /// Reset editor preview to exact image pixels.
     EditorZoomActual,
     /// Reset editor preview to fit-down mode.
