@@ -79,7 +79,7 @@ pub(crate) fn button_style(
         ButtonKind::Secondary => (p.raised, p.t1, p.border),
         ButtonKind::Ghost => (Color::TRANSPARENT, p.t2, Color::TRANSPARENT),
         ButtonKind::Danger => (p.raised, p.danger, p.border),
-        ButtonKind::DangerSolid => (p.danger, Color::WHITE, Color::TRANSPARENT),
+        ButtonKind::DangerSolid => (p.danger, p.danger_fg, Color::TRANSPARENT),
     };
     let toward = if palette_for(theme) == &LIGHT {
         Color::BLACK
@@ -461,5 +461,17 @@ mod tests {
         assert_eq!(ButtonSize::Md.height(), 32.0);
         assert_eq!(ButtonSize::Sm.height(), 28.0);
         assert_eq!(ButtonSize::Xs.height(), 24.0);
+    }
+
+    #[test]
+    fn danger_solid_uses_the_palette_foreground() {
+        assert_eq!(
+            button_style(&dark(), Status::Active, ButtonKind::DangerSolid).text_color,
+            DARK.danger_fg
+        );
+        assert_eq!(
+            button_style(&light(), Status::Active, ButtonKind::DangerSolid).text_color,
+            LIGHT.danger_fg
+        );
     }
 }

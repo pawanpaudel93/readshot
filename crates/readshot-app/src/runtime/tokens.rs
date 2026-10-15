@@ -32,6 +32,8 @@ pub(crate) struct Palette {
     pub ok: Color,
     pub warn: Color,
     pub danger: Color,
+    /// Foreground on a solid `danger` fill (AA contrast per theme).
+    pub danger_fg: Color,
     pub float: Color,
     pub float_border: Color,
     pub tip_bg: Color,
@@ -57,6 +59,7 @@ pub(crate) const DARK: Palette = Palette {
     ok: Color::from_rgb8(0x3D, 0xD6, 0x8C),
     warn: Color::from_rgb8(0xF5, 0xA5, 0x24),
     danger: Color::from_rgb8(0xFF, 0x63, 0x69),
+    danger_fg: Color::from_rgb8(0x0F, 0x0F, 0x0F),
     float: Color::from_rgba(0.110, 0.110, 0.118, 0.96),
     float_border: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
     tip_bg: Color::from_rgb8(0x0F, 0x0F, 0x10),
@@ -82,6 +85,7 @@ pub(crate) const LIGHT: Palette = Palette {
     ok: Color::from_rgb8(0x16, 0xA3, 0x4A),
     warn: Color::from_rgb8(0xD9, 0x77, 0x06),
     danger: Color::from_rgb8(0xDC, 0x26, 0x26),
+    danger_fg: Color::from_rgb8(0xFF, 0xFF, 0xFF),
     float: Color::from_rgba(1.0, 1.0, 1.0, 0.97),
     float_border: Color::from_rgba(0.0, 0.0, 0.0, 0.10),
     tip_bg: Color::from_rgb8(0x17, 0x17, 0x17),
@@ -187,6 +191,7 @@ mod tests {
     fn primary_button_and_status_colors_are_readable() {
         for p in both() {
             assert!(contrast_ratio(p.pri_fg, p.pri_bg) >= 7.0);
+            assert!(contrast_ratio(p.danger_fg, p.danger) >= 4.5);
             assert!(contrast_ratio(p.danger, p.raised) >= 4.5);
             let selected = over(p.acc_tint, p.surface);
             assert!(contrast_ratio(p.acc_text, selected) >= 4.5);
