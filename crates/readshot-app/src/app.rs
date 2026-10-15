@@ -560,6 +560,9 @@ pub enum Message {
     /// opened. Used by the runtime to focus the window after Launch
     /// Services reopens an LSUIElement app.
     WelcomeWindowReady(iced::window::Id),
+    /// Dismiss button on the Welcome status toast (errors stay until
+    /// dismissed or the next capture clears them).
+    WelcomeStatusDismissed,
     /// Keyboard event observed while a welcome window is open. The
     /// runtime validates `window` is the welcome window and binds
     /// Enter to the primary action of whichever card is showing

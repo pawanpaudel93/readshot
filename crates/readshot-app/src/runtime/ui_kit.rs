@@ -244,7 +244,7 @@ fn key_chip_on_dark<'a>(label: &'a str) -> Element<'a, Message> {
 }
 
 /// Key chip that follows the theme (legends, footers, hints).
-pub(crate) fn key_chip<'a>(label: &'a str) -> Element<'a, Message> {
+pub(crate) fn key_chip<'a>(label: impl text::IntoFragment<'a>) -> Element<'a, Message> {
     container(text(label).size(TYPE_MICRO).style(text_t2))
         .padding([3, 6])
         .style(|theme| container::Style {

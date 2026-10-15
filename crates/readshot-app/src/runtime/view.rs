@@ -27,7 +27,6 @@ const TEXT_TITLE: f32 = TYPE_HEADING; // card & section titles (absorbs old 16/1
 const TEXT_HEADING: f32 = TYPE_TITLE; // large chrome glyph (pin close ×)
 const TEXT_DISPLAY: f32 = TYPE_DISPLAY; // HUD frame counter (mono)
 const TEXT_SCREEN_TITLE: f32 = TYPE_TITLE; // Settings / CLI screen headers
-const TEXT_HERO: f32 = TYPE_TITLE; // welcome hero
 
 /// Transparent click-through overlay that draws the captured rect's
 /// border on screen during a scrolling-capture session.
@@ -2689,13 +2688,6 @@ fn frame_popover<'a>(
     .into()
 }
 
-pub(crate) fn editor_shell_style(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Color::from_rgb8(13, 15, 15).into()),
-        ..Default::default()
-    }
-}
-
 pub(crate) fn editor_chrome_style(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.055).into()),
@@ -4558,189 +4550,286 @@ pub(crate) fn slim_scrollbar() -> iced::widget::scrollable::Scrollbar {
 }
 
 pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
-    let hero = column![
-        text("Readshot").size(TEXT_HERO),
-        text("Capture, search, find again.")
-            .size(TEXT_BODY_SM)
-            .color(settings_muted_text()),
-        container(Space::new())
-            .width(Length::Fixed(44.0))
-            .height(Length::Fixed(2.0))
-            .style(|_| container::Style {
-                background: Some(accent(0.85).into()),
-                border: iced::Border {
-                    radius: 1.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
-    ]
-    .spacing(7)
-    .align_x(Alignment::Center);
+    use crate::icons::AppIcon;
+    use iced::widget::tooltip::Position;
+    let p = palette(state.theme_mode);
 
-    let card: Element<'_, Message> = match state.welcome {
-        WelcomeState::Pending => welcome_pending_card(),
-        WelcomeState::AwaitingGrant | WelcomeState::Denied => welcome_awaiting_card(state.welcome),
-        WelcomeState::Granted => welcome_granted_card(state),
-    };
+    let mut col = column![]
+        .spacing(SP4)
+        .align_x(Alignment::Center)
+        .width(Length::Fill)
+        .height(Length::Fill);
 
-    let toast: Element<'_, Message> = match &state.last_capture_status {
-        Some(s) => text(s).size(TEXT_CAPTION).color(TEXT_MUTED).into(),
-        None => Space::new().height(Length::Fixed(0.0)).into(),
-    };
+    match state.welcome {
+        WelcomeState::Pending => {
+            col = col.push(welcome_brand(p, WelcomeTile::App));
+            col = col.push(welcome_status_group(
+                AppIcon::Shield,
+                p.warn,
+                "Screen Recording access needed",
+                "macOS asks once. Readshot only reads the screen when you capture.",
+            ));
+        }
+        WelcomeState::AwaitingGrant | WelcomeState::Denied => {
+            let (title, help) = welcome_permission_guidance(state.welcome);
+            col = col.push(welcome_brand(p, WelcomeTile::App));
+            col = col.push(welcome_status_group(AppIcon::Alert, p.warn, title, help));
+        }
+        WelcomeState::Granted => {
+            col = col.push(welcome_brand(p, WelcomeTile::Done));
+            let hotkey = pretty_hotkey(&state.preferences.capture_hotkey);
+            col = col.push(
+                row![
+                    text("Press").size(TYPE_BODY).style(text_t2),
+                    key_chip(hotkey),
+                    text("anywhere to capture.").size(TYPE_BODY).style(text_t2),
+                ]
+                .spacing(SP2)
+                .align_y(Alignment::Center),
+            );
+        }
+    }
 
-    let inner = column![
-        hero,
-        Space::new().height(Length::Fixed(20.0)),
-        card,
-        Space::new().height(Length::Fixed(10.0)),
-        toast,
-    ]
-    .max_width(420)
-    .align_x(Alignment::Center);
+    col = col.push(Space::new().height(Length::Fill));
 
-    container(inner)
+    if let Some(s) = &state.last_capture_status {
+        let kind = if crate::editor::status_str_is_error(s) {
+            ToastKind::Error
+        } else {
+            ToastKind::Ok
+        };
+        let action = (kind == ToastKind::Error).then(|| {
+            icon_button(
+                AppIcon::Close,
+                p.t2,
+                "Dismiss",
+                None,
+                Some(Message::WelcomeStatusDismissed),
+                false,
+                ICON_BTN_XS,
+                Position::Top,
+            )
+        });
+        col = col.push(toast(kind, s.clone(), action));
+    }
+
+    match state.welcome {
+        WelcomeState::Pending => {
+            col = col.push(welcome_button(
+                None,
+                "Allow Screen Recording",
+                ButtonKind::Primary,
+                ButtonSize::Lg,
+                Some("\u{21B5}"),
+                p,
+                Some(Message::GrantPermissionRequested),
+            ));
+            col = col.push(welcome_reset_footer());
+        }
+        WelcomeState::AwaitingGrant | WelcomeState::Denied => {
+            col = col.push(welcome_button(
+                None,
+                "Open System Settings",
+                ButtonKind::Primary,
+                ButtonSize::Lg,
+                Some("\u{21B5}"),
+                p,
+                Some(Message::OpenPermissionSettingsRequested),
+            ));
+            col = col.push(welcome_button(
+                None,
+                "Restart Readshot",
+                ButtonKind::Secondary,
+                ButtonSize::Md,
+                None,
+                p,
+                Some(Message::RestartRequested),
+            ));
+            col = col.push(welcome_reset_footer());
+        }
+        WelcomeState::Granted => {
+            col = col.push(welcome_button(
+                Some(AppIcon::Crosshair),
+                "Capture Screen",
+                ButtonKind::Primary,
+                ButtonSize::Lg,
+                Some("\u{21B5}"),
+                p,
+                (!state.capture_in_flight).then_some(Message::OpenOverlayRequested),
+            ));
+            col = col.push(
+                row![
+                    welcome_button(
+                        Some(AppIcon::History),
+                        "Show History",
+                        ButtonKind::Secondary,
+                        ButtonSize::Md,
+                        None,
+                        p,
+                        Some(Message::OpenHistoryRequested),
+                    ),
+                    welcome_button(
+                        Some(AppIcon::Gear),
+                        "Open Settings",
+                        ButtonKind::Secondary,
+                        ButtonSize::Md,
+                        None,
+                        p,
+                        Some(Message::OpenSettingsRequested),
+                    ),
+                ]
+                .spacing(SP2),
+            );
+        }
+    }
+
+    container(col)
         .width(Length::Fill)
         .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .padding(28)
-        .style(editor_shell_style)
+        .padding(iced::Padding {
+            top: 56.0,
+            right: 40.0,
+            bottom: 32.0,
+            left: 40.0,
+        })
+        .style(surface_style)
         .into()
 }
 
-/// Severity tint for a welcome card. `Neutral` is the default
-/// glassy chrome; `Blocked` warms it up with an amber accent so the
-/// Denied state reads as "needs your attention" instead of looking
-/// the same as the cold Pending state.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WelcomeCardTone {
-    Neutral,
-    Blocked,
+enum WelcomeTile {
+    /// Dark rounded app tile with the scan icon (permission states).
+    App,
+    /// Green circle with a check (granted).
+    Done,
 }
 
-/// Shared chrome for every welcome card — soft semi-transparent
-/// background, subtle border, generous padding so the action button
-/// has room to breathe. `tone` lets the Denied card stand out.
-pub(crate) fn welcome_card<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
-    welcome_card_with_tone(content, WelcomeCardTone::Neutral)
-}
-
-pub(crate) fn welcome_card_with_tone<'a>(
-    content: Element<'a, Message>,
-    tone: WelcomeCardTone,
-) -> Element<'a, Message> {
-    container(content)
-        .padding(20)
-        .width(Length::Fill)
-        .style(move |_| {
-            let (bg, border) = match tone {
-                WelcomeCardTone::Neutral => (
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.055),
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.12),
-                ),
-                WelcomeCardTone::Blocked => (
-                    Color::from_rgba(0.95, 0.55, 0.30, 0.10),
-                    Color::from_rgba(0.95, 0.55, 0.30, 0.55),
-                ),
-            };
-            iced::widget::container::Style {
-                background: Some(bg.into()),
-                border: iced::Border {
-                    radius: 8.0.into(),
-                    color: border,
-                    width: 1.0,
-                },
+/// Tile plus the title (and, for the permission states, the tagline).
+fn welcome_brand(p: &'static Palette, tile: WelcomeTile) -> Element<'static, Message> {
+    use crate::icons::AppIcon;
+    let (glyph, color, radius, fill) = match tile {
+        WelcomeTile::App => (
+            AppIcon::ScanText,
+            p.acc_text,
+            16.0,
+            Color::from_rgb8(0x14, 0x18, 0x1E),
+        ),
+        WelcomeTile::Done => (AppIcon::CheckCircle, p.ok, 32.0, Color { a: 0.14, ..p.ok }),
+    };
+    let tile_el = container(crate::icons::icon(glyph, color, 30.0))
+        .width(Length::Fixed(64.0))
+        .height(Length::Fixed(64.0))
+        .center_x(Length::Fixed(64.0))
+        .center_y(Length::Fixed(64.0))
+        .style(move |_| container::Style {
+            background: Some(fill.into()),
+            border: iced::Border {
+                radius: radius.into(),
                 ..Default::default()
-            }
-        })
-        .into()
-}
-
-pub(crate) fn welcome_pending_card<'a>() -> Element<'a, Message> {
-    let body = column![
-        // Heading names the missing permission; the button below carries
-        // the "Allow Screen Recording" call to action, so the two no
-        // longer repeat the same words.
-        text("Screen Recording access needed").size(TEXT_TITLE),
-        text(
-            "macOS will pop a permission prompt. Click \"Open System Settings\" \
-             inside it and toggle Readshot on — that's all we need."
-        )
-        .size(TEXT_BODY_SM)
-        .color(TEXT_SECONDARY),
-        Space::new().height(Length::Fixed(6.0)),
-        button(text("Allow Screen Recording").size(TEXT_BODY))
-            .padding([10, 18])
-            .style(|t, s| action_button_style(t, s, ActionKind::Primary))
-            .on_press(Message::GrantPermissionRequested),
+            },
+            ..Default::default()
+        });
+    let (title, tagline) = match tile {
+        WelcomeTile::App => ("Readshot", Some("Capture, search, find again.")),
+        WelcomeTile::Done => ("You're all set.", None),
+    };
+    let mut c = column![
+        tile_el,
+        text(title).size(TYPE_TITLE).font(semibold()).style(text_t1),
     ]
-    .spacing(10)
+    .spacing(SP3)
     .align_x(Alignment::Center);
-    welcome_card(body.into())
+    if let Some(t) = tagline {
+        c = c.push(text(t).size(TYPE_BODY).style(text_t2));
+    }
+    c.into()
 }
 
-pub(crate) fn welcome_awaiting_card<'a>(state: WelcomeState) -> Element<'a, Message> {
-    let (title, body_copy) = welcome_permission_guidance(state);
-    let is_denied = matches!(state, WelcomeState::Denied);
-    let header_label = if is_denied {
-        format!("Attention: {title}")
-    } else {
-        title.to_string()
-    };
-    let header_color = if is_denied {
-        Color::from_rgba(1.0, 0.78, 0.55, 0.95)
-    } else {
-        Color::WHITE
-    };
-    let body = column![
-        text(header_label).size(TEXT_TITLE).color(header_color),
-        text(body_copy).size(TEXT_BODY_SM).color(TEXT_SECONDARY),
-        Space::new().height(Length::Fixed(6.0)),
-        // Two primary-sized buttons overflow the card at the 420 px
-        // minimum window width, so stack them into a column when the
-        // space can't hold them side by side.
-        responsive(|available| {
-            let open = button(text("Open System Settings").size(TEXT_BODY))
-                .padding([10, 18])
-                .style(|t, s| action_button_style(t, s, ActionKind::Primary))
-                .on_press(Message::OpenPermissionSettingsRequested);
-            let restart = button(text("Restart Readshot").size(TEXT_BODY))
-                .padding([10, 16])
-                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::RestartRequested);
-            let content: Element<'_, Message> = if available.width < 340.0 {
-                column![open, restart]
-                    .spacing(8)
-                    .align_x(Alignment::Center)
-                    .into()
-            } else {
-                row![open, restart].spacing(8).into()
-            };
-            container(content)
-                .width(Length::Fill)
-                .center_x(Length::Fill)
-                .into()
-        })
-        .height(Length::Shrink),
-        // After an update signed differently, System Settings can show
-        // Readshot switched on while macOS still denies this build.
+/// Status group: icon, bold title, help text.
+fn welcome_status_group<'a>(
+    glyph: crate::icons::AppIcon,
+    color: Color,
+    title: &'a str,
+    help: &'a str,
+) -> Element<'a, Message> {
+    container(
+        row![
+            crate::icons::icon(glyph, color, 20.0),
+            column![
+                text(title).size(TYPE_BODY).font(semibold()).style(text_t1),
+                text(help)
+                    .size(TYPE_CAPTION)
+                    .style(text_t2)
+                    .wrapping(iced::widget::text::Wrapping::Word),
+            ]
+            .spacing(2)
+            .width(Length::Fill),
+        ]
+        .spacing(SP3),
+    )
+    .padding([SP3, SP4])
+    .width(Length::Fill)
+    .style(group_style)
+    .into()
+}
+
+/// "Already on in System Settings but still blocked?" + ghost link.
+fn welcome_reset_footer<'a>() -> Element<'a, Message> {
+    row![
         text("Already on in System Settings but still blocked?")
-            .size(TEXT_CAPTION)
-            .color(TEXT_SECONDARY),
-        button(text("Reset Permission").size(TEXT_BODY_SM))
-            .padding([6, 12])
-            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+            .size(TYPE_CAPTION)
+            .style(text_t3),
+        button(text("Reset Permission").size(TYPE_CAPTION))
+            .padding([2, 6])
+            .style(|t, s| button_style(t, s, ButtonKind::Ghost))
             .on_press(Message::ResetPermissionRequested),
     ]
-    .spacing(10)
-    .align_x(Alignment::Center);
-    let tone = if is_denied {
-        WelcomeCardTone::Blocked
-    } else {
-        WelcomeCardTone::Neutral
+    .spacing(SP1)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+/// Full-width (Lg / primary column) or content-width button in the kit
+/// style: optional leading icon, label, optional trailing key chip.
+/// `msg: None` renders it disabled.
+fn welcome_button<'a>(
+    glyph: Option<crate::icons::AppIcon>,
+    label: &'static str,
+    kind: ButtonKind,
+    size: ButtonSize,
+    key: Option<&'static str>,
+    p: &'static Palette,
+    msg: Option<Message>,
+) -> Element<'a, Message> {
+    let fg = match kind {
+        ButtonKind::Primary => p.pri_fg,
+        ButtonKind::Ghost => p.t2,
+        _ => p.t1,
     };
-    welcome_card_with_tone(body.into(), tone)
+    let mut content = row![].spacing(SP2).align_y(Alignment::Center);
+    if let Some(g) = glyph {
+        content = content.push(crate::icons::icon(g, fg, ICON_SIZE));
+    }
+    content = content.push(text(label).size(size.text_size()).font(semibold()));
+    if let Some(k) = key {
+        content = content.push(key_chip(k));
+    }
+    let full = size == ButtonSize::Lg || key.is_some();
+    let mut b = button(
+        container(content)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .height(Length::Fixed(size.height()))
+    .padding([0.0, size.padding_x()])
+    .style(move |t, s| button_style(t, s, kind));
+    if full {
+        b = b.width(Length::Fill);
+    }
+    if let Some(m) = msg {
+        b = b.on_press(m);
+    }
+    b.into()
 }
 
 pub(crate) fn welcome_permission_guidance(state: WelcomeState) -> (&'static str, &'static str) {
@@ -4754,76 +4843,6 @@ pub(crate) fn welcome_permission_guidance(state: WelcomeState) -> (&'static str,
             "Enable Readshot in System Settings. If macOS offers Quit & Reopen, accept it; otherwise use Restart Readshot after toggling the permission on.",
         ),
     }
-}
-
-pub(crate) fn welcome_granted_card(state: &App) -> Element<'_, Message> {
-    let mut capture_btn = button(welcome_button_label(
-        "Capture Screen",
-        TEXT_BODY,
-        136.0,
-        40.0,
-    ))
-    .padding(0)
-    .style(|t, s| action_button_style(t, s, ActionKind::Primary));
-    if !state.capture_in_flight {
-        capture_btn = capture_btn.on_press(Message::OpenOverlayRequested);
-    }
-    let history_btn = button(welcome_button_label(
-        "Show History",
-        TEXT_BODY_SM,
-        104.0,
-        34.0,
-    ))
-    .padding(0)
-    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-    .on_press(Message::OpenHistoryRequested);
-    let settings_btn = button(welcome_button_label(
-        "Open Settings",
-        TEXT_BODY_SM,
-        110.0,
-        34.0,
-    ))
-    .padding(0)
-    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-    .on_press(Message::OpenSettingsRequested);
-    let hotkey = pretty_hotkey(&state.preferences.capture_hotkey);
-    let body = column![
-        text("You're all set.").size(TEXT_TITLE),
-        text(format!(
-            "Press {hotkey} or click the menu-bar icon to capture. Every \
-             capture lands in History — searchable by anything visible \
-             in the image."
-        ))
-        .size(TEXT_BODY_SM)
-        .color(TEXT_SECONDARY),
-        Space::new().height(Length::Fixed(6.0)),
-        capture_btn,
-        Space::new().height(Length::Fixed(2.0)),
-        row![history_btn, settings_btn]
-            .spacing(10)
-            .align_y(Alignment::Center),
-    ]
-    .spacing(10)
-    .align_x(Alignment::Center);
-    welcome_card(body.into())
-}
-
-pub(crate) fn welcome_button_label<'a>(
-    label: &'static str,
-    size: f32,
-    width: f32,
-    height: f32,
-) -> Element<'a, Message> {
-    container(
-        text(label)
-            .size(size)
-            .line_height(iced::widget::text::LineHeight::Relative(1.0)),
-    )
-    .width(Length::Fixed(width))
-    .height(Length::Fixed(height))
-    .align_x(iced::alignment::Horizontal::Center)
-    .align_y(iced::alignment::Vertical::Center)
-    .into()
 }
 
 #[cfg(test)]

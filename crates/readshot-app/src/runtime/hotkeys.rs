@@ -63,19 +63,19 @@ pub fn pretty_hotkey(s: &str) -> String {
 
 #[cfg(target_os = "macos")]
 fn format_chord(m: hotkey::HotkeyModifiers, key: &str) -> String {
-    // ⌘⇧⌥⌃ order, matching the glyphs Readshot has always shown.
+    // Apple order ⌃⌥⇧⌘.
     let mut out = String::new();
-    if m.meta {
-        out.push('\u{2318}'); // ⌘
-    }
-    if m.shift {
-        out.push('\u{21E7}'); // ⇧
+    if m.control {
+        out.push('\u{2303}'); // ⌃
     }
     if m.alt {
         out.push('\u{2325}'); // ⌥
     }
-    if m.control {
-        out.push('\u{2303}'); // ⌃
+    if m.shift {
+        out.push('\u{21E7}'); // ⇧
+    }
+    if m.meta {
+        out.push('\u{2318}'); // ⌘
     }
     out.push_str(key);
     out
@@ -761,12 +761,12 @@ mod pretty_hotkey_tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_uses_glyph_form() {
-        // ⌘⇧X (modifiers rendered in ⌘⇧⌥⌃ order).
-        assert_eq!(pretty_hotkey("cmd+shift+x"), "\u{2318}\u{21E7}X");
-        // ⌘⇧⌥⌃, — full modifier stack with the comma key.
+        // ⇧⌘X (modifiers rendered in Apple ⌃⌥⇧⌘ order).
+        assert_eq!(pretty_hotkey("cmd+shift+x"), "\u{21E7}\u{2318}X");
+        // ⌃⌥⇧⌘, — full modifier stack with the comma key.
         assert_eq!(
             pretty_hotkey("ctrl+alt+shift+cmd+comma"),
-            "\u{2318}\u{21E7}\u{2325}\u{2303},"
+            "\u{2303}\u{2325}\u{21E7}\u{2318},"
         );
     }
 

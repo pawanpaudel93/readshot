@@ -1763,6 +1763,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::ScrollCaptureStopRequested
         | Message::ScrollCaptureStitched(..)) => scroll::handle_scroll_message(state, msg),
 
+        Message::WelcomeStatusDismissed => {
+            state.last_capture_status = None;
+            Task::none()
+        }
+
         Message::CaptureSaved(result) => {
             state.capture_in_flight = false;
             state.last_capture_status = Some(match &result {
@@ -4193,6 +4198,14 @@ mod tests {
     }
 
     #[test]
+    fn welcome_status_dismissed_clears_capture_status() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.last_capture_status = Some("Couldn't save.".into());
+        let _ = update(&mut app, Message::WelcomeStatusDismissed);
+        assert!(app.last_capture_status.is_none());
+    }
+
+    #[test]
     fn capture_failure_message_lands_in_toast() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let _ = update(
@@ -4422,10 +4435,10 @@ mod tests {
 
     #[test]
     fn pretty_hotkey_renders_macos_glyphs() {
-        assert_eq!(pretty_hotkey("cmd+shift+x"), "\u{2318}\u{21E7}X");
-        // ⌘⇧⌥⌃ order: alt then control here.
-        assert_eq!(pretty_hotkey("ctrl+alt+y"), "\u{2325}\u{2303}Y");
-        assert_eq!(pretty_hotkey("CMD+Shift+Z"), "\u{2318}\u{21E7}Z");
+        assert_eq!(pretty_hotkey("cmd+shift+x"), "\u{21E7}\u{2318}X");
+        // Apple order ⌃⌥⇧⌘: control then alt here.
+        assert_eq!(pretty_hotkey("ctrl+alt+y"), "\u{2303}\u{2325}Y");
+        assert_eq!(pretty_hotkey("CMD+Shift+Z"), "\u{21E7}\u{2318}Z");
     }
 
     #[test]
