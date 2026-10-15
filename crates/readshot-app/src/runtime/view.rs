@@ -1253,7 +1253,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     };
     // The split view shows status above its key legend; empty states
     // show it under the message so e.g. "Cleared …" is still seen.
-    let body: Element<'_, Message> = match history_status_toast(state) {
+    let body: Element<'_, Message> = match history_status_toast(state, p) {
         Some(t) if shown == 0 || state.history_root.is_none() => {
             column![body, container(t).center_x(Length::Fill).padding(SP4)].into()
         }
@@ -1269,14 +1269,23 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
 
 /// List | detail split. The list keeps 340 px until the window is too
 /// narrow for a usable detail pane, then shrinks.
-fn history_status_toast(state: &App) -> Option<Element<'_, Message>> {
+fn history_status_toast(state: &App, p: &'static Palette) -> Option<Element<'static, Message>> {
     let status = state.history_status.as_deref()?;
-    let kind = if crate::editor::status_str_is_error(status) {
-        ToastKind::Error
-    } else {
-        ToastKind::Ok
-    };
-    Some(toast(kind, status.to_string(), None))
+    let kind = status_toast_kind(status);
+    // Errors stay until dismissed (History has no auto-expiry).
+    let action = (kind == ToastKind::Error).then(|| {
+        icon_button(
+            crate::icons::AppIcon::Close,
+            p.t2,
+            "Dismiss",
+            None,
+            Some(Message::HistoryStatusDismissed),
+            false,
+            ICON_BTN_XS,
+            iced::widget::tooltip::Position::Top,
+        )
+    });
+    Some(toast(kind, status.to_string(), action))
 }
 
 fn history_split<'a>(
@@ -1437,7 +1446,7 @@ fn history_split<'a>(
             slim_scrollbar(),
         ))
         .height(Length::Fill)];
-    if let Some(t) = history_status_toast(state) {
+    if let Some(t) = history_status_toast(state, p) {
         list_col = list_col.push(container(t).width(Length::Fill).padding(SP2));
     }
     list_col = list_col.push(hairline()).push(footer);
@@ -2722,9 +2731,22 @@ pub(crate) const EDITOR_TOAST_BOTTOM: f32 = 66.0;
 pub(crate) fn editor_toast_kind(status: &str, in_progress: bool, discard_armed: bool) -> ToastKind {
     if discard_armed {
         ToastKind::Warn
-    } else if crate::editor::status_str_is_error(status) {
-        ToastKind::Error
-    } else if in_progress {
+    } else if in_progress && !crate::editor::status_str_is_error(status) {
+        ToastKind::Info
+    } else {
+        status_toast_kind(status)
+    }
+}
+
+/// Toast kind for a settled status line (History, Welcome, editor):
+/// failures are Error; "No …", "… not found" and "… cancelled" are
+/// neutral notices (Info) rather than successes; the rest are Ok.
+pub(crate) fn status_toast_kind(status: &str) -> ToastKind {
+    if crate::editor::status_str_is_error(status) {
+        return ToastKind::Error;
+    }
+    let lower = status.to_lowercase();
+    if lower.starts_with("no ") || lower.contains("not found") || lower.contains("cancelled") {
         ToastKind::Info
     } else {
         ToastKind::Ok
@@ -4895,11 +4917,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
     }
 
     if let Some(s) = &state.last_capture_status {
-        let kind = if crate::editor::status_str_is_error(s) {
-            ToastKind::Error
-        } else {
-            ToastKind::Ok
-        };
+        let kind = status_toast_kind(s);
         let action = (kind == ToastKind::Error).then(|| {
             icon_button(
                 AppIcon::Close,

@@ -371,6 +371,9 @@ pub enum Message {
     /// User typed in the history browser's search box. Empty string
     /// resets to "show every record".
     HistorySearchChanged(String),
+    /// Dismiss button on the History status toast (errors stay until
+    /// dismissed or replaced by the next status).
+    HistoryStatusDismissed,
     /// User selected a capture in the history browser.
     HistorySelect(readshot_core::Uuid),
     /// Move selection to the previous visible history capture.

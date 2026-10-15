@@ -1504,6 +1504,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::HistoryListLoaded(..)
         | Message::HistoryClosed
         | Message::HistorySearchChanged(..)
+        | Message::HistoryStatusDismissed
         | Message::HistorySelect(..)
         | Message::HistorySelectPrevious
         | Message::HistorySelectNext
@@ -2838,6 +2839,38 @@ mod tests {
         );
         assert_eq!(editor_toast_kind("Saving…", true, false), ToastKind::Info);
         assert_eq!(editor_toast_kind("anything", false, true), ToastKind::Warn);
+    }
+
+    #[test]
+    fn status_toast_kind_separates_notices_from_successes() {
+        for s in [
+            "Capture not found.",
+            "No history capture selected.",
+            "No OCR text on this capture yet.",
+            "No OCR text in the visible captures.",
+            "Scroll capture cancelled.",
+        ] {
+            assert_eq!(status_toast_kind(s), ToastKind::Info, "{s:?}");
+        }
+        for s in ["Couldn't read history: denied", "Scroll capture failed: x"] {
+            assert_eq!(status_toast_kind(s), ToastKind::Error, "{s:?}");
+        }
+        for s in ["Saved to /tmp/x.png.", "Copied text."] {
+            assert_eq!(status_toast_kind(s), ToastKind::Ok, "{s:?}");
+        }
+        // The editor shares the notice rule for its idle statuses.
+        assert_eq!(
+            editor_toast_kind("No text recognized.", false, false),
+            ToastKind::Info
+        );
+    }
+
+    #[test]
+    fn history_status_dismissed_clears_history_status() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.history_status = Some("Couldn't read history: denied".into());
+        let _ = update(&mut app, Message::HistoryStatusDismissed);
+        assert!(app.history_status.is_none());
     }
 
     #[test]

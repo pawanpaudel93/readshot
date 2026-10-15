@@ -106,6 +106,10 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 None => Task::none(),
             }
         }
+        Message::HistoryStatusDismissed => {
+            state.history_status = None;
+            Task::none()
+        }
         Message::HistorySearchChanged(q) => {
             // A search change (Escape maps here too) cancels an armed
             // delete and resets paging so the first page of the new
