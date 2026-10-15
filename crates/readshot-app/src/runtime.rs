@@ -1646,6 +1646,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorCopyTextRequested
         | Message::EditorCopyTextDone(..)
         | Message::EditorDiscardRequested
+        | Message::EditorDiscardDisarmed
+        | Message::EditorStatusDismissed
         | Message::EditorPopoverToggled(..)
         | Message::EditorPopoverClosed
         | Message::EditorToolbar(..)
@@ -2812,6 +2814,48 @@ mod tests {
         assert!(EDITOR_HINT_TOP + HINT_LINE <= EDITOR_STAGE_PAD_TOP);
         assert!(EDITOR_TOAST_BOTTOM + TOAST_HEIGHT <= EDITOR_STAGE_PAD_BOTTOM);
         assert_eq!(EDITOR_STAGE_PAD_TOP, 138.0);
+    }
+
+    #[test]
+    fn editor_toast_kind_classifies_status() {
+        assert_eq!(
+            editor_toast_kind("Couldn't save — the folder is read-only.", false, false),
+            ToastKind::Error
+        );
+        assert_eq!(
+            editor_toast_kind("Copied image", false, false),
+            ToastKind::Ok
+        );
+        assert_eq!(editor_toast_kind("Saving…", true, false), ToastKind::Info);
+        assert_eq!(editor_toast_kind("anything", false, true), ToastKind::Warn);
+    }
+
+    #[test]
+    fn keep_editing_disarms_discard() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = debug_editor_qa_session();
+        ed.discard_pending_at = Some(std::time::Instant::now());
+        ed.status = Some("Unsaved edits".into());
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorDiscardDisarmed);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.discard_pending_at.is_none());
+        assert!(ed.status.is_none());
+    }
+
+    #[test]
+    fn dismissing_status_clears_it_and_tick_keeps_errors() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = debug_editor_qa_session();
+        ed.status = Some("Couldn't save — the folder is read-only.".into());
+        ed.status_set_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorStatusTick);
+        assert!(app.editor.as_ref().unwrap().status.is_some());
+        let _ = update(&mut app, Message::EditorStatusDismissed);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.status.is_none());
+        assert!(ed.status_set_at.is_none());
     }
 
     #[test]
@@ -5732,7 +5776,7 @@ mod tests {
         assert!(ed.discard_pending_at.is_some());
         assert_eq!(
             ed.status.as_deref(),
-            Some("Discard unsaved edits? Click Discard again to confirm.")
+            Some("Unsaved edits. Press Discard again to close without saving.")
         );
 
         let _ = update(&mut app, Message::EditorDiscardRequested);
@@ -5810,7 +5854,7 @@ mod tests {
         assert!(ed.discard_pending_at.is_some());
         assert_eq!(
             ed.status.as_deref(),
-            Some("Discard unsaved edits? Click Discard again to confirm.")
+            Some("Unsaved edits. Press Discard again to close without saving.")
         );
 
         // Second request within the confirm window closes it.
@@ -5916,7 +5960,7 @@ mod tests {
         assert!(ed.discard_pending_at.is_some());
         assert_eq!(
             ed.status.as_deref(),
-            Some("Discard unsaved edits? Click Discard again to confirm.")
+            Some("Unsaved edits. Press Discard again to close without saving.")
         );
     }
 
@@ -5933,7 +5977,7 @@ mod tests {
         assert!(ed.discard_pending_at.is_some());
         assert_eq!(
             ed.status.as_deref(),
-            Some("Discard unsaved edits? Click Discard again to confirm.")
+            Some("Unsaved edits. Press Discard again to close without saving.")
         );
     }
 

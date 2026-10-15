@@ -1799,17 +1799,47 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         }
         (s, _) => s,
     };
+    let discard_armed = ed.discard_pending_at.is_some();
     let toast_layer = status_text.map(|s| {
-        // Shared classifiers keep the toast kind in step with the
-        // auto-dismiss rule above.
-        let kind = if crate::editor::status_str_is_error(&s) {
-            ToastKind::Error
-        } else if crate::editor::status_str_is_in_progress(&s) {
-            ToastKind::Info
+        let kind = editor_toast_kind(
+            &s,
+            crate::editor::status_str_is_in_progress(&s),
+            discard_armed,
+        );
+        let action: Option<Element<'_, Message>> = if discard_armed {
+            Some(
+                row![
+                    bar_button(
+                        text("Keep Editing").size(ButtonSize::Sm.text_size()).into(),
+                        ButtonKind::Secondary,
+                        ButtonSize::Sm,
+                        Some(Message::EditorDiscardDisarmed),
+                    ),
+                    bar_button(
+                        text("Discard").size(ButtonSize::Sm.text_size()).into(),
+                        ButtonKind::DangerSolid,
+                        ButtonSize::Sm,
+                        Some(Message::EditorDiscardRequested),
+                    ),
+                ]
+                .spacing(SP2)
+                .into(),
+            )
+        } else if kind == ToastKind::Error {
+            Some(icon_button(
+                AppIcon::Close,
+                p.t2,
+                "Dismiss",
+                None,
+                Some(Message::EditorStatusDismissed),
+                false,
+                ICON_BTN_XS,
+                Position::Top,
+            ))
         } else {
-            ToastKind::Ok
+            None
         };
-        container(toast(kind, s, None))
+        container(toast(kind, s, action))
             .width(Length::Fill)
             .height(Length::Fill)
             .padding(iced::Padding {
@@ -2019,6 +2049,20 @@ pub(crate) const EDITOR_POPOVER_TOP: f32 = 100.0;
 pub(crate) const EDITOR_ACTION_BAR_BOTTOM: f32 = 20.0;
 /// Toasts and the frame popover sit just above the action bar.
 pub(crate) const EDITOR_TOAST_BOTTOM: f32 = 66.0;
+
+/// Toast kind for the editor status line. Armed discard wins (amber),
+/// then errors, then in-flight work; everything else is a success.
+pub(crate) fn editor_toast_kind(status: &str, in_progress: bool, discard_armed: bool) -> ToastKind {
+    if discard_armed {
+        ToastKind::Warn
+    } else if crate::editor::status_str_is_error(status) {
+        ToastKind::Error
+    } else if in_progress {
+        ToastKind::Info
+    } else {
+        ToastKind::Ok
+    }
+}
 
 /// Title-row zoom controls: − % + | 1:1 Fit. `shown_scale` is the scale
 /// the stage is displaying (explicit zoom, or the live fit scale).

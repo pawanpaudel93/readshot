@@ -400,6 +400,10 @@ pub enum Message {
     EditorCopyTextDone(Result<String, String>),
     /// User clicked Discard. Closes the editor window.
     EditorDiscardRequested,
+    /// "Keep Editing" on the armed-discard toast: back out of Discard.
+    EditorDiscardDisarmed,
+    /// Dismiss the editor status toast (the × on error toasts).
+    EditorStatusDismissed,
     /// Open the given editor popover, or close it when it is already open.
     EditorPopoverToggled(crate::editor::EditorPopover),
     /// Close whichever editor popover is open (click outside / Esc).

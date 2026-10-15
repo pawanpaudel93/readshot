@@ -301,6 +301,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // that the user has already walked away from.
             if let Some(ed) = state.editor.as_mut() {
                 if !ed.status_is_in_progress()
+                    && !ed.status_is_error()
                     && ed
                         .status_set_at
                         .is_some_and(|t| t.elapsed() > crate::editor::STATUS_AUTO_DISMISS)
@@ -492,6 +493,22 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             Task::none()
         }
 
+        Message::EditorDiscardDisarmed => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.discard_pending_at = None;
+                ed.status = None;
+                ed.status_set_at = None;
+            }
+            Task::none()
+        }
+        Message::EditorStatusDismissed => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.status = None;
+                ed.status_set_at = None;
+            }
+            Task::none()
+        }
+
         Message::EditorDiscardRequested => {
             if state.editor.as_ref().is_some_and(|ed| ed.busy) {
                 return Task::none();
@@ -514,8 +531,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         .unwrap_or(false);
                     if !armed {
                         ed.discard_pending_at = Some(now);
-                        ed.status =
-                            Some("Discard unsaved edits? Click Discard again to confirm.".into());
+                        ed.status = Some(
+                            "Unsaved edits. Press Discard again to close without saving.".into(),
+                        );
                         ed.status_set_at = Some(now);
                         return Task::none();
                     }

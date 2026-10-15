@@ -193,7 +193,7 @@ impl EditorOutputCheckpoint {
     }
 }
 
-/// How long a "Click Discard again to confirm" prompt stays armed
+/// How long an "Press Discard again" prompt stays armed
 /// before reverting to a fresh single-click state.
 pub const DISCARD_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(4);
 
