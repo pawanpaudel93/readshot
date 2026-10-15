@@ -145,7 +145,7 @@ fn draw_ellipse_icon(frame: &mut Frame, color: Color) {
 
 fn draw_line_icon(frame: &mut Frame, color: Color) {
     let path = line_path(Point::new(5.0, 17.0), Point::new(17.0, 5.0));
-    stroke_path(frame, &path, color, 2.2);
+    stroke_path(frame, &path, color, 2.0);
 }
 
 fn draw_arrow_icon(frame: &mut Frame, color: Color) {
@@ -155,8 +155,8 @@ fn draw_arrow_icon(frame: &mut Frame, color: Color) {
         p.line_to(Point::new(17.0, 4.0));
         p.line_to(Point::new(16.4, 10.7));
     });
-    stroke_path(frame, &shaft, color, 2.2);
-    stroke_path(frame, &head, color, 2.2);
+    stroke_path(frame, &shaft, color, 2.0);
+    stroke_path(frame, &head, color, 2.0);
 }
 
 fn draw_pen_icon(frame: &mut Frame, color: Color) {
@@ -170,7 +170,7 @@ fn draw_pen_icon(frame: &mut Frame, color: Color) {
     });
     let cap = line_path(Point::new(12.7, 6.1), Point::new(18.5, 11.9));
     frame.fill(&body, Color::from_rgba(color.r, color.g, color.b, 0.26));
-    stroke_path(frame, &body, color, 1.6);
+    stroke_path(frame, &body, color, 1.8);
     stroke_path(frame, &cap, color, 1.8);
 }
 
@@ -185,12 +185,12 @@ fn draw_highlighter_icon(frame: &mut Frame, color: Color) {
     let mark = Path::rectangle(Point::new(3.8, 18.0), iced::Size::new(14.4, 2.8));
     frame.fill(&mark, Color::from_rgba(color.r, color.g, color.b, 0.30));
     frame.fill(&body, Color::from_rgba(color.r, color.g, color.b, 0.22));
-    stroke_path(frame, &body, color, 1.7);
+    stroke_path(frame, &body, color, 1.8);
     stroke_path(
         frame,
         &line_path(Point::new(6.9, 15.2), Point::new(11.2, 19.5)),
         color,
-        1.7,
+        1.8,
     );
 }
 
@@ -228,7 +228,7 @@ fn draw_blur_icon(frame: &mut Frame, color: Color) {
         );
     });
     frame.fill(&droplet, Color::from_rgba(color.r, color.g, color.b, 0.18));
-    stroke_path(frame, &droplet, color, 1.8);
+    stroke_path(frame, &droplet, color, 2.0);
     for x in [7.6, 11.0, 14.4] {
         frame.fill(&Path::circle(Point::new(x, 14.8), 1.0), color);
     }
@@ -260,7 +260,7 @@ fn draw_numbered_pin_icon(frame: &mut Frame, color: Color) {
         p.close();
     });
     frame.fill(&pin, Color::from_rgba(color.r, color.g, color.b, 0.18));
-    stroke_path(frame, &pin, color, 1.7);
+    stroke_path(frame, &pin, color, 2.0);
     frame.fill_text(CanvasText {
         content: "1".into(),
         position: Point::new(8.8, 7.0),

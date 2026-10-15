@@ -32,6 +32,17 @@ use super::state::{
 };
 use super::tool_state::ToolState;
 
+/// Selection / crop chrome hue. Mirrors the app's accent teal
+/// (`READSHOT_ACCENT` = rgb8(20, 184, 166)); readshot-ui can't depend on
+/// readshot-app, so the value is duplicated here — keep them in sync.
+/// Everywhere else in the product "selected" reads teal, so the editor's
+/// selection handles, crop frame, and blur/pixelate guides match.
+const SELECTION_TEAL: Color = Color::from_rgb8(20, 184, 166);
+
+/// Font size for on-canvas chrome (the live measurement badge). Matches
+/// the app's caption step so the badge agrees with the rest of the UI.
+const CANVAS_BADGE_TEXT: f32 = 12.0;
+
 /// Canvas state: tracks the kind of in-progress interaction so the
 /// `draw` step can paint the preview and the `update` step knows what
 /// to commit on button-release.
@@ -1028,7 +1039,7 @@ fn draw_preview_badge(frame: &mut Frame, bounds: Rectangle, rect: Rectangle, lab
         content: label,
         position: Point::new(x + 7.0, y + 3.0),
         color: Color::WHITE,
-        size: iced::Pixels(11.0),
+        size: iced::Pixels(CANVAS_BADGE_TEXT),
         font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
         ..Default::default()
     });
@@ -1195,11 +1206,20 @@ fn draw_annotation_preview(
                     Point::new(rect.x, rect.y),
                     iced::Size::new(rect.width, rect.height),
                 );
-                frame.fill(&path, Color::from_rgba(0.0, 0.48, 1.0, 0.14));
+                frame.fill(
+                    &path,
+                    Color {
+                        a: 0.14,
+                        ..SELECTION_TEAL
+                    },
+                );
                 frame.stroke(
                     &path,
                     Stroke::default()
-                        .with_color(Color::from_rgba(0.0, 0.48, 1.0, 0.72))
+                        .with_color(Color {
+                            a: 0.72,
+                            ..SELECTION_TEAL
+                        })
                         .with_width(1.5),
                 );
             }
@@ -1243,7 +1263,10 @@ fn draw_annotation_preview(
                 frame.stroke(
                     &path,
                     Stroke::default()
-                        .with_color(Color::from_rgba(0.0, 0.48, 1.0, 0.95))
+                        .with_color(Color {
+                            a: 0.95,
+                            ..SELECTION_TEAL
+                        })
                         .with_width(1.5),
                 );
             }
@@ -1307,7 +1330,10 @@ fn draw_selection_bounds(frame: &mut Frame, rect: Rectangle) {
     frame.stroke(
         &path,
         Stroke::default()
-            .with_color(Color::from_rgba(0.0, 0.48, 1.0, 0.95))
+            .with_color(Color {
+                a: 0.95,
+                ..SELECTION_TEAL
+            })
             .with_width(1.5),
     );
 }
@@ -1323,7 +1349,10 @@ fn draw_selection_handle(frame: &mut Frame, point: Point) {
     frame.stroke(
         &handle_path,
         Stroke::default()
-            .with_color(Color::from_rgba(0.0, 0.48, 1.0, 1.0))
+            .with_color(Color {
+                a: 1.0,
+                ..SELECTION_TEAL
+            })
             .with_width(1.0),
     );
 }

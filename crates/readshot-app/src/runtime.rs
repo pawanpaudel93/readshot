@@ -78,6 +78,27 @@ const READSHOT_SUCCESS: Color = Color::from_rgb8(34, 197, 94);
 const READSHOT_WARNING: Color = Color::from_rgb8(245, 158, 11);
 const READSHOT_DANGER: Color = Color::from_rgb8(239, 68, 68);
 
+// Filled-button teals. READSHOT_PRIMARY / READSHOT_ACCENT read well as
+// accent *tints* (borders, selection rings, progress bars) but fail
+// WCAG AA as a solid fill behind white label text (3.74:1 and 2.49:1).
+// These darker teals carry white text comfortably — ~7.6:1 (base),
+// ~5.5:1 (hover), ~9:1 (pressed) — and are used only where a button is
+// painted a solid primary colour (`action_button_style`,
+// `zoom_button_style`). The accent globals above stay as-is so every
+// other accent surface keeps its brighter teal.
+const READSHOT_PRIMARY_FILL: Color = Color::from_rgb8(17, 94, 89); // #115E59
+const READSHOT_PRIMARY_FILL_HOVER: Color = Color::from_rgb8(15, 118, 110); // #0F766E
+const READSHOT_PRIMARY_FILL_PRESSED: Color = Color::from_rgb8(19, 78, 74); // #134E4A
+
+// Secondary-text roles. Both clear WCAG AA against the app's near-black
+// surfaces; inlined `rgba(1,1,1,α)` text used to drift between eight
+// different alphas, some below readable contrast. Decorative non-text
+// (hairline borders, surface tints, bullets/dividers) is free to sit
+// below these — only readable copy routes through them.
+const TEXT_MUTED: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.55);
+const TEXT_SECONDARY: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.72);
+const TEXT_STRONG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.92);
+
 fn readshot_theme() -> Theme {
     READSHOT_THEME
         .get_or_init(|| {
