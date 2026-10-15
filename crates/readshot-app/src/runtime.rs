@@ -2644,7 +2644,7 @@ mod tests {
         assert_eq!(line_width_label(0.5), "0.5");
     }
 
-    fn editor_with_focused_draft_and_color_popover(app: &mut App) -> iced::window::Id {
+    fn editor_with_draft_and_color_popover(app: &mut App) -> iced::window::Id {
         let mut ed = crate::editor::EditorSession::new(solid(64, 64));
         let id = iced::window::Id::unique();
         ed.window_id = Some(id);
@@ -2661,40 +2661,92 @@ mod tests {
         id
     }
 
-    fn focused_escape(id: iced::window::Id) -> Message {
-        Message::EditorKeyPressed {
-            window: id,
+    /// One Esc press as the running editor delivers it. The inline text
+    /// editor lets Esc through (`editor_text_key_binding` → None) and the
+    /// annotation canvas captures every Esc (publishing `Cancelled`), so
+    /// the keyboard subscription always sees `status_ignored: false`.
+    fn press_escape(app: &mut App, id: iced::window::Id) {
+        assert!(editor_text_key_binding(escape_key_press()).is_none());
+        let _ = update(
+            app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::Cancelled),
+        );
+        let _ = update(
+            app,
+            Message::EditorKeyPressed {
+                window: id,
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                modifiers: iced::keyboard::Modifiers::empty(),
+                status_ignored: false,
+            },
+        );
+    }
+
+    fn escape_key_press() -> iced::widget::text_editor::KeyPress {
+        iced::widget::text_editor::KeyPress {
             key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            modified_key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::Escape),
             modifiers: iced::keyboard::Modifiers::empty(),
-            status_ignored: false,
+            text: None,
+            status: iced::widget::text_editor::Status::Focused { is_hovered: false },
         }
     }
 
     #[test]
-    fn one_esc_in_the_text_editor_closes_the_popover_but_keeps_the_draft() {
-        // The focused text_editor's key binding emits EditorTextCancel and
-        // the keyboard subscription also reports the (handled) Esc.
+    fn text_editor_lets_escape_through_to_the_single_cancel_path() {
+        // If the text editor also emitted EditorTextCancel, one press would
+        // cancel twice (close the popover *and* drop the draft).
+        assert!(editor_text_key_binding(escape_key_press()).is_none());
+    }
+
+    #[test]
+    fn one_esc_closes_the_popover_but_keeps_the_draft() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
-        let id = editor_with_focused_draft_and_color_popover(&mut app);
-        let _ = update(&mut app, Message::EditorTextCancel);
-        let _ = update(&mut app, focused_escape(id));
+        let id = editor_with_draft_and_color_popover(&mut app);
+        press_escape(&mut app, id);
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.popover, None);
-        assert!(ed.pending_text.is_some());
+        assert_eq!(
+            ed.pending_text.as_ref().map(|t| t.content.as_str()),
+            Some("hello")
+        );
 
-        // Same press, the two messages in the other order.
+        // With no popover open, the next Esc cancels the draft.
+        press_escape(&mut app, id);
+        let ed = app.editor.as_ref().expect("editor stays open");
+        assert!(ed.pending_text.is_none());
+        assert!(ed.discard_pending_at.is_none());
+    }
+
+    #[test]
+    fn one_esc_closes_the_popover_but_keeps_the_selection() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
-        let id = editor_with_focused_draft_and_color_popover(&mut app);
-        let _ = update(&mut app, focused_escape(id));
-        let _ = update(&mut app, Message::EditorTextCancel);
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Frame),
+        );
+
+        press_escape(&mut app, id);
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.popover, None);
-        assert!(ed.pending_text.is_some());
+        assert_eq!(ed.model.selected_annotation(), Some(0));
 
-        // With no popover open, the next Esc cancels the draft once.
-        let _ = update(&mut app, Message::EditorTextCancel);
-        let _ = update(&mut app, focused_escape(id));
-        assert!(app.editor.as_ref().unwrap().pending_text.is_none());
+        // Next Esc clears the selection; the editor stays open.
+        press_escape(&mut app, id);
+        let ed = app.editor.as_ref().expect("editor stays open");
+        assert_eq!(ed.model.selected_annotation(), None);
+        assert!(ed.discard_pending_at.is_none());
     }
 
     #[test]
@@ -2717,15 +2769,7 @@ mod tests {
         );
         let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
         assert!(app.editor.as_ref().unwrap().width_drag_baseline.is_some());
-        let _ = update(
-            &mut app,
-            Message::EditorKeyPressed {
-                window: id,
-                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
-                modifiers: iced::keyboard::Modifiers::empty(),
-                status_ignored: true,
-            },
-        );
+        press_escape(&mut app, id);
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.popover, None);
         assert!(ed.width_drag_baseline.is_none());
@@ -6294,16 +6338,16 @@ mod tests {
     }
 
     #[test]
-    fn editor_escape_already_handled_by_a_widget_is_not_handled_twice() {
-        // Only the inline text editor captures Escape in the editor
-        // window, and its key binding already emits EditorTextCancel.
-        let handled = editor_key_message(
+    fn editor_escape_keeps_canvas_cancellation_when_already_handled() {
+        // The annotation canvas captures every Esc, so this is the path a
+        // real Esc press takes: one EditorTextCancel per press.
+        let cancel = editor_key_message(
             iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
             iced::keyboard::Modifiers::empty(),
             false,
         );
 
-        assert!(handled.is_none());
+        assert!(matches!(cancel, Some(Message::EditorTextCancel)));
     }
 
     #[test]

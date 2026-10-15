@@ -59,8 +59,9 @@ pub enum DrawState {
         /// The editor's drag-cancel sequence at the moment this drag
         /// started. If the program is later rebuilt with a bumped
         /// sequence (Escape pressed while the drag is live), the next
-        /// canvas event drops the drag instead of committing it — iced
-        /// 0.14 doesn't route the Escape key into the canvas itself.
+        /// canvas event drops the drag instead of committing it. The
+        /// canvas also handles Escape directly (see `update`); the
+        /// sequence covers an Escape that reaches the runtime instead.
         cancel_seq: u64,
     },
     /// Polyline accumulator — Pen, Highlighter. Each `CursorMoved` on
@@ -161,17 +162,18 @@ pub struct EditorCanvas {
     /// background texture stable and ask the canvas to draw only this
     /// transient overlay.
     pub selected_preview: Option<Annotation>,
-    /// Runtime-tracked Shift state. iced 0.14 does not route keyboard
-    /// events into canvas widgets, so the editor listens globally and
-    /// passes the current modifier state in here on each `view()`. When
+    /// Runtime-tracked Shift state. The editor listens to modifiers
+    /// globally (the canvas only handles Escape itself) and passes the
+    /// current state in here on each `view()`. When
     /// set, an in-progress shape drag is constrained: Rectangle/Ellipse
     /// snap to a square, Line/Arrow snap to 45° increments.
     pub shift_held: bool,
     /// The editor's drag-cancel sequence. The editor bumps this when
     /// Escape is pressed during a live drag; the canvas compares it
     /// against the value captured at drag start and cancels the drag on
-    /// the next event when they differ. (Keyboard events never reach the
-    /// canvas in iced 0.14, so the cancellation has to be threaded in.)
+    /// the next event when they differ. The canvas also captures Escape
+    /// itself and publishes `Cancelled`; this threaded-in sequence is the
+    /// path for an Escape the runtime sees uncaptured.
     pub cancel_seq: u64,
     /// Shared tessellated-geometry cache, owned by the editor session.
     /// `draw` reuses the stored geometry unless the canvas size changed

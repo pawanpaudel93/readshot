@@ -245,13 +245,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if editor_window != Some(window) {
                 return Task::none();
             }
-            // An open popover owns an unhandled Escape: close it before Esc
-            // can cancel a drag or fall through to the discard shortcut.
-            // When a widget already handled Escape (`!status_ignored`: the
-            // inline text editor, whose key binding emits its own
-            // `EditorTextCancel`), that message closes the popover instead
-            // — handling it here too would let one press close the popover
-            // *and* cancel the draft.
+            // An open popover owns Escape. In the running editor the
+            // annotation canvas captures every Escape, so it arrives with
+            // `!status_ignored` and `editor_key_message` maps it to
+            // `EditorTextCancel`, which closes the popover first. This
+            // branch only covers an Escape no widget captured, closing the
+            // popover before it can fall through to discard.
             if status_ignored
                 && matches!(
                     key,
@@ -264,11 +263,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     }
                 }
             }
-            // Escape cancels an in-progress shape/freehand drag before it
-            // can fall through to the discard shortcut. iced 0.14 never
-            // routes Escape into the canvas, so we bump the cancel sequence
-            // here; the canvas drops the drag on its next event. Only when
-            // no drag is live does Escape reach the discard flow.
+            // Fallback for an Escape no widget captured during a live
+            // shape/freehand drag: bump the cancel sequence so the canvas
+            // drops the drag on its next event instead of Escape reaching
+            // the discard flow. (Normally the canvas captures Escape itself
+            // and publishes `Cancelled`.)
             if status_ignored
                 && matches!(
                     key,

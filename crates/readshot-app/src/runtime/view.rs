@@ -2664,9 +2664,11 @@ pub(crate) fn editor_key_message(
         (Key::Named(Named::Escape), _, _) if status_ignored => {
             return Some(Message::EditorDiscardRequested);
         }
-        // A widget already handled this Escape (the inline text editor's
-        // key binding emits its own EditorTextCancel); don't repeat it.
-        (Key::Named(Named::Escape), _, _) => return None,
+        // The annotation canvas captures every Escape (publishing
+        // `Cancelled` for any live drag), so this is a real Esc press.
+        // EditorTextCancel is its single cancel action: it closes an open
+        // popover, else cancels the text draft, else clears the selection.
+        (Key::Named(Named::Escape), _, _) => return Some(Message::EditorTextCancel),
         _ => {}
     }
 
@@ -3015,8 +3017,13 @@ pub(crate) fn editor_text_key_binding(
     if matches!(key_press.key, Key::Named(Named::Enter)) && key_press.modifiers.command() {
         return Some(Binding::Custom(Message::EditorTextCommit));
     }
+    // Let Escape through uncaptured: the canvas captures it and the
+    // keyboard subscription turns it into the one EditorTextCancel for this
+    // press. (iced calls this binding even while the editor is unfocused,
+    // so emitting EditorTextCancel here as well made one press cancel
+    // twice — e.g. close the popover *and* drop the draft.)
     if matches!(key_press.key, Key::Named(Named::Escape)) {
-        return Some(Binding::Custom(Message::EditorTextCancel));
+        return None;
     }
     Binding::from_key_press(key_press)
 }
