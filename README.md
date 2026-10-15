@@ -92,6 +92,38 @@ desktop, Codex CLI, and custom-client examples.
 See [docs/CLI.md](docs/CLI.md) for the full command-line workflow
 reference.
 
+## Accessibility
+
+Readshot's graphical interface is built on the iced 0.14 UI toolkit,
+which does not yet expose an accessibility tree. As a result, screen
+readers such as VoiceOver cannot read the app's buttons, menus, or
+editor controls. This is a toolkit limitation rather than a design
+choice, and it should improve as iced's accessibility support matures.
+
+Every capture and OCR feature is also available from the command line,
+which does work with screen readers:
+
+```bash
+readshot capture --interactive --output capture.png   # capture a region to a file
+readshot capture-text --interactive --clipboard       # capture a region and copy its text
+readshot ocr --input capture.png --output text.txt    # OCR an existing image
+```
+
+See [docs/CLI.md](docs/CLI.md) for the complete command reference.
+
+Inside the GUI, keyboard shortcuts cover the main workflows:
+
+- **Capture overlay:** drag to select a region; `Enter` captures the
+  full display; `Esc` cancels.
+- **Editor tools:** `V` select, `R` rectangle, `O` ellipse, `L` line,
+  `A` arrow, `P` pen, `H` highlighter, `T` text, `B` blur, `X` pixelate,
+  `N` numbered pin, `C` crop. Arrow keys nudge the selection (hold
+  `Shift` for larger steps), `Delete` removes it, `Esc` deselects.
+- **Editor actions:** `Cmd+C` copy image, `Cmd+Shift+C` copy text,
+  `Cmd+S` save, `Cmd+P` pin, `Cmd+Z` / `Cmd+Shift+Z` undo and redo.
+- **History window:** `↑` / `↓` move between captures, `Enter` opens the
+  selected one, `Delete` removes it, `Esc` clears the search.
+
 ## Development
 
 Build from source without installing:

@@ -155,6 +155,15 @@ If you accidentally denied: open **System Settings → Privacy &
 Security → Screen Recording**, find Readshot, toggle it on, and
 restart the app.
 
+## Accessibility
+
+Readshot's GUI is built on the iced 0.14 UI toolkit, which does not yet
+expose an accessibility tree, so screen readers such as VoiceOver cannot
+read its controls. Every capture and OCR feature is also available from
+the command line, which does work with screen readers — see
+[CLI.md](CLI.md). The GUI's keyboard shortcuts are listed under
+[Accessibility in the README](../README.md#accessibility).
+
 ## Uninstalling
 
 Readshot can remove itself, so you never have to hunt down the pieces
