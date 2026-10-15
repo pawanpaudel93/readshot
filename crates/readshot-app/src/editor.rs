@@ -193,13 +193,13 @@ impl EditorOutputCheckpoint {
     }
 }
 
-/// How long an "Press Discard again" prompt stays armed
+/// How long the "Press Discard again" prompt stays armed
 /// before reverting to a fresh single-click state.
 pub const DISCARD_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// Successful status toasts auto-dismiss after this window so they
 /// don't linger forever. Error / in-progress messages stay until
-/// they're overwritten.
+/// they're dismissed (the toast's close button) or replaced.
 pub const STATUS_AUTO_DISMISS: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// A status string is "in progress" when it ends with `…` or starts
@@ -429,7 +429,12 @@ impl EditorSession {
     /// tick. Use this everywhere `status = Some(…)` was set inline so
     /// the auto-dismiss is uniform across save / copy / OCR / pin
     /// paths.
+    ///
+    /// Any status set here replaces the armed-discard prompt, so it also
+    /// disarms Discard (the armed prompt itself is written directly by
+    /// `EditorDiscardRequested`, not through this method).
     pub fn set_status(&mut self, msg: impl Into<String>) {
+        self.discard_pending_at = None;
         self.status = Some(msg.into());
         self.status_set_at = Some(std::time::Instant::now());
     }

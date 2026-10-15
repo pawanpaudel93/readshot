@@ -2831,6 +2831,41 @@ mod tests {
     }
 
     #[test]
+    fn other_status_after_arming_disarms_discard() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = debug_editor_qa_session();
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+        });
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+        let ed = app.editor.as_mut().unwrap();
+        let armed = ed.discard_pending_at.is_some();
+        assert!(armed, "dirty editor should arm");
+        ed.set_status("Copying…");
+        assert!(ed.discard_pending_at.is_none());
+        let s = ed.status.clone().unwrap();
+        assert_ne!(
+            editor_toast_kind(
+                &s,
+                crate::editor::status_str_is_in_progress(&s),
+                ed.discard_pending_at.is_some()
+            ),
+            ToastKind::Warn
+        );
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+        let ed = app.editor.as_mut().unwrap();
+        ed.set_status("Couldn't save — disk full.");
+        let s = ed.status.clone().unwrap();
+        assert_eq!(
+            editor_toast_kind(&s, false, ed.discard_pending_at.is_some()),
+            ToastKind::Error
+        );
+    }
+
+    #[test]
     fn keep_editing_disarms_discard() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let mut ed = debug_editor_qa_session();

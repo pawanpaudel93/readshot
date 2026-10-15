@@ -298,7 +298,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // the 1 Hz tick + redraw ran for the entire life of the
             // editor window. Also expire stale "Discard? Click again"
             // arms so the editor doesn't keep listening for a confirm
-            // that the user has already walked away from.
+            // that the user has already walked away from. The armed
+            // toast's Keep Editing / Discard buttons expire with the arm
+            // on purpose: the press-twice confirm is time-boxed.
             if let Some(ed) = state.editor.as_mut() {
                 if !ed.status_is_in_progress()
                     && !ed.status_is_error()
