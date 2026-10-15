@@ -23,15 +23,15 @@ use crate::welcome::WelcomeState;
 // the editor's densest toolbar readouts (zoom / width / frame style),
 // where a fixed-width container would clip at 12. The three display
 // steps (counter / screen title / hero) are deliberate and kept.
-const TEXT_MICRO: f32 = 11.0; // dense editor toolbar readouts only
-const TEXT_CAPTION: f32 = 12.0; // captions, hints, tooltips, HUD readouts
-const TEXT_BODY_SM: f32 = 13.0; // default labels, most buttons, list text
-const TEXT_BODY: f32 = 14.0; // emphasised body, primary CTAs, HUD title
-const TEXT_TITLE: f32 = 18.0; // card & section titles (absorbs old 16/17)
-const TEXT_HEADING: f32 = 20.0; // large chrome glyph (pin close ×)
-const TEXT_DISPLAY: f32 = 26.0; // HUD frame counter (mono)
-const TEXT_SCREEN_TITLE: f32 = 30.0; // Settings / CLI screen headers
-const TEXT_HERO: f32 = 32.0; // welcome hero
+const TEXT_MICRO: f32 = TYPE_MICRO; // dense editor toolbar readouts only
+const TEXT_CAPTION: f32 = TYPE_CAPTION; // captions, hints, tooltips, HUD readouts
+const TEXT_BODY_SM: f32 = TYPE_BODY; // default labels, most buttons, list text
+const TEXT_BODY: f32 = TYPE_BODY; // emphasised body, primary CTAs, HUD title
+const TEXT_TITLE: f32 = TYPE_HEADING; // card & section titles (absorbs old 16/17)
+const TEXT_HEADING: f32 = TYPE_TITLE; // large chrome glyph (pin close ×)
+const TEXT_DISPLAY: f32 = TYPE_DISPLAY; // HUD frame counter (mono)
+const TEXT_SCREEN_TITLE: f32 = TYPE_TITLE; // Settings / CLI screen headers
+const TEXT_HERO: f32 = TYPE_TITLE; // welcome hero
 
 /// Transparent click-through overlay that draws the captured rect's
 /// border on screen during a scrolling-capture session.
@@ -2771,101 +2771,28 @@ pub(crate) fn editor_action_button<'a>(
 ) -> Element<'a, Message> {
     use iced::widget::tooltip;
 
-    let lbl = text(label).size(TEXT_BODY_SM).color(Color::WHITE);
+    let lbl = text(label).size(TEXT_BODY_SM);
     let mut b = button(lbl)
         .padding([8, 16])
         .style(move |theme, status| action_button_style(theme, status, kind));
     if !busy {
         b = b.on_press(msg);
     }
-    let pop = container(text(tip).size(TEXT_CAPTION).color(Color::WHITE))
-        .padding([4, 8])
-        .style(|_| container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
-            border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.15),
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..Default::default()
-        });
-    tooltip::Tooltip::new(b, pop, tooltip::Position::Top)
-        .gap(4)
-        .into()
+    tooltip_with_key(b, tip, None, tooltip::Position::Top)
 }
 
 pub(crate) fn action_button_style(
-    _theme: &Theme,
+    theme: &Theme,
     status: button::Status,
     kind: ActionKind,
 ) -> button::Style {
-    // `pressed` is a visibly stronger/darker fill than `hover` so a
-    // click reads as a distinct state (previously pressing looked the
-    // same as hovering).
-    let (base, hover, pressed, text_color, border_color) = match kind {
-        ActionKind::Primary => (
-            READSHOT_PRIMARY_FILL,
-            READSHOT_PRIMARY_FILL_HOVER,
-            READSHOT_PRIMARY_FILL_PRESSED,
-            Color::WHITE,
-            accent(0.75),
-        ),
-        ActionKind::Secondary => (
-            Color::from_rgba(1.0, 1.0, 1.0, 0.070),
-            Color::from_rgba(1.0, 1.0, 1.0, 0.115),
-            Color::from_rgba(1.0, 1.0, 1.0, 0.16),
-            Color::WHITE,
-            Color::from_rgba(1.0, 1.0, 1.0, 0.10),
-        ),
-        ActionKind::Danger => (
-            Color::from_rgba(0.55, 0.13, 0.13, 0.92),
-            Color::from_rgba(0.72, 0.18, 0.18, 0.98),
-            Color::from_rgba(0.62, 0.15, 0.15, 1.0),
-            Color::WHITE,
-            Color::from_rgba(1.0, 0.40, 0.40, 0.22),
-        ),
-        ActionKind::DangerQuiet => (
-            Color::from_rgba(1.0, 1.0, 1.0, 0.04),
-            Color::from_rgba(0.72, 0.18, 0.18, 0.30),
-            Color::from_rgba(0.72, 0.18, 0.18, 0.45),
-            Color::from_rgb(1.0, 0.62, 0.62),
-            Color::from_rgba(1.0, 0.40, 0.40, 0.38),
-        ),
+    let k = match kind {
+        ActionKind::Primary => ButtonKind::Primary,
+        ActionKind::Secondary => ButtonKind::Secondary,
+        ActionKind::Danger => ButtonKind::DangerSolid,
+        ActionKind::DangerQuiet => ButtonKind::Danger,
     };
-    // Disabled state: dim the background to ~40% of its base alpha and
-    // mute the text. Without this the button looks identical whether
-    // its `on_press` is wired or not — confusing for the user when
-    // there's nothing to copy / nothing to clear.
-    let (bg, fg, border) = match status {
-        button::Status::Hovered => (hover, text_color, border_color),
-        button::Status::Pressed => (pressed, text_color, border_color),
-        button::Status::Disabled => {
-            let dim = Color {
-                a: base.a * 0.4,
-                ..base
-            };
-            let muted = Color {
-                a: 0.5,
-                ..text_color
-            };
-            let muted_border = Color {
-                a: border_color.a * 0.45,
-                ..border_color
-            };
-            (dim, muted, muted_border)
-        }
-        _ => (base, text_color, border_color),
-    };
-    button::Style {
-        background: Some(bg.into()),
-        text_color: fg,
-        border: iced::Border {
-            radius: 8.0.into(),
-            width: 1.0,
-            color: border,
-        },
-        ..Default::default()
-    }
+    button_style(theme, status, k)
 }
 
 /// Long name + keyboard shortcut shown in the tooltip when the user
@@ -3212,21 +3139,7 @@ pub(crate) fn key_tooltip<'a>(
     label: impl Into<String>,
     position: iced::widget::tooltip::Position,
 ) -> Element<'a, Message> {
-    use iced::widget::tooltip;
-    let tip = container(text(label.into()).size(TEXT_CAPTION).color(Color::WHITE))
-        .padding([4, 8])
-        .style(|_| container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
-            border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.15),
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..Default::default()
-        });
-    tooltip::Tooltip::new(content.into(), tip, position)
-        .gap(4)
-        .into()
+    tooltip_with_key(content, label, None, position)
 }
 
 /// One-line guidance for the currently active tool — replaces the

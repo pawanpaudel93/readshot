@@ -48,6 +48,8 @@ pub(crate) use window_settings::*;
 mod tokens;
 #[allow(unused_imports)] // removed in Task 14 once views read the tokens
 pub(crate) use tokens::*;
+mod ui_kit;
+pub(crate) use ui_kit::*;
 mod view;
 pub(crate) use view::*;
 mod scroll;
@@ -86,8 +88,6 @@ const READSHOT_DANGER: Color = Color::from_rgb8(239, 68, 68);
 // `zoom_button_style`). The accent globals above stay as-is so every
 // other accent surface keeps its brighter teal.
 const READSHOT_PRIMARY_FILL: Color = Color::from_rgb8(17, 94, 89); // #115E59
-const READSHOT_PRIMARY_FILL_HOVER: Color = Color::from_rgb8(15, 118, 110); // #0F766E
-const READSHOT_PRIMARY_FILL_PRESSED: Color = Color::from_rgb8(19, 78, 74); // #134E4A
 
 // Secondary-text roles. Both clear WCAG AA against the app's near-black
 // surfaces; inlined `rgba(1,1,1,α)` text used to drift between eight
@@ -125,7 +125,6 @@ pub(crate) fn readshot_theme_for(mode: ThemeMode) -> Theme {
 
 /// Palette for a style closure. Light only for the light Readshot theme;
 /// every other theme (overlay, iced built-ins) reads dark.
-#[allow(dead_code)] // consumed by style closures in later redesign tasks
 pub(crate) fn palette_for(theme: &Theme) -> &'static Palette {
     use iced::theme::Base; // `name()` is a `Base` trait method
     if theme.name() == LIGHT_THEME_NAME {
