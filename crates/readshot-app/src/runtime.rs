@@ -488,7 +488,7 @@ pub fn theme(state: &App, id: window::Id) -> Theme {
     let kind = state.windows.kind(id);
     if matches!(
         kind,
-        Some(WindowKind::Overlay) | Some(WindowKind::ScrollRegion)
+        Some(WindowKind::Overlay) | Some(WindowKind::ScrollRegion) | Some(WindowKind::ScrollHud)
     ) {
         return Theme::custom(OVERLAY_THEME_NAME.to_string(), iced::theme::Palette::DARK);
     }
@@ -1293,8 +1293,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     s.region_window_id = Some(region_id);
                 }
                 tasks.push(region_open.map(Message::ScrollRegionWindowReady));
-                let hud_pos = scroll_hud_position(rect, Some(bounds));
-                let (hud_id, hud_open) = window::open(scroll_hud_window_settings(hud_pos));
+                let (hud_pos, hud_size) = scroll_window_frame(rect, Some(bounds));
+                let (hud_id, hud_open) =
+                    window::open(scroll_hud_window_settings(hud_pos, hud_size));
                 state.windows.register(hud_id, WindowKind::ScrollHud);
                 tasks.push(hud_open.map(Message::ScrollHudWindowReady));
                 return Task::batch(tasks);
@@ -1487,9 +1488,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                                 }
                                 tasks.push(region_open.map(Message::ScrollRegionWindowReady));
                             }
-                            let hud_pos = scroll_hud_position(last.rect, display_bounds);
+                            let (hud_pos, hud_size) =
+                                scroll_window_frame(last.rect, display_bounds);
                             let (hud_id, hud_open) =
-                                window::open(scroll_hud_window_settings(hud_pos));
+                                window::open(scroll_hud_window_settings(hud_pos, hud_size));
                             state.windows.register(hud_id, WindowKind::ScrollHud);
                             tasks.push(hud_open.map(Message::ScrollHudWindowReady));
                             Task::batch(tasks)

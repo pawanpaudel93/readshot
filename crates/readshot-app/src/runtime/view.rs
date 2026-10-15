@@ -184,6 +184,9 @@ pub(crate) fn hud_frame_pop(pop_t: f32, reduce_motion: bool) -> (bool, f32) {
     (true, eased)
 }
 
+/// Preview height for the legacy HUD view; Task 12c rewrites the view.
+const SCROLL_HUD_PREVIEW_HEIGHT: f32 = 170.0;
+
 /// Floating HUD showing the live state of a scrolling-capture session.
 /// Renders a live preview of the most recently captured frame so the
 /// user can see what's actually being captured, a frame counter with
@@ -353,7 +356,7 @@ pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
 
     // Slim capacity bar — uses the same blue accent as the history
     // selected row so the chrome reads as part of the same app.
-    let bar_w_max = SCROLL_HUD_WIDTH - 28.0;
+    let bar_w_max = SCROLL_WINDOW_W - 28.0;
     let filled_w = (bar_w_max * progress).max(2.0).min(bar_w_max);
     let bar = container(
         container(

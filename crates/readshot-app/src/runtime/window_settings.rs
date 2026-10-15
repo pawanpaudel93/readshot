@@ -274,60 +274,54 @@ pub(crate) fn active_display_bounds() -> Option<(f32, f32, f32, f32)> {
     None
 }
 
-/// Logical width × height of the floating HUD shown while a scroll-
-/// capture session is active. Kept as constants so the placement
-/// helper below can pick a spot that doesn't overlap the capture
-/// region (where it would otherwise show up in every captured frame
-/// and ruin the stitch).
-pub(crate) const SCROLL_HUD_WIDTH: f32 = 320.0;
-pub(crate) const SCROLL_HUD_HEIGHT: f32 = 360.0;
-pub(crate) const SCROLL_HUD_PREVIEW_HEIGHT: f32 = 170.0;
+pub(crate) const SCROLL_WINDOW_W: f32 = 360.0;
+pub(crate) const SCROLL_WINDOW_H: f32 = 540.0;
 pub(crate) const SCROLL_HUD_GAP: f32 = 16.0;
 
-/// Pick a HUD position that doesn't overlap the captured rect.
-///
-/// Order of preference: right of the rect → left of the rect → below →
-/// above → fallback to the display's top-right corner clamped into
-/// the display bounds. Returns logical-pixel **global** screen
-/// coordinates (origin_x/y of the host display plus the in-display
-/// offset) so multi-monitor sessions land the HUD on the correct
-/// monitor.
-pub(crate) fn scroll_hud_position(
+/// Fixed-size window beside the capture area: right, else left (top-
+/// aligned), else below, else above, else the display's top-right.
+/// Shrinks to fit small displays. Returns logical-pixel **global**
+/// coordinates (display origin added) so multi-monitor sessions land
+/// the window on the correct monitor.
+pub(crate) fn scroll_window_frame(
     rect: readshot_core::geom::Rect,
-    display_bounds: Option<(f32, f32, f32, f32)>,
-) -> iced::Point {
-    let (ox, oy, dw, dh) = display_bounds.unwrap_or((0.0, 0.0, 1440.0, 900.0));
-    let w = SCROLL_HUD_WIDTH;
-    let h = SCROLL_HUD_HEIGHT;
+    display: Option<(f32, f32, f32, f32)>,
+) -> (iced::Point, iced::Size) {
+    let (ox, oy, dw, dh) = display.unwrap_or((0.0, 0.0, 1440.0, 900.0));
     let g = SCROLL_HUD_GAP;
-    // Compute the local position first, then add the display origin
-    // at the end so each branch reads the same way as before.
-    let local: iced::Point = if rect.right() + g + w <= dw {
-        iced::Point::new(rect.right() + g, rect.y().clamp(0.0, (dh - h).max(0.0)))
+    let w = SCROLL_WINDOW_W.min(dw - 2.0 * g).max(240.0);
+    let h = SCROLL_WINDOW_H.min(dh - g).max(320.0);
+    let clamp_y = |y: f32| y.clamp(0.0, (dh - h).max(0.0));
+    let clamp_x = |x: f32| x.clamp(0.0, (dw - w).max(0.0));
+    let (x, y) = if rect.right() + g + w <= dw {
+        (rect.right() + g, clamp_y(rect.y()))
     } else if rect.x() - g - w >= 0.0 {
-        iced::Point::new(rect.x() - g - w, rect.y().clamp(0.0, (dh - h).max(0.0)))
+        (rect.x() - g - w, clamp_y(rect.y()))
     } else if rect.bottom() + g + h <= dh {
-        iced::Point::new(rect.x().clamp(0.0, (dw - w).max(0.0)), rect.bottom() + g)
+        (clamp_x(rect.x()), rect.bottom() + g)
     } else if rect.y() - g - h >= 0.0 {
-        iced::Point::new(rect.x().clamp(0.0, (dw - w).max(0.0)), rect.y() - g - h)
+        (clamp_x(rect.x()), rect.y() - g - h)
     } else {
-        iced::Point::new((dw - w - g).max(0.0), g)
+        ((dw - w - g).max(0.0), g)
     };
-    iced::Point::new(local.x + ox, local.y + oy)
+    (iced::Point::new(x + ox, y + oy), iced::Size::new(w, h))
 }
 
 /// Floating HUD shown while a scrolling-capture session is active.
 /// Borderless, always-on-top, positioned outside the captured rect
-/// (see [`scroll_hud_position`]) so the HUD doesn't appear in the
+/// (see [`scroll_window_frame`]) so the HUD doesn't appear in the
 /// frames being stitched.
-pub(crate) fn scroll_hud_window_settings(position: iced::Point) -> window::Settings {
+pub(crate) fn scroll_hud_window_settings(
+    position: iced::Point,
+    size: iced::Size,
+) -> window::Settings {
     window::Settings {
-        size: iced::Size::new(SCROLL_HUD_WIDTH, SCROLL_HUD_HEIGHT),
-        min_size: Some(iced::Size::new(SCROLL_HUD_WIDTH, SCROLL_HUD_HEIGHT)),
+        size,
+        min_size: Some(size),
         position: window::Position::Specific(position),
         resizable: false,
         decorations: false,
-        transparent: false,
+        transparent: true,
         visible: true,
         fullscreen: false,
         level: window::Level::AlwaysOnTop,
@@ -438,4 +432,37 @@ where
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod scroll_window_tests {
+    use super::*;
+
+    #[test]
+    fn scroll_window_sits_right_of_the_region_top_aligned() {
+        let rect = readshot_core::geom::Rect::from_xywh(100.0, 120.0, 600.0, 500.0).unwrap();
+        let (pos, size) = scroll_window_frame(rect, Some((0.0, 0.0, 1440.0, 900.0)));
+        assert_eq!(size, iced::Size::new(360.0, 540.0));
+        assert_eq!(pos, iced::Point::new(716.0, 120.0));
+    }
+
+    #[test]
+    fn scroll_window_falls_back_left_then_below_then_shrinks() {
+        let rect = readshot_core::geom::Rect::from_xywh(900.0, 100.0, 500.0, 300.0).unwrap();
+        let (pos, _) = scroll_window_frame(rect, Some((0.0, 0.0, 1440.0, 900.0)));
+        assert_eq!(pos.x, 900.0 - 16.0 - 360.0);
+        // Full-width region: neither side fits → below it.
+        let wide = readshot_core::geom::Rect::from_xywh(0.0, 0.0, 1440.0, 300.0).unwrap();
+        let (pos, _) = scroll_window_frame(wide, Some((0.0, 0.0, 1440.0, 900.0)));
+        assert_eq!(pos.y, 316.0);
+        let (_, size) = scroll_window_frame(rect, Some((0.0, 0.0, 1280.0, 500.0)));
+        assert_eq!(size.height, 500.0 - 16.0);
+    }
+
+    #[test]
+    fn scroll_window_offsets_by_display_origin() {
+        let rect = readshot_core::geom::Rect::from_xywh(100.0, 120.0, 600.0, 500.0).unwrap();
+        let (pos, _) = scroll_window_frame(rect, Some((1440.0, -200.0, 1440.0, 900.0)));
+        assert_eq!(pos, iced::Point::new(1440.0 + 716.0, -200.0 + 120.0));
+    }
 }
