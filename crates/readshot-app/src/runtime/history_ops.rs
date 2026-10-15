@@ -186,6 +186,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                         Task::none()
                     }
                 },
+                HistoryKeyboardAction::FocusSearch => focus_history_search(),
             }
         }
         Message::HistoryClearAllRequested => {

@@ -576,11 +576,26 @@ pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
     .into()
 }
 
-/// Thumbnail width and row content height for History list items. The
-/// thumbnail fills the full content height (16:10, matching the
-/// 320×200 thumbnails the history store writes).
-const HISTORY_THUMB_WIDTH: f32 = 150.0;
-const HISTORY_ROW_CONTENT_HEIGHT: f32 = 94.0;
+/// History layout (spec §3.3): list column width at full size, and the
+/// 16:10 row thumbnail.
+const HISTORY_LIST_WIDTH: f32 = 340.0;
+const HISTORY_THUMB_W: f32 = 64.0;
+const HISTORY_THUMB_H: f32 = 40.0;
+/// Below this detail-pane width the action row splits into two lines.
+const HISTORY_ACTIONS_STACK_BELOW: f32 = 400.0;
+
+/// Reveal action label per platform.
+#[cfg(target_os = "macos")]
+const HISTORY_REVEAL_LABEL: &str = "Reveal in Finder";
+#[cfg(not(target_os = "macos"))]
+const HISTORY_REVEAL_LABEL: &str = "Show in Folder";
+
+// Key labels for History's own bindings (see the History keyboard
+// subscription in runtime.rs). Delete is Forward-Delete, not Backspace;
+// ⌘C copies text and ⇧⌘C the image.
+const HISTORY_KEY_DELETE: &str = "⌦";
+const HISTORY_KEY_COPY_TEXT: &str = "⌘C";
+const HISTORY_KEY_COPY_IMAGE: &str = "⇧⌘C";
 
 /// Widget id of the History search field, focused when the window opens.
 pub(crate) const HISTORY_SEARCH_ID: &str = "history-search";
@@ -606,478 +621,793 @@ pub(crate) fn history_timestamp_label(
     }
 }
 
+/// Compact age for list rows: "now", "2m", "3h", "Yesterday", "Sep 22",
+/// "Dec 31, 2025". The detail pane shows the fuller
+/// [`history_timestamp_label`].
+pub(crate) fn history_age_label(
+    at: chrono::DateTime<chrono::Local>,
+    now: chrono::DateTime<chrono::Local>,
+) -> String {
+    use chrono::Datelike;
+    let day = at.date_naive();
+    let today = now.date_naive();
+    if day == today {
+        let mins = (now - at).num_minutes().max(0);
+        if mins < 1 {
+            "now".to_string()
+        } else if mins < 60 {
+            format!("{mins}m")
+        } else {
+            format!("{}h", mins / 60)
+        }
+    } else if today.pred_opt() == Some(day) {
+        "Yesterday".to_string()
+    } else if day.year() == today.year() {
+        at.format("%b %-d").to_string()
+    } else {
+        at.format("%b %-d, %Y").to_string()
+    }
+}
+
+/// First non-blank OCR line, trimmed — the row title.
+pub(crate) fn history_first_line(text: Option<&str>) -> Option<&str> {
+    text?.lines().map(str::trim).find(|l| !l.is_empty())
+}
+
+pub(crate) fn history_word_count(text: Option<&str>) -> usize {
+    text.map_or(0, |t| t.split_whitespace().count())
+}
+
+/// Split `text` into `(segment, is_match)` runs for a case-insensitive
+/// `query`. An empty query yields the whole text unmatched.
+pub(crate) fn highlight_spans(text: &str, query: &str) -> Vec<(String, bool)> {
+    // Lowercasing can change a character's byte length (Kelvin sign,
+    // dotted İ), which would make the lowercase byte offsets invalid for
+    // `text`. Such text is shown without highlights rather than panic.
+    if text
+        .chars()
+        .any(|c| c.to_lowercase().map(char::len_utf8).sum::<usize>() != c.len_utf8())
+    {
+        return vec![(text.to_string(), false)];
+    }
+    let q = query.trim();
+    if q.is_empty() {
+        return vec![(text.to_string(), false)];
+    }
+    let lower = text.to_lowercase();
+    let ql = q.to_lowercase();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(pos) = lower[i..].find(&ql) {
+        let start = i + pos;
+        if start > i {
+            out.push((text[i..start].to_string(), false));
+        }
+        out.push((text[start..start + ql.len()].to_string(), true));
+        i = start + ql.len();
+    }
+    if i < text.len() {
+        out.push((text[i..].to_string(), false));
+    }
+    out
+}
+
+/// Text with search matches on an `acc_tint` background.
+fn highlighted_text<'a>(
+    content: &str,
+    query: &str,
+    p: &'static Palette,
+    base: Color,
+    size: f32,
+) -> iced::widget::text::Rich<'a, (), Message> {
+    let spans: Vec<iced::widget::text::Span<'a, (), iced::Font>> = highlight_spans(content, query)
+        .into_iter()
+        .map(|(segment, hit)| {
+            let s = iced::widget::span(segment);
+            if hit {
+                s.color(p.t1).background(p.acc_tint)
+            } else {
+                s.color(base)
+            }
+        })
+        .collect();
+    iced::widget::rich_text(spans).size(size)
+}
+
+fn semibold() -> iced::Font {
+    iced::Font {
+        weight: iced::font::Weight::Semibold,
+        ..iced::Font::DEFAULT
+    }
+}
+
+fn hairline() -> Element<'static, Message> {
+    container(Space::new().width(Length::Fill).height(Length::Fixed(1.0)))
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(|theme| container::Style {
+            background: Some(palette_for(theme).border_subtle.into()),
+            ..container::Style::default()
+        })
+        .into()
+}
+
+fn vhairline() -> Element<'static, Message> {
+    container(Space::new().width(Length::Fixed(1.0)).height(Length::Fill))
+        .width(Length::Fixed(1.0))
+        .height(Length::Fill)
+        .style(|theme| container::Style {
+            background: Some(palette_for(theme).border_subtle.into()),
+            ..container::Style::default()
+        })
+        .into()
+}
+
 pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
-    use iced::widget::{image as image_widget, mouse_area, text_input};
+    use iced::widget::tooltip::Position;
+    use iced::widget::{mouse_area, stack, text_input};
 
+    let p = palette(state.theme_mode);
     let total = state.history_records.len();
-    // Apply the live search filter. Empty query → every record.
-    // Match is case-insensitive substring against `ocr_text` and the
-    // human-readable timestamp (so "april" / "14:32" both work).
+    // Filter once per frame: case-insensitive match on OCR text and
+    // the timestamp (shared with the MCP server's search).
     let q = state.history_search.trim().to_lowercase();
-    let visible: Vec<&readshot_core::CaptureRecord> = if q.is_empty() {
-        state.history_records.iter().collect()
-    } else {
-        state
-            .history_records
-            .iter()
-            .filter(|r| record_matches(r, &q))
-            .collect()
-    };
+    let visible: Vec<&readshot_core::CaptureRecord> = state
+        .history_records
+        .iter()
+        .filter(|r| q.is_empty() || record_matches(r, &q))
+        .collect();
     let shown = visible.len();
+    let visible_text_count = visible
+        .iter()
+        .filter(|r| r.ocr_text.as_deref().is_some_and(|t| !t.trim().is_empty()))
+        .count();
 
-    // Header: search box + count line + status.
-    // The empty-history card below already explains what to do, so the
-    // header stays silent instead of repeating it.
-    let count_line = if total == 0 {
+    // --- Title row: heading · search · Copy Visible Text · Clear All ---
+    let count_caption = if total == 0 {
         String::new()
-    } else if q.is_empty() {
-        format!("{total} capture{}", if total == 1 { "" } else { "s" })
     } else {
-        format!("{shown} of {total} match \u{201C}{q}\u{201D}")
+        format!("{shown} of {total}")
     };
-    let search_box = text_input("Search OCR text or timestamp…", &state.history_search)
+    // Room on the right of the input for the overlaid count caption.
+    let caption_room = count_caption.chars().count() as f32 * 7.0 + 14.0;
+    let search_input = text_input("Search text", &state.history_search)
         .id(iced::widget::Id::new(HISTORY_SEARCH_ID))
         .on_input(Message::HistorySearchChanged)
         .width(Length::Fill)
-        .padding(8)
-        .size(TEXT_BODY_SM);
-    // Two-stage Clear All. Idle: a single Danger-styled "Clear All"
-    // button. Armed: the button flips to "Confirm Clear" and a
-    // companion "Cancel" button appears next to it so the user has
-    // an obvious second-step before everything is wiped.
-    let clear_button: Element<'_, Message> = if state.history_clear_all_pending {
+        .padding(iced::Padding {
+            top: 6.0,
+            bottom: 6.0,
+            left: 30.0,
+            right: caption_room,
+        })
+        .size(TYPE_BODY)
+        .style(text_input_style);
+    // Icon and count draw over the input; neither takes the cursor, so
+    // clicks still reach the field.
+    let search_decor = row![
+        crate::icons::icon(crate::icons::AppIcon::Search, p.t3, 14.0),
+        Space::new().width(Length::Fill),
+        text(count_caption).size(TYPE_CAPTION).style(text_t3),
+    ]
+    .align_y(Alignment::Center)
+    .padding([0, 10])
+    .width(Length::Fill)
+    .height(Length::Fill);
+    let search = container(stack![search_input, search_decor])
+        .width(Length::Fill)
+        .max_width(340);
+
+    let copy_visible: Element<'_, Message> = tooltip_with_key(
+        bar_button(
+            text("Copy Visible Text")
+                .size(ButtonSize::Sm.text_size())
+                .into(),
+            ButtonKind::Ghost,
+            ButtonSize::Sm,
+            (visible_text_count > 0).then_some(Message::HistoryCopyVisibleTextRequested),
+        ),
+        format!(
+            "Copy text from {visible_text_count} visible capture{}",
+            if visible_text_count == 1 { "" } else { "s" }
+        ),
+        None,
+        Position::Bottom,
+    );
+    // Two-stage Clear All: the idle button arms; armed shows a solid
+    // danger confirm plus Cancel.
+    let clear_controls: Element<'_, Message> = if state.history_clear_all_pending {
         row![
-            button(text(format!("Confirm Clear ({total})")).size(TEXT_CAPTION))
-                .padding([8, 10])
-                .style(|t, s| action_button_style(t, s, ActionKind::Danger))
-                .on_press(Message::HistoryClearAllConfirmed),
-            button(text("Cancel").size(TEXT_CAPTION))
-                .padding([8, 10])
-                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::HistoryClearAllCancelled),
+            bar_button(
+                text(format!("Confirm Clear ({total})"))
+                    .size(ButtonSize::Sm.text_size())
+                    .into(),
+                ButtonKind::DangerSolid,
+                ButtonSize::Sm,
+                Some(Message::HistoryClearAllConfirmed),
+            ),
+            bar_button(
+                text("Cancel").size(ButtonSize::Sm.text_size()).into(),
+                ButtonKind::Ghost,
+                ButtonSize::Sm,
+                Some(Message::HistoryClearAllCancelled),
+            ),
         ]
-        .spacing(6)
+        .spacing(SP1)
         .align_y(Alignment::Center)
         .into()
     } else {
-        let b = button(text("Clear All").size(TEXT_CAPTION))
-            .padding([8, 10])
-            .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet));
-        if total > 0 {
-            b.on_press(Message::HistoryClearAllRequested).into()
-        } else {
-            b.into()
-        }
+        bar_button(
+            text("Clear All").size(ButtonSize::Sm.text_size()).into(),
+            ButtonKind::Ghost,
+            ButtonSize::Sm,
+            (total > 0).then_some(Message::HistoryClearAllRequested),
+        )
+        .into()
     };
-    let has_visible_text = visible.iter().any(|r| {
-        r.ocr_text
-            .as_deref()
-            .is_some_and(|text| !text.trim().is_empty())
-    });
-    let copy_visible_button = {
-        let b = button(text("Copy Visible Text").size(TEXT_CAPTION))
-            .padding([8, 10])
-            .style(|t, s| action_button_style(t, s, ActionKind::Secondary));
-        if has_visible_text {
-            b.on_press(Message::HistoryCopyVisibleTextRequested)
-        } else {
-            b
-        }
-    };
-    let search_row = row![search_box, copy_visible_button, clear_button]
-        .spacing(8)
-        .align_y(Alignment::Center);
-    let selected = state
-        .history_selected_id
-        .and_then(|id| visible.iter().copied().find(|record| record.id == id));
-    let selected_panel: Element<'_, Message> = if visible.is_empty() {
-        Space::new().height(Length::Fixed(0.0)).into()
-    } else {
-        let delete_pending =
-            selected.is_some() && state.history_delete_pending == selected.map(|r| r.id);
-        history_selected_panel(selected, delete_pending)
-    };
-    // Only push the count / status lines when they have something to
-    // say; an empty `text("")` still reserves a line plus spacing.
-    let mut header_col = column![search_row].spacing(6);
-    if !count_line.is_empty() {
-        header_col = header_col.push(text(count_line).size(TEXT_CAPTION).color(TEXT_SECONDARY));
+    let title_content = row![
+        text("History")
+            .size(TYPE_BODY)
+            .font(semibold())
+            .style(text_t1),
+        container(search).center_x(Length::Fill),
+        copy_visible,
+        clear_controls,
+    ]
+    .spacing(SP3)
+    .align_y(Alignment::Center)
+    .padding(iced::Padding {
+        left: TITLEBAR_INSET_LEFT,
+        right: 12.0,
+        ..iced::Padding::ZERO
+    })
+    .width(Length::Fill)
+    .height(Length::Fixed(TITLEBAR_HEIGHT));
+    // The transparent title bar is covered by this row; its empty
+    // background is the window's drag handle.
+    let mut drag_handle = mouse_area(
+        Space::new()
+            .width(Length::Fill)
+            .height(Length::Fixed(TITLEBAR_HEIGHT)),
+    );
+    if let Some(id) = state.history_window_id {
+        drag_handle = drag_handle.on_press(Message::WindowDragRequested(id));
     }
-    if let Some(status) = state.history_status.as_deref() {
-        header_col = header_col.push(
-            text(status)
-                .size(TEXT_CAPTION)
-                .color(Color::from_rgb(0.95, 0.55, 0.25)),
-        );
-    }
-    let header = container(header_col.push(selected_panel))
-        .padding([12, 16])
-        .style(editor_chrome_style);
+    let title_row = stack![drag_handle, title_content]
+        .width(Length::Fill)
+        .height(Length::Fixed(TITLEBAR_HEIGHT));
 
-    // Records list — filtered.
-    let mut col = column![].spacing(8).padding(iced::Padding {
-        top: 0.0,
-        right: 16.0,
-        bottom: 16.0,
-        left: 16.0,
-    });
-    if let Some(root) = state.history_root.as_ref() {
-        if visible.is_empty() {
-            let empty = if total == 0 {
-                empty_state_card(
-                    "No captures yet",
-                    "Take a capture and it appears here with its image, OCR text, and quick actions.",
-                    Some(("Capture", Message::OpenOverlayRequested)),
-                )
-            } else {
-                empty_state_card(
-                    "No matching captures",
-                    "Try a different search or clear the filter to see the full history.",
-                    Some(("Clear Search", Message::HistorySearchChanged(String::new()))),
-                )
-            };
-            col = col.push(container(empty).padding([28, 0]));
-        }
-        // Render at most a page of rows. The whole widget tree is
-        // built eagerly (iced 0.14 has no virtual list), so without
-        // this an Unlimited-retention history would build a thumbnail
-        // widget for every record on open. The search filter above
-        // still scans every record; only the rendered slice is capped.
-        let page_limit = state.history_page_limit.max(1);
-        for r in visible.iter().take(page_limit) {
-            let png_path = history_png_path(root, r);
-            let preview_path = history_thumbnail_path(root, r);
-            let stamp = history_timestamp_label(
-                r.captured_at.with_timezone(&chrono::Local),
-                chrono::Local::now(),
-            );
-            let dims = format!("{} × {} px", r.width_px, r.height_px);
-            let snippet = r
-                .ocr_text
-                .as_ref()
-                .map(|t| {
-                    let trimmed = t.chars().take(120).collect::<String>();
-                    if t.chars().count() > 120 {
-                        format!("{trimmed}…")
-                    } else {
-                        trimmed
-                    }
-                })
-                .unwrap_or_else(|| "(no OCR text yet)".to_string());
-
-            let thumb: Element<Message> = if preview_path.exists() || png_path.exists() {
-                let path = if preview_path.exists() {
-                    preview_path
-                } else {
-                    png_path
-                };
-                // Fill the whole row height and crop (Cover) rather than
-                // letterboxing (Contain): wide captures used to collapse
-                // into a thin strip in the middle of the row. The image
-                // widget clips Cover overflow to its bounds.
-                container(
-                    image_widget(image_widget::Handle::from_path(path))
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .content_fit(iced::ContentFit::Cover)
-                        .border_radius(6.0),
-                )
-                .width(Length::Fixed(HISTORY_THUMB_WIDTH))
-                .height(Length::Fill)
-                .style(|_| iced::widget::container::Style {
-                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.22).into()),
-                    border: iced::Border {
-                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.08),
-                        width: 1.0,
-                        radius: 6.0.into(),
-                    },
-                    ..Default::default()
-                })
-                .into()
-            } else {
-                container(
-                    text("Image file missing")
-                        .size(TEXT_CAPTION)
-                        .color(TEXT_SECONDARY),
-                )
-                .width(Length::Fixed(HISTORY_THUMB_WIDTH))
-                .height(Length::Fill)
-                .center_x(Length::Fixed(HISTORY_THUMB_WIDTH))
-                .center_y(Length::Fill)
-                .into()
-            };
-
-            let meta = column![
-                text(stamp).size(TEXT_BODY_SM),
-                text(dims).size(TEXT_CAPTION).color(TEXT_SECONDARY),
-                text(snippet).size(TEXT_CAPTION).color(TEXT_SECONDARY),
-            ]
-            .spacing(4)
-            .width(Length::Fill);
-            // Fixed row height so the thumbnail's Fill height has a
-            // definite size; a long OCR snippet is clipped instead of
-            // stretching the row past the thumbnail.
-            let meta = container(meta)
-                .height(Length::Fill)
-                .center_y(Length::Fill)
-                .clip(true);
-
-            let is_selected = state.history_selected_id == Some(r.id);
-            let actions = history_row_actions(r.id, is_selected);
-            let row_widget = container(
-                row![thumb, meta, actions]
-                    .spacing(12)
-                    .height(Length::Fixed(HISTORY_ROW_CONTENT_HEIGHT))
-                    .align_y(Alignment::Center),
-            )
-            .padding(10)
-            .style(move |_| iced::widget::container::Style {
-                background: Some(
-                    if is_selected {
-                        history_selected_fill()
-                    } else {
-                        Color::from_rgba(1.0, 1.0, 1.0, 0.045)
-                    }
-                    .into(),
-                ),
-                border: iced::Border {
-                    color: if is_selected {
-                        history_selected_border()
-                    } else {
-                        Color::from_rgba(1.0, 1.0, 1.0, 0.075)
-                    },
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..Default::default()
-            });
-            col = col.push(
-                mouse_area(row_widget)
-                    .on_press(Message::HistorySelect(r.id))
-                    .on_double_click(Message::HistoryOpenInEditor(r.id))
-                    .interaction(iced::mouse::Interaction::Pointer),
-            );
-        }
-        // "Show More" pager — appears whenever matches exceed the
-        // rendered page. Bounded incremental loading keeps open time
-        // and memory flat for very large histories.
-        let remaining = visible.len().saturating_sub(page_limit);
-        if remaining > 0 {
-            col = col.push(
-                container(
-                    button(text(format!("Show More ({remaining} more)")).size(TEXT_CAPTION))
-                        .padding([8, 14])
-                        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                        .on_press(Message::HistoryShowMore),
-                )
-                .center_x(Length::Fill)
-                .padding([4, 0]),
-            );
-        }
-    } else {
-        col = col.push(container(empty_state_card(
+    // --- Body ---
+    let body: Element<'_, Message> = if state.history_root.is_none() {
+        empty_state(
+            crate::icons::AppIcon::Alert,
+            p,
             "History unavailable",
             "Readshot could not resolve the history folder for this session.",
             None,
-        )));
-    }
+        )
+    } else if shown == 0 {
+        if total == 0 {
+            empty_state(
+                crate::icons::AppIcon::History,
+                p,
+                "No captures yet",
+                "Take a capture and it appears here with its image, OCR text, and quick actions.",
+                Some(
+                    bar_button(
+                        text("Capture").size(ButtonSize::Md.text_size()).into(),
+                        ButtonKind::Primary,
+                        ButtonSize::Md,
+                        Some(Message::OpenOverlayRequested),
+                    )
+                    .into(),
+                ),
+            )
+        } else {
+            empty_state(
+                crate::icons::AppIcon::Search,
+                p,
+                "No matching captures",
+                "Try a different search or clear the filter to see the full history.",
+                Some(
+                    bar_button(
+                        text("Clear Search").size(ButtonSize::Md.text_size()).into(),
+                        ButtonKind::Secondary,
+                        ButtonSize::Md,
+                        Some(Message::HistorySearchChanged(String::new())),
+                    )
+                    .into(),
+                ),
+            )
+        }
+    } else {
+        responsive(move |size| history_split(state, p, &visible, size.width)).into()
+    };
+    // The split view shows status above its key legend; empty states
+    // show it under the message so e.g. "Cleared …" is still seen.
+    let body: Element<'_, Message> = match history_status_toast(state) {
+        Some(t) if shown == 0 || state.history_root.is_none() => {
+            column![body, container(t).center_x(Length::Fill).padding(SP4)].into()
+        }
+        _ => body,
+    };
 
-    container(
-        column![
-            header,
-            scrollable(col)
-                .direction(iced::widget::scrollable::Direction::Vertical(
-                    slim_scrollbar(),
-                ))
-                .spacing(10.0)
-                .height(Length::Fill)
-        ]
-        .spacing(12)
-        .padding(12),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .style(editor_shell_style)
-    .into()
+    container(column![title_row, hairline(), body])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(surface_style)
+        .into()
 }
 
+/// List | detail split. The list keeps 340 px until the window is too
+/// narrow for a usable detail pane, then shrinks.
+fn history_status_toast(state: &App) -> Option<Element<'_, Message>> {
+    let status = state.history_status.as_deref()?;
+    let kind = if crate::editor::status_str_is_error(status) {
+        ToastKind::Error
+    } else {
+        ToastKind::Ok
+    };
+    Some(toast(kind, status.to_string(), None))
+}
+
+fn history_split<'a>(
+    state: &'a App,
+    p: &'static Palette,
+    visible: &[&'a readshot_core::CaptureRecord],
+    width: f32,
+) -> Element<'a, Message> {
+    use iced::widget::{image as image_widget, mouse_area};
+
+    let list_w = if width >= HISTORY_LIST_WIDTH * 2.2 {
+        HISTORY_LIST_WIDTH
+    } else {
+        (width * 0.45).clamp(200.0, HISTORY_LIST_WIDTH)
+    };
+    let detail_w = (width - list_w - 1.0).max(0.0);
+    let query = state.history_search.trim();
+    let Some(root) = state.history_root.as_ref() else {
+        return Space::new().into();
+    };
+
+    // Render at most a page of rows. iced 0.14 has no virtual list, so
+    // an Unlimited-retention history would otherwise build a thumbnail
+    // widget for every record on open.
+    let page_limit = state.history_page_limit.max(1);
+    let now = chrono::Local::now();
+    let mut list = column![].spacing(2).padding(SP2);
+    for r in visible.iter().take(page_limit) {
+        let png_path = history_png_path(root, r);
+        let preview_path = history_thumbnail_path(root, r);
+        let thumb: Element<'_, Message> = if preview_path.exists() || png_path.exists() {
+            let path = if preview_path.exists() {
+                preview_path
+            } else {
+                png_path
+            };
+            image_widget(image_widget::Handle::from_path(path))
+                .width(Length::Fixed(HISTORY_THUMB_W))
+                .height(Length::Fixed(HISTORY_THUMB_H))
+                .content_fit(iced::ContentFit::Cover)
+                .border_radius(R_CHIP)
+                .into()
+        } else {
+            container(crate::icons::icon(crate::icons::AppIcon::Image, p.t3, 14.0))
+                .width(Length::Fixed(HISTORY_THUMB_W))
+                .height(Length::Fixed(HISTORY_THUMB_H))
+                .center_x(Length::Fixed(HISTORY_THUMB_W))
+                .center_y(Length::Fixed(HISTORY_THUMB_H))
+                .style(|theme| container::Style {
+                    background: Some(palette_for(theme).hover.into()),
+                    border: iced::Border {
+                        radius: R_CHIP.into(),
+                        ..iced::Border::default()
+                    },
+                    ..container::Style::default()
+                })
+                .into()
+        };
+        let title: Element<'_, Message> = match history_first_line(r.ocr_text.as_deref()) {
+            Some(line) => highlighted_text(line, query, p, p.t1, TYPE_BODY)
+                .font(iced::Font {
+                    weight: iced::font::Weight::Medium,
+                    ..iced::Font::DEFAULT
+                })
+                .wrapping(text::Wrapping::None)
+                .into(),
+            None => text("No text yet")
+                .size(TYPE_BODY)
+                .style(text_t3)
+                .wrapping(text::Wrapping::None)
+                .into(),
+        };
+        let sub = text(format!("{} × {}", r.width_px, r.height_px))
+            .font(mono_font())
+            .size(TYPE_MICRO)
+            .style(text_t3)
+            .wrapping(text::Wrapping::None);
+        let meta = container(column![title, sub].spacing(2))
+            .width(Length::Fill)
+            .clip(true);
+        let age = text(history_age_label(
+            r.captured_at.with_timezone(&chrono::Local),
+            now,
+        ))
+        .size(TYPE_CAPTION)
+        .style(text_t3)
+        .wrapping(text::Wrapping::None);
+        let is_selected = state.history_selected_id == Some(r.id);
+        let row_widget = container(
+            row![thumb, meta, age]
+                .spacing(SP3)
+                .align_y(Alignment::Center),
+        )
+        .padding(SP2)
+        .width(Length::Fill)
+        .style(move |theme| {
+            let p = palette_for(theme);
+            container::Style {
+                background: is_selected.then(|| history_selected_fill(p).into()),
+                border: iced::Border {
+                    color: if is_selected {
+                        history_selected_border(p)
+                    } else {
+                        Color::TRANSPARENT
+                    },
+                    width: if is_selected { 1.0 } else { 0.0 },
+                    radius: 9.0.into(),
+                },
+                ..container::Style::default()
+            }
+        });
+        list = list.push(
+            mouse_area(row_widget)
+                .on_press(Message::HistorySelect(r.id))
+                .on_double_click(Message::HistoryOpenInEditor(r.id))
+                .interaction(iced::mouse::Interaction::Pointer),
+        );
+    }
+    // "Show More" pager whenever matches exceed the rendered page.
+    let remaining = visible.len().saturating_sub(page_limit);
+    if remaining > 0 {
+        list = list.push(
+            container(bar_button(
+                text(format!("Show More ({remaining} more)"))
+                    .size(ButtonSize::Sm.text_size())
+                    .into(),
+                ButtonKind::Ghost,
+                ButtonSize::Sm,
+                Some(Message::HistoryShowMore),
+            ))
+            .center_x(Length::Fill)
+            .padding([SP1, 0.0]),
+        );
+    }
+
+    let legend_item = |key: &'static str, label: &'static str| -> Element<'_, Message> {
+        row![key_chip(key), text(label).size(TYPE_CAPTION).style(text_t3)]
+            .spacing(5)
+            .align_y(Alignment::Center)
+            .into()
+    };
+    let footer = container(
+        row![
+            legend_item("↑↓", "Move"),
+            legend_item("↵", "Open"),
+            legend_item(HISTORY_KEY_DELETE, "Delete"),
+            legend_item("⌘F", "Search"),
+        ]
+        .spacing(14)
+        .wrap()
+        .vertical_spacing(SP1),
+    )
+    .padding([10, 14])
+    .width(Length::Fill);
+
+    let mut list_col = column![scrollable(list)
+        .direction(iced::widget::scrollable::Direction::Vertical(
+            slim_scrollbar(),
+        ))
+        .height(Length::Fill)];
+    if let Some(t) = history_status_toast(state) {
+        list_col = list_col.push(container(t).width(Length::Fill).padding(SP2));
+    }
+    list_col = list_col.push(hairline()).push(footer);
+    let list_pane = container(list_col)
+        .width(Length::Fixed(list_w))
+        .height(Length::Fill)
+        .style(bg_style);
+
+    let selected = state
+        .history_selected_id
+        .and_then(|id| visible.iter().copied().find(|record| record.id == id));
+    let delete_pending = selected.is_some_and(|r| state.history_delete_pending == Some(r.id));
+    let detail = history_selected_panel(
+        selected,
+        root,
+        query,
+        p,
+        delete_pending,
+        detail_w - 2.0 * SP4 < HISTORY_ACTIONS_STACK_BELOW,
+    );
+
+    row![list_pane, vhairline(), detail]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+/// Detail pane: preview, recognized text, one action row.
 pub(crate) fn history_selected_panel<'a>(
     record: Option<&'a readshot_core::CaptureRecord>,
+    root: &Path,
+    query: &str,
+    p: &'static Palette,
     delete_pending: bool,
+    stack_actions: bool,
 ) -> Element<'a, Message> {
+    use crate::icons::AppIcon;
+    use iced::widget::image as image_widget;
+    use iced::widget::tooltip::Position;
+
     let Some(record) = record else {
-        return container(
-            text("Select a capture to preview details. Use ↑/↓, Enter, and Delete in this window.")
-                .size(TEXT_CAPTION)
-                .color(TEXT_MUTED),
-        )
-        .padding([8, 10])
-        .width(Length::Fill)
-        .style(history_selected_panel_style)
-        .into();
+        return empty_state(
+            AppIcon::History,
+            p,
+            "No capture selected",
+            "Select a capture to see its image and text.",
+            None,
+        );
     };
+    let id = record.id;
+
+    let png_path = history_png_path(root, record);
+    let thumb_path = history_thumbnail_path(root, record);
+    let preview: Element<'a, Message> = if png_path.exists() || thumb_path.exists() {
+        let path = if png_path.exists() {
+            png_path
+        } else {
+            thumb_path
+        };
+        container(
+            image_widget(image_widget::Handle::from_path(path))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .content_fit(iced::ContentFit::Contain),
+        )
+        .padding(SP2)
+        .into()
+    } else {
+        empty_state(
+            AppIcon::Image,
+            p,
+            "Image file missing",
+            "The image for this capture was moved or deleted. Its text is still here.",
+            None,
+        )
+    };
+    let preview = container(preview)
+        .width(Length::Fill)
+        .height(Length::FillPortion(5))
+        .clip(true)
+        .style(history_selected_panel_style);
 
     let stamp = history_timestamp_label(
         record.captured_at.with_timezone(&chrono::Local),
         chrono::Local::now(),
     );
-    let text_count = record
+    let ocr = record
         .ocr_text
         .as_deref()
-        .map(|text| text.trim().chars().count())
-        .unwrap_or(0);
-    let has_text = text_count > 0;
-    let id = record.id;
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
+    let words = history_word_count(ocr);
+    let heading = row![
+        text("Recognized Text")
+            .size(TYPE_BODY)
+            .font(semibold())
+            .style(text_t1),
+        Space::new().width(Length::Fill),
+        text(format!(
+            "{stamp} · {words} word{}",
+            if words == 1 { "" } else { "s" }
+        ))
+        .size(TYPE_CAPTION)
+        .style(text_t3)
+        .wrapping(text::Wrapping::None),
+    ]
+    .spacing(SP2)
+    .align_y(Alignment::Center);
+    let text_body: Element<'a, Message> = match ocr {
+        Some(t) => scrollable(
+            container(
+                highlighted_text(t, query, p, p.t2, TYPE_CAPTION)
+                    .wrapping(text::Wrapping::WordOrGlyph)
+                    .width(Length::Fill),
+            )
+            .padding([10, 12]),
+        )
+        .direction(iced::widget::scrollable::Direction::Vertical(
+            slim_scrollbar(),
+        ))
+        .height(Length::Fill)
+        .into(),
+        None => container(
+            text("No text recognized.")
+                .size(TYPE_CAPTION)
+                .style(text_t3),
+        )
+        .padding([10, 12])
+        .into(),
+    };
+    let text_box = container(text_body)
+        .width(Length::Fill)
+        .height(Length::FillPortion(4))
+        .style(history_selected_panel_style);
 
-    container(responsive(move |available| {
-        let summary = column![
-            text("Selected capture")
-                .size(TEXT_CAPTION)
-                .color(settings_muted_text()),
-            text(format!(
-                "{} · {} × {} px · {} OCR chars",
-                stamp, record.width_px, record.height_px, text_count
-            ))
-            .size(TEXT_CAPTION),
+    // Two-stage delete, like Clear All: the icon arms; armed shows a
+    // solid "Delete Capture" plus Cancel.
+    let delete_control: Element<'a, Message> = if delete_pending {
+        row![
+            bar_button(
+                text("Delete Capture")
+                    .size(ButtonSize::Sm.text_size())
+                    .into(),
+                ButtonKind::DangerSolid,
+                ButtonSize::Sm,
+                Some(Message::HistoryDeleteConfirmed(id)),
+            ),
+            bar_button(
+                text("Cancel").size(ButtonSize::Sm.text_size()).into(),
+                ButtonKind::Ghost,
+                ButtonSize::Sm,
+                Some(Message::HistoryDeleteCancelled),
+            ),
         ]
-        .spacing(3);
-        let secondary = |label: &'static str, msg: Message| {
-            button(text(label).size(TEXT_CAPTION))
-                .padding([6, 9])
-                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(msg)
-        };
-        let copy_text_button: Element<'_, Message> = if has_text {
-            secondary("Copy Text", Message::HistoryCopyText(id)).into()
-        } else {
-            button(text("Copy Text").size(TEXT_CAPTION))
-                .padding([6, 9])
-                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .into()
-        };
-        // `Open` is the most common action on a selected row (also
-        // the Enter-key default) — promote it to Primary styling so
-        // the eye lands on it instead of bouncing between three
-        // identical Secondary buttons.
-        let open_btn = button(text("Open").size(TEXT_CAPTION))
-            .padding([6, 9])
-            .style(|t, s| action_button_style(t, s, ActionKind::Primary))
-            .on_press(Message::HistoryOpenInEditor(id));
-        let primary_actions = row![
-            open_btn,
-            secondary("Reveal", Message::HistoryReveal(id)),
-            copy_text_button,
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
-        // Two-stage single delete, mirroring "Clear All": the idle
-        // button just arms the prompt; while armed it splits into a
-        // Danger "Delete Capture" and a Secondary "Cancel" so a
-        // capture can't vanish on a single stray click or keypress.
-        let delete_control: Element<'_, Message> = if delete_pending {
+        .spacing(SP1)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        icon_button(
+            AppIcon::Trash,
+            p.t2,
+            "Delete Capture",
+            Some(HISTORY_KEY_DELETE),
+            Some(Message::HistoryDelete(id)),
+            false,
+            ICON_BTN,
+            Position::Top,
+        )
+    };
+    let left_actions = row![
+        delete_control,
+        icon_button(
+            AppIcon::Folder,
+            p.t2,
+            HISTORY_REVEAL_LABEL,
+            None,
+            Some(Message::HistoryReveal(id)),
+            false,
+            ICON_BTN,
+            Position::Top,
+        ),
+        icon_button(
+            AppIcon::Open,
+            p.t2,
+            "Open in Editor",
+            Some("↵"),
+            Some(Message::HistoryOpenInEditor(id)),
+            false,
+            ICON_BTN,
+            Position::Top,
+        ),
+    ]
+    .spacing(2)
+    .align_y(Alignment::Center);
+    let has_text = ocr.is_some();
+    let text_fg = if has_text {
+        p.t1
+    } else {
+        Color {
+            a: p.t1.a * 0.45,
+            ..p.t1
+        }
+    };
+    let copy_text = tooltip_with_key(
+        bar_button(
             row![
-                button(text("Delete Capture").size(TEXT_CAPTION))
-                    .padding([6, 9])
-                    .style(|t, s| action_button_style(t, s, ActionKind::Danger))
-                    .on_press(Message::HistoryDeleteConfirmed(id)),
-                button(text("Cancel").size(TEXT_CAPTION))
-                    .padding([6, 9])
-                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                    .on_press(Message::HistoryDeleteCancelled),
+                crate::icons::icon(AppIcon::ScanText, text_fg, ICON_SIZE),
+                text("Copy Text").size(ButtonSize::Md.text_size()),
             ]
             .spacing(6)
             .align_y(Alignment::Center)
-            .into()
-        } else {
-            button(text("Delete").size(TEXT_CAPTION))
-                .padding([6, 9])
-                .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
-                .on_press(Message::HistoryDelete(id))
-                .into()
-        };
-        let secondary_actions = row![
-            secondary("Copy Image", Message::HistoryCopyImage(id)),
-            secondary("Pin", Message::HistoryPin(id)),
-            delete_control,
+            .into(),
+            ButtonKind::Secondary,
+            ButtonSize::Md,
+            has_text.then_some(Message::HistoryCopyText(id)),
+        ),
+        "Copy Text",
+        Some(HISTORY_KEY_COPY_TEXT),
+        Position::Top,
+    );
+    let copy_image = tooltip_with_key(
+        bar_button(
+            row![
+                crate::icons::icon(AppIcon::Copy, p.pri_fg, ICON_SIZE),
+                text("Copy Image").size(ButtonSize::Md.text_size()),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into(),
+            ButtonKind::Primary,
+            ButtonSize::Md,
+            Some(Message::HistoryCopyImage(id)),
+        ),
+        "Copy Image",
+        Some(HISTORY_KEY_COPY_IMAGE),
+        Position::Top,
+    );
+    let pin = icon_button(
+        AppIcon::Pin,
+        p.t2,
+        "Pin",
+        None,
+        Some(Message::HistoryPin(id)),
+        false,
+        ICON_BTN,
+        Position::Top,
+    );
+    let actions: Element<'a, Message> = if stack_actions {
+        column![
+            row![left_actions, Space::new().width(Length::Fill), pin].align_y(Alignment::Center),
+            row![Space::new().width(Length::Fill), copy_text, copy_image]
+                .spacing(SP2)
+                .align_y(Alignment::Center),
         ]
-        .spacing(6)
-        .align_y(Alignment::Center);
-        if available.width < 600.0 {
-            column![summary, primary_actions, secondary_actions]
-                .spacing(8)
-                .into()
-        } else if available.width < 820.0 {
-            row![
-                summary.width(Length::Fill),
-                column![primary_actions, secondary_actions].spacing(6)
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .into()
-        } else {
-            row![
-                summary.width(Length::Fill),
-                primary_actions,
-                secondary_actions
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .into()
-        }
-    }))
-    .height(Length::Shrink)
-    .padding([8, 10])
-    .width(Length::Fill)
-    .style(history_selected_panel_style)
-    .into()
+        .spacing(SP2)
+        .into()
+    } else {
+        row![
+            left_actions,
+            Space::new().width(Length::Fill),
+            pin,
+            copy_text,
+            copy_image,
+        ]
+        .spacing(SP2)
+        .align_y(Alignment::Center)
+        .into()
+    };
+
+    column![preview, heading, text_box, actions]
+        .spacing(SP3)
+        .padding(SP4)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
-/// Shared accent colour for the history row's selected state — used
-/// by the row background, the selected border, and the chevron so
-/// they read as one accent rather than sibling blues drifting apart.
-pub(crate) const HISTORY_SELECTED_RGB: (f32, f32, f32) =
-    (READSHOT_ACCENT.r, READSHOT_ACCENT.g, READSHOT_ACCENT.b);
-pub(crate) const HISTORY_SELECTED_FILL_ALPHA: f32 = 0.14;
-pub(crate) const HISTORY_SELECTED_BORDER_ALPHA: f32 = 0.55;
-
-pub(crate) fn history_selected_fill() -> Color {
-    let (r, g, b) = HISTORY_SELECTED_RGB;
-    Color::from_rgba(r, g, b, HISTORY_SELECTED_FILL_ALPHA)
+/// Selected list row: accent tint fill with a 35 % accent hairline.
+pub(crate) fn history_selected_fill(p: &Palette) -> Color {
+    p.acc_tint
 }
 
-pub(crate) fn history_selected_border() -> Color {
-    let (r, g, b) = HISTORY_SELECTED_RGB;
-    Color::from_rgba(r, g, b, HISTORY_SELECTED_BORDER_ALPHA)
+pub(crate) fn history_selected_border(p: &Palette) -> Color {
+    Color { a: 0.35, ..p.acc }
 }
 
-pub(crate) fn history_selected_panel_style(_theme: &Theme) -> iced::widget::container::Style {
+/// Preview and text boxes in the detail pane.
+pub(crate) fn history_selected_panel_style(theme: &Theme) -> iced::widget::container::Style {
+    let p = palette_for(theme);
     iced::widget::container::Style {
-        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.055).into()),
+        background: Some(p.bg.into()),
         border: iced::Border {
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+            color: p.border_subtle,
             width: 1.0,
-            radius: 8.0.into(),
+            radius: R_BUTTON.into(),
         },
         ..Default::default()
     }
-}
-
-/// Compact row-level affordance. The whole row is already pressable
-/// via `mouse_area`, so every row shows a chevron hint; the selected
-/// row's chevron takes the accent colour to match its fill and border. The real Open / Copy / Reveal
-/// commands live in the selected-capture panel above the list.
-pub(crate) fn history_row_actions<'a>(
-    _id: readshot_core::Uuid,
-    is_selected: bool,
-) -> Element<'a, Message> {
-    let chevron = if is_selected {
-        history_selected_border()
-    } else {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.35)
-    };
-    container(text("›").size(TEXT_TITLE).color(chevron))
-        .padding([6, 12])
-        .into()
 }
 
 // Search semantics live in readshot-core (shared with the MCP
@@ -1292,15 +1622,24 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     use readshot_ui::editor::{canvas::EditorCanvas, ToolState};
 
     let Some(ed) = state.editor.as_ref() else {
-        return container(empty_state_card(
+        return container(empty_state(
+            AppIcon::Image,
+            palette(state.theme_mode),
             "No capture open",
             "Start a capture to annotate, copy, save, pin, or extract text.",
-            Some(("Capture", Message::OpenOverlayRequested)),
+            Some(
+                bar_button(
+                    text("Capture").size(ButtonSize::Md.text_size()).into(),
+                    ButtonKind::Primary,
+                    ButtonSize::Md,
+                    Some(Message::OpenOverlayRequested),
+                )
+                .into(),
+            ),
         ))
         .width(Length::Fill)
         .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
+        .style(bg_style)
         .into();
     };
 
@@ -4061,37 +4400,6 @@ pub(crate) fn setting_value_box(value: String, active: bool) -> Element<'static,
     .into()
 }
 
-pub(crate) fn empty_state_card<'a>(
-    title: &'static str,
-    body: &'static str,
-    action: Option<(&'static str, Message)>,
-) -> Element<'a, Message> {
-    let mut content = column![
-        text(title).size(TEXT_TITLE),
-        text(body)
-            .size(TEXT_CAPTION)
-            .color(settings_muted_text())
-            .width(Length::Fill),
-    ]
-    .spacing(8)
-    .max_width(420);
-
-    if let Some((label, msg)) = action {
-        content = content.push(
-            button(text(label).size(TEXT_BODY_SM).color(Color::WHITE))
-                .padding([8, 16])
-                .style(|theme, status| action_button_style(theme, status, ActionKind::Primary))
-                .on_press(msg),
-        );
-    }
-
-    container(content)
-        .padding(18)
-        .width(Length::Fill)
-        .style(settings_section_style)
-        .into()
-}
-
 pub(crate) fn settings_section_style(_theme: &Theme) -> iced::widget::container::Style {
     iced::widget::container::Style {
         background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.055).into()),
@@ -4406,6 +4714,79 @@ pub(crate) fn welcome_button_label<'a>(
 #[cfg(test)]
 mod tests {
     use super::ocr_language_display_name;
+    use super::{
+        highlight_spans, history_age_label, history_first_line, history_selected_border,
+        history_selected_fill, history_word_count,
+    };
+    use crate::runtime::{DARK, LIGHT};
+
+    #[test]
+    fn highlight_spans_marks_case_insensitive_matches() {
+        let spans = highlight_spans("Quarterly overview", "quarter");
+        assert_eq!(
+            spans,
+            vec![
+                ("Quarter".to_string(), true),
+                ("ly overview".to_string(), false)
+            ]
+        );
+        assert_eq!(highlight_spans("abc", ""), vec![("abc".to_string(), false)]);
+        assert_eq!(
+            highlight_spans("a-a", "a"),
+            vec![("a".into(), true), ("-".into(), false), ("a".into(), true)]
+        );
+        // Lowercasing changes byte lengths here; must not panic.
+        assert_eq!(
+            highlight_spans("\u{212A}İİ", "i"),
+            vec![("\u{212A}İİ".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn history_age_label_is_compact() {
+        use chrono::TimeZone;
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 9, 27, 14, 0, 0)
+            .unwrap();
+        let ago = |mins: i64| now - chrono::Duration::minutes(mins);
+        assert_eq!(history_age_label(ago(0), now), "now");
+        assert_eq!(history_age_label(ago(2), now), "2m");
+        assert_eq!(history_age_label(ago(90), now), "1h");
+        assert_eq!(history_age_label(ago(60 * 20), now), "Yesterday");
+        assert_eq!(history_age_label(ago(60 * 24 * 5), now), "Sep 22");
+        let old = chrono::Local
+            .with_ymd_and_hms(2025, 12, 31, 9, 0, 0)
+            .unwrap();
+        assert_eq!(history_age_label(old, now), "Dec 31, 2025");
+    }
+
+    #[test]
+    fn history_first_line_skips_blank_lines() {
+        assert_eq!(
+            history_first_line(Some("\n  \n  Quarterly overview \nmore")),
+            Some("Quarterly overview")
+        );
+        assert_eq!(history_first_line(Some("   \n ")), None);
+        assert_eq!(history_first_line(None), None);
+    }
+
+    #[test]
+    fn history_word_count_counts_whitespace_separated_words() {
+        assert_eq!(
+            history_word_count(Some("Revenue $482k\n· Active  users")),
+            5
+        );
+        assert_eq!(history_word_count(None), 0);
+    }
+
+    #[test]
+    fn history_selection_colors_read_tokens() {
+        assert_eq!(history_selected_fill(&DARK), DARK.acc_tint);
+        assert_eq!(history_selected_fill(&LIGHT), LIGHT.acc_tint);
+        let b = history_selected_border(&DARK);
+        assert_eq!((b.r, b.g, b.b), (DARK.acc.r, DARK.acc.g, DARK.acc.b));
+        assert!((b.a - 0.35).abs() < 1e-6);
+    }
 
     #[test]
     fn ocr_language_display_name_maps_known_codes() {

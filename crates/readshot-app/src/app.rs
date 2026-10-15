@@ -80,6 +80,8 @@ pub enum HistoryKeyboardAction {
     Delete,
     CopyText,
     CopyImage,
+    /// ⌘F: focus the search field (shown in the History key legend).
+    FocusSearch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

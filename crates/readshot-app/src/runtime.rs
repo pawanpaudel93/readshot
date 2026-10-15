@@ -704,6 +704,18 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event else {
                 return None;
             };
+            // ⌘F focuses the search field, wherever focus is.
+            if modifiers.command()
+                && !modifiers.shift()
+                && !modifiers.alt()
+                && !modifiers.control()
+                && matches!(&key, Key::Character(c) if c.eq_ignore_ascii_case("f"))
+            {
+                return Some(Message::HistoryKeyboardShortcut(
+                    window,
+                    HistoryKeyboardAction::FocusSearch,
+                ));
+            }
             // ⌘C / ⌘⇧C only fire when no widget has captured the
             // event — search-input text selection takes precedence.
             if status == Status::Ignored
@@ -3756,6 +3768,22 @@ mod tests {
             app.history_status.as_deref(),
             Some("No history capture selected.")
         );
+    }
+
+    #[test]
+    fn history_focus_search_shortcut_leaves_state_alone() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = iced::window::Id::unique();
+        app.history_window_id = Some(id);
+        app.history_search = "invoice".into();
+
+        let _ = update(
+            &mut app,
+            Message::HistoryKeyboardShortcut(id, HistoryKeyboardAction::FocusSearch),
+        );
+
+        assert_eq!(app.history_status, None);
+        assert_eq!(app.history_search, "invoice");
     }
 
     #[test]
