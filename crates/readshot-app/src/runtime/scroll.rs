@@ -33,6 +33,63 @@ pub(crate) const SCROLL_MIN_ACCEPTED_MOTION_PX: u32 = 8;
 /// up the loop naturally throttles to whatever rate the
 /// `capture_region` future supports.
 pub(crate) const SCROLL_FRAME_INTERVAL_MS: u64 = 120;
+/// Width (px) of the downscaled live-preview strip in the scroll window.
+pub(crate) const PREVIEW_STRIP_W: u32 = 340;
+/// Height cap (px) of the preview strip. Only the newest rows are kept,
+/// so a long page doesn't shrink the preview to a sliver.
+pub(crate) const PREVIEW_STRIP_MAX_H: u32 = 4096;
+/// How long a first Cancel click stays armed ("Discard N Frames")
+/// before reverting to a plain Cancel.
+pub(crate) const CANCEL_ARM_WINDOW: std::time::Duration = std::time::Duration::from_millis(2500);
+
+/// Downscaled slice for the live preview: the whole frame for the first
+/// one, else only the newly revealed bottom `new_rows`. Runs inside the
+/// existing `spawn_blocking` judge, never on the UI thread.
+pub(crate) fn preview_rows(frame: &image::RgbaImage, new_rows: Option<u32>) -> image::RgbaImage {
+    use image::imageops::{crop_imm, resize, FilterType};
+    let (fw, fh) = frame.dimensions();
+    let rows = new_rows.map_or(fh, |n| n.min(fh));
+    if rows == 0 || fw == 0 {
+        return image::RgbaImage::new(PREVIEW_STRIP_W, 0);
+    }
+    let scale = PREVIEW_STRIP_W as f32 / fw as f32;
+    let h = ((rows as f32 * scale).round() as u32).max(1);
+    let src = crop_imm(frame, 0, fh - rows, fw, rows).to_image();
+    resize(&src, PREVIEW_STRIP_W, h, FilterType::Triangle)
+}
+
+/// Append newly revealed preview rows under the existing strip, keeping
+/// at most `PREVIEW_STRIP_MAX_H` of the newest rows.
+pub(crate) fn append_preview_rows(
+    strip: Option<image::RgbaImage>,
+    added: image::RgbaImage,
+) -> image::RgbaImage {
+    let Some(prev) = strip else {
+        return keep_tail(added);
+    };
+    if added.height() == 0 {
+        return prev;
+    }
+    let mut out = image::RgbaImage::new(PREVIEW_STRIP_W, prev.height() + added.height());
+    image::imageops::replace(&mut out, &prev, 0, 0);
+    image::imageops::replace(&mut out, &added, 0, prev.height() as i64);
+    keep_tail(out)
+}
+
+fn keep_tail(img: image::RgbaImage) -> image::RgbaImage {
+    if img.height() <= PREVIEW_STRIP_MAX_H {
+        return img;
+    }
+    let y = img.height() - PREVIEW_STRIP_MAX_H;
+    image::imageops::crop_imm(&img, 0, y, img.width(), PREVIEW_STRIP_MAX_H).to_image()
+}
+
+/// True while a first Cancel click is still inside `CANCEL_ARM_WINDOW`.
+pub(crate) fn cancel_armed(session: &crate::app::ScrollSession) -> bool {
+    session
+        .cancel_armed_at
+        .is_some_and(|t| t.elapsed() < CANCEL_ARM_WINDOW)
+}
 
 /// Process in-order completed captures. Frames needing a motion
 /// verdict are compared against the previous accepted frame on a
@@ -53,30 +110,44 @@ pub(crate) fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession)
         match result {
             Ok(image) => {
                 let Some(prev) = session.frames.last().cloned() else {
-                    // First frame — accepted unconditionally.
-                    accept_scroll_frame(session, image);
+                    // First frame — accepted unconditionally. Its
+                    // preview slice is computed once, synchronously.
+                    let rows = preview_rows(&image, None);
+                    accept_scroll_frame(session, image, Some(rows), None);
                     continue;
                 };
                 session.judge_in_flight = Some(seq);
                 return Task::perform(
                     async move {
                         tokio::task::spawn_blocking(move || {
-                            let moved = frame_has_scroll_motion(&prev, &image);
-                            (image, moved)
+                            // Motion verdict and the preview slice are
+                            // both computed here, off the UI thread.
+                            let same_dims = prev.dimensions() == image.dimensions();
+                            let offset = scroll_motion_offset(&prev, &image);
+                            let moved = !same_dims
+                                || offset.is_some_and(|dy| dy >= SCROLL_MIN_ACCEPTED_MOTION_PX);
+                            let rows = moved.then(|| {
+                                preview_rows(&image, if same_dims { offset } else { None })
+                            });
+                            (image, moved, offset, rows)
                         })
                         .await
                         .ok()
                     },
                     move |judged| match judged {
-                        Some((image, moved)) => Message::ScrollFrameJudged {
+                        Some((image, moved, offset, rows)) => Message::ScrollFrameJudged {
                             seq,
                             image: Some(image),
                             moved,
+                            offset,
+                            rows,
                         },
                         None => Message::ScrollFrameJudged {
                             seq,
                             image: None,
                             moved: false,
+                            offset: None,
+                            rows: None,
                         },
                     },
                 );
@@ -90,23 +161,38 @@ pub(crate) fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession)
     Task::none()
 }
 
-/// Append an accepted frame and refresh the HUD preview state.
+/// Append an accepted frame and refresh the live-preview strip.
+/// `rows` is the frame's downscaled preview slice (computed off the UI
+/// thread); `offset` is the measured scroll motion vs. the previous
+/// accepted frame (`None` for the first frame or a size change, which
+/// counts the frame's full height).
 pub(crate) fn accept_scroll_frame(
     session: &mut crate::app::ScrollSession,
     image: image::RgbaImage,
+    rows: Option<image::RgbaImage>,
+    offset: Option<u32>,
 ) {
-    // Cache an iced Handle once per accepted frame so the HUD's
-    // live preview doesn't re-clone ~8 MB of RGBA on every redraw.
-    let handle = iced::widget::image::Handle::from_rgba(
-        image.width(),
-        image.height(),
-        image.as_raw().clone(),
-    );
+    if let Some(r) = rows {
+        session.last_frame_rows_scaled = (image.height() as f32 * PREVIEW_STRIP_W as f32
+            / image.width().max(1) as f32)
+            .round() as u32;
+        let strip = append_preview_rows(session.preview_strip.take(), r);
+        // Cache an iced Handle once per accepted frame so the window's
+        // live preview doesn't re-clone the strip on every redraw.
+        session.preview_handle = Some(iced::widget::image::Handle::from_rgba(
+            strip.width(),
+            strip.height(),
+            strip.as_raw().clone(),
+        ));
+        session.preview_strip = Some(strip);
+    }
+    session.stitched_rows = session
+        .stitched_rows
+        .saturating_add(offset.unwrap_or(image.height()));
     session.no_motion_count = 0;
     session.frames.push(std::sync::Arc::new(image));
     session.frame_tick = session.frame_tick.wrapping_add(1);
     session.last_frame_at = Some(std::time::Instant::now());
-    session.last_frame_handle = Some(handle);
     // Session never auto-stops on stillness — the user explicitly
     // clicks Stop & Stitch (or Cancel) when they're done.
 }
@@ -114,7 +200,9 @@ pub(crate) fn accept_scroll_frame(
 /// Returns true only when adjacent captures appear to have vertical
 /// scroll movement, not merely changed pixels. This prevents repeated
 /// frames caused by blinking carets, hover states, timers, or video
-/// from entering the final stitch.
+/// from entering the final stitch. The judge worker inlines the same
+/// rule so it can reuse the measured offset for the preview strip.
+#[cfg(test)]
 pub(crate) fn frame_has_scroll_motion(a: &image::RgbaImage, b: &image::RgbaImage) -> bool {
     if a.dimensions() != b.dimensions() {
         return true;
@@ -288,7 +376,13 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             drain_ready_scroll_frames(session)
         }
 
-        Message::ScrollFrameJudged { seq, image, moved } => {
+        Message::ScrollFrameJudged {
+            seq,
+            image,
+            moved,
+            offset,
+            rows,
+        } => {
             let Some(session) = state.scroll_session.as_mut() else {
                 return Task::none();
             };
@@ -298,7 +392,7 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             }
             session.judge_in_flight = None;
             match image {
-                Some(image) if moved => accept_scroll_frame(session, image),
+                Some(image) if moved => accept_scroll_frame(session, image, rows, offset),
                 _ => session.no_motion_count += 1,
             }
             drain_ready_scroll_frames(session)
@@ -308,24 +402,24 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             // Two-click cancel guard. Discarding a session that
             // already accumulated frames is destructive (the captured
             // frames are dropped on the floor), so the first click
-            // arms the cancel and updates the HUD copy to confirm.
-            // A second click inside `CANCEL_ARM_WINDOW` actually
-            // discards. The arm expires on the OverlayTick if the
-            // user changes their mind.
-            const CANCEL_ARM_WINDOW: std::time::Duration = std::time::Duration::from_millis(2500);
+            // arms the cancel and the window offers "Discard N Frames"
+            // + "Keep Going". A second click inside `CANCEL_ARM_WINDOW`
+            // actually discards; once the window elapses `cancel_armed`
+            // reads false (the overlay tick re-renders the view), and
+            // Keep Going disarms it explicitly.
             let Some(session) = state.scroll_session.as_mut() else {
                 return Task::none();
             };
+            // The frames already belong to the stitch task — nothing
+            // left to discard, and the window shows "Stitching…".
+            if session.stopping {
+                return Task::none();
+            }
             // Pristine sessions (only the first auto-captured frame)
             // skip the confirm — nothing of value to lose.
             let has_real_content = session.frames.len() > 1;
-            let now = std::time::Instant::now();
-            let armed = session
-                .cancel_armed_at
-                .map(|t| now.duration_since(t) < CANCEL_ARM_WINDOW)
-                .unwrap_or(false);
-            if has_real_content && !armed {
-                session.cancel_armed_at = Some(now);
+            if has_real_content && !cancel_armed(session) {
+                session.cancel_armed_at = Some(std::time::Instant::now());
                 return Task::none();
             }
             let Some(session) = state.scroll_session.take() else {
@@ -343,6 +437,13 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             Task::batch(tasks)
         }
 
+        Message::ScrollCaptureKeepGoing => {
+            if let Some(session) = state.scroll_session.as_mut() {
+                session.cancel_armed_at = None;
+            }
+            Task::none()
+        }
+
         Message::ScrollCaptureStopRequested => {
             let Some(session) = state.scroll_session.as_mut() else {
                 return Task::none();
@@ -351,13 +452,15 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
                 return Task::none();
             }
             session.stopping = true;
+            session.cancel_armed_at = None;
+            session.stitch_frame_count = session.frames.len();
             let frames = std::mem::take(&mut session.frames);
-            let hud_id = session.hud_window_id;
-            let region_id = session.region_window_id;
-            // Close session windows now — the stitch task runs on its
-            // own and the HUD / region overlay are no longer useful.
+            let region_id = session.region_window_id.take();
+            // Close only the region outline now. The scroll window stays
+            // open through the stitch so it can show "Stitching…" (and
+            // "limit reached"); `ScrollCaptureStitched` closes it.
             let mut tasks: Vec<Task<Message>> = Vec::new();
-            for id in [hud_id, region_id].into_iter().flatten() {
+            if let Some(id) = region_id {
                 state.windows.forget(id);
                 tasks.push(window::close(id));
             }
@@ -371,23 +474,64 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             let session = state.scroll_session.take();
             let display_scale = session.as_ref().map(|s| s.scale).unwrap_or(1.0);
             let display_bounds = session.as_ref().and_then(|s| s.display_size);
+            // The scroll window stayed open through the stitch; close it
+            // now on both outcomes.
+            let close_hud = match session.as_ref().and_then(|s| s.hud_window_id) {
+                Some(id) => {
+                    state.windows.forget(id);
+                    window::close(id)
+                }
+                None => Task::none(),
+            };
             match result {
                 Ok(image) => {
                     let (w, h) = (image.width(), image.height());
                     let mut ed =
                         crate::editor::EditorSession::new_with_display_scale(image, display_scale);
                     ed.set_status(format!("Scrolling capture stitched into {w} × {h}px."));
-                    open_editor_window_replacing(state, ed, display_bounds)
+                    Task::batch([
+                        close_hud,
+                        open_editor_window_replacing(state, ed, display_bounds),
+                    ])
                 }
                 Err(e) => {
                     state.last_capture_status = Some(format!("Scroll capture failed: {e}"));
                     tracing::warn!(target: "readshot::scroll", "stitch failed: {e}");
-                    Task::none()
+                    close_hud
                 }
             }
         }
         other => unreachable!(
             "non-scroll-capture message routed to the scroll-capture handler: {other:?}"
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_rows_scale_to_strip_width() {
+        let frame = image::RgbaImage::from_pixel(680, 400, image::Rgba([255, 0, 0, 255]));
+        assert_eq!(
+            preview_rows(&frame, None).dimensions(),
+            (PREVIEW_STRIP_W, 200)
+        );
+        assert_eq!(
+            preview_rows(&frame, Some(100)).dimensions(),
+            (PREVIEW_STRIP_W, 50)
+        );
+    }
+
+    #[test]
+    fn strip_appends_and_keeps_the_newest_rows_when_capped() {
+        let a = image::RgbaImage::new(PREVIEW_STRIP_W, 200);
+        let s = append_preview_rows(None, a.clone());
+        let s = append_preview_rows(Some(s), image::RgbaImage::new(PREVIEW_STRIP_W, 50));
+        assert_eq!(s.height(), 250);
+        let big = image::RgbaImage::new(PREVIEW_STRIP_W, 3000);
+        let s = append_preview_rows(Some(append_preview_rows(None, big.clone())), big);
+        assert_eq!(s.height(), PREVIEW_STRIP_MAX_H);
     }
 }

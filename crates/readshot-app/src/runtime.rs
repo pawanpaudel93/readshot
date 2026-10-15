@@ -1280,7 +1280,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     started_at: std::time::Instant::now(),
                     last_frame_at: None,
                     frame_tick: 0,
-                    last_frame_handle: None,
+                    preview_strip: None,
+                    preview_handle: None,
+                    stitched_rows: 0,
+                    last_frame_rows_scaled: 0,
+                    stitch_frame_count: 0,
                     cancel_armed_at: None,
                 };
                 state.reduce_motion = os_reduce_motion();
@@ -1470,7 +1474,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                                 last.rect,
                                 display_scale,
                             );
-                            accept_scroll_frame(&mut session, image);
+                            let rows = preview_rows(&image, None);
+                            accept_scroll_frame(&mut session, image, Some(rows), None);
                             session.display_size = display_bounds;
                             state.reduce_motion = os_reduce_motion();
                             state.scroll_session = Some(session);
@@ -1762,6 +1767,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::ScrollCaptureFrame { .. }
         | Message::ScrollFrameJudged { .. }
         | Message::ScrollCaptureCancelRequested
+        | Message::ScrollCaptureKeepGoing
         | Message::ScrollCaptureStopRequested
         | Message::ScrollCaptureStitched(..)) => scroll::handle_scroll_message(state, msg),
 
@@ -3066,6 +3072,8 @@ mod tests {
                 seq: 1,
                 image: Some(scrolling_texture(80, 120, 14)),
                 moved: true,
+                offset: None,
+                rows: None,
             },
         );
         let session = app.scroll_session.as_ref().unwrap();
@@ -3079,6 +3087,8 @@ mod tests {
                 seq: 2,
                 image: Some(scrolling_texture(80, 120, 28)),
                 moved: true,
+                offset: None,
+                rows: None,
             },
         );
         let session = app.scroll_session.as_ref().unwrap();
@@ -3103,6 +3113,8 @@ mod tests {
                 seq: 3,
                 image: Some(scrolling_texture(80, 120, 14)),
                 moved: true,
+                offset: None,
+                rows: None,
             },
         );
         let session = app.scroll_session.as_ref().unwrap();
@@ -3116,12 +3128,56 @@ mod tests {
                 seq: 7,
                 image: Some(scrolling_texture(80, 120, 0)),
                 moved: false,
+                offset: None,
+                rows: None,
             },
         );
         let session = app.scroll_session.as_ref().unwrap();
         assert_eq!(session.frames.len(), 1);
         assert_eq!(session.no_motion_count, 1);
         assert_eq!(session.judge_in_flight, None);
+    }
+
+    fn test_session() -> crate::app::ScrollSession {
+        crate::app::ScrollSession::new(
+            "display-a".into(),
+            readshot_core::geom::Rect::from_xywh(0.0, 0.0, 80.0, 120.0).unwrap(),
+            1.0,
+        )
+    }
+
+    #[test]
+    fn keep_going_disarms_cancel() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut s = test_session();
+        s.cancel_armed_at = Some(std::time::Instant::now());
+        app.scroll_session = Some(s);
+        let _ = update(&mut app, Message::ScrollCaptureKeepGoing);
+        assert!(app
+            .scroll_session
+            .as_ref()
+            .unwrap()
+            .cancel_armed_at
+            .is_none());
+    }
+
+    #[test]
+    fn cancel_arm_expires_after_the_window() {
+        let mut s = test_session();
+        s.cancel_armed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
+        assert!(!cancel_armed(&s));
+        s.cancel_armed_at = Some(std::time::Instant::now());
+        assert!(cancel_armed(&s));
+    }
+
+    #[test]
+    fn cancel_is_ignored_while_stitching() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut s = test_session();
+        s.stopping = true;
+        app.scroll_session = Some(s);
+        let _ = update(&mut app, Message::ScrollCaptureCancelRequested);
+        assert!(app.scroll_session.is_some());
     }
 
     #[test]

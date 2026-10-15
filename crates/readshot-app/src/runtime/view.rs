@@ -195,8 +195,18 @@ const SCROLL_HUD_PREVIEW_HEIGHT: f32 = 170.0;
 pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     use iced::widget::mouse_area;
     let session = state.scroll_session.as_ref();
-    let frame_count = session.map(|s| s.frames.len()).unwrap_or(0);
     let stopping = session.map(|s| s.stopping).unwrap_or(false);
+    // `frames` is drained into the stitch task at stop time; the
+    // stitch count keeps the window's number honest while stitching.
+    let frame_count = session
+        .map(|s| {
+            if s.stopping {
+                s.stitch_frame_count
+            } else {
+                s.frames.len()
+            }
+        })
+        .unwrap_or(0);
     let elapsed_secs = session
         .map(|s| s.started_at.elapsed().as_secs_f32())
         .unwrap_or(0.0);
@@ -263,7 +273,7 @@ pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     // confirm what's in the capture region while they scroll. Letter-
     // boxed inside a fixed-size bay so HUD layout stays stable across
     // very tall / very wide rects.
-    let preview: Element<'_, Message> = match session.and_then(|s| s.last_frame_handle.clone()) {
+    let preview: Element<'_, Message> = match session.and_then(|s| s.preview_handle.clone()) {
         Some(handle) => container(
             iced::widget::image(handle)
                 .width(Length::Fill)
@@ -412,10 +422,10 @@ pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     // moment the user clicks it once on a session with content, so
     // the second click reads as an explicit destructive confirm
     // rather than a benign close.
-    let cancel_armed = session.and_then(|s| s.cancel_armed_at).is_some();
+    let armed = session.is_some_and(cancel_armed);
     let cancel_btn: Element<'_, Message> = if stopping {
         Space::new().width(Length::Fixed(0.0)).into()
-    } else if cancel_armed {
+    } else if armed {
         button(
             text(format!(
                 "Discard {} Frame{}",

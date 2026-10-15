@@ -297,11 +297,17 @@ pub enum Message {
     /// Background motion-judge verdict for the frame at `seq`. `image`
     /// is the candidate frame handed back from the worker (`None` only
     /// if the worker died); `moved` says whether it scrolled vs the
-    /// previous accepted frame and should join the session.
+    /// previous accepted frame and should join the session. `offset`
+    /// is the measured vertical motion (`None` if unmeasurable, e.g. a
+    /// size change); `rows` is the downscaled preview slice for the
+    /// newly revealed rows, computed on the worker (`Some` only when
+    /// `moved`).
     ScrollFrameJudged {
         seq: u64,
         image: Option<image::RgbaImage>,
         moved: bool,
+        offset: Option<u32>,
+        rows: Option<image::RgbaImage>,
     },
     /// User clicked Stop in the HUD (or pressed Esc / hit an auto-
     /// stop limit). Closes the HUD and kicks off stitching of the
@@ -310,6 +316,9 @@ pub enum Message {
     /// User clicked Cancel in the HUD. Throws the session away
     /// without stitching — captured frames are dropped on the floor.
     ScrollCaptureCancelRequested,
+    /// User clicked Keep Going on an armed cancel. Disarms the cancel
+    /// so the session carries on recording.
+    ScrollCaptureKeepGoing,
     /// Stitching task finished. `Ok` opens the stitched image in the
     /// editor; `Err` toasts a status and clears the session.
     ScrollCaptureStitched(Result<image::RgbaImage, String>),
@@ -933,10 +942,24 @@ pub struct ScrollSession {
     /// frames-vec length for animation triggers because some ticks
     /// produce no-motion drops which leave the length unchanged).
     pub frame_tick: u64,
-    /// Cached `iced::Handle` to the most recent accepted frame so the
-    /// HUD can render it as a live preview without re-cloning the
-    /// RGBA buffer on every redraw tick (a 1080p frame is ~8 MB).
-    pub last_frame_handle: Option<iced::widget::image::Handle>,
+    /// Downscaled (`PREVIEW_STRIP_W` wide) stitched preview of the
+    /// session so far: the first frame, then each accepted frame's newly
+    /// revealed rows appended below. Capped at `PREVIEW_STRIP_MAX_H`,
+    /// keeping the newest rows.
+    pub preview_strip: Option<image::RgbaImage>,
+    /// Cached `iced::Handle` for `preview_strip`, rebuilt once per
+    /// accepted frame so the window doesn't re-clone RGBA per redraw.
+    pub preview_handle: Option<iced::widget::image::Handle>,
+    /// Estimated stitched height (source px): the first frame's full
+    /// height plus each accepted frame's measured scroll offset.
+    pub stitched_rows: u32,
+    /// Height of the latest accepted frame scaled to the strip width,
+    /// so the view can mark where the live frame sits in the strip.
+    pub last_frame_rows_scaled: u32,
+    /// Frame count handed to the stitcher at stop time (`frames` is
+    /// drained into the stitch task, so the window reads this while
+    /// "Stitching…").
+    pub stitch_frame_count: usize,
 }
 
 impl ScrollSession {
@@ -964,7 +987,11 @@ impl ScrollSession {
             started_at: std::time::Instant::now(),
             last_frame_at: None,
             frame_tick: 0,
-            last_frame_handle: None,
+            preview_strip: None,
+            preview_handle: None,
+            stitched_rows: 0,
+            last_frame_rows_scaled: 0,
+            stitch_frame_count: 0,
         }
     }
 }
