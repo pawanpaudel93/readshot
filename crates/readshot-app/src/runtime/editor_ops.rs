@@ -228,6 +228,18 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if editor_window != Some(window) {
                 return Task::none();
             }
+            // An open popover owns Escape: close it before Esc can cancel a
+            // drag or fall through to the discard shortcut.
+            if matches!(
+                key,
+                iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+            ) {
+                if let Some(ed) = state.editor.as_mut() {
+                    if ed.popover.take().is_some() {
+                        return Task::none();
+                    }
+                }
+            }
             // Escape cancels an in-progress shape/freehand drag before it
             // can fall through to the discard shortcut. iced 0.14 never
             // routes Escape into the canvas, so we bump the cancel sequence
@@ -278,6 +290,22 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         ed.discard_pending_at = None;
                     }
                 }
+            }
+            Task::none()
+        }
+        Message::EditorPopoverToggled(which) => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.popover = if ed.popover == Some(which) {
+                    None
+                } else {
+                    Some(which)
+                };
+            }
+            Task::none()
+        }
+        Message::EditorPopoverClosed => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.popover = None;
             }
             Task::none()
         }
@@ -390,6 +418,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 cancel_editor_previews(ed);
                 ed.clear_discard_confirmation();
                 ed.frame_style = style;
+                ed.popover = None;
                 ed.set_status(match style {
                     EditorFrameStyle::None => "Frame removed.".into(),
                     _ => format!("Frame set to {}.", style.label()),
@@ -498,6 +527,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
                 readshot_ui::ToolbarMessage::SelectColor(c) => {
                     apply_editor_color(ed, &state.coordinator, c);
+                    ed.popover = None;
                 }
                 readshot_ui::ToolbarMessage::SetLineWidth(w) => {
                     apply_editor_line_width(ed, &state.coordinator, w);
@@ -810,6 +840,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         }
         Message::EditorTextCancel => {
             if let Some(ed) = state.editor.as_mut() {
+                if ed.popover.take().is_some() {
+                    return Task::none();
+                }
                 if ed.busy {
                     return Task::none();
                 }

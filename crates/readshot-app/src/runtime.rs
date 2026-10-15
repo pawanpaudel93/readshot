@@ -79,16 +79,6 @@ const READSHOT_THEME_NAME: &str = "readshot";
 const READSHOT_ACCENT: Color = Color::from_rgb8(20, 184, 166);
 const READSHOT_DANGER: Color = Color::from_rgb8(239, 68, 68);
 
-// Filled-button teals. READSHOT_PRIMARY / READSHOT_ACCENT read well as
-// accent *tints* (borders, selection rings, progress bars) but fail
-// WCAG AA as a solid fill behind white label text (3.74:1 and 2.49:1).
-// These darker teals carry white text comfortably — ~7.6:1 (base),
-// ~5.5:1 (hover), ~9:1 (pressed) — and are used only where a button is
-// painted a solid primary colour (`action_button_style`,
-// `zoom_button_style`). The accent globals above stay as-is so every
-// other accent surface keeps its brighter teal.
-const READSHOT_PRIMARY_FILL: Color = Color::from_rgb8(17, 94, 89); // #115E59
-
 // Secondary-text roles. Both clear WCAG AA against the app's near-black
 // surfaces; inlined `rgba(1,1,1,α)` text used to drift between eight
 // different alphas, some below readable contrast. Decorative non-text
@@ -1644,6 +1634,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::WindowDragRequested(id) => window::drag(id),
         msg @ (Message::EditorKeyPressed { .. }
         | Message::EditorStatusTick
         | Message::EditorWindowReady(..)
@@ -1655,6 +1646,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorCopyTextRequested
         | Message::EditorCopyTextDone(..)
         | Message::EditorDiscardRequested
+        | Message::EditorPopoverToggled(..)
+        | Message::EditorPopoverClosed
         | Message::EditorToolbar(..)
         | Message::EditorLineWidthPreview(..)
         | Message::EditorLineWidthCommit
@@ -2553,6 +2546,126 @@ mod tests {
         assert_eq!(ed.status.as_deref(), Some("Editor QA fixture loaded."));
     }
 
+    #[test]
+    fn popover_toggles_and_esc_closes_it_before_cancelling_text() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(debug_editor_qa_session());
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        assert_eq!(
+            app.editor.as_ref().unwrap().popover,
+            Some(crate::editor::EditorPopover::Color)
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        assert_eq!(app.editor.as_ref().unwrap().popover, None);
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Width),
+        );
+        let _ = update(&mut app, Message::EditorTextCancel);
+        assert_eq!(app.editor.as_ref().unwrap().popover, None);
+    }
+
+    #[test]
+    fn plain_esc_closes_popover_instead_of_arming_discard() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = debug_editor_qa_session();
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorKeyPressed {
+                window: id,
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                modifiers: iced::keyboard::Modifiers::empty(),
+                status_ignored: true,
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.popover, None);
+        assert!(ed.discard_pending_at.is_none());
+    }
+
+    #[test]
+    fn picking_a_color_closes_the_color_popover() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(debug_editor_qa_session());
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectColor(
+                readshot_ui::editor::toolbar::PALETTE[3],
+            )),
+        );
+        assert_eq!(app.editor.as_ref().unwrap().popover, None);
+    }
+
+    #[test]
+    fn picking_a_frame_style_closes_the_frame_popover() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(debug_editor_qa_session());
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Frame),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorFrameStyleChanged(crate::editor::EditorFrameStyle::Soft),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.popover, None);
+        assert_eq!(ed.frame_style, crate::editor::EditorFrameStyle::Soft);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn editor_window_draws_under_a_transparent_title_bar() {
+        let ps = editor_window_settings(None).platform_specific;
+        assert!(ps.title_hidden && ps.titlebar_transparent && ps.fullsize_content_view);
+        assert_eq!(TITLEBAR_HEIGHT, 44.0);
+        assert_eq!(TITLEBAR_INSET_LEFT, 78.0);
+    }
+
+    #[test]
+    fn line_width_label_drops_needless_decimals() {
+        assert_eq!(line_width_label(3.0), "3");
+        assert_eq!(line_width_label(2.5), "2.5");
+        assert_eq!(line_width_label(0.5), "0.5");
+    }
+
+    #[test]
+    fn popover_closed_message_clears_any_open_popover() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(debug_editor_qa_session());
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Width),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Frame),
+        );
+        assert_eq!(
+            app.editor.as_ref().unwrap().popover,
+            Some(crate::editor::EditorPopover::Frame)
+        );
+        let _ = update(&mut app, Message::EditorPopoverClosed);
+        assert_eq!(app.editor.as_ref().unwrap().popover, None);
+    }
+
     fn overlay_display(id: &str) -> crate::app::OverlayDisplay {
         crate::app::OverlayDisplay {
             display_id: id.to_string(),
@@ -3139,13 +3252,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn editor_bottom_layout_stacks_before_controls_crowd() {
-        assert_eq!(editor_bottom_layout(1000.0), EditorBottomLayout::Wide);
-        assert_eq!(editor_bottom_layout(700.0), EditorBottomLayout::Stacked);
-        assert_eq!(editor_bottom_layout(420.0), EditorBottomLayout::Compact);
-    }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn relaunch_on_exit_only_for_system_quit_while_awaiting_permission() {
@@ -3186,24 +3292,6 @@ mod tests {
         assert_eq!(
             view::history_timestamp_label(at(2025, 12, 31, 23, 0), now),
             "Dec 31, 2025"
-        );
-    }
-
-    #[test]
-    fn editor_toolbar_layout_splits_before_controls_crowd() {
-        assert_eq!(editor_toolbar_layout(1100.0), EditorToolbarLayout::Wide);
-        // Undo/redo used to be clipped here in the one-row layout.
-        assert_eq!(editor_toolbar_layout(1000.0), EditorToolbarLayout::Stacked);
-        assert_eq!(editor_toolbar_layout(800.0), EditorToolbarLayout::Stacked);
-        assert_eq!(editor_toolbar_layout(520.0), EditorToolbarLayout::Compact);
-        assert_eq!(editor_width_control_width(EditorToolbarLayout::Wide), 110.0);
-        assert_eq!(
-            editor_width_control_width(EditorToolbarLayout::Stacked),
-            140.0
-        );
-        assert_eq!(
-            editor_width_control_width(EditorToolbarLayout::Compact),
-            108.0
         );
     }
 
@@ -3280,26 +3368,6 @@ mod tests {
 
         assert!(geom.x + geom.width <= 400.0);
         assert!(geom.y + geom.height <= 200.0);
-    }
-
-    #[test]
-    fn editor_bottom_actions_keep_copy_actions_together_before_pin() {
-        use EditorBottomAction as A;
-        assert_eq!(
-            editor_bottom_action_rows(EditorBottomLayout::Wide),
-            vec![vec![A::Discard, A::CopyText, A::CopyImage, A::Pin, A::Save]]
-        );
-        assert_eq!(
-            editor_bottom_action_rows(EditorBottomLayout::Stacked),
-            vec![vec![A::Discard, A::CopyText, A::CopyImage, A::Pin, A::Save]]
-        );
-        assert_eq!(
-            editor_bottom_action_rows(EditorBottomLayout::Compact),
-            vec![
-                vec![A::Discard, A::CopyText, A::CopyImage],
-                vec![A::Pin, A::Save]
-            ]
-        );
     }
 
     #[test]

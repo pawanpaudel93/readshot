@@ -400,6 +400,13 @@ pub enum Message {
     EditorCopyTextDone(Result<String, String>),
     /// User clicked Discard. Closes the editor window.
     EditorDiscardRequested,
+    /// Open the given editor popover, or close it when it is already open.
+    EditorPopoverToggled(crate::editor::EditorPopover),
+    /// Close whichever editor popover is open (click outside / Esc).
+    EditorPopoverClosed,
+    /// Mouse-down on a view's own title row (windows that use the
+    /// transparent full-size title bar) — starts a native window drag.
+    WindowDragRequested(iced::window::Id),
     /// User clicked Pin in the editor — flatten the current state,
     /// open a borderless always-on-top "pin" window with that
     /// image, and close the editor.

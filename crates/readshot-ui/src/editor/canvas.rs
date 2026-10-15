@@ -1339,12 +1339,8 @@ fn draw_selection_bounds(frame: &mut Frame, rect: Rectangle) {
 }
 
 fn draw_selection_handle(frame: &mut Frame, point: Point) {
-    let handle = 6.0;
-    let half = handle * 0.5;
-    let handle_path = Path::rectangle(
-        Point::new(point.x - half, point.y - half),
-        iced::Size::new(handle, handle),
-    );
+    // Round handles (spec §3.2): white fill, 1.5 px selection-teal ring.
+    let handle_path = Path::circle(point, 5.0);
     frame.fill(&handle_path, Color::WHITE);
     frame.stroke(
         &handle_path,
@@ -1353,7 +1349,7 @@ fn draw_selection_handle(frame: &mut Frame, point: Point) {
                 a: 1.0,
                 ..SELECTION_TEAL
             })
-            .with_width(1.0),
+            .with_width(1.5),
     );
 }
 

@@ -4,9 +4,7 @@ use super::*;
 
 use std::path::{Path, PathBuf};
 
-use iced::widget::{
-    button, column, container, pick_list, responsive, row, scrollable, text, Space,
-};
+use iced::widget::{button, column, container, responsive, row, scrollable, text, Space};
 use iced::window;
 use iced::{Alignment, Color, Element, Length, Theme};
 
@@ -19,11 +17,9 @@ use crate::welcome::WelcomeState;
 
 // Type scale. One ramp so font sizes read as roles instead of scattered
 // magic numbers (the view used twelve distinct literals). 12 is the
-// floor for readable text; TEXT_MICRO is a *documented* exception for
-// the editor's densest toolbar readouts (zoom / width / frame style),
-// where a fixed-width container would clip at 12. The three display
-// steps (counter / screen title / hero) are deliberate and kept.
-const TEXT_MICRO: f32 = TYPE_MICRO; // dense editor toolbar readouts only
+// floor for readable text (the shared kit's Xs buttons use TYPE_MICRO).
+// The three display steps (counter / screen title / hero) are
+// deliberate and kept.
 const TEXT_CAPTION: f32 = TYPE_CAPTION; // captions, hints, tooltips, HUD readouts
 const TEXT_BODY_SM: f32 = TYPE_BODY; // default labels, most buttons, list text
 const TEXT_BODY: f32 = TYPE_BODY; // emphasised body, primary CTAs, HUD title
@@ -1288,9 +1284,12 @@ pub(crate) fn open_folder_path(path: &Path) -> Result<(), std::io::Error> {
 }
 
 pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
+    use crate::editor::EditorPopover;
+    use crate::icons::AppIcon;
     use iced::widget::canvas::Canvas;
-    use iced::widget::{stack, Space as IcedSpace};
-    use readshot_ui::editor::{canvas::EditorCanvas, toolbar, ToolState};
+    use iced::widget::tooltip::Position;
+    use iced::widget::{mouse_area, opaque, stack, Space as IcedSpace};
+    use readshot_ui::editor::{canvas::EditorCanvas, ToolState};
 
     let Some(ed) = state.editor.as_ref() else {
         return container(empty_state_card(
@@ -1311,238 +1310,150 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let busy = ed.busy;
     let has_selected_annotation = ed.model.selected_annotation().is_some();
 
-    // ===== Toolbar — adaptive, icon-only =====
-    // Tools stay available in every layout. Secondary controls split
-    // into more rows as width tightens so the editor does not need a
-    // horizontal scrollbar just to expose color / size / undo.
-    let undo_depth = ed.model.undo_depth();
-    let redo_depth = ed.model.redo_depth();
+    // ===== Chrome — floating bars over the stage =====
+    // Title row (zoom), tool bar (tools · color · width), hint, action
+    // bar (history · frame · outputs) and at most one popover all float
+    // over the image as `stack!` layers. Color, width and frame live in
+    // popovers, so both bars stay one row down to the 720 px minimum.
+    let p = palette(state.theme_mode);
+    let mono = mono_font();
+    let dimmed = |c: Color| Color { a: c.a * 0.45, ..c };
+    let icon_color = |enabled: bool| if enabled { p.t2 } else { dimmed(p.t2) };
+    let popover = ed.popover;
     let can_undo = ed.model.can_undo();
     let can_redo = ed.model.can_redo();
-    let undo_tip = if undo_depth > 0 {
-        format!(
-            "Undo (⌘Z) · {undo_depth} action{}",
-            if undo_depth == 1 { "" } else { "s" }
-        )
-    } else {
-        "Undo (⌘Z)".to_string()
-    };
-    let redo_tip = if redo_depth > 0 {
-        format!(
-            "Redo (⌘⇧Z) · {redo_depth} action{}",
-            if redo_depth == 1 { "" } else { "s" }
-        )
-    } else {
-        "Redo (⌘⇧Z)".to_string()
-    };
 
-    let toolbar_row = container(
-        responsive(move |available| {
-            let layout = editor_toolbar_layout(available.width);
-            let tool_groups: &[&[ToolState]] = &[
-                &[ToolState::Select],
-                &[
-                    ToolState::Rectangle,
-                    ToolState::Ellipse,
-                    ToolState::Line,
-                    ToolState::Arrow,
-                ],
-                &[ToolState::Pen, ToolState::Highlighter, ToolState::Text],
-                &[ToolState::Blur, ToolState::Pixelate],
-                &[ToolState::NumberedPin],
-                &[ToolState::Crop],
-            ];
-
-            // Group tools into recessed rounded "segments" so related
-            // tools (shapes, marker/pen/text, redaction…) read as one
-            // cluster instead of a flat strip separated by hairlines.
-            let mut tool_row = row![].spacing(6).align_y(Alignment::Center);
-            for group in tool_groups.iter() {
-                let mut segment = row![].spacing(3).align_y(Alignment::Center);
-                for t in group.iter() {
-                    segment = segment.push(tool_button(*t, active_tool, busy));
-                }
-                tool_row = tool_row.push(toolbar_segment(segment.into()));
-            }
-
-            let palette_row = toolbar::PALETTE.iter().fold(
-                row![].spacing(4).align_y(Alignment::Center),
-                |row, swatch| {
-                    let is_selected = swatch_eq(*swatch, active_color);
-                    let color = Color::from_rgba(swatch.r, swatch.g, swatch.b, swatch.a);
-                    let mut btn = button(
-                        IcedSpace::new()
-                            .width(Length::Fixed(18.0))
-                            .height(Length::Fixed(18.0)),
-                    )
-                    .padding(0)
-                    .style(move |_theme, status| {
-                        // Swap the selected ring colour to a dark stroke when the
-                        // swatch itself is bright, otherwise white-on-white makes
-                        // the selected swatch invisible. sRGB relative luminance.
-                        let lum = 0.2126 * swatch.r + 0.7152 * swatch.g + 0.0722 * swatch.b;
-                        let selected_ring = if lum > 0.72 {
-                            Color::from_rgba(0.0, 0.0, 0.0, 0.85)
-                        } else {
-                            Color::WHITE
-                        };
-                        // While a save / copy / ocr task is in flight the
-                        // swatch has no `on_press`; dim it to match the
-                        // other disabled controls so it doesn't read as
-                        // clickable.
-                        let dim = if busy { 0.4 } else { 1.0 };
-                        let border = if is_selected {
-                            iced::Border {
-                                color: fade(selected_ring, dim),
-                                width: 2.5,
-                                radius: 6.0.into(),
-                            }
-                        } else if !busy && matches!(status, button::Status::Pressed) {
-                            // Pressed: a brighter, thicker ring than hover
-                            // so clicking a swatch reads as a distinct step
-                            // (the fill itself is the swatch colour and
-                            // can't be darkened).
-                            iced::Border {
-                                color: Color::from_rgba(1.0, 1.0, 1.0, 0.85),
-                                width: 2.0,
-                                radius: 6.0.into(),
-                            }
-                        } else if !busy && matches!(status, button::Status::Hovered) {
-                            iced::Border {
-                                color: Color::from_rgba(1.0, 1.0, 1.0, 0.55),
-                                width: 1.5,
-                                radius: 6.0.into(),
-                            }
-                        } else {
-                            iced::Border {
-                                color: Color::from_rgba(1.0, 1.0, 1.0, 0.18 * dim),
-                                width: 1.0,
-                                radius: 6.0.into(),
-                            }
-                        };
-                        button::Style {
-                            background: Some(fade(color, dim).into()),
-                            text_color: Color::TRANSPARENT,
-                            border,
-                            ..Default::default()
-                        }
-                    });
-                    if !busy {
-                        btn = btn.on_press(Message::EditorToolbar(
-                            readshot_ui::ToolbarMessage::SelectColor(*swatch),
-                        ));
-                    }
-                    row.push(btn)
-                },
-            );
-
-            let width_text_color = if busy { TEXT_MUTED } else { TEXT_SECONDARY };
-            // Stroke width readout. Whether it applies to the selection
-            // or to new shapes is in the tooltip, not a cryptic prefix.
-            let width_tip = if has_selected_annotation {
-                "Stroke width of the selected annotation"
+    // --- Tool bar ---
+    let tool_groups: [&[ToolState]; 6] = [
+        &[ToolState::Select],
+        &[
+            ToolState::Rectangle,
+            ToolState::Ellipse,
+            ToolState::Line,
+            ToolState::Arrow,
+        ],
+        &[ToolState::Pen, ToolState::Highlighter, ToolState::Text],
+        &[ToolState::Blur, ToolState::Pixelate],
+        &[ToolState::NumberedPin],
+        &[ToolState::Crop],
+    ];
+    let mut tool_bar = row![].spacing(2).align_y(Alignment::Center);
+    for (i, group) in tool_groups.iter().enumerate() {
+        if i > 0 {
+            tool_bar = tool_bar.push(vsep());
+        }
+        for &t in group.iter() {
+            let (label, key) = tool_label_and_key(t);
+            let selected = t == active_tool;
+            let color = if busy {
+                dimmed(p.t2)
+            } else if selected {
+                p.acc_text
             } else {
-                "Stroke width for new annotations"
+                p.t2
             };
-            let width_label = iced::widget::tooltip(
-                text(format!("{line_width:.0} px"))
-                    .size(TEXT_MICRO)
-                    .color(width_text_color)
-                    .width(Length::Fixed(38.0))
-                    .align_x(iced::alignment::Horizontal::Right),
-                container(text(width_tip).size(TEXT_CAPTION))
-                    .padding([4, 8])
-                    .style(|_| container::Style {
-                        background: Some(Color::from_rgba(0.06, 0.07, 0.07, 0.96).into()),
-                        border: iced::Border {
-                            radius: 6.0.into(),
-                            color: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
-                            width: 1.0,
-                        },
-                        text_color: Some(Color::WHITE),
-                        ..Default::default()
-                    }),
-                iced::widget::tooltip::Position::Bottom,
-            );
-            let width_control_width = editor_width_control_width(layout);
-            let width_control: Element<'_, Message> = if busy {
-                passive_line_width_control_sized(line_width, width_control_width)
-            } else {
-                iced::widget::slider(
-                    toolbar::MIN_LINE_WIDTH..=toolbar::MAX_LINE_WIDTH,
-                    line_width,
-                    Message::EditorLineWidthPreview,
-                )
-                .step(0.5)
-                .on_release(Message::EditorLineWidthCommit)
-                .width(Length::Fixed(width_control_width))
-                .into()
-            };
-            let undo_btn = ghost_icon_button(
-                crate::icons::EditorIcon::Undo,
-                undo_tip.clone(),
-                !busy && can_undo,
-                || Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
-            );
-            let redo_btn = ghost_icon_button(
-                crate::icons::EditorIcon::Redo,
-                redo_tip.clone(),
-                !busy && can_redo,
-                || Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
-            );
-            let width_row = row![
-                width_label,
-                width_control,
-                IcedSpace::new().width(Length::Fill),
-                undo_btn,
-                redo_btn,
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center)
-            .width(Length::Fill);
-
-            let toolbar_inner: Element<'_, Message> = match layout {
-                EditorToolbarLayout::Wide => row![
-                    tool_row,
-                    toolbar_divider(),
-                    palette_row,
-                    toolbar_divider(),
-                    width_row,
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center)
-                .padding([6, 10])
-                .width(Length::Fill)
-                .into(),
-                EditorToolbarLayout::Stacked => column![
-                    tool_row,
-                    row![palette_row, toolbar_divider(), width_row]
-                        .spacing(10)
-                        .align_y(Alignment::Center)
-                ]
-                .spacing(6)
-                .padding([6, 10])
-                .width(Length::Fill)
-                .into(),
-                EditorToolbarLayout::Compact => column![tool_row, palette_row, width_row]
-                    .spacing(6)
-                    .padding([6, 10])
-                    .width(Length::Fill)
-                    .into(),
-            };
-
-            toolbar_inner
-        })
-        // The `responsive` widget defaults to Fill on both axes, so without an
-        // explicit Shrink height it claims half the editor column (it and the
-        // image area are both Fill-height children). Constrain the widget itself —
-        // a Shrink wrapper alone is ineffective because the Fill child still
-        // resolves to the full available height.
-        .height(Length::Shrink),
+            tool_bar = tool_bar.push(icon_button(
+                AppIcon::Tool(t),
+                color,
+                label,
+                Some(key),
+                (!busy).then_some(Message::EditorToolbar(
+                    readshot_ui::ToolbarMessage::SelectTool(t),
+                )),
+                selected,
+                ICON_BTN,
+                Position::Bottom,
+            ));
+        }
+    }
+    let swatch_fill = swatch_color(active_color);
+    let color_dot = container(
+        container(
+            IcedSpace::new()
+                .width(Length::Fixed(18.0))
+                .height(Length::Fixed(18.0)),
+        )
+        .style(move |theme: &Theme| container::Style {
+            background: Some(fade(swatch_fill, if busy { 0.45 } else { 1.0 }).into()),
+            border: iced::Border {
+                radius: 9.0.into(),
+                width: 2.0,
+                color: palette_for(theme).float,
+            },
+            ..Default::default()
+        }),
     )
-    .width(Length::Fill)
-    .height(Length::Shrink)
-    .style(editor_chrome_style);
+    .padding(1.5)
+    .style(|theme: &Theme| container::Style {
+        background: Some(palette_for(theme).t3.into()),
+        border: iced::Border {
+            radius: 10.5.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let color_open = popover == Some(EditorPopover::Color);
+    let mut color_btn = button(
+        container(color_dot)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .width(Length::Fixed(ICON_BTN))
+    .height(Length::Fixed(ICON_BTN))
+    .padding(0)
+    .style(move |t, s| icon_button_style(t, s, color_open));
+    if !busy {
+        color_btn = color_btn.on_press(Message::EditorPopoverToggled(EditorPopover::Color));
+    }
+    let width_open = popover == Some(EditorPopover::Width);
+    let width_btn = bar_button(
+        row![
+            container(
+                IcedSpace::new()
+                    .width(Length::Fixed(16.0))
+                    .height(Length::Fixed(3.0))
+            )
+            .style(|theme: &Theme| container::Style {
+                background: Some(palette_for(theme).t1.into()),
+                border: iced::Border {
+                    radius: 2.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            text(format!("{} px", line_width_label(line_width)))
+                .font(mono)
+                .size(TYPE_CAPTION),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .into(),
+        if width_open {
+            ButtonKind::Secondary
+        } else {
+            ButtonKind::Ghost
+        },
+        ButtonSize::Sm,
+        (!busy).then_some(Message::EditorPopoverToggled(EditorPopover::Width)),
+    );
+    let tool_bar = tool_bar
+        .push(vsep())
+        .push(tooltip_with_key(color_btn, "Color", None, Position::Bottom))
+        .push(tooltip_with_key(
+            width_btn,
+            "Line width",
+            None,
+            Position::Bottom,
+        ));
+    let tool_layer = container(container(tool_bar).padding(4).style(floating_bar_style))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(iced::Padding {
+            top: TITLEBAR_HEIGHT + 8.0,
+            ..iced::Padding::ZERO
+        })
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Start);
 
     // ===== Image area — letterboxed image with canvas overlay =====
     // Both layers share the same container; the canvas Program knows
@@ -1570,12 +1481,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     // scale it renders at; the runtime reads it back to hit-test grabs.
     let render_scale = ed.render_scale.clone();
     let image_area_content = responsive(move |stage| {
-        // Zoom and frame controls sit in a strip under the image rather
-        // than floating over it, so they never hide part of the capture.
-        let available = iced::Size::new(
-            stage.width,
-            (stage.height - EDITOR_STAGE_CONTROLS_HEIGHT).max(1.0),
-        );
+        // The stage is already inset clear of the floating bars.
+        let available = stage;
         let iw = image_w as f32;
         let ih = image_h as f32;
         let fit_scale = editor_fit_scale(available, image_w, image_h);
@@ -1770,116 +1677,9 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             .center_x(Length::Fill)
             .center_y(Length::Fill);
 
-        let zoom_row = row![
-            text("Zoom").size(TEXT_MICRO).color(TEXT_MUTED),
-            zoom_button(
-                "−",
-                "Zoom out",
-                Message::EditorZoomOutFromDisplayScale(scale),
-                zoom.can_zoom_out_from_display_scale(scale),
-                false,
-                busy,
-            ),
-            text(format!(
-                "{:.0}%",
-                scale * display_scale.max(f32::EPSILON) * 100.0
-            ))
-            .size(TEXT_MICRO)
-            .color(TEXT_SECONDARY)
-            .width(Length::Fixed(50.0))
-            .align_x(iced::alignment::Horizontal::Center),
-        ];
-        let zoom_controls = container(
-            zoom_row
-                .push(zoom_button(
-                    "+",
-                    "Zoom in",
-                    Message::EditorZoomInFromDisplayScale(scale),
-                    zoom.can_zoom_in_from_display_scale(scale),
-                    false,
-                    busy,
-                ))
-                .push(zoom_button(
-                    "1:1",
-                    "Actual pixels (100%)",
-                    Message::EditorZoomActual,
-                    true,
-                    zoom.is_actual_size_for_display_scale(display_scale),
-                    busy,
-                ))
-                .push(zoom_button(
-                    "Fit",
-                    "Fit to view",
-                    Message::EditorZoomFit,
-                    true,
-                    zoom.is_fit(),
-                    busy,
-                ))
-                .spacing(4)
-                .align_y(Alignment::Center),
-        )
-        .padding([3, 6])
-        .style(|_theme: &Theme| container::Style {
-            background: Some(Color::from_rgba(0.02, 0.025, 0.025, 0.78).into()),
-            border: iced::Border {
-                color: accent(0.22),
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..Default::default()
-        });
-
-        let frame_picker: Element<'_, Message> = if busy {
-            container(
-                text(frame_style.label())
-                    .size(TEXT_MICRO)
-                    .color(TEXT_SECONDARY),
-            )
-            .width(Length::Fixed(124.0))
-            .padding([4, 6])
-            .style(|_| iced::widget::container::Style {
-                background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.06).into()),
-                border: iced::Border {
-                    radius: 6.0.into(),
-                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
-                    width: 1.0,
-                },
-                ..Default::default()
-            })
-            .into()
-        } else {
-            pick_list(
-                &EditorFrameStyle::ALL[..],
-                Some(frame_style),
-                Message::EditorFrameStyleChanged,
-            )
-            .text_size(TEXT_MICRO)
-            .width(Length::Fixed(124.0))
-            .into()
-        };
-        let frame_controls = container(
-            row![
-                text("Frame").size(TEXT_MICRO).color(TEXT_MUTED),
-                frame_picker
-            ]
-            .spacing(4)
-            .align_y(Alignment::Center),
-        )
-        .padding([2, 4])
-        .style(|_theme: &Theme| container::Style {
-            background: Some(Color::from_rgba(0.02, 0.025, 0.025, 0.66).into()),
-            border: iced::Border {
-                color: accent(0.16),
-                width: 1.0,
-                radius: 7.0.into(),
-            },
-            ..Default::default()
-        });
-
         let needs_horizontal_scroll = output_w > available.width + 0.5;
         let needs_vertical_scroll = output_h > available.height + 0.5;
-        let scroll_layer: Element<'_, Message> = if needs_horizontal_scroll || needs_vertical_scroll
-        {
+        if needs_horizontal_scroll || needs_vertical_scroll {
             let scroll_direction = match (needs_horizontal_scroll, needs_vertical_scroll) {
                 (true, true) => iced::widget::scrollable::Direction::Both {
                     vertical: slim_scrollbar(),
@@ -1899,57 +1699,146 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
-        };
-
-        let controls_strip = container(
-            row![
-                zoom_controls,
-                IcedSpace::new().width(Length::Fill),
-                frame_controls
-            ]
-            .align_y(Alignment::Center),
-        )
-        .width(Length::Fill)
-        .height(Length::Fixed(EDITOR_STAGE_CONTROLS_HEIGHT))
-        .padding(iced::Padding {
-            top: 6.0,
-            right: 0.0,
-            bottom: 0.0,
-            left: 0.0,
-        })
-        .align_y(Alignment::End);
-
-        column![
-            container(scroll_layer)
-                .width(Length::Fill)
-                .height(Length::Fixed(available.height)),
-            controls_strip
-        ]
-        .into()
+        }
     })
     .width(Length::Fill)
     .height(Length::Fill);
-    let image_area = container(image_area_content)
+    let stage = container(image_area_content)
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding(8)
-        .style(editor_stage_style);
+        .padding(iced::Padding {
+            top: EDITOR_STAGE_PAD_TOP,
+            bottom: EDITOR_STAGE_PAD_BOTTOM,
+            left: EDITOR_STAGE_PAD_SIDE,
+            right: EDITOR_STAGE_PAD_SIDE,
+        })
+        .style(bg_style);
 
-    // ===== Bottom row — dims/hint + actions =====
+    // --- Title row: capture size + zoom ---
     let (img_w, img_h) = ed.effective_image_size();
-    // When the user just opened the editor and hasn't drawn anything
-    // yet, show a discoverable "press a key to pick a tool" hint
-    // in place of the per-tool guidance — the keyboard shortcuts
-    // aren't visible anywhere in the chrome until the user hovers
-    // a tool button, so this is the surface that surfaces them.
+    // The stage records the scale it rendered at; in Fit mode that is the
+    // only place the fit scale is known (it depends on the stage size).
+    let shown_scale = zoom
+        .explicit_scale()
+        .unwrap_or_else(|| ed.render_scale.get());
+    let can_zoom_out = !busy && zoom.can_zoom_out_from_display_scale(shown_scale);
+    let can_zoom_in = !busy && zoom.can_zoom_in_from_display_scale(shown_scale);
+    let actual_on = zoom.is_actual_size_for_display_scale(display_scale);
+    let fit_on = zoom.is_fit();
+    let zoom_segment = row![
+        icon_button(
+            AppIcon::Minus,
+            icon_color(can_zoom_out),
+            "Zoom out",
+            Some("⌘−"),
+            can_zoom_out.then_some(Message::EditorZoomOutFromDisplayScale(shown_scale)),
+            false,
+            ICON_BTN_SM,
+            Position::Bottom,
+        ),
+        text(format!(
+            "{:.0}%",
+            shown_scale * display_scale.max(f32::EPSILON) * 100.0
+        ))
+        .font(mono)
+        .size(TYPE_CAPTION)
+        .style(text_t2)
+        .width(Length::Fixed(48.0))
+        .align_x(iced::alignment::Horizontal::Center),
+        icon_button(
+            AppIcon::Plus,
+            icon_color(can_zoom_in),
+            "Zoom in",
+            Some("⌘="),
+            can_zoom_in.then_some(Message::EditorZoomInFromDisplayScale(shown_scale)),
+            false,
+            ICON_BTN_SM,
+            Position::Bottom,
+        ),
+        vsep(),
+        tooltip_with_key(
+            bar_button(
+                text("1:1").size(ButtonSize::Xs.text_size()).into(),
+                if actual_on {
+                    ButtonKind::Secondary
+                } else {
+                    ButtonKind::Ghost
+                },
+                ButtonSize::Xs,
+                (!busy).then_some(Message::EditorZoomActual),
+            ),
+            "Actual pixels",
+            Some("⌘0"),
+            Position::Bottom,
+        ),
+        tooltip_with_key(
+            bar_button(
+                text("Fit").size(ButtonSize::Xs.text_size()).into(),
+                if fit_on {
+                    ButtonKind::Secondary
+                } else {
+                    ButtonKind::Ghost
+                },
+                ButtonSize::Xs,
+                (!busy).then_some(Message::EditorZoomFit),
+            ),
+            "Fit to view",
+            None,
+            Position::Bottom,
+        ),
+    ]
+    .spacing(2)
+    .align_y(Alignment::Center);
+    let title_content = row![
+        text("Capture").size(TYPE_BODY).style(text_t2),
+        text(format!("{img_w} × {img_h} px"))
+            .font(mono)
+            .size(TYPE_CAPTION)
+            .style(text_t3),
+        IcedSpace::new().width(Length::Fill),
+        zoom_segment,
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center)
+    .padding(iced::Padding {
+        left: TITLEBAR_INSET_LEFT,
+        right: 12.0,
+        ..iced::Padding::ZERO
+    })
+    .width(Length::Fill)
+    .height(Length::Fixed(TITLEBAR_HEIGHT));
+    // The transparent title bar is covered by our content, so the row's
+    // empty background is the window's drag handle.
+    let mut drag_handle = mouse_area(
+        IcedSpace::new()
+            .width(Length::Fill)
+            .height(Length::Fixed(TITLEBAR_HEIGHT)),
+    );
+    if let Some(id) = ed.window_id {
+        drag_handle = drag_handle.on_press(Message::WindowDragRequested(id));
+    }
+    let title_layer = container(stack![drag_handle, title_content])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_y(Alignment::Start);
+
+    // --- Hint under the tool bar ---
     let hint_str = if let Some(kind) = ed.model.selected_kind_label() {
         editor_selected_hint(kind, ed.model.selected_text_edit().is_some())
-    } else if ed.model.annotations().is_empty() && ed.status.is_none() {
-        "Pick a tool above — hover any tool to see its shortcut · ⌘Z to undo".to_string()
     } else {
-        tool_hint(active_tool).to_string()
+        editor_compact_hint(active_tool).to_string()
     };
-    let hint_text = hint_str;
+    let hint_layer = container(text(hint_str).size(TYPE_CAPTION).style(text_t3))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(iced::Padding {
+            top: EDITOR_HINT_TOP,
+            ..iced::Padding::ZERO
+        })
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Start);
+
+    // --- Status toast above the action bar ---
     // Auto-dismiss old success / info status text so the chrome
     // doesn't stay loud forever after a successful save / copy.
     // In-progress strings (Saving…, Copying…, Recognising text…) and
@@ -1966,201 +1855,418 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         }
         (s, _) => s,
     };
-    let bottom_row: Element<'_, Message> = container(
-        responsive(move |available| {
-            let layout = editor_bottom_layout(available.width);
-            let compact = layout == EditorBottomLayout::Compact;
-            let dims = text(format!("{img_w} × {img_h} px"))
-                .size(TEXT_CAPTION)
-                .color(TEXT_MUTED);
-            let hint_copy = if compact {
-                editor_compact_hint(active_tool).to_string()
-            } else {
-                hint_text.clone()
-            };
-            let hint = text(hint_copy)
-                .size(TEXT_CAPTION)
-                .color(TEXT_SECONDARY)
-                .width(Length::Fill)
-                .wrapping(if compact {
-                    iced::widget::text::Wrapping::Word
-                } else {
-                    iced::widget::text::Wrapping::None
-                });
-            let toast: Element<'_, Message> = match status_text.clone() {
-                Some(s) => {
-                    // Use the shared classifiers so the toast colour
-                    // agrees with the auto-dismiss rule. The old local
-                    // check only matched "copying"/"recognising", so
-                    // "Saving…" and "Choose a save location…" rendered
-                    // with the success (green) style instead of the
-                    // neutral in-progress style.
-                    let is_error = crate::editor::status_str_is_error(&s);
-                    let in_progress = !is_error && crate::editor::status_str_is_in_progress(&s);
-                    let (bg, fg) = if is_error {
-                        (
-                            Color::from_rgba(0.85, 0.32, 0.32, 0.22),
-                            Color::from_rgba(1.0, 0.78, 0.78, 1.0),
-                        )
-                    } else if in_progress {
-                        (
-                            Color::from_rgba(1.0, 1.0, 1.0, 0.10),
-                            Color::from_rgba(1.0, 1.0, 1.0, 0.85),
-                        )
-                    } else {
-                        (
-                            Color::from_rgba(0.30, 0.65, 0.45, 0.24),
-                            Color::from_rgba(0.78, 1.0, 0.88, 1.0),
-                        )
-                    };
-                    container(
-                        text(s)
-                            .size(TEXT_CAPTION)
-                            .color(fg)
-                            .wrapping(iced::widget::text::Wrapping::Word),
-                    )
-                    .padding([3, 8])
-                    .style(move |_| iced::widget::container::Style {
-                        background: Some(bg.into()),
-                        border: iced::Border {
-                            radius: 9.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    })
-                    .into()
-                }
-                None => IcedSpace::new().height(Length::Fixed(0.0)).into(),
-            };
-            let status_area = if compact {
-                container(column![dims, hint, toast].spacing(3))
-                    .width(Length::Fill)
-                    .clip(true)
-            } else {
-                let bullet = text("·")
-                    .size(TEXT_CAPTION)
-                    .color(Color::from_rgba(1.0, 1.0, 1.0, 0.35));
-                container(
-                    row![
-                        dims,
-                        IcedSpace::new().width(Length::Fixed(8.0)),
-                        bullet,
-                        IcedSpace::new().width(Length::Fixed(8.0)),
-                        hint,
-                        IcedSpace::new().width(Length::Fixed(8.0)),
-                        toast,
-                    ]
-                    .spacing(0)
-                    .align_y(Alignment::Center),
-                )
-                .width(Length::Fill)
-                .clip(true)
-            };
+    let toast_layer = status_text.map(|s| {
+        // Shared classifiers keep the toast kind in step with the
+        // auto-dismiss rule above.
+        let kind = if crate::editor::status_str_is_error(&s) {
+            ToastKind::Error
+        } else if crate::editor::status_str_is_in_progress(&s) {
+            ToastKind::Info
+        } else {
+            ToastKind::Ok
+        };
+        container(toast(kind, s, None))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(iced::Padding {
+                bottom: EDITOR_TOAST_BOTTOM,
+                ..iced::Padding::ZERO
+            })
+            .align_x(Alignment::Center)
+            .align_y(Alignment::End)
+    });
 
-            let discard = editor_action_button(
-                "Discard",
-                Message::EditorDiscardRequested,
-                ActionKind::DangerQuiet,
-                busy,
-                "Close this editor. Unsaved edits ask for a second click.  ⌘W",
-            );
-            let pin = editor_action_button(
-                "Pin",
-                Message::EditorPinRequested,
-                ActionKind::Secondary,
-                busy,
-                "Keep this capture floating above other windows.  ⌘P",
-            );
-            let copy_text = editor_action_button(
-                "Copy Text",
-                Message::EditorCopyTextRequested,
-                ActionKind::Secondary,
-                busy,
-                "Run OCR and copy the recognized text.  ⌘⇧C",
-            );
-            let copy_image = editor_action_button(
-                "Copy Image",
-                Message::EditorCopyImageRequested,
-                ActionKind::Secondary,
-                busy,
-                "Copy the annotated image using the selected frame option.  ⌘C",
-            );
-            let save = editor_action_button(
-                "Save",
-                Message::EditorSaveRequested,
-                ActionKind::Primary,
-                busy,
-                "Save the annotated image using the selected frame option.  ⌘S",
-            );
-
-            match layout {
-                EditorBottomLayout::Wide => row![
-                    status_area,
-                    row![
-                        discard,
-                        IcedSpace::new().width(Length::Fixed(8.0)),
-                        copy_text,
-                        copy_image,
-                        pin,
-                        toolbar_divider(),
-                        save,
-                    ]
-                    .spacing(6)
-                    .align_y(Alignment::Center)
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center)
-                .into(),
-                EditorBottomLayout::Stacked => column![
-                    status_area,
-                    row![
-                        discard,
-                        IcedSpace::new().width(Length::Fill),
-                        copy_text,
-                        copy_image,
-                        pin,
-                        toolbar_divider(),
-                        save
-                    ]
-                    .spacing(6)
-                    .align_y(Alignment::Center)
-                    .width(Length::Fill)
-                ]
-                .spacing(8)
-                .into(),
-                EditorBottomLayout::Compact => column![
-                    status_area,
-                    row![discard, copy_text, copy_image]
-                        .spacing(6)
-                        .align_y(Alignment::Center),
-                    row![IcedSpace::new().width(Length::Fill), pin, save]
-                        .spacing(6)
-                        .align_y(Alignment::Center)
-                        .width(Length::Fill),
-                ]
-                .spacing(8)
-                .into(),
-            }
+    // --- Action bar: history · frame · outputs · discard ---
+    let undo_enabled = !busy && can_undo;
+    let redo_enabled = !busy && can_redo;
+    let frame_open = popover == Some(EditorPopover::Frame);
+    let frame_btn = tooltip_with_key(
+        bar_button(
+            row![
+                crate::icons::icon(AppIcon::Frame, p.t2, 15.0),
+                text(frame_style.label()).size(ButtonSize::Sm.text_size()),
+                crate::icons::icon(AppIcon::Chevron, p.t3, 13.0),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into(),
+            if frame_open {
+                ButtonKind::Secondary
+            } else {
+                ButtonKind::Ghost
+            },
+            ButtonSize::Sm,
+            (!busy).then_some(Message::EditorPopoverToggled(EditorPopover::Frame)),
+        ),
+        "Frame style for Copy, Save and Pin",
+        None,
+        Position::Top,
+    );
+    let copy_image = tooltip_with_key(
+        bar_button(
+            row![
+                crate::icons::icon(
+                    AppIcon::Copy,
+                    if busy { dimmed(p.pri_fg) } else { p.pri_fg },
+                    ICON_SIZE
+                ),
+                text("Copy Image").size(ButtonSize::Md.text_size()),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into(),
+            ButtonKind::Primary,
+            ButtonSize::Md,
+            (!busy).then_some(Message::EditorCopyImageRequested),
+        ),
+        "Copy Image",
+        Some("⌘C"),
+        Position::Top,
+    );
+    let action_bar = row![
+        icon_button(
+            AppIcon::Undo,
+            icon_color(undo_enabled),
+            "Undo",
+            Some("⌘Z"),
+            undo_enabled.then_some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
+            false,
+            ICON_BTN,
+            Position::Top,
+        ),
+        icon_button(
+            AppIcon::Redo,
+            icon_color(redo_enabled),
+            "Redo",
+            Some("⇧⌘Z"),
+            redo_enabled.then_some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo)),
+            false,
+            ICON_BTN,
+            Position::Top,
+        ),
+        vsep(),
+        frame_btn,
+        vsep(),
+        icon_button(
+            AppIcon::Pin,
+            icon_color(!busy),
+            "Pin",
+            Some("⌘P"),
+            (!busy).then_some(Message::EditorPinRequested),
+            false,
+            ICON_BTN,
+            Position::Top,
+        ),
+        icon_button(
+            AppIcon::Save,
+            icon_color(!busy),
+            "Save",
+            Some("⌘S"),
+            (!busy).then_some(Message::EditorSaveRequested),
+            false,
+            ICON_BTN,
+            Position::Top,
+        ),
+        icon_button(
+            AppIcon::ScanText,
+            icon_color(!busy),
+            "Copy Text",
+            Some("⇧⌘C"),
+            (!busy).then_some(Message::EditorCopyTextRequested),
+            false,
+            ICON_BTN,
+            Position::Top,
+        ),
+        copy_image,
+        vsep(),
+        icon_button(
+            AppIcon::Close,
+            icon_color(!busy),
+            "Discard",
+            Some("⌘W"),
+            (!busy).then_some(Message::EditorDiscardRequested),
+            false,
+            ICON_BTN,
+            Position::Top,
+        ),
+    ]
+    .spacing(2)
+    .align_y(Alignment::Center);
+    let action_layer = container(container(action_bar).padding(4).style(floating_bar_style))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(iced::Padding {
+            bottom: EDITOR_ACTION_BAR_BOTTOM,
+            ..iced::Padding::ZERO
         })
-        // Same trap as the toolbar: `responsive` defaults to Fill height and
-        // would split the editor column with the image area. Pin the widget to
-        // Shrink so the bottom bar hugs its content.
-        .height(Length::Shrink),
-    )
-    .padding([8, 10])
-    .style(editor_chrome_style)
-    .height(Length::Shrink)
-    .into();
+        .align_x(Alignment::Center)
+        .align_y(Alignment::End);
 
-    container(
-        column![toolbar_row, image_area, bottom_row]
-            .spacing(8)
-            .padding(10)
-            .align_x(Alignment::Start),
+    let mut layers: Vec<Element<'_, Message>> = vec![
+        stage.into(),
+        title_layer.into(),
+        tool_layer.into(),
+        hint_layer.into(),
+    ];
+    if let Some(toast_layer) = toast_layer {
+        layers.push(toast_layer.into());
+    }
+    layers.push(action_layer.into());
+
+    // --- Popover: a click-outside scrim, then the card ---
+    if let Some(which) = popover {
+        layers.push(
+            mouse_area(IcedSpace::new().width(Length::Fill).height(Length::Fill))
+                .on_press(Message::EditorPopoverClosed)
+                .interaction(iced::mouse::Interaction::Idle)
+                .into(),
+        );
+        let body = match which {
+            EditorPopover::Color => color_popover(active_color, busy),
+            EditorPopover::Width => width_popover(line_width, active_color, busy, mono),
+            EditorPopover::Frame => frame_popover(frame_style, busy, p),
+        };
+        // `opaque` keeps clicks on the card's padding from reaching the
+        // scrim underneath (which would close it).
+        let card = opaque(container(body).padding(10).style(popover_style));
+        let placed = match which {
+            // Color and width open from the tool bar: under it.
+            EditorPopover::Color | EditorPopover::Width => container(card)
+                .padding(iced::Padding {
+                    top: EDITOR_POPOVER_TOP,
+                    ..iced::Padding::ZERO
+                })
+                .align_y(Alignment::Start),
+            // Frame opens from the action bar: above it.
+            EditorPopover::Frame => container(card)
+                .padding(iced::Padding {
+                    bottom: EDITOR_TOAST_BOTTOM,
+                    ..iced::Padding::ZERO
+                })
+                .align_y(Alignment::End),
+        };
+        layers.push(
+            placed
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Center)
+                .into(),
+        );
+    }
+
+    iced::widget::Stack::with_children(layers)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+/// Stage insets: title row 44 + tool bar 48 + gap 12 on top; the
+/// action bar's band at the bottom; breathing room at the sides.
+pub(crate) const EDITOR_STAGE_PAD_TOP: f32 = 104.0;
+pub(crate) const EDITOR_STAGE_PAD_BOTTOM: f32 = 80.0;
+pub(crate) const EDITOR_STAGE_PAD_SIDE: f32 = 46.0;
+/// Tool hint sits under the tool bar.
+pub(crate) const EDITOR_HINT_TOP: f32 = 104.0;
+/// Color / width popovers open just under the tool bar.
+pub(crate) const EDITOR_POPOVER_TOP: f32 = 100.0;
+/// Action bar distance from the window's bottom edge.
+pub(crate) const EDITOR_ACTION_BAR_BOTTOM: f32 = 20.0;
+/// Toasts and the frame popover sit just above the action bar.
+pub(crate) const EDITOR_TOAST_BOTTOM: f32 = 66.0;
+
+fn swatch_color(c: readshot_core::Rgba) -> Color {
+    Color::from_rgba(c.r, c.g, c.b, c.a)
+}
+
+/// Line width for display: whole numbers without a decimal, half steps
+/// with one (`3`, `2.5`) — the slider moves in 0.5 steps.
+pub(crate) fn line_width_label(width: f32) -> String {
+    if (width - width.round()).abs() < 0.05 {
+        format!("{width:.0}")
+    } else {
+        format!("{width:.1}")
+    }
+}
+
+/// Text (or icon + text) button in the shared kit's style and height.
+/// `msg: None` renders it disabled.
+fn bar_button<'a>(
+    content: Element<'a, Message>,
+    kind: ButtonKind,
+    size: ButtonSize,
+    msg: Option<Message>,
+) -> iced::widget::Button<'a, Message> {
+    let mut b = button(container(content).center_y(Length::Fill))
+        .height(Length::Fixed(size.height()))
+        .padding([0.0, size.padding_x()])
+        .style(move |t, s| button_style(t, s, kind));
+    if let Some(m) = msg {
+        b = b.on_press(m);
+    }
+    b
+}
+
+fn popover_heading<'a>(label: &'a str) -> iced::widget::Text<'a> {
+    text(label)
+        .size(TYPE_CAPTION)
+        .style(text_t2)
+        .font(iced::Font {
+            weight: iced::font::Weight::Semibold,
+            ..iced::Font::DEFAULT
+        })
+}
+
+fn color_popover<'a>(current: readshot_core::Rgba, busy: bool) -> Element<'a, Message> {
+    use readshot_ui::editor::toolbar::PALETTE;
+    let mut grid = column![].spacing(8);
+    for chunk in PALETTE.chunks(6) {
+        let mut r = row![].spacing(8);
+        for &swatch in chunk {
+            let is_current = swatch_eq(swatch, current);
+            let fill = swatch_color(swatch);
+            let mut b = button(
+                Space::new()
+                    .width(Length::Fixed(22.0))
+                    .height(Length::Fixed(22.0)),
+            )
+            .padding(0)
+            .style(move |theme: &Theme, status| {
+                let p = palette_for(theme);
+                let (width, color) = if is_current {
+                    (2.0, p.t1)
+                } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                    (1.5, p.t2)
+                } else {
+                    (1.0, p.border)
+                };
+                button::Style {
+                    background: Some(fade(fill, if busy { 0.45 } else { 1.0 }).into()),
+                    border: iced::Border {
+                        radius: 11.0.into(),
+                        width,
+                        color,
+                    },
+                    ..Default::default()
+                }
+            });
+            if !busy {
+                b = b.on_press(Message::EditorToolbar(
+                    readshot_ui::ToolbarMessage::SelectColor(swatch),
+                ));
+            }
+            r = r.push(b);
+        }
+        grid = grid.push(r);
+    }
+    column![popover_heading("Color"), grid].spacing(8).into()
+}
+
+fn width_popover<'a>(
+    line_width: f32,
+    color: readshot_core::Rgba,
+    busy: bool,
+    mono: iced::Font,
+) -> Element<'a, Message> {
+    use readshot_ui::editor::toolbar::{MAX_LINE_WIDTH, MIN_LINE_WIDTH};
+    const W: f32 = 220.0;
+    let control: Element<'a, Message> = if busy {
+        passive_line_width_control_sized(line_width, W)
+    } else {
+        iced::widget::slider(
+            MIN_LINE_WIDTH..=MAX_LINE_WIDTH,
+            line_width,
+            Message::EditorLineWidthPreview,
+        )
+        .step(0.5)
+        .on_release(Message::EditorLineWidthCommit)
+        .width(Length::Fixed(W))
+        .into()
+    };
+    let stroke = swatch_color(color);
+    let preview = container(
+        container(
+            Space::new()
+                .width(Length::Fixed(150.0))
+                .height(Length::Fixed(line_width.clamp(1.0, 26.0))),
+        )
+        .style(move |_theme: &Theme| container::Style {
+            background: Some(stroke.into()),
+            border: iced::Border {
+                radius: 2.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
     )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .style(editor_shell_style)
+    .width(Length::Fixed(W))
+    .height(Length::Fixed(34.0))
+    .center_x(Length::Fixed(W))
+    .center_y(Length::Fixed(34.0))
+    .style(|theme: &Theme| container::Style {
+        background: Some(palette_for(theme).hover.into()),
+        border: iced::Border {
+            radius: 7.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    column![
+        row![
+            popover_heading("Line width"),
+            Space::new().width(Length::Fill),
+            text(format!("{} px", line_width_label(line_width)))
+                .font(mono)
+                .size(TYPE_CAPTION)
+                .style(text_t2),
+        ]
+        .align_y(Alignment::Center)
+        .width(Length::Fixed(W)),
+        control,
+        preview,
+    ]
+    .spacing(8)
+    .into()
+}
+
+fn frame_popover<'a>(
+    current: EditorFrameStyle,
+    busy: bool,
+    p: &'static Palette,
+) -> Element<'a, Message> {
+    const W: f32 = 240.0;
+    let mut list = column![].spacing(2).width(Length::Fixed(W));
+    for style in EditorFrameStyle::ALL {
+        let mut r = row![text(style.label()).size(TYPE_BODY).style(text_t1)]
+            .spacing(8)
+            .align_y(Alignment::Center);
+        r = r.push(Space::new().width(Length::Fill));
+        if style == current {
+            r = r.push(crate::icons::icon(
+                crate::icons::AppIcon::CheckCircle,
+                p.acc_text,
+                14.0,
+            ));
+        }
+        list = list.push(
+            bar_button(
+                r.width(Length::Fill).into(),
+                ButtonKind::Ghost,
+                ButtonSize::Sm,
+                (!busy).then_some(Message::EditorFrameStyleChanged(style)),
+            )
+            .width(Length::Fill),
+        );
+    }
+    column![
+        popover_heading("Frame style"),
+        list,
+        text("Applies to Copy Image, Save and Pin. The canvas previews it.")
+            .size(TYPE_CAPTION)
+            .style(text_t3)
+            .width(Length::Fixed(W))
+            .wrapping(iced::widget::text::Wrapping::Word),
+    ]
+    .spacing(6)
     .into()
 }
 
@@ -2176,18 +2282,6 @@ pub(crate) fn editor_chrome_style(_theme: &Theme) -> container::Style {
         background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.055).into()),
         border: iced::Border {
             color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        ..Default::default()
-    }
-}
-
-pub(crate) fn editor_stage_style(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Color::from_rgb8(16, 20, 20).into()),
-        border: iced::Border {
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.08),
             width: 1.0,
             radius: 8.0.into(),
         },
@@ -2371,111 +2465,6 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
         .into()
 }
 
-/// One toolbar tool button with a hover tooltip + keyboard hint.
-pub(crate) fn tool_button<'a>(
-    t: readshot_ui::editor::ToolState,
-    active: readshot_ui::editor::ToolState,
-    busy: bool,
-) -> Element<'a, Message> {
-    use iced::widget::tooltip;
-    let (long, key) = tool_label_and_key(t);
-    let is_active = t == active;
-    let icon = crate::icons::editor_icon(crate::icons::EditorIcon::Tool(t), !busy);
-    let mut b = button(icon)
-        .padding(0)
-        .width(Length::Fixed(32.0))
-        .height(Length::Fixed(32.0))
-        .style(move |theme: &Theme, status| toolbar_button_style(theme, status, is_active));
-    if !busy {
-        b = b.on_press(Message::EditorToolbar(
-            readshot_ui::ToolbarMessage::SelectTool(t),
-        ));
-    }
-    let tip = container(
-        text(format!("{long}  {key}"))
-            .size(TEXT_CAPTION)
-            .color(Color::WHITE),
-    )
-    .padding([4, 8])
-    .style(|_| container::Style {
-        background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
-        border: iced::Border {
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.15),
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        ..Default::default()
-    });
-    tooltip::Tooltip::new(b, tip, tooltip::Position::Bottom)
-        .gap(4)
-        .into()
-}
-
-/// Compact ghost-style action button used for Undo / Redo. `gen`
-/// produces the message lazily so we only build it when enabled.
-pub(crate) fn ghost_icon_button<'a, F>(
-    icon: crate::icons::EditorIcon,
-    tip: impl Into<String>,
-    enabled: bool,
-    gen: F,
-) -> Element<'a, Message>
-where
-    F: Fn() -> Message + 'a,
-{
-    let tip = tip.into();
-    use iced::widget::tooltip;
-    let mut b = button(crate::icons::editor_icon(icon, enabled))
-        .padding(0)
-        .width(Length::Fixed(32.0))
-        .height(Length::Fixed(32.0))
-        .style(move |theme: &Theme, status| toolbar_ghost_style(theme, status, enabled));
-    if enabled {
-        b = b.on_press(gen());
-    }
-    let pop = container(text(tip).size(TEXT_CAPTION).color(Color::WHITE))
-        .padding([4, 8])
-        .style(|_| container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
-            border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.15),
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..Default::default()
-        });
-    tooltip::Tooltip::new(b, pop, tooltip::Position::Bottom)
-        .gap(4)
-        .into()
-}
-
-/// Recessed rounded backing for a cluster of related toolbar buttons.
-/// Groups tools visually without the noise of per-button hairlines.
-pub(crate) fn toolbar_segment<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
-    container(content)
-        .padding([2, 4])
-        .style(|_theme: &Theme| container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.22).into()),
-            border: iced::Border {
-                radius: 9.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .into()
-}
-
-/// 1px vertical divider between toolbar groups.
-pub(crate) fn toolbar_divider() -> Element<'static, Message> {
-    container(iced::widget::Space::new())
-        .width(Length::Fixed(1.0))
-        .height(Length::Fixed(20.0))
-        .style(|_theme: &Theme| container::Style {
-            background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.12).into()),
-            ..Default::default()
-        })
-        .into()
-}
-
 pub(crate) fn passive_line_width_control_sized(
     width: f32,
     control_width: f32,
@@ -2510,37 +2499,6 @@ pub(crate) fn passive_line_width_control_sized(
     .into()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum EditorToolbarLayout {
-    Wide,
-    Stacked,
-    Compact,
-}
-
-/// Height of the zoom / frame strip under the editor image.
-pub(crate) const EDITOR_STAGE_CONTROLS_HEIGHT: f32 = 36.0;
-
-pub(crate) fn editor_toolbar_layout(width: f32) -> EditorToolbarLayout {
-    // The one-row layout needs ~1060 pt: 14 tool buttons, 12 swatches,
-    // the width control, and undo/redo. Below that undo/redo were pushed
-    // off the right edge, so switch to two rows instead.
-    if width < 640.0 {
-        EditorToolbarLayout::Compact
-    } else if width < 1060.0 {
-        EditorToolbarLayout::Stacked
-    } else {
-        EditorToolbarLayout::Wide
-    }
-}
-
-pub(crate) fn editor_width_control_width(layout: EditorToolbarLayout) -> f32 {
-    match layout {
-        EditorToolbarLayout::Wide => 110.0,
-        EditorToolbarLayout::Stacked => 140.0,
-        EditorToolbarLayout::Compact => 108.0,
-    }
-}
-
 pub(crate) fn line_width_fraction(width: f32) -> f32 {
     let min = readshot_ui::editor::toolbar::MIN_LINE_WIDTH;
     let max = readshot_ui::editor::toolbar::MAX_LINE_WIDTH;
@@ -2559,155 +2517,6 @@ pub(crate) fn disabled_text_input_style(_theme: &Theme) -> container::Style {
     }
 }
 
-pub(crate) fn toolbar_button_style(
-    _theme: &Theme,
-    status: button::Status,
-    is_active: bool,
-) -> button::Style {
-    // Active tool gets a pronounced fill *and* a 2 px accent border
-    // so the active state is unambiguous against any backdrop. The
-    // previous styling relied solely on a subtle fill change that
-    // washed out next to the rest of the toolbar.
-    let base = if is_active {
-        // A press on the already-active tool deepens the accent fill;
-        // the selected tool otherwise keeps its highlight even when
-        // `busy` turns it Disabled.
-        if matches!(status, button::Status::Pressed) {
-            accent(0.30)
-        } else {
-            accent(0.22)
-        }
-    } else if matches!(status, button::Status::Disabled) {
-        Color::from_rgba(0.0, 0.0, 0.0, 0.0)
-    } else if matches!(status, button::Status::Pressed) {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.13)
-    } else if matches!(status, button::Status::Hovered) {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.075)
-    } else {
-        Color::TRANSPARENT
-    };
-    let border_color = if is_active {
-        accent(0.85)
-    } else {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.08)
-    };
-    let text_color = if matches!(status, button::Status::Disabled) {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.35)
-    } else {
-        Color::WHITE
-    };
-    button::Style {
-        background: Some(base.into()),
-        text_color,
-        border: iced::Border {
-            radius: 6.0.into(),
-            width: if is_active { 1.5 } else { 1.0 },
-            color: border_color,
-        },
-        ..Default::default()
-    }
-}
-
-pub(crate) fn toolbar_ghost_style(
-    _theme: &Theme,
-    status: button::Status,
-    enabled: bool,
-) -> button::Style {
-    let bg = match (enabled, status) {
-        (true, button::Status::Pressed) => Color::from_rgba(1.0, 1.0, 1.0, 0.13),
-        (true, button::Status::Hovered) => Color::from_rgba(1.0, 1.0, 1.0, 0.075),
-        _ => Color::TRANSPARENT,
-    };
-    // Mirror the active toolbar button's disabled treatment so
-    // undo / redo / icon ghost buttons fade out coherently when
-    // `busy` removes their `on_press`.
-    let disabled_or_inactive = !enabled || matches!(status, button::Status::Disabled);
-    button::Style {
-        background: Some(bg.into()),
-        text_color: if disabled_or_inactive {
-            Color::from_rgba(1.0, 1.0, 1.0, 0.35)
-        } else {
-            Color::WHITE
-        },
-        border: iced::Border {
-            radius: 6.0.into(),
-            width: 1.0,
-            color: Color::from_rgba(
-                1.0,
-                1.0,
-                1.0,
-                if disabled_or_inactive { 0.05 } else { 0.10 },
-            ),
-        },
-        ..Default::default()
-    }
-}
-
-pub(crate) fn zoom_button<'a>(
-    label: &'static str,
-    tip: &'static str,
-    msg: Message,
-    enabled: bool,
-    selected: bool,
-    busy: bool,
-) -> Element<'a, Message> {
-    use iced::widget::tooltip;
-
-    let mut b = button(text(label).size(TEXT_MICRO).color(Color::WHITE))
-        .padding([5, 9])
-        .style(move |theme, status| zoom_button_style(theme, status, enabled, selected));
-    if !busy && enabled {
-        b = b.on_press(msg);
-    }
-    let pop = container(text(tip).size(TEXT_CAPTION).color(Color::WHITE))
-        .padding([4, 8])
-        .style(|_| container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
-            border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.15),
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..Default::default()
-        });
-    tooltip::Tooltip::new(b, pop, tooltip::Position::Bottom)
-        .gap(4)
-        .into()
-}
-
-pub(crate) fn zoom_button_style(
-    _theme: &Theme,
-    status: button::Status,
-    enabled: bool,
-    selected: bool,
-) -> button::Style {
-    let background = if selected {
-        READSHOT_PRIMARY_FILL
-    } else if !enabled {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.03)
-    } else if matches!(status, button::Status::Pressed) {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.20)
-    } else if matches!(status, button::Status::Hovered) {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.14)
-    } else {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.07)
-    };
-    button::Style {
-        background: Some(background.into()),
-        text_color: if enabled {
-            Color::WHITE
-        } else {
-            Color::from_rgba(1.0, 1.0, 1.0, 0.35)
-        },
-        border: iced::Border {
-            radius: 6.0.into(),
-            width: if selected { 1.0 } else { 0.0 },
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.20),
-        },
-        ..Default::default()
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) enum ActionKind {
     Primary,
@@ -2717,68 +2526,6 @@ pub(crate) enum ActionKind {
     /// Outlined red: a destructive action's first, arming step. Keeps
     /// Discard / Delete / Clear All from being the loudest control.
     DangerQuiet,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum EditorBottomLayout {
-    Wide,
-    Stacked,
-    Compact,
-}
-
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum EditorBottomAction {
-    Discard,
-    CopyText,
-    CopyImage,
-    Pin,
-    Save,
-}
-
-pub(crate) fn editor_bottom_layout(width: f32) -> EditorBottomLayout {
-    if width < 520.0 {
-        EditorBottomLayout::Compact
-    } else if width < 860.0 {
-        EditorBottomLayout::Stacked
-    } else {
-        EditorBottomLayout::Wide
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn editor_bottom_action_rows(
-    layout: EditorBottomLayout,
-) -> Vec<Vec<EditorBottomAction>> {
-    use EditorBottomAction as A;
-    match layout {
-        EditorBottomLayout::Wide | EditorBottomLayout::Stacked => {
-            vec![vec![A::Discard, A::CopyText, A::CopyImage, A::Pin, A::Save]]
-        }
-        EditorBottomLayout::Compact => vec![
-            vec![A::Discard, A::CopyText, A::CopyImage],
-            vec![A::Pin, A::Save],
-        ],
-    }
-}
-
-pub(crate) fn editor_action_button<'a>(
-    label: &'static str,
-    msg: Message,
-    kind: ActionKind,
-    busy: bool,
-    tip: &'static str,
-) -> Element<'a, Message> {
-    use iced::widget::tooltip;
-
-    let lbl = text(label).size(TEXT_BODY_SM);
-    let mut b = button(lbl)
-        .padding([8, 16])
-        .style(move |theme, status| action_button_style(theme, status, kind));
-    if !busy {
-        b = b.on_press(msg);
-    }
-    tooltip_with_key(b, tip, None, tooltip::Position::Top)
 }
 
 pub(crate) fn action_button_style(
@@ -3131,36 +2878,15 @@ pub(crate) fn scroll_key_message(
     }
 }
 
-/// Dark hover tooltip wrapper used to name a keyboard shortcut on an
-/// otherwise icon-only control (mirrors `tool_button`'s tip chrome so
-/// every tooltip in the app reads the same).
+/// Name-only hover tooltip for an otherwise icon-only control; a thin
+/// wrapper over [`tooltip_with_key`] so every tooltip in the app shares
+/// one chrome (the editor's tool bar uses `tooltip_with_key` directly).
 pub(crate) fn key_tooltip<'a>(
     content: impl Into<Element<'a, Message>>,
     label: impl Into<String>,
     position: iced::widget::tooltip::Position,
 ) -> Element<'a, Message> {
     tooltip_with_key(content, label, None, position)
-}
-
-/// One-line guidance for the currently active tool — replaces the
-/// blank slate the user used to face when they didn't know what
-/// click would do what.
-pub(crate) fn tool_hint(tool: readshot_ui::editor::ToolState) -> &'static str {
-    use readshot_ui::editor::ToolState as T;
-    match tool {
-        T::Select => "Select — click an annotation, drag to move, Delete removes, Esc deselects.",
-        T::Rectangle => "Rectangle — drag to outline a region.",
-        T::Ellipse => "Ellipse — drag the bounding box.",
-        T::Line => "Line — drag from start to end.",
-        T::Arrow => "Arrow — drag from base toward the target.",
-        T::Pen => "Pen — drag to free-draw.",
-        T::Highlighter => "Highlighter — drag over text; semi-transparent.",
-        T::Text => "Text — click to place; type and press Enter to commit.",
-        T::Blur => "Blur — drag a region; radius scales with width.",
-        T::Pixelate => "Pixelate — drag a region; block size scales with width.",
-        T::NumberedPin => "Numbered pin — click to drop the next number.",
-        T::Crop => "Crop — drag to keep only that region.",
-    }
 }
 
 pub(crate) fn editor_compact_hint(tool: readshot_ui::editor::ToolState) -> &'static str {

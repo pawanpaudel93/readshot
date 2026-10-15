@@ -7,7 +7,6 @@
 #![allow(dead_code)] // removed in Task 14
 
 use iced::widget::canvas::{self, Frame, Path, Stroke, Text as CanvasText};
-use iced::widget::container;
 use iced::{Color, Element, Length, Point, Rectangle, Renderer, Theme};
 
 use crate::app::Message;
@@ -44,9 +43,6 @@ pub enum AppIcon {
     Frame,
 }
 
-/// Kept so the editor compiles unchanged until Task 7.
-pub type EditorIcon = AppIcon;
-
 #[derive(Clone, Copy, Debug)]
 struct IconProgram {
     icon: AppIcon,
@@ -58,20 +54,6 @@ pub fn icon<'a>(icon: AppIcon, color: Color, size: f32) -> Element<'a, Message> 
     canvas::Canvas::new(IconProgram { icon, color, size })
         .width(Length::Fixed(size))
         .height(Length::Fixed(size))
-        .into()
-}
-
-pub fn editor_icon<'a>(i: EditorIcon, enabled: bool) -> Element<'a, Message> {
-    let c = if enabled {
-        Color::WHITE
-    } else {
-        Color::from_rgba(1.0, 1.0, 1.0, 0.35)
-    };
-    container(icon(i, c, 22.0))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
         .into()
 }
 

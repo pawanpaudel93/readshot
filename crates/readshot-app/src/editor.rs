@@ -56,6 +56,14 @@ impl std::fmt::Display for EditorFrameStyle {
     }
 }
 
+/// Which floating popover is open over the editor (at most one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorPopover {
+    Color,
+    Width,
+    Frame,
+}
+
 /// One open editor window, plus the iced-side state that doesn't
 /// belong inside the pure model.
 pub struct EditorSession {
@@ -121,6 +129,9 @@ pub struct EditorSession {
     /// Optional presentation frame applied to image outputs from this
     /// editor window. `No Frame` keeps Save / Copy / Pin pixel-exact.
     pub frame_style: EditorFrameStyle,
+    /// Open color / line-width / frame popover, if any. Esc and a
+    /// click outside close it before any other Esc behaviour runs.
+    pub popover: Option<EditorPopover>,
     /// True while a shape/freehand drag is in progress on the canvas
     /// (between `DragStarted` and its `Cancelled`/`CommitAnnotation`).
     /// Escape uses this to decide whether to cancel the drag or fall
@@ -352,6 +363,7 @@ impl EditorSession {
             display_scale: display_scale.max(f32::EPSILON),
             source_display_bounds: None,
             discard_pending_at: None,
+            popover: None,
             status_set_at: None,
             move_drag: None,
             width_drag_baseline: None,
@@ -393,6 +405,7 @@ impl EditorSession {
             display_scale: display_scale.max(f32::EPSILON),
             source_display_bounds: None,
             discard_pending_at: None,
+            popover: None,
             status_set_at: None,
             move_drag: None,
             width_drag_baseline: None,

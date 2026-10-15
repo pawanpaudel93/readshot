@@ -11,6 +11,34 @@ pub(crate) fn mono_font() -> iced::Font {
     iced::Font::with_name(readshot_core::render::FONT_FAMILY)
 }
 
+/// Height of a view's own title row when the window uses
+/// [`macos_fullsize_titlebar`].
+pub(crate) const TITLEBAR_HEIGHT: f32 = 44.0;
+/// Left inset of that title row: clears the macOS traffic lights.
+#[cfg(target_os = "macos")]
+pub(crate) const TITLEBAR_INSET_LEFT: f32 = 78.0;
+#[cfg(not(target_os = "macos"))]
+pub(crate) const TITLEBAR_INSET_LEFT: f32 = 12.0;
+
+/// Transparent, full-size-content title bar so views draw their own top
+/// row under the traffic lights (macOS only; other platforms keep theirs).
+/// Every view using this must make its title row draggable via
+/// `Message::WindowDragRequested`.
+pub(crate) fn macos_fullsize_titlebar() -> window::settings::PlatformSpecific {
+    #[cfg(target_os = "macos")]
+    {
+        window::settings::PlatformSpecific {
+            title_hidden: true,
+            titlebar_transparent: true,
+            fullsize_content_view: true,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window::settings::PlatformSpecific::default()
+    }
+}
+
 pub(crate) fn welcome_window_settings() -> window::Settings {
     const W: f32 = 520.0;
     const H: f32 = 380.0;
@@ -54,6 +82,7 @@ pub(crate) fn editor_window_settings(
         // unsaved-work confirmation instead of dropping the session.
         // `Message::WindowCloseRequested` performs the actual close.
         exit_on_close_request: false,
+        platform_specific: macos_fullsize_titlebar(),
         ..Default::default()
     }
 }
