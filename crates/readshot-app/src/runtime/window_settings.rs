@@ -163,6 +163,7 @@ pub(crate) fn settings_window_settings() -> window::Settings {
         decorations: true,
         transparent: false,
         visible: true,
+        platform_specific: macos_fullsize_titlebar(),
         ..Default::default()
     }
 }

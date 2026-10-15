@@ -141,7 +141,6 @@ pub enum SettingsPane {
     App,
 }
 
-#[allow(dead_code)] // label/icon feed the sidebar view (next commit)
 impl SettingsPane {
     pub(crate) const ALL: [Self; 7] = [
         Self::Permissions,

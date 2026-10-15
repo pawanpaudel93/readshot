@@ -3672,110 +3672,254 @@ pub(crate) fn overlay_toolbar_layer<'a>(
         .into()
 }
 
-/// Preferences window. v1 = a single General tab with the controls
-/// users need regularly. The other `SettingsTab` variants stay on the
-/// enum but don't render until they have content worth showing.
+/// Settings window: a 200 px sidebar of seven panes (⌘1–⌘7) beside the
+/// selected pane's grouped rows. Every control, message, and keyboard
+/// path from the old single-page layout is kept; only placement moved.
 pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
-    use iced::widget::{button, pick_list, text_input, toggler};
-    use readshot_core::{ExportFormat, HistoryRetention, OcrEngineChoice};
+    use iced::widget::tooltip::Position;
+    use iced::widget::{mouse_area, stack};
 
-    // `pick_list` borrows its options for the duration of the
-    // returned `Element`, so a `'static` slice keeps the lifetime
-    // story simple.
-    const RETENTION_OPTIONS: [HistoryRetention; 4] = [
-        HistoryRetention::Off,
-        HistoryRetention::Last50,
-        HistoryRetention::Last30Days,
-        HistoryRetention::Unlimited,
-    ];
-    const FORMAT_OPTIONS: [ExportFormat; 3] =
-        [ExportFormat::Png, ExportFormat::Jpeg, ExportFormat::Webp];
-    const ENGINE_OPTIONS: [OcrEngineChoice; 2] =
-        [OcrEngineChoice::Native, OcrEngineChoice::Tesseract];
+    let p = palette(state.theme_mode);
 
-    let header = row![
-        column![
-            text("Settings").size(TEXT_SCREEN_TITLE),
-            text("Capture, files, permissions, and startup")
-                .size(TEXT_BODY_SM)
-                .color(settings_muted_text()),
+    // Window drag handle for one of the two title strips (the window
+    // uses a transparent full-size title bar on macOS).
+    let drag_handle = || {
+        let mut handle = mouse_area(
+            Space::new()
+                .width(Length::Fill)
+                .height(Length::Fixed(TITLEBAR_HEIGHT)),
+        );
+        if let Some(id) = state.settings_window_id {
+            handle = handle.on_press(Message::WindowDragRequested(id));
+        }
+        handle
+    };
+
+    // --- Sidebar -------------------------------------------------------
+    const PANE_KEYS: [&str; 7] = ["⌘1", "⌘2", "⌘3", "⌘4", "⌘5", "⌘6", "⌘7"];
+    let mut nav = column![].spacing(1).padding([4, 8]);
+    for (pane, key) in SettingsPane::ALL.into_iter().zip(PANE_KEYS) {
+        let selected = pane == state.settings_pane;
+        let label_style: fn(&Theme) -> iced::widget::text::Style =
+            if selected { text_t1 } else { text_t2 };
+        let mut item = row![
+            crate::icons::icon(
+                pane.icon(),
+                if selected { p.acc_text } else { p.t2 },
+                ICON_SIZE
+            ),
+            text(pane.label())
+                .size(TYPE_BODY)
+                .font(if selected {
+                    medium()
+                } else {
+                    iced::Font::DEFAULT
+                })
+                .style(label_style),
+            Space::new().width(Length::Fill),
         ]
-        .spacing(3),
-        Space::new().width(Length::Fill),
-    ]
-    .align_y(Alignment::Center);
-
-    let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
-    let mut hotkey_hint = if state.settings_recording_hotkey {
-        state
-            .settings_hotkey_error
-            .clone()
-            .unwrap_or_else(|| "Press a modifier shortcut now. Escape cancels.".to_string())
-    } else if let Some(err) = &state.settings_hotkey_error {
-        // A rejected chord (e.g. a conflict with a reserved hotkey) or a
-        // registration failure. Show it even when recording has ended.
-        err.clone()
-    } else if let Some(status) = &state.settings_hotkey_status {
-        status.clone()
-    } else if readshot_ui::hotkey::parse(&state.preferences.capture_hotkey).is_err() {
-        format!(
-            "Couldn't read `{}` — try `cmd+shift+x` style.",
-            state.preferences.capture_hotkey
-        )
-    } else if let Some(reserved) = capture_hotkey_conflict(&state.preferences.capture_hotkey) {
-        format!("{pretty} is reserved for the {reserved} shortcut. Pick another chord.")
-    } else if !state.capture_hotkey_registered {
-        // Parsed-OK but registration failed, e.g. another app already
-        // owns the chord. Tell the user so they pick another one.
-        format!("{pretty} — couldn't grab globally; try a different chord.")
-    } else {
-        String::new()
-    };
-    // A fixed hotkey (History / Settings) that couldn't be registered is
-    // surfaced here so the failure isn't silent.
-    if !state.fixed_hotkey_failures.is_empty() {
-        let names = state.fixed_hotkey_failures.join(" and ");
-        let plural = if state.fixed_hotkey_failures.len() > 1 {
-            "shortcuts"
-        } else {
-            "shortcut"
-        };
-        let warning = format!("⚠ The {names} {plural} couldn't be registered globally.");
-        hotkey_hint = if hotkey_hint.is_empty() {
-            warning
-        } else {
-            format!("{hotkey_hint}  {warning}")
-        };
+        .spacing(SP2)
+        .align_y(Alignment::Center);
+        if pane == SettingsPane::Permissions {
+            match state.permission_status {
+                PermissionStatus::Granted => {
+                    item = item.push(crate::icons::icon(
+                        crate::icons::AppIcon::CheckCircle,
+                        p.ok,
+                        14.0,
+                    ));
+                }
+                PermissionStatus::Denied => {
+                    item = item.push(crate::icons::icon(
+                        crate::icons::AppIcon::Alert,
+                        p.warn,
+                        14.0,
+                    ));
+                }
+                // Nothing to grant on this platform: no badge.
+                PermissionStatus::NotApplicable => {}
+            }
+        }
+        let entry = button(container(item).center_y(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fixed(32.0))
+            .padding([0, 10])
+            .style(move |t, s| settings_nav_style(t, s, selected))
+            .on_press(Message::SettingsPaneSelected(pane));
+        nav = nav.push(tooltip_with_key(
+            entry,
+            pane.label(),
+            Some(key),
+            Position::Right,
+        ));
     }
-    let hotkey_label = if state.settings_recording_hotkey {
-        "Press shortcut…".to_string()
-    } else {
-        pretty_hotkey(&state.preferences.capture_hotkey)
-    };
+    let footer = column![
+        row![
+            key_chip("⌘W"),
+            text("Close").size(TYPE_CAPTION).style(text_t3)
+        ]
+        .spacing(SP2)
+        .align_y(Alignment::Center),
+        text(concat!("Readshot ", env!("CARGO_PKG_VERSION")))
+            .size(TYPE_CAPTION)
+            .style(text_t3),
+    ]
+    .spacing(6)
+    .padding([12, 16]);
+    let sidebar = container(column![
+        drag_handle(),
+        nav,
+        Space::new().height(Length::Fill),
+        footer
+    ])
+    .width(Length::Fixed(200.0))
+    .height(Length::Fill)
+    .style(surface_style);
 
-    let startup_row: Element<'_, Message> = toggler(state.preferences.launch_at_login)
-        .label("Open Readshot at login")
-        .on_toggle(|v| Message::Settings(SettingsMessage::SetLaunchAtLogin(v)))
-        .into();
-
-    let save_folder_value = if state.preferences.save_folder.as_os_str().is_empty() {
-        "Platform default".to_string()
-    } else {
-        state.preferences.save_folder.display().to_string()
+    // --- Selected pane -------------------------------------------------
+    let pane = state.settings_pane;
+    let body: Vec<Element<'_, Message>> = match pane {
+        SettingsPane::Permissions => settings_permissions_pane(state),
+        SettingsPane::Capture => settings_capture_pane(state),
+        SettingsPane::Files => settings_files_pane(state),
+        SettingsPane::TextRecognition => settings_ocr_pane(state),
+        SettingsPane::Export => settings_export_pane(state),
+        SettingsPane::Diagnostics => settings_diagnostics_pane(state),
+        SettingsPane::App => settings_app_pane(state),
     };
-    let filename_template = state.preferences.filename_template.clone();
+    let title_content = container(
+        text(pane.label())
+            .size(TYPE_HEADING)
+            .font(semibold())
+            .style(text_t1),
+    )
+    .padding([0, 22])
+    .width(Length::Fill)
+    .height(Length::Fixed(TITLEBAR_HEIGHT))
+    .align_y(Alignment::Center);
+    let title_row = stack![drag_handle(), title_content]
+        .width(Length::Fill)
+        .height(Length::Fixed(TITLEBAR_HEIGHT));
+    let pane_body = scrollable(
+        container(iced::widget::Column::with_children(body).spacing(SP2))
+            .width(Length::Fill)
+            .padding(iced::Padding {
+                top: 2.0,
+                right: 22.0,
+                bottom: 22.0,
+                left: 22.0,
+            }),
+    )
+    .direction(iced::widget::scrollable::Direction::Vertical(
+        slim_scrollbar(),
+    ))
+    .height(Length::Fill);
+
+    container(row![
+        sidebar,
+        vhairline(),
+        column![title_row, pane_body]
+            .width(Length::Fill)
+            .height(Length::Fill),
+    ])
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(bg_style)
+    .into()
+}
+
+fn medium() -> iced::Font {
+    iced::Font {
+        weight: iced::font::Weight::Medium,
+        ..iced::Font::DEFAULT
+    }
+}
+
+/// Sidebar entry: accent tint when selected (teal marks selection only),
+/// hover fill otherwise.
+fn settings_nav_style(theme: &Theme, status: button::Status, selected: bool) -> button::Style {
+    let p = palette_for(theme);
+    let bg = if selected {
+        p.acc_tint
+    } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+        p.hover
+    } else {
+        Color::TRANSPARENT
+    };
+    button::Style {
+        background: Some(bg.into()),
+        text_color: if selected { p.t1 } else { p.t2 },
+        border: iced::Border {
+            radius: 7.0.into(),
+            ..iced::Border::default()
+        },
+        ..button::Style::default()
+    }
+}
+
+/// Small caption above a group ("Shortcut", "Danger zone").
+fn settings_group_heading<'a>(
+    label: &'a str,
+    style: fn(&Theme) -> iced::widget::text::Style,
+) -> Element<'a, Message> {
+    container(text(label).size(TYPE_CAPTION).font(semibold()).style(style))
+        .padding(iced::Padding {
+            top: 10.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 2.0,
+        })
+        .into()
+}
+
+/// Rounded group of rows with hairlines between them.
+fn settings_group<'a>(rows: Vec<Element<'a, Message>>) -> Element<'a, Message> {
+    let mut col = column![].width(Length::Fill);
+    for (i, r) in rows.into_iter().enumerate() {
+        if i > 0 {
+            col = col.push(hairline());
+        }
+        col = col.push(r);
+    }
+    container(col).width(Length::Fill).style(group_style).into()
+}
+
+/// A group row whose control is too wide to sit beside its label (value
+/// boxes with buttons, text fields, checkbox lists): label and help on
+/// top, the control full-width below. Same padding as [`group_row`].
+fn settings_block<'a>(
+    label: &'a str,
+    help: impl Into<String>,
+    control: Element<'a, Message>,
+) -> Element<'a, Message> {
+    let help = help.into();
+    let mut head = column![text(label).size(TYPE_BODY).style(text_t1)].spacing(2);
+    if !help.is_empty() {
+        head = head.push(
+            text(help)
+                .size(TYPE_CAPTION)
+                .style(text_t3)
+                .wrapping(iced::widget::text::Wrapping::Word),
+        );
+    }
+    column![head, control]
+        .spacing(SP2)
+        .padding([10, 14])
+        .width(Length::Fill)
+        .into()
+}
+
+fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
     // Never probe from view(): it runs on every redraw.
     let permission_status = state.permission_status;
     let (permission_title, permission_hint) = permission_settings_summary(permission_status);
-
-    let history_retention = state.preferences.history_retention;
-    let settings_recording_hotkey = state.settings_recording_hotkey;
     let permission_control: Element<'_, Message> = responsive(move |available| {
         let status = column![
-            text(permission_title).size(TEXT_BODY_SM),
+            text(permission_title).size(TEXT_BODY_SM).style(text_t1),
             text(permission_hint)
                 .size(TEXT_CAPTION)
-                .color(settings_muted_text()),
+                .style(text_t3)
+                .wrapping(iced::widget::text::Wrapping::Word),
         ]
         .spacing(6)
         .width(Length::Fill);
@@ -3821,460 +3965,436 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     })
     .height(Length::Shrink)
     .into();
-    let permission_section = settings_section("Permissions", "Capture access", permission_control);
-    let capture_section = settings_section(
-        "Capture",
-        "Shortcut and history",
-        responsive(move |available| {
-            let hotkey_control: Element<'_, Message> = responsive({
-                let hotkey_label = hotkey_label.clone();
-                move |available| {
-                    let value = setting_value_box(hotkey_label.clone(), settings_recording_hotkey);
-                    // Record / Cancel are exclusive: while a recording
-                    // is armed, the user needs an obvious exit that
-                    // doesn't require pressing a real shortcut.
-                    // Previously the Record button was a no-op once
-                    // armed, leaving Esc as the only way out (and Esc
-                    // wasn't documented).
-                    let primary_btn = if settings_recording_hotkey {
-                        button(text("Cancel").size(TEXT_BODY_SM))
-                            .padding([6, 12])
-                            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                            .on_press(Message::SettingsHotkeyRecordingCancelled)
-                    } else {
-                        button(text("Record").size(TEXT_BODY_SM))
-                            .padding([6, 12])
-                            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                            .on_press(Message::SettingsStartHotkeyRecording)
-                    };
-                    let actions = row![
-                        primary_btn,
-                        button(text("Reset").size(TEXT_BODY_SM))
-                            .padding([6, 12])
-                            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                            .on_press(Message::Settings(SettingsMessage::SetCaptureHotkey(
-                                default_capture_hotkey().into()
-                            ),)),
-                    ]
-                    .spacing(8)
-                    .align_y(Alignment::Center);
+    vec![
+        settings_group_heading("Capture access", text_t3),
+        settings_group(vec![container(permission_control)
+            .padding([10, 14])
+            .width(Length::Fill)
+            .into()]),
+    ]
+}
 
-                    let main: Element<'_, Message> = if available.width < 360.0 {
-                        column![value, actions].spacing(8).into()
-                    } else {
-                        row![value, actions]
-                            .spacing(8)
-                            .align_y(Alignment::Center)
-                            .into()
-                    };
-                    if settings_recording_hotkey {
-                        column![
-                            main,
-                            text("Press the new shortcut, or Esc to cancel.")
-                                .size(TEXT_CAPTION)
-                                .color(accent(0.85)),
-                        ]
-                        .spacing(6)
-                        .into()
-                    } else {
-                        main
-                    }
-                }
-            })
-            .height(Length::Shrink)
-            .into();
-            let hotkey_row = settings_field("Capture hotkey", hotkey_hint.clone(), hotkey_control);
-            let retention_control: Element<'_, Message> =
-                pick_list(&RETENTION_OPTIONS[..], Some(history_retention), |r| {
-                    Message::Settings(SettingsMessage::SetHistoryRetention(r))
-                })
-                .text_size(TEXT_BODY_SM)
-                .padding([7, 10])
-                .into();
-            let retention_row = settings_field(
-                "History retention",
-                "Searchable archive of captures. Off keeps everything in-memory only.",
-                retention_control,
-            );
+fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
+    use iced::widget::pick_list;
+    use iced::widget::tooltip::Position;
+    use readshot_core::HistoryRetention;
 
-            if available.width < 560.0 {
-                column![hotkey_row, retention_row].spacing(14).into()
-            } else {
-                row![
-                    column![hotkey_row].width(Length::FillPortion(3)),
-                    column![retention_row].width(Length::FillPortion(2)),
-                ]
-                .spacing(18)
-                .align_y(Alignment::Start)
-                .into()
-            }
-        })
-        .height(Length::Shrink)
-        .into(),
-    );
-    let files_section = settings_section(
-        "Files",
-        "Save location and naming",
-        responsive(move |available| {
-            let save_folder_control: Element<'_, Message> = column![
-                setting_value_box(save_folder_value.clone(), false),
-                row![
-                    button(text("Choose").size(TEXT_BODY_SM)).padding([6, 12])
-                        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                        .on_press(Message::SettingsChooseSaveFolderRequested),
-                    button(text("Open").size(TEXT_BODY_SM)).padding([6, 12])
-                        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                        .on_press(Message::SettingsOpenSaveFolderRequested),
-                    button(text("Reset").size(TEXT_BODY_SM)).padding([6, 12])
-                        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                        .on_press(Message::Settings(SettingsMessage::SetSaveFolder(
-                            PathBuf::new()
-                        ))),
-                ]
+    // `pick_list` borrows its options for the duration of the
+    // returned `Element`, so a `'static` slice keeps the lifetime
+    // story simple.
+    const RETENTION_OPTIONS: [HistoryRetention; 4] = [
+        HistoryRetention::Off,
+        HistoryRetention::Last50,
+        HistoryRetention::Last30Days,
+        HistoryRetention::Unlimited,
+    ];
+
+    let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
+    let mut hotkey_hint = if state.settings_recording_hotkey {
+        state
+            .settings_hotkey_error
+            .clone()
+            .unwrap_or_else(|| "Press a modifier shortcut now. Escape cancels.".to_string())
+    } else if let Some(err) = &state.settings_hotkey_error {
+        // A rejected chord (e.g. a conflict with a reserved hotkey) or a
+        // registration failure. Show it even when recording has ended.
+        err.clone()
+    } else if let Some(status) = &state.settings_hotkey_status {
+        status.clone()
+    } else if readshot_ui::hotkey::parse(&state.preferences.capture_hotkey).is_err() {
+        format!(
+            "Couldn't read `{}` — try `cmd+shift+x` style.",
+            state.preferences.capture_hotkey
+        )
+    } else if let Some(reserved) = capture_hotkey_conflict(&state.preferences.capture_hotkey) {
+        format!("{pretty} is reserved for the {reserved} shortcut. Pick another chord.")
+    } else if !state.capture_hotkey_registered {
+        // Parsed-OK but registration failed, e.g. another app already
+        // owns the chord. Tell the user so they pick another one.
+        format!("{pretty} — couldn't grab globally; try a different chord.")
+    } else {
+        String::new()
+    };
+    // A fixed hotkey (History / Settings) that couldn't be registered is
+    // surfaced here so the failure isn't silent.
+    if !state.fixed_hotkey_failures.is_empty() {
+        let names = state.fixed_hotkey_failures.join(" and ");
+        let plural = if state.fixed_hotkey_failures.len() > 1 {
+            "shortcuts"
+        } else {
+            "shortcut"
+        };
+        let warning = format!("⚠ The {names} {plural} couldn't be registered globally.");
+        hotkey_hint = if hotkey_hint.is_empty() {
+            warning
+        } else {
+            format!("{hotkey_hint}  {warning}")
+        };
+    }
+    if hotkey_hint.is_empty() {
+        hotkey_hint = "Opens the capture overlay from any app.".to_string();
+    }
+    let hotkey_label = if state.settings_recording_hotkey {
+        "Press shortcut…".to_string()
+    } else {
+        pretty
+    };
+    let settings_recording_hotkey = state.settings_recording_hotkey;
+    let hotkey_control: Element<'_, Message> = responsive(move |available| {
+        let value = setting_value_box(hotkey_label.clone(), settings_recording_hotkey);
+        // Record / Cancel are exclusive: while a recording is armed, the
+        // user needs an obvious exit that doesn't require pressing a
+        // real shortcut.
+        let primary_btn = if settings_recording_hotkey {
+            button(text("Cancel").size(TEXT_BODY_SM))
+                .padding([6, 12])
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(Message::SettingsHotkeyRecordingCancelled)
+        } else {
+            button(text("Record").size(TEXT_BODY_SM))
+                .padding([6, 12])
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(Message::SettingsStartHotkeyRecording)
+        };
+        let actions = row![
+            primary_btn,
+            button(text("Reset").size(TEXT_BODY_SM))
+                .padding([6, 12])
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(Message::Settings(SettingsMessage::SetCaptureHotkey(
+                    default_capture_hotkey().into()
+                ),)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+
+        let main: Element<'_, Message> = if available.width < 360.0 {
+            column![value, actions].spacing(8).into()
+        } else {
+            row![value, actions]
                 .spacing(8)
-                .align_y(Alignment::Center),
+                .align_y(Alignment::Center)
+                .into()
+        };
+        if settings_recording_hotkey {
+            column![
+                main,
+                text("Press the new shortcut, or Esc to cancel.")
+                    .size(TEXT_CAPTION)
+                    .style(text_acc),
             ]
-            .spacing(8)
-            .into();
-            let save_folder_row = settings_field(
+            .spacing(6)
+            .into()
+        } else {
+            main
+        }
+    })
+    .height(Length::Shrink)
+    .into();
+
+    let retention_control = tooltip_with_key(
+        pick_list(
+            &RETENTION_OPTIONS[..],
+            Some(state.preferences.history_retention),
+            |r| Message::Settings(SettingsMessage::SetHistoryRetention(r)),
+        )
+        .text_size(TEXT_BODY_SM)
+        .padding([7, 10]),
+        "Next retention option",
+        Some("⌘R"),
+        Position::Top,
+    );
+
+    vec![
+        settings_group_heading("Shortcut", text_t3),
+        settings_group(vec![settings_block(
+            "Capture hotkey",
+            hotkey_hint,
+            hotkey_control,
+        )]),
+        settings_group_heading("History", text_t3),
+        settings_group(vec![group_row(
+            "History retention",
+            "Searchable archive of captures. Off keeps everything in-memory only.",
+            retention_control,
+        )]),
+    ]
+}
+
+fn settings_files_pane(state: &App) -> Vec<Element<'_, Message>> {
+    use iced::widget::text_input;
+
+    let save_folder_value = if state.preferences.save_folder.as_os_str().is_empty() {
+        "Platform default".to_string()
+    } else {
+        state.preferences.save_folder.display().to_string()
+    };
+    let filename_template = state.preferences.filename_template.clone();
+
+    let save_folder_control: Element<'_, Message> = column![
+        setting_value_box(save_folder_value, false),
+        row![
+            button(text("Choose").size(TEXT_BODY_SM))
+                .padding([6, 12])
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(Message::SettingsChooseSaveFolderRequested),
+            button(text("Open").size(TEXT_BODY_SM))
+                .padding([6, 12])
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(Message::SettingsOpenSaveFolderRequested),
+            button(text("Reset").size(TEXT_BODY_SM))
+                .padding([6, 12])
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(Message::Settings(SettingsMessage::SetSaveFolder(
+                    PathBuf::new()
+                ))),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(8)
+    .into();
+    let preview_template = if filename_template.trim().is_empty() {
+        "Screenshot {YYYY-MM-DD at HH.mm.ss}".to_string()
+    } else {
+        filename_template.clone()
+    };
+    let preview_name = default_save_filename(&preview_template, chrono::Utc::now());
+    let filename_input = text_input("Screenshot {YYYY-MM-DD at HH.mm.ss}", &filename_template)
+        .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
+        .size(TEXT_BODY_SM)
+        .padding([8, 10])
+        .style(text_input_style);
+    let preview_line = text(format!("Saves as: {preview_name}"))
+        .size(TEXT_CAPTION)
+        .style(text_t3);
+    let filename_control: Element<'_, Message> =
+        column![filename_input, preview_line].spacing(4).into();
+
+    vec![
+        settings_group_heading("Save location and naming", text_t3),
+        settings_group(vec![
+            settings_block(
                 "Default save folder",
                 "Starting folder for Save. Platform default uses your system screenshots location.",
                 save_folder_control,
-            );
-            let filename_input =
-                text_input("Screenshot {YYYY-MM-DD at HH.mm.ss}", &filename_template)
-                    .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
-                    .size(TEXT_BODY_SM)
-                    .padding([8, 10]);
-            let preview_template = if filename_template.trim().is_empty() {
-                "Screenshot {YYYY-MM-DD at HH.mm.ss}".to_string()
-            } else {
-                filename_template.clone()
-            };
-            let preview_name = default_save_filename(&preview_template, chrono::Utc::now());
-            let preview_line = text(format!("Saves as: {preview_name}"))
-                .size(TEXT_CAPTION)
-                .color(settings_muted_text());
-            let filename_control: Element<'_, Message> =
-                column![filename_input, preview_line].spacing(4).into();
-            let filename_row = settings_field(
+            ),
+            settings_block(
                 "Filename template",
                 "Tokens: {YYYY-MM-DD at HH.mm.ss} · {YYYY-MM-DD} · {HH.mm.ss} · {YYYY} · {timestamp}",
                 filename_control,
-            );
+            ),
+        ]),
+    ]
+}
 
-            if available.width < 620.0 {
-                column![save_folder_row, filename_row].spacing(14).into()
-            } else {
-                row![
-                    column![save_folder_row].width(Length::FillPortion(3)),
-                    column![filename_row].width(Length::FillPortion(2)),
-                ]
-                .spacing(18)
-                .align_y(Alignment::Start)
-                .into()
-            }
-        })
-        .height(Length::Shrink)
-        .into(),
-    );
-    // --- Text recognition (OCR) ---------------------------------------
-    let ocr_engine = state.preferences.ocr_engine_choice;
+fn settings_ocr_pane(state: &App) -> Vec<Element<'_, Message>> {
+    use iced::widget::pick_list;
+    use iced::widget::tooltip::Position;
+    use readshot_core::OcrEngineChoice;
+
+    const ENGINE_OPTIONS: [OcrEngineChoice; 2] =
+        [OcrEngineChoice::Native, OcrEngineChoice::Tesseract];
+
     let ocr_supported = state.coordinator.supported_languages();
     let ocr_selected = state.preferences.ocr_languages.clone();
-    let ocr_section = settings_section(
-        "Text recognition",
-        "OCR engine and languages",
-        column![
-            settings_field(
+    let engine_control = tooltip_with_key(
+        pick_list(
+            &ENGINE_OPTIONS[..],
+            Some(state.preferences.ocr_engine_choice),
+            |c| Message::Settings(SettingsMessage::SetOcrEngine(c)),
+        )
+        .text_size(TEXT_BODY_SM)
+        .padding([7, 10]),
+        "Next OCR engine",
+        Some("⌘E"),
+        Position::Top,
+    );
+    vec![
+        settings_group_heading("OCR engine and languages", text_t3),
+        settings_group(vec![
+            group_row(
                 "OCR engine",
                 "System default uses your platform's built-in recognizer. Takes effect after restart.",
-                pick_list(&ENGINE_OPTIONS[..], Some(ocr_engine), |c| {
-                    Message::Settings(SettingsMessage::SetOcrEngine(c))
-                })
-                .text_size(TEXT_BODY_SM)
-                .padding([7, 10])
-                .into(),
+                engine_control,
             ),
-            settings_field(
+            settings_block(
                 "Recognition languages",
                 "Leave all off to let the recognizer choose. Applies to your next capture.",
                 ocr_language_control(&ocr_supported, &ocr_selected),
             ),
-        ]
-        .spacing(14)
-        .into(),
-    );
+        ]),
+    ]
+}
 
-    // --- Export --------------------------------------------------------
-    let default_format = state.preferences.default_format;
-    let export_section = settings_section(
-        "Export",
-        "Default image format",
-        settings_field(
+fn settings_export_pane(state: &App) -> Vec<Element<'_, Message>> {
+    use iced::widget::pick_list;
+    use iced::widget::tooltip::Position;
+    use readshot_core::ExportFormat;
+
+    const FORMAT_OPTIONS: [ExportFormat; 3] =
+        [ExportFormat::Png, ExportFormat::Jpeg, ExportFormat::Webp];
+
+    let format_control = tooltip_with_key(
+        pick_list(
+            &FORMAT_OPTIONS[..],
+            Some(state.preferences.default_format),
+            |f| Message::Settings(SettingsMessage::SetDefaultFormat(f)),
+        )
+        .text_size(TEXT_BODY_SM)
+        .padding([7, 10]),
+        "Next format",
+        Some("⌘F"),
+        Position::Top,
+    );
+    vec![
+        settings_group_heading("Default image format", text_t3),
+        settings_group(vec![group_row(
             "Default format",
             "Format used when you Save a capture.",
-            pick_list(&FORMAT_OPTIONS[..], Some(default_format), |f| {
-                Message::Settings(SettingsMessage::SetDefaultFormat(f))
-            })
-            .text_size(TEXT_BODY_SM)
-            .padding([7, 10])
-            .into(),
-        ),
-    );
+            format_control,
+        )]),
+    ]
+}
 
-    // --- Advanced ------------------------------------------------------
+fn settings_diagnostics_pane(state: &App) -> Vec<Element<'_, Message>> {
+    use iced::widget::toggler;
+    use iced::widget::tooltip::Position;
+
     // No update-channel picker: the appcast publishes no channel-tagged
     // items and the Sparkle bridge sets no `allowedChannels`, so a
     // Stable/Beta choice would change nothing.
-    let debug_logging = state.preferences.debug_logging;
-    let debug_toggle: Element<'_, Message> = toggler(debug_logging)
-        .label("Verbose debug logging")
-        .on_toggle(|v| Message::Settings(SettingsMessage::SetDebugLogging(v)))
-        .into();
-    // Section title, subtitle, and the toggle's own label previously all
-    // said some variant of "Diagnostics"; drop the redundant field label
-    // and keep a single caption noting the restart requirement.
-    let advanced_section = settings_section(
-        "Diagnostics",
-        "Logs for troubleshooting",
-        column![
+    let debug_toggle = tooltip_with_key(
+        toggler(state.preferences.debug_logging)
+            .on_toggle(|v| Message::Settings(SettingsMessage::SetDebugLogging(v))),
+        "Toggle debug logging",
+        Some("⌘D"),
+        Position::Top,
+    );
+    vec![
+        settings_group_heading("Logs for troubleshooting", text_t3),
+        settings_group(vec![group_row(
+            "Verbose debug logging",
+            "Logs at DEBUG level. Takes effect after restart.",
             debug_toggle,
-            text("Logs at DEBUG level. Takes effect after restart.")
-                .size(TEXT_CAPTION)
-                .color(settings_muted_text()),
-        ]
-        .spacing(7)
-        .into(),
+        )]),
+    ]
+}
+
+fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
+    use iced::widget::toggler;
+    use iced::widget::tooltip::Position;
+
+    let startup_toggle = tooltip_with_key(
+        toggler(state.preferences.launch_at_login)
+            .on_toggle(|v| Message::Settings(SettingsMessage::SetLaunchAtLogin(v))),
+        "Toggle open at login",
+        Some("⌘L"),
+        Position::Top,
     );
 
-    let reset_pending = state.settings_reset_all_pending;
-    let reset_status = state
-        .settings_status
-        .as_deref()
-        .unwrap_or("Return all preferences to the shipped defaults.")
-        .to_string();
-    let reset_controls: Element<'_, Message> = responsive(move |available| {
-        let copy = if reset_pending {
-            "Resets hotkey, save folder, filename template, retention, OCR, and startup options. History records are kept."
-                .to_string()
-        } else {
-            reset_status.clone()
-        };
-        let label = text(copy).size(TEXT_CAPTION).color(settings_muted_text());
-
-        // Idle and armed buttons share the Settings size (13) and
-        // padding ([6, 12]) so the control keeps a constant height across
-        // states. Idle is an outlined-red arming step (DangerQuiet); the
-        // confirm step is the loud filled-red Danger.
-        if reset_pending {
-            let actions = row![
-                button(text("Confirm Reset").size(TEXT_BODY_SM))
-                    .padding([6, 12])
-                    .style(|t, s| action_button_style(t, s, ActionKind::Danger))
-                    .on_press(Message::SettingsResetAllConfirmed),
+    // Both destructive rows keep the two-step arm/confirm pattern: the
+    // idle button (outlined red) arms, the armed step shows a filled-red
+    // confirm plus Cancel. ⇧⌘R / ⇧⌘U press the same two steps.
+    let reset_row: Element<'_, Message> = if state.settings_reset_all_pending {
+        settings_block(
+            "Reset All Settings",
+            "Resets hotkey, save folder, filename template, retention, OCR, and startup options. History records are kept.",
+            row![
+                tooltip_with_key(
+                    button(text("Confirm Reset").size(TEXT_BODY_SM))
+                        .padding([6, 12])
+                        .style(|t, s| action_button_style(t, s, ActionKind::Danger))
+                        .on_press(Message::SettingsResetAllConfirmed),
+                    "Confirm reset",
+                    Some("⇧⌘R"),
+                    Position::Top,
+                ),
                 button(text("Cancel").size(TEXT_BODY_SM))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                     .on_press(Message::SettingsResetAllCancelled),
             ]
             .spacing(8)
-            .align_y(Alignment::Center);
+            .align_y(Alignment::Center)
+            .into(),
+        )
+    } else {
+        let reset_status = state
+            .settings_status
+            .as_deref()
+            .unwrap_or("Return all preferences to the shipped defaults.")
+            .to_string();
+        group_row(
+            "Reset All Settings",
+            reset_status,
+            tooltip_with_key(
+                button(text("Reset…").size(TEXT_BODY_SM))
+                    .padding([6, 12])
+                    .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
+                    .on_press(Message::SettingsResetAllRequested),
+                "Reset all settings",
+                Some("⇧⌘R"),
+                Position::Top,
+            ),
+        )
+    };
 
-            if available.width < 460.0 {
-                column![label, actions].spacing(8).into()
-            } else {
-                row![label, Space::new().width(Length::Fill), actions]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-                    .into()
-            }
-        } else {
-            let action = button(text("Reset All Settings").size(TEXT_BODY_SM))
-                .padding([6, 12])
-                .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
-                .on_press(Message::SettingsResetAllRequested);
-            if available.width < 460.0 {
-                column![label, action].spacing(8).into()
-            } else {
-                row![label, Space::new().width(Length::Fill), action]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-                    .into()
-            }
-        }
-    })
-    .height(Length::Shrink)
-    .into();
-    let app_section = settings_section("App", "Startup behavior", startup_row);
-    // Reset lives in its own section at the bottom so a destructive
-    // control never sits next to the everyday startup toggle.
-    let reset_section = settings_section("Reset", "Restore defaults", reset_controls);
-
-    // Uninstall is the loudest destructive control, so it sits last in
-    // its own section, following the same two-step arm/confirm pattern.
-    let uninstall_pending = state.settings_uninstall_pending;
-    let uninstall_purge = state.settings_uninstall_purge;
-    let uninstall_controls: Element<'_, Message> = responsive(move |available| {
-        if uninstall_pending {
-            let explanation = text(
-                "Removes the launch-at-login item, the readshot command-line tools, and the \
-                 Screen Recording permission, then moves Readshot to the Trash.",
-            )
-            .size(TEXT_CAPTION)
-            .color(settings_muted_text());
-            let purge_checkbox = iced::widget::checkbox(uninstall_purge)
-                .label("Also delete history and preferences")
-                .size(16)
-                .text_size(TEXT_BODY_SM)
-                .on_toggle(Message::SettingsUninstallPurgeToggled);
-            let actions = row![
+    let uninstall_row: Element<'_, Message> = if state.settings_uninstall_pending {
+        let purge_checkbox = iced::widget::checkbox(state.settings_uninstall_purge)
+            .label("Also delete history and preferences")
+            .size(16)
+            .text_size(TEXT_BODY_SM)
+            .on_toggle(Message::SettingsUninstallPurgeToggled);
+        let actions = row![
+            tooltip_with_key(
                 button(text("Uninstall").size(TEXT_BODY_SM))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Danger))
                     .on_press(Message::SettingsUninstallConfirmed),
-                button(text("Cancel").size(TEXT_BODY_SM))
-                    .padding([6, 12])
-                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                    .on_press(Message::SettingsUninstallCancelled),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center);
-            column![explanation, purge_checkbox, actions]
-                .spacing(10)
-                .into()
-        } else {
-            let label = text("Remove Readshot and its command-line tools from this Mac.")
-                .size(TEXT_CAPTION)
-                .color(settings_muted_text());
-            let action = button(text("Uninstall Readshot…").size(TEXT_BODY_SM))
+                "Confirm uninstall",
+                Some("⇧⌘U"),
+                Position::Top,
+            ),
+            button(text("Cancel").size(TEXT_BODY_SM))
                 .padding([6, 12])
-                .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
-                .on_press(Message::SettingsUninstallRequested);
-            if available.width < 460.0 {
-                column![label, action].spacing(8).into()
-            } else {
-                row![label, Space::new().width(Length::Fill), action]
-                    .spacing(8)
-                    .align_y(Alignment::Center)
-                    .into()
-            }
-        }
-    })
-    .height(Length::Shrink)
-    .into();
-    let uninstall_section = settings_section(
-        "Uninstall",
-        "Remove Readshot from this Mac",
-        uninstall_controls,
-    );
-
-    // Discoverable keyboard map for this pointer-only window — every
-    // control here is also reachable by key (WCAG 2.1.1). ⌘ renders as
-    // Control on Windows/Linux (where `modifiers.command()` is Ctrl).
-    let keyboard_hint = text(
-        "Keyboard: ⌘L login · ⌘D logging · ⌘R retention · ⌘E engine · ⌘F format · \
-         ⌘⇧R reset · ⌘⇧U uninstall · Esc or ⌘W close",
-    )
-    .size(TEXT_CAPTION)
-    .color(settings_muted_text())
-    .wrapping(iced::widget::text::Wrapping::Word);
-
-    let body = container(
-        column![
-            header,
-            permission_section,
-            capture_section,
-            files_section,
-            ocr_section,
-            export_section,
-            advanced_section,
-            app_section,
-            reset_section,
-            uninstall_section,
-            keyboard_hint,
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(Message::SettingsUninstallCancelled),
         ]
-        .spacing(16)
-        .max_width(720),
-    )
-    .width(Length::Fill)
-    .center_x(Length::Fill)
-    // The scrollbar sits at the window edge. Because iced reserves a
-    // scrollbar lane on the right, equal content padding reads as
-    // right-heavy; offset the inner padding so the settings column
-    // appears optically centered.
-    .padding(iced::Padding {
-        top: 26.0,
-        right: 24.0,
-        bottom: 26.0,
-        left: 40.0,
-    });
+        .spacing(8)
+        .align_y(Alignment::Center);
+        settings_block(
+            "Uninstall Readshot",
+            "Removes the launch-at-login item, the readshot command-line tools, and the \
+             Screen Recording permission, then moves Readshot to the Trash.",
+            column![purge_checkbox, actions].spacing(10).into(),
+        )
+    } else {
+        group_row(
+            "Uninstall Readshot",
+            "Remove Readshot and its command-line tools from this Mac.",
+            tooltip_with_key(
+                button(text("Uninstall…").size(TEXT_BODY_SM))
+                    .padding([6, 12])
+                    .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
+                    .on_press(Message::SettingsUninstallRequested),
+                "Uninstall Readshot",
+                Some("⇧⌘U"),
+                Position::Top,
+            ),
+        )
+    };
 
-    container(
-        scrollable(body)
-            .direction(iced::widget::scrollable::Direction::Vertical(
-                slim_scrollbar(),
-            ))
-            .spacing(10.0)
-            .height(Length::Fill),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .style(editor_shell_style)
-    .into()
-}
-
-pub(crate) fn settings_section<'a>(
-    title: &'a str,
-    subtitle: &'a str,
-    content: Element<'a, Message>,
-) -> Element<'a, Message> {
-    container(
-        column![
-            responsive(move |available| {
-                if available.width < 420.0 {
-                    column![
-                        text(title).size(TEXT_TITLE),
-                        text(subtitle)
-                            .size(TEXT_CAPTION)
-                            .color(settings_muted_text()),
-                    ]
-                    .spacing(3)
-                    .into()
-                } else {
-                    row![
-                        text(title).size(TEXT_TITLE),
-                        Space::new().width(Length::Fill),
-                        text(subtitle)
-                            .size(TEXT_CAPTION)
-                            .color(settings_muted_text()),
-                    ]
-                    .align_y(Alignment::Center)
-                    .into()
-                }
-            }),
-            content,
-        ]
-        .spacing(14),
-    )
-    .width(Length::Fill)
-    .padding(16)
-    .style(settings_section_style)
-    .into()
-}
-
-pub(crate) fn settings_field<'a>(
-    label: &'a str,
-    hint: impl Into<String>,
-    control: Element<'a, Message>,
-) -> Element<'a, Message> {
-    let hint = hint.into();
-    let mut col = column![text(label).size(TEXT_BODY_SM), control].spacing(7);
-    // No empty caption line when a field has nothing to add.
-    if !hint.is_empty() {
-        col = col.push(text(hint).size(TEXT_CAPTION).color(settings_muted_text()));
-    }
-    col.into()
+    vec![
+        settings_group_heading("Startup", text_t3),
+        settings_group(vec![group_row(
+            "Open Readshot at login",
+            "",
+            startup_toggle,
+        )]),
+        settings_group_heading("Danger zone", text_danger),
+        settings_group(vec![reset_row, uninstall_row]),
+    ]
 }
 
 /// Simple multi-select for OCR languages: one checkbox per language the
@@ -4369,52 +4489,25 @@ pub(crate) fn setting_value_box(value: String, active: bool) -> Element<'static,
     container(
         text(value)
             .size(TEXT_BODY_SM)
-            .color(if active {
-                Color::from_rgb8(214, 255, 247)
-            } else {
-                TEXT_STRONG
-            })
+            .style(text_t1)
             .width(Length::Fill),
     )
     .width(Length::Fill)
     .padding([9, 12])
     .style(move |theme: &Theme| {
-        let palette = theme.extended_palette();
-        let border_color = if active {
-            palette.primary.base.color
-        } else {
-            Color::from_rgba(1.0, 1.0, 1.0, 0.12)
-        };
+        // Active (recording a hotkey) is a focus state: accent ring.
+        let p = palette_for(theme);
         iced::widget::container::Style {
-            background: Some(
-                if active {
-                    accent(0.10)
-                } else {
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.055)
-                }
-                .into(),
-            ),
+            background: Some(if active { p.acc_tint } else { p.raised }.into()),
             border: iced::Border {
-                color: border_color,
+                color: if active { p.acc } else { p.border },
                 width: if active { 2.0 } else { 1.0 },
-                radius: 7.0.into(),
+                radius: R_BUTTON.into(),
             },
             ..Default::default()
         }
     })
     .into()
-}
-
-pub(crate) fn settings_section_style(_theme: &Theme) -> iced::widget::container::Style {
-    iced::widget::container::Style {
-        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.055).into()),
-        border: iced::Border {
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
-            width: 1.0,
-            radius: 8.0.into(),
-        },
-        ..Default::default()
-    }
 }
 
 pub(crate) fn settings_muted_text() -> Color {

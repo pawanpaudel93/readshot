@@ -369,9 +369,10 @@ pub(crate) fn text_input_style(
 
 pub(crate) fn group_row<'a>(
     label: &'a str,
-    help: &'a str,
+    help: impl Into<String>,
     control: Element<'a, Message>,
 ) -> Element<'a, Message> {
+    let help = help.into();
     let mut left = iced::widget::column![text(label).size(TYPE_BODY).style(text_t1)].spacing(2);
     if !help.is_empty() {
         left = left.push(
