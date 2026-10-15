@@ -502,6 +502,16 @@ pub fn style(_state: &App, theme: &Theme) -> iced::theme::Style {
     }
 }
 
+/// Bring the running scroll capture's window forward (no-op when it
+/// has none yet). Used by capture entry points that must not start a
+/// second session over a live one.
+fn focus_scroll_hud(state: &App) -> Task<Message> {
+    match state.scroll_session.as_ref().and_then(|s| s.hud_window_id) {
+        Some(id) => window::gain_focus(id),
+        None => Task::none(),
+    }
+}
+
 /// Background subscriptions — permission poll + global-hotkey drain
 /// + app/window keyboard shortcuts.
 pub fn subscription(state: &App) -> Subscription<Message> {
@@ -1057,6 +1067,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             if state.welcome.should_show() || state.capture_in_flight || state.overlay_opening {
                 return Task::none();
             }
+            // A scroll capture is running or stitching: starting another
+            // would overwrite its session and orphan its windows.
+            if state.scroll_session.is_some() {
+                return focus_scroll_hud(state);
+            }
             // Don't stack overlays.
             if state.windows.kinds().any(|k| k == WindowKind::Overlay) {
                 return Task::none();
@@ -1080,6 +1095,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             if state.capture_in_flight {
                 return Task::none();
+            }
+            if state.scroll_session.is_some() {
+                return focus_scroll_hud(state);
             }
             let Some((display_id, last)) =
                 state
@@ -3156,6 +3174,24 @@ mod tests {
     }
 
     #[test]
+    fn discard_label_drops_the_count_below_340px() {
+        assert_eq!(scroll_discard_label(299.0, 120), "Discard");
+        assert_eq!(scroll_discard_label(330.0, 120), "Discard");
+        assert_eq!(scroll_discard_label(340.0, 120), "Discard 120 Frames");
+        assert_eq!(scroll_discard_label(SCROLL_WINDOW_W, 1), "Discard 1 Frame");
+    }
+
+    #[test]
+    fn stop_button_shows_esc_chip_only_while_recording_and_roomy() {
+        assert_eq!(scroll_stop_key_chip(ScrollHudState::Waiting, false), None);
+        assert_eq!(scroll_stop_key_chip(ScrollHudState::Recording, true), None);
+        assert_eq!(
+            scroll_stop_key_chip(ScrollHudState::Recording, false),
+            Some("esc")
+        );
+    }
+
+    #[test]
     fn keep_going_disarms_cancel() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let mut s = test_session();
@@ -3243,6 +3279,71 @@ mod tests {
         app.scroll_session = Some(s);
         let _ = update(&mut app, Message::ScrollCaptureCancelRequested);
         assert!(app.scroll_session.is_some());
+    }
+
+    /// A scroll session with live HUD + region windows registered.
+    fn app_with_scroll_windows(stopping: bool) -> (App, window::Id, window::Id) {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let hud = window::Id::unique();
+        let region = window::Id::unique();
+        app.windows.register(hud, WindowKind::ScrollHud);
+        app.windows.register(region, WindowKind::ScrollRegion);
+        let mut s = test_session();
+        s.hud_window_id = Some(hud);
+        s.region_window_id = Some(region);
+        s.stopping = stopping;
+        app.scroll_session = Some(s);
+        (app, hud, region)
+    }
+
+    #[test]
+    fn open_overlay_leaves_a_running_scroll_session_alone() {
+        let (mut app, hud, _) = app_with_scroll_windows(true);
+        let _ = update(&mut app, Message::OpenOverlayRequested);
+        assert!(!app.overlay_opening);
+        let s = app.scroll_session.as_ref().unwrap();
+        assert!(s.stopping);
+        assert_eq!(s.hud_window_id, Some(hud));
+    }
+
+    #[test]
+    fn retake_leaves_a_running_scroll_session_alone() {
+        let (mut app, hud, _) = app_with_scroll_windows(true);
+        let rect = readshot_core::geom::Rect::from_xywh(10.0, 20.0, 120.0, 80.0).unwrap();
+        app.last_regions.insert(
+            "display-a".into(),
+            crate::app::LastRegion {
+                rect,
+                display_scale: 2.0,
+                display_bounds: None,
+            },
+        );
+        app.last_region_display_id = Some("display-a".into());
+        let _ = update(&mut app, Message::RetakeLastRegionRequested);
+        assert_eq!(app.pending_display_id, None);
+        let s = app.scroll_session.as_ref().unwrap();
+        assert!(s.stopping);
+        assert_eq!(s.hud_window_id, Some(hud));
+    }
+
+    #[test]
+    fn stitch_result_closes_both_scroll_windows() {
+        let (mut app, hud, region) = app_with_scroll_windows(true);
+        let _ = update(&mut app, Message::ScrollCaptureStitched(Err("boom".into())));
+        assert!(app.scroll_session.is_none());
+        assert_eq!(app.windows.kind(hud), None);
+        assert_eq!(app.windows.kind(region), None);
+    }
+
+    #[test]
+    fn stop_with_no_frames_cancels_instead_of_failing() {
+        let (mut app, hud, region) = app_with_scroll_windows(false);
+        let _ = update(&mut app, Message::ScrollCaptureStopRequested);
+        assert!(app.scroll_session.is_none());
+        assert_eq!(app.windows.kind(hud), None);
+        assert_eq!(app.windows.kind(region), None);
+        let status = app.last_capture_status.as_deref().unwrap_or("");
+        assert!(!status.contains("failed"), "status: {status}");
     }
 
     #[test]

@@ -177,6 +177,27 @@ pub(crate) fn scroll_hud_compact(window_w: f32) -> bool {
     window_w < SCROLL_HUD_COMPACT_BELOW
 }
 
+/// Window width below which the armed Discard button drops its frame
+/// count: "Discard 120 Frames" overflows half the footer under ~340 px,
+/// and the caption above already names the count.
+const SCROLL_DISCARD_SHORT_BELOW: f32 = 340.0;
+
+pub(crate) fn scroll_discard_label(window_w: f32, frame_count: usize) -> String {
+    if window_w < SCROLL_DISCARD_SHORT_BELOW {
+        "Discard".to_string()
+    } else {
+        let plural = if frame_count == 1 { "" } else { "s" };
+        format!("Discard {frame_count} Frame{plural}")
+    }
+}
+
+/// Key chip on the Stop & Stitch button. Hidden while Waiting (the
+/// button is disabled and esc cancels there) and in the compact
+/// layout, where the label alone fits.
+pub(crate) fn scroll_stop_key_chip(hud: ScrollHudState, compact: bool) -> Option<&'static str> {
+    (hud == ScrollHudState::Recording && !compact).then_some("esc")
+}
+
 /// Distances (stage px, measured up from the bottom of the strip) of the
 /// joins between recent preview slices. `joins` is oldest-first in strip
 /// px; the newest slice sits at the bottom, so the first tick is its
@@ -668,11 +689,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
             footer = footer.push(Space::new().height(Length::Fixed(10.0)));
             row![
                 scroll_hud_button(
-                    if compact {
-                        "Discard".to_string()
-                    } else {
-                        format!("Discard {frame_count} Frame{plural}")
-                    },
+                    scroll_discard_label(window_w, frame_count),
                     ButtonKind::DangerSolid,
                     Some(Message::ScrollCaptureCancelRequested),
                     None,
@@ -714,9 +731,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
                     "Stop & Stitch".to_string(),
                     ButtonKind::Primary,
                     (!waiting).then_some(Message::ScrollCaptureStopRequested),
-                    // The chip needs room; at the narrowest sizes the
-                    // label alone fits (Esc is still named in tooltips).
-                    (!compact).then_some("esc"),
+                    scroll_stop_key_chip(hud, compact),
                     3,
                 ),
             ]

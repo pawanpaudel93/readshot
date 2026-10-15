@@ -319,6 +319,20 @@ pub(crate) async fn stitch_frames_async(
     .map_err(|e| e.to_string())?
 }
 
+/// Close (and forget) whichever of the session's HUD and region
+/// windows are still open.
+fn close_scroll_windows(state: &mut App, session: &crate::app::ScrollSession) -> Task<Message> {
+    let mut tasks: Vec<Task<Message>> = Vec::new();
+    for id in [session.hud_window_id, session.region_window_id]
+        .into_iter()
+        .flatten()
+    {
+        state.windows.forget(id);
+        tasks.push(window::close(id));
+    }
+    Task::batch(tasks)
+}
+
 /// Every scroll-capture message arm, extracted from `runtime::update` so the
 /// top-level dispatcher stays navigable. Routed from `update`'s
 /// grouped arm; the trailing `unreachable!` only fires if a
@@ -441,16 +455,8 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             let Some(session) = state.scroll_session.take() else {
                 return Task::none();
             };
-            let mut tasks: Vec<Task<Message>> = Vec::new();
-            for id in [session.hud_window_id, session.region_window_id]
-                .into_iter()
-                .flatten()
-            {
-                state.windows.forget(id);
-                tasks.push(window::close(id));
-            }
             state.last_capture_status = Some("Scroll capture cancelled.".into());
-            Task::batch(tasks)
+            close_scroll_windows(state, &session)
         }
 
         Message::ScrollCaptureKeepGoing => {
@@ -466,6 +472,16 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             };
             if session.stopping {
                 return Task::none();
+            }
+            // Nothing captured yet (still Waiting): there is nothing to
+            // stitch, so Stop / esc ends the session like Cancel rather
+            // than reporting a failed zero-frame stitch.
+            if session.frames.is_empty() && session.preview_handle.is_none() {
+                let Some(session) = state.scroll_session.take() else {
+                    return Task::none();
+                };
+                state.last_capture_status = Some("Scroll capture cancelled.".into());
+                return close_scroll_windows(state, &session);
             }
             session.stopping = true;
             session.cancel_armed_at = None;
@@ -500,14 +516,9 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             let display_scale = session.scale;
             let display_bounds = session.display_size;
             // The scroll window stayed open through the stitch; close it
-            // now on both outcomes.
-            let close_hud = match session.hud_window_id {
-                Some(id) => {
-                    state.windows.forget(id);
-                    window::close(id)
-                }
-                None => Task::none(),
-            };
+            // now on both outcomes. Stop already closed the region
+            // outline, but close it too if it is somehow still live.
+            let close_hud = close_scroll_windows(state, &session);
             match result {
                 Ok(image) => {
                     let (w, h) = (image.width(), image.height());
