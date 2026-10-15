@@ -582,23 +582,9 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             None
         }));
     }
-    if overlay_tick_active(state) && !state.reduce_motion {
-        // Marching-ants tick — drives the dash-offset animation on
-        // any open region overlay and the scroll-capture region
-        // indicator. Avoid running this while the selector is only
-        // showing the hint / live drag; mouse movement already redraws
-        // that path, and ticking every transparent full-screen overlay
-        // before a committed region makes capture feel heavier.
-        //
-        // Under OS reduce-motion we skip the tick entirely: `OverlayTick`
-        // only bumps `overlay_tick` (the dash offset), so not ticking
-        // freezes the dashes into a static outline — the static cue the
-        // user still needs — with no other behaviour lost.
-        subs.push(iced::time::every(Duration::from_millis(80)).map(|_| Message::OverlayTick));
-    }
     if !state.overlay_displays.is_empty() || state.scroll_session.is_some() {
-        // Global Shift watcher — iced 0.14 does not pipe keyboard
-        // events into canvas widgets, so the overlay's "hold Shift =
+        // Global Shift watcher — iced 0.14 does not reliably route
+        // modifier changes into canvas widgets, so the overlay's "hold Shift =
         // square" constraint relies on this subscription forwarding
         // the modifier state into App.overlay_shift_held.
         subs.push(iced::event::listen_with(|event, _status, _window| {
@@ -649,8 +635,8 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             }
             None
         }));
-        // Global Shift watcher for the editor — iced 0.14 doesn't pipe
-        // keyboard events into canvas widgets, so the editor canvas's
+        // Global Shift watcher for the editor — iced 0.14 doesn't reliably route
+        // modifier changes into canvas widgets, so the editor canvas's
         // "hold Shift = constrain" relies on this forwarding modifier
         // state into App.editor_shift_held (mirrors the overlay watcher).
         subs.push(iced::event::listen_with(|event, _status, _window| {
@@ -850,10 +836,6 @@ fn app_window_shortcut_message(
     }
 }
 
-fn overlay_tick_active(state: &App) -> bool {
-    state.scroll_session.is_some() || !state.overlay_selections.is_empty()
-}
-
 /// Top-level update fn. Delegates testable transitions to
 /// [`App::update_sync`] and adds the iced-only async branches.
 pub fn update(state: &mut App, message: Message) -> Task<Message> {
@@ -924,15 +906,6 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 }
                 return Task::batch(close_tasks);
             }
-            Task::none()
-        }
-
-        Message::OverlayTick => {
-            // Bump the dash-offset counter and let iced redraw the
-            // overlay window(s) — the canvas's draw step reads
-            // `state.overlay_tick` indirectly via the OverlayProgram
-            // we build in `view`.
-            state.overlay_tick = state.overlay_tick.wrapping_add(2);
             Task::none()
         }
 
@@ -2951,26 +2924,9 @@ mod tests {
     }
 
     #[test]
-    fn overlay_animation_tick_only_runs_when_visual_animation_exists() {
-        let mut app = build_app(Arc::new(FakePermissions::granted()));
-        assert!(!overlay_tick_active(&app));
-
-        let window = iced::window::Id::unique();
-        app.overlay_displays
-            .insert(window, overlay_display("display-a"));
-        assert!(!overlay_tick_active(&app));
-
-        let rect = readshot_core::geom::Rect::from_xywh(1.0, 2.0, 30.0, 40.0).unwrap();
-        app.overlay_selections.insert("display-a".to_string(), rect);
-        assert!(overlay_tick_active(&app));
-
-        app.overlay_selections.clear();
-        app.scroll_session = Some(crate::app::ScrollSession::new(
-            "display-a".to_string(),
-            rect,
-            1.0,
-        ));
-        assert!(overlay_tick_active(&app));
+    fn no_animation_tick_runs_for_static_overlays() {
+        let src = include_str!("runtime.rs");
+        assert!(!src.contains(concat!("Message::", "OverlayTick")));
     }
 
     fn solid(w: u32, h: u32) -> image::RgbaImage {

@@ -44,21 +44,19 @@ use readshot_core::geom::Rect;
 /// the resulting [`Message::OverlaySelected`] always carries the
 /// display id of the screen the selection actually lives on.
 ///
-/// `dash_offset` is bumped by the runtime's `OverlayTick` subscription
-/// so the selection border animates as marching ants. `scale` is the
+/// `scale` is the
 /// display's HiDPI factor — used to render the live size badge in
 /// physical pixels (which is what the captured image will be).
 #[derive(Debug, Default, Clone)]
 pub struct OverlayProgram {
     pub display_id: DisplayId,
-    pub dash_offset: usize,
     pub scale: f32,
     /// When set, the initial drag release immediately confirms the
     /// selection with this intent instead of committing an editable
     /// selection and showing the quick-action toolbar.
     pub auto_confirm_intent: Option<CaptureIntent>,
-    /// Runtime-tracked Shift state. iced 0.14 does not route keyboard
-    /// events into canvas widgets, so the daemon listens globally and
+    /// Runtime-tracked Shift state. iced 0.14 does not reliably route modifier
+    /// changes into canvas widgets, so the daemon listens globally and
     /// passes the current modifier state in here on each view().
     pub shift_held: bool,
 }
@@ -631,8 +629,8 @@ impl Program<Message> for OverlayProgram {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<Action<Message>> {
-        // iced 0.14 does not deliver keyboard events to canvas widgets,
-        // so the runtime tracks Shift globally and threads the current
+        // Modifier changes do not reliably reach canvas widgets in
+        // iced 0.14, so the runtime tracks Shift globally and threads the current
         // state into `self.shift_held`. Sync it into the program state
         // on every event so the rest of the draw path (which reads
         // state.shift_held) can stay unchanged. A direct

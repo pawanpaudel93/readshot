@@ -218,13 +218,9 @@ pub enum Message {
     /// 50 ms drain tick — runtime polls the global-hotkey receiver and
     /// emits a `CaptureFullPrimaryRequested` if any events arrived.
     HotkeyTick,
-    /// 80 ms tick driving the region-overlay's marching-ants
-    /// animation. Only fires while at least one overlay window is
-    /// open.
-    OverlayTick,
     /// Shift modifier toggled while an overlay window is open. Drives
     /// the "hold Shift = square selection" constraint; iced 0.14 does
-    /// not pipe keyboard events into the canvas widget, so the runtime
+    /// not reliably route modifier changes to the canvas, so the runtime
     /// listens globally and forwards the state into the overlay.
     OverlayShiftChanged(bool),
     /// 100 ms drain tick — runtime polls the tray + menu event channels.
@@ -750,9 +746,6 @@ pub struct App {
     /// Each pin window's `view` reads its state from this map. The
     /// map shrinks as pins close.
     pub pins: HashMap<iced::window::Id, PinState>,
-    /// Monotonically-increasing counter the region-overlay reads to
-    /// animate its marching-ants stroke. Bumped by `OverlayTick`.
-    pub overlay_tick: u32,
     /// Tracks whether Shift is currently held while the region-overlay
     /// is open. The overlay's canvas Program would read modifiers
     /// itself if iced delivered keyboard events to canvas widgets, but
@@ -761,8 +754,8 @@ pub struct App {
     /// view().
     pub overlay_shift_held: bool,
     /// Tracks whether Shift is held while an editor window is open. Same
-    /// rationale as `overlay_shift_held`: iced 0.14 doesn't route keyboard
-    /// events into canvas widgets, so the runtime tracks Shift globally and
+    /// rationale as `overlay_shift_held`: iced 0.14 doesn't reliably route
+    /// modifier changes into canvas widgets, so the runtime tracks Shift globally and
     /// threads it into the editor canvas to constrain shape drags.
     pub editor_shift_held: bool,
     /// Last directory the user saved into. The editor's save picker
@@ -1110,7 +1103,6 @@ impl App {
             pending_url_after_permission: None,
             cli_interactive_output: None,
             pins: HashMap::new(),
-            overlay_tick: 0,
             overlay_shift_held: false,
             editor_shift_held: false,
             last_save_dir: None,
