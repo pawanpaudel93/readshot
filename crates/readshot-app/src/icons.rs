@@ -4,8 +4,6 @@
 //! in-app icon set. The icons are intentionally monochrome so the
 //! toolbar's active/hover state remains responsible for emphasis.
 
-#![allow(dead_code)] // removed in Task 14
-
 use iced::widget::canvas::{self, Frame, Path, Stroke, Text as CanvasText};
 use iced::{Color, Element, Length, Point, Rectangle, Renderer, Theme};
 

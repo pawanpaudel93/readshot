@@ -2,7 +2,6 @@
 //! colors, radii, sizes and type. Mirrors the table in
 //! docs/superpowers/specs/2026-10-15-ui-redesign-design.md §2.2.
 //! Views never inline colors; style closures call `palette_for(theme)`.
-#![allow(dead_code)] // removed in Task 14 once every token is used
 
 use iced::Color;
 
@@ -102,7 +101,6 @@ pub(crate) fn palette(mode: ThemeMode) -> &'static Palette {
 
 // Radius (spec §2.2): nested corners shrink inward.
 pub(crate) const R_CHIP: f32 = 5.0;
-pub(crate) const R_BADGE: f32 = 6.0;
 pub(crate) const R_TIP: f32 = 7.0;
 pub(crate) const R_BUTTON: f32 = 8.0;
 pub(crate) const R_GROUP: f32 = 10.0;
@@ -131,8 +129,6 @@ pub(crate) const SP1: f32 = 4.0;
 pub(crate) const SP2: f32 = 8.0;
 pub(crate) const SP3: f32 = 12.0;
 pub(crate) const SP4: f32 = 16.0;
-pub(crate) const SP6: f32 = 24.0;
-pub(crate) const SP8: f32 = 32.0;
 
 /// Composite `fg` (possibly translucent) over an opaque `bg`.
 #[cfg(test)]

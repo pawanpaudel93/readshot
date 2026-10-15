@@ -1,6 +1,5 @@
 //! Shared components for the redesign. Every style reads the active
 //! palette through `palette_for(theme)`, so light/dark is free.
-#![allow(dead_code)] // removed in Task 14
 
 use std::time::Duration;
 
