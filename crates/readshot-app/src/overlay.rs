@@ -27,7 +27,7 @@
 use iced::keyboard::{self, key::Named, Key};
 use iced::mouse;
 use iced::widget::canvas::{
-    Action, Cache, Event, Frame, Geometry, LineDash, Path, Program, Stroke, Text as CanvasText,
+    Action, Cache, Event, Fill, Frame, Geometry, Path, Program, Stroke, Text as CanvasText,
 };
 use iced::{Color, Point, Rectangle, Renderer, Theme};
 
@@ -119,8 +119,6 @@ pub(crate) enum Handle {
     W,
 }
 
-/// Visual half-side of a resize handle, in logical pixels.
-const HANDLE_HALF: f32 = 4.0;
 /// Hit-test half-side. Roughly a fingertip target so handles are
 /// easy to grab on a trackpad — the visual square stays small but
 /// the active grab area expands around it.
@@ -282,54 +280,101 @@ fn draw_crosshair(frame: &mut Frame<Renderer>, bounds: Rectangle, point: Point) 
         frame.stroke(
             &path,
             Stroke::default()
-                .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.72))
-                .with_width(2.4),
+                .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.35))
+                .with_width(2.0),
         );
         frame.stroke(
             &path,
-            Stroke::default().with_color(Color::WHITE).with_width(1.0),
+            Stroke::default()
+                .with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.35))
+                .with_width(1.0),
         );
     }
 }
 
 /// Approximate advance width of one glyph in the hint pill, in logical
-/// pixels. Used both to size the pill background and to decide how many
-/// characters of the label actually fit inside it.
+/// pixels. Used to size the pill and the key chips.
 const HINT_CHAR_W: f32 = 7.0;
 
-/// Truncate `label` so it occupies at most `max_chars` glyph cells,
-/// appending an ellipsis when characters are dropped. Returns the label
-/// unchanged when it already fits.
-fn truncate_with_ellipsis(label: &str, max_chars: usize) -> String {
-    if label.chars().count() <= max_chars {
-        return label.to_string();
-    }
-    match max_chars {
-        0 => String::new(),
-        1 => "…".to_string(),
-        _ => {
-            let mut s: String = label.chars().take(max_chars - 1).collect();
-            s.push('…');
-            s
-        }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HintSeg {
+    Text(&'static str),
+    Muted(&'static str),
+    Key(&'static str),
+}
+
+/// Hint pill copy: the instruction first, then key chips. Key chips never
+/// truncate, so the old "Esc first" ordering is no longer needed.
+pub(crate) fn hint_segments(cli_interactive: bool, too_small: bool) -> Vec<HintSeg> {
+    use HintSeg::*;
+    if too_small {
+        vec![
+            Text("Drag to select a larger area"),
+            Key("esc"),
+            Muted("Cancel"),
+        ]
+    } else if cli_interactive {
+        vec![
+            Text("Drag to capture"),
+            Muted("Release to capture"),
+            Key("⇧"),
+            Muted("Square"),
+            Key("esc"),
+            Muted("Cancel"),
+        ]
+    } else {
+        vec![
+            Text("Drag to select an area"),
+            Key("⇧"),
+            Muted("Square"),
+            Key("↵"),
+            Muted("Full screen"),
+            Key("esc"),
+            Muted("Cancel"),
+        ]
     }
 }
 
-/// The hint-pill copy for the current overlay state. The escape clause
-/// goes first so that, when the pill is truncated to fit a narrow
-/// display, "Esc to cancel" is the last thing dropped rather than the
-/// first. This hint is only drawn before a selection exists (the caller
-/// gates on `current_rect().is_none()`), so "Enter for full screen" is
-/// always accurate here — once a region is committed, Enter captures
-/// that region and the hint is hidden.
-fn overlay_hint_label(cli_interactive: bool, too_small: bool) -> &'static str {
-    if too_small {
-        "Esc to cancel · Drag to select a larger area"
-    } else if cli_interactive {
-        "Esc to cancel · Drag to capture · Mouse-up commits · Shift for square"
-    } else {
-        "Esc to cancel · Drag to select · Shift for square · Enter for full screen"
+const HINT_GAP: f32 = 10.0;
+const HINT_KEY_PAD: f32 = 12.0;
+const HINT_H: f32 = 34.0;
+const HINT_TOP: f32 = 40.0;
+
+fn seg_width(s: &HintSeg) -> f32 {
+    match s {
+        HintSeg::Text(t) | HintSeg::Muted(t) => t.chars().count() as f32 * HINT_CHAR_W,
+        HintSeg::Key(k) => k.chars().count().max(2) as f32 * HINT_CHAR_W + HINT_KEY_PAD,
     }
+}
+
+fn segs_width(segs: &[HintSeg]) -> f32 {
+    segs.iter().map(seg_width).sum::<f32>() + HINT_GAP * segs.len().saturating_sub(1) as f32 + 32.0
+}
+
+/// Drop optional key/label pairs (Square, Full screen, Release) from the
+/// middle until the pill fits; the instruction and esc always stay.
+fn fit_hint_segments(mut segs: Vec<HintSeg>, max_w: f32) -> Vec<HintSeg> {
+    while segs_width(&segs) > max_w {
+        let drop = segs
+            .iter()
+            .position(|s| matches!(s, HintSeg::Key(k) if *k != "esc"))
+            .or_else(|| {
+                segs.iter()
+                    .skip(1)
+                    .position(|s| matches!(s, HintSeg::Muted(m) if *m != "Cancel"))
+                    .map(|i| i + 1)
+            });
+        match drop {
+            Some(i) => {
+                segs.remove(i);
+                if matches!(segs.get(i), Some(HintSeg::Muted(m)) if *m != "Cancel") {
+                    segs.remove(i);
+                }
+            }
+            None => break,
+        }
+    }
+    segs
 }
 
 fn draw_overlay_hint(
@@ -338,26 +383,69 @@ fn draw_overlay_hint(
     cli_interactive: bool,
     too_small: bool,
 ) {
-    let label = overlay_hint_label(cli_interactive, too_small);
-    let text_w = (label.chars().count() as f32 * HINT_CHAR_W).min((bounds.width - 48.0).max(160.0));
-    let box_w = text_w + 24.0;
-    let box_h = 30.0;
-    let x = ((bounds.width - box_w) / 2.0).max(16.0);
-    let y = 24.0;
-    let bg = Path::rounded_rectangle(Point::new(x, y), iced::Size::new(box_w, box_h), 6.0.into());
-    frame.fill(&bg, Color::from_rgba(0.0, 0.0, 0.0, 0.58));
-    // `text_w` is capped to the available width, but the untruncated
-    // label can be wider — draw a truncated copy so the glyphs never
-    // spill past the pill background on narrow displays.
-    let max_chars = (text_w / HINT_CHAR_W).floor() as usize;
-    frame.fill_text(CanvasText {
-        content: truncate_with_ellipsis(label, max_chars),
-        position: Point::new(x + 12.0, y + 8.0),
-        color: Color::WHITE,
-        size: iced::Pixels(13.0),
-        font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
-        ..Default::default()
-    });
+    let segs = fit_hint_segments(
+        hint_segments(cli_interactive, too_small),
+        bounds.width - 48.0,
+    );
+    let box_w = segs_width(&segs);
+    let x0 = ((bounds.width - box_w) / 2.0).max(0.0);
+    let pill = Path::rounded_rectangle(
+        Point::new(x0, HINT_TOP),
+        iced::Size::new(box_w, HINT_H),
+        (HINT_H / 2.0).into(),
+    );
+    frame.fill(&pill, Color::from_rgba8(28, 28, 30, 0.90));
+    frame.stroke(
+        &pill,
+        Stroke::default()
+            .with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.10))
+            .with_width(1.0),
+    );
+
+    let font = iced::Font::with_name(readshot_core::render::FONT_FAMILY);
+    let mid_y = HINT_TOP + HINT_H / 2.0;
+    let mut x = x0 + 16.0;
+    for seg in &segs {
+        let w = seg_width(seg);
+        match seg {
+            HintSeg::Text(t) | HintSeg::Muted(t) => {
+                let color = if matches!(seg, HintSeg::Text(_)) {
+                    Color::from_rgb8(0xED, 0xED, 0xED)
+                } else {
+                    Color::from_rgb8(0xA1, 0xA1, 0xAA)
+                };
+                frame.fill_text(CanvasText {
+                    content: (*t).to_string(),
+                    position: Point::new(x, mid_y),
+                    color,
+                    size: iced::Pixels(13.0),
+                    font,
+                    align_y: iced::alignment::Vertical::Center,
+                    ..Default::default()
+                });
+            }
+            HintSeg::Key(k) => {
+                let chip_h = 20.0;
+                let chip = Path::rounded_rectangle(
+                    Point::new(x, mid_y - chip_h / 2.0),
+                    iced::Size::new(w, chip_h),
+                    5.0.into(),
+                );
+                frame.fill(&chip, Color::from_rgba(1.0, 1.0, 1.0, 0.08));
+                frame.fill_text(CanvasText {
+                    content: (*k).to_string(),
+                    position: Point::new(x + w / 2.0, mid_y),
+                    color: Color::from_rgb8(0xB4, 0xB4, 0xB4),
+                    size: iced::Pixels(11.0),
+                    font,
+                    align_x: iced::alignment::Horizontal::Center.into(),
+                    align_y: iced::alignment::Vertical::Center,
+                    ..Default::default()
+                });
+            }
+        }
+        x += w + HINT_GAP;
+    }
 }
 
 fn resize_rect(orig: Rectangle, handle: Handle, cursor: Point) -> Rectangle {
@@ -398,17 +486,23 @@ fn resize_rect(orig: Rectangle, handle: Handle, cursor: Point) -> Rectangle {
     rectangle_from_two_points(Point::new(left, top), Point::new(right, bottom))
 }
 
+/// Badge sits above the selection's top-left corner; inside the selection
+/// when there is no room above.
 fn size_badge_origin(
     bounds: Rectangle,
     selection: Rectangle,
     badge_w: f32,
     badge_h: f32,
 ) -> (f32, f32) {
-    let pad = 4.0;
+    let gap = 6.0;
     let max_x = (bounds.width - badge_w).max(0.0);
-    let max_y = (bounds.height - badge_h).max(0.0);
-    let x = (selection.x + selection.width - badge_w - pad).clamp(0.0, max_x);
-    let y = (selection.y + pad).clamp(0.0, max_y);
+    let x = selection.x.clamp(0.0, max_x);
+    let above = selection.y - badge_h - gap;
+    let y = if above >= 0.0 {
+        above
+    } else {
+        selection.y + gap
+    };
     (x, y)
 }
 
@@ -650,12 +744,6 @@ impl Program<Message> for OverlayProgram {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Vec<Geometry<Renderer>> {
-        let veil = state.veil_cache.draw(renderer, bounds.size(), |frame| {
-            frame.fill(
-                &Path::rectangle(Point::ORIGIN, bounds.size()),
-                Color::from_rgba(0.0, 0.0, 0.0, 0.5),
-            );
-        });
         let mut frame = Frame::new(renderer, bounds.size());
         let cursor_point = cursor.position_in(bounds);
 
@@ -670,34 +758,43 @@ impl Program<Message> for OverlayProgram {
         }
 
         let Some(rect) = current_rect else {
+            let veil = state.veil_cache.draw(renderer, bounds.size(), |frame| {
+                frame.fill(
+                    &Path::rectangle(Point::ORIGIN, bounds.size()),
+                    Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+                );
+            });
             if let Some(point) = crosshair_point(state, cursor_point) {
                 draw_crosshair(&mut frame, bounds, point);
             }
             return vec![veil, frame.into_geometry()];
         };
 
-        // "Punch out" the selection by overdrawing it with a near-
-        // transparent fill so it appears brighter than the surrounding
-        // veil. Border = outer black halo + animated white dashes.
+        // Punch the selection out of the veil (even-odd) so it shows the
+        // screen at full brightness, then draw a clean two-tone edge.
+        let mut veil_frame = Frame::new(renderer, bounds.size());
+        let veil_path = Path::new(|b| {
+            b.rectangle(Point::ORIGIN, bounds.size());
+            b.rectangle(Point::new(rect.x, rect.y), rect.size());
+        });
+        veil_frame.fill(
+            &veil_path,
+            Fill {
+                style: Color::from_rgba(0.0, 0.0, 0.0, 0.5).into(),
+                rule: iced::widget::canvas::fill::Rule::EvenOdd,
+            },
+        );
         let path = Path::rectangle(Point::new(rect.x, rect.y), rect.size());
         let interaction_active = state.active.is_some();
-        frame.fill(&path, Color::from_rgba(1.0, 1.0, 1.0, 0.05));
         frame.stroke(
             &path,
             Stroke::default()
-                .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.7))
+                .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.45))
                 .with_width(3.0),
         );
-        const DASH_SEGMENTS: &[f32] = &[6.0, 4.0];
         frame.stroke(
             &path,
-            Stroke {
-                line_dash: LineDash {
-                    segments: DASH_SEGMENTS,
-                    offset: self.dash_offset,
-                },
-                ..Stroke::default().with_color(Color::WHITE).with_width(1.5)
-            },
+            Stroke::default().with_color(Color::WHITE).with_width(1.0),
         );
 
         if !interaction_active {
@@ -707,11 +804,9 @@ impl Program<Message> for OverlayProgram {
             // the hot path stays just vector strokes.
             let phys_w = ((rect.width * self.scale).round() as i32).max(0);
             let phys_h = ((rect.height * self.scale).round() as i32).max(0);
-            let phys_x = (rect.x * self.scale).round() as i32;
-            let phys_y = (rect.y * self.scale).round() as i32;
-            let label = format!("{phys_w} × {phys_h}px · {phys_x}, {phys_y}");
-            let badge_w = 8.0 + label.chars().count() as f32 * 7.0;
-            let badge_h = 18.0;
+            let label = format!("{phys_w} × {phys_h}");
+            let badge_w = 16.0 + label.chars().count() as f32 * 7.0;
+            let badge_h = 22.0;
             let (bx, by) = size_badge_origin(bounds, rect, badge_w, badge_h);
             // Rounded corners (radius 6) match the hint pill; the badge
             // text already uses the bundled monospace family.
@@ -720,12 +815,18 @@ impl Program<Message> for OverlayProgram {
                 iced::Size::new(badge_w, badge_h),
                 6.0.into(),
             );
-            frame.fill(&badge_path, Color::from_rgba(0.0, 0.0, 0.0, 0.7));
+            frame.fill(&badge_path, Color::from_rgba8(28, 28, 30, 0.90));
+            frame.stroke(
+                &badge_path,
+                Stroke::default()
+                    .with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.10))
+                    .with_width(1.0),
+            );
             frame.fill_text(CanvasText {
                 content: label,
-                position: Point::new(bx + 4.0, by + 2.0),
-                color: Color::WHITE,
-                size: iced::Pixels(11.0),
+                position: Point::new(bx + 8.0, by + 4.0),
+                color: Color::from_rgb8(0xED, 0xED, 0xED),
+                size: iced::Pixels(11.5),
                 font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
                 ..Default::default()
             });
@@ -737,15 +838,12 @@ impl Program<Message> for OverlayProgram {
         if !interaction_active && state.selection.is_some() {
             let centers = corner_centers(rect).into_iter().chain(edge_centers(rect));
             for (_h, c) in centers {
-                let p = Path::rectangle(
-                    Point::new(c.x - HANDLE_HALF, c.y - HANDLE_HALF),
-                    iced::Size::new(HANDLE_HALF * 2.0, HANDLE_HALF * 2.0),
-                );
+                let p = Path::circle(c, 5.0);
                 frame.fill(&p, Color::WHITE);
                 frame.stroke(
                     &p,
                     Stroke::default()
-                        .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.8))
+                        .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.35))
                         .with_width(1.0),
                 );
             }
@@ -755,7 +853,7 @@ impl Program<Message> for OverlayProgram {
             draw_crosshair(&mut frame, bounds, point);
         }
 
-        vec![veil, frame.into_geometry()]
+        vec![veil_frame.into_geometry(), frame.into_geometry()]
     }
 
     fn mouse_interaction(
@@ -803,61 +901,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn overlay_hint_label_always_leads_with_escape() {
-        for (cli, too_small) in [(false, false), (true, false), (false, true), (true, true)] {
-            let label = overlay_hint_label(cli, too_small);
-            assert!(
-                label.starts_with("Esc to cancel"),
-                "hint {label:?} must lead with the escape clause"
-            );
+    fn hint_leads_with_the_instruction_and_always_offers_esc() {
+        for (cli, small) in [(false, false), (true, false), (false, true)] {
+            let segs = hint_segments(cli, small);
+            assert!(matches!(segs[0], HintSeg::Text(_)), "instruction first");
+            assert!(segs.iter().any(|s| matches!(s, HintSeg::Key("esc"))));
         }
+        let normal = hint_segments(false, false);
+        assert!(normal.contains(&HintSeg::Key("↵")));
+        assert!(normal.contains(&HintSeg::Key("⇧")));
     }
 
     #[test]
-    fn overlay_hint_label_advertises_full_screen_only_without_selection() {
-        // The default (idle, roomy) hint is the only one that mentions the
-        // full-screen fallback, and it is exactly what Enter does before a
-        // selection exists.
-        assert!(overlay_hint_label(false, false).contains("Enter for full screen"));
-        // The too-small hint drops the Enter clause entirely.
-        assert!(!overlay_hint_label(false, true).contains("full screen"));
-    }
-
-    #[test]
-    fn overlay_hint_label_keeps_too_small_guidance() {
-        assert!(overlay_hint_label(false, true).contains("larger area"));
-    }
-
-    #[test]
-    fn truncate_with_ellipsis_leaves_short_labels_untouched() {
-        assert_eq!(
-            truncate_with_ellipsis("Drag to select", 20),
-            "Drag to select"
-        );
-        assert_eq!(truncate_with_ellipsis("exact", 5), "exact");
-    }
-
-    #[test]
-    fn truncate_with_ellipsis_adds_ellipsis_and_respects_budget() {
-        let out = truncate_with_ellipsis("Drag to select · Shift = square", 10);
-        assert_eq!(out.chars().count(), 10);
-        assert!(out.ends_with('…'));
-        assert_eq!(out, "Drag to s…");
-    }
-
-    #[test]
-    fn truncate_with_ellipsis_handles_tiny_budgets() {
-        assert_eq!(truncate_with_ellipsis("hello", 0), "");
-        assert_eq!(truncate_with_ellipsis("hello", 1), "…");
-        assert_eq!(truncate_with_ellipsis("hello", 2), "h…");
-    }
-
-    #[test]
-    fn truncate_with_ellipsis_counts_unicode_by_char() {
-        // Multi-byte chars must be counted as single cells, not bytes.
-        let out = truncate_with_ellipsis("café ● ○ ◐ ◑ ◒", 4);
-        assert_eq!(out.chars().count(), 4);
-        assert_eq!(out, "caf…");
+    fn narrow_hint_keeps_instruction_and_esc() {
+        let segs = fit_hint_segments(hint_segments(false, false), 260.0);
+        assert!(matches!(segs[0], HintSeg::Text(_)));
+        assert!(segs.contains(&HintSeg::Key("esc")));
+        assert!(!segs.contains(&HintSeg::Key("↵")));
     }
 
     #[test]
@@ -1200,24 +1260,22 @@ mod tests {
     }
 
     #[test]
-    fn size_badge_stays_at_selection_top() {
+    fn badge_sits_above_the_top_left_corner() {
         let bounds = Rectangle {
             x: 0.0,
             y: 0.0,
-            width: 500.0,
-            height: 400.0,
+            width: 1000.0,
+            height: 800.0,
         };
-        let selection = Rectangle {
+        let sel = Rectangle {
             x: 100.0,
-            y: 80.0,
-            width: 220.0,
-            height: 120.0,
+            y: 200.0,
+            width: 300.0,
+            height: 200.0,
         };
-
-        let (x, y) = size_badge_origin(bounds, selection, 80.0, 18.0);
-
-        assert_eq!(x, 236.0);
-        assert_eq!(y, 84.0);
+        assert_eq!(size_badge_origin(bounds, sel, 80.0, 20.0), (100.0, 174.0));
+        let top = Rectangle { y: 4.0, ..sel };
+        assert_eq!(size_badge_origin(bounds, top, 80.0, 20.0), (100.0, 10.0));
     }
 
     #[test]
