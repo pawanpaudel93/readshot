@@ -53,7 +53,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 ]);
             }
             let (id, open_task) = window::open(history_window_settings());
-            state.windows.register(id, WindowKind::History);
+            register_window(state, id, WindowKind::History);
             state.history_window_id = Some(id);
             state.history_status = None;
             state.history_delete_pending = None;

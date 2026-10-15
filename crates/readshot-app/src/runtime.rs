@@ -113,15 +113,36 @@ pub(crate) fn palette_for(theme: &Theme) -> &'static Palette {
     }
 }
 
+/// Whether a window kind follows the system appearance. Capture
+/// chrome (overlay, scroll window and outline, pins) is always dark.
+pub(crate) fn follows_system_theme(kind: WindowKind) -> bool {
+    !matches!(
+        kind,
+        WindowKind::Overlay | WindowKind::ScrollRegion | WindowKind::ScrollHud | WindowKind::Pin
+    )
+}
+
 pub(crate) fn theme_mode_for(window: Option<WindowKind>, system: ThemeMode) -> ThemeMode {
     match window {
-        Some(
-            WindowKind::Overlay
-            | WindowKind::ScrollRegion
-            | WindowKind::ScrollHud
-            | WindowKind::Pin,
-        ) => ThemeMode::Dark,
+        Some(kind) if !follows_system_theme(kind) => ThemeMode::Dark,
         _ => system,
+    }
+}
+
+/// The OS appearance poll only matters while some open window follows
+/// it; an idle menu-bar app (or one showing only capture chrome)
+/// shouldn't wake every second.
+pub(crate) fn theme_poll_needed(state: &App) -> bool {
+    state.windows.kinds().any(follows_system_theme)
+}
+
+/// Register a newly opened window. A system-themed window re-reads the
+/// OS appearance here (in `update`, on the main thread) so it opens in
+/// the right mode even though the 1 Hz poll was idle until now.
+pub(crate) fn register_window(state: &mut App, id: window::Id, kind: WindowKind) {
+    state.windows.register(id, kind);
+    if follows_system_theme(kind) {
+        state.theme_mode = os_theme_mode();
     }
 }
 
@@ -523,7 +544,10 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     // The map closure runs on the tokio executor, where `os_theme_mode`
     // (main-thread only) would always read Dark, so emit a bare tick and
     // read the OS appearance in `update()`.
-    subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::ThemePollTick));
+    // Only while a system-themed window is open (see `theme_poll_needed`).
+    if theme_poll_needed(state) {
+        subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::ThemePollTick));
+    }
     if state.welcome.should_show() {
         // Polling at 500 ms keeps the UI responsive without burning
         // CPU. The TCC db is already cached in-process so each poll
@@ -1930,7 +1954,7 @@ fn show_or_focus_welcome(state: &mut App) -> Task<Message> {
         return window::gain_focus(id);
     }
     let (id, open_task) = window::open(welcome_window_settings());
-    state.windows.register(id, WindowKind::Welcome);
+    register_window(state, id, WindowKind::Welcome);
     open_task.map(Message::WelcomeWindowReady)
 }
 
@@ -2523,6 +2547,37 @@ mod tests {
         let _ = update(&mut app, Message::ThemePollTick);
         // Off the main thread (tests) `os_theme_mode` reports Dark.
         assert_eq!(app.theme_mode, os_theme_mode());
+    }
+
+    #[test]
+    fn theme_poll_runs_only_while_a_system_themed_window_is_open() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        assert!(!theme_poll_needed(&app));
+        app.windows.register(window::Id::unique(), WindowKind::Pin);
+        app.windows
+            .register(window::Id::unique(), WindowKind::ScrollHud);
+        assert!(!theme_poll_needed(&app));
+        for kind in [
+            WindowKind::Welcome,
+            WindowKind::Editor,
+            WindowKind::History,
+            WindowKind::Settings,
+            WindowKind::CliTools,
+        ] {
+            let mut app = build_app(Arc::new(FakePermissions::granted()));
+            app.windows.register(window::Id::unique(), kind);
+            assert!(theme_poll_needed(&app), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn opening_a_system_themed_window_reads_the_os_mode() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.theme_mode = ThemeMode::Light;
+        let _ = update(&mut app, Message::OpenSettingsRequested);
+        // Off the main thread (tests) `os_theme_mode` reports Dark.
+        assert_eq!(app.theme_mode, os_theme_mode());
+        assert_eq!(app.theme_mode, ThemeMode::Dark);
     }
 
     fn build_app(perms: Arc<FakePermissions>) -> App {

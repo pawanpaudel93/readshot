@@ -54,7 +54,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
                 return window::gain_focus(id);
             }
             let (id, open_task) = window::open(settings_window_settings());
-            state.windows.register(id, WindowKind::Settings);
+            register_window(state, id, WindowKind::Settings);
             state.settings_window_id = Some(id);
             open_task.map(Message::SettingsWindowReady)
         }
@@ -325,7 +325,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             }
             state.cli_tools_status = None;
             let (id, open_task) = window::open(cli_tools_window_settings());
-            state.windows.register(id, WindowKind::CliTools);
+            register_window(state, id, WindowKind::CliTools);
             state.cli_tools_window_id = Some(id);
             open_task.map(Message::CliToolsWindowReady)
         }
