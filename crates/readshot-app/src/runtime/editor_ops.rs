@@ -1021,7 +1021,20 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         Message::PinClosePressed(id) => {
             state.windows.forget(id);
             state.pins.remove(&id);
+            if state.hovered_pin == Some(id) {
+                state.hovered_pin = None;
+            }
             window::close(id)
+        }
+        Message::PinHovered(id, true) => {
+            state.hovered_pin = Some(id);
+            Task::none()
+        }
+        Message::PinHovered(id, false) => {
+            if state.hovered_pin == Some(id) {
+                state.hovered_pin = None;
+            }
+            Task::none()
         }
         Message::PinDragRequested(id) => window::drag(id),
         Message::PinOpacityChanged(id, opacity) => {

@@ -492,6 +492,8 @@ pub enum Message {
     PinOpacityChanged(iced::window::Id, f32),
     /// User toggled whether a pin should stay put when clicked.
     PinLockToggled(iced::window::Id),
+    /// Pointer entered (`true`) or left (`false`) a pin window.
+    PinHovered(iced::window::Id, bool),
     /// Keyboard event observed while at least one pin window is open.
     /// iced 0.14 buttons can't take focus, so the runtime taps keys
     /// globally and validates `window` against `App::pins` before
@@ -746,6 +748,9 @@ pub struct App {
     /// Each pin window's `view` reads its state from this map. The
     /// map shrinks as pins close.
     pub pins: HashMap<iced::window::Id, PinState>,
+    /// The pin window the pointer is currently over; drives the
+    /// hover-only control bar.
+    pub hovered_pin: Option<iced::window::Id>,
     /// Tracks whether Shift is currently held while the region-overlay
     /// is open. The overlay's canvas Program would read modifiers
     /// itself if iced delivered keyboard events to canvas widgets, but
@@ -1103,6 +1108,7 @@ impl App {
             pending_url_after_permission: None,
             cli_interactive_output: None,
             pins: HashMap::new(),
+            hovered_pin: None,
             overlay_shift_held: false,
             editor_shift_held: false,
             last_save_dir: None,

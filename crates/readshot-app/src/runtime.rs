@@ -77,7 +77,6 @@ static LAUNCHED_AT_LOGIN: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 
 const READSHOT_THEME_NAME: &str = "readshot";
 const READSHOT_ACCENT: Color = Color::from_rgb8(20, 184, 166);
-const READSHOT_DANGER: Color = Color::from_rgb8(239, 68, 68);
 
 // Secondary-text role. Clears WCAG AA against the app's near-black
 // surfaces; inlined `rgba(1,1,1,α)` text used to drift between eight
@@ -1664,6 +1663,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::PinDragRequested(..)
         | Message::PinOpacityChanged(..)
         | Message::PinLockToggled(..)
+        | Message::PinHovered(..)
         | Message::PinKeyPressed { .. }) => editor_ops::handle_editor_message(state, msg),
         Message::OverlayCopyDone(result) => {
             state.last_capture_status = Some(match result {
@@ -3597,6 +3597,25 @@ mod tests {
             app.last_capture_status.as_deref(),
             Some("No previous region to retake. Capture a region first, then use Retake Last Region.")
         );
+    }
+
+    #[test]
+    fn pin_hover_tracks_the_window() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = iced::window::Id::unique();
+        let _ = update(&mut app, Message::PinHovered(id, true));
+        assert_eq!(app.hovered_pin, Some(id));
+        let _ = update(&mut app, Message::PinHovered(id, false));
+        assert_eq!(app.hovered_pin, None);
+    }
+
+    #[test]
+    fn pin_hover_exit_of_another_pin_keeps_current() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let (a, b) = (iced::window::Id::unique(), iced::window::Id::unique());
+        let _ = update(&mut app, Message::PinHovered(a, true));
+        let _ = update(&mut app, Message::PinHovered(b, false));
+        assert_eq!(app.hovered_pin, Some(a));
     }
 
     #[test]

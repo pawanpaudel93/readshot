@@ -24,7 +24,6 @@ const TEXT_CAPTION: f32 = TYPE_CAPTION; // captions, hints, tooltips, HUD readou
 const TEXT_BODY_SM: f32 = TYPE_BODY; // default labels, most buttons, list text
 const TEXT_BODY: f32 = TYPE_BODY; // emphasised body, primary CTAs, HUD title
 const TEXT_TITLE: f32 = TYPE_HEADING; // card & section titles (absorbs old 16/17)
-const TEXT_HEADING: f32 = TYPE_TITLE; // large chrome glyph (pin close ×)
 const TEXT_SCREEN_TITLE: f32 = TYPE_TITLE; // Settings / CLI screen headers
 
 /// Transparent click-through overlay that draws the captured rect's
@@ -2972,6 +2971,7 @@ pub(crate) fn editor_chrome_style(_theme: &Theme) -> container::Style {
 /// Click anywhere on the image body initiates a native window
 /// drag; a small "×" button in the corner closes it.
 pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
+    use crate::icons::AppIcon;
     use iced::widget::{mouse_area, stack};
     let Some(pin) = state.pins.get(&id) else {
         return container(text("(no pin)"))
@@ -3001,147 +3001,140 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
             .into()
     };
 
-    // Pin controls: Lock + opacity slider + readout in a glassy chip
-    // pinned bottom-left. On a small pin (min 120×80) the slider +
-    // readout would overflow the window, so below the width that fits
-    // all three we drop them and keep just Lock — the keyboard −/+ still
-    // adjusts opacity (see `pin_key_action`). The constants below size
-    // the breakpoint from the row's own widths + chrome/layer padding.
-    const PIN_LOCK_W: f32 = 60.0; // "Unlock" (the wider label) + padding
-    const PIN_SLIDER_W: f32 = 92.0;
-    const PIN_OPACITY_LABEL_W: f32 = 36.0; // "100%"
-    const PIN_CONTROLS_SPACING: f32 = 6.0;
-    const PIN_CONTROLS_FULL_WIDTH: f32 = PIN_LOCK_W
-        + PIN_SLIDER_W
-        + PIN_OPACITY_LABEL_W
-        + 2.0 * PIN_CONTROLS_SPACING
-        + 2.0 * 7.0 // chrome horizontal padding
-        + 2.0 * 6.0; // layer horizontal padding
-
+    // Hover-only control bar, top-right. Frameless: the pin window is
+    // exactly image-sized, so the native window shadow is the only
+    // chrome. Keyboard users get everything the bar offers via
+    // `pin_key_action` (L, -/+, Esc, arrows), so the bar is a pointer
+    // convenience only. Show/hide is instant (no animation, so nothing
+    // for Reduce Motion to suppress).
+    let hovered = state.hovered_pin == Some(id);
     let controls_layer: Element<'_, Message> = responsive(move |available| {
-        let lock = button(text(if locked { "Unlock" } else { "Lock" }).size(TEXT_CAPTION))
-            .padding([4, 8])
-            .style(|_, status| {
-                let bg = match status {
-                    button::Status::Pressed => Color::from_rgba(0.0, 0.0, 0.0, 0.85),
-                    button::Status::Hovered => Color::from_rgba(0.0, 0.0, 0.0, 0.72),
-                    _ => Color::from_rgba(0.0, 0.0, 0.0, 0.55),
-                };
-                button::Style {
-                    background: Some(bg.into()),
-                    text_color: Color::WHITE,
+        let pos = iced::widget::tooltip::Position::Bottom;
+        let lock_name = if locked { "Unlock" } else { "Lock" };
+        let lock = icon_button(
+            AppIcon::Lock,
+            DARK.t1,
+            lock_name,
+            Some("L"),
+            Some(Message::PinLockToggled(id)),
+            locked,
+            ICON_BTN_SM,
+            pos,
+        );
+        if locked && !hovered {
+            // Resting locked state: a small badge, no bar.
+            let badge = container(crate::icons::icon(AppIcon::Lock, Color::WHITE, 13.0))
+                .center_x(Length::Fixed(24.0))
+                .center_y(Length::Fixed(24.0))
+                .style(|_| container::Style {
+                    background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.6).into()),
                     border: iced::Border {
-                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.28),
-                        width: 1.0,
-                        radius: 6.0.into(),
+                        radius: 7.0.into(),
+                        ..Default::default()
                     },
                     ..Default::default()
-                }
-            })
-            .on_press(Message::PinLockToggled(id));
-
-        let controls: Element<'_, Message> = if available.width >= PIN_CONTROLS_FULL_WIDTH {
-            let opacity_label = text(format!("{:.0}%", opacity * 100.0))
-                .size(TEXT_CAPTION)
-                .color(Color::WHITE)
-                .width(Length::Shrink);
-            let opacity_slider =
-                iced::widget::slider(PIN_OPACITY_MIN..=PIN_OPACITY_MAX, opacity, move |value| {
-                    Message::PinOpacityChanged(id, value)
-                })
-                .step(PIN_OPACITY_STEP)
-                .width(Length::Fixed(PIN_SLIDER_W));
-            row![lock, opacity_slider, opacity_label]
-                .spacing(PIN_CONTROLS_SPACING)
-                .align_y(Alignment::Center)
-                .into()
-        } else {
-            row![lock].align_y(Alignment::Center).into()
+                });
+            return container(badge)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(8)
+                .align_x(Alignment::End)
+                .align_y(Alignment::Start)
+                .into();
+        }
+        if !hovered {
+            return Space::new().into();
+        }
+        let close = icon_button(
+            AppIcon::Close,
+            DARK.t1,
+            "Close",
+            Some("esc"),
+            Some(Message::PinClosePressed(id)),
+            false,
+            ICON_BTN_SM,
+            pos,
+        );
+        let step = |delta: f32| {
+            Message::PinOpacityChanged(
+                id,
+                (opacity + delta).clamp(PIN_OPACITY_MIN, PIN_OPACITY_MAX),
+            )
         };
-
-        let controls_chrome = container(controls)
-            .padding([5, 7])
-            .style(|_| container::Style {
-                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.46).into()),
-                border: iced::Border {
-                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.16),
-                    width: 1.0,
-                    radius: 8.0.into(),
-                },
-                ..Default::default()
-            });
-        // No-op `mouse_area` so a press on the chip is consumed here
-        // instead of falling through to the drag layer beneath (an
-        // errant slider-track drag would otherwise move the window).
-        let controls_blocker = mouse_area(controls_chrome).on_press(Message::NoOp);
+        let bar: Element<'_, Message> = if locked {
+            // Locked + hovered: only the unlock control.
+            row![lock].align_y(Alignment::Center).into()
+        } else if pin_controls_compact(available.width) {
+            row![lock, close].align_y(Alignment::Center).into()
+        } else {
+            row![
+                lock,
+                vsep(),
+                icon_button(
+                    AppIcon::Minus,
+                    DARK.t1,
+                    "Less opaque",
+                    Some("-"),
+                    Some(step(-PIN_OPACITY_STEP)),
+                    false,
+                    ICON_BTN_SM,
+                    pos,
+                ),
+                text(format!("{:.0}%", opacity * 100.0))
+                    .size(TEXT_CAPTION)
+                    .font(iced::Font::MONOSPACE)
+                    .color(DARK.t2),
+                icon_button(
+                    AppIcon::Plus,
+                    DARK.t1,
+                    "More opaque",
+                    Some("+"),
+                    Some(step(PIN_OPACITY_STEP)),
+                    false,
+                    ICON_BTN_SM,
+                    pos,
+                ),
+                vsep(),
+                close,
+            ]
+            .spacing(2)
+            .align_y(Alignment::Center)
+            .into()
+        };
+        let chrome = container(bar).padding(3).style(|theme| container::Style {
+            border: iced::Border {
+                radius: 9.0.into(),
+                ..floating_bar_style(theme).border
+            },
+            ..floating_bar_style(theme)
+        });
+        // No-op `mouse_area` so a press on the bar is consumed here
+        // instead of falling through to the drag layer beneath.
+        let controls_blocker = mouse_area(chrome).on_press(Message::NoOp);
         container(controls_blocker)
             .width(Length::Fill)
             .height(Length::Fill)
-            .padding(6)
-            .align_x(Alignment::Start)
-            .align_y(Alignment::End)
+            .padding(8)
+            .align_x(Alignment::End)
+            .align_y(Alignment::Start)
             .into()
     })
     .into();
 
-    // Close button — sits in the top-right corner with subtle
-    // styling so it's discoverable without dominating the pin.
-    let close = button(
-        text("×")
-            .size(TEXT_HEADING)
-            .color(Color::WHITE)
-            .align_x(iced::alignment::Horizontal::Center)
-            .align_y(iced::alignment::Vertical::Center)
+    mouse_area(
+        container(stack![drag_layer, controls_layer])
             .width(Length::Fill)
             .height(Length::Fill),
     )
-    .padding(0)
-    .width(Length::Fixed(28.0))
-    .height(Length::Fixed(28.0))
-    .style(|_, status| {
-        let bg = match status {
-            button::Status::Pressed => Color::from_rgb8(197, 48, 48),
-            button::Status::Hovered => READSHOT_DANGER,
-            _ => Color::from_rgba(0.0, 0.0, 0.0, 0.55),
-        };
-        button::Style {
-            background: Some(bg.into()),
-            text_color: Color::WHITE,
-            border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.4),
-                width: 1.0,
-                radius: 14.0.into(),
-            },
-            ..Default::default()
-        }
-    })
-    .on_press(Message::PinClosePressed(id));
-    // Name the close shortcut (and, by extension, the whole pin keyboard
-    // map) on the only visible chrome the pin has.
-    let close = key_tooltip(
-        close,
-        "Close (Esc)  ·  L lock  ·  −/+ opacity  ·  arrows move",
-        iced::widget::tooltip::Position::Left,
-    );
-    let close_layer = container(close)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(6)
-        .align_x(Alignment::End)
-        .align_y(Alignment::Start);
-    container(stack![drag_layer, close_layer, controls_layer])
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb8(13, 15, 15).into()),
-            border: iced::Border {
-                color: accent(0.20),
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..Default::default()
-        })
-        .into()
+    .on_enter(Message::PinHovered(id, true))
+    .on_exit(Message::PinHovered(id, false))
+    .into()
+}
+
+/// Below this pin width the hover bar drops the opacity controls and
+/// keeps only Lock and Close (keyboard -/+ still adjusts opacity).
+pub(crate) fn pin_controls_compact(width: f32) -> bool {
+    width < 230.0
 }
 
 pub(crate) fn passive_line_width_control_sized(
@@ -3579,17 +3572,6 @@ pub(crate) fn scroll_key_message(
         }
         _ => None,
     }
-}
-
-/// Name-only hover tooltip for an otherwise icon-only control; a thin
-/// wrapper over [`tooltip_with_key`] so every tooltip in the app shares
-/// one chrome (the editor's tool bar uses `tooltip_with_key` directly).
-pub(crate) fn key_tooltip<'a>(
-    content: impl Into<Element<'a, Message>>,
-    label: impl Into<String>,
-    position: iced::widget::tooltip::Position,
-) -> Element<'a, Message> {
-    tooltip_with_key(content, label, None, position)
 }
 
 pub(crate) fn editor_compact_hint(tool: readshot_ui::editor::ToolState) -> &'static str {
@@ -5134,6 +5116,12 @@ mod tests {
         history_selected_fill, history_word_count,
     };
     use crate::runtime::{DARK, LIGHT};
+
+    #[test]
+    fn pin_controls_compact_below_230() {
+        assert!(super::pin_controls_compact(229.0));
+        assert!(!super::pin_controls_compact(230.0));
+    }
 
     #[test]
     fn highlight_spans_marks_case_insensitive_matches() {
