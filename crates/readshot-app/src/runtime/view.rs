@@ -158,6 +158,37 @@ pub(crate) fn scroll_region_view(state: &App) -> Element<'_, Message> {
     .into()
 }
 
+/// Recording-dot heartbeat alpha for the HUD "● Recording" chip — a
+/// gentle 1.4 s sine pulse so the HUD doesn't feel statically dead
+/// between frames. Held at constant full alpha under OS reduce-motion,
+/// where the chip must read as a static cue.
+pub(crate) fn hud_recording_pulse(elapsed_secs: f32, reduce_motion: bool) -> f32 {
+    if reduce_motion {
+        return 1.0;
+    }
+    let t = elapsed_secs * std::f32::consts::TAU / 1.4;
+    // Floor well above transparent so the chip never dims into
+    // unreadable territory — it breathes within 0.9..=1.0.
+    0.9 + 0.1 * (0.5 + 0.5 * t.sin())
+}
+
+/// Frame-arrival "pop" easing for the HUD frame counter: a quick rise
+/// (0.0–0.3) then slow decay (0.3–1.0) over ~220 ms, reading as a
+/// "thunk" rather than a fade. Returns `(active, eased)`. Under
+/// reduce-motion it never activates, so the counter stays white and the
+/// capacity tail keeps its base alpha.
+pub(crate) fn hud_frame_pop(pop_t: f32, reduce_motion: bool) -> (bool, f32) {
+    if reduce_motion || pop_t >= 1.0 {
+        return (false, 0.0);
+    }
+    let eased = if pop_t < 0.3 {
+        pop_t / 0.3
+    } else {
+        1.0 - (pop_t - 0.3) / 0.7
+    };
+    (true, eased)
+}
+
 /// Floating HUD showing the live state of a scrolling-capture session.
 /// Renders a live preview of the most recently captured frame so the
 /// user can see what's actually being captured, a frame counter with
@@ -175,30 +206,17 @@ pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     // to drive a brief tint + grow on the counter. 220 ms gives the
     // pulse enough room to read as a deliberate animation without
     // feeling sluggish.
+    // Frame-arrival pop + recording heartbeat. Both freeze under OS
+    // reduce-motion (see `hud_frame_pop` / `hud_recording_pulse`): the
+    // counter stops popping and the chip holds full alpha, while the
+    // static "● Recording" label and counter stay put.
     let pop_t = session
         .and_then(|s| s.last_frame_at)
         .map(|t| (t.elapsed().as_millis() as f32) / 220.0)
         .unwrap_or(2.0);
-    let pop_active = pop_t < 1.0;
-    let pop_eased = if pop_active {
-        // Quick rise (0.0–0.3) → slow decay (0.3–1.0). Reads as a
-        // satisfying "thunk" rather than a fade.
-        if pop_t < 0.3 {
-            pop_t / 0.3
-        } else {
-            1.0 - (pop_t - 0.3) / 0.7
-        }
-    } else {
-        0.0
-    };
-    // Recording-dot heartbeat: gentle 1.4 s sine pulse on the chip's
-    // alpha so the HUD doesn't feel statically dead between frames.
+    let (pop_active, pop_eased) = hud_frame_pop(pop_t, state.reduce_motion);
     let pulse = if !stopping {
-        let t = elapsed_secs * std::f32::consts::TAU / 1.4;
-        // Keep the heartbeat's floor well above transparent so the red
-        // "● Recording" chip never dims into unreadable territory — it
-        // still breathes, just within 0.9..=1.0 instead of 0.65..=1.0.
-        0.9 + 0.1 * (0.5 + 0.5 * t.sin())
+        hud_recording_pulse(elapsed_secs, state.reduce_motion)
     } else {
         0.55
     };

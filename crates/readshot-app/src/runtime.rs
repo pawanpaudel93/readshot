@@ -319,6 +319,10 @@ pub fn start() -> (App, Task<Message>) {
     let mut app = App::new(coordinator, permissions, prefs);
     app.history_root = history_root;
     app.preferences_path = preferences_path;
+    // Honour the OS reduce-motion setting from the first frame; it is
+    // refreshed when an animated surface opens (see the overlay/scroll
+    // handlers) in case the user toggles it while Readshot runs.
+    app.reduce_motion = os_reduce_motion();
     let cli_interactive_request = take_cli_interactive_request();
     if let Some(request) = cli_interactive_request.as_ref() {
         app.cli_interactive_output = Some(request.output.clone());
@@ -552,13 +556,18 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             None
         }));
     }
-    if overlay_tick_active(state) {
+    if overlay_tick_active(state) && !state.reduce_motion {
         // Marching-ants tick — drives the dash-offset animation on
         // any open region overlay and the scroll-capture region
         // indicator. Avoid running this while the selector is only
         // showing the hint / live drag; mouse movement already redraws
         // that path, and ticking every transparent full-screen overlay
         // before a committed region makes capture feel heavier.
+        //
+        // Under OS reduce-motion we skip the tick entirely: `OverlayTick`
+        // only bumps `overlay_tick` (the dash offset), so not ticking
+        // freezes the dashes into a static outline — the static cue the
+        // user still needs — with no other behaviour lost.
         subs.push(iced::time::every(Duration::from_millis(80)).map(|_| Message::OverlayTick));
     }
     if !state.overlay_displays.is_empty() || state.scroll_session.is_some() {
@@ -1054,6 +1063,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // actual window-open work in `OverlayDisplaysListed` so we
             // can spawn one transparent overlay per monitor.
             let coord = state.coordinator.clone();
+            // Cheap refresh so the marching-ants honour a reduce-motion
+            // toggle the user flipped since launch.
+            state.reduce_motion = os_reduce_motion();
             state.overlay_opening = true;
             Task::perform(async move { coord.list_displays().await }, |result| {
                 Message::OverlayDisplaysListed(result.map_err(|e| e.to_string()))
@@ -1229,6 +1241,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     last_frame_handle: None,
                     cancel_armed_at: None,
                 };
+                state.reduce_motion = os_reduce_motion();
                 state.scroll_session = Some(session);
                 state.pending_intent = None;
                 state.pending_display_bounds = None;
@@ -1416,6 +1429,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                             );
                             accept_scroll_frame(&mut session, image);
                             session.display_size = display_bounds;
+                            state.reduce_motion = os_reduce_motion();
                             state.scroll_session = Some(session);
                             // Open the click-through region indicator
                             // first so the user sees the rect outline
@@ -6020,6 +6034,34 @@ mod tests {
             pin_key_action(&Key::Character("q".into()), Modifiers::empty()),
             None
         );
+    }
+
+    #[test]
+    fn hud_recording_pulse_is_constant_under_reduce_motion() {
+        // Reduce-motion: constant full alpha at any elapsed time.
+        for t in [0.0_f32, 0.35, 0.7, 1.4, 3.3] {
+            assert_eq!(hud_recording_pulse(t, true), 1.0);
+        }
+        // Motion allowed: breathes inside ~0.9..=1.0, never unreadable.
+        for t in [0.0_f32, 0.35, 0.7, 1.4, 3.3] {
+            let a = hud_recording_pulse(t, false);
+            assert!(
+                (0.89..=1.01).contains(&a),
+                "pulse {a} out of range at t={t}"
+            );
+        }
+    }
+
+    #[test]
+    fn hud_frame_pop_frozen_under_reduce_motion() {
+        // Reduce-motion: never active, zero ease, even mid-pop.
+        assert_eq!(hud_frame_pop(0.1, true), (false, 0.0));
+        assert_eq!(hud_frame_pop(0.5, true), (false, 0.0));
+        // Motion allowed: active only inside the 0..1 window.
+        let (active, eased) = hud_frame_pop(0.15, false);
+        assert!(active && eased > 0.0);
+        assert_eq!(hud_frame_pop(1.0, false), (false, 0.0));
+        assert_eq!(hud_frame_pop(2.0, false), (false, 0.0));
     }
 
     #[test]

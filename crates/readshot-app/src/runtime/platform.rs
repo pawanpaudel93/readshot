@@ -29,6 +29,47 @@ pub(crate) enum OcrCopyError {
     Clipboard(#[from] ClipboardError),
 }
 
+/// Whether the OS is set to reduce motion (macOS: System Settings →
+/// Accessibility → Display → Reduce motion). Read at startup and
+/// refreshed cheaply when an animated surface opens, so Readshot can
+/// freeze its marching-ants and HUD pulses for users who asked for
+/// less motion. Non-macOS returns `false` — the animated chrome is
+/// macOS-only surface area today.
+#[cfg(target_os = "macos")]
+pub(crate) fn os_reduce_motion() -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    // AppKit accessibility reads are main-thread APIs. In the running
+    // app `start`/`update` run on the app thread; in unit tests (nextest
+    // worker threads) `MainThreadMarker::new()` is `None`, so skip the
+    // call and report "no reduce motion" rather than touch AppKit off
+    // the main thread. Mirrors `updater::assert_main_thread`.
+    if objc2::MainThreadMarker::new().is_none() {
+        return false;
+    }
+    let Some(class) = AnyClass::get(c"NSWorkspace") else {
+        return false;
+    };
+    // SAFETY: on the main thread (checked above). `sharedWorkspace`
+    // returns the process-wide NSWorkspace singleton (never nil once
+    // AppKit is up); `accessibilityDisplayShouldReduceMotion` is a BOOL
+    // property read with no arguments.
+    unsafe {
+        let workspace: *mut AnyObject = msg_send![class, sharedWorkspace];
+        if workspace.is_null() {
+            return false;
+        }
+        let reduce: bool = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
+        reduce
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn os_reduce_motion() -> bool {
+    false
+}
+
 pub(crate) fn pick_primary(displays: &[DisplayInfo]) -> Option<&DisplayInfo> {
     displays
         .iter()

@@ -765,6 +765,13 @@ pub struct App {
     /// the runtime can drive the capture loop, render the HUD, and
     /// stitch the result when the session ends.
     pub scroll_session: Option<ScrollSession>,
+    /// Whether the OS "reduce motion" accessibility setting is on.
+    /// Read at startup and refreshed when an animated surface (region
+    /// overlay / scroll session) opens. When `true` the marching-ants
+    /// and HUD pulses hold still; static cues (outline, counter, the
+    /// "● Recording" label) stay. Defaults to `false`; the runtime
+    /// fills it from `os_reduce_motion()` so `App::new` stays pure.
+    pub reduce_motion: bool,
 }
 
 /// State for an active scrolling-capture session.
@@ -1016,6 +1023,7 @@ impl App {
             cli_tools_window_id: None,
             cli_tools_status: None,
             scroll_session: None,
+            reduce_motion: false,
         }
     }
 
