@@ -465,20 +465,33 @@ pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     ]
     .spacing(7)
     .align_x(Alignment::Start);
-    container(body)
-        .padding(14)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(|_| iced::widget::container::Style {
-            background: Some(Color::from_rgba(0.05, 0.06, 0.06, 0.96).into()),
-            border: iced::Border {
-                color: accent(0.28),
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..Default::default()
-        })
-        .into()
+    // The HUD window is a fixed 320×360 and non-resizable, so a wrapped
+    // status line (or any future row) could push Stop/Cancel past the
+    // bottom edge and out of reach. Wrap the body in a vertical
+    // scrollable (overlay scrollbar, no `spacing`) so it only appears on
+    // overflow — at the default one-frame state everything still fits
+    // and the HUD looks unchanged.
+    container(
+        scrollable(body)
+            .direction(iced::widget::scrollable::Direction::Vertical(
+                slim_scrollbar(),
+            ))
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .padding(14)
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(|_| iced::widget::container::Style {
+        background: Some(Color::from_rgba(0.05, 0.06, 0.06, 0.96).into()),
+        border: iced::Border {
+            color: accent(0.28),
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
 }
 
 /// A dark rounded code panel for a command block: matches the editor
@@ -2211,64 +2224,88 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
             .into()
     };
 
-    let lock = button(text(if locked { "Unlock" } else { "Lock" }).size(TEXT_CAPTION))
-        .padding([4, 8])
-        .style(|_, status| {
-            let bg = match status {
-                button::Status::Pressed => Color::from_rgba(0.0, 0.0, 0.0, 0.85),
-                button::Status::Hovered => Color::from_rgba(0.0, 0.0, 0.0, 0.72),
-                _ => Color::from_rgba(0.0, 0.0, 0.0, 0.55),
-            };
-            button::Style {
-                background: Some(bg.into()),
-                text_color: Color::WHITE,
+    // Pin controls: Lock + opacity slider + readout in a glassy chip
+    // pinned bottom-left. On a small pin (min 120×80) the slider +
+    // readout would overflow the window, so below the width that fits
+    // all three we drop them and keep just Lock — the keyboard −/+ still
+    // adjusts opacity (see `pin_key_action`). The constants below size
+    // the breakpoint from the row's own widths + chrome/layer padding.
+    const PIN_LOCK_W: f32 = 60.0; // "Unlock" (the wider label) + padding
+    const PIN_SLIDER_W: f32 = 92.0;
+    const PIN_OPACITY_LABEL_W: f32 = 36.0; // "100%"
+    const PIN_CONTROLS_SPACING: f32 = 6.0;
+    const PIN_CONTROLS_FULL_WIDTH: f32 = PIN_LOCK_W
+        + PIN_SLIDER_W
+        + PIN_OPACITY_LABEL_W
+        + 2.0 * PIN_CONTROLS_SPACING
+        + 2.0 * 7.0 // chrome horizontal padding
+        + 2.0 * 6.0; // layer horizontal padding
+
+    let controls_layer: Element<'_, Message> = responsive(move |available| {
+        let lock = button(text(if locked { "Unlock" } else { "Lock" }).size(TEXT_CAPTION))
+            .padding([4, 8])
+            .style(|_, status| {
+                let bg = match status {
+                    button::Status::Pressed => Color::from_rgba(0.0, 0.0, 0.0, 0.85),
+                    button::Status::Hovered => Color::from_rgba(0.0, 0.0, 0.0, 0.72),
+                    _ => Color::from_rgba(0.0, 0.0, 0.0, 0.55),
+                };
+                button::Style {
+                    background: Some(bg.into()),
+                    text_color: Color::WHITE,
+                    border: iced::Border {
+                        color: Color::from_rgba(1.0, 1.0, 1.0, 0.28),
+                        width: 1.0,
+                        radius: 6.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .on_press(Message::PinLockToggled(id));
+
+        let controls: Element<'_, Message> = if available.width >= PIN_CONTROLS_FULL_WIDTH {
+            let opacity_label = text(format!("{:.0}%", opacity * 100.0))
+                .size(TEXT_CAPTION)
+                .color(Color::WHITE)
+                .width(Length::Shrink);
+            let opacity_slider =
+                iced::widget::slider(PIN_OPACITY_MIN..=PIN_OPACITY_MAX, opacity, move |value| {
+                    Message::PinOpacityChanged(id, value)
+                })
+                .step(PIN_OPACITY_STEP)
+                .width(Length::Fixed(PIN_SLIDER_W));
+            row![lock, opacity_slider, opacity_label]
+                .spacing(PIN_CONTROLS_SPACING)
+                .align_y(Alignment::Center)
+                .into()
+        } else {
+            row![lock].align_y(Alignment::Center).into()
+        };
+
+        let controls_chrome = container(controls)
+            .padding([5, 7])
+            .style(|_| container::Style {
+                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.46).into()),
                 border: iced::Border {
-                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.28),
+                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.16),
                     width: 1.0,
-                    radius: 6.0.into(),
+                    radius: 8.0.into(),
                 },
                 ..Default::default()
-            }
-        })
-        .on_press(Message::PinLockToggled(id));
-    let opacity_label = text(format!("{:.0}%", opacity * 100.0))
-        .size(TEXT_CAPTION)
-        .color(Color::WHITE)
-        .width(Length::Shrink);
-    let opacity_slider =
-        iced::widget::slider(PIN_OPACITY_MIN..=PIN_OPACITY_MAX, opacity, move |value| {
-            Message::PinOpacityChanged(id, value)
-        })
-        .step(PIN_OPACITY_STEP)
-        .width(Length::Fixed(92.0));
-    let controls = row![lock, opacity_slider, opacity_label]
-        .spacing(6)
-        .align_y(Alignment::Center);
-    // Wrap the controls row in a `mouse_area` whose `on_press` is a
-    // no-op (`Message::NoOp`) so iced consumes the press at the
-    // controls layer instead of letting it fall through to the drag
-    // layer beneath. Without this, the gap between the Lock button
-    // and the slider — and any drag-attempt along the slider track —
-    // moved the entire window because the underlying drag-press
-    // fired before the slider widget could lock the gesture.
-    let controls_chrome = container(controls)
-        .padding([5, 7])
-        .style(|_| container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.46).into()),
-            border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.16),
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..Default::default()
-        });
-    let controls_blocker = mouse_area(controls_chrome).on_press(Message::NoOp);
-    let controls_layer = container(controls_blocker)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(6)
-        .align_x(Alignment::Start)
-        .align_y(Alignment::End);
+            });
+        // No-op `mouse_area` so a press on the chip is consumed here
+        // instead of falling through to the drag layer beneath (an
+        // errant slider-track drag would otherwise move the window).
+        let controls_blocker = mouse_area(controls_chrome).on_press(Message::NoOp);
+        container(controls_blocker)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(6)
+            .align_x(Alignment::Start)
+            .align_y(Alignment::End)
+            .into()
+    })
+    .into();
 
     // Close button — sits in the top-right corner with subtle
     // styling so it's discoverable without dominating the pin.
@@ -4534,17 +4571,32 @@ pub(crate) fn welcome_awaiting_card<'a>(state: WelcomeState) -> Element<'a, Mess
         text(header_label).size(TEXT_TITLE).color(header_color),
         text(body_copy).size(TEXT_BODY_SM).color(TEXT_SECONDARY),
         Space::new().height(Length::Fixed(6.0)),
-        row![
-            button(text("Open System Settings").size(TEXT_BODY))
+        // Two primary-sized buttons overflow the card at the 420 px
+        // minimum window width, so stack them into a column when the
+        // space can't hold them side by side.
+        responsive(|available| {
+            let open = button(text("Open System Settings").size(TEXT_BODY))
                 .padding([10, 18])
                 .style(|t, s| action_button_style(t, s, ActionKind::Primary))
-                .on_press(Message::OpenPermissionSettingsRequested),
-            button(text("Restart Readshot").size(TEXT_BODY))
+                .on_press(Message::OpenPermissionSettingsRequested);
+            let restart = button(text("Restart Readshot").size(TEXT_BODY))
                 .padding([10, 16])
                 .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::RestartRequested),
-        ]
-        .spacing(8),
+                .on_press(Message::RestartRequested);
+            let content: Element<'_, Message> = if available.width < 340.0 {
+                column![open, restart]
+                    .spacing(8)
+                    .align_x(Alignment::Center)
+                    .into()
+            } else {
+                row![open, restart].spacing(8).into()
+            };
+            container(content)
+                .width(Length::Fill)
+                .center_x(Length::Fill)
+                .into()
+        })
+        .height(Length::Shrink),
         // After an update signed differently, System Settings can show
         // Readshot switched on while macOS still denies this build.
         text("Already on in System Settings but still blocked?")
