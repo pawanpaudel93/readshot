@@ -3372,10 +3372,6 @@ pub(crate) fn overlay_auto_confirm_intent(state: &App) -> Option<crate::app::Cap
     }
 }
 
-pub(crate) use crate::overlay::{
-    OVERLAY_TOOLBAR_GAP, OVERLAY_TOOLBAR_HEIGHT, OVERLAY_TOOLBAR_WIDTH,
-};
-
 /// Build a positioned action toolbar (Capture / Copy / Save / Pin /
 /// Cancel) anchored to the right edge of `rect`. Falls back to
 /// "above" then "inside" if "below" would clip the window.
@@ -3388,20 +3384,18 @@ pub(crate) fn overlay_toolbar_layer<'a>(
     use crate::app::CaptureIntent;
 
     use iced::widget::tooltip;
-    let sel_x = rect.x();
     let sel_y = rect.y();
-    let sel_w = rect.width();
-    let sel_h = rect.height();
-    let below_y = sel_y + sel_h + OVERLAY_TOOLBAR_GAP;
-    let above_y = sel_y - OVERLAY_TOOLBAR_GAP - OVERLAY_TOOLBAR_HEIGHT;
-    let toolbar_y = if below_y + OVERLAY_TOOLBAR_HEIGHT <= bounds_h {
-        below_y
-    } else if above_y >= 0.0 {
-        above_y
-    } else {
-        // Both placements clip — fall back to inside the selection.
-        sel_y + OVERLAY_TOOLBAR_GAP
-    };
+    let bar_rect = crate::overlay::toolbar_rect(
+        bounds_w,
+        bounds_h,
+        iced::Rectangle {
+            x: rect.x(),
+            y: sel_y,
+            width: rect.width(),
+            height: rect.height(),
+        },
+    );
+    let toolbar_y = bar_rect.y;
 
     // Tooltips open away from the selection.
     let tip_pos = if toolbar_y < sel_y {
@@ -3501,17 +3495,15 @@ pub(crate) fn overlay_toolbar_layer<'a>(
     .align_y(Alignment::Center);
     let bar = container(buttons).padding(4).style(floating_bar_style);
 
-    // Anchor the toolbar's right edge at the selection's right edge,
-    // but clamp so the toolbar never extends past the left edge of the
-    // overlay when the selection sits near the left of the screen.
-    let desired_right = (sel_x + sel_w).clamp(OVERLAY_TOOLBAR_WIDTH.min(bounds_w), bounds_w);
-    let right_pad = (bounds_w - desired_right).max(0.0);
+    // Right edge follows the selection (clamped on screen) -- see
+    // `toolbar_rect`.
+    let right_pad = (bounds_w - (bar_rect.x + bar_rect.width)).max(0.0);
 
     container(bar)
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(iced::Padding {
-            top: toolbar_y.max(0.0),
+            top: toolbar_y,
             right: right_pad,
             bottom: 0.0,
             left: 0.0,

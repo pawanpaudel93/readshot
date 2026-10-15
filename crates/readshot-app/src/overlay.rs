@@ -551,11 +551,59 @@ pub(crate) fn overlay_shortcut(key: &Key, m: keyboard::Modifiers) -> Option<Over
     }
 }
 
-/// True when the action bar flips above a selection too narrow to
-/// shield the size badge, so the badge must move inside the selection.
-fn badge_clashes_with_toolbar(bounds: Rectangle, selection: Rectangle) -> bool {
-    selection.y + selection.height + OVERLAY_TOOLBAR_GAP + OVERLAY_TOOLBAR_HEIGHT > bounds.height
-        && selection.width < OVERLAY_TOOLBAR_WIDTH
+/// Where the action bar sits for `selection`: below it, flipped above
+/// when below would clip, else inside the selection. The bar's right
+/// edge follows the selection's right edge, clamped so it stays on
+/// screen. Shared by `runtime/view.rs` (placement) and the size badge
+/// (collision avoidance) so the two cannot drift.
+pub(crate) fn toolbar_rect(bounds_w: f32, bounds_h: f32, selection: Rectangle) -> Rectangle {
+    let below_y = selection.y + selection.height + OVERLAY_TOOLBAR_GAP;
+    let above_y = selection.y - OVERLAY_TOOLBAR_GAP - OVERLAY_TOOLBAR_HEIGHT;
+    let y = if below_y + OVERLAY_TOOLBAR_HEIGHT <= bounds_h {
+        below_y
+    } else if above_y >= 0.0 {
+        above_y
+    } else {
+        selection.y + OVERLAY_TOOLBAR_GAP
+    }
+    .max(0.0);
+    let right =
+        (selection.x + selection.width).clamp(OVERLAY_TOOLBAR_WIDTH.min(bounds_w), bounds_w);
+    Rectangle {
+        x: right - OVERLAY_TOOLBAR_WIDTH,
+        y,
+        width: OVERLAY_TOOLBAR_WIDTH,
+        height: OVERLAY_TOOLBAR_HEIGHT,
+    }
+}
+
+/// Size-badge origin that never sits under the action bar. Starts from
+/// `size_badge_origin`; on a real rectangle overlap with the bar it moves
+/// inside the selection (bar flipped above) or just below the bar (bar
+/// inside the selection).
+fn size_badge_origin_clear_of_toolbar(
+    bounds: Rectangle,
+    selection: Rectangle,
+    badge_w: f32,
+    badge_h: f32,
+) -> (f32, f32) {
+    let (bx, by) = size_badge_origin(bounds, selection, badge_w, badge_h);
+    let bar = toolbar_rect(bounds.width, bounds.height, selection);
+    let badge = Rectangle {
+        x: bx,
+        y: by,
+        width: badge_w,
+        height: badge_h,
+    };
+    if !badge.intersects(&bar) {
+        return (bx, by);
+    }
+    if bar.y >= selection.y {
+        // Bar is inside the selection: tuck the badge under it.
+        (bx, bar.y + bar.height + 6.0)
+    } else {
+        (bx, selection.y + 6.0)
+    }
 }
 
 /// Translate `orig` by `delta`, clamped so the rect stays inside
@@ -891,10 +939,7 @@ impl Program<Message> for OverlayProgram {
             let label = format!("{phys_w} × {phys_h}");
             let badge_w = 16.0 + label.chars().count() as f32 * 7.0;
             let badge_h = 22.0;
-            let (bx, mut by) = size_badge_origin(bounds, rect, badge_w, badge_h);
-            if badge_clashes_with_toolbar(bounds, rect) {
-                by = rect.y + 6.0;
-            }
+            let (bx, by) = size_badge_origin_clear_of_toolbar(bounds, rect, badge_w, badge_h);
             // Rounded corners (radius 6) match the hint pill; the badge
             // text already uses the bundled monospace family.
             let badge_path = Path::rounded_rectangle(
@@ -985,35 +1030,61 @@ fn overlay_crosshair_interaction() -> mouse::Interaction {
 
 #[cfg(test)]
 mod tests {
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Rectangle {
+        Rectangle {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
+    }
+
+    fn badge_for(bounds: Rectangle, sel: Rectangle) -> Rectangle {
+        let (x, y) = size_badge_origin_clear_of_toolbar(bounds, sel, 80.0, 22.0);
+        rect(x, y, 80.0, 22.0)
+    }
+
     #[test]
-    fn badge_moves_inside_when_flipped_toolbar_would_cover_it() {
-        let bounds = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: 800.0,
-            height: 600.0,
-        };
-        let narrow_low = Rectangle {
-            x: 10.0,
-            y: 500.0,
-            width: 100.0,
-            height: 90.0,
-        };
-        let wide_low = Rectangle {
-            x: 10.0,
-            y: 500.0,
-            width: 400.0,
-            height: 90.0,
-        };
-        let narrow_high = Rectangle {
-            x: 10.0,
-            y: 100.0,
-            width: 100.0,
-            height: 90.0,
-        };
-        assert!(badge_clashes_with_toolbar(bounds, narrow_low));
-        assert!(!badge_clashes_with_toolbar(bounds, wide_low));
-        assert!(!badge_clashes_with_toolbar(bounds, narrow_high));
+    fn badge_clears_flipped_bar_for_mid_width_selection() {
+        // 340 wide: above the 312 threshold the old check missed.
+        let bounds = rect(0.0, 0.0, 1440.0, 900.0);
+        let sel = rect(100.0, 800.0, 340.0, 80.0);
+        let bar = toolbar_rect(1440.0, 900.0, sel);
+        assert!(bar.y < sel.y, "bar flipped above");
+        let default = size_badge_origin(bounds, sel, 80.0, 22.0);
+        assert!(rect(default.0, default.1, 80.0, 22.0).intersects(&bar));
+        let badge = badge_for(bounds, sel);
+        assert!(!badge.intersects(&bar));
+        assert_eq!(badge.y, sel.y + 6.0);
+    }
+
+    #[test]
+    fn badge_stays_put_when_bar_does_not_cover_it() {
+        let bounds = rect(0.0, 0.0, 1440.0, 900.0);
+        // Wide, low selection: bar flips above but its left edge is past the badge.
+        let wide = rect(100.0, 800.0, 600.0, 80.0);
+        assert_eq!(
+            size_badge_origin_clear_of_toolbar(bounds, wide, 80.0, 22.0),
+            size_badge_origin(bounds, wide, 80.0, 22.0)
+        );
+        // Bar below the selection: badge above the corner, untouched.
+        let high = rect(100.0, 300.0, 100.0, 90.0);
+        assert_eq!(
+            size_badge_origin_clear_of_toolbar(bounds, high, 80.0, 22.0),
+            size_badge_origin(bounds, high, 80.0, 22.0)
+        );
+    }
+
+    #[test]
+    fn badge_moves_below_bar_when_bar_falls_back_inside_selection() {
+        // Selection spans (almost) the whole height: bar fits neither below nor above.
+        let bounds = rect(0.0, 0.0, 800.0, 600.0);
+        let sel = rect(100.0, 10.0, 200.0, 580.0);
+        let bar = toolbar_rect(800.0, 600.0, sel);
+        assert_eq!(bar.y, sel.y + OVERLAY_TOOLBAR_GAP);
+        let badge = badge_for(bounds, sel);
+        assert!(!badge.intersects(&bar));
+        assert_eq!(badge.y, bar.y + bar.height + 6.0);
     }
 
     #[test]
