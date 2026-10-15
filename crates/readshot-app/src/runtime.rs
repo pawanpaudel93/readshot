@@ -541,16 +541,13 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             iced::time::every(Duration::from_millis(SCROLL_FRAME_INTERVAL_MS))
                 .map(|_| Message::ScrollCaptureTick),
         );
-        // Esc anywhere ends the session — same affordance as the
-        // Stop button on the HUD.
+        // Esc anywhere ends the session (same as the Stop button);
+        // Shift+Esc / ⌘. discards it (same as Cancel, which arms then
+        // confirms). See `scroll_key_message`.
         subs.push(iced::event::listen_with(|event, _status, _window| {
-            use iced::keyboard::{key::Named, Event as KbEvent, Key};
-            if let iced::Event::Keyboard(KbEvent::KeyPressed {
-                key: Key::Named(Named::Escape),
-                ..
-            }) = event
-            {
-                return Some(Message::ScrollCaptureStopRequested);
+            use iced::keyboard::Event as KbEvent;
+            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
+                return scroll_key_message(&key, modifiers);
             }
             None
         }));
@@ -722,6 +719,56 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             }
         }));
     }
+    if state.settings_window_id.is_some() && !state.settings_recording_hotkey {
+        // Settings is pointer-only (togglers, pick-lists, buttons), none
+        // of which iced 0.14 can focus. Tap keys and route them to the
+        // settings handler, which validates the window id. The filename
+        // text_input keeps plain typing because every shortcut is
+        // ⌘-prefixed (Esc aside). See `settings_key_action`.
+        subs.push(iced::event::listen_with(|event, _status, window| {
+            use iced::keyboard::Event as KbEvent;
+            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
+                return Some(Message::SettingsKeyPressed {
+                    window,
+                    key,
+                    modifiers,
+                });
+            }
+            None
+        }));
+    }
+    if !state.pins.is_empty() {
+        // Pins are borderless, always-on-top thumbnails whose only
+        // chrome is pointer-driven; give the focused pin a keyboard map
+        // (close / lock / opacity / move). See `pin_key_action`.
+        subs.push(iced::event::listen_with(|event, _status, window| {
+            use iced::keyboard::Event as KbEvent;
+            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
+                return Some(Message::PinKeyPressed {
+                    window,
+                    key,
+                    modifiers,
+                });
+            }
+            None
+        }));
+    }
+    if state.windows.kinds().any(|k| k == WindowKind::Welcome) {
+        // Bind Enter to the welcome card's primary action so the
+        // permission / capture flow is operable without the mouse.
+        // See `welcome_key_message`.
+        subs.push(iced::event::listen_with(|event, _status, window| {
+            use iced::keyboard::Event as KbEvent;
+            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
+                return Some(Message::WelcomeKeyPressed {
+                    window,
+                    key,
+                    modifiers,
+                });
+            }
+            None
+        }));
+    }
     // Watch for the OS X-button closing any tracked window. Without
     // this, `state.windows` accumulates stale ids, and helpers like
     // `show_or_focus_welcome` end up calling `gain_focus` on dead
@@ -769,6 +816,22 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 state.mark_onboarding_completed();
             }
             window::gain_focus(id)
+        }
+
+        Message::WelcomeKeyPressed {
+            window,
+            key,
+            modifiers,
+        } => {
+            // Validate the focused window really is the welcome window —
+            // the keyboard subscription is global to the daemon.
+            if state.windows.kind(window) != Some(WindowKind::Welcome) {
+                return Task::none();
+            }
+            match welcome_key_message(state.welcome, state.capture_in_flight, &key, modifiers) {
+                Some(message) => update(state, message),
+                None => Task::none(),
+            }
         }
 
         // Explicit checks (Recheck, after Allow) may probe; the periodic
@@ -1561,7 +1624,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::PinClosePressed(..)
         | Message::PinDragRequested(..)
         | Message::PinOpacityChanged(..)
-        | Message::PinLockToggled(..)) => editor_ops::handle_editor_message(state, msg),
+        | Message::PinLockToggled(..)
+        | Message::PinKeyPressed { .. }) => editor_ops::handle_editor_message(state, msg),
         Message::OverlayCopyDone(result) => {
             state.last_capture_status = Some(match result {
                 Ok(()) => "Copied image to clipboard.".into(),
@@ -1732,6 +1796,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::SettingsUninstallConfirmed
         | Message::SettingsUninstallFinished
         | Message::SettingsWindowReady(..)
+        | Message::SettingsKeyPressed { .. }
         | Message::OpenCliToolsRequested
         | Message::CliToolsWindowReady(..)
         | Message::CliToolsCopyRequested(..)
@@ -5865,5 +5930,147 @@ mod tests {
         );
 
         assert!(matches!(cancel, Some(Message::EditorTextCancel)));
+    }
+
+    #[test]
+    fn scroll_keys_map_stop_and_discard() {
+        use iced::keyboard::{key::Named, Key, Modifiers};
+        let esc = Key::Named(Named::Escape);
+        // Esc alone stops & stitches (same as the Stop button).
+        assert!(matches!(
+            scroll_key_message(&esc, Modifiers::empty()),
+            Some(Message::ScrollCaptureStopRequested)
+        ));
+        // Shift+Esc and ⌘. discard (same as the Cancel button, which
+        // arms then confirms on repeat).
+        assert!(matches!(
+            scroll_key_message(&esc, Modifiers::SHIFT),
+            Some(Message::ScrollCaptureCancelRequested)
+        ));
+        let dot = Key::Character(".".into());
+        assert!(matches!(
+            scroll_key_message(&dot, command_modifiers()),
+            Some(Message::ScrollCaptureCancelRequested)
+        ));
+        assert!(scroll_key_message(&dot, Modifiers::empty()).is_none());
+    }
+
+    #[test]
+    fn welcome_enter_triggers_card_primary_action() {
+        use crate::welcome::WelcomeState;
+        use iced::keyboard::{key::Named, Key, Modifiers};
+        let enter = Key::Named(Named::Enter);
+        assert!(matches!(
+            welcome_key_message(WelcomeState::Pending, false, &enter, Modifiers::empty()),
+            Some(Message::GrantPermissionRequested)
+        ));
+        assert!(matches!(
+            welcome_key_message(WelcomeState::Denied, false, &enter, Modifiers::empty()),
+            Some(Message::OpenPermissionSettingsRequested)
+        ));
+        assert!(matches!(
+            welcome_key_message(WelcomeState::Granted, false, &enter, Modifiers::empty()),
+            Some(Message::OpenOverlayRequested)
+        ));
+        // Capture is disabled (so Enter is a no-op) while one is running.
+        assert!(
+            welcome_key_message(WelcomeState::Granted, true, &enter, Modifiers::empty()).is_none()
+        );
+        // A chord is not the bare-Enter primary activation.
+        assert!(
+            welcome_key_message(WelcomeState::Pending, false, &enter, command_modifiers())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn pin_keys_map_to_actions() {
+        use iced::keyboard::{key::Named, Key, Modifiers};
+        assert_eq!(
+            pin_key_action(&Key::Named(Named::Escape), Modifiers::empty()),
+            Some(PinKeyAction::Close)
+        );
+        assert_eq!(
+            pin_key_action(&Key::Character("w".into()), command_modifiers()),
+            Some(PinKeyAction::Close)
+        );
+        assert_eq!(
+            pin_key_action(&Key::Character("l".into()), Modifiers::empty()),
+            Some(PinKeyAction::ToggleLock)
+        );
+        assert_eq!(
+            pin_key_action(&Key::Character("=".into()), Modifiers::empty()),
+            Some(PinKeyAction::OpacityUp)
+        );
+        assert_eq!(
+            pin_key_action(&Key::Character("-".into()), Modifiers::empty()),
+            Some(PinKeyAction::OpacityDown)
+        );
+        // Arrows move the window: 10 px, Shift → 1 px fine step.
+        assert_eq!(
+            pin_key_action(&Key::Named(Named::ArrowLeft), Modifiers::empty()),
+            Some(PinKeyAction::Nudge(-10.0, 0.0))
+        );
+        assert_eq!(
+            pin_key_action(&Key::Named(Named::ArrowDown), Modifiers::SHIFT),
+            Some(PinKeyAction::Nudge(0.0, 1.0))
+        );
+        // An unmapped plain key is ignored.
+        assert_eq!(
+            pin_key_action(&Key::Character("q".into()), Modifiers::empty()),
+            None
+        );
+    }
+
+    #[test]
+    fn settings_keys_map_to_actions() {
+        use iced::keyboard::{key::Named, Key, Modifiers};
+        let cmd = command_modifiers();
+        assert_eq!(
+            settings_key_action(&Key::Named(Named::Escape), Modifiers::empty()),
+            Some(SettingsKeyAction::Close)
+        );
+        assert_eq!(
+            settings_key_action(&Key::Character("w".into()), cmd),
+            Some(SettingsKeyAction::Close)
+        );
+        assert_eq!(
+            settings_key_action(&Key::Character("l".into()), cmd),
+            Some(SettingsKeyAction::ToggleLaunchAtLogin)
+        );
+        assert_eq!(
+            settings_key_action(&Key::Character("d".into()), cmd),
+            Some(SettingsKeyAction::ToggleDebugLogging)
+        );
+        assert_eq!(
+            settings_key_action(&Key::Character("r".into()), cmd),
+            Some(SettingsKeyAction::CycleRetention)
+        );
+        assert_eq!(
+            settings_key_action(&Key::Character("e".into()), cmd),
+            Some(SettingsKeyAction::CycleEngine)
+        );
+        assert_eq!(
+            settings_key_action(&Key::Character("f".into()), cmd),
+            Some(SettingsKeyAction::CycleFormat)
+        );
+        // Destructive commands need ⌘⇧ and only arm; the second press
+        // (resolved in the runtime) confirms, so a single press can't wipe.
+        let mut cmd_shift = cmd;
+        cmd_shift.insert(Modifiers::SHIFT);
+        assert_eq!(
+            settings_key_action(&Key::Character("r".into()), cmd_shift),
+            Some(SettingsKeyAction::ResetAll)
+        );
+        assert_eq!(
+            settings_key_action(&Key::Character("u".into()), cmd_shift),
+            Some(SettingsKeyAction::Uninstall)
+        );
+        // A bare letter (no ⌘) never changes a setting — it must reach
+        // the filename text_input instead.
+        assert_eq!(
+            settings_key_action(&Key::Character("l".into()), Modifiers::empty()),
+            None
+        );
     }
 }

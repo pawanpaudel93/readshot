@@ -217,6 +217,77 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             state.settings_window_id = Some(id);
             window::gain_focus(id)
         }
+        Message::SettingsKeyPressed {
+            window,
+            key,
+            modifiers,
+        } => {
+            // The keyboard subscription is global to the daemon; only
+            // act when the focused window is the settings window.
+            if state.settings_window_id != Some(window) {
+                return Task::none();
+            }
+            let Some(action) = settings_key_action(&key, modifiers) else {
+                return Task::none();
+            };
+            match action {
+                SettingsKeyAction::Close => {
+                    state.windows.forget(window);
+                    window::close(window)
+                }
+                SettingsKeyAction::ToggleLaunchAtLogin => {
+                    let next = !state.preferences.launch_at_login;
+                    update(
+                        state,
+                        Message::Settings(SettingsMessage::SetLaunchAtLogin(next)),
+                    )
+                }
+                SettingsKeyAction::ToggleDebugLogging => {
+                    let next = !state.preferences.debug_logging;
+                    update(
+                        state,
+                        Message::Settings(SettingsMessage::SetDebugLogging(next)),
+                    )
+                }
+                SettingsKeyAction::CycleRetention => {
+                    let next = cycle_retention(state.preferences.history_retention);
+                    update(
+                        state,
+                        Message::Settings(SettingsMessage::SetHistoryRetention(next)),
+                    )
+                }
+                SettingsKeyAction::CycleEngine => {
+                    let next = cycle_ocr_engine(state.preferences.ocr_engine_choice);
+                    update(
+                        state,
+                        Message::Settings(SettingsMessage::SetOcrEngine(next)),
+                    )
+                }
+                SettingsKeyAction::CycleFormat => {
+                    let next = cycle_export_format(state.preferences.default_format);
+                    update(
+                        state,
+                        Message::Settings(SettingsMessage::SetDefaultFormat(next)),
+                    )
+                }
+                // Destructive: the key arms the two-stage prompt, and a
+                // second press confirms. A single keypress can never wipe.
+                SettingsKeyAction::ResetAll => {
+                    if state.settings_reset_all_pending {
+                        update(state, Message::SettingsResetAllConfirmed)
+                    } else {
+                        update(state, Message::SettingsResetAllRequested)
+                    }
+                }
+                SettingsKeyAction::Uninstall => {
+                    if state.settings_uninstall_pending {
+                        update(state, Message::SettingsUninstallConfirmed)
+                    } else {
+                        update(state, Message::SettingsUninstallRequested)
+                    }
+                }
+            }
+        }
         Message::OpenCliToolsRequested => {
             if let Some(id) = state.cli_tools_window_id {
                 return window::gain_focus(id);
@@ -247,4 +318,31 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
         }
         other => unreachable!("non-settings message routed to the settings handler: {other:?}"),
     }
+}
+
+/// Cycle to the next option in a fixed list, wrapping at the end. Used
+/// by the settings keyboard map (⌘R / ⌘E / ⌘F) so a pick-list can be
+/// changed without the pointer.
+fn cycle_in<T: Copy + PartialEq>(options: &[T], current: T) -> T {
+    match options.iter().position(|o| *o == current) {
+        Some(i) => options[(i + 1) % options.len()],
+        None => options.first().copied().unwrap_or(current),
+    }
+}
+
+// The option orders below mirror `settings_view`'s pick-list arrays so
+// keyboard cycling steps through the same sequence the list shows.
+fn cycle_retention(current: readshot_core::HistoryRetention) -> readshot_core::HistoryRetention {
+    use readshot_core::HistoryRetention as R;
+    cycle_in(&[R::Off, R::Last50, R::Last30Days, R::Unlimited], current)
+}
+
+fn cycle_ocr_engine(current: readshot_core::OcrEngineChoice) -> readshot_core::OcrEngineChoice {
+    use readshot_core::OcrEngineChoice as E;
+    cycle_in(&[E::Native, E::Tesseract], current)
+}
+
+fn cycle_export_format(current: readshot_core::ExportFormat) -> readshot_core::ExportFormat {
+    use readshot_core::ExportFormat as F;
+    cycle_in(&[F::Png, F::Jpeg, F::Webp], current)
 }

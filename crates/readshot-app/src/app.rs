@@ -417,6 +417,15 @@ pub enum Message {
     PinOpacityChanged(iced::window::Id, f32),
     /// User toggled whether a pin should stay put when clicked.
     PinLockToggled(iced::window::Id),
+    /// Keyboard event observed while at least one pin window is open.
+    /// iced 0.14 buttons can't take focus, so the runtime taps keys
+    /// globally and validates `window` against `App::pins` before
+    /// acting (close / lock / opacity / nudge). WCAG 2.1.1.
+    PinKeyPressed {
+        window: iced::window::Id,
+        key: iced::keyboard::Key,
+        modifiers: iced::keyboard::Modifiers,
+    },
     /// Bump the editor's line width by `delta` (positive grows,
     /// negative shrinks). Triggered by `[` / `]` keyboard
     /// shortcuts; the runtime resolves the new width against the
@@ -487,6 +496,15 @@ pub enum Message {
     /// opened. Used by the runtime to focus the window after Launch
     /// Services reopens an LSUIElement app.
     WelcomeWindowReady(iced::window::Id),
+    /// Keyboard event observed while a welcome window is open. The
+    /// runtime validates `window` is the welcome window and binds
+    /// Enter to the primary action of whichever card is showing
+    /// (Allow / Open Settings / Capture). WCAG 2.1.1.
+    WelcomeKeyPressed {
+        window: iced::window::Id,
+        key: iced::keyboard::Key,
+        modifiers: iced::keyboard::Modifiers,
+    },
     /// User asked for the settings window — tray "Settings…" entry or
     /// (future) a "Settings" command from elsewhere. Single-instance:
     /// focuses the existing window if one is already open.
@@ -529,6 +547,15 @@ pub enum Message {
     /// First `view` call after the settings window is opened. Records
     /// the `window::Id` so close + focus paths work.
     SettingsWindowReady(iced::window::Id),
+    /// Keyboard event observed while the settings window is open. iced
+    /// 0.14 buttons / togglers / pick-lists can't take focus, so the
+    /// runtime taps keys globally and validates `window` against
+    /// `App::settings_window_id` before acting. WCAG 2.1.1.
+    SettingsKeyPressed {
+        window: iced::window::Id,
+        key: iced::keyboard::Key,
+        modifiers: iced::keyboard::Modifiers,
+    },
     /// User asked for the command-line setup instructions window.
     OpenCliToolsRequested,
     /// First `view` call after the command-line setup window opens.

@@ -957,6 +957,39 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }
             Task::none()
         }
+        Message::PinKeyPressed {
+            window,
+            key,
+            modifiers,
+        } => {
+            // The keyboard subscription is global; only act when the
+            // focused window is actually a live pin. Copy the opacity out
+            // so the immutable pin borrow is dropped before `update`
+            // needs `&mut state`.
+            let Some(opacity) = state.pins.get(&window).map(|pin| pin.opacity) else {
+                return Task::none();
+            };
+            match pin_key_action(&key, modifiers) {
+                Some(PinKeyAction::Close) => update(state, Message::PinClosePressed(window)),
+                Some(PinKeyAction::ToggleLock) => update(state, Message::PinLockToggled(window)),
+                Some(PinKeyAction::OpacityUp) => {
+                    let next = (opacity + PIN_OPACITY_STEP).clamp(PIN_OPACITY_MIN, PIN_OPACITY_MAX);
+                    update(state, Message::PinOpacityChanged(window, next))
+                }
+                Some(PinKeyAction::OpacityDown) => {
+                    let next = (opacity - PIN_OPACITY_STEP).clamp(PIN_OPACITY_MIN, PIN_OPACITY_MAX);
+                    update(state, Message::PinOpacityChanged(window, next))
+                }
+                Some(PinKeyAction::Nudge(dx, dy)) => {
+                    // iced exposes no relative move; read the current
+                    // logical position, then move_to the offset point.
+                    window::position(window).and_then(move |p| {
+                        window::move_to(window, iced::Point::new(p.x + dx, p.y + dy))
+                    })
+                }
+                None => Task::none(),
+            }
+        }
         other => unreachable!("non-editor message routed to the editor handler: {other:?}"),
     }
 }
