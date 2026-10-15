@@ -5,8 +5,8 @@
 //! actual `iced::daemon` invocation lives in `main.rs`; this module
 //! exposes the pieces it needs (`App`, `Message`, `update`, `view`).
 //!
-//! The full iced wiring — multi-window orchestration, marching-ants
-//! animation timer, `tray-icon` and `global-hotkey` integrations —
+//! The full iced wiring — multi-window orchestration, the scroll
+//! window's frame/pulse timers, `tray-icon` and `global-hotkey` integrations —
 //! is structurally laid out below but commented as TODOs the runtime
 //! implementer fills in once the GUI is exercised on a real display.
 //! Everything that is *testable* without iced (state transitions,
@@ -853,8 +853,8 @@ pub struct App {
     pub scroll_session: Option<ScrollSession>,
     /// Whether the OS "reduce motion" accessibility setting is on.
     /// Read at startup and refreshed when an animated surface (region
-    /// overlay / scroll session) opens. When `true` the marching-ants
-    /// and HUD pulses hold still; static cues (outline, counter, the
+    /// overlay / scroll session) opens. When `true` the scroll
+    /// window's recording pulse holds still; static cues (outline, counter, the
     /// "● Recording" label) stay. Defaults to `false`; the runtime
     /// fills it from `os_reduce_motion()` so `App::new` stays pure.
     pub reduce_motion: bool,

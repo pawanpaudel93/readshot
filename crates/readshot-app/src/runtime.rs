@@ -1080,8 +1080,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // actual window-open work in `OverlayDisplaysListed` so we
             // can spawn one transparent overlay per monitor.
             let coord = state.coordinator.clone();
-            // Cheap refresh so the marching-ants honour a reduce-motion
-            // toggle the user flipped since launch.
+            // Cheap refresh so a scroll session started from this
+            // overlay honours a reduce-motion toggle the user flipped
+            // since launch.
             state.reduce_motion = os_reduce_motion();
             state.overlay_opening = true;
             Task::perform(async move { coord.list_displays().await }, |result| {

@@ -32,7 +32,7 @@ pub(crate) enum OcrCopyError {
 /// Whether the OS is set to reduce motion (macOS: System Settings →
 /// Accessibility → Display → Reduce motion). Read at startup and
 /// refreshed cheaply when an animated surface opens, so Readshot can
-/// freeze its marching-ants and HUD pulses for users who asked for
+/// freeze the scroll window's recording pulse for users who asked for
 /// less motion. Non-macOS returns `false` — the animated chrome is
 /// macOS-only surface area today.
 #[cfg(target_os = "macos")]

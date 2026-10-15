@@ -2254,7 +2254,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 // the default (newline). Clicking a button also commits
                 // / cancels (below).
                 iced::widget::text_editor(content)
-                    .placeholder("Type text… (⌘↵ to commit, Esc to cancel)")
+                    .placeholder("Type text… (⌘↵ to commit, esc to cancel)")
                     .on_action(Message::EditorTextAction)
                     .key_binding(editor_text_key_binding)
                     .padding(8)
@@ -3031,7 +3031,7 @@ pub(crate) fn editor_chrome_style(_theme: &Theme) -> container::Style {
 
 /// Render a pin window — borderless, always-on-top, draggable.
 /// Click anywhere on the image body initiates a native window
-/// drag; a small "×" button in the corner closes it.
+/// drag. Close lives in the hover control bar (and esc / ⌘W).
 pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
     use crate::icons::AppIcon;
     use iced::widget::{mouse_area, stack};
@@ -3052,7 +3052,7 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
     // Double-click toggles the lock instead of destroying the pin —
     // the audit flagged the previous "double-click closes" as a
     // landmine because pin-positioning involves a lot of accidental
-    // double-clicks. Close is now exclusively the `×` button.
+    // double-clicks. Close is the hover bar's close button or esc / ⌘W.
     let drag_area = mouse_area(img).on_double_click(Message::PinLockToggled(id));
     let drag_layer: Element<'_, Message> = if locked {
         drag_area.into()
@@ -4397,7 +4397,7 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
         if settings_recording_hotkey {
             column![
                 main,
-                text("Press the new shortcut, or Esc to cancel.")
+                text("Press the new shortcut, or esc to cancel.")
                     .size(TEXT_CAPTION)
                     .style(text_acc),
             ]
