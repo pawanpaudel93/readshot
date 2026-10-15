@@ -45,6 +45,9 @@ mod hotkeys;
 pub(crate) use hotkeys::*;
 mod window_settings;
 pub(crate) use window_settings::*;
+mod tokens;
+#[allow(unused_imports)] // removed in Task 14 once views read the tokens
+pub(crate) use tokens::*;
 mod view;
 pub(crate) use view::*;
 mod scroll;
