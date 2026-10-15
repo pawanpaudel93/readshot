@@ -511,6 +511,53 @@ fn size_badge_origin(
     (x, y)
 }
 
+/// Estimated size of the floating action bar (`runtime/view.rs`
+/// `overlay_toolbar_layer`). Used for edge-aware placement without
+/// measuring real layout. Edit (~74) + 6 icon buttons (32) + separator
+/// + gaps + padding.
+pub(crate) const OVERLAY_TOOLBAR_HEIGHT: f32 = 42.0;
+pub(crate) const OVERLAY_TOOLBAR_GAP: f32 = 10.0;
+pub(crate) const OVERLAY_TOOLBAR_WIDTH: f32 = 312.0;
+
+/// Keyboard shortcuts the overlay handles while a selection exists.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OverlayShortcut {
+    Intent(CaptureIntent),
+    Nudge { dx: f32, dy: f32 },
+}
+
+pub(crate) fn overlay_shortcut(key: &Key, m: keyboard::Modifiers) -> Option<OverlayShortcut> {
+    use CaptureIntent as I;
+    if m.command() && !m.alt() {
+        let Key::Character(c) = key else { return None };
+        return match (c.to_ascii_lowercase().as_str(), m.shift()) {
+            ("c", false) => Some(OverlayShortcut::Intent(I::CopyToClipboard)),
+            ("c", true) => Some(OverlayShortcut::Intent(I::CopyTextDirect)),
+            ("s", false) => Some(OverlayShortcut::Intent(I::SaveDirect)),
+            ("p", false) => Some(OverlayShortcut::Intent(I::Pin)),
+            _ => None,
+        };
+    }
+    if m.command() || m.alt() || m.control() {
+        return None;
+    }
+    let step = if m.shift() { 10.0 } else { 1.0 };
+    match key {
+        Key::Named(Named::ArrowLeft) => Some(OverlayShortcut::Nudge { dx: -step, dy: 0.0 }),
+        Key::Named(Named::ArrowRight) => Some(OverlayShortcut::Nudge { dx: step, dy: 0.0 }),
+        Key::Named(Named::ArrowUp) => Some(OverlayShortcut::Nudge { dx: 0.0, dy: -step }),
+        Key::Named(Named::ArrowDown) => Some(OverlayShortcut::Nudge { dx: 0.0, dy: step }),
+        _ => None,
+    }
+}
+
+/// True when the action bar flips above a selection too narrow to
+/// shield the size badge, so the badge must move inside the selection.
+fn badge_clashes_with_toolbar(bounds: Rectangle, selection: Rectangle) -> bool {
+    selection.y + selection.height + OVERLAY_TOOLBAR_GAP + OVERLAY_TOOLBAR_HEIGHT > bounds.height
+        && selection.width < OVERLAY_TOOLBAR_WIDTH
+}
+
 /// Translate `orig` by `delta`, clamped so the rect stays inside
 /// `bounds`. When the rect is larger than `bounds` (shouldn't happen
 /// in practice but the math has to be safe) we clamp the available
@@ -564,7 +611,7 @@ impl Program<Message> for OverlayProgram {
         }
 
         // Esc / Enter / Space.
-        if let Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) = event {
+        if let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event {
             match key {
                 Key::Named(Named::Escape) => {
                     state.active = None;
@@ -599,6 +646,38 @@ impl Program<Message> for OverlayProgram {
                     return Some(Action::publish(Message::OverlayCancelled).and_capture());
                 }
                 _ => {}
+            }
+            if let (Some(shortcut), Some(sel)) =
+                (overlay_shortcut(key, *modifiers), state.selection)
+            {
+                if state.active.is_none() {
+                    match shortcut {
+                        OverlayShortcut::Intent(intent) => {
+                            if let Some(domain) = rect_to_domain(sel) {
+                                state.selection = None;
+                                return Some(
+                                    Action::publish(Message::OverlaySelected {
+                                        display_id: self.display_id.clone(),
+                                        rect: domain,
+                                        intent,
+                                    })
+                                    .and_capture(),
+                                );
+                            }
+                        }
+                        OverlayShortcut::Nudge { dx, dy } => {
+                            let moved = move_rect(sel, (dx, dy), bounds);
+                            state.selection = Some(moved);
+                            return Some(
+                                Action::publish(Message::OverlaySelectionChanged {
+                                    display_id: self.display_id.clone(),
+                                    rect: rect_to_domain(moved),
+                                })
+                                .and_capture(),
+                            );
+                        }
+                    }
+                }
             }
         }
 
@@ -812,7 +891,10 @@ impl Program<Message> for OverlayProgram {
             let label = format!("{phys_w} × {phys_h}");
             let badge_w = 16.0 + label.chars().count() as f32 * 7.0;
             let badge_h = 22.0;
-            let (bx, by) = size_badge_origin(bounds, rect, badge_w, badge_h);
+            let (bx, mut by) = size_badge_origin(bounds, rect, badge_w, badge_h);
+            if badge_clashes_with_toolbar(bounds, rect) {
+                by = rect.y + 6.0;
+            }
             // Rounded corners (radius 6) match the hint pill; the badge
             // text already uses the bundled monospace family.
             let badge_path = Path::rounded_rectangle(
@@ -903,6 +985,69 @@ fn overlay_crosshair_interaction() -> mouse::Interaction {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn badge_moves_inside_when_flipped_toolbar_would_cover_it() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let narrow_low = Rectangle {
+            x: 10.0,
+            y: 500.0,
+            width: 100.0,
+            height: 90.0,
+        };
+        let wide_low = Rectangle {
+            x: 10.0,
+            y: 500.0,
+            width: 400.0,
+            height: 90.0,
+        };
+        let narrow_high = Rectangle {
+            x: 10.0,
+            y: 100.0,
+            width: 100.0,
+            height: 90.0,
+        };
+        assert!(badge_clashes_with_toolbar(bounds, narrow_low));
+        assert!(!badge_clashes_with_toolbar(bounds, wide_low));
+        assert!(!badge_clashes_with_toolbar(bounds, narrow_high));
+    }
+
+    #[test]
+    fn overlay_shortcuts_map_to_intents_and_nudges() {
+        use crate::app::CaptureIntent as I;
+        use iced::keyboard::{key::Named, Key, Modifiers};
+        let ch = |c: &str| Key::Character(c.into());
+        assert_eq!(
+            overlay_shortcut(&ch("c"), Modifiers::COMMAND),
+            Some(OverlayShortcut::Intent(I::CopyToClipboard))
+        );
+        assert_eq!(
+            overlay_shortcut(&ch("c"), Modifiers::COMMAND | Modifiers::SHIFT),
+            Some(OverlayShortcut::Intent(I::CopyTextDirect))
+        );
+        assert_eq!(
+            overlay_shortcut(&ch("s"), Modifiers::COMMAND),
+            Some(OverlayShortcut::Intent(I::SaveDirect))
+        );
+        assert_eq!(
+            overlay_shortcut(&ch("p"), Modifiers::COMMAND),
+            Some(OverlayShortcut::Intent(I::Pin))
+        );
+        assert_eq!(
+            overlay_shortcut(&Key::Named(Named::ArrowLeft), Modifiers::empty()),
+            Some(OverlayShortcut::Nudge { dx: -1.0, dy: 0.0 })
+        );
+        assert_eq!(
+            overlay_shortcut(&Key::Named(Named::ArrowDown), Modifiers::SHIFT),
+            Some(OverlayShortcut::Nudge { dx: 0.0, dy: 10.0 })
+        );
+        assert_eq!(overlay_shortcut(&ch("c"), Modifiers::empty()), None);
+    }
+
     use super::*;
 
     #[test]

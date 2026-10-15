@@ -114,7 +114,8 @@ See [docs/CLI.md](docs/CLI.md) for the complete command reference.
 Inside the GUI, keyboard shortcuts cover the main workflows:
 
 - **Capture overlay:** drag to select a region; `Enter` captures the
-  full display; `Esc` cancels.
+  full display; `Esc` cancels. With a selection: `⌘C` / `⇧⌘C` / `⌘S` / `⌘P`
+  copy image / copy text / save / pin, and the arrow keys nudge it (`Shift` ×10).
 - **Editor tools:** `V` select, `R` rectangle, `O` ellipse, `L` line,
   `A` arrow, `P` pen, `H` highlighter, `T` text, `B` blur, `X` pixelate,
   `N` numbered pin, `C` crop. Arrow keys nudge the selection (hold

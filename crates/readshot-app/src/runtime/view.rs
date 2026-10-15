@@ -3372,17 +3372,9 @@ pub(crate) fn overlay_auto_confirm_intent(state: &App) -> Option<crate::app::Cap
     }
 }
 
-/// Estimated visual size of the floating overlay toolbar. Used for
-/// edge-aware reflow without measuring real layout (which iced
-/// doesn't expose mid-build).
-pub(crate) const OVERLAY_TOOLBAR_HEIGHT: f32 = 44.0;
-pub(crate) const OVERLAY_TOOLBAR_GAP: f32 = 8.0;
-/// Conservative estimate of the floating toolbar's rendered width.
-/// iced doesn't expose mid-layout widget measurement, so the value is
-/// hand-tuned against the actual button row (7 buttons, mostly short
-/// after padding + the row's internal spacing). Slight over-estimate
-/// is fine — it just means the clamp engages a few px earlier.
-pub(crate) const OVERLAY_TOOLBAR_WIDTH: f32 = 660.0;
+pub(crate) use crate::overlay::{
+    OVERLAY_TOOLBAR_GAP, OVERLAY_TOOLBAR_HEIGHT, OVERLAY_TOOLBAR_WIDTH,
+};
 
 /// Build a positioned action toolbar (Capture / Copy / Save / Pin /
 /// Cancel) anchored to the right edge of `rect`. Falls back to
@@ -3396,117 +3388,6 @@ pub(crate) fn overlay_toolbar_layer<'a>(
     use crate::app::CaptureIntent;
 
     use iced::widget::tooltip;
-    let make_btn = |label: &'static str, tip: &'static str, msg: Message| -> Element<'a, Message> {
-        let btn = button(text(label).size(TEXT_BODY_SM).color(Color::WHITE))
-            .padding([6, 10])
-            .style(|_, status| {
-                let base = Color::from_rgba(1.0, 1.0, 1.0, 0.0);
-                let hovered = accent(0.13);
-                let pressed = accent(0.22);
-                let bg = match status {
-                    iced::widget::button::Status::Hovered => hovered,
-                    iced::widget::button::Status::Pressed => pressed,
-                    _ => base,
-                };
-                iced::widget::button::Style {
-                    background: Some(bg.into()),
-                    text_color: Color::WHITE,
-                    border: iced::Border {
-                        radius: 4.0.into(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }
-            })
-            .on_press(msg);
-        let pop = container(text(tip).size(TEXT_CAPTION).color(Color::WHITE))
-            .padding([4, 8])
-            .style(|_| container::Style {
-                background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.9).into()),
-                border: iced::Border {
-                    color: Color::from_rgba(1.0, 1.0, 1.0, 0.15),
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..Default::default()
-            });
-        tooltip::Tooltip::new(btn, pop, tooltip::Position::Bottom)
-            .gap(4)
-            .into()
-    };
-
-    let buttons = row![
-        make_btn(
-            "Capture",
-            "Open in editor (Enter)",
-            Message::OverlaySelected {
-                display_id: display_id.clone(),
-                rect: *rect,
-                intent: CaptureIntent::Editor,
-            },
-        ),
-        make_btn(
-            "Copy Image",
-            "Copy selection to clipboard",
-            Message::OverlaySelected {
-                display_id: display_id.clone(),
-                rect: *rect,
-                intent: CaptureIntent::CopyToClipboard,
-            },
-        ),
-        make_btn(
-            "Copy Text",
-            "Run OCR and copy recognized text",
-            Message::OverlaySelected {
-                display_id: display_id.clone(),
-                rect: *rect,
-                intent: CaptureIntent::CopyTextDirect,
-            },
-        ),
-        make_btn(
-            "Save",
-            "Save to default folder",
-            Message::OverlaySelected {
-                display_id: display_id.clone(),
-                rect: *rect,
-                intent: CaptureIntent::SaveDirect,
-            },
-        ),
-        make_btn(
-            "Pin",
-            "Pin as always-on-top window",
-            Message::OverlaySelected {
-                display_id: display_id.clone(),
-                rect: *rect,
-                intent: CaptureIntent::Pin,
-            },
-        ),
-        make_btn(
-            "Scrolling Capture",
-            "Scrolling capture — capture this region repeatedly as you scroll, then stitch into one tall image",
-            Message::OverlaySelected {
-                display_id: display_id.clone(),
-                rect: *rect,
-                intent: CaptureIntent::ScrollCapture,
-            },
-        ),
-        make_btn("Cancel", "Cancel (Esc)", Message::OverlayCancelled),
-    ]
-    .spacing(4)
-    .align_y(Alignment::Center);
-
-    let bar = container(buttons)
-        .padding(6)
-        .style(|_| iced::widget::container::Style {
-            background: Some(Color::from_rgba(0.05, 0.06, 0.06, 0.88).into()),
-            border: iced::Border {
-                radius: 8.0.into(),
-                color: accent(0.30),
-                width: 1.0,
-            },
-            ..Default::default()
-        });
-
     let sel_x = rect.x();
     let sel_y = rect.y();
     let sel_w = rect.width();
@@ -3521,6 +3402,104 @@ pub(crate) fn overlay_toolbar_layer<'a>(
         // Both placements clip — fall back to inside the selection.
         sel_y + OVERLAY_TOOLBAR_GAP
     };
+
+    // Tooltips open away from the selection.
+    let tip_pos = if toolbar_y < sel_y {
+        tooltip::Position::Top
+    } else {
+        tooltip::Position::Bottom
+    };
+    use crate::icons::AppIcon;
+    let sel = |intent| Message::OverlaySelected {
+        display_id: display_id.clone(),
+        rect: *rect,
+        intent,
+    };
+    let fg = DARK.t2;
+    let edit = tooltip_with_key(
+        button(
+            row![
+                crate::icons::icon(AppIcon::Edit, DARK.pri_fg, 15.0),
+                text("Edit").size(TYPE_BODY)
+            ]
+            .spacing(7)
+            .align_y(Alignment::Center),
+        )
+        .height(Length::Fixed(BTN_MD))
+        .padding([0, 12])
+        .style(|t, s| button_style(t, s, ButtonKind::Primary))
+        .on_press(sel(CaptureIntent::Editor)),
+        "Open in Editor",
+        Some("\u{21b5}"),
+        tip_pos,
+    );
+    let buttons = row![
+        edit,
+        icon_button(
+            AppIcon::Copy,
+            fg,
+            "Copy Image",
+            Some("\u{2318}C"),
+            Some(sel(CaptureIntent::CopyToClipboard)),
+            false,
+            ICON_BTN,
+            tip_pos
+        ),
+        icon_button(
+            AppIcon::ScanText,
+            fg,
+            "Copy Text",
+            Some("\u{21e7}\u{2318}C"),
+            Some(sel(CaptureIntent::CopyTextDirect)),
+            false,
+            ICON_BTN,
+            tip_pos
+        ),
+        icon_button(
+            AppIcon::Save,
+            fg,
+            "Save",
+            Some("\u{2318}S"),
+            Some(sel(CaptureIntent::SaveDirect)),
+            false,
+            ICON_BTN,
+            tip_pos
+        ),
+        icon_button(
+            AppIcon::Pin,
+            fg,
+            "Pin",
+            Some("\u{2318}P"),
+            Some(sel(CaptureIntent::Pin)),
+            false,
+            ICON_BTN,
+            tip_pos
+        ),
+        icon_button(
+            AppIcon::Scroll,
+            fg,
+            "Scrolling Capture",
+            None,
+            Some(sel(CaptureIntent::ScrollCapture)),
+            false,
+            ICON_BTN,
+            tip_pos
+        ),
+        vsep(),
+        icon_button(
+            AppIcon::Close,
+            fg,
+            "Cancel",
+            Some("esc"),
+            Some(Message::OverlayCancelled),
+            false,
+            ICON_BTN,
+            tip_pos
+        ),
+    ]
+    .spacing(2)
+    .align_y(Alignment::Center);
+    let bar = container(buttons).padding(4).style(floating_bar_style);
 
     // Anchor the toolbar's right edge at the selection's right edge,
     // but clamp so the toolbar never extends past the left edge of the
