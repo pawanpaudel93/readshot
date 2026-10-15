@@ -41,6 +41,8 @@ pub(crate) const PREVIEW_STRIP_MAX_H: u32 = 4096;
 /// How long a first Cancel click stays armed ("Discard N Frames")
 /// before reverting to a plain Cancel.
 pub(crate) const CANCEL_ARM_WINDOW: std::time::Duration = std::time::Duration::from_millis(2500);
+/// How many recent frame joins the window remembers for its join ticks.
+pub(crate) const RECENT_JOINS_MAX: usize = 64;
 
 /// Downscaled slice for the live preview: the whole frame for the first
 /// one, else only the newly revealed bottom `new_rows`. Runs inside the
@@ -178,6 +180,13 @@ pub(crate) fn accept_scroll_frame(
         session.last_frame_rows_scaled = (image.height() as f32 * PREVIEW_STRIP_W as f32
             / image.width().max(1) as f32)
             .round() as u32;
+        // Every slice after the first is joined to the one above it.
+        if session.preview_strip.is_some() && r.height() > 0 {
+            if session.recent_join_heights.len() == RECENT_JOINS_MAX {
+                session.recent_join_heights.pop_front();
+            }
+            session.recent_join_heights.push_back(r.height());
+        }
         let strip = append_preview_rows(session.preview_strip.take(), r);
         // Cache an iced Handle once per accepted frame so the window's
         // live preview doesn't re-clone the strip on every redraw.

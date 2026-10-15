@@ -960,6 +960,10 @@ pub struct ScrollSession {
     /// drained into the stitch task, so the window reads this while
     /// "Stitching…").
     pub stitch_frame_count: usize,
+    /// Strip-px heights of the most recent appended preview slices
+    /// (oldest first, capped at `RECENT_JOINS_MAX`). Each marks a join
+    /// between frames; the window draws a tick at each one.
+    pub recent_join_heights: std::collections::VecDeque<u32>,
 }
 
 impl ScrollSession {
@@ -992,6 +996,7 @@ impl ScrollSession {
             stitched_rows: 0,
             last_frame_rows_scaled: 0,
             stitch_frame_count: 0,
+            recent_join_heights: std::collections::VecDeque::new(),
         }
     }
 }

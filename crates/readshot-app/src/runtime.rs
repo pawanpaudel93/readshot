@@ -79,14 +79,12 @@ const READSHOT_THEME_NAME: &str = "readshot";
 const READSHOT_ACCENT: Color = Color::from_rgb8(20, 184, 166);
 const READSHOT_DANGER: Color = Color::from_rgb8(239, 68, 68);
 
-// Secondary-text roles. Both clear WCAG AA against the app's near-black
+// Secondary-text role. Clears WCAG AA against the app's near-black
 // surfaces; inlined `rgba(1,1,1,α)` text used to drift between eight
 // different alphas, some below readable contrast. Decorative non-text
 // (hairline borders, surface tints, bullets/dividers) is free to sit
 // below these — only readable copy routes through them.
 const TEXT_MUTED: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.55);
-const TEXT_SECONDARY: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.72);
-const TEXT_STRONG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.92);
 
 pub(crate) const LIGHT_THEME_NAME: &str = "readshot-light";
 static READSHOT_DARK: OnceLock<Theme> = OnceLock::new();
@@ -1286,6 +1284,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     last_frame_rows_scaled: 0,
                     stitch_frame_count: 0,
                     cancel_armed_at: None,
+                    recent_join_heights: std::collections::VecDeque::new(),
                 };
                 state.reduce_motion = os_reduce_motion();
                 state.scroll_session = Some(session);
@@ -3144,6 +3143,68 @@ mod tests {
             readshot_core::geom::Rect::from_xywh(0.0, 0.0, 80.0, 120.0).unwrap(),
             1.0,
         )
+    }
+
+    #[test]
+    fn scroll_hud_state_covers_every_phase() {
+        let mut s = test_session();
+        assert_eq!(scroll_hud_state(&s), ScrollHudState::Waiting);
+        s.preview_handle = Some(iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]));
+        assert_eq!(scroll_hud_state(&s), ScrollHudState::Recording);
+        s.cancel_armed_at = Some(std::time::Instant::now());
+        assert_eq!(scroll_hud_state(&s), ScrollHudState::Armed);
+        s.stopping = true;
+        s.stitch_frame_count = SCROLL_MAX_FRAMES;
+        assert_eq!(scroll_hud_state(&s), ScrollHudState::Limit);
+        s.stitch_frame_count = 5;
+        assert_eq!(scroll_hud_state(&s), ScrollHudState::Stitching);
+    }
+
+    #[test]
+    fn accepted_frames_record_join_heights_capped_at_64() {
+        let mut s = test_session();
+        let first = scrolling_texture(80, 120, 0);
+        let rows = preview_rows(&first, None);
+        accept_scroll_frame(&mut s, first, Some(rows), None);
+        // The first frame has nothing above it to join to.
+        assert!(s.recent_join_heights.is_empty());
+        accept_scroll_frame(
+            &mut s,
+            scrolling_texture(80, 120, 14),
+            Some(image::RgbaImage::new(PREVIEW_STRIP_W, 60)),
+            Some(14),
+        );
+        assert_eq!(
+            s.recent_join_heights.iter().copied().collect::<Vec<_>>(),
+            [60]
+        );
+        for _ in 0..80 {
+            accept_scroll_frame(
+                &mut s,
+                scrolling_texture(80, 120, 14),
+                Some(image::RgbaImage::new(PREVIEW_STRIP_W, 7)),
+                Some(14),
+            );
+        }
+        assert_eq!(s.recent_join_heights.len(), 64);
+        assert_eq!(s.recent_join_heights.back(), Some(&7));
+    }
+
+    #[test]
+    fn join_ticks_sit_above_each_newer_slice_scaled_to_the_stage() {
+        // Slices appended oldest→newest: 60 then 40 strip px. From the
+        // bottom, the newest slice (40) ends at the first join, the
+        // older one (60) at the second. Stage twice the strip width.
+        let joins: std::collections::VecDeque<u32> = [60, 40].into_iter().collect();
+        let ticks = join_tick_offsets(&joins, PREVIEW_STRIP_W as f32 * 2.0);
+        assert_eq!(ticks, vec![80.0, 200.0]);
+    }
+
+    #[test]
+    fn scroll_window_footer_goes_compact_below_300px() {
+        assert!(scroll_hud_compact(240.0));
+        assert!(scroll_hud_compact(299.0));
+        assert!(!scroll_hud_compact(SCROLL_WINDOW_W));
     }
 
     #[test]
@@ -6690,18 +6751,6 @@ mod tests {
                 "pulse {a} out of range at t={t}"
             );
         }
-    }
-
-    #[test]
-    fn hud_frame_pop_frozen_under_reduce_motion() {
-        // Reduce-motion: never active, zero ease, even mid-pop.
-        assert_eq!(hud_frame_pop(0.1, true), (false, 0.0));
-        assert_eq!(hud_frame_pop(0.5, true), (false, 0.0));
-        // Motion allowed: active only inside the 0..1 window.
-        let (active, eased) = hud_frame_pop(0.15, false);
-        assert!(active && eased > 0.0);
-        assert_eq!(hud_frame_pop(1.0, false), (false, 0.0));
-        assert_eq!(hud_frame_pop(2.0, false), (false, 0.0));
     }
 
     #[test]

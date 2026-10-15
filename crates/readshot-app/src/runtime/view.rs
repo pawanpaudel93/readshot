@@ -25,7 +25,6 @@ const TEXT_BODY_SM: f32 = TYPE_BODY; // default labels, most buttons, list text
 const TEXT_BODY: f32 = TYPE_BODY; // emphasised body, primary CTAs, HUD title
 const TEXT_TITLE: f32 = TYPE_HEADING; // card & section titles (absorbs old 16/17)
 const TEXT_HEADING: f32 = TYPE_TITLE; // large chrome glyph (pin close ×)
-const TEXT_DISPLAY: f32 = TYPE_DISPLAY; // HUD frame counter (mono)
 const TEXT_SCREEN_TITLE: f32 = TYPE_TITLE; // Settings / CLI screen headers
 
 /// Transparent click-through overlay that draws the captured rect's
@@ -167,335 +166,615 @@ pub(crate) fn hud_recording_pulse(elapsed_secs: f32, reduce_motion: bool) -> f32
     0.9 + 0.1 * (0.5 + 0.5 * t.sin())
 }
 
-/// Frame-arrival "pop" easing for the HUD frame counter: a quick rise
-/// (0.0–0.3) then slow decay (0.3–1.0) over ~220 ms, reading as a
-/// "thunk" rather than a fade. Returns `(active, eased)`. Under
-/// reduce-motion it never activates, so the counter stays white and the
-/// capacity tail keeps its base alpha.
-pub(crate) fn hud_frame_pop(pop_t: f32, reduce_motion: bool) -> (bool, f32) {
-    if reduce_motion || pop_t >= 1.0 {
-        return (false, 0.0);
-    }
-    let eased = if pop_t < 0.3 {
-        pop_t / 0.3
-    } else {
-        1.0 - (pop_t - 0.3) / 0.7
-    };
-    (true, eased)
+/// What the scroll window shows right now. One window, every state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScrollHudState {
+    /// No frame yet: "Scroll the page to start".
+    Waiting,
+    /// Frames arriving; the stitched preview grows from the bottom.
+    Recording,
+    /// Cancel pressed once with frames to lose: Discard / Keep Going.
+    Armed,
+    /// Stopped at `SCROLL_MAX_FRAMES` and stitching (amber).
+    Limit,
+    /// Stopped by the user and stitching.
+    Stitching,
 }
 
-/// Preview height for the legacy HUD view; Task 12c rewrites the view.
-const SCROLL_HUD_PREVIEW_HEIGHT: f32 = 170.0;
+pub(crate) fn scroll_hud_state(s: &crate::app::ScrollSession) -> ScrollHudState {
+    if s.stopping {
+        if s.stitch_frame_count >= SCROLL_MAX_FRAMES {
+            ScrollHudState::Limit
+        } else {
+            ScrollHudState::Stitching
+        }
+    } else if cancel_armed(s) {
+        ScrollHudState::Armed
+    } else if s.preview_handle.is_none() {
+        ScrollHudState::Waiting
+    } else {
+        ScrollHudState::Recording
+    }
+}
 
-/// Floating HUD showing the live state of a scrolling-capture session.
-/// Renders a live preview of the most recently captured frame so the
-/// user can see what's actually being captured, a frame counter with
-/// capacity progress bar, the current activity status, and the
-/// Stop / Cancel buttons.
-pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
-    use iced::widget::mouse_area;
-    let session = state.scroll_session.as_ref();
-    let stopping = session.map(|s| s.stopping).unwrap_or(false);
-    // `frames` is drained into the stitch task at stop time; the
-    // stitch count keeps the window's number honest while stitching.
-    let frame_count = session
-        .map(|s| {
-            if s.stopping {
-                s.stitch_frame_count
-            } else {
-                s.frames.len()
+/// Window width below which the scroll window drops the header's
+/// elapsed time, puts the output size on its own footer line, and uses
+/// short button labels. 12a can shrink the window to 240 wide.
+const SCROLL_HUD_COMPACT_BELOW: f32 = 300.0;
+
+pub(crate) fn scroll_hud_compact(window_w: f32) -> bool {
+    window_w < SCROLL_HUD_COMPACT_BELOW
+}
+
+/// Distances (stage px, measured up from the bottom of the strip) of the
+/// joins between recent preview slices. `joins` is oldest-first in strip
+/// px; the newest slice sits at the bottom, so the first tick is its
+/// height, the next adds the slice above it, and so on.
+pub(crate) fn join_tick_offsets(joins: &std::collections::VecDeque<u32>, stage_w: f32) -> Vec<f32> {
+    let k = stage_w / PREVIEW_STRIP_W as f32;
+    let mut acc = 0.0;
+    joins
+        .iter()
+        .rev()
+        .map(|h| {
+            acc += *h as f32 * k;
+            acc
+        })
+        .collect()
+}
+
+/// Stage background behind the preview (spec mockup `#0C0C0D`).
+const SCROLL_STAGE_BG: Color = Color::from_rgb(12.0 / 255.0, 12.0 / 255.0, 13.0 / 255.0);
+
+/// Canvas layer over the live strip: the teal "on screen now" outline
+/// around the newest frame, and small ticks at the left edge where
+/// frames were joined. Coordinates are bottom-relative.
+#[derive(Debug)]
+struct StageMarks {
+    /// Height of the newest frame in stage px (0 = no outline).
+    outline_h: f32,
+    /// Join distances up from the bottom, in stage px.
+    ticks: Vec<f32>,
+}
+
+impl<Message> iced::widget::canvas::Program<Message> for StageMarks {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<iced::widget::canvas::Geometry> {
+        use iced::widget::canvas::{Frame, Path, Stroke};
+        use iced::{Point, Size};
+        let mut frame = Frame::new(renderer, bounds.size());
+        let (w, h) = (bounds.width, bounds.height);
+        // Ticks: a dark and a light hairline so they read on any page.
+        for &dy in &self.ticks {
+            let y = (h - dy).round();
+            if y < 0.0 {
+                break;
             }
-        })
-        .unwrap_or(0);
-    let elapsed_secs = session
-        .map(|s| s.started_at.elapsed().as_secs_f32())
-        .unwrap_or(0.0);
-    // Frame-arrival pop: tracks elapsed-since-last-frame and uses it
-    // to drive a brief tint + grow on the counter. 220 ms gives the
-    // pulse enough room to read as a deliberate animation without
-    // feeling sluggish.
-    // Frame-arrival pop + recording heartbeat. Both freeze under OS
-    // reduce-motion (see `hud_frame_pop` / `hud_recording_pulse`): the
-    // counter stops popping and the chip holds full alpha, while the
-    // static "● Recording" label and counter stay put.
-    let pop_t = session
-        .and_then(|s| s.last_frame_at)
-        .map(|t| (t.elapsed().as_millis() as f32) / 220.0)
-        .unwrap_or(2.0);
-    let (pop_active, pop_eased) = hud_frame_pop(pop_t, state.reduce_motion);
-    let pulse = if !stopping {
-        hud_recording_pulse(elapsed_secs, state.reduce_motion)
-    } else {
-        0.55
-    };
-    // Throughput indicator — frames per second over the whole
-    // session. Useful diagnostic for the user wondering whether
-    // they're scrolling fast enough or too fast.
-    let fps = if elapsed_secs > 0.5 {
-        frame_count as f32 / elapsed_secs
-    } else {
-        0.0
-    };
-    let cap = SCROLL_MAX_FRAMES;
-    let progress = (frame_count as f32 / cap as f32).clamp(0.0, 1.0);
+            for (off, color) in [
+                (0.0, Color::from_rgba(0.0, 0.0, 0.0, 0.55)),
+                (1.0, Color::from_rgba(1.0, 1.0, 1.0, 0.6)),
+            ] {
+                frame.stroke(
+                    &Path::line(
+                        Point::new(0.0, y + off - 0.5),
+                        Point::new(6.0, y + off - 0.5),
+                    ),
+                    Stroke::default().with_color(color).with_width(1.0),
+                );
+            }
+        }
+        if self.outline_h > 0.0 {
+            let oh = self.outline_h.min(h);
+            let inset = 1.0;
+            frame.stroke(
+                &Path::rounded_rectangle(
+                    Point::new(inset, h - oh + inset),
+                    Size::new((w - 2.0 * inset).max(0.0), (oh - 2.0 * inset).max(0.0)),
+                    8.0.into(),
+                ),
+                Stroke::default().with_color(DARK.acc).with_width(1.5),
+            );
+        }
+        vec![frame.into_geometry()]
+    }
+}
 
-    // Header — title + recording / stitching chip with heartbeat.
-    let (chip_label, chip_base): (&'static str, Color) = if stopping {
-        ("Stitching", Color::from_rgba(1.0, 1.0, 1.0, 0.55))
-    } else {
-        ("● Recording", Color::from_rgba(0.95, 0.4, 0.4, pulse))
-    };
-    let chip_color = chip_base;
-    let elapsed_label = format!(
-        "{:02}:{:02}",
-        (elapsed_secs as u32) / 60,
-        (elapsed_secs as u32) % 60
-    );
-    // Whole header doubles as the drag handle. iced delegates to the
-    // OS window drag on press so the user can reposition the HUD
-    // without it stealing focus from the page they're scrolling.
-    let header_row = row![
-        text("Scrolling Capture").size(TEXT_BODY).color(TEXT_STRONG),
-        Space::new().width(Length::Fill),
-        text(elapsed_label)
-            .size(TEXT_CAPTION)
-            .font(mono_font())
-            .color(TEXT_MUTED),
-        Space::new().width(Length::Fixed(8.0)),
-        text(chip_label).size(TEXT_CAPTION).color(chip_color),
-    ]
-    .align_y(Alignment::Center);
-    let header = mouse_area(header_row)
-        .on_press(Message::ScrollHudDragRequested)
-        .interaction(iced::mouse::Interaction::Grab);
-
-    // Live preview of the most recent accepted frame so the user can
-    // confirm what's in the capture region while they scroll. Letter-
-    // boxed inside a fixed-size bay so HUD layout stays stable across
-    // very tall / very wide rects.
-    let preview: Element<'_, Message> = match session.and_then(|s| s.preview_handle.clone()) {
-        Some(handle) => container(
-            iced::widget::image(handle)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .content_fit(iced::ContentFit::Contain),
+/// The live stitched strip at full stage width, bottom-anchored so the
+/// newest rows stay in view, with the outline/tick layer on top.
+fn scroll_live_stage<'a>(
+    handle: iced::widget::image::Handle,
+    strip_h: u32,
+    last_frame_rows_scaled: u32,
+    joins: std::collections::VecDeque<u32>,
+) -> Element<'a, Message> {
+    use iced::widget::scrollable::{Direction, Scrollbar};
+    responsive(move |size| {
+        let stage_w = size.width.max(1.0);
+        let k = stage_w / PREVIEW_STRIP_W as f32;
+        let img_h = (strip_h as f32 * k).max(1.0);
+        // Short strips sit at the bottom of the stage, like the mockup.
+        let content_h = img_h.max(size.height);
+        let image_layer = container(
+            iced::widget::image(handle.clone())
+                .width(Length::Fixed(stage_w))
+                .height(Length::Fixed(img_h))
+                .content_fit(iced::ContentFit::Fill),
         )
-        .width(Length::Fill)
-        .height(Length::Fixed(SCROLL_HUD_PREVIEW_HEIGHT))
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .style(|_| iced::widget::container::Style {
-            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.4).into()),
-            border: iced::Border {
-                color: accent(0.55),
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..Default::default()
+        .width(Length::Fixed(stage_w))
+        .height(Length::Fixed(content_h))
+        .align_y(iced::alignment::Vertical::Bottom);
+        let marks = iced::widget::Canvas::new(StageMarks {
+            outline_h: last_frame_rows_scaled as f32 * k,
+            ticks: join_tick_offsets(&joins, stage_w),
         })
-        .into(),
-        None => container(
-            text("Waiting for first frame…")
-                .size(TEXT_CAPTION)
-                .color(TEXT_MUTED),
-        )
-        .width(Length::Fill)
-        .height(Length::Fixed(SCROLL_HUD_PREVIEW_HEIGHT))
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .style(|_| iced::widget::container::Style {
-            background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.04).into()),
-            border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
-                width: 1.0,
-                radius: 6.0.into(),
-            },
-            ..Default::default()
-        })
-        .into(),
-    };
+        .width(Length::Fixed(stage_w))
+        .height(Length::Fixed(content_h));
+        scrollable(iced::widget::stack![image_layer, marks])
+            .anchor_bottom()
+            .direction(Direction::Vertical(
+                Scrollbar::new().width(0).scroller_width(0),
+            ))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    })
+    .into()
+}
 
-    // Frame counter — big number plus capacity tail. The number tints
-    // toward the teal accent for ~220 ms each time a new frame lands so
-    // the user gets a clear "scroll registered" pulse without staring at
-    // the digits.
-    let counter_color = if pop_active {
-        // Lerp white → accent by the eased pop amount.
-        let a = READSHOT_ACCENT;
-        let r = 1.0 - (1.0 - a.r) * pop_eased;
-        let g = 1.0 - (1.0 - a.g) * pop_eased;
-        let b = 1.0 - (1.0 - a.b) * pop_eased;
-        Color::from_rgba(r, g, b, 1.0)
-    } else {
-        Color::WHITE
-    };
-    let tail_alpha = 0.55 + 0.25 * pop_eased;
-    // Fixed font size — the previous `22 + 6 * pop_eased` grow
-    // animation expanded the counter row and pushed everything below
-    // it in the column, which iced compensated for by shrinking the
-    // Length::Fixed preview. Net effect: thumbnail wobbled in size
-    // every frame. Keep the text size stable and let the color flash
-    // do the "scroll registered" pulse on its own.
-    let counter_row = container(
-        row![
-            text(format!("{frame_count}"))
-                .size(TEXT_DISPLAY)
-                .font(mono_font())
-                .color(counter_color),
-            text(format!("/ {cap} frames"))
-                .size(TEXT_CAPTION)
-                .color(Color::from_rgba(1.0, 1.0, 1.0, tail_alpha)),
-            Space::new().width(Length::Fill),
-            text(if fps > 0.0 {
-                format!("{fps:.1} fps")
-            } else {
-                String::new()
-            })
-            .size(TEXT_CAPTION)
-            .font(mono_font())
-            .color(TEXT_MUTED),
-        ]
-        .spacing(6)
-        .align_y(Alignment::End),
+/// Stitching / limit: the whole page zoomed to fit, dimmed, with a
+/// static "Joining N frames" pill (no spinner animation, so nothing to
+/// freeze under Reduce Motion).
+fn scroll_stitching_stage<'a>(
+    handle: Option<iced::widget::image::Handle>,
+    frame_count: usize,
+) -> Element<'a, Message> {
+    let ring = container(
+        Space::new()
+            .width(Length::Fixed(14.0))
+            .height(Length::Fixed(14.0)),
     )
-    // Pin the row to a fixed height so even if a future change adds
-    // a transient grow animation back, the surrounding column won't
-    // reflow and squeeze the preview.
-    .height(Length::Fixed(32.0))
-    .width(Length::Fill);
+    .style(|_| container::Style {
+        border: iced::Border {
+            color: DARK.acc,
+            width: 2.0,
+            radius: 7.0.into(),
+        },
+        ..Default::default()
+    });
+    let pill = container(
+        row![
+            ring,
+            text(format!("Joining {frame_count} frames"))
+                .size(TYPE_BODY)
+                .color(DARK.t1)
+                .wrapping(iced::widget::text::Wrapping::None),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
+    )
+    .padding([9, 14])
+    .style(|_| container::Style {
+        background: Some(Color::from_rgba(28.0 / 255.0, 28.0 / 255.0, 30.0 / 255.0, 0.95).into()),
+        border: iced::Border {
+            color: DARK.border,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    });
+    let veil = container(pill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(
+                Color {
+                    a: 0.35,
+                    ..SCROLL_STAGE_BG
+                }
+                .into(),
+            ),
+            ..Default::default()
+        });
+    match handle {
+        Some(h) => iced::widget::stack![
+            container(
+                iced::widget::image(h)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .content_fit(iced::ContentFit::Contain),
+            )
+            .padding(14)
+            .width(Length::Fill)
+            .height(Length::Fill),
+            veil,
+        ]
+        .into(),
+        None => veil.into(),
+    }
+}
 
-    // Slim capacity bar — uses the same blue accent as the history
-    // selected row so the chrome reads as part of the same app.
-    let bar_w_max = SCROLL_WINDOW_W - 28.0;
-    let filled_w = (bar_w_max * progress).max(2.0).min(bar_w_max);
-    let bar = container(
+/// A full-height footer button that takes `portion` of the row and never
+/// wraps its label.
+fn scroll_hud_button<'a>(
+    label: String,
+    kind: ButtonKind,
+    msg: Option<Message>,
+    chip: Option<&'static str>,
+    portion: u16,
+) -> Element<'a, Message> {
+    let mut content = row![text(label)
+        .size(ButtonSize::Lg.text_size())
+        .font(if kind == ButtonKind::Primary {
+            semibold()
+        } else {
+            iced::Font::DEFAULT
+        })
+        .wrapping(iced::widget::text::Wrapping::None)]
+    .spacing(SP2)
+    .align_y(Alignment::Center);
+    if let Some(k) = chip {
+        content = content.push(key_chip_on_primary(k));
+    }
+    bar_button(
+        container(content).center_x(Length::Fill).into(),
+        kind,
+        ButtonSize::Lg,
+        msg,
+    )
+    .width(Length::FillPortion(portion))
+    .into()
+}
+
+/// The scrolling-capture window (dark only; colors from `DARK`). The
+/// image is the largest thing in every state: the stitched page grows
+/// from the bottom while recording, and is zoomed to fit while
+/// stitching. Lays out at any size 12a can pick, 240×320 to 360×540 —
+/// nothing here is sized from `SCROLL_WINDOW_W/H`.
+pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
+    responsive(move |size| scroll_hud_body(state, size.width)).into()
+}
+
+fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
+    use iced::widget::mouse_area;
+    use iced::widget::tooltip::Position;
+    let Some(session) = state.scroll_session.as_ref() else {
+        return container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    };
+    let compact = scroll_hud_compact(window_w);
+    let hud = scroll_hud_state(session);
+    let stopping = session.stopping;
+    // `frames` is drained into the stitch task at stop time; the stitch
+    // count keeps the window's number honest while stitching.
+    let frame_count = if stopping {
+        session.stitch_frame_count
+    } else {
+        session.frames.len()
+    };
+    let elapsed_secs = session.started_at.elapsed().as_secs_f32();
+
+    // ---- Header: dot, title, elapsed, close. Doubles as drag handle.
+    let dot_base = match hud {
+        ScrollHudState::Recording | ScrollHudState::Armed => DARK.acc,
+        ScrollHudState::Waiting | ScrollHudState::Stitching => DARK.t3,
+        ScrollHudState::Limit => DARK.warn,
+    };
+    let dot_color = match hud {
+        ScrollHudState::Recording | ScrollHudState::Armed => Color {
+            a: hud_recording_pulse(elapsed_secs, state.reduce_motion),
+            ..dot_base
+        },
+        _ => dot_base,
+    };
+    let dot = container(
         container(
             Space::new()
-                .width(Length::Fixed(filled_w))
-                .height(Length::Fixed(4.0)),
+                .width(Length::Fixed(8.0))
+                .height(Length::Fixed(8.0)),
         )
-        .style(|_| iced::widget::container::Style {
-            background: Some(accent(0.85).into()),
+        .style(move |_| container::Style {
+            background: Some(dot_color.into()),
             border: iced::Border {
-                radius: 2.0.into(),
+                radius: 4.0.into(),
                 ..Default::default()
             },
             ..Default::default()
         }),
     )
-    .width(Length::Fixed(bar_w_max))
-    .height(Length::Fixed(4.0))
-    .style(|_| iced::widget::container::Style {
-        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.08).into()),
+    .center_x(Length::Fixed(16.0))
+    .center_y(Length::Fixed(16.0))
+    .style(move |_| container::Style {
+        background: Some(
+            Color {
+                a: 0.15,
+                ..dot_base
+            }
+            .into(),
+        ),
         border: iced::Border {
-            radius: 2.0.into(),
+            radius: 8.0.into(),
             ..Default::default()
         },
         ..Default::default()
     });
-
-    // Status line — what the user should be doing right now.
-    let status_text = if stopping {
-        "Stitching frames into one tall image…".to_string()
+    let title = if stopping {
+        "Stitching…"
     } else {
-        "Scroll the page underneath. Click Stop & Stitch (or Esc) when done.".to_string()
+        "Scrolling Capture"
     };
-    let status = text(status_text)
-        .size(TEXT_CAPTION)
-        .color(TEXT_SECONDARY)
-        .wrapping(iced::widget::text::Wrapping::Word);
-
-    // Buttons — Stop (primary) + Cancel (discards session).
-    let stop_btn: Element<'_, Message> = if stopping {
-        button(text("Stitching…").size(TEXT_CAPTION))
-            .padding([6, 12])
-            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-            .into()
-    } else {
-        button(text("Stop & Stitch").size(TEXT_CAPTION))
-            .padding([6, 12])
-            .style(|t, s| action_button_style(t, s, ActionKind::Primary))
-            .on_press(Message::ScrollCaptureStopRequested)
-            .into()
-    };
-    // Cancel button flips to a Danger-styled "Discard N Frames" the
-    // moment the user clicks it once on a session with content, so
-    // the second click reads as an explicit destructive confirm
-    // rather than a benign close.
-    let armed = session.is_some_and(cancel_armed);
-    let cancel_btn: Element<'_, Message> = if stopping {
-        Space::new().width(Length::Fixed(0.0)).into()
-    } else if armed {
-        button(
-            text(format!(
-                "Discard {} Frame{}",
-                frame_count,
-                if frame_count == 1 { "" } else { "s" }
-            ))
-            .size(TEXT_CAPTION),
-        )
-        .padding([6, 12])
-        .style(|t, s| action_button_style(t, s, ActionKind::Danger))
-        .on_press(Message::ScrollCaptureCancelRequested)
-        .into()
-    } else {
-        button(text("Cancel").size(TEXT_CAPTION))
-            .padding([6, 12])
-            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-            .on_press(Message::ScrollCaptureCancelRequested)
-            .into()
-    };
-    // Name the keyboard affordance on the Cancel button (Esc already
-    // stops & stitches; Shift+Esc or ⌘. discards). Skipped while
-    // stitching, when the slot is a zero-width spacer.
-    let cancel_btn: Element<'_, Message> = if stopping {
-        cancel_btn
-    } else {
-        key_tooltip(
-            cancel_btn,
-            "Discard session  (⇧Esc or ⌘.)",
-            iced::widget::tooltip::Position::Top,
-        )
-    };
-    let actions = row![stop_btn, cancel_btn]
-        .spacing(8)
-        .align_y(Alignment::Center);
-
-    let body = column![
-        header,
-        preview,
-        counter_row,
-        bar,
-        Space::new().height(Length::Fixed(2.0)),
-        status,
-        Space::new().height(Length::Fixed(4.0)),
-        actions,
+    let mut header_row = row![
+        dot,
+        text(title)
+            .size(TYPE_BODY)
+            .font(semibold())
+            .color(DARK.t1)
+            .wrapping(iced::widget::text::Wrapping::None),
     ]
-    .spacing(7)
-    .align_x(Alignment::Start);
-    // The HUD window is fixed-size (360×540, see `SCROLL_WINDOW_W/H`) and non-resizable, so a wrapped
-    // status line (or any future row) could push Stop/Cancel past the
-    // bottom edge and out of reach. Wrap the body in a vertical
-    // scrollable (overlay scrollbar, no `spacing`) so it only appears on
-    // overflow — at the default one-frame state everything still fits
-    // and the HUD looks unchanged.
+    .spacing(10)
+    .align_y(Alignment::Center);
+    let show_elapsed = !compact
+        && matches!(
+            hud,
+            ScrollHudState::Recording | ScrollHudState::Armed | ScrollHudState::Limit
+        );
+    if show_elapsed {
+        let secs = elapsed_secs as u32;
+        header_row = header_row.push(
+            text(format!("{:02}:{:02}", secs / 60, secs % 60))
+                .size(TYPE_CAPTION)
+                .font(mono_font())
+                .color(DARK.t3),
+        );
+    }
+    header_row = header_row
+        .push(Space::new().width(Length::Fill))
+        .push(icon_button(
+            crate::icons::AppIcon::Close,
+            DARK.t2,
+            "Cancel",
+            Some("⇧esc"),
+            (!stopping).then_some(Message::ScrollCaptureCancelRequested),
+            false,
+            ICON_BTN,
+            Position::Bottom,
+        ));
+    let header = mouse_area(
+        container(header_row)
+            .padding(iced::Padding {
+                top: 0.0,
+                right: 10.0,
+                bottom: 0.0,
+                left: 16.0,
+            })
+            .width(Length::Fill)
+            .height(Length::Fixed(48.0))
+            .center_y(Length::Fixed(48.0)),
+    )
+    .on_press(Message::ScrollHudDragRequested)
+    .interaction(iced::mouse::Interaction::Grab);
+
+    // ---- Stage: the image.
+    let stage_content: Element<'_, Message> = match (hud, session.preview_handle.clone()) {
+        (ScrollHudState::Stitching | ScrollHudState::Limit, handle) => {
+            scroll_stitching_stage(handle, frame_count)
+        }
+        (ScrollHudState::Recording | ScrollHudState::Armed, Some(handle)) => scroll_live_stage(
+            handle,
+            session.preview_strip.as_ref().map_or(0, |s| s.height()),
+            session.last_frame_rows_scaled,
+            session.recent_join_heights.clone(),
+        ),
+        _ => container(empty_state(
+            crate::icons::AppIcon::Scroll,
+            &DARK,
+            "Scroll the page to start",
+            "Each new part of the page appears here, joined to the last.",
+            None,
+        ))
+        .padding(16)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into(),
+    };
+    let stage = container(
+        container(stage_content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .clip(true)
+            .style(|_| container::Style {
+                background: Some(SCROLL_STAGE_BG.into()),
+                border: iced::Border {
+                    color: DARK.border_subtle,
+                    width: 1.0,
+                    radius: 10.0.into(),
+                },
+                ..Default::default()
+            }),
+    )
+    .padding([0, 10])
+    .width(Length::Fill)
+    .height(Length::Fill);
+
+    // ---- Footer: count, output size, limit bar, buttons.
+    let limit = hud == ScrollHudState::Limit;
+    let count = text(frame_count.to_string())
+        .size(TYPE_DISPLAY)
+        .font(iced::Font {
+            weight: iced::font::Weight::Semibold,
+            ..mono_font()
+        })
+        .color(if frame_count == 0 { DARK.t3 } else { DARK.t1 });
+    let label = text(if limit {
+        "frames · limit reached"
+    } else {
+        "frames"
+    })
+    .size(TYPE_BODY)
+    .color(DARK.t3)
+    .wrapping(iced::widget::text::Wrapping::None);
+    let count_row = row![count, label].spacing(SP2).align_y(Alignment::End);
+    let dims = (session.stitched_rows > 0).then(|| {
+        text(format!(
+            "{} × {} px",
+            (session.rect.width() * session.scale).round() as u32,
+            session.stitched_rows
+        ))
+        .size(TYPE_CAPTION)
+        .font(mono_font())
+        .color(DARK.t3)
+        .wrapping(iced::widget::text::Wrapping::None)
+    });
+    let stats: Element<'_, Message> = match dims {
+        Some(d) if compact => column![count_row, d].spacing(2).into(),
+        Some(d) => row![count_row, Space::new().width(Length::Fill), d]
+            .align_y(Alignment::End)
+            .into(),
+        None => count_row.into(),
+    };
+
+    let progress = (frame_count as f32 / SCROLL_MAX_FRAMES as f32).clamp(0.0, 1.0);
+    let filled = (progress * 1000.0).round() as u16;
+    let bar_color = if limit { DARK.warn } else { DARK.acc };
+    let mut bar_row = row![].width(Length::Fill).height(Length::Fixed(3.0));
+    if filled > 0 {
+        bar_row = bar_row.push(
+            container(Space::new().height(Length::Fixed(3.0)))
+                .width(Length::FillPortion(filled))
+                .style(move |_| container::Style {
+                    background: Some(bar_color.into()),
+                    border: iced::Border {
+                        radius: 2.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+        );
+    }
+    if filled < 1000 {
+        bar_row = bar_row.push(Space::new().width(Length::FillPortion(1000 - filled)));
+    }
+    let bar = container(bar_row)
+        .width(Length::Fill)
+        .height(Length::Fixed(3.0))
+        .style(|_| container::Style {
+            background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.08).into()),
+            border: iced::Border {
+                radius: 2.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+    let plural = if frame_count == 1 { "" } else { "s" };
+    let mut footer = column![
+        stats,
+        Space::new().height(Length::Fixed(10.0)),
+        bar,
+        Space::new().height(Length::Fixed(12.0)),
+    ]
+    .width(Length::Fill);
+    let buttons: Element<'_, Message> = match hud {
+        ScrollHudState::Armed => {
+            footer = footer.push(
+                text(format!(
+                    "Press again within {:.1} s to discard {frame_count} frame{plural}.",
+                    CANCEL_ARM_WINDOW.as_secs_f32()
+                ))
+                .size(TYPE_CAPTION)
+                .color(DARK.danger)
+                .wrapping(iced::widget::text::Wrapping::Word),
+            );
+            footer = footer.push(Space::new().height(Length::Fixed(10.0)));
+            row![
+                scroll_hud_button(
+                    if compact {
+                        "Discard".to_string()
+                    } else {
+                        format!("Discard {frame_count} Frame{plural}")
+                    },
+                    ButtonKind::DangerSolid,
+                    Some(Message::ScrollCaptureCancelRequested),
+                    None,
+                    1,
+                ),
+                scroll_hud_button(
+                    "Keep Going".to_string(),
+                    ButtonKind::Primary,
+                    Some(Message::ScrollCaptureKeepGoing),
+                    None,
+                    1,
+                ),
+            ]
+            .spacing(SP2)
+            .into()
+        }
+        ScrollHudState::Stitching | ScrollHudState::Limit => row![
+            scroll_hud_button("Cancel".to_string(), ButtonKind::Secondary, None, None, 2),
+            scroll_hud_button("Stitching…".to_string(), ButtonKind::Primary, None, None, 3),
+        ]
+        .spacing(SP2)
+        .into(),
+        ScrollHudState::Waiting | ScrollHudState::Recording => {
+            let waiting = hud == ScrollHudState::Waiting;
+            row![
+                tooltip_with_key(
+                    scroll_hud_button(
+                        "Cancel".to_string(),
+                        ButtonKind::Secondary,
+                        Some(Message::ScrollCaptureCancelRequested),
+                        None,
+                        2,
+                    ),
+                    "Cancel and discard",
+                    Some("⇧esc"),
+                    Position::Top,
+                ),
+                scroll_hud_button(
+                    "Stop & Stitch".to_string(),
+                    ButtonKind::Primary,
+                    (!waiting).then_some(Message::ScrollCaptureStopRequested),
+                    // The chip needs room; at the narrowest sizes the
+                    // label alone fits (Esc is still named in tooltips).
+                    (!compact).then_some("esc"),
+                    3,
+                ),
+            ]
+            .spacing(SP2)
+            .into()
+        }
+    };
+    let footer = container(footer.push(buttons))
+        .padding(iced::Padding {
+            top: 12.0,
+            right: 14.0,
+            bottom: 14.0,
+            left: 14.0,
+        })
+        .width(Length::Fill);
+
     container(
-        scrollable(body)
-            .direction(iced::widget::scrollable::Direction::Vertical(
-                slim_scrollbar(),
-            ))
+        column![header, stage, footer]
             .width(Length::Fill)
             .height(Length::Fill),
     )
-    .padding(14)
     .width(Length::Fill)
     .height(Length::Fill)
-    .style(|_| iced::widget::container::Style {
-        background: Some(Color::from_rgba(0.05, 0.06, 0.06, 0.96).into()),
+    .style(|_| container::Style {
+        background: Some(DARK.float.into()),
         border: iced::Border {
-            color: accent(0.28),
+            color: DARK.float_border,
             width: 1.0,
-            radius: 8.0.into(),
+            radius: R_WINDOW.into(),
         },
         ..Default::default()
     })
