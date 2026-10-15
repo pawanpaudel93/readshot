@@ -78,13 +78,6 @@ static LAUNCHED_AT_LOGIN: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 const READSHOT_THEME_NAME: &str = "readshot";
 const READSHOT_ACCENT: Color = Color::from_rgb8(20, 184, 166);
 
-// Secondary-text role. Clears WCAG AA against the app's near-black
-// surfaces; inlined `rgba(1,1,1,α)` text used to drift between eight
-// different alphas, some below readable contrast. Decorative non-text
-// (hairline borders, surface tints, bullets/dividers) is free to sit
-// below these — only readable copy routes through them.
-const TEXT_MUTED: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.55);
-
 pub(crate) const LIGHT_THEME_NAME: &str = "readshot-light";
 static READSHOT_DARK: OnceLock<Theme> = OnceLock::new();
 static READSHOT_LIGHT: OnceLock<Theme> = OnceLock::new();
@@ -503,7 +496,7 @@ pub fn style(_state: &App, theme: &Theme) -> iced::theme::Style {
     if theme.name() == OVERLAY_THEME_NAME {
         iced::theme::Style {
             background_color: Color::TRANSPARENT,
-            text_color: Color::WHITE,
+            text_color: DARK.t1,
         }
     } else {
         theme.base()

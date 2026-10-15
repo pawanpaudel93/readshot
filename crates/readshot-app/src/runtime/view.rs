@@ -18,13 +18,9 @@ use crate::welcome::WelcomeState;
 // Type scale. One ramp so font sizes read as roles instead of scattered
 // magic numbers (the view used twelve distinct literals). 12 is the
 // floor for readable text (the shared kit's Xs buttons use TYPE_MICRO).
-// The three display steps (counter / screen title / hero) are
-// deliberate and kept.
 const TEXT_CAPTION: f32 = TYPE_CAPTION; // captions, hints, tooltips, HUD readouts
 const TEXT_BODY_SM: f32 = TYPE_BODY; // default labels, most buttons, list text
 const TEXT_BODY: f32 = TYPE_BODY; // emphasised body, primary CTAs, HUD title
-const TEXT_TITLE: f32 = TYPE_HEADING; // card & section titles (absorbs old 16/17)
-const TEXT_SCREEN_TITLE: f32 = TYPE_TITLE; // Settings / CLI screen headers
 
 /// Transparent click-through overlay that draws the captured rect's
 /// border on screen during a scrolling-capture session.
@@ -756,90 +752,141 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
     .into()
 }
 
-/// A dark rounded code panel for a command block: matches the editor
-/// stage background with a subtle 1px border and radius-6 corners, and
-/// renders its contents in the bundled monospace family.
+/// A command block: monospace text on the `raised` surface, radius 8,
+/// with a hairline border so it reads on white cards in light mode too.
 fn cli_code_panel<'a>(commands: impl Into<String>) -> Element<'a, Message> {
-    container(text(commands.into()).size(TEXT_BODY_SM).font(mono_font()))
-        .padding(12)
-        .width(Length::Fill)
-        .style(|_: &Theme| container::Style {
-            background: Some(Color::from_rgb8(16, 20, 20).into()),
+    container(
+        text(commands.into())
+            .size(TYPE_CAPTION)
+            .font(mono_font())
+            .style(text_t1),
+    )
+    .padding([10, 12])
+    .width(Length::Fill)
+    .style(|theme: &Theme| {
+        let p = palette_for(theme);
+        container::Style {
+            background: Some(p.raised.into()),
             border: iced::Border {
-                color: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
+                color: p.border_subtle,
                 width: 1.0,
-                radius: 6.0.into(),
+                radius: R_BUTTON.into(),
             },
             ..Default::default()
-        })
+        }
+    })
+    .into()
+}
+
+/// One CLI Tools card: a heading (with an optional copy button on the
+/// right) above its command block.
+fn cli_card<'a>(
+    heading: String,
+    copy: Option<(String, Message)>,
+    commands: impl Into<String>,
+) -> Element<'a, Message> {
+    let mut head = row![text(heading)
+        .size(TYPE_BODY)
+        .font(semibold())
+        .style(text_t1)
+        .width(Length::Fill)]
+    .spacing(SP3)
+    .align_y(Alignment::Center);
+    if let Some((label, msg)) = copy {
+        head = head.push(bar_button(
+            text(label).size(ButtonSize::Sm.text_size()).into(),
+            ButtonKind::Secondary,
+            ButtonSize::Sm,
+            Some(msg),
+        ));
+    }
+    container(column![head, cli_code_panel(commands)].spacing(SP2))
+        .padding([12, 14])
+        .width(Length::Fill)
+        .style(group_style)
         .into()
 }
 
 pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
-    let common = crate::cli_tools::common_commands();
-    let verify = crate::cli_tools::verify_commands();
+    use iced::widget::{mouse_area, stack};
+
     let status = state.cli_tools_status.as_deref().unwrap_or("");
 
-    let shell_sections =
-        crate::cli_tools::Shell::ALL
-            .into_iter()
-            .fold(column![].spacing(12), |sections, shell| {
-                sections.push(
-                    container(
-                        column![
-                            row![
-                                text(format!("For {}", shell.label())).size(TEXT_TITLE),
-                                Space::new().width(Length::Fill),
-                                button(
-                                    text(format!("Copy {} Commands", shell.label()))
-                                        .size(TEXT_BODY_SM)
-                                )
-                                .padding([6, 12])
-                                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                                .on_press(Message::CliToolsCopyRequested(shell)),
-                            ]
-                            .spacing(12)
-                            .align_y(Alignment::Center),
-                            cli_code_panel(crate::cli_tools::shell_commands(shell)),
-                        ]
-                        .spacing(8),
-                    )
-                    .padding(10)
-                    .width(Length::Fill),
-                )
-            });
-
-    container(
-        column![
-            text("Command Line Tools").size(TEXT_SCREEN_TITLE),
-            text("Choose your shell and copy only that command block into Terminal.")
-                .size(TEXT_BODY_SM)
-                .color(settings_muted_text()),
-            text(status).size(TEXT_BODY_SM),
-            scrollable(
-                column![
-                    text("Run for every shell").size(TEXT_TITLE),
-                    cli_code_panel(common),
-                    shell_sections,
-                    text("Verify").size(TEXT_TITLE),
-                    cli_code_panel(verify),
-                ]
-                .spacing(12)
-            )
-            .direction(iced::widget::scrollable::Direction::Vertical(
-                slim_scrollbar(),
-            ))
-            .spacing(10.0)
-            .height(Length::Fill),
-        ]
-        .spacing(14)
-        .padding(24)
-        .width(Length::Fill)
-        .height(Length::Fill),
+    // --- Title row (transparent full-size title bar on macOS) ---
+    let title_content = container(
+        text("Command Line Tools")
+            .size(TYPE_BODY)
+            .font(semibold())
+            .style(text_t1),
     )
+    .padding(iced::Padding {
+        left: TITLEBAR_INSET_LEFT,
+        right: 12.0,
+        ..iced::Padding::ZERO
+    })
     .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
+    .height(Length::Fixed(TITLEBAR_HEIGHT))
+    .align_y(Alignment::Center);
+    // The row's empty background is the window's drag handle.
+    let mut drag_handle = mouse_area(
+        Space::new()
+            .width(Length::Fill)
+            .height(Length::Fixed(TITLEBAR_HEIGHT)),
+    );
+    if let Some(id) = state.cli_tools_window_id {
+        drag_handle = drag_handle.on_press(Message::WindowDragRequested(id));
+    }
+    let title_row = stack![drag_handle, title_content]
+        .width(Length::Fill)
+        .height(Length::Fixed(TITLEBAR_HEIGHT));
+
+    // --- Body: same order as before, restyled as cards ---
+    let mut cards =
+        column![
+            text("Choose your shell and copy only that command block into Terminal.")
+                .size(TYPE_BODY)
+                .style(text_t2),
+        ]
+        .spacing(SP3);
+    if !status.is_empty() {
+        cards = cards.push(text(status).size(TYPE_CAPTION).style(text_t2));
+    }
+    cards = cards.push(cli_card(
+        "Run for every shell".to_string(),
+        None,
+        crate::cli_tools::common_commands(),
+    ));
+    for shell in crate::cli_tools::Shell::ALL {
+        cards = cards.push(cli_card(
+            format!("For {}", shell.label()),
+            Some((
+                format!("Copy {} Commands", shell.label()),
+                Message::CliToolsCopyRequested(shell),
+            )),
+            crate::cli_tools::shell_commands(shell),
+        ));
+    }
+    cards = cards.push(cli_card(
+        "Verify".to_string(),
+        None,
+        crate::cli_tools::verify_commands(),
+    ));
+    let body = scrollable(container(cards).width(Length::Fill).padding(iced::Padding {
+        top: 2.0,
+        right: 22.0,
+        bottom: 22.0,
+        left: 22.0,
+    }))
+    .direction(iced::widget::scrollable::Direction::Vertical(
+        slim_scrollbar(),
+    ))
+    .height(Length::Fill);
+
+    container(column![title_row, body])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(bg_style)
+        .into()
 }
 
 /// History layout (spec §3.3): list column width at full size, and the
@@ -2178,7 +2225,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 container(
                     text(content)
                         .size(TEXT_BODY)
-                        .color(TEXT_MUTED)
+                        .style(text_t3)
                         .wrapping(iced::widget::text::Wrapping::Word),
                 )
                 .padding(8)
@@ -2211,13 +2258,13 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .into()
             };
             let commit_label = editor_text_commit_label(pending.edit_index.is_some());
-            let mut commit = button(text(commit_label).size(TEXT_CAPTION).color(Color::WHITE))
+            let mut commit = button(text(commit_label).size(TEXT_CAPTION))
                 .padding([7, 10])
                 .style(|theme, status| action_button_style(theme, status, ActionKind::Primary));
             if !busy {
                 commit = commit.on_press(Message::EditorTextCommit);
             }
-            let mut cancel = button(text("Cancel").size(TEXT_CAPTION).color(Color::WHITE))
+            let mut cancel = button(text("Cancel").size(TEXT_CAPTION))
                 .padding([7, 10])
                 .style(|theme, status| action_button_style(theme, status, ActionKind::Secondary));
             if !busy {
@@ -3023,7 +3070,7 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
         );
         if locked && !hovered {
             // Resting locked state: a small badge, no bar.
-            let badge = container(crate::icons::icon(AppIcon::Lock, Color::WHITE, 13.0))
+            let badge = container(crate::icons::icon(AppIcon::Lock, DARK.t1, 13.0))
                 .center_x(Length::Fixed(24.0))
                 .center_y(Length::Fixed(24.0))
                 .style(|_| container::Style {
@@ -4766,10 +4813,6 @@ pub(crate) fn setting_value_box(value: String, active: bool) -> Element<'static,
     .into()
 }
 
-pub(crate) fn settings_muted_text() -> Color {
-    Color::from_rgba(1.0, 1.0, 1.0, 0.60)
-}
-
 pub(crate) fn permission_settings_summary(
     status: PermissionStatus,
 ) -> (&'static str, &'static str) {
@@ -5116,6 +5159,22 @@ mod tests {
         history_selected_fill, history_word_count,
     };
     use crate::runtime::{DARK, LIGHT};
+
+    #[test]
+    fn no_hardcoded_white_text_left_in_themed_views() {
+        let src = include_str!("view.rs");
+        let needle = concat!(".color(Color::", "WHITE)"); // split so this test doesn't match itself
+        let count = src.matches(needle).count();
+        assert_eq!(count, 0, "use text_t1/text_t2/... so light mode works");
+    }
+
+    #[test]
+    fn every_tool_tooltip_names_a_key() {
+        for t in readshot_ui::editor::toolbar::TOOL_ORDER {
+            let (name, key) = super::tool_label_and_key(t);
+            assert!(!name.is_empty() && key.len() == 1, "{t:?}");
+        }
+    }
 
     #[test]
     fn pin_controls_compact_below_230() {
