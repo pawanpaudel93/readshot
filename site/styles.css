@@ -11,8 +11,12 @@
      links) where the button-fill teal falls below 4.5:1. */
   --teal-text: #5be0d0;
   --blue: #5c6af2;
+  /* Stronger line for standalone UI-control boundaries that need the
+     3:1 minimum; --line (1.76:1) is fine for cards/tables but not for
+     an interactive control's only edge. #5b6b78 is 3.39:1 on --bg. */
+  --control-border: #5b6b78;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
 }
 
@@ -120,9 +124,11 @@ a:focus-visible,
   text-decoration: none;
 }
 
-.nav-links a:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text);
+@media (hover: hover) {
+  .nav-links a:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+  }
 }
 
 .nav-links a[aria-current="page"] {
@@ -151,7 +157,7 @@ a:focus-visible,
 
 .eyebrow {
   color: var(--teal-text);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   margin: 0 0 14px;
@@ -159,7 +165,7 @@ a:focus-visible,
 }
 
 h1 {
-  font-size: clamp(52px, 9vw, 88px);
+  font-size: clamp(3.25rem, 9vw, 5.5rem);
   letter-spacing: -0.01em;
   line-height: 0.95;
   margin: 0 0 22px;
@@ -167,17 +173,18 @@ h1 {
 }
 
 .hero-split h1 {
-  font-size: clamp(40px, 5.4vw, 64px);
+  font-size: clamp(2.5rem, 5.4vw, 4rem);
   letter-spacing: -0.02em;
   line-height: 1.02;
 }
 
 .hero-copy {
   color: #c9d2da;
-  font-size: 21px;
+  font-size: 1.3125rem;
   line-height: 1.5;
   margin: 0 0 28px;
   max-width: 680px;
+  text-wrap: pretty;
 }
 
 .actions {
@@ -208,12 +215,14 @@ h1 {
 }
 
 .button.secondary {
-  border-color: var(--line);
+  border-color: var(--control-border);
   color: var(--text);
 }
 
-.button:hover {
-  filter: brightness(1.06);
+@media (hover: hover) {
+  .button:hover {
+    filter: brightness(1.06);
+  }
 }
 
 .button:active {
@@ -258,7 +267,7 @@ h1 {
 
 pre.terminal code {
   display: block;
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.6;
   white-space: pre;
 }
@@ -267,7 +276,7 @@ code {
   color: #d7f8f4;
   font-family:
     "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", monospace;
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -284,16 +293,17 @@ code {
 }
 
 .copy-button {
-  align-items: center;
   background: transparent;
   border: 1px solid var(--line);
   border-radius: 7px;
   color: var(--text);
   cursor: pointer;
-  display: inline-flex;
+  /* Grid so the copy and check icons stack in one cell and cross-fade. */
+  display: inline-grid;
   height: 44px;
-  justify-content: center;
   padding: 0;
+  place-content: center;
+  place-items: center;
   transition:
     background 180ms ease,
     border-color 180ms ease,
@@ -301,17 +311,32 @@ code {
   width: 44px;
 }
 
-.copy-button:hover {
-  background: rgba(255, 255, 255, 0.06);
+@media (hover: hover) {
+  .copy-button:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
 }
 
 .copy-button svg {
+  /* Both icons share the single grid cell so they overlap and swap by
+     opacity/scale/blur rather than display, enabling a cross-fade. */
+  grid-area: 1 / 1;
   height: 18px;
   width: 18px;
 }
 
+.copy-button .copy-icon,
 .copy-button .check-icon {
-  display: none;
+  transition:
+    opacity 300ms cubic-bezier(0.2, 0, 0, 1),
+    transform 300ms cubic-bezier(0.2, 0, 0, 1),
+    filter 300ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.copy-button .check-icon {
+  filter: blur(4px);
+  opacity: 0;
+  transform: scale(0.25);
 }
 
 .copy-button.is-copied {
@@ -320,11 +345,15 @@ code {
 }
 
 .copy-button.is-copied .copy-icon {
-  display: none;
+  filter: blur(4px);
+  opacity: 0;
+  transform: scale(0.25);
 }
 
 .copy-button.is-copied .check-icon {
-  display: block;
+  filter: blur(0);
+  opacity: 1;
+  transform: scale(1);
 }
 
 .copy-status {
@@ -348,7 +377,7 @@ code {
 
 .section h2,
 .doc-section h2 {
-  font-size: 34px;
+  font-size: 2.125rem;
   letter-spacing: 0;
   margin: 0 0 22px;
   text-wrap: balance;
@@ -375,18 +404,19 @@ code {
 .card strong,
 .card h3 {
   display: block;
-  font-size: 18px;
+  font-size: 1.125rem;
   margin: 0 0 9px;
 }
 
 .card h3 {
-  font-size: 22px;
+  font-size: 1.375rem;
 }
 
 .card p,
 .doc-section p {
   color: var(--muted);
   line-height: 1.6;
+  text-wrap: pretty;
 }
 
 .doc-section p {
@@ -461,9 +491,11 @@ code {
   text-decoration: none;
 }
 
-.doc-nav a:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text);
+@media (hover: hover) {
+  .doc-nav a:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+  }
 }
 
 .doc-section {
@@ -475,7 +507,7 @@ code {
 }
 
 .doc-section h3 {
-  font-size: 22px;
+  font-size: 1.375rem;
   margin: 24px 0 10px;
 }
 
@@ -498,7 +530,7 @@ code {
   border-bottom: 1px solid rgba(52, 64, 74, 0.82);
   color: var(--muted);
   display: flex;
-  font-size: 13px;
+  font-size: 0.8125rem;
   justify-content: space-between;
   min-height: 42px;
   padding: 0 10px 0 15px;
@@ -573,13 +605,13 @@ footer a {
 
 .requirements {
   color: var(--muted);
-  font-size: 14px;
+  font-size: 0.875rem;
   margin: 14px 0 0;
 }
 
 .install-label {
   color: var(--muted);
-  font-size: 14px;
+  font-size: 0.875rem;
   margin: 0 0 8px;
 }
 
@@ -629,13 +661,13 @@ footer a {
 }
 
 .demo-slide-title {
-  font-size: 20px;
+  font-size: 1.25rem;
   font-weight: 800;
   margin: 0 0 14px;
 }
 
 .demo-line {
-  font-size: 15px;
+  font-size: 0.9375rem;
   line-height: 1.5;
   margin: 0 0 8px;
 }
@@ -681,7 +713,7 @@ footer a {
   border-radius: 5px;
   bottom: -30px;
   color: #062b32;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   padding: 3px 7px;
@@ -702,14 +734,14 @@ footer a {
 
 .demo-result-label {
   color: var(--teal-text);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 700;
   margin: 0 0 6px;
 }
 
 .demo-result-text {
   color: var(--text);
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.55;
   margin: 0;
   user-select: text;
@@ -761,7 +793,7 @@ footer a {
 }
 
 .feature-list dt {
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 700;
   margin-bottom: 8px;
 }
@@ -920,7 +952,7 @@ footer a {
   }
 
   .demo-line {
-    font-size: 14px;
+    font-size: 0.875rem;
   }
 
   /* h1 size handled by the clamp at the top-level rule — no need
@@ -928,11 +960,11 @@ footer a {
 
   .section h2,
   .doc-section h2 {
-    font-size: 30px;
+    font-size: 1.875rem;
   }
 
   .hero-copy {
-    font-size: 18px;
+    font-size: 1.125rem;
   }
 
   .doc-section {
@@ -987,7 +1019,7 @@ footer a {
 
   .command .mobile-command {
     display: block;
-    font-size: clamp(11.5px, 3.4vw, 13px);
+    font-size: clamp(0.75rem, 3.4vw, 0.8125rem);
     white-space: normal;
   }
 }
