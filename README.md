@@ -114,24 +114,29 @@ See [docs/CLI.md](docs/CLI.md) for the complete command reference.
 Inside the GUI, keyboard shortcuts cover the main workflows:
 
 - **Capture overlay:** drag to select a region; `Enter` captures the
-  full display; `Esc` cancels. With a selection: `⌘C` / `⇧⌘C` / `⌘S` / `⌘P`
-  copy image / copy text / save / pin, and the arrow keys nudge it (`Shift` ×10).
+  full display; `esc` cancels. With a selection: `⌘C` / `⇧⌘C` / `⌘S` / `⌘P`
+  copy image / copy text / save / pin, and the arrow keys nudge it (`⇧` ×10).
 - **Editor tools:** `V` select, `R` rectangle, `O` ellipse, `L` line,
   `A` arrow, `P` pen, `H` highlighter, `T` text, `B` blur, `X` pixelate,
   `N` numbered pin, `C` crop. Arrow keys nudge the selection (hold
-  `Shift` for larger steps), `Delete` removes it, `Esc` deselects.
-- **Editor actions:** `Cmd+C` copy image, `Cmd+Shift+C` copy text,
-  `Cmd+S` save, `Cmd+P` pin, `Cmd+Z` / `Cmd+Shift+Z` undo and redo.
+  `⇧` for larger steps), `Delete` removes it, `esc` deselects.
+- **Editor actions:** `⌘C` copy image, `⇧⌘C` copy text, `⌘S` save,
+  `⌘P` pin, `⌘Z` / `⇧⌘Z` undo and redo. `esc` / `⌘W` close; with unsaved
+  edits the first press only warns; press again to discard, or click
+  Keep Editing.
 - **History window:** `↑` / `↓` move between captures, `Enter` opens the
-  selected one, `Delete` removes it, `Esc` clears the search.
-- **Settings window:** `Esc` / `Cmd+W` close; `Cmd+L` toggles launch-at-login
-  and `Cmd+D` toggles debug logging; `Cmd+R`, `Cmd+E`, `Cmd+F` cycle retention,
-  OCR engine, and format; `Cmd+Shift+R` resets and `Cmd+Shift+U` uninstalls
-  (press twice to confirm).
-- **Scrolling-capture HUD:** `Esc` stops and stitches the session;
-  `Shift+Esc` or `Cmd+.` discards it (press twice to confirm).
-- **Pinned windows:** `Esc` / `Cmd+W` close, `L` lock, `-` / `+` adjust opacity,
-  arrow keys move the window (hold `Shift` for 1-pixel steps).
+  selected one, `⌘C` copies its text and `⇧⌘C` its image, `⌦` deletes it,
+  `⌘F` focuses the search, `esc` clears the search.
+- **Settings window:** `⌘1`–`⌘7` switch panes; `esc` / `⌘W` close; `⌘L`
+  toggles launch-at-login and `⌘D` toggles debug logging; `⌘R`, `⌘E`, `⌘F`
+  cycle retention, OCR engine, and format; `⇧⌘R` resets and `⇧⌘U` uninstalls
+  (press twice to confirm). Each shortcut also brings up the pane its setting
+  lives on.
+- **Scrolling-capture window:** `esc` stops and stitches the session;
+  `⇧esc` or `⌘.` discards it (press twice to confirm, or click Keep Going
+  to carry on capturing).
+- **Pinned windows:** `esc` / `⌘W` close, `L` lock, `-` / `+` adjust opacity,
+  arrow keys move the window (hold `⇧` for 1-pixel steps).
 - **Welcome screen:** `Enter` triggers the primary action (Allow / Open System
   Settings / Capture).
 
