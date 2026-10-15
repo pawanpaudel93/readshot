@@ -294,7 +294,12 @@ fn draw_crosshair(frame: &mut Frame<Renderer>, bounds: Rectangle, point: Point) 
 
 /// Approximate advance width of one glyph in the hint pill, in logical
 /// pixels. Used to size the pill and the key chips.
-const HINT_CHAR_W: f32 = 7.0;
+const HINT_TEXT_SIZE: f32 = 13.0;
+const HINT_KEY_SIZE: f32 = 11.0;
+/// JetBrains Mono advance (600/1000 upm) per pixel of font size.
+const MONO_ADVANCE: f32 = 0.6;
+const HINT_TEXT_W: f32 = HINT_TEXT_SIZE * MONO_ADVANCE;
+const HINT_KEY_W: f32 = HINT_KEY_SIZE * MONO_ADVANCE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HintSeg {
@@ -342,8 +347,8 @@ const HINT_TOP: f32 = 40.0;
 
 fn seg_width(s: &HintSeg) -> f32 {
     match s {
-        HintSeg::Text(t) | HintSeg::Muted(t) => t.chars().count() as f32 * HINT_CHAR_W,
-        HintSeg::Key(k) => k.chars().count().max(2) as f32 * HINT_CHAR_W + HINT_KEY_PAD,
+        HintSeg::Text(t) | HintSeg::Muted(t) => t.chars().count() as f32 * HINT_TEXT_W,
+        HintSeg::Key(k) => k.chars().count().max(2) as f32 * HINT_KEY_W + HINT_KEY_PAD,
     }
 }
 
@@ -418,7 +423,7 @@ fn draw_overlay_hint(
                     content: (*t).to_string(),
                     position: Point::new(x, mid_y),
                     color,
-                    size: iced::Pixels(13.0),
+                    size: iced::Pixels(HINT_TEXT_SIZE),
                     font,
                     align_y: iced::alignment::Vertical::Center,
                     ..Default::default()
@@ -436,7 +441,7 @@ fn draw_overlay_hint(
                     content: (*k).to_string(),
                     position: Point::new(x + w / 2.0, mid_y),
                     color: Color::from_rgb8(0xB4, 0xB4, 0xB4),
-                    size: iced::Pixels(11.0),
+                    size: iced::Pixels(HINT_KEY_SIZE),
                     font,
                     align_x: iced::alignment::Horizontal::Center.into(),
                     align_y: iced::alignment::Vertical::Center,
@@ -910,6 +915,23 @@ mod tests {
         let normal = hint_segments(false, false);
         assert!(normal.contains(&HintSeg::Key("↵")));
         assert!(normal.contains(&HintSeg::Key("⇧")));
+    }
+
+    #[test]
+    fn hint_variants_match_live_behavior() {
+        let small = hint_segments(false, true);
+        assert!(small.contains(&HintSeg::Text("Drag to select a larger area")));
+        assert!(!small.contains(&HintSeg::Key("↵")));
+        assert!(!hint_segments(true, false).contains(&HintSeg::Key("↵")));
+    }
+
+    #[test]
+    fn seg_width_uses_the_drawn_font_advance() {
+        let t = "Drag to select an area";
+        let w = seg_width(&HintSeg::Text(t));
+        assert!((w - t.chars().count() as f32 * 13.0 * 0.6).abs() < 1e-3);
+        let k = seg_width(&HintSeg::Key("esc"));
+        assert!((k - (3.0 * 11.0 * 0.6 + HINT_KEY_PAD)).abs() < 1e-3);
     }
 
     #[test]
