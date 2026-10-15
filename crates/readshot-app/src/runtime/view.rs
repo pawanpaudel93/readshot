@@ -1479,13 +1479,13 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .into()
             };
             let undo_btn = ghost_icon_button(
-                crate::editor_icons::EditorIcon::Undo,
+                crate::icons::EditorIcon::Undo,
                 undo_tip.clone(),
                 !busy && can_undo,
                 || Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
             );
             let redo_btn = ghost_icon_button(
-                crate::editor_icons::EditorIcon::Redo,
+                crate::icons::EditorIcon::Redo,
                 redo_tip.clone(),
                 !busy && can_redo,
                 || Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
@@ -2380,7 +2380,7 @@ pub(crate) fn tool_button<'a>(
     use iced::widget::tooltip;
     let (long, key) = tool_label_and_key(t);
     let is_active = t == active;
-    let icon = crate::editor_icons::editor_icon(crate::editor_icons::EditorIcon::Tool(t), !busy);
+    let icon = crate::icons::editor_icon(crate::icons::EditorIcon::Tool(t), !busy);
     let mut b = button(icon)
         .padding(0)
         .width(Length::Fixed(32.0))
@@ -2414,7 +2414,7 @@ pub(crate) fn tool_button<'a>(
 /// Compact ghost-style action button used for Undo / Redo. `gen`
 /// produces the message lazily so we only build it when enabled.
 pub(crate) fn ghost_icon_button<'a, F>(
-    icon: crate::editor_icons::EditorIcon,
+    icon: crate::icons::EditorIcon,
     tip: impl Into<String>,
     enabled: bool,
     gen: F,
@@ -2424,7 +2424,7 @@ where
 {
     let tip = tip.into();
     use iced::widget::tooltip;
-    let mut b = button(crate::editor_icons::editor_icon(icon, enabled))
+    let mut b = button(crate::icons::editor_icon(icon, enabled))
         .padding(0)
         .width(Length::Fixed(32.0))
         .height(Length::Fixed(32.0))

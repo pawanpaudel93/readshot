@@ -388,6 +388,78 @@ pub(crate) fn group_row<'a>(
         .into()
 }
 
+#[allow(clippy::too_many_arguments)] // signature fixed by the redesign plan
+pub(crate) fn icon_button<'a>(
+    glyph: crate::icons::AppIcon,
+    color: Color,
+    name: &'static str,
+    key: Option<&'static str>,
+    msg: Option<Message>,
+    selected: bool,
+    size: f32,
+    position: tooltip::Position,
+) -> Element<'a, Message> {
+    let mut b = button(
+        container(crate::icons::icon(glyph, color, ICON_SIZE))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .width(Length::Fixed(size))
+    .height(Length::Fixed(size))
+    .padding(0)
+    .style(move |t, s| icon_button_style(t, s, selected));
+    if let Some(m) = msg {
+        b = b.on_press(m);
+    }
+    tooltip_with_key(b, name, key, position)
+}
+
+pub(crate) fn empty_state<'a>(
+    glyph: crate::icons::AppIcon,
+    p: &'static Palette,
+    title: &'a str,
+    body: &'a str,
+    action: Option<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let tile = container(crate::icons::icon(glyph, p.t2, 22.0))
+        .width(Length::Fixed(44.0))
+        .height(Length::Fixed(44.0))
+        .center_x(Length::Fixed(44.0))
+        .center_y(Length::Fixed(44.0))
+        .style(|theme| container::Style {
+            background: Some(palette_for(theme).hover.into()),
+            border: Border {
+                radius: 12.0.into(),
+                ..Border::default()
+            },
+            ..container::Style::default()
+        });
+    let mut col = iced::widget::column![
+        tile,
+        text(title)
+            .size(TYPE_BODY)
+            .font(iced::Font {
+                weight: iced::font::Weight::Semibold,
+                ..iced::Font::DEFAULT
+            })
+            .style(text_t1),
+        text(body)
+            .size(TYPE_CAPTION)
+            .style(text_t2)
+            .align_x(iced::alignment::Horizontal::Center),
+    ]
+    .spacing(SP2)
+    .align_x(Alignment::Center)
+    .max_width(320);
+    if let Some(a) = action {
+        col = col.push(a);
+    }
+    container(col)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
