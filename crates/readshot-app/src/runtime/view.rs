@@ -463,7 +463,7 @@ pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
     ]
     .spacing(7)
     .align_x(Alignment::Start);
-    // The HUD window is a fixed 320×360 and non-resizable, so a wrapped
+    // The HUD window is fixed-size (360×540, see `SCROLL_WINDOW_W/H`) and non-resizable, so a wrapped
     // status line (or any future row) could push Stop/Cancel past the
     // bottom edge and out of reach. Wrap the body in a vertical
     // scrollable (overlay scrollbar, no `spacing`) so it only appears on

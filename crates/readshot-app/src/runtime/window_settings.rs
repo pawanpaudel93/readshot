@@ -280,6 +280,8 @@ pub(crate) const SCROLL_HUD_GAP: f32 = 16.0;
 
 /// Fixed-size window beside the capture area: right, else left (top-
 /// aligned), else below, else above, else the display's top-right.
+/// When no strip fits full size, shrinks into the largest free strip
+/// (down to 240 wide / 320 tall) before using the corner.
 /// Shrinks to fit small displays. Returns logical-pixel **global**
 /// coordinates (display origin added) so multi-monitor sessions land
 /// the window on the correct monitor.
@@ -289,21 +291,49 @@ pub(crate) fn scroll_window_frame(
 ) -> (iced::Point, iced::Size) {
     let (ox, oy, dw, dh) = display.unwrap_or((0.0, 0.0, 1440.0, 900.0));
     let g = SCROLL_HUD_GAP;
-    let w = SCROLL_WINDOW_W.min(dw - 2.0 * g).max(240.0);
-    let h = SCROLL_WINDOW_H.min(dh - g).max(320.0);
-    let clamp_y = |y: f32| y.clamp(0.0, (dh - h).max(0.0));
-    let clamp_x = |x: f32| x.clamp(0.0, (dw - w).max(0.0));
-    let (x, y) = if rect.right() + g + w <= dw {
-        (rect.right() + g, clamp_y(rect.y()))
-    } else if rect.x() - g - w >= 0.0 {
-        (rect.x() - g - w, clamp_y(rect.y()))
-    } else if rect.bottom() + g + h <= dh {
-        (clamp_x(rect.x()), rect.bottom() + g)
-    } else if rect.y() - g - h >= 0.0 {
-        (clamp_x(rect.x()), rect.y() - g - h)
-    } else {
-        ((dw - w - g).max(0.0), g)
+    // Never larger than the display; minimums are capped likewise.
+    let w0 = SCROLL_WINDOW_W.min((dw - 2.0 * g).max(1.0)).min(dw);
+    let h0 = SCROLL_WINDOW_H.min((dh - g).max(1.0)).min(dh);
+    let w_min = 240.0_f32.min(w0);
+    let h_min = 320.0_f32.min(h0);
+    let clamp_y = |y: f32, h: f32| y.clamp(0.0, (dh - h).max(0.0));
+    let clamp_x = |x: f32, w: f32| x.clamp(0.0, (dw - w).max(0.0));
+
+    // Candidate strips in preference order: right, left, below, above.
+    // Side strips shrink width (keep height); top/bottom strips shrink
+    // height (keep width). The largest-area candidate wins; ties keep
+    // the earlier (preferred) side, so a full-size fit always beats a
+    // shrunk one.
+    let mut best: Option<((f32, f32), (f32, f32))> = None;
+    let mut consider = |pos: (f32, f32), size: (f32, f32)| {
+        let better = best.is_none_or(|(_, (bw, bh))| size.0 * size.1 > bw * bh);
+        if better {
+            best = Some((pos, size));
+        }
     };
+    let right_w = (dw - rect.right() - g).min(w0);
+    if right_w >= w_min {
+        consider((rect.right() + g, clamp_y(rect.y(), h0)), (right_w, h0));
+    }
+    let left_w = (rect.x() - g).min(w0);
+    if left_w >= w_min {
+        consider((rect.x() - g - left_w, clamp_y(rect.y(), h0)), (left_w, h0));
+    }
+    let below_h = (dh - rect.bottom() - g).min(h0);
+    if below_h >= h_min {
+        consider((clamp_x(rect.x(), w0), rect.bottom() + g), (w0, below_h));
+    }
+    let above_h = (rect.y() - g).min(h0);
+    if above_h >= h_min {
+        consider(
+            (clamp_x(rect.x(), w0), rect.y() - g - above_h),
+            (w0, above_h),
+        );
+    }
+    let ((x, y), (w, h)) = best.unwrap_or((
+        ((dw - w0 - g).max(0.0), g.min((dh - h0).max(0.0))),
+        (w0, h0),
+    ));
     (iced::Point::new(x + ox, y + oy), iced::Size::new(w, h))
 }
 
@@ -464,5 +494,57 @@ mod scroll_window_tests {
         let rect = readshot_core::geom::Rect::from_xywh(100.0, 120.0, 600.0, 500.0).unwrap();
         let (pos, _) = scroll_window_frame(rect, Some((1440.0, -200.0, 1440.0, 900.0)));
         assert_eq!(pos, iced::Point::new(1440.0 + 716.0, -200.0 + 120.0));
+    }
+
+    fn on_display(pos: iced::Point, size: iced::Size, d: (f32, f32, f32, f32)) -> bool {
+        pos.x >= d.0 - 0.01
+            && pos.y >= d.1 - 0.01
+            && pos.x + size.width <= d.0 + d.2 + 0.01
+            && pos.y + size.height <= d.1 + d.3 + 0.01
+    }
+
+    fn overlaps(pos: iced::Point, size: iced::Size, r: readshot_core::geom::Rect) -> bool {
+        pos.x < r.right()
+            && pos.x + size.width > r.x()
+            && pos.y < r.bottom()
+            && pos.y + size.height > r.y()
+    }
+
+    #[test]
+    fn scroll_window_shrinks_into_free_strip_for_wide_tall_region() {
+        let d = (0.0, 0.0, 1440.0, 900.0);
+        let rect = readshot_core::geom::Rect::from_xywh(300.0, 100.0, 840.0, 700.0).unwrap();
+        let (pos, size) = scroll_window_frame(rect, Some(d));
+        assert!(on_display(pos, size, d), "{pos:?} {size:?}");
+        assert!(!overlaps(pos, size, rect), "{pos:?} {size:?}");
+        assert!(size.width >= 240.0 && size.height >= 320.0);
+    }
+
+    #[test]
+    fn scroll_window_goes_above_when_only_above_fits() {
+        let d = (0.0, 0.0, 1440.0, 900.0);
+        let rect = readshot_core::geom::Rect::from_xywh(0.0, 600.0, 1440.0, 290.0).unwrap();
+        let (pos, size) = scroll_window_frame(rect, Some(d));
+        assert_eq!(size, iced::Size::new(360.0, 540.0));
+        assert!(pos.y + size.height <= 600.0 - 16.0 + 0.01);
+        assert!(on_display(pos, size, d));
+        assert!(!overlaps(pos, size, rect));
+    }
+
+    #[test]
+    fn scroll_window_stays_within_negative_origin_display() {
+        let d = (-1280.0, 120.0, 1280.0, 800.0);
+        let rect = readshot_core::geom::Rect::from_xywh(100.0, 100.0, 1000.0, 400.0).unwrap();
+        let (pos, size) = scroll_window_frame(rect, Some(d));
+        assert!(on_display(pos, size, d), "{pos:?} {size:?}");
+    }
+
+    #[test]
+    fn scroll_window_true_no_fit_uses_corner_on_display() {
+        let d = (0.0, 0.0, 1440.0, 900.0);
+        let rect = readshot_core::geom::Rect::from_xywh(0.0, 0.0, 1440.0, 900.0).unwrap();
+        let (pos, size) = scroll_window_frame(rect, Some(d));
+        assert!(on_display(pos, size, d), "{pos:?} {size:?}");
+        assert_eq!(pos, iced::Point::new(1440.0 - 360.0 - 16.0, 16.0));
     }
 }
