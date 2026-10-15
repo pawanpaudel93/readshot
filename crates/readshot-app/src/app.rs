@@ -566,6 +566,9 @@ pub enum Message {
     CliToolsCopyDone(crate::cli_tools::Shell, Result<(), String>),
     /// User invoked the URL scheme.
     UrlActionReceived(crate::url_scheme::UrlAction),
+    /// macOS/Windows appearance changed (or the initial query returned).
+    /// `Mode::None` means "unknown" and falls back to dark.
+    SystemThemeChanged(iced::theme::Mode),
 }
 
 /// Top-level application state.
@@ -618,6 +621,8 @@ pub struct App {
     /// flight. This closes the race where two hotkey/tray clicks can both
     /// enqueue `list_displays()` before any overlay window id exists.
     pub overlay_opening: bool,
+    /// Current system appearance (overlay-like windows ignore it).
+    pub theme_mode: crate::runtime::ThemeMode,
     /// Live overlay selections per display. Drives the floating
     /// action toolbar's position; populated by
     /// [`Message::OverlaySelectionChanged`] from the canvas.
@@ -987,6 +992,7 @@ impl App {
             editor: None,
             overlay_displays: HashMap::new(),
             overlay_opening: false,
+            theme_mode: Default::default(),
             overlay_selections: HashMap::new(),
             last_regions: HashMap::new(),
             last_region_display_id: None,

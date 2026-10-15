@@ -72,13 +72,9 @@ static CLI_INTERACTIVE_REQUEST: OnceLock<Mutex<Option<CliInteractiveRequest>>> =
 /// settles silently into the menu bar instead of opening the ready
 /// window — see `needs_welcome_window_on_boot`.
 static LAUNCHED_AT_LOGIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static READSHOT_THEME: OnceLock<Theme> = OnceLock::new();
 
 const READSHOT_THEME_NAME: &str = "readshot";
 const READSHOT_ACCENT: Color = Color::from_rgb8(20, 184, 166);
-const READSHOT_PRIMARY: Color = Color::from_rgb8(13, 148, 136);
-const READSHOT_SUCCESS: Color = Color::from_rgb8(34, 197, 94);
-const READSHOT_WARNING: Color = Color::from_rgb8(245, 158, 11);
 const READSHOT_DANGER: Color = Color::from_rgb8(239, 68, 68);
 
 // Filled-button teals. READSHOT_PRIMARY / READSHOT_ACCENT read well as
@@ -102,22 +98,53 @@ const TEXT_MUTED: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.55);
 const TEXT_SECONDARY: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.72);
 const TEXT_STRONG: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.92);
 
-fn readshot_theme() -> Theme {
-    READSHOT_THEME
-        .get_or_init(|| {
-            Theme::custom(
-                READSHOT_THEME_NAME,
-                iced::theme::Palette {
-                    background: Color::from_rgb8(23, 23, 23),
-                    text: Color::from_rgb8(245, 245, 244),
-                    primary: READSHOT_PRIMARY,
-                    success: READSHOT_SUCCESS,
-                    warning: READSHOT_WARNING,
-                    danger: READSHOT_DANGER,
-                },
-            )
-        })
-        .clone()
+pub(crate) const LIGHT_THEME_NAME: &str = "readshot-light";
+static READSHOT_DARK: OnceLock<Theme> = OnceLock::new();
+static READSHOT_LIGHT: OnceLock<Theme> = OnceLock::new();
+
+pub(crate) fn readshot_theme_for(mode: ThemeMode) -> Theme {
+    let (cell, name, p) = match mode {
+        ThemeMode::Dark => (&READSHOT_DARK, READSHOT_THEME_NAME, &DARK),
+        ThemeMode::Light => (&READSHOT_LIGHT, LIGHT_THEME_NAME, &LIGHT),
+    };
+    cell.get_or_init(|| {
+        Theme::custom(
+            name,
+            iced::theme::Palette {
+                background: p.bg,
+                text: p.t1,
+                primary: p.acc,
+                success: p.ok,
+                warning: p.warn,
+                danger: p.danger,
+            },
+        )
+    })
+    .clone()
+}
+
+/// Palette for a style closure. Light only for the light Readshot theme;
+/// every other theme (overlay, iced built-ins) reads dark.
+#[allow(dead_code)] // consumed by style closures in later redesign tasks
+pub(crate) fn palette_for(theme: &Theme) -> &'static Palette {
+    use iced::theme::Base; // `name()` is a `Base` trait method
+    if theme.name() == LIGHT_THEME_NAME {
+        &LIGHT
+    } else {
+        &DARK
+    }
+}
+
+pub(crate) fn theme_mode_for(window: Option<WindowKind>, system: ThemeMode) -> ThemeMode {
+    match window {
+        Some(
+            WindowKind::Overlay
+            | WindowKind::ScrollRegion
+            | WindowKind::ScrollHud
+            | WindowKind::Pin,
+        ) => ThemeMode::Dark,
+        _ => system,
+    }
 }
 
 fn accent(alpha: f32) -> Color {
@@ -401,7 +428,8 @@ pub fn start() -> (App, Task<Message>) {
     // not, so the app just appears in the menu bar at every boot
     // instead of popping a window in the user's face.
     let initial_url_action = take_initial_url_action();
-    let mut tasks: Vec<Task<Message>> = Vec::new();
+    let mut tasks: Vec<Task<Message>> =
+        vec![iced::system::theme().map(Message::SystemThemeChanged)];
     let needs_welcome_window = needs_welcome_window_on_boot(
         app.welcome,
         initial_url_action.is_some(),
@@ -468,14 +496,14 @@ const OVERLAY_THEME_NAME: &str = "readshot-overlay-transparent";
 /// matter for the canvas-only overlay view, so we copy `Theme::Dark`
 /// to avoid widget surprises if iced ever consults them.
 pub fn theme(state: &App, id: window::Id) -> Theme {
+    let kind = state.windows.kind(id);
     if matches!(
-        state.windows.kind(id),
+        kind,
         Some(WindowKind::Overlay) | Some(WindowKind::ScrollRegion)
     ) {
-        Theme::custom(OVERLAY_THEME_NAME.to_string(), iced::theme::Palette::DARK)
-    } else {
-        readshot_theme()
+        return Theme::custom(OVERLAY_THEME_NAME.to_string(), iced::theme::Palette::DARK);
     }
+    readshot_theme_for(theme_mode_for(kind, state.theme_mode))
 }
 
 /// Per-window appearance. iced's wgpu surface uses
@@ -500,6 +528,16 @@ pub fn style(_state: &App, theme: &Theme) -> iced::theme::Style {
 /// + app/window keyboard shortcuts.
 pub fn subscription(state: &App) -> Subscription<Message> {
     let mut subs = Vec::new();
+    subs.push(iced::system::theme_changes().map(Message::SystemThemeChanged));
+    // iced pins each open window's appearance to its theme, so winit
+    // suppresses theme-change events for those windows; poll the OS too.
+    // The handler is idempotent, so identical repeats are free.
+    subs.push(iced::time::every(Duration::from_secs(1)).map(|_| {
+        Message::SystemThemeChanged(match os_theme_mode() {
+            ThemeMode::Light => iced::theme::Mode::Light,
+            ThemeMode::Dark => iced::theme::Mode::Dark,
+        })
+    }));
     if state.welcome.should_show() {
         // Polling at 500 ms keeps the UI responsive without burning
         // CPU. The TCC db is already cached in-process so each poll
@@ -1735,6 +1773,13 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
 
+        Message::SystemThemeChanged(mode) => {
+            state.theme_mode = match mode {
+                iced::theme::Mode::Light => ThemeMode::Light,
+                _ => ThemeMode::Dark,
+            };
+            Task::none()
+        }
         Message::UrlActionReceived(action) => match action {
             UrlAction::NewCapture => {
                 tracing::info!(target: "readshot::url", "readshot:// → opening overlay");
@@ -2414,6 +2459,54 @@ mod tests {
     use readshot_core::{Annotation, FsHistoryStore, HistoryStore, PointLike, RectLike, Rgba};
     use readshot_ocr::fake::FakeOcrEngine;
     use std::collections::HashMap;
+
+    #[test]
+    fn overlay_like_windows_are_always_dark() {
+        for kind in [
+            WindowKind::Overlay,
+            WindowKind::ScrollRegion,
+            WindowKind::ScrollHud,
+            WindowKind::Pin,
+        ] {
+            assert_eq!(
+                theme_mode_for(Some(kind), ThemeMode::Light),
+                ThemeMode::Dark
+            );
+        }
+        assert_eq!(
+            theme_mode_for(Some(WindowKind::Editor), ThemeMode::Light),
+            ThemeMode::Light
+        );
+        assert_eq!(theme_mode_for(None, ThemeMode::Dark), ThemeMode::Dark);
+    }
+
+    #[test]
+    fn palette_for_reads_the_theme_name() {
+        assert_eq!(
+            palette_for(&readshot_theme_for(ThemeMode::Light)).bg,
+            LIGHT.bg
+        );
+        assert_eq!(
+            palette_for(&readshot_theme_for(ThemeMode::Dark)).bg,
+            DARK.bg
+        );
+        assert_eq!(palette_for(&Theme::Dark).bg, DARK.bg);
+    }
+
+    #[test]
+    fn system_theme_message_switches_mode() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let _ = update(
+            &mut app,
+            Message::SystemThemeChanged(iced::theme::Mode::Light),
+        );
+        assert_eq!(app.theme_mode, ThemeMode::Light);
+        let _ = update(
+            &mut app,
+            Message::SystemThemeChanged(iced::theme::Mode::None),
+        );
+        assert_eq!(app.theme_mode, ThemeMode::Dark);
+    }
 
     fn build_app(perms: Arc<FakePermissions>) -> App {
         let coord = CaptureCoordinator::new(

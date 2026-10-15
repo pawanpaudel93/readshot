@@ -70,6 +70,57 @@ pub(crate) fn os_reduce_motion() -> bool {
     false
 }
 
+/// The OS light/dark appearance. macOS reads
+/// `NSApplication.effectiveAppearance.name` (contains "Dark" in dark
+/// mode); off the main thread and on other platforms this is `Dark`.
+#[cfg(target_os = "macos")]
+pub(crate) fn os_theme_mode() -> crate::runtime::ThemeMode {
+    use crate::runtime::ThemeMode;
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    if objc2::MainThreadMarker::new().is_none() {
+        return ThemeMode::Dark;
+    }
+    let Some(class) = AnyClass::get(c"NSApplication") else {
+        return ThemeMode::Dark;
+    };
+    // SAFETY: on the main thread (checked above). `sharedApplication`
+    // is the process-wide singleton; `effectiveAppearance` returns an
+    // NSAppearance whose `name` is an NSString. Every pointer is
+    // null-checked before use; `UTF8String` yields a C string valid for
+    // the current autorelease scope, which we copy out immediately.
+    unsafe {
+        let app: *mut AnyObject = msg_send![class, sharedApplication];
+        if app.is_null() {
+            return ThemeMode::Dark;
+        }
+        let appearance: *mut AnyObject = msg_send![app, effectiveAppearance];
+        if appearance.is_null() {
+            return ThemeMode::Dark;
+        }
+        let name: *mut AnyObject = msg_send![appearance, name];
+        if name.is_null() {
+            return ThemeMode::Dark;
+        }
+        let utf8: *const std::ffi::c_char = msg_send![name, UTF8String];
+        if utf8.is_null() {
+            return ThemeMode::Dark;
+        }
+        let name = std::ffi::CStr::from_ptr(utf8).to_string_lossy();
+        if name.contains("Dark") {
+            ThemeMode::Dark
+        } else {
+            ThemeMode::Light
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn os_theme_mode() -> crate::runtime::ThemeMode {
+    crate::runtime::ThemeMode::Dark
+}
+
 pub(crate) fn pick_primary(displays: &[DisplayInfo]) -> Option<&DisplayInfo> {
     displays
         .iter()
