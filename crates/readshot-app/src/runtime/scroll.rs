@@ -98,7 +98,9 @@ pub(crate) fn cancel_armed(session: &crate::app::ScrollSession) -> bool {
 /// 8 fps. Draining pauses while a verdict is outstanding (so frames
 /// stay chronological) and resumes from the `ScrollFrameJudged` arm.
 pub(crate) fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession) -> Task<Message> {
-    if session.judge_in_flight.is_some() {
+    // After Stop the frames belong to the stitch task; nothing more may
+    // join the session (or its preview strip).
+    if session.stopping || session.judge_in_flight.is_some() {
         return Task::none();
     }
     while let Some(result) = session
@@ -369,7 +371,9 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
                 return Task::none();
             };
             session.capture_in_flight = session.capture_in_flight.saturating_sub(1);
-            if seq < session.next_frame_seq_to_process {
+            // A capture still in flight at Stop is dropped: it isn't in
+            // the stitch input, so it mustn't reach the preview either.
+            if session.stopping || seq < session.next_frame_seq_to_process {
                 return Task::none();
             }
             session.pending_frames.insert(seq, result);
@@ -386,8 +390,10 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             let Some(session) = state.scroll_session.as_mut() else {
                 return Task::none();
             };
-            // A verdict from a cancelled/replaced session is stale.
-            if session.judge_in_flight != Some(seq) {
+            // A verdict from a cancelled/replaced session is stale, and
+            // one landing after Stop is too (Stop clears the in-flight
+            // judge; `stopping` is checked explicitly as well).
+            if session.stopping || session.judge_in_flight != Some(seq) {
                 return Task::none();
             }
             session.judge_in_flight = None;
@@ -405,8 +411,9 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             // arms the cancel and the window offers "Discard N Frames"
             // + "Keep Going". A second click inside `CANCEL_ARM_WINDOW`
             // actually discards; once the window elapses `cancel_armed`
-            // reads false (the overlay tick re-renders the view), and
-            // Keep Going disarms it explicitly.
+            // reads false (the next `ScrollCaptureTick` re-renders the
+            // view — the overlay tick isn't subscribed under Reduce
+            // Motion), and Keep Going disarms it explicitly.
             let Some(session) = state.scroll_session.as_mut() else {
                 return Task::none();
             };
@@ -455,6 +462,10 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             session.cancel_armed_at = None;
             session.stitch_frame_count = session.frames.len();
             let frames = std::mem::take(&mut session.frames);
+            // Drop buffered captures and any outstanding verdict: they
+            // aren't part of the stitch and must not touch the preview.
+            session.pending_frames.clear();
+            session.judge_in_flight = None;
             let region_id = session.region_window_id.take();
             // Close only the region outline now. The scroll window stays
             // open through the stitch so it can show "Stitching…" (and
@@ -471,12 +482,17 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
         }
 
         Message::ScrollCaptureStitched(result) => {
-            let session = state.scroll_session.take();
-            let display_scale = session.as_ref().map(|s| s.scale).unwrap_or(1.0);
-            let display_bounds = session.as_ref().and_then(|s| s.display_size);
+            // No session means it was torn down while stitching (e.g.
+            // cancelled out-of-band): the result is stale, drop it.
+            let Some(session) = state.scroll_session.take() else {
+                tracing::debug!(target: "readshot::scroll", "dropping stitch result: no session");
+                return Task::none();
+            };
+            let display_scale = session.scale;
+            let display_bounds = session.display_size;
             // The scroll window stayed open through the stitch; close it
             // now on both outcomes.
-            let close_hud = match session.as_ref().and_then(|s| s.hud_window_id) {
+            let close_hud = match session.hud_window_id {
                 Some(id) => {
                     state.windows.forget(id);
                     window::close(id)

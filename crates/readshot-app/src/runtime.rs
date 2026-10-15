@@ -3171,6 +3171,62 @@ mod tests {
     }
 
     #[test]
+    fn frames_arriving_after_stop_do_not_touch_the_session() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut s = test_session();
+        let first = scrolling_texture(80, 120, 0);
+        let rows = preview_rows(&first, None);
+        accept_scroll_frame(&mut s, first, Some(rows), None);
+        // A capture and a judge verdict are outstanding at Stop.
+        s.judge_in_flight = Some(1);
+        s.pending_frames
+            .insert(2, Ok(scrolling_texture(80, 120, 28)));
+        s.capture_in_flight = 1;
+        app.scroll_session = Some(s);
+        let _ = update(&mut app, Message::ScrollCaptureStopRequested);
+        let before = app.scroll_session.as_ref().unwrap();
+        let strip_h = before.preview_strip.as_ref().unwrap().height();
+        let stitched = before.stitched_rows;
+        assert!(before.pending_frames.is_empty());
+        assert_eq!(before.judge_in_flight, None);
+
+        let _ = update(
+            &mut app,
+            Message::ScrollFrameJudged {
+                seq: 1,
+                image: Some(scrolling_texture(80, 120, 14)),
+                moved: true,
+                offset: Some(14),
+                rows: Some(image::RgbaImage::new(PREVIEW_STRIP_W, 60)),
+            },
+        );
+        let _ = update(
+            &mut app,
+            Message::ScrollCaptureFrame {
+                seq: 3,
+                result: Ok(scrolling_texture(80, 120, 42)),
+            },
+        );
+        let after = app.scroll_session.as_ref().unwrap();
+        assert!(after.frames.is_empty());
+        assert!(after.pending_frames.is_empty());
+        assert_eq!(after.judge_in_flight, None);
+        assert_eq!(after.preview_strip.as_ref().unwrap().height(), strip_h);
+        assert_eq!(after.stitched_rows, stitched);
+    }
+
+    #[test]
+    fn stitch_result_without_a_session_is_dropped() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        assert!(app.scroll_session.is_none());
+        let _ = update(
+            &mut app,
+            Message::ScrollCaptureStitched(Ok(image::RgbaImage::new(10, 10))),
+        );
+        assert!(app.editor.is_none());
+    }
+
+    #[test]
     fn cancel_is_ignored_while_stitching() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let mut s = test_session();
