@@ -243,6 +243,35 @@ fn key_chip_on_dark<'a>(label: &'a str) -> Element<'a, Message> {
     .into()
 }
 
+/// (background, text) of a key chip sitting on a Primary button, whose
+/// fill is inverted relative to the theme.
+pub(crate) fn key_chip_on_primary_colors(p: &Palette) -> (Color, Color) {
+    (
+        Color {
+            a: 0.14,
+            ..p.pri_fg
+        },
+        p.pri_fg,
+    )
+}
+
+/// Key chip for use inside a Primary button.
+pub(crate) fn key_chip_on_primary<'a>(label: impl text::IntoFragment<'a>) -> Element<'a, Message> {
+    container(text(label).size(TYPE_MICRO).style(|theme| text::Style {
+        color: Some(key_chip_on_primary_colors(palette_for(theme)).1),
+    }))
+    .padding([3, 6])
+    .style(|theme| container::Style {
+        background: Some(key_chip_on_primary_colors(palette_for(theme)).0.into()),
+        border: Border {
+            radius: R_CHIP.into(),
+            ..Border::default()
+        },
+        ..container::Style::default()
+    })
+    .into()
+}
+
 /// Key chip that follows the theme (legends, footers, hints).
 pub(crate) fn key_chip<'a>(label: impl text::IntoFragment<'a>) -> Element<'a, Message> {
     container(text(label).size(TYPE_MICRO).style(text_t2))
@@ -546,5 +575,27 @@ mod tests {
             button_style(&light(), Status::Active, ButtonKind::DangerSolid).text_color,
             LIGHT.danger_fg
         );
+    }
+}
+
+#[cfg(test)]
+mod chip_tests {
+    use super::*;
+
+    #[test]
+    fn on_primary_chip_uses_pri_fg_and_is_readable_in_both_palettes() {
+        for p in [&DARK, &LIGHT] {
+            let (bg, fg) = key_chip_on_primary_colors(p);
+            assert_eq!(fg, p.pri_fg);
+            // Chip fill composited over the primary button fill.
+            let over = |a: f32| Color {
+                r: bg.r * a + p.pri_bg.r * (1.0 - a),
+                g: bg.g * a + p.pri_bg.g * (1.0 - a),
+                b: bg.b * a + p.pri_bg.b * (1.0 - a),
+                a: 1.0,
+            };
+            let fill = over(bg.a);
+            assert!(contrast_ratio(fg, fill) >= 4.5);
+        }
     }
 }

@@ -581,7 +581,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     commit_pending_editor_text(ed, &state.coordinator);
                     if ed.model.undo() {
                         ed.refresh_image();
-                        ed.set_status("Undid edit. ⌘⇧Z to redo.");
+                        ed.set_status("Undid edit. ⇧⌘Z to redo.");
                         sync_editor_history(ed, &state.coordinator);
                     }
                 }

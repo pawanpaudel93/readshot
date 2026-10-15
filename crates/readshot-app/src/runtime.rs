@@ -629,7 +629,7 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         );
     }
     if state.editor.is_some() {
-        // Keyboard sub: ⌘Z / Ctrl+Z = Undo, ⌘⇧Z / Ctrl+Shift+Z = Redo,
+        // Keyboard sub: ⌘Z / Ctrl+Z = Undo, ⇧⌘Z / Ctrl+Shift+Z = Redo,
         // ⌘S / Ctrl+S = Save. Iced 0.14's `event::listen_with` is the
         // window-agnostic event tap; we filter to KeyPressed events
         // and only react when the editor window is the focused one
@@ -716,7 +716,7 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                     HistoryKeyboardAction::FocusSearch,
                 ));
             }
-            // ⌘C / ⌘⇧C only fire when no widget has captured the
+            // ⌘C / ⇧⌘C only fire when no widget has captured the
             // event — search-input text selection takes precedence.
             if status == Status::Ignored
                 && modifiers.command()
@@ -5500,7 +5500,7 @@ mod tests {
             Annotation::Rectangle { .. }
         ));
         assert!(ed.model.can_redo());
-        assert_eq!(ed.status.as_deref(), Some("Undid edit. ⌘⇧Z to redo."));
+        assert_eq!(ed.status.as_deref(), Some("Undid edit. ⇧⌘Z to redo."));
     }
 
     #[test]
@@ -6622,7 +6622,7 @@ mod tests {
             settings_key_action(&Key::Character("f".into()), cmd),
             Some(SettingsKeyAction::CycleFormat)
         );
-        // Destructive commands need ⌘⇧ and only arm; the second press
+        // Destructive commands need ⇧⌘ and only arm; the second press
         // (resolved in the runtime) confirms, so a single press can't wipe.
         let mut cmd_shift = cmd;
         cmd_shift.insert(Modifiers::SHIFT);

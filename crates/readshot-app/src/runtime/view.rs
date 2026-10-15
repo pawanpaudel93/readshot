@@ -3213,7 +3213,7 @@ impl SettingsKeyAction {
 /// Map a key press in the settings window to a [`SettingsKeyAction`].
 /// Every shortcut is ⌘-prefixed (so plain typing in the filename field
 /// is never stolen) except Esc, which closes. The destructive commands
-/// use ⌘⇧ to sit apart from the everyday toggles.
+/// use ⇧⌘ to sit apart from the everyday toggles.
 pub(crate) fn settings_key_action(
     key: &iced::keyboard::Key,
     modifiers: iced::keyboard::Modifiers,
@@ -4557,8 +4557,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
     let mut col = column![]
         .spacing(SP4)
         .align_x(Alignment::Center)
-        .width(Length::Fill)
-        .height(Length::Fill);
+        .width(Length::Fill);
 
     match state.welcome {
         WelcomeState::Pending => {
@@ -4590,8 +4589,6 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
         }
     }
 
-    col = col.push(Space::new().height(Length::Fill));
-
     if let Some(s) = &state.last_capture_status {
         let kind = if crate::editor::status_str_is_error(s) {
             ToastKind::Error
@@ -4613,9 +4610,13 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
         col = col.push(toast(kind, s.clone(), action));
     }
 
+    let mut actions = column![]
+        .spacing(SP4)
+        .align_x(Alignment::Center)
+        .width(Length::Fill);
     match state.welcome {
         WelcomeState::Pending => {
-            col = col.push(welcome_button(
+            actions = actions.push(welcome_button(
                 None,
                 "Allow Screen Recording",
                 ButtonKind::Primary,
@@ -4624,10 +4625,10 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                 p,
                 Some(Message::GrantPermissionRequested),
             ));
-            col = col.push(welcome_reset_footer());
+            actions = actions.push(welcome_reset_footer());
         }
         WelcomeState::AwaitingGrant | WelcomeState::Denied => {
-            col = col.push(welcome_button(
+            actions = actions.push(welcome_button(
                 None,
                 "Open System Settings",
                 ButtonKind::Primary,
@@ -4636,7 +4637,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                 p,
                 Some(Message::OpenPermissionSettingsRequested),
             ));
-            col = col.push(welcome_button(
+            actions = actions.push(welcome_button(
                 None,
                 "Restart Readshot",
                 ButtonKind::Secondary,
@@ -4645,19 +4646,19 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                 p,
                 Some(Message::RestartRequested),
             ));
-            col = col.push(welcome_reset_footer());
+            actions = actions.push(welcome_reset_footer());
         }
         WelcomeState::Granted => {
-            col = col.push(welcome_button(
+            actions = actions.push(welcome_button(
                 Some(AppIcon::Crosshair),
                 "Capture Screen",
                 ButtonKind::Primary,
                 ButtonSize::Lg,
-                Some("\u{21B5}"),
+                (!state.capture_in_flight).then_some("\u{21B5}"),
                 p,
                 (!state.capture_in_flight).then_some(Message::OpenOverlayRequested),
             ));
-            col = col.push(
+            actions = actions.push(
                 row![
                     welcome_button(
                         Some(AppIcon::History),
@@ -4683,7 +4684,18 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
         }
     }
 
-    container(col)
+    // Upper content scrolls; the action area stays pinned so the primary
+    // action is visible at the minimum window height.
+    let body = column![
+        scrollable(col.width(Length::Fill))
+            .height(Length::Fill)
+            .direction(scrollable::Direction::Vertical(slim_scrollbar())),
+        actions,
+    ]
+    .spacing(SP4)
+    .width(Length::Fill)
+    .height(Length::Fill);
+    container(body)
         .width(Length::Fill)
         .height(Length::Fill)
         .padding(iced::Padding {
@@ -4812,7 +4824,11 @@ fn welcome_button<'a>(
     }
     content = content.push(text(label).size(size.text_size()).font(semibold()));
     if let Some(k) = key {
-        content = content.push(key_chip(k));
+        content = content.push(if kind == ButtonKind::Primary {
+            key_chip_on_primary(k)
+        } else {
+            key_chip(k)
+        });
     }
     let full = size == ButtonSize::Lg || key.is_some();
     let mut b = button(

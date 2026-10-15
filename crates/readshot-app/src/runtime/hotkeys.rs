@@ -44,7 +44,7 @@ pub(crate) fn default_capture_hotkey() -> &'static str {
 }
 
 /// Render a hotkey string like "cmd+shift+x" as a human label. On macOS
-/// this is the native glyph form "⌘⇧X" (modifiers in ⌘⇧⌥⌃ order, no
+/// this is the native glyph form "⇧⌘X" (modifiers in ⌃⌥⇧⌘ order, no
 /// separators); elsewhere it's "Ctrl+Shift+X". Named
 /// keys render with their proper symbol ("," "↩" "←" …) instead of a
 /// raw token like "COMMA".
