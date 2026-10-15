@@ -324,7 +324,14 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 ed.set_status(match result {
                     Ok(Some(p)) => format!("Saved to {}.", p.display()),
                     Ok(None) => "Save cancelled.".into(),
-                    Err(e) => format!("Save failed: {e}"),
+                    Err(e) => {
+                        tracing::warn!(target: "readshot::editor", "save failed: {e}");
+                        super::history_ops::friendly_string_error_with(
+                            "save the image",
+                            &e,
+                            Some(super::history_ops::SAVE_HINT),
+                        )
+                    }
                 });
             }
             Task::none()
@@ -362,7 +369,14 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
                 ed.set_status(match result {
                     Ok(()) => "Copied image to clipboard.".into(),
-                    Err(e) => format!("Copy failed: {e}"),
+                    Err(e) => {
+                        tracing::warn!(target: "readshot::editor", "copy image failed: {e}");
+                        super::history_ops::friendly_string_error_with(
+                            "copy to the clipboard",
+                            &e,
+                            Some(super::history_ops::RETRY_HINT),
+                        )
+                    }
                 });
             }
             Task::none()
@@ -412,7 +426,14 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         text.chars().count(),
                         if text.chars().count() == 1 { "" } else { "s" },
                     ),
-                    Err(e) => format!("Copy text failed: {e}"),
+                    Err(e) => {
+                        tracing::warn!(target: "readshot::editor", "copy text failed: {e}");
+                        super::history_ops::friendly_string_error_with(
+                            "copy the text",
+                            &e,
+                            Some(super::history_ops::RETRY_HINT),
+                        )
+                    }
                 });
             }
             Task::none()

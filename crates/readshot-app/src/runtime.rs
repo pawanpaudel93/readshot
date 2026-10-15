@@ -1115,8 +1115,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::OverlayDisplaysListed(Err(e)) => {
             state.overlay_opening = false;
             clear_pending_capture_state(state);
-            state.last_capture_status =
-                Some(format!("Capture failed: could not list displays — {e}"));
+            tracing::warn!(target: "readshot::capture", "could not list displays: {e}");
+            state.last_capture_status = Some(history_ops::friendly_capture_error(&e));
             if state.cli_interactive_output.is_some() {
                 Task::done(Message::CliInteractiveWritten(Err(format!(
                     "could not list displays: {e}"
@@ -1129,7 +1129,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.overlay_opening = false;
             if displays.is_empty() {
                 clear_pending_capture_state(state);
-                state.last_capture_status = Some("Capture failed: no displays detected.".into());
+                tracing::warn!(target: "readshot::capture", "no displays detected");
+                state.last_capture_status =
+                    Some("Couldn't capture — no display was detected.".into());
                 return if state.cli_interactive_output.is_some() {
                     Task::done(Message::CliInteractiveWritten(Err(
                         "no displays detected".into()
@@ -1456,7 +1458,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     Task::batch([history_task, intent_task])
                 }
                 Err(e) => {
-                    state.last_capture_status = Some(format!("Capture failed: {e}"));
+                    tracing::warn!(target: "readshot::capture", "region capture failed: {e}");
+                    state.last_capture_status = Some(history_ops::friendly_capture_error(&e));
                     if state.cli_interactive_output.is_some() {
                         Task::done(Message::CliInteractiveWritten(Err(e)))
                     } else {
@@ -1643,7 +1646,14 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::OverlayCopyDone(result) => {
             state.last_capture_status = Some(match result {
                 Ok(()) => "Copied image to clipboard.".into(),
-                Err(e) => format!("Copy failed: {e}"),
+                Err(e) => {
+                    tracing::warn!(target: "readshot::overlay", "copy image failed: {e}");
+                    history_ops::friendly_string_error_with(
+                        "copy to the clipboard",
+                        &e,
+                        Some(history_ops::RETRY_HINT),
+                    )
+                }
             });
             Task::none()
         }
@@ -1656,7 +1666,14 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.last_capture_status = Some(match result {
                 Ok(Some(p)) => format!("Saved to {}.", p.display()),
                 Ok(None) => "Save cancelled.".into(),
-                Err(e) => format!("Save failed: {e}"),
+                Err(e) => {
+                    tracing::warn!(target: "readshot::overlay", "save failed: {e}");
+                    history_ops::friendly_string_error_with(
+                        "save the image",
+                        &e,
+                        Some(history_ops::SAVE_HINT),
+                    )
+                }
             });
             Task::none()
         }
@@ -1670,7 +1687,14 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         if n == 1 { "" } else { "s" }
                     )
                 }
-                Err(e) => format!("Copy text failed: {e}"),
+                Err(e) => {
+                    tracing::warn!(target: "readshot::overlay", "copy text failed: {e}");
+                    history_ops::friendly_string_error_with(
+                        "copy the text",
+                        &e,
+                        Some(history_ops::RETRY_HINT),
+                    )
+                }
             });
             Task::none()
         }
@@ -1700,7 +1724,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.capture_in_flight = false;
             state.last_capture_status = Some(match &result {
                 Ok(path) => format!("Saved to {}.", path.display()),
-                Err(e) => format!("Capture failed: {e}"),
+                Err(e) => {
+                    tracing::warn!(target: "readshot::capture", "capture failed: {e}");
+                    history_ops::friendly_capture_error(e)
+                }
             });
             Task::none()
         }
@@ -2809,7 +2836,7 @@ mod tests {
         assert!(!app.overlay_opening);
         assert_eq!(
             app.last_capture_status.as_deref(),
-            Some("Capture failed: no displays detected.")
+            Some("Couldn't capture — no display was detected.")
         );
     }
 
@@ -2834,11 +2861,11 @@ mod tests {
         assert_eq!(app.pending_display_scale, None);
         assert_eq!(app.pending_display_bounds, None);
         assert!(app.pending_hide_cursor);
-        assert!(app
-            .last_capture_status
-            .as_deref()
-            .unwrap()
-            .contains("backend unavailable"));
+        // The raw backend error is logged, not leaked into the status —
+        // the user sees friendly recovery text instead.
+        let status = app.last_capture_status.as_deref().unwrap();
+        assert!(status.starts_with("Couldn't capture"), "{status}");
+        assert!(!status.contains("backend unavailable"), "{status}");
     }
 
     #[test]
@@ -3565,6 +3592,34 @@ mod tests {
         let generic =
             history_ops::friendly_string_error("copy the image to the clipboard", "weird backend");
         assert!(!generic.contains("weird backend"), "{generic}");
+
+        // A recovery next-step is appended as a second sentence; an
+        // unclassified error drops the "See the log" tail in its favour.
+        let save = history_ops::friendly_string_error_with(
+            "save the image",
+            "No space left on device",
+            Some(history_ops::SAVE_HINT),
+        );
+        assert!(save.contains("the disk is full"), "{save}");
+        assert!(
+            save.ends_with("Pick a different folder in Settings and try again."),
+            "{save}"
+        );
+        let retry = history_ops::friendly_string_error_with(
+            "copy the text",
+            "weird backend",
+            Some("Try again."),
+        );
+        assert_eq!(retry, "Couldn't copy the text. Try again.", "{retry}");
+
+        // Capture errors suggest the Screen Recording permission only
+        // when the error looks permission-related, never otherwise.
+        let perm = history_ops::friendly_capture_error("permission denied (os error 1)");
+        assert!(perm.contains("permission denied"), "{perm}");
+        assert!(perm.contains("Screen Recording"), "{perm}");
+        let other = history_ops::friendly_capture_error("backend offline");
+        assert!(!other.contains("backend offline"), "{other}");
+        assert!(other.ends_with("Try again."), "{other}");
     }
 
     #[cfg(target_os = "macos")]

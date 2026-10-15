@@ -279,7 +279,11 @@ pub(crate) fn notify_update_check_started() {
 pub(crate) fn notify_update_check_failed(error: &str) {
     #[cfg(target_os = "macos")]
     {
-        let body = format!("Could not check for updates: {error}");
+        let body = super::history_ops::friendly_string_error_with(
+            "check for updates",
+            error,
+            Some(super::history_ops::CONNECTION_HINT),
+        );
         show_macos_notification("Readshot updates", &body);
     }
     #[cfg(not(target_os = "macos"))]

@@ -312,7 +312,14 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
                     "{} commands copied. Paste them into Terminal.",
                     shell.label()
                 ),
-                Err(e) => format!("Copy failed: {e}"),
+                Err(e) => {
+                    tracing::warn!(target: "readshot::settings", "copy cli commands failed: {e}");
+                    super::history_ops::friendly_string_error_with(
+                        "copy the commands",
+                        &e,
+                        Some(super::history_ops::RETRY_HINT),
+                    )
+                }
             });
             Task::none()
         }

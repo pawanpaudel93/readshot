@@ -241,7 +241,12 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 open_editor_window_replacing(state, editor, None)
             }
             Err(e) => {
-                state.history_status = Some(format!("Open failed: {e}"));
+                tracing::warn!(target: "readshot::history", "open in editor failed: {e}");
+                state.history_status = Some(friendly_string_error_with(
+                    "open the capture",
+                    &e,
+                    Some(RETRY_HINT),
+                ));
                 Task::none()
             }
         },
@@ -257,7 +262,12 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 return Task::none();
             };
             if let Err(e) = reveal_path(&path) {
-                state.history_status = Some(format!("Reveal failed: {e}"));
+                tracing::warn!(target: "readshot::history", "reveal failed: {e}");
+                state.history_status = Some(friendly_string_error_with(
+                    "reveal the file",
+                    &e.to_string(),
+                    Some(RETRY_HINT),
+                ));
             }
             Task::none()
         }
@@ -328,7 +338,10 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                         if n == 1 { "" } else { "s" }
                     )
                 }
-                Err(e) => format!("Copy text failed: {e}"),
+                Err(e) => {
+                    tracing::warn!(target: "readshot::history", "copy text failed: {e}");
+                    friendly_string_error_with("copy the text", &e, Some(RETRY_HINT))
+                }
             });
             Task::none()
         }
@@ -355,7 +368,10 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                     "Copied OCR text from {count} capture{}.",
                     if count == 1 { "" } else { "s" }
                 ),
-                Err(e) => format!("Copy visible text failed: {e}"),
+                Err(e) => {
+                    tracing::warn!(target: "readshot::history", "copy visible text failed: {e}");
+                    friendly_string_error_with("copy the visible text", &e, Some(RETRY_HINT))
+                }
             });
             Task::none()
         }
@@ -386,7 +402,12 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone()))
             }
             Err(e) => {
-                state.history_status = Some(format!("Pin failed: {e}"));
+                tracing::warn!(target: "readshot::history", "pin failed: {e}");
+                state.history_status = Some(friendly_string_error_with(
+                    "pin the capture",
+                    &e,
+                    Some(RETRY_HINT),
+                ));
                 Task::none()
             }
         },
@@ -431,13 +452,22 @@ fn delete_history_record(state: &mut App, id: readshot_core::Uuid) -> Task<Messa
     history_list_task(state.coordinator.clone())
 }
 
+/// Short recovery next-steps appended to a friendly error so a failure
+/// never leaves the user at a dead end. Kept as module consts so every
+/// call site draws from the same small vocabulary.
+pub(crate) const RETRY_HINT: &str = "Try again.";
+pub(crate) const SAVE_HINT: &str = "Pick a different folder in Settings and try again.";
+pub(crate) const CONNECTION_HINT: &str = "Check your connection and try again.";
+pub(crate) const CAPTURE_PERMISSION_HINT: &str =
+    "Check Screen Recording permission in System Settings and try again.";
+
 /// Turn a typed [`HistoryError`] into a short, human-readable status
 /// line. The raw error is logged separately via tracing; the user sees
 /// plain language plus a hint (permission denied / not found) when the
 /// underlying io error exposes one.
 pub(crate) fn friendly_history_error(action: &str, e: &readshot_core::HistoryError) -> String {
     use readshot_core::HistoryError;
-    let hint = match e {
+    let reason = match e {
         HistoryError::Io(msg) => io_reason_hint(msg),
         // Parse/serialise failures mean the on-disk history index is
         // damaged — surface that rather than a raw serde string.
@@ -445,21 +475,25 @@ pub(crate) fn friendly_history_error(action: &str, e: &readshot_core::HistoryErr
             Some("the history data looks damaged")
         }
     };
-    match hint {
-        Some(reason) => format!("Couldn't {action} — {reason}."),
-        None => format!("Couldn't {action}. See the log for details."),
-    }
+    compose_friendly(action, reason, None)
 }
 
 /// Map a raw io-error string to a short human reason, when it carries a
 /// recognisable one. `None` for anything unclassified (the caller then
-/// falls back to a generic message + the log).
+/// falls back to a generic message + the log). Covers the common
+/// `io::ErrorKind` cases a user can actually act on.
 pub(crate) fn io_reason_hint(raw: &str) -> Option<&'static str> {
     let lower = raw.to_lowercase();
     if lower.contains("permission denied") {
         Some("permission denied")
     } else if lower.contains("not found") || lower.contains("no such file") {
         Some("the file was already gone")
+    } else if lower.contains("no space") || lower.contains("disk full") {
+        Some("the disk is full")
+    } else if lower.contains("read-only") || lower.contains("read only") {
+        Some("the location is read-only")
+    } else if lower.contains("timed out") || lower.contains("timeout") {
+        Some("it timed out")
     } else {
         None
     }
@@ -467,13 +501,52 @@ pub(crate) fn io_reason_hint(raw: &str) -> Option<&'static str> {
 
 /// Friendly status for the string-typed errors that come back from the
 /// clipboard / file-manager tasks (they've already been `to_string`d
-/// at the task boundary). Logs the raw error and returns plain text
-/// with a hint where one is recognisable.
+/// at the task boundary). The raw error is logged by the caller; this
+/// returns plain text with a hint where one is recognisable.
 pub(crate) fn friendly_string_error(action: &str, raw: &str) -> String {
-    match io_reason_hint(raw) {
+    friendly_string_error_with(action, raw, None)
+}
+
+/// As [`friendly_string_error`], with an optional recovery next-step
+/// appended as a second sentence (e.g. "Try again.").
+pub(crate) fn friendly_string_error_with(
+    action: &str,
+    raw: &str,
+    next_step: Option<&str>,
+) -> String {
+    compose_friendly(action, io_reason_hint(raw), next_step)
+}
+
+/// Capture failures are the most visible errors in the app, so they get
+/// a dedicated helper: a Screen Recording permission next-step when the
+/// error looks permission-related (the common, fixable cause on macOS),
+/// and a plain retry hint otherwise.
+pub(crate) fn friendly_capture_error(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+    let next_step = if lower.contains("permission") || lower.contains("denied") {
+        CAPTURE_PERMISSION_HINT
+    } else {
+        RETRY_HINT
+    };
+    friendly_string_error_with("capture the screen", raw, Some(next_step))
+}
+
+/// Assemble the final status line. With a recognised reason it reads
+/// "Couldn't {action} — {reason}."; otherwise just "Couldn't {action}.".
+/// A recovery next-step, when present, is appended as a second sentence
+/// — and replaces the "See the log" tail, since the user now has a
+/// concrete action (the full error still goes to the log).
+fn compose_friendly(action: &str, reason: Option<&str>, next_step: Option<&str>) -> String {
+    let mut msg = match reason {
         Some(reason) => format!("Couldn't {action} — {reason}."),
+        None if next_step.is_some() => format!("Couldn't {action}."),
         None => format!("Couldn't {action}. See the log for details."),
+    };
+    if let Some(step) = next_step {
+        msg.push(' ');
+        msg.push_str(step);
     }
+    msg
 }
 
 fn focus_history_search() -> Task<Message> {
