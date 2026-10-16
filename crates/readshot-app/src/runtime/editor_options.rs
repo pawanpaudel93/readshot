@@ -180,6 +180,30 @@ fn option_control<'a>(
             p,
             |s| send(StyleMessage::SpotlightShape(s)),
         ),
+        O::StampPicker => {
+            let mut r = row![].spacing(1).align_y(Alignment::Center);
+            for kind in readshot_core::StampKind::ALL {
+                let selected = style.stamp == kind;
+                let mut b = button(
+                    container(
+                        text(kind.glyph())
+                            .size(TYPE_BODY)
+                            .shaping(iced::widget::text::Shaping::Advanced),
+                    )
+                    .center_x(Length::Fill)
+                    .center_y(Length::Fill),
+                )
+                .width(Length::Fixed(ICON_BTN_SM))
+                .height(Length::Fixed(ICON_BTN_SM))
+                .padding(0)
+                .style(move |t, s| icon_button_style(t, s, selected));
+                if !busy {
+                    b = b.on_press(Message::EditorStyle(StyleMessage::Stamp(kind)));
+                }
+                r = r.push(tooltip_with_key(b, kind.label(), None, Position::Bottom));
+            }
+            r.into()
+        }
     }
 }
 

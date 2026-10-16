@@ -22,6 +22,7 @@ pub enum ToolState {
     Pixelate,
     Spotlight,
     NumberedPin,
+    Stamp,
     Crop,
 }
 
@@ -54,6 +55,7 @@ impl ToolState {
             Self::Pixelate => "pixelate",
             Self::Spotlight => "spotlight",
             Self::NumberedPin => "numbered_pin",
+            Self::Stamp => "stamp",
             Self::Crop => "crop",
         }
     }
@@ -70,9 +72,9 @@ impl ToolState {
     }
 
     /// Tools that drop a single annotation at the click point with no
-    /// drag (text, numbered-pin).
+    /// drag (text, numbered-pin, stamp).
     pub fn is_point_tool(&self) -> bool {
-        matches!(self, Self::Text | Self::NumberedPin)
+        matches!(self, Self::Text | Self::NumberedPin | Self::Stamp)
     }
 }
 
@@ -103,6 +105,7 @@ mod tests {
             ToolState::Pixelate,
             ToolState::Spotlight,
             ToolState::NumberedPin,
+            ToolState::Stamp,
             ToolState::Crop,
         ];
         for t in tools {

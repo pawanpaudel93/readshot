@@ -8,7 +8,7 @@
 use readshot_core::line_geom::{seed_for, DEFAULT_BEND};
 use readshot_core::{
     Annotation, ArrowHeads, FillMode, LinePath, LineStyle, PointLike, ShapeStyle, SpotlightShape,
-    TextStyle,
+    StampKind, TextStyle,
 };
 
 use super::tool_state::ToolState;
@@ -127,6 +127,7 @@ pub struct ToolStyle {
     pub text_bold: bool,
     pub spotlight_shape: SpotlightShape,
     pub dim: f32,
+    pub stamp: StampKind,
 }
 
 impl Default for ToolStyle {
@@ -142,6 +143,7 @@ impl Default for ToolStyle {
             text_bold: false,
             spotlight_shape: SpotlightShape::default(),
             dim: readshot_core::annotation::DEFAULT_SPOTLIGHT_DIM,
+            stamp: StampKind::default(),
         }
     }
 }
@@ -159,6 +161,7 @@ pub enum StyleMessage {
     TextBold(bool),
     SpotlightShape(SpotlightShape),
     Dim(f32),
+    Stamp(StampKind),
 }
 
 /// Controls the options bar can show, in display order.
@@ -176,6 +179,7 @@ pub enum OptionControl {
     TextBold,
     Dim,
     SpotlightShape,
+    StampPicker,
 }
 
 /// The tool that draws `annotation` — the options-bar target for a selection.
@@ -192,6 +196,7 @@ pub fn tool_for_annotation(annotation: &Annotation) -> ToolState {
         Annotation::Pixelate { .. } => ToolState::Pixelate,
         Annotation::Spotlight { .. } => ToolState::Spotlight,
         Annotation::NumberedPin { .. } => ToolState::NumberedPin,
+        Annotation::Stamp { .. } => ToolState::Stamp,
         Annotation::Crop { .. } => ToolState::Crop,
     }
 }
@@ -209,6 +214,7 @@ pub fn options_for(active: ToolState, selected: Option<&Annotation>) -> &'static
         ToolState::Blur | ToolState::Pixelate => &[Width],
         ToolState::Spotlight => &[Dim, SpotlightShape],
         ToolState::NumberedPin => &[Color],
+        ToolState::Stamp => &[Color, StampPicker],
     }
 }
 
@@ -225,6 +231,7 @@ impl ToolStyle {
             StyleMessage::TextBold(b) => self.text_bold = b,
             StyleMessage::SpotlightShape(s) => self.spotlight_shape = s,
             StyleMessage::Dim(d) => self.dim = d.clamp(MIN_DIM, MAX_DIM),
+            StyleMessage::Stamp(k) => self.stamp = k,
         }
     }
 
@@ -282,6 +289,7 @@ impl ToolStyle {
                 self.spotlight_shape = *shape;
                 self.dim = *dim;
             }
+            Annotation::Stamp { stamp, .. } => self.stamp = *stamp,
             _ => {}
         }
         self
@@ -320,6 +328,7 @@ pub fn apply_style_to_annotation(annotation: &mut Annotation, msg: StyleMessage)
         (Annotation::Spotlight { dim, .. }, StyleMessage::Dim(d)) => {
             *dim = d.clamp(MIN_DIM, MAX_DIM)
         }
+        (Annotation::Stamp { stamp, .. }, StyleMessage::Stamp(k)) => *stamp = k,
         _ => return false,
     }
     *annotation != before

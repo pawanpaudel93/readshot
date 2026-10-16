@@ -629,6 +629,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         commit_pending_editor_text(ed, &state.coordinator);
                     }
                     ed.model.set_tool(t);
+                    // Build the emoji cache off the UI thread the first
+                    // time Stamp is chosen (the OnceLock makes repeats free).
+                    if t == readshot_ui::editor::ToolState::Stamp {
+                        std::thread::spawn(readshot_core::stamp::prewarm_emoji);
+                    }
                 }
                 readshot_ui::ToolbarMessage::SelectColor(c) => {
                     apply_editor_color(ed, &state.coordinator, c);

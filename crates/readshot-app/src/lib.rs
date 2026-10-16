@@ -18,6 +18,8 @@ pub mod cli;
 pub mod cli_tools;
 pub mod coordinator;
 pub mod editor;
+#[cfg(target_os = "macos")]
+pub mod emoji_macos;
 mod icons;
 pub mod overlay;
 pub mod permissions;

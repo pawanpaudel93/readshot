@@ -651,7 +651,9 @@ pub(crate) fn annotation_hit_test(annotation: &Annotation, point: PointLike, sca
         } => points.windows(2).any(|pair| {
             distance_to_segment(point, pair[0], pair[1]) <= (*line_width * 0.5).max(tolerance)
         }),
-        Annotation::NumberedPin { origin, .. } => distance(point, *origin) <= 16.0,
+        Annotation::NumberedPin { origin, .. } | Annotation::Stamp { origin, .. } => {
+            distance(point, *origin) <= 16.0
+        }
         // Border only: a spotlight must not block selecting what it contains.
         Annotation::Spotlight { rect, .. } => {
             let inside = point.x > rect.x + tolerance
@@ -679,6 +681,7 @@ fn annotation_kind_label(annotation: &Annotation) -> &'static str {
         Annotation::Pixelate { .. } => "Pixelate",
         Annotation::Spotlight { .. } => "Spotlight",
         Annotation::NumberedPin { .. } => "Pin",
+        Annotation::Stamp { .. } => "Stamp",
         Annotation::Crop { .. } => "Crop",
     }
 }
@@ -691,7 +694,8 @@ fn set_annotation_color(annotation: &mut Annotation, color: Rgba) -> bool {
         | Annotation::Arrow { color: c, .. }
         | Annotation::Pen { color: c, .. }
         | Annotation::Text { color: c, .. }
-        | Annotation::NumberedPin { color: c, .. } => {
+        | Annotation::NumberedPin { color: c, .. }
+        | Annotation::Stamp { color: c, .. } => {
             if *c == color {
                 return false;
             }
@@ -722,7 +726,8 @@ fn annotation_color(annotation: &Annotation) -> Option<Rgba> {
         | Annotation::Pen { color, .. }
         | Annotation::Highlighter { color, .. }
         | Annotation::Text { color, .. }
-        | Annotation::NumberedPin { color, .. } => Some(*color),
+        | Annotation::NumberedPin { color, .. }
+        | Annotation::Stamp { color, .. } => Some(*color),
         Annotation::Blur { .. }
         | Annotation::Pixelate { .. }
         | Annotation::Spotlight { .. }
@@ -742,6 +747,7 @@ fn annotation_width(annotation: &Annotation) -> Option<f32> {
         Annotation::Pixelate { block_size, .. } => Some(*block_size),
         Annotation::Text { .. }
         | Annotation::NumberedPin { .. }
+        | Annotation::Stamp { .. }
         | Annotation::Spotlight { .. }
         | Annotation::Crop { .. } => None,
     }
@@ -792,9 +798,10 @@ fn set_annotation_width(annotation: &mut Annotation, width: f32) -> bool {
             *block_size = next;
             true
         }
-        Annotation::NumberedPin { .. } | Annotation::Spotlight { .. } | Annotation::Crop { .. } => {
-            false
-        }
+        Annotation::NumberedPin { .. }
+        | Annotation::Stamp { .. }
+        | Annotation::Spotlight { .. }
+        | Annotation::Crop { .. } => false,
     }
 }
 
@@ -860,7 +867,7 @@ pub(crate) fn annotation_bounds(annotation: &Annotation) -> Option<RectLike> {
                 line_height * line_count,
             ))
         }
-        Annotation::NumberedPin { origin, .. } => {
+        Annotation::NumberedPin { origin, .. } | Annotation::Stamp { origin, .. } => {
             Some(RectLike::new(origin.x - 16.0, origin.y - 16.0, 32.0, 32.0))
         }
     }
@@ -945,7 +952,9 @@ fn translate_annotation(annotation: &mut Annotation, dx: f32, dy: f32) {
                 translate_point(point, dx, dy);
             }
         }
-        Annotation::Text { origin, .. } | Annotation::NumberedPin { origin, .. } => {
+        Annotation::Text { origin, .. }
+        | Annotation::NumberedPin { origin, .. }
+        | Annotation::Stamp { origin, .. } => {
             translate_point(origin, dx, dy);
         }
     }
@@ -1249,6 +1258,27 @@ mod tests {
         s.clear_selection();
         assert_eq!(s.select_at(PointLike::new(70.0, 70.0)), None);
         assert_eq!(s.select_at(PointLike::new(20.0, 70.0)), Some(0));
+    }
+
+    #[test]
+    fn stamp_moves_and_recolors_undoably() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(Annotation::Stamp {
+            origin: PointLike::new(20.0, 20.0),
+            stamp: readshot_core::StampKind::Star,
+            color: Rgba::OPAQUE_BLACK,
+        });
+        let depth = s.undo_depth();
+        assert!(s.nudge_selected(5.0, 0.0));
+        assert!(s.apply_color_to_selected(Rgba::new(1.0, 0.0, 0.0, 1.0)));
+        assert_eq!(s.undo_depth(), depth + 2);
+        assert!(matches!(
+            &s.annotations()[0],
+            Annotation::Stamp { origin, color, .. } if origin.x == 25.0 && color.r == 1.0
+        ));
+        assert_eq!(s.selected_kind_label(), Some("Stamp"));
+        // Stamps have no size, so width changes don't apply.
+        assert!(!s.apply_line_width_to_selected(9.0));
     }
 
     #[test]

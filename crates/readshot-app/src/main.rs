@@ -23,6 +23,10 @@ use readshot_app::runtime;
 use readshot_app::url_scheme;
 
 fn main() -> iced::Result {
+    // Emoji stamps rasterize through CoreText on macOS (spec §3.4).
+    #[cfg(target_os = "macos")]
+    readshot_core::stamp::set_emoji_rasterizer(readshot_app::emoji_macos::rasterize_emoji);
+
     // Phase D (argv path): if the binary is invoked with a
     // `readshot://...` URL as the first argument (e.g. `open
     // readshot://new` on macOS or a desktop-handler invocation on

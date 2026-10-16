@@ -24,10 +24,11 @@ pub mod png;
 pub mod preferences;
 pub mod render;
 pub mod scroll_stitch;
+pub mod stamp;
 
 pub use annotation::{
     Annotation, ArrowHeads, FillMode, LinePath, LineStyle, Rgba, ShapeStyle, SpotlightShape,
-    TextStyle,
+    StampKind, TextStyle,
 };
 pub use error::{CaptureError, CoreError, ExportError, HistoryError, OCRError, PreferencesError};
 pub use filename::expand as expand_filename_template;

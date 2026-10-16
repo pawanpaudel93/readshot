@@ -185,6 +185,17 @@ pub fn render(base: &RgbaImage, model: &[Annotation]) -> RgbaImage {
                 number,
                 color,
             } => draw_numbered_pin(&mut pixmap, *origin, *number, *color, offset, &font),
+            Annotation::Stamp {
+                origin,
+                stamp,
+                color,
+            } => crate::stamp::draw_stamp(
+                &mut pixmap,
+                shift_point(*origin, offset),
+                *stamp,
+                *color,
+                &font,
+            ),
         }
     }
 
@@ -881,22 +892,37 @@ fn draw_numbered_pin(
     );
 
     // Number rendered with the bundled font, centred on the circle.
-    let label = number.to_string();
-    let size = RADIUS * 1.2; // ≈17 px — fills the circle at default radius.
+    // ≈17 px — fills the circle at default radius.
+    draw_centered_label(
+        pixmap,
+        centre,
+        &number.to_string(),
+        RADIUS * 1.2,
+        [255, 255, 255, 255],
+        font,
+    );
+}
+
+/// Draw `label` centred on `centre` with the bundled font. Shared by
+/// numbered pins and the `!` / `?` stamps.
+pub(crate) fn draw_centered_label(
+    pixmap: &mut Pixmap,
+    centre: PointLike,
+    label: &str,
+    size: f32,
+    color: [u8; 4],
+    font: &FontRef<'static>,
+) {
     let scaled = font.as_scaled(PxScale::from(size));
     let glyph_w: f32 = label
         .chars()
         .map(|c| scaled.h_advance(scaled.glyph_id(c)))
         .sum();
     let baseline_y = centre.y + size * 0.35; // empirical centring offset
-    let baseline_x = centre.x - glyph_w * 0.5;
-    let mut x = baseline_x;
-
+    let mut x = centre.x - glyph_w * 0.5;
     let pw = pixmap.width() as i32;
     let ph = pixmap.height() as i32;
     let data = pixmap.data_mut();
-    let color_white = [255u8, 255, 255, 255];
-
     let mut last_glyph: Option<ab_glyph::GlyphId> = None;
     for c in label.chars() {
         let glyph_id = scaled.glyph_id(c);
@@ -913,7 +939,7 @@ fn draw_numbered_pin(
                 if px < 0 || py < 0 || px >= pw || py >= ph {
                     return;
                 }
-                composite_premultiplied(data, (py * pw + px) as usize * 4, color_white, alpha);
+                composite_premultiplied(data, (py * pw + px) as usize * 4, color, alpha);
             });
         }
         x += scaled.h_advance(glyph_id);
@@ -954,7 +980,9 @@ pub(crate) fn composite_premultiplied(dst: &mut [u8], idx: usize, src: [u8; 4], 
 mod tests {
     use super::*;
     use crate::Rgba;
-    use crate::{ArrowHeads, FillMode, LinePath, LineStyle, ShapeStyle, SpotlightShape, TextStyle};
+    use crate::{
+        ArrowHeads, FillMode, LinePath, LineStyle, ShapeStyle, SpotlightShape, StampKind, TextStyle,
+    };
 
     fn solid_base(w: u32, h: u32, rgb: [u8; 3]) -> RgbaImage {
         let mut img = RgbaImage::new(w, h);
@@ -1298,5 +1326,37 @@ mod tests {
             contrast_ink(Rgba::new(0.1, 0.3, 0.8, 1.0)),
             Rgba::OPAQUE_WHITE
         );
+    }
+
+    #[test]
+    fn every_stamp_kind_draws_something() {
+        let base = solid_base(48, 48, [255, 255, 255]);
+        for kind in StampKind::ALL {
+            let out = render(
+                &base,
+                &[Annotation::Stamp {
+                    origin: PointLike::new(24.0, 24.0),
+                    stamp: kind,
+                    color: Rgba::new(0.1, 0.5, 0.2, 1.0),
+                }],
+            );
+            assert_ne!(out.as_raw(), base.as_raw(), "{kind:?} drew nothing");
+        }
+    }
+
+    #[test]
+    fn symbol_stamp_is_a_colored_disc_with_a_white_mark() {
+        let base = solid_base(48, 48, [255, 255, 255]);
+        let out = render(
+            &base,
+            &[Annotation::Stamp {
+                origin: PointLike::new(24.0, 24.0),
+                stamp: StampKind::Cross,
+                color: Rgba::new(0.0, 0.0, 1.0, 1.0),
+            }],
+        );
+        assert_eq!(out.get_pixel(24, 33).0, [0, 0, 255, 255], "disc fill");
+        let p = out.get_pixel(24, 24);
+        assert!(p[0] > 200 && p[1] > 200, "white cross at the centre: {p:?}");
     }
 }

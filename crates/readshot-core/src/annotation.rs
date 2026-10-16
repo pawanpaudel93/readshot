@@ -162,6 +162,90 @@ impl TextStyle {
     }
 }
 
+/// Stamp marks (spec §3.4). Symbol stamps are vector marks on a disc in
+/// the stamp color; emoji stamps come from the system emoji font.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StampKind {
+    #[default]
+    Check,
+    Cross,
+    Exclaim,
+    Question,
+    Star,
+    Heart,
+    ThumbsUp,
+    ThumbsDown,
+    Fire,
+    Party,
+    Eyes,
+    /// Last in the spec's emoji row, but drawn as a vector symbol that
+    /// takes the stamp color (no emoji font has a color ➜).
+    ArrowRight,
+}
+
+impl StampKind {
+    /// Picker order (spec §3.4 / mockup): ✓ ✕ ! ? ★ ♥ then 👍 👎 🔥 🎉 👀 ➜.
+    pub const ALL: [Self; 12] = [
+        Self::Check,
+        Self::Cross,
+        Self::Exclaim,
+        Self::Question,
+        Self::Star,
+        Self::Heart,
+        Self::ThumbsUp,
+        Self::ThumbsDown,
+        Self::Fire,
+        Self::Party,
+        Self::Eyes,
+        Self::ArrowRight,
+    ];
+
+    /// The emoji for emoji stamps; `None` for symbol stamps.
+    pub fn emoji(self) -> Option<&'static str> {
+        match self {
+            Self::ThumbsUp => Some("👍"),
+            Self::ThumbsDown => Some("👎"),
+            Self::Fire => Some("🔥"),
+            Self::Party => Some("🎉"),
+            Self::Eyes => Some("👀"),
+            _ => None,
+        }
+    }
+
+    /// What the picker shows.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Self::Check => "✓",
+            Self::Cross => "✕",
+            Self::Exclaim => "!",
+            Self::Question => "?",
+            Self::Star => "★",
+            Self::Heart => "♥",
+            Self::ArrowRight => "➜",
+            other => other.emoji().unwrap_or("?"),
+        }
+    }
+
+    /// Tooltip name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Check => "Check",
+            Self::Cross => "Cross",
+            Self::Exclaim => "Exclamation",
+            Self::Question => "Question",
+            Self::Star => "Star",
+            Self::Heart => "Heart",
+            Self::ArrowRight => "Arrow",
+            Self::ThumbsUp => "Thumbs up",
+            Self::ThumbsDown => "Thumbs down",
+            Self::Fire => "Fire",
+            Self::Party => "Party",
+            Self::Eyes => "Eyes",
+        }
+    }
+}
+
 /// One element of an editor's annotation list.
 ///
 /// The editor stores `Vec<Annotation>` and passes a slice to the renderer;
@@ -238,6 +322,13 @@ pub enum Annotation {
     NumberedPin {
         origin: PointLike,
         number: u32,
+        color: Rgba,
+    },
+    /// A mark sized like a numbered pin (spec §3.4). `color` tints symbol
+    /// stamps; emoji keep their own colors.
+    Stamp {
+        origin: PointLike,
+        stamp: StampKind,
         color: Rgba,
     },
     Crop {
@@ -329,6 +420,11 @@ mod tests {
                 number: 3,
                 color: red(),
             },
+            Annotation::Stamp {
+                origin: pt(40.0, 40.0),
+                stamp: StampKind::Fire,
+                color: red(),
+            },
             Annotation::Crop {
                 rect: rect(0.0, 0.0, 256.0, 256.0),
             },
@@ -336,7 +432,7 @@ mod tests {
 
         // Sanity: the fixture set covers every variant. If a new variant is
         // added without extending this list, this assertion fails.
-        const VARIANT_COUNT: usize = 12;
+        const VARIANT_COUNT: usize = 13;
         assert_eq!(
             fixtures.len(),
             VARIANT_COUNT,
@@ -351,6 +447,21 @@ mod tests {
                 "round-trip mismatch for variant: {original:?}\njson: {json}",
             );
         }
+    }
+
+    #[test]
+    fn stamp_kinds_split_into_seven_symbols_and_five_emoji() {
+        assert_eq!(
+            StampKind::ALL
+                .iter()
+                .filter(|k| k.emoji().is_some())
+                .count(),
+            5
+        );
+        assert!(StampKind::ArrowRight.emoji().is_none());
+        assert!(StampKind::ALL
+            .iter()
+            .all(|k| !k.glyph().is_empty() && !k.label().is_empty()));
     }
 
     #[test]

@@ -100,6 +100,7 @@ fn draw_editor_icon(frame: &mut Frame, icon: AppIcon, color: Color) {
         AppIcon::Tool(T::Pixelate) => draw_pixelate_icon(frame, color),
         AppIcon::Tool(T::Spotlight) => draw_spotlight_icon(frame, color),
         AppIcon::Tool(T::NumberedPin) => draw_numbered_pin_icon(frame, color),
+        AppIcon::Tool(T::Stamp) => draw_stamp_icon(frame, color),
         AppIcon::Tool(T::Crop) => draw_crop_icon(frame, color),
         // Undo is the counter-clockwise ↺ (arrowhead at top-left),
         // redo the clockwise ↻ — they were drawn the other way round.
@@ -291,6 +292,32 @@ fn draw_pixelate_icon(frame: &mut Frame, color: Color) {
             frame.fill(&square, Color::from_rgba(color.r, color.g, color.b, 0.72));
         }
     }
+}
+
+fn draw_stamp_icon(frame: &mut Frame, color: Color) {
+    stroke_path(frame, &Path::circle(Point::new(11.0, 5.5), 2.5), color, 2.0);
+    stroke_path(
+        frame,
+        &line_path(Point::new(11.0, 8.0), Point::new(11.0, 12.0)),
+        color,
+        2.0,
+    );
+    stroke_path(
+        frame,
+        &Path::rounded_rectangle(
+            Point::new(5.0, 12.0),
+            iced::Size::new(12.0, 4.0),
+            1.0.into(),
+        ),
+        color,
+        2.0,
+    );
+    stroke_path(
+        frame,
+        &line_path(Point::new(4.0, 19.0), Point::new(18.0, 19.0)),
+        color,
+        2.0,
+    );
 }
 
 fn draw_numbered_pin_icon(frame: &mut Frame, color: Color) {

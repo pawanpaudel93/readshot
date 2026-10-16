@@ -1324,6 +1324,38 @@ fn draw_annotation_preview(
                 });
             }
         }
+        Annotation::Stamp {
+            origin,
+            stamp,
+            color,
+        } => {
+            if let Some(point) =
+                base_point_to_canvas(*origin, bounds, image_size, image_offset, display_scale)
+            {
+                let radius = readshot_core::stamp::STAMP_RADIUS * scale;
+                let symbol = stamp.emoji().is_none();
+                if symbol {
+                    let disc = Path::circle(point, radius);
+                    frame.fill(&disc, core_rgba_to_color(*color));
+                    frame.stroke(
+                        &disc,
+                        Stroke::default()
+                            .with_color(Color::WHITE)
+                            .with_width((2.0 * scale).max(1.0)),
+                    );
+                }
+                frame.fill_text(CanvasText {
+                    content: stamp.glyph().to_string(),
+                    position: point,
+                    color: Color::WHITE,
+                    size: iced::Pixels((radius * if symbol { 1.2 } else { 1.8 }).max(9.0)),
+                    align_x: iced::widget::text::Alignment::Center,
+                    align_y: iced::alignment::Vertical::Center,
+                    shaping: iced::widget::text::Shaping::Advanced,
+                    ..Default::default()
+                });
+            }
+        }
         Annotation::Crop { rect } => {
             if let Some(rect) =
                 base_rect_to_canvas(*rect, bounds, image_size, image_offset, display_scale)
@@ -1474,7 +1506,7 @@ fn draw_selection_handle(frame: &mut Frame, point: Point) {
 }
 
 /// Translate a single click for a point tool into an annotation.
-/// NumberedPin is the only one wired today; Text needs a separate
+/// NumberedPin and Stamp are wired here; Text needs a separate
 /// input modality and is handled outside the canvas.
 pub fn annotation_for_point(
     tool: ToolState,
@@ -1482,12 +1514,17 @@ pub fn annotation_for_point(
     color: CoreRgba,
     _line_width: f32,
     next_pin_number: u32,
-    _style: &ToolStyle,
+    style: &ToolStyle,
 ) -> Option<Annotation> {
     match tool {
         ToolState::NumberedPin => Some(Annotation::NumberedPin {
             origin: PointLike::new(point.x, point.y),
             number: next_pin_number,
+            color,
+        }),
+        ToolState::Stamp => Some(Annotation::Stamp {
+            origin: PointLike::new(point.x, point.y),
+            stamp: style.stamp,
             color,
         }),
         _ => None,
@@ -1566,6 +1603,7 @@ pub fn annotation_for_drag(
         | ToolState::Highlighter
         | ToolState::Text
         | ToolState::NumberedPin
+        | ToolState::Stamp
         | ToolState::Select => None,
     }
 }
@@ -1853,6 +1891,26 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn stamp_click_commits_the_selected_stamp() {
+        let style = ToolStyle {
+            stamp: readshot_core::StampKind::Fire,
+            ..ToolStyle::default()
+        };
+        let a = annotation_for_point(
+            ToolState::Stamp,
+            pt(10.0, 12.0),
+            CoreRgba::OPAQUE_BLACK,
+            2.0,
+            1,
+            &style,
+        );
+        assert!(matches!(
+            a,
+            Some(Annotation::Stamp { stamp: readshot_core::StampKind::Fire, origin, .. }) if origin == PointLike::new(10.0, 12.0)
+        ));
     }
 
     #[test]

@@ -3286,6 +3286,7 @@ pub(crate) fn tool_label_and_key(
         T::Pixelate => ("Pixelate", "X"),
         T::Spotlight => ("Spotlight", "S"),
         T::NumberedPin => ("Numbered pin", "N"),
+        T::Stamp => ("Stamp", "E"),
         T::Crop => ("Crop", "C"),
     }
 }
@@ -3307,6 +3308,7 @@ pub(crate) fn tool_for_key(c: &str) -> Option<readshot_ui::editor::ToolState> {
         "x" => Some(T::Pixelate),
         "s" => Some(T::Spotlight),
         "n" => Some(T::NumberedPin),
+        "e" => Some(T::Stamp),
         "c" => Some(T::Crop),
         _ => None,
     }
@@ -3644,6 +3646,7 @@ pub(crate) fn editor_compact_hint(tool: readshot_ui::editor::ToolState) -> &'sta
         T::Pixelate => "Drag a region to pixelate.",
         T::Spotlight => "Drag an area to spotlight; the rest dims.",
         T::NumberedPin => "Click to drop a number.",
+        T::Stamp => "Click to place a stamp.",
         T::Crop => "Drag the region to keep.",
     }
 }

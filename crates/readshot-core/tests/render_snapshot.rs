@@ -24,7 +24,7 @@ use std::io::Cursor;
 use image::ImageFormat;
 use readshot_core::{
     render, Annotation, ArrowHeads, FillMode, LinePath, LineStyle, PointLike, RectLike, Rgba,
-    ShapeStyle, SpotlightShape, TextStyle,
+    ShapeStyle, SpotlightShape, StampKind, TextStyle,
 };
 use readshot_test_fixtures::base_256;
 
@@ -380,5 +380,30 @@ fn spotlight_union() {
             style: Default::default(),
         },
     ]);
+    insta::assert_binary_snapshot!(".png", png);
+}
+
+#[test]
+fn stamp_symbols() {
+    let symbols = [
+        StampKind::Check,
+        StampKind::Cross,
+        StampKind::Exclaim,
+        StampKind::Question,
+        StampKind::Star,
+        StampKind::Heart,
+        StampKind::ArrowRight,
+    ];
+    let png = render_png(
+        symbols
+            .iter()
+            .enumerate()
+            .map(|(i, kind)| Annotation::Stamp {
+                origin: PointLike::new(24.0 + i as f32 * 34.0, 128.0),
+                stamp: *kind,
+                color: if i % 2 == 0 { green() } else { red() },
+            })
+            .collect(),
+    );
     insta::assert_binary_snapshot!(".png", png);
 }

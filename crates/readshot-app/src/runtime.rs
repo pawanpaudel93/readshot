@@ -6783,6 +6783,21 @@ mod tests {
     }
 
     #[test]
+    fn e_selects_the_stamp_tool() {
+        let msg = editor_key_message(
+            iced::keyboard::Key::Character("e".into()),
+            iced::keyboard::Modifiers::empty(),
+            true,
+        );
+        assert!(matches!(
+            msg,
+            Some(Message::EditorToolbar(
+                readshot_ui::ToolbarMessage::SelectTool(readshot_ui::editor::ToolState::Stamp)
+            ))
+        ));
+    }
+
+    #[test]
     fn selecting_a_new_tool_marks_it_seen() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
