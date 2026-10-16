@@ -124,6 +124,13 @@ pub(crate) fn finish_combine_capture(state: &mut App, image: image::RgbaImage) -
 /// show the editor again, unchanged. `status` is a complete, friendly
 /// message for the editor's toast (`None` for a plain cancel).
 pub(crate) fn abort_combine_capture(state: &mut App, status: Option<&str>) -> Task<Message> {
+    // Past its selection (`OverlaySelected` recorded the display, cleared
+    // when `RegionCaptureCompleted` runs) the capture is in flight: it
+    // must land in this editor or be dropped there. Aborting now would
+    // let it fall back to the Editor intent and replace the editor.
+    if state.pending_display_id.is_some() {
+        return Task::none();
+    }
     let Some(cc) = state.combine_capture.take() else {
         return Task::none();
     };

@@ -1140,7 +1140,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 || state.capture_in_flight
                 || state.scroll_session.is_some()
                 || overlay_up;
-            let restore = if refused && !overlay_up {
+            // Never once the combine's own capture is in flight (its
+            // selection set the pending display): see `abort_combine_capture`.
+            let restore = if refused && !overlay_up && state.pending_display_id.is_none() {
                 let why = if state.capture_in_flight || state.scroll_session.is_some() {
                     "Couldn't add the capture — another capture is in progress."
                 } else {
@@ -12276,6 +12278,49 @@ mod tests {
                 radius: 4.0,
             }]
         );
+    }
+
+    #[test]
+    fn an_overlay_request_during_the_combine_capture_never_replaces_the_editor() {
+        use readshot_core::document::Join;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
+        let session = app.editor.as_ref().unwrap().session_id;
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        app.overlay_opening = false;
+        let id = window::Id::unique();
+        app.windows.register(id, WindowKind::Overlay);
+        let display_id: readshot_capture::DisplayId = Default::default();
+        let rect = readshot_core::geom::Rect::from_xywh(0.0, 0.0, 10.0, 10.0).unwrap();
+        let _ = update(
+            &mut app,
+            Message::OverlaySelected {
+                display_id: display_id.clone(),
+                rect,
+                intent: crate::app::CaptureIntent::CombineIntoEditor,
+            },
+        );
+        let _ = update(
+            &mut app,
+            Message::CaptureRegionRequested { display_id, rect },
+        );
+        assert!(app.capture_in_flight);
+        // A readshot:// NewCapture or History's Capture button meanwhile.
+        let _ = update(&mut app, Message::OpenOverlayRequested);
+        assert!(app.combine_capture.is_some(), "the combine is in flight");
+        assert_eq!(
+            app.pending_intent,
+            Some(crate::app::CaptureIntent::CombineIntoEditor)
+        );
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 16))));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.session_id, session, "never a new editor");
+        assert_eq!(ed.model.part_ids().len(), 2);
+        assert!(ed.source_record.is_none(), "no History record made");
+        assert!(app.combine_capture.is_none());
     }
 
     fn png_header_only(w: u32, h: u32) -> Vec<u8> {
