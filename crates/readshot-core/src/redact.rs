@@ -580,6 +580,11 @@ fn after_data_uri_header(cs: &[char], s: usize) -> bool {
     if b < 5 || !cs[b - 5..b].iter().copied().eq("data:".chars()) {
         return false;
     }
+    // `data:` must start its own token: `metadata:…` or `secret=data:…`
+    // is a word or a value, not a data URI.
+    if b > 5 && (cs[b - 6].is_alphanumeric() || matches!(cs[b - 6], '=' | '_')) {
+        return false;
+    }
     let header: String = cs[b..end].iter().collect();
     let word = |x: &str| {
         !x.is_empty()
@@ -1365,6 +1370,35 @@ mod tests {
             format!("data:image/svg+xml;charset=utf-8;base64,{png}"),
         ] {
             assert!(found(&line).is_empty(), "{line}");
+        }
+    }
+
+    #[test]
+    fn data_marker_inside_a_word_or_value_does_not_hide_secrets() {
+        // 40 chars of synthetic random-looking material.
+        let tok = [fake_random_token().as_str(), "Pq2Ws6Ex", "Jy7UGn3K"].concat();
+        assert_eq!(tok.chars().count(), 40);
+        for line in [
+            format!("metadata:text/plain;base64,{tok}"),
+            format!("secret=data:a/b;base64,{tok}"),
+            format!("my_data:a/b;base64,{tok}"),
+        ] {
+            assert!(
+                covered(&line, &tok, RedactKind::ApiKey),
+                "{line}: {:?}",
+                found(&line)
+            );
+        }
+        // A data URI that starts the line or follows punctuation is
+        // still content.
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+        for line in [
+            format!("data:image/png;base64,{png}"),
+            format!("src=\"data:image/png;base64,{png}\""),
+            format!("url(data:image/png;base64,{png})"),
+            format!("img data:image/png;base64,{png}"),
+        ] {
+            assert!(found(&line).is_empty(), "{line}: {:?}", found(&line));
         }
     }
 
