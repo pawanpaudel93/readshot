@@ -344,17 +344,19 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
             }
             let message = editor_key_message(key, modifiers, status_ignored);
-            // While the Color popover is open its hex field may have focus.
-            // iced's text_input has no undo and doesn't capture Cmd+Z, so
-            // undo/redo would silently rewind the drawing under the popover.
+            // While the Color popover is open its hex field may have focus,
+            // and an inline text draft owns its own field. iced's text_input
+            // has no undo and doesn't capture Cmd+Z, so undo/redo would
+            // silently rewind the drawing under the popover, or commit the
+            // draft and then undo it (the typed text vanishes).
             if matches!(
                 message,
                 Some(Message::EditorToolbar(
                     readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
                 ))
-            ) && state.editor.as_ref().and_then(|ed| ed.popover)
-                == Some(crate::editor::EditorPopover::Color)
-            {
+            ) && state.editor.as_ref().is_some_and(|ed| {
+                ed.popover == Some(crate::editor::EditorPopover::Color) || ed.pending_text.is_some()
+            }) {
                 return Task::none();
             }
             match message {

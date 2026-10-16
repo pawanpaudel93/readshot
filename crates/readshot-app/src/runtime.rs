@@ -6087,6 +6087,55 @@ mod tests {
     }
 
     #[test]
+    fn cmd_z_with_a_text_draft_open_keeps_the_draft() {
+        // The draft's text_input has no undo and doesn't capture ⌘Z; the
+        // shortcut must not commit-then-undo the typed text.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(96, 96));
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(30.0, 30.0),
+            content: "hello".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+        let undo_before = app.editor.as_ref().unwrap().model.undo_depth();
+
+        for modifiers in [
+            iced::keyboard::Modifiers::COMMAND,
+            iced::keyboard::Modifiers::COMMAND | iced::keyboard::Modifiers::SHIFT,
+        ] {
+            for status_ignored in [true, false] {
+                let _ = update(
+                    &mut app,
+                    Message::EditorKeyPressed {
+                        window: id,
+                        key: iced::keyboard::Key::Character("z".into()),
+                        modifiers,
+                        status_ignored,
+                    },
+                );
+            }
+        }
+
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            ed.pending_text.as_ref().map(|p| p.content.as_str()),
+            Some("hello")
+        );
+        assert_eq!(ed.model.annotations().len(), 1);
+        assert_eq!(ed.model.undo_depth(), undo_before);
+        assert!(!ed.model.can_redo());
+    }
+
+    #[test]
     fn editor_redo_with_pending_text_commits_new_branch_and_clears_redo() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let mut ed = crate::editor::EditorSession::new(solid(96, 96));
