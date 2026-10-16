@@ -167,14 +167,32 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 Task::none()
             }
         },
+        Message::HistoryCapturedShortcut(window_id, action) => {
+            if state.history_search.is_empty() {
+                update(state, Message::HistoryKeyboardShortcut(window_id, action))
+            } else {
+                Task::none()
+            }
+        }
         Message::HistoryKeyboardShortcut(window_id, action) => {
             if state.history_window_id != Some(window_id) {
                 return Task::none();
             }
             match action {
-                HistoryKeyboardAction::Previous => update(state, Message::HistorySelectPrevious),
-                HistoryKeyboardAction::Next => update(state, Message::HistorySelectNext),
-                HistoryKeyboardAction::Open => update(state, Message::HistoryOpenSelected),
+                // Moving through the list hands keyboard focus from the
+                // search field to the list, so ⌘C / ⌘⌫ / ⌦ reach History.
+                HistoryKeyboardAction::Previous => Task::batch([
+                    update(state, Message::HistorySelectPrevious),
+                    unfocus_history_search(),
+                ]),
+                HistoryKeyboardAction::Next => Task::batch([
+                    update(state, Message::HistorySelectNext),
+                    unfocus_history_search(),
+                ]),
+                HistoryKeyboardAction::Open => Task::batch([
+                    update(state, Message::HistoryOpenSelected),
+                    unfocus_history_search(),
+                ]),
                 HistoryKeyboardAction::Delete => update(state, Message::HistoryDeleteSelected),
                 HistoryKeyboardAction::CopyText => match state.history_selected_id {
                     Some(id) => update(state, Message::HistoryCopyText(id)),
@@ -552,6 +570,13 @@ fn compose_friendly(action: &str, reason: Option<&str>, next_step: Option<&str>)
         msg.push_str(step);
     }
     msg
+}
+
+/// Drop keyboard focus from the search field. iced 0.14 exposes no
+/// public unfocus task, but `focus` unfocuses every focusable whose id
+/// doesn't match, so targeting an id nothing owns clears focus.
+fn unfocus_history_search() -> Task<Message> {
+    iced::widget::operation::focus(iced::widget::Id::new("history-list"))
 }
 
 fn focus_history_search() -> Task<Message> {

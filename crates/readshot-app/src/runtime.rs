@@ -783,6 +783,17 @@ pub(crate) fn history_key_message(
 ) -> Option<Message> {
     use iced::keyboard::{key::Named, Key};
     let action = |a| Some(Message::HistoryKeyboardShortcut(window, a));
+    // A focused search field captures ⌘C and ⌫/⌦ even when it has nothing
+    // to copy or delete. Subscriptions cannot see app state, so captured
+    // chords go out as `HistoryCapturedShortcut` and the handler applies
+    // them only while the search query is empty.
+    let chord = |a| {
+        Some(if status_ignored {
+            Message::HistoryKeyboardShortcut(window, a)
+        } else {
+            Message::HistoryCapturedShortcut(window, a)
+        })
+    };
     // ⌘F focuses the search field, wherever focus is.
     if modifiers.command()
         && !modifiers.shift()
@@ -792,12 +803,11 @@ pub(crate) fn history_key_message(
     {
         return action(HistoryKeyboardAction::FocusSearch);
     }
-    // ⌘C / ⇧⌘C only fire when no widget has captured the event, so
-    // search-input text selection takes precedence.
-    if status_ignored && modifiers.command() && !modifiers.alt() && !modifiers.control() {
+    // ⌘C copies the image, ⇧⌘C the text.
+    if modifiers.command() && !modifiers.alt() && !modifiers.control() {
         if let Key::Character(c) = key {
             if c.eq_ignore_ascii_case("c") {
-                return action(if modifiers.shift() {
+                return chord(if modifiers.shift() {
                     HistoryKeyboardAction::CopyText
                 } else {
                     HistoryKeyboardAction::CopyImage
@@ -805,14 +815,12 @@ pub(crate) fn history_key_message(
             }
         }
     }
-    // Delete: ⌦ or ⌘⌫ (Move to Trash). Both need an uncaptured event so
-    // they never hijack character deletion in the search field; plain ⌫
-    // is never bound.
-    if status_ignored && !modifiers.alt() && !modifiers.control() && !modifiers.shift() {
+    // Delete: ⌦ or ⌘⌫ (Move to Trash). Plain ⌫ is never bound.
+    if !modifiers.alt() && !modifiers.control() && !modifiers.shift() {
         match key {
-            Key::Named(Named::Delete) => return action(HistoryKeyboardAction::Delete),
+            Key::Named(Named::Delete) => return chord(HistoryKeyboardAction::Delete),
             Key::Named(Named::Backspace) if modifiers.command() => {
-                return action(HistoryKeyboardAction::Delete)
+                return chord(HistoryKeyboardAction::Delete)
             }
             _ => {}
         }
@@ -1525,6 +1533,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::HistoryOpenSelected
         | Message::HistoryDeleteSelected
         | Message::HistoryKeyboardShortcut(..)
+        | Message::HistoryCapturedShortcut(..)
         | Message::HistoryClearAllRequested
         | Message::HistoryClearAllCancelled
         | Message::HistoryClearAllConfirmed
@@ -6883,7 +6892,7 @@ mod tests {
 
     #[test]
     fn history_copy_keys_match_overlay_and_editor() {
-        use iced::keyboard::{key::Named, Key, Modifiers};
+        use iced::keyboard::{Key, Modifiers};
         let w = iced::window::Id::unique();
         let c = Key::Character("c".into());
         let cmd_shift = command_modifiers() | Modifiers::SHIFT;
@@ -6901,10 +6910,22 @@ mod tests {
                 HistoryKeyboardAction::CopyText
             ))
         ));
-        // A focused search field keeps its own copy.
-        assert!(history_key_message(w, &c, command_modifiers(), false).is_none());
-        assert!(history_key_message(w, &c, cmd_shift, false).is_none());
-        let _ = Named::Enter;
+        // A focused search field captured it: deferred to the handler,
+        // which only applies it while the query is empty.
+        assert!(matches!(
+            history_key_message(w, &c, command_modifiers(), false),
+            Some(Message::HistoryCapturedShortcut(
+                _,
+                HistoryKeyboardAction::CopyImage
+            ))
+        ));
+        assert!(matches!(
+            history_key_message(w, &c, cmd_shift, false),
+            Some(Message::HistoryCapturedShortcut(
+                _,
+                HistoryKeyboardAction::CopyText
+            ))
+        ));
     }
 
     #[test]
@@ -6938,9 +6959,78 @@ mod tests {
         // Plain ⌫ never deletes a capture.
         assert!(history_key_message(w, &bs, Modifiers::empty(), true).is_none());
         assert!(history_key_message(w, &bs, Modifiers::empty(), false).is_none());
-        // A focused search field keeps ⌘⌫ / ⌦ for text editing.
-        assert!(history_key_message(w, &bs, command_modifiers(), false).is_none());
-        assert!(history_key_message(w, &del, Modifiers::empty(), false).is_none());
+        // Captured by the search field: deferred, never immediate.
+        assert!(matches!(
+            history_key_message(w, &bs, command_modifiers(), false),
+            Some(Message::HistoryCapturedShortcut(
+                _,
+                HistoryKeyboardAction::Delete
+            ))
+        ));
+        assert!(matches!(
+            history_key_message(w, &del, Modifiers::empty(), false),
+            Some(Message::HistoryCapturedShortcut(
+                _,
+                HistoryKeyboardAction::Delete
+            ))
+        ));
+    }
+
+    #[test]
+    fn history_captured_shortcut_applies_only_for_empty_search() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = iced::window::Id::unique();
+        app.history_window_id = Some(id);
+        let captured = |a| Message::HistoryCapturedShortcut(id, a);
+
+        // Non-empty query: the field owns the chord, nothing happens.
+        app.history_search = "invoice".into();
+        let _ = update(&mut app, captured(HistoryKeyboardAction::CopyImage));
+        assert_eq!(app.history_status, None);
+
+        // Empty query: it reaches History (no selection -> status).
+        app.history_search.clear();
+        let _ = update(&mut app, captured(HistoryKeyboardAction::CopyImage));
+        assert_eq!(
+            app.history_status.as_deref(),
+            Some("No history capture selected.")
+        );
+    }
+
+    #[test]
+    fn history_second_delete_key_confirms() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = iced::window::Id::unique();
+        app.history_window_id = Some(id);
+        let rec = readshot_core::Uuid::new_v4();
+        app.history_selected_id = Some(rec);
+        let del = Message::HistoryKeyboardShortcut(id, HistoryKeyboardAction::Delete);
+        let _ = update(&mut app, del.clone());
+        assert_eq!(app.history_delete_pending, Some(rec));
+        // Second press goes down the confirm path (pending is consumed).
+        let _ = update(&mut app, del);
+        assert_ne!(app.history_delete_pending, Some(rec));
+    }
+
+    #[test]
+    fn history_arrow_while_search_focused_returns_nav_message() {
+        use iced::keyboard::{key::Named, Key, Modifiers};
+        let w = iced::window::Id::unique();
+        assert!(matches!(
+            history_key_message(w, &Key::Named(Named::ArrowDown), Modifiers::empty(), false),
+            Some(Message::HistoryKeyboardShortcut(
+                _,
+                HistoryKeyboardAction::Next
+            ))
+        ));
+        // The handler pairs the move with an unfocus task for the field.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.history_window_id = Some(w);
+        let task = update(
+            &mut app,
+            Message::HistoryKeyboardShortcut(w, HistoryKeyboardAction::Next),
+        );
+        assert!(task.units() >= 1);
     }
 
     #[test]

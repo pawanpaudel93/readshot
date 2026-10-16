@@ -388,6 +388,10 @@ pub enum Message {
     /// the window id before applying the action, because iced event
     /// subscriptions are global to the daemon.
     HistoryKeyboardShortcut(iced::window::Id, HistoryKeyboardAction),
+    /// A copy / delete chord a widget (the search field) already
+    /// captured. Applied only while the search query is empty, since an
+    /// empty field has nothing to copy or delete.
+    HistoryCapturedShortcut(iced::window::Id, HistoryKeyboardAction),
     /// Browser-level "Clear All" — first click arms the confirm
     /// prompt. The button label flips and a Cancel option appears;
     /// a second click sends `HistoryClearAllConfirmed`.
