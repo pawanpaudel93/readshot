@@ -411,7 +411,7 @@ impl EditorState {
     /// clobber newer edits.
     pub fn cancel_preview_snapshot(&mut self, baseline: Snapshot) {
         match self.preview_baseline.take() {
-            Some((_, g)) if g == self.history.generation() => {}
+            Some((b, g)) if g == self.history.generation() && b == baseline => {}
             _ => return,
         }
         // `baseline` came from `snapshot()`, so its geometry is valid.
@@ -2585,6 +2585,20 @@ mod tests {
         s.commit_annotation(block(0.0, 0.0));
         s.cancel_preview_snapshot(baseline);
         assert_eq!(s.annotations().len(), 1, "the newer edit survives");
+        assert_eq!(s.beautify(), BuiltinPreset::Soft.settings());
+    }
+
+    #[test]
+    fn cancel_preview_snapshot_ignores_a_different_baseline() {
+        use readshot_core::beautify::BuiltinPreset;
+        let mut s = EditorState::new(px_grid(4, 4));
+        let baseline = s.snapshot();
+        let mut next = baseline.clone();
+        next.doc.beautify = BuiltinPreset::Soft.settings();
+        s.preview_snapshot(next).unwrap();
+        let mut other = baseline.clone();
+        other.doc.beautify = BuiltinPreset::Dark.settings();
+        s.cancel_preview_snapshot(other);
         assert_eq!(s.beautify(), BuiltinPreset::Soft.settings());
     }
 }

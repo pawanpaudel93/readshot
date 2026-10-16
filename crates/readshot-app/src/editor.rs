@@ -210,6 +210,10 @@ pub struct EditorSession {
     /// combine gap) is dragged. Release commits one undo step; esc
     /// restores it.
     pub snapshot_drag_baseline: Option<readshot_ui::editor::Snapshot>,
+    /// Set when Esc, undo or another edit dropped a snapshot drag whose
+    /// slider is still held: iced keeps sending ticks until release, and
+    /// they must not start a new preview. Cleared on release.
+    pub snapshot_drag_cancelled: bool,
     /// Draft of the Beautify tab's background hex field.
     pub beautify_hex_draft: String,
     /// Open color / line-width popover, if any. Esc and a
@@ -482,6 +486,7 @@ impl EditorSession {
             width_drag_baseline: None,
             style_drag_baseline: None,
             snapshot_drag_baseline: None,
+            snapshot_drag_cancelled: false,
             beautify_hex_draft: String::new(),
             canvas_drag_active: false,
             drag_cancel_seq: 0,
@@ -534,6 +539,7 @@ impl EditorSession {
             width_drag_baseline: None,
             style_drag_baseline: None,
             snapshot_drag_baseline: None,
+            snapshot_drag_cancelled: false,
             beautify_hex_draft: String::new(),
             canvas_drag_active: false,
             drag_cancel_seq: 0,

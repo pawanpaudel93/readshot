@@ -192,7 +192,41 @@ pub struct Preferences {
 
     /// Beautify presets the user saved (Save Preset), oldest first, at
     /// most `beautify::MAX_SAVED_PRESETS`.
+    #[serde(deserialize_with = "tolerant_presets")]
     pub editor_beautify_presets: Vec<crate::beautify::SavedBeautifyPreset>,
+}
+
+/// Read the saved-presets list one entry at a time: an entry that does
+/// not parse (a bad value, or a variant from a newer build) is dropped,
+/// and a non-list value reads as empty, so it can never fail the whole
+/// preferences file.
+fn tolerant_presets<'de, D>(d: D) -> Result<Vec<crate::beautify::SavedBeautifyPreset>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::IgnoredAny;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Ok(crate::beautify::SavedBeautifyPreset),
+        Bad(IgnoredAny),
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum List {
+        Entries(Vec<Entry>),
+        Other(IgnoredAny),
+    }
+    Ok(match List::deserialize(d)? {
+        List::Entries(v) => v
+            .into_iter()
+            .filter_map(|e| match e {
+                Entry::Ok(p) => Some(p),
+                Entry::Bad(_) => None,
+            })
+            .collect(),
+        List::Other(_) => Vec::new(),
+    })
 }
 
 impl Default for Preferences {
@@ -549,5 +583,35 @@ ocr_languages = ["en"]
             assert_eq!(s.settings.corner_radius, MAX_CORNER_RADIUS);
             assert!(s.name.chars().count() <= 24);
         }
+    }
+
+    #[test]
+    fn a_bad_saved_preset_never_costs_the_other_preferences() {
+        let cases = [
+            "padding = \"big\"",
+            "canvas = \"square_4k\"",
+            "background = { type = \"image\" }",
+        ];
+        for bad in cases {
+            let (_dir, path) = temp_path();
+            let text = format!(
+                "schema_version = 3\ncapture_hotkey = \"cmd+shift+9\"\nsave_folder = \"/tmp/keep\"\n\n[[editor_beautify_presets]]\nname = \"Good\"\n\n[[editor_beautify_presets]]\nname = \"Bad\"\n[editor_beautify_presets.settings]\n{bad}\n"
+            );
+            std::fs::write(&path, text).unwrap();
+            let p = Preferences::load(&path).unwrap_or_else(|e| panic!("{bad}: {e}"));
+            assert_eq!(p.capture_hotkey, "cmd+shift+9", "{bad}");
+            assert_eq!(p.save_folder, PathBuf::from("/tmp/keep"), "{bad}");
+            assert_eq!(p.editor_beautify_presets.len(), 1, "{bad}");
+            assert_eq!(p.editor_beautify_presets[0].name, "Good");
+        }
+        let (_dir, path) = temp_path();
+        std::fs::write(
+            &path,
+            "capture_hotkey = \"cmd+shift+9\"\neditor_beautify_presets = 5\n",
+        )
+        .unwrap();
+        let p = Preferences::load(&path).unwrap();
+        assert!(p.editor_beautify_presets.is_empty());
+        assert_eq!(p.capture_hotkey, "cmd+shift+9");
     }
 }

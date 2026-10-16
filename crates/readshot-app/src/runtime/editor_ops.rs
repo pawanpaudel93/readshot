@@ -240,10 +240,27 @@ pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
     }
     if let Some(baseline) = ed.snapshot_drag_baseline.take() {
         ed.model.cancel_preview_snapshot(baseline);
+        ed.snapshot_drag_cancelled = true;
         refresh = true;
     }
     if refresh {
         ed.refresh_image();
+    }
+}
+
+/// Keep an open snapshot slider preview as one undo step. Slider
+/// keys and Ctrl+wheel preview without ever sending a release, so
+/// anything that outputs the image settles it first.
+pub(crate) fn commit_snapshot_drag(
+    ed: &mut crate::editor::EditorSession,
+    coord: &CaptureCoordinator,
+) {
+    if let Some(baseline) = ed.snapshot_drag_baseline.take() {
+        if ed.model.commit_preview_snapshot(baseline) {
+            ed.clear_discard_confirmation();
+            ed.refresh_image();
+            sync_editor_history(ed, coord);
+        }
     }
 }
 
@@ -564,6 +581,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 return Task::none();
             }
             commit_pending_editor_text(ed, &state.coordinator);
+            commit_snapshot_drag(ed, &state.coordinator);
             cancel_editor_previews(ed);
             ed.busy = true;
             ed.set_status("Choose a save location…");
@@ -613,6 +631,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 return Task::none();
             }
             commit_pending_editor_text(ed, &state.coordinator);
+            commit_snapshot_drag(ed, &state.coordinator);
             cancel_editor_previews(ed);
             ed.busy = true;
             ed.set_status(if ed.model.beautify().is_identity() {
@@ -653,6 +672,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     return Task::none();
                 }
                 cancel_editor_previews(ed);
+                ed.snapshot_drag_cancelled = false;
                 ed.clear_discard_confirmation();
                 close_editor_popover(ed);
                 if ed.model.set_beautify(preset.settings()) {
@@ -669,13 +689,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
 
         Message::EditorSnapshotSliderCommit => {
             if let Some(ed) = state.editor.as_mut() {
-                if let Some(baseline) = ed.snapshot_drag_baseline.take() {
-                    if ed.model.commit_preview_snapshot(baseline) {
-                        ed.clear_discard_confirmation();
-                        ed.refresh_image();
-                        sync_editor_history(ed, &state.coordinator);
-                    }
-                }
+                // Release ends the drag: a cancelled one commits nothing.
+                ed.snapshot_drag_cancelled = false;
+                commit_snapshot_drag(ed, &state.coordinator);
             }
             Task::none()
         }
@@ -849,6 +865,14 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
                 readshot_ui::ToolbarMessage::SetLineWidth(w) => {
                     apply_editor_line_width(ed, &state.coordinator, w);
+                }
+                readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
+                    if ed.snapshot_drag_baseline.is_some() =>
+                {
+                    // One step per press: an open slider drag ends (back to
+                    // its value before the drag) and history stays put.
+                    cancel_editor_previews(ed);
+                    ed.set_status("Cancelled the slider change.");
                 }
                 readshot_ui::ToolbarMessage::Undo => {
                     cancel_editor_previews(ed);
@@ -1464,6 +1488,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 return Task::none();
             }
             commit_pending_editor_text(ed, &state.coordinator);
+            commit_snapshot_drag(ed, &state.coordinator);
             cancel_editor_previews(ed);
             let img = editor_output_image(ed);
             let size = (img.width(), img.height());

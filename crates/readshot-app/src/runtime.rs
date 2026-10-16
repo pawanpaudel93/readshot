@@ -3176,6 +3176,104 @@ mod tests {
     }
 
     #[test]
+    fn undo_during_a_held_drag_cancels_only_the_drag_and_loses_nothing() {
+        use readshot_core::beautify::{BeautifyEdit, BuiltinPreset};
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Dark));
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        );
+        // The slider is still held: more ticks arrive, then release.
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(160)),
+        );
+        let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.beautify(), BuiltinPreset::Dark.settings());
+        assert_eq!(ed.model.undo_depth(), depth, "one undo, no history step");
+        assert!(!ed.snapshot_drag_cancelled);
+        // The next drag works again.
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(30)),
+        );
+        let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
+        assert_eq!(app.editor.as_ref().unwrap().model.beautify().padding, 30);
+    }
+
+    #[test]
+    fn esc_during_a_held_drag_ignores_the_remaining_ticks() {
+        use readshot_core::beautify::{BeautifyEdit, BuiltinPreset};
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifyPreset(BuiltinPreset::Minimal),
+        );
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
+        );
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(151)),
+        );
+        let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.beautify(), BuiltinPreset::Minimal.settings());
+        assert_eq!(ed.model.undo_depth(), depth);
+    }
+
+    #[test]
+    fn output_commits_a_key_driven_slider_preview() {
+        use readshot_core::beautify::{BeautifyEdit, BuiltinPreset};
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifyPreset(BuiltinPreset::Minimal),
+        );
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        // Arrow keys preview but never send a release.
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(25)),
+        );
+        let _ = update(&mut app, Message::EditorCopyImageRequested);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            ed.model.beautify().padding,
+            25,
+            "the copied output keeps the previewed value"
+        );
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+        assert!(ed.snapshot_drag_baseline.is_none());
+    }
+
+    #[test]
+    fn picking_a_background_closes_the_narrow_panel_overlay() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.window_width = 800.0;
+        ed.panel_overlay_open = true;
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorBeautifyPickBackground);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(!ed.panel_overlay_open);
+        assert!(ed.eyedropper.is_some());
+    }
+
+    #[test]
     fn saved_presets_persist_apply_and_cap_at_twelve() {
         use readshot_core::beautify::{BuiltinPreset, MAX_SAVED_PRESETS};
         let mut app = build_app(Arc::new(FakePermissions::granted()));

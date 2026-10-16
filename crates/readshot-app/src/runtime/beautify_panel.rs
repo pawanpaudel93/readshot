@@ -10,7 +10,7 @@ use iced::widget::{column, container, row, text, text_input, toggler, Space};
 use iced::{Alignment, Element, Length, Task, Theme};
 use readshot_core::beautify::{
     Background, BeautifyEdit, BuiltinPreset, CanvasSize, GRADIENTS, MAX_CORNER_RADIUS, MAX_PADDING,
-    MAX_SHADOW_LEVEL, SOLIDS,
+    MAX_SAVED_PRESETS, MAX_SHADOW_LEVEL, SOLIDS,
 };
 
 use crate::app::{App, Message};
@@ -33,7 +33,9 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
         if let Some(ed) = state.editor.as_mut() {
             ed.set_status(match saved {
                 Some(name) => format!("Saved {name}."),
-                None => "You can keep up to 12 presets. Remove one to save another.".into(),
+                None => format!(
+                    "You can keep up to {MAX_SAVED_PRESETS} presets. Remove one to save another."
+                ),
             });
         }
         return Task::none();
@@ -53,17 +55,26 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
         Message::EditorBeautifySavedPresetApplied(i) => {
             if let Some(p) = saved.get(i) {
                 cancel_editor_previews(ed);
+                ed.snapshot_drag_cancelled = false;
                 set(ed, p.settings.clamped(), &format!("Applied {}", p.name));
             }
         }
         Message::EditorBeautifyEdit(edit) => {
             cancel_editor_previews(ed);
+            ed.snapshot_drag_cancelled = false;
             let mut s = ed.model.beautify();
             s.apply(edit);
             set(ed, s, "Beautify updated");
         }
         Message::EditorBeautifySliderPreview(edit) => {
+            // The slider is still held after Esc / undo cancelled its drag:
+            // ticks until release must not start a new preview.
+            if ed.snapshot_drag_cancelled {
+                return Task::none();
+            }
             if ed.snapshot_drag_baseline.is_none() {
+                // Settle any other open preview before taking the baseline.
+                cancel_editor_previews(ed);
                 ed.snapshot_drag_baseline = Some(ed.model.snapshot());
             }
             let mut next = ed.snapshot_drag_baseline.clone().expect("set above");
@@ -90,6 +101,9 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
                 return Task::none();
             }
             close_editor_popover(ed);
+            // Below the dock width the panel floats over the canvas; the
+            // first canvas click must pick, not just dismiss it.
+            close_panel_overlay(ed);
             ed.eyedropper = Some(EyedropperState {
                 loupe: None,
                 target: EyedropperTarget::BeautifyBackground,
@@ -235,7 +249,7 @@ pub(crate) fn beautify_tab<'a>(
             AppIcon::Dropper,
             p.t2,
             "Pick from image",
-            Some("I"),
+            None,
             (!busy).then_some(Message::EditorBeautifyPickBackground),
             false,
             ICON_BTN_SM,
@@ -257,7 +271,8 @@ pub(crate) fn beautify_tab<'a>(
         text("Save Preset").size(ButtonSize::Sm.text_size()).into(),
         ButtonKind::Secondary,
         ButtonSize::Sm,
-        (!busy).then_some(Message::EditorBeautifySavePreset),
+        (!busy && state.preferences.editor_beautify_presets.len() < MAX_SAVED_PRESETS)
+            .then_some(Message::EditorBeautifySavePreset),
     );
     let level = usize::from(s.shadow_level());
     let body = column![
