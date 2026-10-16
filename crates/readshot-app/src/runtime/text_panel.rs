@@ -116,14 +116,33 @@ fn next_unrecognized_part(
             continue;
         }
         if let Some(src) = tp.bake_sources.get(&p.id) {
-            // Source ids are older than the baked one: no cycles.
+            // Source ids are older than the baked one: no cycles. A baked
+            // part's own (turned) pixels are never recognized: its text
+            // comes from its sources only, or it has none (fail closed).
             if let Some(q) = next_unrecognized_part(tp, &src.parts) {
                 return Some(q);
             }
+            continue;
         }
         return Some(p.clone());
     }
     None
+}
+
+/// Original part px → document px of `g`, through any bakes: the
+/// original may only survive inside a baked part (`bake_sources`).
+pub(crate) fn original_part_affine(
+    tp: &crate::editor::TextPanelState,
+    g: &readshot_core::document::DocGeometry,
+) -> Option<readshot_core::document::Affine> {
+    if let Some(m) = g.part_affine(readshot_core::document::ORIGINAL_PART) {
+        return Some(m);
+    }
+    g.parts.iter().find_map(|p| {
+        let src = tp.bake_sources.get(&p.id)?;
+        let inner = original_part_affine(tp, src)?;
+        Some(inner.then(&g.part_affine(p.id)?))
+    })
 }
 
 /// [`refresh_text_for_geometry`] when the panel's document was built for

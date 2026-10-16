@@ -127,6 +127,11 @@ pub(crate) fn abort_combine_capture(state: &mut App, status: Option<&str>) -> Ta
     let Some(cc) = state.combine_capture.take() else {
         return Task::none();
     };
+    // A stale intent would make the next ordinary capture auto-confirm
+    // into a combine that no longer exists, and drop it.
+    if state.pending_intent == Some(CaptureIntent::CombineIntoEditor) {
+        state.pending_intent = None;
+    }
     let Some(ed) = state
         .editor
         .as_mut()
@@ -143,30 +148,91 @@ pub(crate) fn abort_combine_capture(state: &mut App, status: Option<&str>) -> Ta
 /// Read and decode a picked file as an untrusted input: its size and
 /// the image's dimensions are checked before the pixels are allocated.
 /// Errors are short, user-facing reasons (the raw error is logged).
-pub(crate) fn load_part_file(path: &std::path::Path) -> Result<image::RgbaImage, String> {
-    let len = std::fs::metadata(path)
-        .map_err(|e| {
-            tracing::warn!(target: "readshot::editor", "add image: metadata: {e}");
-            history_ops::io_reason_hint(&e.to_string())
-                .unwrap_or("the file couldn't be read")
-                .to_string()
-        })?
-        .len();
-    if len > MAX_PART_FILE_BYTES {
-        return Err("the file is too large".into());
-    }
-    let bytes = std::fs::read(path).map_err(|e| {
-        tracing::warn!(target: "readshot::editor", "add image: read: {e}");
+pub(crate) fn load_part_file(
+    path: &std::path::Path,
+    budget: PartBudget,
+) -> Result<image::RgbaImage, String> {
+    use std::io::Read;
+    let io_err = |what: &str, e: std::io::Error| {
+        tracing::warn!(target: "readshot::editor", "add image: {what}: {e}");
         history_ops::io_reason_hint(&e.to_string())
             .unwrap_or("the file couldn't be read")
             .to_string()
-    })?;
-    decode_part_image(&bytes)
+    };
+    let meta = std::fs::metadata(path).map_err(|e| io_err("metadata", e))?;
+    // A FIFO, device or directory can report any length and block (or
+    // fail) on read: only regular files are opened.
+    if !meta.is_file() {
+        return Err("that isn't an image file".into());
+    }
+    if meta.len() > MAX_PART_FILE_BYTES {
+        return Err("the file is too large".into());
+    }
+    // Bounded even if the file grows after the check.
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|e| io_err("open", e))?
+        .take(MAX_PART_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| io_err("read", e))?;
+    if bytes.len() as u64 > MAX_PART_FILE_BYTES {
+        return Err("the file is too large".into());
+    }
+    decode_part_image(&bytes, budget)
+}
+
+/// The document an added file joins (Add Image from File appends below):
+/// its layout size once any transform is baked, and its gap. Lets the
+/// file's header be checked against the combined size before decoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PartBudget {
+    pub doc_width: u32,
+    pub doc_height: u32,
+    pub gap: u32,
+}
+
+impl PartBudget {
+    /// The budget for appending below `g` (mirrors `add_part`: a
+    /// transformed document is baked into one part of its output size).
+    pub(crate) fn below(g: &readshot_core::document::DocGeometry) -> Self {
+        let (doc_width, doc_height) = if g.transform.is_identity() {
+            let l = g.layout();
+            (l.width, l.height)
+        } else {
+            g.size()
+        };
+        Self {
+            doc_width,
+            doc_height,
+            gap: g.gap.min(readshot_core::document::MAX_GAP),
+        }
+    }
+
+    /// Whether a `w` × `h` part appended below fits the document limits.
+    fn check(&self, w: u32, h: u32) -> Result<(), String> {
+        let cw = self.doc_width.max(w);
+        let ch = u64::from(self.doc_height) + u64::from(self.gap) + u64::from(h);
+        if u64::from(cw) > u64::from(MAX_DOC_SIDE) || ch > u64::from(MAX_DOC_SIDE) {
+            return Err(format!(
+                "the combined image would be {cw} × {ch} px, and the limit is {MAX_DOC_SIDE} px on a side"
+            ));
+        }
+        let pixels = u64::from(cw) * ch;
+        if pixels > MAX_DOC_PIXELS {
+            return Err(format!(
+                "the combined image would be {pixels} px, over the {MAX_DOC_PIXELS} px limit"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Decode image bytes, refusing anything over the document limits
 /// before allocating its pixels.
-pub(crate) fn decode_part_image(bytes: &[u8]) -> Result<image::RgbaImage, String> {
+pub(crate) fn decode_part_image(
+    bytes: &[u8],
+    budget: PartBudget,
+) -> Result<image::RgbaImage, String> {
     const NOT_AN_IMAGE: &str = "that file isn't an image Readshot can read";
     let reader = || {
         image::ImageReader::new(std::io::Cursor::new(bytes))
@@ -194,6 +260,9 @@ pub(crate) fn decode_part_image(bytes: &[u8]) -> Result<image::RgbaImage, String
             "image too large: {pixels} px is over the {MAX_DOC_PIXELS} px limit"
         ));
     }
+    // The document it joins must still fit: refuse before decoding, not
+    // after a large allocation that `add_part` then rejects.
+    budget.check(w, h)?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_DOC_SIDE);
     limits.max_image_height = Some(MAX_DOC_SIDE);
@@ -229,7 +298,9 @@ pub(crate) fn combine_capture_failed_status(raw: &str) -> String {
     history_ops::friendly_string_error_with("add the capture", raw, Some(next_step))
 }
 
-async fn pick_and_decode_image() -> Result<Option<Arc<image::RgbaImage>>, String> {
+async fn pick_and_decode_image(
+    budget: PartBudget,
+) -> Result<Option<Arc<image::RgbaImage>>, String> {
     let Some(file) = rfd::AsyncFileDialog::new()
         .add_filter(
             "Images",
@@ -241,12 +312,14 @@ async fn pick_and_decode_image() -> Result<Option<Arc<image::RgbaImage>>, String
         return Ok(None);
     };
     let path: PathBuf = file.path().to_path_buf();
-    tokio::task::spawn_blocking(move || load_part_file(&path).map(|img| Some(Arc::new(img))))
-        .await
-        .map_err(|e| {
-            tracing::warn!(target: "readshot::editor", "add image worker: {e}");
-            "the file couldn't be read".to_string()
-        })?
+    tokio::task::spawn_blocking(move || {
+        load_part_file(&path, budget).map(|img| Some(Arc::new(img)))
+    })
+    .await
+    .map_err(|e| {
+        tracing::warn!(target: "readshot::editor", "add image worker: {e}");
+        "the file couldn't be read".to_string()
+    })?
 }
 
 /// Preview the gap slider's `gap` over the drag's baseline (no undo
@@ -320,7 +393,8 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
             ed.busy = true;
             ed.set_status("Choose an image…");
             let session = ed.session_id;
-            Task::perform(pick_and_decode_image(), move |result| {
+            let budget = PartBudget::below(ed.model.geometry());
+            Task::perform(pick_and_decode_image(budget), move |result| {
                 Message::EditorPartLoaded { session, result }
             })
         }

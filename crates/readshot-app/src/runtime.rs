@@ -1131,19 +1131,25 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
 
         Message::OpenOverlayRequested => {
-            // An Add Capture whose overlay can't open (another capture
-            // started in between) gives its hidden editor back at once.
+            // An Add Capture whose overlay can't open gives its hidden
+            // editor back at once: whenever this request opens nothing and
+            // no overlay is up or on its way.
             let overlay_up =
                 state.overlay_opening || state.windows.kinds().any(|k| k == WindowKind::Overlay);
-            let restore =
-                if !overlay_up && (state.capture_in_flight || state.scroll_session.is_some()) {
-                    abort_combine_capture(
-                        state,
-                        Some("Couldn't add the capture — another capture is in progress."),
-                    )
+            let refused = state.welcome.should_show()
+                || state.capture_in_flight
+                || state.scroll_session.is_some()
+                || overlay_up;
+            let restore = if refused && !overlay_up {
+                let why = if state.capture_in_flight || state.scroll_session.is_some() {
+                    "Couldn't add the capture — another capture is in progress."
                 } else {
-                    Task::none()
+                    "Couldn't add the capture. Try again."
                 };
+                abort_combine_capture(state, Some(why))
+            } else {
+                Task::none()
+            };
             if state.welcome.should_show() || state.capture_in_flight || state.overlay_opening {
                 return restore;
             }
@@ -1703,6 +1709,22 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // don't try to focus a dead window.
             state.windows.forget(id);
             state.overlay_displays.remove(&id);
+            // The last overlay went away without a selection or a cancel
+            // (closed by the OS): an Add Capture waiting on it gives its
+            // hidden editor back. A confirmed selection has set the pending
+            // display (cleared when its capture completes), so that capture
+            // is left to finish.
+            let restore = if state.combine_capture.is_some()
+                && !state.overlay_opening
+                && !state.capture_in_flight
+                && state.pending_display_id.is_none()
+                && !state.windows.kinds().any(|k| k == WindowKind::Overlay)
+            {
+                state.overlay_selections.clear();
+                abort_combine_capture(state, None)
+            } else {
+                Task::none()
+            };
             if state.history_window_id == Some(id) {
                 state.history_window_id = None;
                 state.history_records.clear();
@@ -1756,10 +1778,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         tasks.push(window::close(sibling));
                     }
                     state.last_capture_status = Some("Scroll capture cancelled.".into());
+                    tasks.push(restore);
                     return Task::batch(tasks);
                 }
             }
-            Task::none()
+            restore
         }
         Message::WindowRescaled(id, scale) => {
             if matches!(state.windows.kind(id), Some(WindowKind::Editor)) {
@@ -12048,6 +12071,10 @@ mod tests {
         app.capture_in_flight = true;
         let _ = update(&mut app, Message::OpenOverlayRequested);
         assert!(app.combine_capture.is_none());
+        assert!(
+            app.pending_intent.is_none(),
+            "a stale combine intent would swallow the next capture"
+        );
         assert!(app
             .editor
             .as_ref()
@@ -12056,6 +12083,199 @@ mod tests {
             .as_deref()
             .unwrap()
             .starts_with("Couldn't add the capture"));
+    }
+
+    const NO_DOC: PartBudget = PartBudget {
+        doc_width: 0,
+        doc_height: 0,
+        gap: 0,
+    };
+
+    #[test]
+    fn an_overlay_refused_for_the_welcome_gives_the_editor_back() {
+        use readshot_core::document::Join;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        app.welcome = crate::welcome::WelcomeState::Pending;
+        let _ = update(&mut app, Message::OpenOverlayRequested);
+        assert!(app.combine_capture.is_none());
+        assert!(app.pending_intent.is_none());
+    }
+
+    #[test]
+    fn an_overlay_closed_by_the_os_gives_the_editor_back() {
+        use readshot_core::document::Join;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        app.overlay_opening = false;
+        let (a, b) = (window::Id::unique(), window::Id::unique());
+        app.windows.register(a, WindowKind::Overlay);
+        app.windows.register(b, WindowKind::Overlay);
+        let _ = update(&mut app, Message::WindowClosed(a));
+        assert!(app.combine_capture.is_some(), "another overlay is still up");
+        let _ = update(&mut app, Message::WindowClosed(b));
+        assert!(app.combine_capture.is_none());
+        assert!(app.pending_intent.is_none());
+    }
+
+    #[test]
+    fn closing_the_overlays_after_a_selection_keeps_the_combine_capture() {
+        use readshot_core::document::Join;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        let id = window::Id::unique();
+        app.windows.register(id, WindowKind::Overlay);
+        let _ = update(
+            &mut app,
+            Message::OverlaySelected {
+                display_id: Default::default(),
+                rect: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 10.0, 10.0).unwrap(),
+                intent: crate::app::CaptureIntent::CombineIntoEditor,
+            },
+        );
+        // The close event lands before the capture request runs.
+        let _ = update(&mut app, Message::WindowClosed(id));
+        assert!(app.combine_capture.is_some());
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 16))));
+        assert_eq!(app.editor.as_ref().unwrap().model.part_ids().len(), 2);
+    }
+
+    #[test]
+    fn a_file_that_would_overflow_the_combined_document_is_refused_before_decoding() {
+        // 20000 × 10000 is fine alone; below a 20000 × 10000 document it
+        // is 400 MP.
+        let budget = PartBudget {
+            doc_width: 20_000,
+            doc_height: 10_000,
+            gap: 0,
+        };
+        let err = decode_part_image(&png_header_only(20_000, 10_000), budget).unwrap_err();
+        assert!(err.contains("combined"), "{err}");
+        let tall = PartBudget {
+            doc_width: 10,
+            doc_height: 30_000,
+            gap: 40,
+        };
+        let err = decode_part_image(&png_header_only(10, 3_000), tall).unwrap_err();
+        assert!(err.contains("32767"), "{err}");
+        // The budget follows the document: a rotated one counts as baked.
+        let mut ed = crate::editor::EditorSession::new(solid(30, 20));
+        ed.model.rotate(true).unwrap();
+        assert_eq!(
+            PartBudget::below(ed.model.geometry()),
+            PartBudget {
+                doc_width: 20,
+                doc_height: 30,
+                gap: 0
+            }
+        );
+    }
+
+    #[test]
+    fn only_regular_files_are_read() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let fake = dir.path().join("x.png");
+        std::fs::create_dir(&fake).unwrap();
+        let err = load_part_file(&fake, NO_DOC).unwrap_err();
+        assert_eq!(err, "that isn't an image file");
+        let real = dir.path().join("y.png");
+        std::fs::write(&real, readshot_core::encode_png(&solid(3, 2)).unwrap()).unwrap();
+        assert_eq!(load_part_file(&real, NO_DOC).unwrap().dimensions(), (3, 2));
+    }
+
+    #[test]
+    fn a_baked_part_is_never_recognized_in_its_own_pixels() {
+        use readshot_core::document::Join;
+        let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
+        app.preferences.editor_panel_open = true;
+        app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(20, 10))));
+        let ed = app.editor.as_mut().unwrap();
+        let ids = ed.model.part_ids();
+        // The source can't be placed (say, its geometry lost the original):
+        // the baked part then has no text rather than OCR of turned pixels.
+        let src = ed.text_panel.bake_sources.get(&ids[0]).cloned().unwrap();
+        let mut broken = (*src).clone();
+        broken.parts.clear();
+        ed.text_panel.bake_sources.insert(ids[0], Arc::new(broken));
+        ed.text_panel.recognition = crate::editor::TextRecognition::Idle;
+        ed.text_panel.recognizing_part = None;
+        ed.text_panel.part_docs.insert(
+            ids[1],
+            Arc::new(positioned_doc("x", RectLike::new(0.0, 0.0, 2.0, 2.0))),
+        );
+        let _ = request_text_recognition(&mut app);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.text_panel.recognizing_part, None);
+        assert!(!ed.text_panel.part_docs.contains_key(&ids[0]));
+    }
+
+    #[tokio::test]
+    async fn a_scrubbed_record_keeps_its_redactions_through_a_bake() {
+        use readshot_core::document::Join;
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+        let img = solid(8, 4);
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 8, 4, "d");
+        record.ocr_text = Some("██████".into());
+        record.redacted = true;
+        record.redactions = vec![Annotation::Blur {
+            rect: RectLike::new(0.0, 0.0, 4.0, 2.0),
+            radius: 4.0,
+        }];
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            img,
+            record.clone(),
+        ));
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(4, 4))));
+        assert_ne!(
+            app.editor.as_ref().unwrap().model.part_ids()[0],
+            readshot_core::document::ORIGINAL_PART,
+            "baked"
+        );
+        app.coordinator.flush_history_updates();
+        let stored = store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == record.id)
+            .unwrap();
+        assert!(stored.redacted);
+        // The blur over the original's top-left 4 × 2, turned clockwise
+        // with the 8 × 4 image: the right edge's top 2 × 4.
+        assert_eq!(
+            stored.redactions,
+            vec![Annotation::Blur {
+                rect: RectLike::new(2.0, 0.0, 2.0, 4.0),
+                radius: 4.0,
+            }]
+        );
     }
 
     fn png_header_only(w: u32, h: u32) -> Vec<u8> {
@@ -12095,18 +12315,18 @@ mod tests {
     #[test]
     fn a_picked_file_is_decoded_as_untrusted_input() {
         let ok = readshot_core::encode_png(&solid(3, 2)).unwrap();
-        assert_eq!(decode_part_image(&ok).unwrap().dimensions(), (3, 2));
-        let err = decode_part_image(b"not an image at all").unwrap_err();
+        assert_eq!(decode_part_image(&ok, NO_DOC).unwrap().dimensions(), (3, 2));
+        let err = decode_part_image(b"not an image at all", NO_DOC).unwrap_err();
         assert!(err.contains("isn't an image"), "{err}");
         let mut truncated = ok.clone();
         truncated.truncate(ok.len() / 2);
-        assert!(decode_part_image(&truncated).is_err());
+        assert!(decode_part_image(&truncated, NO_DOC).is_err());
         // Refused from the header alone, before any pixel is allocated.
-        let err = decode_part_image(&png_header_only(40_000, 1)).unwrap_err();
+        let err = decode_part_image(&png_header_only(40_000, 1), NO_DOC).unwrap_err();
         assert!(err.contains("32767"), "{err}");
-        let err = decode_part_image(&png_header_only(20_000, 20_000)).unwrap_err();
+        let err = decode_part_image(&png_header_only(20_000, 20_000), NO_DOC).unwrap_err();
         assert!(err.contains("256000000"), "{err}");
-        let err = decode_part_image(&png_header_only(0, 5)).unwrap_err();
+        let err = decode_part_image(&png_header_only(0, 5), NO_DOC).unwrap_err();
         assert!(!err.is_empty());
     }
 

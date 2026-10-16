@@ -421,10 +421,9 @@ fn inherited_redactions(
     if !readshot_core::scrub::has_redaction(&record.redactions) {
         return None;
     }
-    let m = ed
-        .model
-        .geometry()
-        .part_affine(readshot_core::document::ORIGINAL_PART)?;
+    // Through any bake (Add Capture on a transformed document): the
+    // original part then lives inside the baked one.
+    let m = super::text_panel::original_part_affine(&ed.text_panel, ed.model.geometry())?;
     Some(
         record
             .redactions
