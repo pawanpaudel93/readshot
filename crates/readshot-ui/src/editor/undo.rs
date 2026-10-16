@@ -42,6 +42,9 @@ pub struct History {
     past: Vec<Snapshot>,
     present: Snapshot,
     future: Vec<Snapshot>,
+    /// Bumped by every push, undo and redo (never by a preview), so a
+    /// caller can tell whether the history moved since it looked.
+    generation: u64,
 }
 
 impl History {
@@ -61,7 +64,13 @@ impl History {
             past: Vec::new(),
             present,
             future: Vec::new(),
+            generation: 0,
         }
+    }
+
+    /// Changes on every push, undo and redo; never on a preview.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Snapshot accessor — the slice the renderer should render.
@@ -98,6 +107,7 @@ impl History {
     }
 
     pub fn push_snapshot(&mut self, next: Snapshot) {
+        self.generation += 1;
         let prev = std::mem::replace(&mut self.present, next);
         self.past.push(prev);
         if self.past.len() > MAX_HISTORY {
@@ -113,6 +123,7 @@ impl History {
         let prev = self.past.pop()?;
         let current = std::mem::replace(&mut self.present, prev);
         self.future.push(current);
+        self.generation += 1;
         Some(&self.present.annotations)
     }
 
@@ -122,6 +133,7 @@ impl History {
         let next = self.future.pop()?;
         let current = std::mem::replace(&mut self.present, next);
         self.past.push(current);
+        self.generation += 1;
         Some(&self.present.annotations)
     }
 

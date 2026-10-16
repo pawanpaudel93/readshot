@@ -81,7 +81,7 @@ pub struct EditorState {
     base_geometry: Arc<DocGeometry>,
     next_part_id: PartId,
     /// Present snapshot's baseline while a snapshot preview is open.
-    preview_baseline: Option<Snapshot>,
+    preview_baseline: Option<(Snapshot, u64)>,
     history: History,
     active_tool: ToolState,
     current_color: Rgba,
@@ -375,7 +375,7 @@ impl EditorState {
     pub fn preview_snapshot(&mut self, snapshot: Snapshot) -> Result<(), GeometryError> {
         snapshot.doc.geometry.validate()?;
         if self.preview_baseline.is_none() {
-            self.preview_baseline = Some(self.snapshot());
+            self.preview_baseline = Some((self.snapshot(), self.history.generation()));
         }
         self.history.replace_present_snapshot(snapshot);
         self.sync_base();
@@ -387,8 +387,11 @@ impl EditorState {
     /// Keep the previewed state as one undo step over `baseline`. Does
     /// nothing when no preview is open.
     pub fn commit_preview_snapshot(&mut self, baseline: Snapshot) -> bool {
-        if self.preview_baseline.take().is_none() {
-            return false;
+        // Refuse when no preview is open or the history moved since it
+        // opened: the baseline is stale and would clobber a newer edit.
+        match self.preview_baseline.take() {
+            Some((_, g)) if g == self.history.generation() => {}
+            _ => return false,
         }
         let current = self.snapshot();
         if current == baseline {
@@ -409,9 +412,13 @@ impl EditorState {
 
     /// Close an open snapshot preview, restoring its baseline.
     fn close_preview(&mut self) {
-        if let Some(b) = self.preview_baseline.take() {
-            self.history.replace_present_snapshot(b);
-            self.sync_base();
+        // Restore only while the history has not moved; otherwise the
+        // baseline is stale and the present already holds newer edits.
+        if let Some((b, g)) = self.preview_baseline.take() {
+            if g == self.history.generation() {
+                self.history.replace_present_snapshot(b);
+                self.sync_base();
+            }
         }
     }
 
@@ -2492,5 +2499,33 @@ mod tests {
         snap.doc.geometry = Arc::new(DocGeometry::default());
         assert!(s.preview_snapshot(snap).is_err());
         assert!(s.geometry().is_original());
+    }
+
+    #[test]
+    fn an_edit_after_an_abandoned_preview_survives_undo_and_redo() {
+        use readshot_core::beautify::BuiltinPreset;
+        let mut s = EditorState::new(px_grid(4, 4));
+        s.commit_annotation(block(0.0, 0.0));
+        let baseline = s.snapshot();
+        let mut next = baseline.clone();
+        next.doc.beautify = BuiltinPreset::Soft.settings();
+        s.preview_snapshot(next).unwrap();
+        s.commit_annotation(block(1.0, 1.0));
+        assert!(s.undo());
+        assert!(s.redo());
+        assert_eq!(s.annotations().len(), 2);
+    }
+
+    #[test]
+    fn a_rotation_after_an_abandoned_preview_stays_redoable() {
+        use readshot_core::beautify::BuiltinPreset;
+        let mut s = EditorState::new(px_grid(3, 2));
+        let mut next = s.snapshot();
+        next.doc.beautify = BuiltinPreset::Soft.settings();
+        s.preview_snapshot(next).unwrap();
+        s.rotate(true).unwrap();
+        assert!(s.undo());
+        assert!(s.redo());
+        assert_eq!(s.base().dimensions(), (2, 3));
     }
 }
