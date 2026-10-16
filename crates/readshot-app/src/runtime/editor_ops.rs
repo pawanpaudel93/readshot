@@ -132,6 +132,7 @@ pub(crate) fn commit_pending_editor_text(
         // Tie text size to the line-width slider so it's discoverable
         // without a separate control.
         size: text_size_from_line_width(ed.model.current_line_width()),
+        style: Default::default(),
     };
     ed.model.commit_annotation(annotation);
     ed.refresh_image();

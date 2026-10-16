@@ -9,6 +9,8 @@
 //! 1. The renderer's match arm in `readshot-core::render`.
 //! 2. The toolbar's `ToolState` enum in `readshot-ui::editor::tool_state`.
 //! 3. The serde round-trip test below.
+//! 4. `readshot-ui::editor::style::{tool_for_annotation, options_for}` and
+//!    the `state.rs` helpers.
 
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +37,119 @@ impl Rgba {
     pub const TRANSPARENT: Self = Self::new(0.0, 0.0, 0.0, 0.0);
 }
 
+impl Rgba {
+    /// Build from 8-bit straight RGBA channels.
+    pub fn from_rgba8([r, g, b, a]: [u8; 4]) -> Self {
+        Self::new(
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            b as f32 / 255.0,
+            a as f32 / 255.0,
+        )
+    }
+
+    /// `#RRGGBB`, uppercase. Alpha is not encoded.
+    pub fn to_hex(&self) -> String {
+        let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        format!("#{:02X}{:02X}{:02X}", c(self.r), c(self.g), c(self.b))
+    }
+
+    /// Parse `#RGB`, `#RRGGBB`, `RGB` or `RRGGBB` (any case; surrounding
+    /// whitespace ignored). The result is opaque.
+    pub fn from_hex(input: &str) -> Option<Self> {
+        let s = input.trim();
+        let s = s.strip_prefix('#').unwrap_or(s);
+        if s.is_empty() || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        let expanded: String = match s.len() {
+            3 => s.chars().flat_map(|c| [c, c]).collect(),
+            6 => s.to_string(),
+            _ => return None,
+        };
+        let byte = |i: usize| u8::from_str_radix(&expanded[i..i + 2], 16).ok();
+        Some(Self::from_rgba8([byte(0)?, byte(2)?, byte(4)?, 255]))
+    }
+}
+
+/// How a rectangle or ellipse is painted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FillMode {
+    #[default]
+    Outline,
+    Filled,
+    /// Translucent fill (see `render::BOTH_FILL_ALPHA`) plus the outline.
+    Both,
+}
+
+/// Rectangle / ellipse options (spec §3.3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShapeStyle {
+    pub fill: FillMode,
+    pub dashed: bool,
+    /// Rectangle only; ellipses ignore it.
+    pub corner_radius: f32,
+}
+
+impl ShapeStyle {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Path a line or arrow follows between its endpoints.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LinePath {
+    #[default]
+    Straight,
+    /// Quadratic curve. `bend` places the control point at the chord
+    /// midpoint plus `bend × chord length` along the chord's left normal.
+    Curved { bend: f32 },
+    /// Seeded jitter (see `line_geom`). The seed is stored so every
+    /// re-render, move and export draws the same wobble.
+    HandDrawn { seed: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrowHeads {
+    #[default]
+    End,
+    Both,
+}
+
+/// Line / arrow options (spec §3.3). `heads` only matters for arrows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LineStyle {
+    pub path: LinePath,
+    pub dashed: bool,
+    pub heads: ArrowHeads,
+}
+
+impl LineStyle {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Text options (spec §3.3). Size lives in `Annotation::Text::size`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextStyle {
+    pub pill: bool,
+    pub bold: bool,
+}
+
+impl TextStyle {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// One element of an editor's annotation list.
 ///
 /// The editor stores `Vec<Annotation>` and passes a slice to the renderer;
@@ -48,23 +163,31 @@ pub enum Annotation {
         rect: RectLike,
         color: Rgba,
         line_width: f32,
+        #[serde(default, skip_serializing_if = "ShapeStyle::is_default")]
+        style: ShapeStyle,
     },
     Ellipse {
         rect: RectLike,
         color: Rgba,
         line_width: f32,
+        #[serde(default, skip_serializing_if = "ShapeStyle::is_default")]
+        style: ShapeStyle,
     },
     Line {
         a: PointLike,
         b: PointLike,
         color: Rgba,
         line_width: f32,
+        #[serde(default, skip_serializing_if = "LineStyle::is_default")]
+        style: LineStyle,
     },
     Arrow {
         a: PointLike,
         b: PointLike,
         color: Rgba,
         line_width: f32,
+        #[serde(default, skip_serializing_if = "LineStyle::is_default")]
+        style: LineStyle,
     },
     Pen {
         points: Vec<PointLike>,
@@ -82,6 +205,8 @@ pub enum Annotation {
         color: Rgba,
         font_family: String,
         size: f32,
+        #[serde(default, skip_serializing_if = "TextStyle::is_default")]
+        style: TextStyle,
     },
     Blur {
         rect: RectLike,
@@ -127,23 +252,27 @@ mod tests {
                 rect: rect(10.0, 20.0, 30.0, 40.0),
                 color: red(),
                 line_width: 2.0,
+                style: ShapeStyle::default(),
             },
             Annotation::Ellipse {
                 rect: rect(0.0, 0.0, 50.0, 25.0),
                 color: red(),
                 line_width: 1.5,
+                style: ShapeStyle::default(),
             },
             Annotation::Line {
                 a: pt(0.0, 0.0),
                 b: pt(100.0, 100.0),
                 color: red(),
                 line_width: 3.0,
+                style: LineStyle::default(),
             },
             Annotation::Arrow {
                 a: pt(5.0, 5.0),
                 b: pt(95.0, 95.0),
                 color: red(),
                 line_width: 4.0,
+                style: LineStyle::default(),
             },
             Annotation::Pen {
                 points: vec![pt(0.0, 0.0), pt(10.0, 5.0), pt(20.0, 0.0)],
@@ -161,6 +290,7 @@ mod tests {
                 color: Rgba::OPAQUE_BLACK,
                 font_family: "system-ui".to_string(),
                 size: 14.0,
+                style: TextStyle::default(),
             },
             Annotation::Blur {
                 rect: rect(50.0, 50.0, 100.0, 100.0),
@@ -215,5 +345,112 @@ mod tests {
         };
         let json = serde_json::to_value(&a).unwrap();
         assert_eq!(json["kind"], "Crop");
+    }
+
+    #[test]
+    fn legacy_json_without_style_decodes_to_default_style() {
+        // Sidecars written before Phase A carry no `style` key.
+        let json = r#"{"kind":"Rectangle","rect":{"x":1.0,"y":2.0,"width":3.0,"height":4.0},"color":{"r":1.0,"g":0.0,"b":0.0,"a":1.0},"line_width":2.0}"#;
+        let a: Annotation = serde_json::from_str(json).expect("legacy rectangle");
+        assert_eq!(
+            a,
+            Annotation::Rectangle {
+                rect: rect(1.0, 2.0, 3.0, 4.0),
+                color: red(),
+                line_width: 2.0,
+                style: ShapeStyle::default(),
+            }
+        );
+        let json = r#"{"kind":"Arrow","a":{"x":0.0,"y":0.0},"b":{"x":5.0,"y":5.0},"color":{"r":1.0,"g":0.0,"b":0.0,"a":1.0},"line_width":3.0}"#;
+        let a: Annotation = serde_json::from_str(json).expect("legacy arrow");
+        assert!(matches!(a, Annotation::Arrow { style, .. } if style == LineStyle::default()));
+        let json = r#"{"kind":"Text","content":"hi","origin":{"x":0.0,"y":0.0},"color":{"r":0.0,"g":0.0,"b":0.0,"a":1.0},"font_family":"system-ui","size":14.0}"#;
+        let a: Annotation = serde_json::from_str(json).expect("legacy text");
+        assert!(matches!(a, Annotation::Text { style, .. } if style == TextStyle::default()));
+    }
+
+    #[test]
+    fn default_style_is_not_serialised() {
+        let a = Annotation::Line {
+            a: pt(0.0, 0.0),
+            b: pt(1.0, 1.0),
+            color: red(),
+            line_width: 2.0,
+            style: LineStyle::default(),
+        };
+        let json = serde_json::to_value(&a).unwrap();
+        assert!(json.get("style").is_none(), "{json}");
+    }
+
+    #[test]
+    fn styled_variants_roundtrip_through_json() {
+        let fixtures = vec![
+            Annotation::Rectangle {
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+                color: red(),
+                line_width: 2.0,
+                style: ShapeStyle {
+                    fill: FillMode::Both,
+                    dashed: true,
+                    corner_radius: 8.0,
+                },
+            },
+            Annotation::Arrow {
+                a: pt(0.0, 0.0),
+                b: pt(50.0, 10.0),
+                color: red(),
+                line_width: 3.0,
+                style: LineStyle {
+                    path: LinePath::Curved { bend: 0.3 },
+                    dashed: false,
+                    heads: ArrowHeads::Both,
+                },
+            },
+            Annotation::Line {
+                a: pt(0.0, 0.0),
+                b: pt(50.0, 10.0),
+                color: red(),
+                line_width: 3.0,
+                style: LineStyle {
+                    path: LinePath::HandDrawn { seed: 99 },
+                    dashed: true,
+                    heads: ArrowHeads::End,
+                },
+            },
+            Annotation::Text {
+                content: "Click here".into(),
+                origin: pt(4.0, 20.0),
+                color: Rgba::OPAQUE_BLACK,
+                font_family: "system-ui".into(),
+                size: 24.0,
+                style: TextStyle {
+                    pill: true,
+                    bold: true,
+                },
+            },
+        ];
+        for original in fixtures {
+            let json = serde_json::to_string(&original).unwrap();
+            let back: Annotation = serde_json::from_str(&json).unwrap();
+            assert_eq!(original, back, "{json}");
+        }
+    }
+
+    #[test]
+    fn hex_round_trips_and_accepts_short_forms() {
+        assert_eq!(Rgba::new(1.0, 0.0, 0.0, 1.0).to_hex(), "#FF0000");
+        assert_eq!(Rgba::from_hex("#4f46e5").unwrap().to_hex(), "#4F46E5");
+        assert_eq!(Rgba::from_hex("  4F46E5 ").unwrap().to_hex(), "#4F46E5");
+        assert_eq!(Rgba::from_hex("#abc").unwrap().to_hex(), "#AABBCC");
+        assert_eq!(Rgba::from_hex("#abc").unwrap().a, 1.0);
+        for bad in ["", "#", "#12", "#12345", "#1234567", "#GGGGGG", "red"] {
+            assert!(Rgba::from_hex(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn from_rgba8_maps_channels_to_unit_range() {
+        let c = Rgba::from_rgba8([255, 0, 51, 255]);
+        assert_eq!(c, Rgba::new(1.0, 0.0, 0.2, 1.0));
     }
 }

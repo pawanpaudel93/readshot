@@ -273,17 +273,20 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
             color: Rgba::OPAQUE_WHITE,
             font_family: "system-ui".into(),
             size: 24.0,
+            style: Default::default(),
         },
         Annotation::Rectangle {
             rect: RectLike::new(270.0, 102.0, 700.0, 170.0),
             color: Rgba::new(0.08, 0.72, 0.65, 1.0),
             line_width: 5.0,
+            style: Default::default(),
         },
         Annotation::Arrow {
             a: PointLike::new(236.0, 224.0),
             b: PointLike::new(330.0, 142.0),
             color: Rgba::new(0.93, 0.34, 0.34, 1.0),
             line_width: 6.0,
+            style: Default::default(),
         },
         Annotation::Highlighter {
             points: vec![
@@ -305,6 +308,7 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
             color: Rgba::new(0.10, 0.12, 0.16, 1.0),
             font_family: "system-ui".into(),
             size: 19.0,
+            style: Default::default(),
         },
     ]
 }
@@ -2818,6 +2822,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
         app.editor = Some(ed);
@@ -2848,6 +2853,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
         let undo_depth = ed.model.undo_depth();
@@ -2957,6 +2963,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         app.editor = Some(ed);
         let _ = update(&mut app, Message::EditorDiscardRequested);
@@ -3949,6 +3956,7 @@ mod tests {
                 rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
                 color: Rgba::OPAQUE_BLACK,
                 line_width: 2.0,
+                style: Default::default(),
             },
             Annotation::Crop {
                 rect: RectLike::new(4.0, 4.0, 18.0, 18.0),
@@ -4203,6 +4211,7 @@ mod tests {
             rect: RectLike::new(1.0, 2.0, 30.0, 40.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         };
         let _ = update(
             &mut app,
@@ -5008,6 +5017,7 @@ mod tests {
             rect: RectLike::new(6.0, 6.0, 20.0, 20.0),
             color: Rgba::new(1.0, 0.0, 0.0, 1.0),
             line_width: 4.0,
+            style: Default::default(),
         });
         ed.frame_style = EditorFrameStyle::Minimal;
 
@@ -5418,6 +5428,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
         app.editor = Some(ed);
@@ -5439,6 +5450,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         let undo_depth = ed.model.undo_depth();
         app.editor = Some(ed);
@@ -5480,6 +5492,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         let undo_depth = ed.model.undo_depth();
         app.editor = Some(ed);
@@ -5653,11 +5666,13 @@ mod tests {
             color: Rgba::OPAQUE_BLACK,
             font_family: "system-ui".into(),
             size: 16.0,
+            style: Default::default(),
         });
         ed.model.commit_annotation(Annotation::Rectangle {
             rect: RectLike::new(40.0, 40.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(12.0, 8.0)), Some(0));
         ed.pending_text = Some(crate::editor::PendingText {
@@ -5692,6 +5707,7 @@ mod tests {
             color: Rgba::OPAQUE_BLACK,
             font_family: "system-ui".into(),
             size: 16.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(12.0, 8.0)), Some(0));
         ed.pending_text = Some(crate::editor::PendingText {
@@ -5727,6 +5743,7 @@ mod tests {
             color: Rgba::OPAQUE_BLACK,
             font_family: "system-ui".into(),
             size: 16.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(12.0, 8.0)), Some(0));
         let undo_before = ed.model.undo_depth();
@@ -5779,6 +5796,7 @@ mod tests {
             color: Rgba::OPAQUE_BLACK,
             font_family: "system-ui".into(),
             size: 16.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(12.0, 8.0)), Some(0));
         ed.pending_text = Some(crate::editor::PendingText {
@@ -5807,6 +5825,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
         ed.pending_text = Some(crate::editor::PendingText {
@@ -5832,6 +5851,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         ed.pending_text = Some(crate::editor::PendingText {
             origin: PointLike::new(30.0, 30.0),
@@ -5864,11 +5884,13 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         ed.model.commit_annotation(Annotation::Ellipse {
             rect: RectLike::new(40.0, 40.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert!(ed.model.undo());
         assert!(ed.model.can_redo());
@@ -5969,6 +5991,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
         let undo_depth = ed.model.undo_depth();
@@ -5999,6 +6022,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
         let undo_depth = ed.model.undo_depth();
@@ -6029,6 +6053,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
         let undo_depth = ed.model.undo_depth();
@@ -6058,6 +6083,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
         let undo_depth = ed.model.undo_depth();
@@ -6131,6 +6157,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         ed.frame_style = EditorFrameStyle::Soft;
         let undo_depth = ed.model.undo_depth();
@@ -6158,6 +6185,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         ed.frame_style = EditorFrameStyle::Dark;
         app.editor = Some(ed);
@@ -6177,6 +6205,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         app.editor = Some(ed);
 
@@ -6273,6 +6302,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         app.editor = Some(ed);
 
@@ -6316,6 +6346,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         app.editor = Some(ed);
 
@@ -6352,6 +6383,7 @@ mod tests {
             color: Rgba::OPAQUE_BLACK,
             font_family: "system-ui".into(),
             size: 16.0,
+            style: Default::default(),
         });
         ed.mark_output_clean();
         ed.pending_text = Some(crate::editor::PendingText {
@@ -6376,6 +6408,7 @@ mod tests {
             color: Rgba::OPAQUE_BLACK,
             font_family: "system-ui".into(),
             size: 16.0,
+            style: Default::default(),
         });
         ed.mark_output_clean();
         ed.pending_text = Some(crate::editor::PendingText {
@@ -6420,6 +6453,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         app.editor = Some(ed);
 
@@ -6446,6 +6480,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         app.editor = Some(ed);
 
@@ -6459,6 +6494,7 @@ mod tests {
                     rect: RectLike::new(30.0, 30.0, 12.0, 12.0),
                     color: Rgba::OPAQUE_BLACK,
                     line_width: 2.0,
+                    style: Default::default(),
                 },
             )),
         );
@@ -6507,6 +6543,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
         ed.busy = true;
@@ -6527,6 +6564,7 @@ mod tests {
                     rect: RectLike::new(30.0, 30.0, 10.0, 10.0),
                     color: Rgba::OPAQUE_BLACK,
                     line_width: 4.0,
+                    style: Default::default(),
                 },
             )),
         );
@@ -6590,6 +6628,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
         app.editor = Some(ed);
@@ -6631,6 +6670,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         // A shape drag is in flight (canvas published DragStarted).
         ed.canvas_drag_active = true;

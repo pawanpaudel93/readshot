@@ -944,6 +944,7 @@ mod tests {
             rect: RectLike::new(x, 0.0, 10.0, 10.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 1.0,
+            style: Default::default(),
         }
     }
 
@@ -1001,6 +1002,7 @@ mod tests {
             rect: RectLike::new(8.0, 8.0, 48.0, 48.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         let flat1 = s.flatten();
         let pixel_top_edge = flat1.get_pixel(32, 8);
@@ -1035,11 +1037,13 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 30.0, 30.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 1.0,
+            style: Default::default(),
         });
         s.commit_annotation(Annotation::Ellipse {
             rect: RectLike::new(10.0, 10.0, 30.0, 30.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 1.0,
+            style: Default::default(),
         });
 
         assert_eq!(s.select_at(PointLike::new(20.0, 20.0)), Some(1));
@@ -1167,6 +1171,7 @@ mod tests {
             rect: RectLike::new(10.0, 20.0, 30.0, 40.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 1.0,
+            style: Default::default(),
         });
         assert_eq!(s.select_at(PointLike::new(12.0, 22.0)), Some(0));
 
@@ -1185,6 +1190,7 @@ mod tests {
             rect: RectLike::new(10.0, 20.0, 30.0, 40.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 1.0,
+            style: Default::default(),
         });
         assert_eq!(s.select_at(PointLike::new(12.0, 22.0)), Some(0));
 
@@ -1272,6 +1278,7 @@ mod tests {
             b: PointLike::new(30.0, 30.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(s.select_at(PointLike::new(20.0, 20.0)), Some(0));
         assert_eq!(
@@ -1366,6 +1373,7 @@ mod tests {
             color: Rgba::OPAQUE_BLACK,
             font_family: "system-ui".into(),
             size,
+            style: Default::default(),
         });
         assert_eq!(single.select_at(origin), Some(0));
         let single_bounds = single.selected_bounds().expect("single-line bounds");
@@ -1377,6 +1385,7 @@ mod tests {
             color: Rgba::OPAQUE_BLACK,
             font_family: "system-ui".into(),
             size,
+            style: Default::default(),
         });
         assert_eq!(multi.select_at(origin), Some(0));
         let multi_bounds = multi.selected_bounds().expect("multi-line bounds");
@@ -1402,6 +1411,7 @@ mod tests {
             color: Rgba::OPAQUE_BLACK,
             font_family: "system-ui".into(),
             size,
+            style: Default::default(),
         });
         assert_eq!(single_again.select_at(third_line), None);
     }
@@ -1415,6 +1425,7 @@ mod tests {
             color: Rgba::OPAQUE_BLACK,
             font_family: "system-ui".into(),
             size: 16.0,
+            style: Default::default(),
         });
         assert_eq!(s.select_at(PointLike::new(12.0, 8.0)), Some(0));
         let edit = s.selected_text_edit().expect("selected text is editable");
@@ -1443,11 +1454,13 @@ mod tests {
             color: Rgba::OPAQUE_BLACK,
             font_family: "system-ui".into(),
             size: 16.0,
+            style: Default::default(),
         });
         s.commit_annotation(Annotation::Rectangle {
             rect: RectLike::new(40.0, 40.0, 20.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 2.0,
+            style: Default::default(),
         });
         assert_eq!(s.select_at(PointLike::new(12.0, 8.0)), Some(0));
         let edit = s.selected_text_edit().expect("selected text is editable");
@@ -1488,6 +1501,7 @@ mod tests {
             rect: RectLike::new(20.0, 20.0, 200.0, 200.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 1.0,
+            style: Default::default(),
         });
         assert_eq!(s.select_at(PointLike::new(30.0, 30.0)), Some(0));
 
@@ -1515,6 +1529,7 @@ mod tests {
             b: PointLike::new(200.0, 20.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 1.0,
+            style: Default::default(),
         });
 
         // 10 base px off the stroke. At scale 1.0 the 6-screen-px tolerance

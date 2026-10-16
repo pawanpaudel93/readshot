@@ -864,6 +864,7 @@ mod tests {
             b: crate::PointLike::new(3.0, 4.0),
             color: crate::Rgba::new(1.0, 0.0, 0.0, 1.0),
             line_width: 2.0,
+            style: Default::default(),
         }];
         s.update(&annotated).unwrap();
 

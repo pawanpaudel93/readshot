@@ -35,6 +35,7 @@ fn render_test_image(text: &str) -> RgbaImage {
             rect: RectLike::new(8.0, 8.0, (width - 16) as f32, (height - 16) as f32),
             color: CoreRgba::new(0.85, 0.85, 0.85, 1.0),
             line_width: 1.0,
+            style: Default::default(),
         },
         Annotation::Text {
             content: text.to_string(),
@@ -42,6 +43,7 @@ fn render_test_image(text: &str) -> RgbaImage {
             color: CoreRgba::OPAQUE_BLACK,
             font_family: "system-ui".to_string(),
             size: 48.0,
+            style: Default::default(),
         },
     ];
     render(&base, &model)

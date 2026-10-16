@@ -1063,6 +1063,7 @@ fn draw_annotation_preview(
             rect,
             color,
             line_width,
+            ..
         } => {
             if let Some(rect) =
                 base_rect_to_canvas(*rect, bounds, image_size, image_offset, display_scale)
@@ -1084,6 +1085,7 @@ fn draw_annotation_preview(
             rect,
             color,
             line_width,
+            ..
         } => {
             if let Some(rect) =
                 base_rect_to_canvas(*rect, bounds, image_size, image_offset, display_scale)
@@ -1106,6 +1108,7 @@ fn draw_annotation_preview(
             b,
             color,
             line_width,
+            ..
         } => draw_preview_polyline(
             frame,
             &[*a, *b],
@@ -1122,6 +1125,7 @@ fn draw_annotation_preview(
             b,
             color,
             line_width,
+            ..
         } => {
             let points = [*a, *b];
             draw_preview_polyline(
@@ -1395,23 +1399,27 @@ pub fn annotation_for_drag(
             rect,
             color,
             line_width,
+            style: Default::default(),
         }),
         ToolState::Ellipse => Some(Annotation::Ellipse {
             rect,
             color,
             line_width,
+            style: Default::default(),
         }),
         ToolState::Line => Some(Annotation::Line {
             a: p0,
             b: p1,
             color,
             line_width,
+            style: Default::default(),
         }),
         ToolState::Arrow => Some(Annotation::Arrow {
             a: p0,
             b: p1,
             color,
             line_width,
+            style: Default::default(),
         }),
         ToolState::Blur => Some(Annotation::Blur {
             rect,
@@ -1852,6 +1860,7 @@ mod tests {
                 rect: RectLike::new(10.0, 10.0, 40.0, 30.0),
                 color: CoreRgba::OPAQUE_BLACK,
                 line_width: 2.0,
+                style: Default::default(),
             }),
             selected_preview: None,
             shift_held: false,
@@ -1992,6 +2001,7 @@ mod tests {
                 b: PointLike::new(50.0, 40.0),
                 color: CoreRgba::OPAQUE_BLACK,
                 line_width: 2.0,
+                style: Default::default(),
             }),
             selected_preview: None,
             shift_held: false,

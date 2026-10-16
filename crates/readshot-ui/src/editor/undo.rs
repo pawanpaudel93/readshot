@@ -122,6 +122,7 @@ mod tests {
             rect: RectLike::new(x, 0.0, 10.0, 10.0),
             color: Rgba::OPAQUE_BLACK,
             line_width: 1.0,
+            style: Default::default(),
         }
     }
 

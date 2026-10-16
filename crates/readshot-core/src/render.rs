@@ -62,17 +62,20 @@ pub fn render(base: &RgbaImage, model: &[Annotation]) -> RgbaImage {
                 rect,
                 color,
                 line_width,
+                ..
             } => draw_rectangle(&mut pixmap, *rect, *color, *line_width, offset),
             Annotation::Ellipse {
                 rect,
                 color,
                 line_width,
+                ..
             } => draw_ellipse(&mut pixmap, *rect, *color, *line_width, offset),
             Annotation::Line {
                 a,
                 b,
                 color,
                 line_width,
+                ..
             } => draw_polyline(
                 &mut pixmap,
                 &[*a, *b],
@@ -86,6 +89,7 @@ pub fn render(base: &RgbaImage, model: &[Annotation]) -> RgbaImage {
                 b,
                 color,
                 line_width,
+                ..
             } => draw_arrow(&mut pixmap, *a, *b, *color, *line_width, offset),
             Annotation::Pen {
                 points,
@@ -663,6 +667,7 @@ mod tests {
                     color: Rgba::OPAQUE_BLACK,
                     font_family: "system-ui".into(),
                     size,
+                    style: Default::default(),
                 }],
             );
             assert_eq!(out.width(), 32);
@@ -701,6 +706,7 @@ mod tests {
                 color: Rgba::OPAQUE_BLACK,
                 font_family: "system-ui".into(),
                 size: 18.0,
+                style: Default::default(),
             }],
         );
         let multi = render(
@@ -711,6 +717,7 @@ mod tests {
                 color: Rgba::OPAQUE_BLACK,
                 font_family: "system-ui".into(),
                 size: 18.0,
+                style: Default::default(),
             }],
         );
 
@@ -739,6 +746,7 @@ mod tests {
                     color: Rgba::OPAQUE_BLACK,
                     font_family: "system-ui".into(),
                     size: 18.0,
+                    style: Default::default(),
                 }],
             )
         };
@@ -772,6 +780,7 @@ mod tests {
                 rect: RectLike::new(8.0, 8.0, 48.0, 48.0),
                 color: Rgba::new(1.0, 0.0, 0.0, 1.0),
                 line_width: 2.0,
+                style: Default::default(),
             }],
         );
         // Sample a pixel on the top edge of the stroke — should have a

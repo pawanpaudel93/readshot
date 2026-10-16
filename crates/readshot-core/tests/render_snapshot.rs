@@ -56,6 +56,7 @@ fn rectangle() {
         rect: RectLike::new(40.0, 40.0, 176.0, 176.0),
         color: red(),
         line_width: 4.0,
+        style: Default::default(),
     }]);
     insta::assert_binary_snapshot!(".png", png);
 }
@@ -66,6 +67,7 @@ fn ellipse() {
         rect: RectLike::new(48.0, 80.0, 160.0, 96.0),
         color: green(),
         line_width: 3.0,
+        style: Default::default(),
     }]);
     insta::assert_binary_snapshot!(".png", png);
 }
@@ -77,6 +79,7 @@ fn line() {
         b: PointLike::new(236.0, 236.0),
         color: blue(),
         line_width: 3.0,
+        style: Default::default(),
     }]);
     insta::assert_binary_snapshot!(".png", png);
 }
@@ -88,6 +91,7 @@ fn arrow() {
         b: PointLike::new(216.0, 56.0),
         color: red(),
         line_width: 4.0,
+        style: Default::default(),
     }]);
     insta::assert_binary_snapshot!(".png", png);
 }
@@ -126,6 +130,7 @@ fn text() {
         color: Rgba::OPAQUE_BLACK,
         font_family: "system-ui".to_string(),
         size: 24.0,
+        style: Default::default(),
     }]);
     insta::assert_binary_snapshot!(".png", png);
 }
@@ -182,6 +187,7 @@ fn composite_arrow_text_blur() {
             b: PointLike::new(150.0, 150.0),
             color: red(),
             line_width: 4.0,
+            style: Default::default(),
         },
         Annotation::Text {
             content: "redacted".to_string(),
@@ -189,6 +195,7 @@ fn composite_arrow_text_blur() {
             color: red(),
             font_family: "system-ui".to_string(),
             size: 18.0,
+            style: Default::default(),
         },
     ]);
     insta::assert_binary_snapshot!(".png", png);
