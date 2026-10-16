@@ -162,16 +162,7 @@ fn draw_symbol(
         StampKind::Question => {
             draw_centered_label(pixmap, c, "?", STAMP_RADIUS * 1.2, [255; 4], font)
         }
-        StampKind::Star => {
-            let pts: Vec<(f32, f32)> = (0..10)
-                .map(|i| {
-                    let angle = (-90.0 + i as f32 * 36.0).to_radians();
-                    let r = if i % 2 == 0 { 8.0 } else { 3.4 };
-                    (r * angle.cos(), r * angle.sin())
-                })
-                .collect();
-            fill_poly(pixmap, &pts);
-        }
+        StampKind::Star => fill_poly(pixmap, &STAR_POINTS),
         StampKind::Heart => {
             let mut pb = PathBuilder::new();
             pb.move_to(c.x, c.y + 6.0);
@@ -200,6 +191,23 @@ fn draw_symbol(
         | StampKind::Eyes => {}
     }
 }
+
+/// Five-point star, tip up: vertex `i` sits at angle `-90° + 36°·i` on
+/// radius 8.0 (even `i`) or 3.4 (odd `i`). Written as literals rather than
+/// computed with `cos`/`sin`, whose last bits vary across platform libms,
+/// so the rendered pixels are identical everywhere.
+const STAR_POINTS: [(f32, f32); 10] = [
+    (0.0, -8.0),
+    (1.998_47, -2.750_658),
+    (7.608_452, -2.472_136),
+    (3.233_592, 1.050_658),
+    (4.702_282, 6.472_136),
+    (0.0, 3.4),
+    (-4.702_282, 6.472_136),
+    (-3.233_592, 1.050_658),
+    (-7.608_452, -2.472_136),
+    (-1.998_47, -2.750_658),
+];
 
 struct EmojiBitmap {
     image: RgbaImage,
@@ -429,6 +437,16 @@ mod tests {
         let cache = load_emoji_bitmaps(None, NO_FONT);
         assert_eq!(cache.len(), 5);
         assert!(cache.iter().all(|(_, b)| b.is_none()));
+    }
+
+    #[test]
+    fn star_points_match_the_star_geometry() {
+        for (i, &(x, y)) in STAR_POINTS.iter().enumerate() {
+            let angle = (-90.0_f64 + i as f64 * 36.0).to_radians();
+            let r = if i % 2 == 0 { 8.0 } else { 3.4 };
+            assert!((x as f64 - r * angle.cos()).abs() < 1e-4, "x{i}");
+            assert!((y as f64 - r * angle.sin()).abs() < 1e-4, "y{i}");
+        }
     }
 
     #[test]
