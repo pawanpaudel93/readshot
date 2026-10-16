@@ -70,7 +70,7 @@ pub(crate) fn draw_stamp(
     if kind.emoji().is_some() {
         draw_emoji(pixmap, centre, kind, color, font);
     } else {
-        draw_symbol(pixmap, centre, kind, color, font);
+        draw_symbol(pixmap, centre, kind, color);
     }
 }
 
@@ -108,13 +108,7 @@ fn draw_disc(pixmap: &mut Pixmap, c: PointLike, color: Rgba) {
     );
 }
 
-fn draw_symbol(
-    pixmap: &mut Pixmap,
-    c: PointLike,
-    kind: StampKind,
-    color: Rgba,
-    font: &FontRef<'static>,
-) {
+fn draw_symbol(pixmap: &mut Pixmap, c: PointLike, kind: StampKind, color: Rgba) {
     draw_disc(pixmap, c, color);
     let white = solid_paint(Rgba::OPAQUE_WHITE);
     let mark = Stroke {
@@ -150,17 +144,45 @@ fn draw_symbol(
             );
         }
     };
+    let fill_dot = |pixmap: &mut Pixmap, (x, y): (f32, f32)| {
+        if let Some(path) = PathBuilder::from_circle(c.x + x, c.y + y, 1.9) {
+            pixmap.fill_path(
+                &path,
+                &white,
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+    };
     match kind {
         StampKind::Check => stroke_poly(pixmap, &[(-5.5, 0.5), (-1.5, 4.5), (6.0, -4.5)]),
         StampKind::Cross => {
             stroke_poly(pixmap, &[(-5.0, -5.0), (5.0, 5.0)]);
             stroke_poly(pixmap, &[(5.0, -5.0), (-5.0, 5.0)]);
         }
+        // `!` and `?` are vector marks at the ✓/✕ stroke weight, so they
+        // read as boldly as the other symbols (a font glyph came out thin).
         StampKind::Exclaim => {
-            draw_centered_label(pixmap, c, "!", STAMP_RADIUS * 1.2, [255; 4], font)
+            stroke_poly(pixmap, &[(0.0, -6.5), (0.0, 1.0)]);
+            fill_dot(pixmap, (0.0, 5.5));
         }
         StampKind::Question => {
-            draw_centered_label(pixmap, c, "?", STAMP_RADIUS * 1.2, [255; 4], font)
+            let mut pb = PathBuilder::new();
+            pb.move_to(c.x - 3.8, c.y - 3.2);
+            pb.cubic_to(
+                c.x - 3.8,
+                c.y - 8.0,
+                c.x + 3.8,
+                c.y - 8.0,
+                c.x + 3.8,
+                c.y - 3.6,
+            );
+            pb.cubic_to(c.x + 3.8, c.y - 1.0, c.x, c.y - 1.0, c.x, c.y + 1.5);
+            if let Some(path) = pb.finish() {
+                pixmap.stroke_path(&path, &white, &mark, Transform::identity(), None);
+            }
+            fill_dot(pixmap, (0.0, 5.5));
         }
         StampKind::Star => fill_poly(pixmap, &STAR_POINTS),
         StampKind::Heart => {
