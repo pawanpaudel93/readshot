@@ -7,7 +7,7 @@
 //! regex crate, no floating-point entropy) — see the plan's decision
 //! list for the exact rules.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 use crate::annotation::{Annotation, FillMode, Rgba, ShapeStyle};
@@ -123,27 +123,32 @@ pub fn detect_line(text: &str) -> Vec<(Range<usize>, RedactKind)> {
                 .map(|r| (r, RedactKind::ApiKey)),
         )
         .chain(find_phones(&cs).into_iter().map(|r| (r, RedactKind::Phone)));
-    let mut accepted: Vec<(Range<usize>, RedactKind)> = Vec::new();
+    // Accepted spans are disjoint, so of those starting before `r.end`
+    // only the last one can reach past `r.start`: O(log n) per candidate.
+    let mut accepted: BTreeMap<usize, (usize, RedactKind)> = BTreeMap::new();
     for (r, k) in candidates {
-        if accepted
-            .iter()
-            .all(|(a, _)| r.end <= a.start || r.start >= a.end)
-        {
-            accepted.push((r, k));
+        let overlaps = accepted
+            .range(..r.end)
+            .next_back()
+            .is_some_and(|(_, &(end, _))| end > r.start);
+        if !overlaps {
+            accepted.insert(r.start, (r.end, k));
         }
     }
-    accepted.sort_by_key(|(r, _)| r.start);
     accepted
+        .into_iter()
+        .map(|(start, (end, k))| (start..end, k))
+        .collect()
 }
 
 // --- Emails ----------------------------------------------------------
 
 fn is_local(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-')
+    c.is_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-')
 }
 
 fn is_domain(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '.' | '-')
+    c.is_alphanumeric() || matches!(c, '.' | '-')
 }
 
 fn find_emails(cs: &[char]) -> Vec<Range<usize>> {
@@ -174,7 +179,7 @@ fn find_emails(cs: &[char]) -> Vec<Range<usize>> {
             continue;
         };
         let tld = &domain[dot + 1..];
-        if dot == 0 || tld.len() < 2 || !tld.chars().all(|c| c.is_ascii_alphabetic()) {
+        if dot == 0 || tld.chars().count() < 2 || !tld.chars().all(char::is_alphabetic) {
             continue;
         }
         if out.last().is_some_and(|r| r.end > s) {
@@ -213,14 +218,23 @@ pub fn luhn_valid(digits: &[u8]) -> bool {
     sum.is_multiple_of(10)
 }
 
-/// Issuer prefix and length of a card number (`digits.len()` ≥ 13):
-/// Visa, Mastercard, Amex, Discover, JCB, Diners.
+/// Card numbers have 12–19 digits (Maestro is the shortest).
+const CARD_DIGITS: Range<usize> = 12..20;
+
+/// Issuer prefix and length of a card number (`digits.len()` ≥ 12):
+/// Visa, Mastercard, Amex, Discover, JCB, Diners, UnionPay, Maestro.
+/// Every `6…` prefix is some network (Discover 6011/644–649/65,
+/// UnionPay 62, Maestro 56–69), so it only needs the length.
 fn card_network_ok(d: &[u8]) -> bool {
     let n = d.len();
     let prefix = |k: usize| d[..k].iter().fold(0u32, |a, &x| a * 10 + u32::from(x));
     match d[0] {
         4 => matches!(n, 13 | 16 | 19),
-        5 => (51..=55).contains(&prefix(2)) && n == 16,
+        5 => match prefix(2) {
+            51..=55 => n == 16,
+            50 | 56..=59 => CARD_DIGITS.contains(&n),
+            _ => false,
+        },
         2 => (2221..=2720).contains(&prefix(4)) && n == 16,
         3 => match prefix(2) {
             34 | 37 => n == 15,
@@ -228,55 +242,74 @@ fn card_network_ok(d: &[u8]) -> bool {
             30 | 36 | 38 => (14..=19).contains(&n),
             _ => false,
         },
-        6 => {
-            (prefix(4) == 6011 || prefix(2) == 65 || (644..=649).contains(&prefix(3)))
-                && (16..=19).contains(&n)
-        }
+        6 => CARD_DIGITS.contains(&n),
         _ => false,
     }
 }
 
+/// Length of a card group separator at `j`: one or two spaces, a dash or
+/// a dot. 0 if there is none.
+fn card_sep(cs: &[char], j: usize) -> usize {
+    match cs.get(j) {
+        Some('-' | '.') => 1,
+        Some(' ') if cs.get(j + 1) == Some(&' ') => 2,
+        Some(' ') => 1,
+        _ => 0,
+    }
+}
+
+/// Digit-group runs, longest valid prefix first. Linear: each start reads
+/// at most `CARD_DIGITS.end` digits, and a failed start resumes at the
+/// next group rather than the next char.
 fn find_cards(cs: &[char]) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < cs.len() {
-        if !cs[i].is_ascii_digit() || (i > 0 && cs[i - 1].is_alphanumeric()) {
+        // A `+` prefix makes it a phone number, never a card.
+        if !cs[i].is_ascii_digit() || (i > 0 && (cs[i - 1].is_alphanumeric() || cs[i - 1] == '+')) {
             i += 1;
             continue;
         }
         let mut digits: Vec<u8> = Vec::new();
-        // (char index just past a digit group, digits so far)
-        let mut ends: Vec<(usize, usize)> = Vec::new();
+        // (group start, char index just past the group, digits so far)
+        let mut groups: Vec<(usize, usize, usize)> = Vec::new();
         let mut j = i;
-        loop {
+        'run: loop {
+            let gs = j;
             while j < cs.len() && cs[j].is_ascii_digit() {
                 digits.push(cs[j] as u8 - b'0');
                 j += 1;
+                if digits.len() >= CARD_DIGITS.end {
+                    break 'run;
+                }
             }
-            ends.push((j, digits.len()));
-            let sep = j < cs.len() && matches!(cs[j], ' ' | '-');
-            if sep && j + 1 < cs.len() && cs[j + 1].is_ascii_digit() {
-                j += 1;
+            groups.push((gs, j, digits.len()));
+            let k = card_sep(cs, j);
+            if k > 0 && cs.get(j + k).is_some_and(char::is_ascii_digit) {
+                j += k;
             } else {
                 break;
             }
         }
-        let run_end = j;
-        let run_bounded = run_end >= cs.len() || !cs[run_end].is_alphanumeric();
-        let hit = ends
-            .iter()
-            .rev()
-            .filter(|&&(end, _)| end < run_end || run_bounded)
-            .find(|&&(_, n)| {
-                (13..=19).contains(&n) && card_network_ok(&digits[..n]) && luhn_valid(&digits[..n])
-            })
-            .map(|&(end, _)| i..end);
+        let hit = (0..groups.len()).rev().find_map(|g| {
+            let (_, end, n) = groups[g];
+            let bounded = end >= cs.len() || !cs[end].is_alphanumeric();
+            // Real cards print groups of 4+ (4-4-4-4, 4-6-5, 4-6-4); only
+            // the last group may be shorter.
+            let shaped = groups[..g].iter().all(|&(gs, ge, _)| ge - gs >= 4);
+            (bounded
+                && shaped
+                && CARD_DIGITS.contains(&n)
+                && card_network_ok(&digits[..n])
+                && luhn_valid(&digits[..n]))
+            .then_some(i..end)
+        });
         match hit {
             Some(r) => {
                 i = r.end;
                 out.push(r);
             }
-            None => i += 1,
+            None => i = groups.get(1).map_or(j.max(i + 1), |&(gs, _, _)| gs),
         }
     }
     out
@@ -288,66 +321,103 @@ fn is_phone_char(c: char) -> bool {
     c.is_ascii_digit() || matches!(c, ' ' | '-' | '.' | '(' | ')')
 }
 
-/// Plausible phone groupings only (see the plan's decision list):
-/// `+CC` international (8–15 digits, country code 1–3, groups 2–4),
-/// NANP 3-3-4 or 1-3-3-4, or a national number with a leading trunk `0`
-/// (10–11 digits, groups 2–4). Dots only in 3-3-4.
+/// The most digits (E.164) and chars a phone candidate may span.
+const MAX_PHONE_DIGITS: usize = 15;
+const MAX_PHONE_CHARS: usize = 32;
+
+/// Plausible phone groupings only:
+/// - `+CC` international: 8–15 digits, either one block (`+14155550100`)
+///   or a 1–3 digit country code then groups of 1–8 (incl. `(0)`);
+/// - NANP 3-3-4 or 1-3-3-4;
+/// - national with a leading trunk `0`: 10–11 digits in groups of 2–6.
+///
+/// Parentheses must balance and dots only appear in 3-3-4.
 fn phone_like(span: &[char]) -> bool {
-    let groups: Vec<&[char]> = span
-        .split(|c| !c.is_ascii_digit())
-        .filter(|g| !g.is_empty())
-        .collect();
-    if groups.is_empty() {
+    // Allocation-free: this runs for every group end of every start.
+    let (mut opens, mut closes, mut dots) = (0usize, 0usize, false);
+    let mut lens = [0usize; MAX_PHONE_DIGITS];
+    let mut groups = 0;
+    let mut digits = 0;
+    let mut prev_digit = false;
+    for &c in span {
+        match c {
+            '(' => opens += 1,
+            ')' => closes += 1,
+            '.' => dots = true,
+            _ => {}
+        }
+        let digit = c.is_ascii_digit();
+        if digit {
+            if !prev_digit {
+                if groups == lens.len() {
+                    return false;
+                }
+                groups += 1;
+            }
+            lens[groups - 1] += 1;
+            digits += 1;
+        }
+        prev_digit = digit;
+    }
+    let lens = &lens[..groups];
+    if opens != closes || lens.is_empty() {
         return false;
     }
-    let lens: Vec<usize> = groups.iter().map(|g| g.len()).collect();
-    let digits: usize = lens.iter().sum();
     if span.first() == Some(&'+') {
-        return (8..=15).contains(&digits)
-            && lens.len() >= 2
-            && lens[0] <= 3
-            && lens[1..].iter().all(|n| (2..=4).contains(n));
+        return (8..=MAX_PHONE_DIGITS).contains(&digits)
+            && (lens.len() == 1
+                || (lens[0] <= 3 && lens[1..].iter().all(|n| (1..=8).contains(n))));
     }
-    if span.contains(&'.') {
+    if dots {
         return lens == [3, 3, 4];
     }
+    let first = span.iter().find(|c| c.is_ascii_digit()).copied();
     lens == [3, 3, 4]
-        || (lens == [1, 3, 3, 4] && groups[0] == ['1'])
-        || (groups[0][0] == '0'
+        || (lens == [1, 3, 3, 4] && first == Some('1'))
+        || (first == Some('0')
             && (10..=11).contains(&digits)
             && lens.len() >= 2
-            && lens.iter().all(|n| (2..=4).contains(n)))
+            && lens.iter().all(|n| (2..=6).contains(n)))
 }
 
+/// For every group start, the longest plausible phone that starts there.
+/// Candidates may overlap each other or a card; `detect_line` keeps the
+/// first by priority and start, so a rejected prefix ("2026-10-16 …",
+/// "Qty 3 (415) …") never hides the number after it. Linear: each start
+/// reads at most `MAX_PHONE_CHARS`.
 fn find_phones(cs: &[char]) -> Vec<Range<usize>> {
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < cs.len() {
-        let starts = cs[i] == '+' || cs[i] == '(' || cs[i].is_ascii_digit();
-        if !starts || (i > 0 && cs[i - 1].is_alphanumeric()) {
-            i += 1;
+    for i in 0..cs.len() {
+        let c = cs[i];
+        let prev = i.checked_sub(1).map(|p| cs[p]);
+        let starts = match c {
+            '+' | '(' => true,
+            // A digit right after `+` or `(` belongs to that start.
+            d if d.is_ascii_digit() => !matches!(prev, Some('+' | '(')),
+            _ => false,
+        };
+        if !starts || prev.is_some_and(char::is_alphanumeric) {
             continue;
         }
-        let mut e = i + 1;
-        while e < cs.len() && is_phone_char(cs[e]) {
-            e += 1;
+        let mut best = None;
+        let mut digits = 0;
+        let mut j = i;
+        while j < cs.len() && j - i < MAX_PHONE_CHARS && (j == i || is_phone_char(cs[j])) {
+            if cs[j].is_ascii_digit() {
+                digits += 1;
+                if digits > MAX_PHONE_DIGITS {
+                    break;
+                }
+                let end = j + 1;
+                let group_end = end >= cs.len() || !cs[end].is_ascii_digit();
+                let bounded = end >= cs.len() || !cs[end].is_alphanumeric();
+                if group_end && bounded && phone_like(&cs[i..end]) {
+                    best = Some(i..end);
+                }
+            }
+            j += 1;
         }
-        let next = e;
-        while e > i && !(cs[e - 1].is_ascii_digit() || cs[e - 1] == ')') {
-            e -= 1;
-        }
-        let opens = cs[i..e].iter().filter(|&&c| c == '(').count();
-        let closes = cs[i..e].iter().filter(|&&c| c == ')').count();
-        if e > i && cs[e - 1] == ')' && closes > opens {
-            e -= 1;
-        }
-        let bounded = e >= cs.len() || !cs[e].is_alphanumeric();
-        if e > i && bounded && phone_like(&cs[i..e]) {
-            out.push(i..e);
-        }
-        // Never restart inside a rejected run: "4242 4242 4242 4241"
-        // must not yield its last 12 digits as a phone.
-        i = next.max(i + 1);
+        out.extend(best);
     }
     out
 }
@@ -379,13 +449,19 @@ const KEY_PREFIXES: &[(&str, usize)] = &[
     ("sk-", 20),
     ("SG.", 20),
     ("eyJ", 20),
+    ("npm_", 36),
+    ("hf_", 30),
+    ("shpat_", 32),
+    ("shpss_", 32),
+    ("dop_v1_", 64),
+    ("xapp-", 10),
 ];
 
 /// Minimum length of an unprefixed high-entropy token (spec §3.8).
 pub const MIN_SECRET_LEN: usize = 20;
 
 fn is_key_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '=' | '.')
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '=' | '.' | '/')
 }
 
 fn class(c: char) -> u8 {
@@ -406,7 +482,7 @@ fn class(c: char) -> u8 {
 pub fn looks_like_secret(token: &str) -> bool {
     if KEY_PREFIXES
         .iter()
-        .any(|(p, body)| token.starts_with(p) && token.len() >= p.len() + body)
+        .any(|(p, body)| token.starts_with(p) && token.chars().count() >= p.chars().count() + body)
     {
         return true;
     }
@@ -416,11 +492,12 @@ pub fn looks_like_secret(token: &str) -> bool {
     token.split(['.', '-']).any(random_segment)
 }
 
-/// ≥ 20 chars with upper, lower and digits, ≥ 12 distinct, and whose
-/// alphanumerics change class (upper / lower / digit) at least every
-/// other character. CamelCase changes about twice per word, so
-/// `SomeJavaClassNameFactoryBean2` fails; random base62 changes ~62 % of
-/// the time.
+/// ≥ 20 chars with upper, lower and digits, ≥ 12 distinct alphanumerics,
+/// and random-looking: the alphanumerics change class (upper / lower /
+/// digit) on at least 35 % of steps, and lowercase runs average at most
+/// 3 chars. Random base62/base64 changes class ~62 % of the time with
+/// lowercase runs of ~1.7; CamelCase and paths have lowercase runs of
+/// whole words (`SomeJavaClassNameFactoryBean2`: 3.7). Integer-only.
 fn random_segment(seg: &str) -> bool {
     if seg.chars().count() < MIN_SECRET_LEN {
         return false;
@@ -435,7 +512,13 @@ fn random_segment(seg: &str) -> bool {
         .windows(2)
         .filter(|w| class(w[0]) != class(w[1]))
         .count();
-    distinct >= 12 && changes * 2 >= alnum.len()
+    let lower = alnum.iter().filter(|c| c.is_ascii_lowercase()).count();
+    let lower_runs = alnum
+        .iter()
+        .enumerate()
+        .filter(|&(k, c)| c.is_ascii_lowercase() && (k == 0 || !alnum[k - 1].is_ascii_lowercase()))
+        .count();
+    distinct >= 12 && changes * 20 >= alnum.len() * 7 && lower <= lower_runs * 3
 }
 
 fn find_api_keys(cs: &[char]) -> Vec<Range<usize>> {
@@ -459,7 +542,9 @@ fn find_api_keys(cs: &[char]) -> Vec<Range<usize>> {
             e -= 1;
         }
         let token: String = cs[s..e].iter().collect();
-        if looks_like_secret(&token) {
+        // The payload of a `data:…;base64,` URI is content, not a secret.
+        let data_uri = s >= 7 && cs[s - 7..s].iter().copied().eq("base64,".chars());
+        if !data_uri && looks_like_secret(&token) {
             out.push(s..e);
         }
         i = next;
@@ -950,5 +1035,186 @@ mod tests {
         let located = locate(&doc, &stale, 100, 100);
         assert!(located.rects.is_empty());
         assert_eq!(located.unlocatable, stale);
+    }
+
+    // --- Review fix round 1 -------------------------------------------
+
+    fn phones_in(text: &str) -> Vec<String> {
+        found(text)
+            .into_iter()
+            .filter(|(_, k)| *k == RedactKind::Phone)
+            .map(|(s, _)| s)
+            .collect()
+    }
+
+    #[test]
+    fn phones_after_rejected_prefixes_are_still_found() {
+        for (line, want) in [
+            ("2026-10-16 415-555-0100", vec!["415-555-0100"]),
+            (
+                "415-555-0100 415-555-0101",
+                vec!["415-555-0100", "415-555-0101"],
+            ),
+            ("12:30 415 555 0100", vec!["415 555 0100"]),
+            ("1. 415-555-0100", vec!["415-555-0100"]),
+            ("1) 415-555-0100", vec!["415-555-0100"]),
+            ("2 415-555-0100", vec!["415-555-0100"]),
+            ("Qty 3 (415) 555-0100", vec!["(415) 555-0100"]),
+            ("Apt 4 - 415-555-0100", vec!["415-555-0100"]),
+            ("Ext 12 +44 20 7946 0958", vec!["+44 20 7946 0958"]),
+        ] {
+            assert_eq!(phones_in(line), want, "{line}");
+        }
+        assert_eq!(
+            found("4242 4242 4242 4242 415 555 0100"),
+            [
+                ("4242 4242 4242 4242".to_string(), RedactKind::Card),
+                ("415 555 0100".to_string(), RedactKind::Phone),
+            ]
+        );
+        assert!(found("4242 4242 4242 4241").is_empty());
+        assert_eq!(
+            found("4242 4242 4242 4241 a@example.com"),
+            [("a@example.com".to_string(), RedactKind::Email)]
+        );
+    }
+
+    #[test]
+    fn international_and_national_phones() {
+        for s in [
+            "+14155550100",
+            "+33 1 23 45 67 89",
+            "+81 3-1234-5678",
+            "+61 2 9374 4000",
+            "+353 1 234 5678",
+            "+91 98765 43210",
+            "+49 30 12345678",
+            "+44 (0)20 7946 0958",
+            "07700 900123",
+        ] {
+            assert_eq!(found(s), [(s.to_string(), RedactKind::Phone)], "{s}");
+        }
+        for s in [
+            "12345 67890",
+            "1 299 000 000",
+            "on 2026-10-16 12:30",
+            "at 12:30:45 on 16.10.2026",
+            "Total $1,299.00",
+            "Price 1 299,00",
+            "+12.50",
+        ] {
+            assert!(found(s).is_empty(), "{s}");
+        }
+    }
+
+    #[test]
+    fn non_ascii_emails_span_the_whole_address() {
+        assert_eq!(
+            found("mail jöhn@example.com now"),
+            [("jöhn@example.com".to_string(), RedactKind::Email)]
+        );
+        assert_eq!(
+            found("José@exämple.com"),
+            [("José@exämple.com".to_string(), RedactKind::Email)]
+        );
+        assert!(found("x@y.c0m").is_empty());
+    }
+
+    #[test]
+    fn cards_with_dot_and_double_space_separators_and_more_networks() {
+        for s in [
+            "4242  4242  4242  4242",
+            "4242.4242.4242.4242",
+            "6200 0000 0000 0005", // UnionPay
+            "6759 6498 2643 8453", // Maestro
+        ] {
+            assert_eq!(found(s), [(s.to_string(), RedactKind::Card)], "{s}");
+        }
+        // Group shapes no card uses: a phone, not a card.
+        assert_eq!(found("+61 2 9374 4000")[0].1, RedactKind::Phone);
+        assert!(found("9000 0000 0000 0001").is_empty());
+    }
+
+    #[test]
+    fn long_digit_runs_scan_in_linear_time() {
+        // Quadratic scanning of these takes minutes; linear takes ms.
+        let start = std::time::Instant::now();
+        for unit in ["12-", "4242 ", "1 ", "1.2-3 "] {
+            let line = unit.repeat(50_000);
+            let _ = detect_line(&line);
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn more_key_prefixes_and_base64_tokens() {
+        for key in [
+            ["np", "m_", "EXAMPLEexample0123456789abcdefABCDEF"].concat(),
+            ["h", "f_", "EXAMPLEexample0123456789abcdef"].concat(),
+            ["shp", "at_", "0123456789abcdef0123456789abcdef"].concat(),
+            ["shp", "ss_", "0123456789abcdef0123456789abcdef"].concat(),
+            ["do", "p_v1_", &"0123456789abcdef".repeat(4)].concat(),
+            ["xa", "pp-", "1-A0EXAMPLE-0123456789"].concat(),
+        ] {
+            assert_eq!(found(&key), [(key.clone(), RedactKind::ApiKey)], "{key}");
+        }
+        let b64 = ["Qm9i/x7Zp+K3", "wL5tR8vN2yH4", "cD6jF1=="].concat();
+        assert_eq!(
+            found(&format!("secret: {b64}")),
+            [(b64.clone(), RedactKind::ApiKey)]
+        );
+        // Prefix body length counts chars, not bytes.
+        assert!(!looks_like_secret(&["gh", "p_", &"é".repeat(12)].concat()));
+    }
+
+    #[test]
+    fn more_non_secrets_stay_unflagged() {
+        for s in [
+            "SomeJavaClassNameFactoryBean2",
+            "AbstractSingletonProxyFactoryBean2",
+            "HttpServerRequestHandlerV2Impl",
+            "UserProfileSettingsViewController3",
+            "01ARZ3NDEKTSV4RRFFQ8K5DSMV",
+            "3f78685",
+            "3F786850E387550FDAB836ED7E6DC881DE23001B",
+            "v2.3.1-rc.4+build.20261016",
+            "/Users/me/Projects2026/readshot/crates/Cargo2.toml",
+            "src/components/UserProfile/ProfileCard2.tsx",
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+        ] {
+            assert!(found(s).is_empty(), "{s}: {:?}", found(s));
+        }
+    }
+
+    /// Deterministic xorshift64 so the rate check needs no rand crate.
+    fn xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    fn flagged_share(alphabet: &str, len: usize, trials: usize, seed: u64) -> f64 {
+        let set: Vec<char> = alphabet.chars().collect();
+        let mut x = seed;
+        let hits = (0..trials)
+            .filter(|_| {
+                let t: String = (0..len)
+                    .map(|_| set[(xorshift(&mut x) % set.len() as u64) as usize])
+                    .collect();
+                !detect_line(&format!("key {t}")).is_empty()
+            })
+            .count();
+        hits as f64 / trials as f64
+    }
+
+    #[test]
+    fn random_tokens_are_flagged_at_a_high_rate() {
+        const B62: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        let b64 = format!("{B62}+/");
+        let base62 = flagged_share(B62, 24, 2_000, 0x9E37_79B9_7F4A_7C15);
+        let base64 = flagged_share(&b64, 32, 2_000, 0xD1B5_4A32_D192_ED03);
+        assert!(base62 >= 0.95, "base62/24 flagged {base62}");
+        assert!(base64 >= 0.90, "base64/32 flagged {base64}");
     }
 }
