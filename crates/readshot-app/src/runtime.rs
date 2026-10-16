@@ -8248,4 +8248,20 @@ mod tests {
         let _ = update(&mut app, Message::EditorEyedropperToggled);
         assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
     }
+
+    #[test]
+    fn i_is_ignored_during_a_select_move_drag() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(16, 16));
+        ed.move_drag = Some(crate::editor::MoveDrag {
+            baseline: Vec::new(),
+            selected_index: 0,
+            start: PointLike::new(2.0, 2.0),
+            moved: true,
+            kind: crate::editor::MoveDragKind::Move,
+        });
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
+    }
 }

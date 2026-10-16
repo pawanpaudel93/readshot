@@ -772,8 +772,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         }
         Message::EditorEyedropperToggled => {
             if let Some(ed) = state.editor.as_mut() {
-                // A held drag can't be hijacked into a pick.
-                if ed.busy || ed.canvas_drag_active {
+                // A held drag (shape, freehand or Select move/resize)
+                // can't be hijacked into a pick.
+                if ed.busy || ed.canvas_drag_active || ed.move_drag.is_some() {
                     return Task::none();
                 }
                 close_editor_popover(ed);
