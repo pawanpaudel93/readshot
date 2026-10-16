@@ -107,6 +107,20 @@ pub struct TextPanelState {
     /// or while the panel is open; a background (history) OCR failure
     /// with the panel closed just marks the panel Failed.
     pub user_requested: bool,
+    /// Each part's own recognition, in that part's pixels. The document
+    /// shown is derived from these for the current geometry
+    /// (`refresh_text_for_geometry`); a part is recognized once, however
+    /// often the geometry changes.
+    pub part_docs: std::collections::BTreeMap<
+        readshot_core::document::PartId,
+        std::sync::Arc<readshot_core::text_lines::TextDocument>,
+    >,
+    /// The part the running recognition is for.
+    pub recognizing_part: Option<readshot_core::document::PartId>,
+    /// The geometry `recognition`'s document was built for; a different
+    /// one (rotate, combine, undo across either) means its boxes are
+    /// stale and must be rebuilt before anything uses them.
+    pub built_for: Option<std::sync::Arc<readshot_core::document::DocGeometry>>,
 }
 
 impl TextPanelState {
@@ -121,6 +135,15 @@ impl TextPanelState {
     pub fn positioned_document(&self) -> Option<&readshot_core::text_lines::TextDocument> {
         self.document().filter(|d| d.positioned)
     }
+}
+
+/// What History's image for this capture is known to show.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HistoryFrame {
+    /// `None` = the original capture; `Some(id)` = that document frame.
+    Known(Option<String>),
+    /// A write failed: the next sync rewrites the record in full.
+    Unknown,
 }
 
 /// Button in the status toast.
@@ -290,6 +313,16 @@ pub struct EditorSession {
     /// the record in full (restoring the original) instead of the plain
     /// sidecar sync, which can't change a scrubbed record.
     pub history_scrubbed: bool,
+    /// Prefix of this session's History frame ids, so a frame id from one
+    /// session never matches another session's (or another capture's)
+    /// frame with the same geometry fingerprint.
+    pub history_nonce: readshot_core::Uuid,
+    /// The frame id of the image the editor opened with: `None` for a
+    /// fresh capture, the record's `geometry_id` when reopened from
+    /// History (its stored image may itself be a transformed document).
+    pub history_geometry_base: Option<String>,
+    /// The frame History's image was last written in by this session.
+    pub history_frame_written: HistoryFrame,
     /// Outcome of the newest queued History rewrite, taken by the runtime
     /// and turned into `Message::EditorHistoryWritten`.
     pub history_write:
@@ -506,6 +539,9 @@ impl EditorSession {
             window_width: DEFAULT_WINDOW_WIDTH,
             panel_overlay_open: false,
             history_scrubbed: false,
+            history_nonce: readshot_core::Uuid::new_v4(),
+            history_geometry_base: None,
+            history_frame_written: HistoryFrame::Known(None),
             history_write: None,
         }
     }
@@ -523,6 +559,7 @@ impl EditorSession {
         let mut model = Model::with_annotations(image, record.annotation_model.clone());
         let image_handle = build_handle(&mut model);
         let output_checkpoint = EditorOutputCheckpoint(model.snapshot());
+        let history_geometry_base = record.geometry_id.clone();
         Self {
             model,
             status: None,
@@ -560,6 +597,9 @@ impl EditorSession {
             window_width: DEFAULT_WINDOW_WIDTH,
             panel_overlay_open: false,
             history_scrubbed: false,
+            history_nonce: readshot_core::Uuid::new_v4(),
+            history_frame_written: HistoryFrame::Known(history_geometry_base.clone()),
+            history_geometry_base,
             history_write: None,
         }
     }

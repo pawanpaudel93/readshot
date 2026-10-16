@@ -22,40 +22,125 @@ use readshot_core::redact::{
 };
 use readshot_core::text_lines::{TextDocument, TextLine};
 
-/// Start recognizing the editor's base image unless it is already
-/// running or done. The base (not the flattened output) is recognized,
-/// so line boxes are in annotation coordinates and redactions can't
-/// hide text from the list. Never sets `busy`.
+/// Rebuild the Text panel's document for the current geometry: every
+/// part's recognition (part px) mapped into document px and merged.
+/// Clears hover and selection (line indices may have moved). While a
+/// part has no recognition there is no document (decision D2): the
+/// scrub then stores no text rather than text it can't mask.
+pub(crate) fn refresh_text_for_geometry(ed: &mut EditorSession) {
+    use readshot_core::document::{map_text_document, merge_text_documents};
+    let g = std::sync::Arc::clone(ed.model.geometry());
+    let tp = &mut ed.text_panel;
+    tp.built_for = Some(std::sync::Arc::clone(&g));
+    tp.hovered = None;
+    tp.selected.clear();
+    tp.anchor = None;
+    let docs: Option<Vec<TextDocument>> = g
+        .parts
+        .iter()
+        .map(|p| {
+            Some(map_text_document(
+                tp.part_docs.get(&p.id)?,
+                &g.part_affine(p.id)?,
+            ))
+        })
+        .collect();
+    match docs {
+        Some(docs) if !docs.is_empty() => {
+            let doc = merge_text_documents(&docs);
+            tp.matches = if doc.positioned {
+                readshot_core::redact::scan(&doc)
+            } else {
+                Vec::new()
+            };
+            tp.recognition = TextRecognition::Ready(std::sync::Arc::new(doc));
+        }
+        _ => {
+            tp.matches.clear();
+            if matches!(tp.recognition, TextRecognition::Ready(_)) {
+                tp.recognition = TextRecognition::Idle;
+            }
+        }
+    }
+}
+
+/// [`refresh_text_for_geometry`] when the panel's document was built for
+/// another geometry than the present one (a transform, a combine, or an
+/// undo/redo across one), so its word boxes never lag the frame the
+/// redactions are in.
+pub(crate) fn refresh_text_if_stale(ed: &mut EditorSession) {
+    let stale = ed
+        .text_panel
+        .built_for
+        .as_ref()
+        .is_some_and(|g| !std::sync::Arc::ptr_eq(g, ed.model.geometry()));
+    if stale {
+        refresh_text_for_geometry(ed);
+    }
+}
+
+/// Start recognizing the first part of the document that has no
+/// recognition yet, unless one is already running (one request at a
+/// time) or every part is done. Each part is recognized in its own
+/// pixels (not the flattened output), so its boxes map exactly into
+/// annotation coordinates and redactions can't hide text from the list.
+/// Never sets `busy`.
 pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
     };
     if matches!(
         ed.text_panel.recognition,
-        TextRecognition::Recognizing { .. } | TextRecognition::Ready(_)
+        TextRecognition::Recognizing { .. }
     ) {
         return Task::none();
     }
+    let Some(part) = ed
+        .model
+        .geometry()
+        .parts
+        .iter()
+        .find(|p| !ed.text_panel.part_docs.contains_key(&p.id))
+        .cloned()
+    else {
+        return Task::none(); // every part is recognized
+    };
     ed.text_panel.recognition = TextRecognition::Recognizing {
         since: std::time::Instant::now(),
     };
+    ed.text_panel.recognizing_part = Some(part.id);
     if ed.toast_action == Some(EditorToastAction::RetryRecognition) {
         ed.status = None;
         ed.status_set_at = None;
         ed.toast_action = None;
     }
     let session = ed.session_id;
+    // The task stores masked text in History itself (so it lands after
+    // the editor closes) only while the document is the original frame:
+    // part px are document px there. Otherwise the editor-side write in
+    // `EditorTextRecognized` does it (decision D2). The record carries
+    // the frame id, so History drops the text if it holds another frame
+    // by the time it lands.
+    let history_record = if ed.model.geometry().is_original() {
+        let frame = history_geometry_id(ed);
+        ed.source_record.clone().map(|mut r| {
+            r.geometry_id = frame;
+            r
+        })
+    } else {
+        None
+    };
     // Only a shared handle here: the full-size pixel copy the engine
     // takes ownership of (~80 MB on a 5K capture) is made in the task,
     // off the UI thread.
-    let base = ed.model.shared_base();
-    let history_record = ed.source_record.clone();
+    let part_image = std::sync::Arc::clone(&part.image);
+    let part_id = part.id;
     let languages = state.preferences.ocr_languages.clone();
     let coord = state.coordinator.clone();
     Task::perform(
         async move {
             let req = readshot_ocr::OCRRequest {
-                image: image::RgbaImage::clone(&base),
+                image: image::RgbaImage::clone(&part_image),
                 languages,
                 use_language_correction: true,
             };
@@ -68,7 +153,11 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
                 None => result,
             }
         },
-        move |result| Message::EditorTextRecognized { session, result },
+        move |result| Message::EditorTextRecognized {
+            session,
+            part: part_id,
+            result,
+        },
     )
 }
 
@@ -113,7 +202,12 @@ pub(crate) fn seed_text_from_history(ed: &mut EditorSession, engine_reports_posi
         return;
     };
     let doc = readshot_core::text_lines::TextDocument::from_plain(text);
-    ed.text_panel.recognition = TextRecognition::Ready(std::sync::Arc::new(doc));
+    // The stored text is the opened image's: the original part's.
+    ed.text_panel.part_docs.insert(
+        readshot_core::document::ORIGINAL_PART,
+        std::sync::Arc::new(doc),
+    );
+    refresh_text_for_geometry(ed);
 }
 
 pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Task<Message> {
@@ -124,7 +218,11 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
             }
             request_text_recognition(state)
         }
-        Message::EditorTextRecognized { session, result } => {
+        Message::EditorTextRecognized {
+            session,
+            part,
+            result,
+        } => {
             let panel_open = state.preferences.editor_panel_open;
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
@@ -135,24 +233,45 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
             let user_requested = std::mem::take(&mut ed.text_panel.user_requested);
             match result {
                 Ok(doc) => {
-                    let tp = &mut ed.text_panel;
-                    tp.matches = if doc.positioned {
-                        readshot_core::redact::scan(&doc)
-                    } else {
-                        Vec::new()
-                    };
-                    tp.hovered = None;
-                    tp.selected.clear();
-                    tp.anchor = None;
-                    tp.recognition = TextRecognition::Ready(std::sync::Arc::new(doc));
-                    // Redacted before the text was known: scrub History
-                    // again, now with word-precise masking.
-                    if readshot_core::scrub::has_redaction(ed.model.annotations()) {
+                    ed.text_panel
+                        .part_docs
+                        .insert(part, std::sync::Arc::new(doc));
+                    // A late result for another part (the capture's own
+                    // OCR, say) leaves a running request for this one be.
+                    let other_running =
+                        matches!(
+                            ed.text_panel.recognition,
+                            TextRecognition::Recognizing { .. }
+                        ) && ed.text_panel.recognizing_part.is_some_and(|p| p != part);
+                    if !other_running {
+                        ed.text_panel.recognizing_part = None;
+                        ed.text_panel.recognition = TextRecognition::Idle;
+                    }
+                    refresh_text_for_geometry(ed);
+                    // Redacted before the text was known, or History holds a
+                    // transformed/combined document whose text is missing:
+                    // write again, now with the full (masked) text.
+                    let ready = ed.text_panel.document().is_some();
+                    if ready && readshot_core::scrub::has_redaction(ed.model.annotations()) {
                         write_editor_history(ed, &state.coordinator);
+                    } else if ready
+                        && !ed.model.geometry().is_original()
+                        && ed.source_record.is_some()
+                    {
+                        ed.history_frame_written = crate::editor::HistoryFrame::Unknown;
+                        write_editor_history(ed, &state.coordinator);
+                    }
+                    if !ready && !other_running {
+                        // Another part still needs recognition.
+                        if user_requested {
+                            ed.text_panel.user_requested = true;
+                        }
+                        return request_text_recognition(state);
                     }
                 }
                 Err(e) => {
                     tracing::warn!(target: "readshot::editor", "text recognition failed: {e}");
+                    ed.text_panel.recognizing_part = None;
                     ed.text_panel.recognition = TextRecognition::Failed(e.clone());
                     // Don't clobber a Saving…/Copying… toast; the panel's
                     // Try Again state still offers the retry. A background
@@ -318,6 +437,7 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
                         // What's on disk is unknown now: the next sync
                         // rewrites the whole record again.
                         ed.history_scrubbed = true;
+                        ed.history_frame_written = crate::editor::HistoryFrame::Unknown;
                         if !ed.busy {
                             ed.set_status(super::history_ops::friendly_string_error_with(
                                 "update this capture in History",
@@ -1064,6 +1184,15 @@ pub(crate) fn snap_highlight_annotation(
             color,
             line_width,
         } => {
+            // A sideways document turns text lines vertical; the snap
+            // only knows horizontal lines, so the stroke stays as drawn.
+            if ed.model.geometry().transform.is_sideways() {
+                return Annotation::Highlighter {
+                    points,
+                    color,
+                    line_width,
+                };
+            }
             let snapped = ed
                 .model
                 .tool_style()

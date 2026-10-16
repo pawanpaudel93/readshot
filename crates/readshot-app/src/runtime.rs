@@ -1479,6 +1479,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                                     crate::editor::TextRecognition::Recognizing {
                                         since: std::time::Instant::now(),
                                     };
+                                editor.text_panel.recognizing_part =
+                                    Some(readshot_core::document::ORIGINAL_PART);
                             }
                             open_editor_window_replacing(state, editor, display_bounds)
                         }
@@ -2373,7 +2375,11 @@ async fn persist_history(
                     Err(e) => Err(e.to_string()),
                 };
                 let _ = output
-                    .send(Message::EditorTextRecognized { session, result })
+                    .send(Message::EditorTextRecognized {
+                        session,
+                        part: readshot_core::document::ORIGINAL_PART,
+                        result,
+                    })
                     .await;
             }
             doc
@@ -8817,6 +8823,7 @@ mod tests {
             app,
             Message::EditorTextRecognized {
                 session,
+                part: 0,
                 result: Ok(sample_doc()),
             },
         );
@@ -8952,6 +8959,7 @@ mod tests {
             &mut app,
             Message::EditorTextRecognized {
                 session,
+                part: 0,
                 result: Ok(sample_doc()),
             },
         );
@@ -8971,6 +8979,7 @@ mod tests {
             &mut app,
             Message::EditorTextRecognized {
                 session,
+                part: 0,
                 result: Err("Vision OCR timed out".into()),
             },
         );
@@ -9094,6 +9103,7 @@ mod tests {
             &mut app,
             Message::EditorTextRecognized {
                 session,
+                part: 0,
                 result: Err("no models".into()),
             },
         );
@@ -9110,6 +9120,7 @@ mod tests {
             &mut app,
             Message::EditorTextRecognized {
                 session,
+                part: 0,
                 result: Err("no models".into()),
             },
         );
@@ -9176,6 +9187,7 @@ mod tests {
         match &msgs[0] {
             Message::EditorTextRecognized {
                 session: 7,
+                part: 0,
                 result: Ok(doc),
             } => {
                 assert_eq!(doc.layout_text, "one\n\ntwo");
@@ -9209,6 +9221,7 @@ mod tests {
             &msgs[0],
             Message::EditorTextRecognized {
                 session: 3,
+                part: 0,
                 result: Err(_)
             }
         ));
@@ -9230,6 +9243,7 @@ mod tests {
                 &msgs[..],
                 [Message::EditorTextRecognized {
                     session: 4,
+                    part: 0,
                     result: Ok(_)
                 }]
             ),
@@ -9826,6 +9840,7 @@ mod tests {
             &mut app,
             Message::EditorTextRecognized {
                 session,
+                part: 0,
                 result: Ok(readshot_core::text_lines::TextDocument::from_plain(
                     "Email priya@example.com",
                 )),
@@ -10033,6 +10048,7 @@ mod tests {
             &mut app,
             Message::EditorTextRecognized {
                 session,
+                part: 0,
                 result: Ok(sample_doc()),
             },
         );
@@ -10316,5 +10332,229 @@ mod tests {
             super::text_panel::copy_lines_text(ed, &[0, 1], false).as_deref(),
             Some(format!("Name Priya\nEmail {}", "█".repeat(EMAIL.len())).as_str())
         );
+    }
+
+    fn positioned_doc(text: &str, rect: RectLike) -> readshot_core::text_lines::TextDocument {
+        use readshot_core::text_lines::{TextDocument, TextLine, WordRect};
+        TextDocument {
+            lines: vec![TextLine {
+                text: text.into(),
+                rect: Some(rect),
+                words: vec![WordRect {
+                    start: 0,
+                    end: text.chars().count(),
+                    rect,
+                }],
+            }],
+            positioned: true,
+            layout_text: text.into(),
+        }
+    }
+
+    #[test]
+    fn text_boxes_follow_a_rotation() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(30, 20));
+        let session = ed.session_id;
+        ed.text_panel.recognition = crate::editor::TextRecognition::Recognizing {
+            since: std::time::Instant::now(),
+        };
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorTextRecognized {
+                session,
+                part: readshot_core::document::ORIGINAL_PART,
+                result: Ok(positioned_doc(
+                    "Example",
+                    RectLike::new(2.0, 4.0, 10.0, 3.0),
+                )),
+            },
+        );
+        let ed = app.editor.as_mut().unwrap();
+        ed.model.rotate(true).unwrap();
+        sync_editor_history(ed, &app.coordinator);
+        let doc = ed.text_panel.positioned_document().expect("still ready");
+        // (x, y, w, h) → (H − y − h, x, h, w) for a clockwise turn of a 30×20 image.
+        assert_eq!(doc.lines[0].rect, Some(RectLike::new(13.0, 2.0, 3.0, 10.0)));
+        // Undo back to the original frame moves the boxes back.
+        ed.model.undo();
+        sync_editor_history(ed, &app.coordinator);
+        let doc = ed.text_panel.positioned_document().expect("still ready");
+        assert_eq!(doc.lines[0].rect, Some(RectLike::new(2.0, 4.0, 10.0, 3.0)));
+    }
+
+    #[test]
+    fn an_added_part_needs_its_own_recognition_and_the_scrub_fails_closed_until_then() {
+        let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(20, 10));
+        let session = ed.session_id;
+        ed.text_panel.recognition = crate::editor::TextRecognition::Recognizing {
+            since: std::time::Instant::now(),
+        };
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorTextRecognized {
+                session,
+                part: readshot_core::document::ORIGINAL_PART,
+                result: Ok(positioned_doc("first", RectLike::new(1.0, 1.0, 10.0, 4.0))),
+            },
+        );
+        let ed = app.editor.as_mut().unwrap();
+        let id = ed
+            .model
+            .add_part(solid(20, 10), readshot_core::document::Join::Below)
+            .unwrap();
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+            style: readshot_core::ShapeStyle {
+                fill: readshot_core::FillMode::Filled,
+                ..Default::default()
+            },
+        });
+        sync_editor_history(ed, &app.coordinator);
+        assert!(
+            ed.text_panel.positioned_document().is_none(),
+            "the new part isn't recognized yet"
+        );
+        assert_eq!(
+            scrubbed_history_text(ed, true),
+            None,
+            "no text rather than unmasked text"
+        );
+        // Without positions from the engine either: still no text while a
+        // part has none.
+        assert_eq!(scrubbed_history_text(ed, false), None);
+        let _ = update(
+            &mut app,
+            Message::EditorTextRecognized {
+                session,
+                part: id,
+                result: Ok(positioned_doc("second", RectLike::new(1.0, 1.0, 10.0, 4.0))),
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        let doc = ed
+            .text_panel
+            .positioned_document()
+            .expect("both parts recognized");
+        assert_eq!(doc.lines.len(), 2);
+        assert_eq!(doc.lines[1].rect, Some(RectLike::new(1.0, 11.0, 10.0, 4.0)));
+        assert_eq!(
+            scrubbed_history_text(ed, true).as_deref(),
+            Some("█████\n\n██████")
+        );
+    }
+
+    #[test]
+    fn recognition_runs_once_per_part_starting_with_the_first_missing_one() {
+        let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(20, 10));
+        ed.text_panel.part_docs.insert(
+            readshot_core::document::ORIGINAL_PART,
+            Arc::new(positioned_doc("first", RectLike::new(1.0, 1.0, 10.0, 4.0))),
+        );
+        let id = ed
+            .model
+            .add_part(solid(20, 10), readshot_core::document::Join::Below)
+            .unwrap();
+        app.editor = Some(ed);
+        let _ = request_text_recognition(&mut app);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.text_panel.recognizing_part, Some(id));
+        assert!(matches!(
+            ed.text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
+    }
+
+    #[test]
+    fn a_stale_recognition_of_the_original_frame_never_masks_a_rotated_record() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+        let img = solid(8, 4);
+        let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 8, 4, "d");
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        let mut ed = crate::editor::EditorSession::from_history(img, record.clone());
+        ed.model.rotate(true).unwrap();
+        ed.model.commit_annotation(Annotation::Blur {
+            rect: RectLike::new(0.0, 0.0, 4.0, 8.0),
+            radius: 4.0,
+        });
+        write_editor_history(&mut ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let stored = store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == record.id)
+            .unwrap();
+        assert!(stored.redacted && stored.geometry_id.is_some());
+        // The capture's own OCR (original frame) lands late.
+        let doc = positioned_doc("secret", RectLike::new(0.0, 0.0, 8.0, 4.0));
+        app.coordinator
+            .record_recognized_text(&record, &doc, true)
+            .unwrap();
+        let stored = store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == record.id)
+            .unwrap();
+        assert_eq!(stored.ocr_text, None, "stale text is dropped, never stored");
+    }
+
+    #[tokio::test]
+    async fn a_rotation_rewrites_history_as_the_rotated_document_with_editable_annotations() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+        let img = solid(8, 4);
+        let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 8, 4, "d");
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        let mut ed = crate::editor::EditorSession::from_history(img, record.clone());
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(1.0, 1.0, 2.0, 2.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+            style: Default::default(),
+        });
+        ed.model.rotate(true).unwrap();
+        write_editor_history(&mut ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let stored = store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == record.id)
+            .unwrap();
+        assert!(stored.geometry_id.is_some());
+        assert_eq!((stored.width_px, stored.height_px), (4, 8));
+        assert_eq!(
+            stored.annotation_model.len(),
+            1,
+            "annotations stay editable"
+        );
+        assert!(!stored.redacted);
+        // Undo back to the original frame restores the original image.
+        ed.model.undo();
+        write_editor_history(&mut ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let stored = store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == record.id)
+            .unwrap();
+        assert_eq!(stored.geometry_id, None);
+        assert_eq!((stored.width_px, stored.height_px), (8, 4));
     }
 }

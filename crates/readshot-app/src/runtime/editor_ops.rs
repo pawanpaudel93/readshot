@@ -303,14 +303,22 @@ pub(crate) fn sync_editor_history(
 }
 
 /// Write the editor's state to its History record, if it has one.
+/// History stores the unbeautified document in its current frame
+/// ([`history_geometry_id`]); every write carries that frame id.
 ///
 /// - Any redaction ([`readshot_core::scrub::has_redaction`]): **scrub**.
 ///   History gets the flattened output as its image (rendered and
 ///   encoded on the writer thread) and the text with every hidden word
 ///   masked; the annotations are baked in, so the sidecar stores none.
-/// - No redaction left after a scrub (all undone): **restore** the
-///   original image and text, both still in memory.
+/// - No redaction, but History may hold a scrub (all undone), or its
+///   image is in another frame than the editor's (rotate, resize,
+///   combine, or an undo back to the original), or its state is unknown
+///   after a failed write: **rewrite** the image as the current document
+///   with the unmasked text, annotations still editable.
 /// - Otherwise the plain sidecar sync (annotations only).
+///
+/// The Text panel's word boxes are rebuilt first when the geometry moved,
+/// so the masking always uses boxes in the redactions' frame.
 ///
 /// Everything is queued on the coordinator's ordered background writer
 /// (the writes fsync, and this runs on every commit/undo/redo); rapid
@@ -320,12 +328,17 @@ pub(crate) fn write_editor_history(
     ed: &mut crate::editor::EditorSession,
     coord: &CaptureCoordinator,
 ) {
+    // A geometry change (or an undo across one) moves every OCR box.
+    super::text_panel::refresh_text_if_stale(ed);
+    let frame = history_geometry_id(ed);
     let Some(record) = ed.source_record.as_mut() else {
         return;
     };
     record.annotation_model = ed.model.annotations().to_vec();
+    record.geometry_id = frame.clone();
     let record = record.clone();
     let annotations = ed.model.annotations();
+    let known = crate::editor::HistoryFrame::Known(frame);
     if readshot_core::scrub::has_redaction(annotations) {
         let mut scrubbed = record;
         scrubbed.ocr_text = scrubbed_history_text(ed, coord.engine_reports_positions());
@@ -333,17 +346,42 @@ pub(crate) fn write_editor_history(
         scrubbed.redacted = true;
         let bake = annotations.to_vec();
         ed.history_scrubbed = true;
+        ed.history_frame_written = known;
         ed.history_write =
             Some(coord.rewrite_history_async(scrubbed, ed.model.shared_base(), bake));
-    } else if ed.history_scrubbed {
+    } else if ed.history_scrubbed || ed.history_frame_written != known {
+        // Restore after a scrub, or the frame changed: the image itself
+        // must change, with the annotations still editable.
         let mut restored = record;
-        restored.ocr_text = original_history_text(ed);
+        restored.ocr_text = history_plain_text(ed);
         ed.history_scrubbed = false;
+        ed.history_frame_written = known;
         ed.history_write =
             Some(coord.rewrite_history_async(restored, ed.model.shared_base(), Vec::new()));
     } else {
         coord.update_history_async(record);
     }
+}
+
+/// History's id for the document frame the editor shows now (D2): the
+/// opened image's own frame while the geometry is untouched, else this
+/// session's nonce plus the geometry fingerprint.
+pub(crate) fn history_geometry_id(ed: &crate::editor::EditorSession) -> Option<String> {
+    match ed.model.geometry().fingerprint() {
+        None => ed.history_geometry_base.clone(),
+        Some(f) => Some(format!("{}:{f}", ed.history_nonce)),
+    }
+}
+
+/// Unmasked text for an unredacted rewrite: the panel's (merged)
+/// document when it covers several parts, else the capture's text.
+fn history_plain_text(ed: &crate::editor::EditorSession) -> Option<String> {
+    if ed.model.geometry().parts.len() > 1 {
+        if let Some(doc) = ed.text_panel.document() {
+            return Some(doc.layout_text.clone());
+        }
+    }
+    original_history_text(ed)
 }
 
 /// The capture's unredacted text: what History held when the editor
@@ -369,8 +407,10 @@ fn original_history_text(ed: &crate::editor::EditorSession) -> Option<String> {
 /// - an engine without positions never will, so mask every detected item
 ///   in the known text (the documented fallback).
 ///
-/// `None` also when no text is known at all.
-fn scrubbed_history_text(
+/// `None` also when no text is known at all, and whenever the document
+/// has a part other than the opened image with no recognition yet (no
+/// text rather than text nothing could mask: decision D2).
+pub(crate) fn scrubbed_history_text(
     ed: &crate::editor::EditorSession,
     engine_reports_positions: bool,
 ) -> Option<String> {
@@ -386,8 +426,18 @@ fn scrubbed_history_text(
     }
     match ed.text_panel.document() {
         Some(doc) => Some(mask(doc)),
-        None => original_history_text(ed).map(|t| mask(&TextDocument::from_plain(&t))),
+        None if only_the_original_part(ed) => {
+            original_history_text(ed).map(|t| mask(&TextDocument::from_plain(&t)))
+        }
+        None => None,
     }
+}
+
+/// The document is made of the opened image alone (perhaps transformed),
+/// so the capture's own text is all the text it has.
+fn only_the_original_part(ed: &crate::editor::EditorSession) -> bool {
+    let parts = &ed.model.geometry().parts;
+    parts.len() == 1 && parts[0].id == readshot_core::document::ORIGINAL_PART
 }
 
 /// Follow-ups after a message that may have written History: await the

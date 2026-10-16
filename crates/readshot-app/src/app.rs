@@ -492,9 +492,11 @@ pub enum Message {
     /// Start (or retry) recognizing the editor's base image for the Text
     /// panel. No-op while recognizing or once ready.
     EditorTextRecognize,
-    /// Text-panel recognition finished for editor session `session`.
+    /// Text-panel recognition of part `part` (in that part's pixels)
+    /// finished for editor session `session`.
     EditorTextRecognized {
         session: u64,
+        part: readshot_core::document::PartId,
         result: Result<readshot_core::text_lines::TextDocument, String>,
     },
     /// The newest History rewrite (scrub after a redaction, or restore)

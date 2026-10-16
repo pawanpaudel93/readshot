@@ -37,7 +37,9 @@ pub(crate) fn visible_option_controls(ed: &EditorSession) -> Vec<OptionControl> 
         .iter()
         .copied()
         .filter(|c| {
-            *c != OptionControl::SnapToText || ed.text_panel.positioned_document().is_some()
+            *c != OptionControl::SnapToText
+                || (ed.text_panel.positioned_document().is_some()
+                    && !ed.model.geometry().transform.is_sideways())
         })
         .collect()
 }
@@ -635,5 +637,27 @@ mod tests {
             TextDocument::from_plain("hi"),
         ));
         assert!(!visible_option_controls(&ed).contains(&OptionControl::SnapToText));
+        // Sideways, text runs vertically: no snap.
+        ed.text_panel.recognition =
+            crate::editor::TextRecognition::Ready(std::sync::Arc::new(positioned_hi()));
+        ed.model.rotate(true).unwrap();
+        assert!(!visible_option_controls(&ed).contains(&OptionControl::SnapToText));
+        ed.model.rotate(true).unwrap();
+        assert!(visible_option_controls(&ed).contains(&OptionControl::SnapToText));
+    }
+
+    fn positioned_hi() -> readshot_core::text_lines::TextDocument {
+        readshot_core::text_lines::TextDocument::from_recognized(
+            &[readshot_core::ocr_layout::RecognizedLine {
+                text: "hi".into(),
+                x: 0.1,
+                y: 0.1,
+                w: 0.5,
+                h: 0.2,
+                words: Vec::new(),
+            }],
+            32,
+            32,
+        )
     }
 }

@@ -133,8 +133,17 @@ struct ScrubState {
     /// Newest rewrite request per record.
     latest: std::collections::HashMap<readshot_core::Uuid, u64>,
     /// Redactions whose phase one (masked sidecar, unredacted image
-    /// removed) is on disk, per record.
-    secured: std::collections::HashMap<readshot_core::Uuid, Vec<readshot_core::Annotation>>,
+    /// removed) is on disk, per record, with the document frame they are
+    /// in: the same redactions in another frame cover other pixels.
+    secured: std::collections::HashMap<readshot_core::Uuid, SecuredScrub>,
+}
+
+/// A secured scrub's document frame (`CaptureRecord::geometry_id`) and
+/// redactions.
+type SecuredScrub = (Option<String>, Vec<readshot_core::Annotation>);
+
+fn secured_key(record: &CaptureRecord) -> SecuredScrub {
+    (record.geometry_id.clone(), record.redactions.clone())
 }
 
 fn next_rewrite_seq() -> u64 {
@@ -167,21 +176,17 @@ impl Scrubs {
             .is_some_and(|&latest| latest > seq)
     }
 
-    /// Record that phase one for `redactions` is on disk — only while
+    /// Record that phase one for `record`'s redactions (in its document
+    /// frame) is on disk — only while
     /// request `seq` is still the newest for `id`. `secured` is a cache
     /// that lets an edit skip phase one, so it may only ever be missing
     /// (phase one runs again: fail closed), never wrong: a job finishing
     /// after a newer request (a restore) must not put back the entry the
     /// newer request cleared.
-    fn mark_secured(
-        &self,
-        id: readshot_core::Uuid,
-        seq: u64,
-        redactions: &[readshot_core::Annotation],
-    ) {
+    fn mark_secured(&self, id: readshot_core::Uuid, seq: u64, record: &CaptureRecord) {
         let mut st = lock(&self.state);
         if st.latest.get(&id) == Some(&seq) {
-            st.secured.insert(id, redactions.to_vec());
+            st.secured.insert(id, secured_key(record));
         }
     }
 }
@@ -274,13 +279,15 @@ fn apply_rewrite(
     match store.commit_rewrite(record, staged) {
         Ok(true) => {
             if record.redacted {
-                scrubs.mark_secured(id, job.seq, &record.redactions);
+                scrubs.mark_secured(id, job.seq, record);
             }
             b.unsecured.remove(&id);
             Outcome::Done
         }
         Ok(false) => {
-            if record.redacted {
+            // A frame rewrite also replaces the raw capture when the
+            // save lands (History stores the transformed document).
+            if record.redacted || record.geometry_id.is_some() {
                 b.parked.insert(id, job.clone());
             }
             Outcome::Missing
@@ -590,7 +597,8 @@ impl CaptureCoordinator {
     /// - **Phase two** (render, encode, write the redacted image) runs on
     ///   the writer thread and is retried with backoff until it lands.
     /// - A record not saved yet is parked; [`Self::record_history`] saves
-    ///   the scrubbed version in place of the raw capture.
+    ///   the scrubbed version in place of the raw capture. So is a frame
+    ///   rewrite (`record.geometry_id` set) of a record not saved yet.
     ///
     /// A restore (`redacted: false`) cancels any parked or pending scrub.
     pub fn rewrite_history_async(
@@ -640,7 +648,7 @@ impl CaptureCoordinator {
             let mut st = lock(&self.scrubs.state);
             let seq = next_rewrite_seq();
             st.latest.insert(id, seq);
-            let phase_one = st.secured.get(&id) != Some(&record.redactions);
+            let phase_one = st.secured.get(&id) != Some(&secured_key(&record));
             (seq, phase_one)
         };
         let job = RewriteJob {
@@ -657,7 +665,7 @@ impl CaptureCoordinator {
             let mut b = lock(&self.scrubs.book);
             match store.begin_scrub(&record) {
                 Ok(true) => {
-                    self.scrubs.mark_secured(id, seq, &record.redactions);
+                    self.scrubs.mark_secured(id, seq, &record);
                     b.unsecured.remove(&id);
                 }
                 Ok(false) => {
@@ -756,7 +764,7 @@ impl CaptureCoordinator {
                 Ok(found) => {
                     b.unsecured.remove(&record.id);
                     if found {
-                        self.scrubs.mark_secured(record.id, seq, &record.redactions);
+                        self.scrubs.mark_secured(record.id, seq, &record);
                     }
                 }
                 Err(e) => tracing::warn!(
@@ -825,7 +833,9 @@ impl CaptureCoordinator {
 
 /// Save a fresh capture, or — when the editor already scrubbed it while
 /// the save was in flight (a parked scrub) — its scrubbed version
-/// instead, so the raw capture never reaches disk. Rendering, encoding
+/// instead, so the raw capture never reaches disk. A parked frame
+/// rewrite (rotated, resized or combined document, no redaction) is
+/// saved in place of the raw capture the same way, but is not a scrub. Rendering, encoding
 /// and staging happen without any lock; the commit gate is held only to
 /// re-check that the parked entry didn't change meanwhile (else
 /// prepare again) and for the short commit.
@@ -862,7 +872,9 @@ fn save_capture(
         if let (Some((scrubbed, _, _)), Some(Ok(staged))) = (rendered, staged_scrub) {
             let saved = history.commit_save(&scrubbed, staged);
             match &saved {
-                Ok(()) => scrubs.mark_secured(record.id, job.seq, &scrubbed.redactions),
+                // A parked frame rewrite is not a scrub: nothing to mark.
+                Ok(()) if scrubbed.redacted => scrubs.mark_secured(record.id, job.seq, &scrubbed),
+                Ok(()) => {}
                 Err(_) => {
                     b.parked.insert(record.id, job);
                 }
@@ -881,7 +893,7 @@ fn save_capture(
             b.parked.insert(record.id, job);
             return Err(e);
         }
-        if history.begin_scrub(&job.record).is_err() {
+        if job.record.redacted && history.begin_scrub(&job.record).is_err() {
             b.unsecured.insert(record.id, (job.seq, job.record.clone()));
         }
         return Ok(());
@@ -1269,6 +1281,33 @@ mod tests {
             png_on_disk(&store, &record).unwrap(),
             readshot_core::render(&base, &pixelate())
         );
+    }
+
+    #[tokio::test]
+    async fn a_frame_rewrite_of_a_record_not_saved_yet_is_saved_in_place_of_the_raw_capture() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let coord = history_coord(store.clone());
+        let raw_img = white(8, 4);
+        let rotated = Arc::new(image::imageops::rotate90(&raw_img));
+        let record = CaptureRecord::new(chrono::Utc::now(), 8, 4, "d");
+        let mut framed = record.clone();
+        framed.geometry_id = Some("n:rot=1".into());
+        drop(coord.rewrite_history_async(framed, Arc::clone(&rotated), Vec::new()));
+        coord.flush_history_updates();
+        let raw = readshot_core::encode_png(&raw_img).unwrap();
+        coord
+            .record_history(
+                record.clone(),
+                raw,
+                HistoryRetention::Unlimited,
+                chrono::Utc::now(),
+            )
+            .await;
+        let stored = sidecar(&store, &record);
+        assert_eq!(stored.geometry_id.as_deref(), Some("n:rot=1"));
+        assert!(!stored.redacted);
+        assert_eq!(png_on_disk(&store, &record).unwrap(), *rotated);
     }
 
     #[tokio::test]

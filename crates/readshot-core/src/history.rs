@@ -82,6 +82,15 @@ pub struct CaptureRecord {
     /// (no image on disk) until the redacted image is written.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scrub_pending: bool,
+    /// Which document frame the stored image (and `redactions`,
+    /// `annotation_model`) is in: `None` for the capture as taken, else an
+    /// opaque id of an editor geometry (rotated, resized, combined).
+    /// Recognized text is only stored — and masked — for a record of the
+    /// same frame ([`HistoryStore::record_recognized_text`]), so OCR of
+    /// one frame never masks, or replaces the text of, another. Absent in
+    /// older records and never written while `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry_id: Option<String>,
 }
 
 impl CaptureRecord {
@@ -104,6 +113,7 @@ impl CaptureRecord {
             redacted: false,
             redactions: Vec::new(),
             scrub_pending: false,
+            geometry_id: None,
         }
     }
 }
@@ -237,7 +247,10 @@ pub trait HistoryStore: Send + Sync {
     /// no text is stored yet, and never without stored redactions — the
     /// text stays as is rather than risk leaking). An unredacted record
     /// gets `doc.layout_text` only when `fill_unredacted`. Annotations and
-    /// everything else stored are kept. No-op for a missing record.
+    /// everything else stored are kept. No-op for a missing record, and
+    /// no-op when `record.geometry_id` differs from the stored one (`doc`
+    /// was recognized in another document frame than the stored image
+    /// and redactions).
     fn record_recognized_text(
         &self,
         record: &CaptureRecord,
@@ -532,14 +545,19 @@ impl FsHistoryStore {
     /// The text a scrub of `record` stores. `ocr_text: None` on a scrub
     /// means "not known yet" (the precise text lands later through
     /// `record_recognized_text`): keep text already stored for a scrub
-    /// with the same redactions, since it is masked exactly as needed.
-    /// Anything else — no stored scrub, other redactions — is dropped.
+    /// with the same redactions in the same document frame, since it is
+    /// masked exactly as needed. Anything else — no stored scrub, other
+    /// redactions, another frame — is dropped.
     fn scrub_text(&self, record: &CaptureRecord) -> Option<String> {
         if record.ocr_text.is_some() {
             return record.ocr_text.clone();
         }
         self.read_sidecar(record)
-            .filter(|stored| stored.redacted && stored.redactions == record.redactions)
+            .filter(|stored| {
+                stored.redacted
+                    && stored.redactions == record.redactions
+                    && stored.geometry_id == record.geometry_id
+            })
             .and_then(|stored| stored.ocr_text)
     }
 
@@ -826,6 +844,7 @@ impl HistoryStore for FsHistoryStore {
                     redacted: false,
                     redactions: Vec::new(),
                     scrub_pending: false,
+                    geometry_id: None,
                 };
                 let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&record_for_path)));
                 self.remove_staging_for(&record_for_path);
@@ -932,6 +951,11 @@ impl HistoryStore for FsHistoryStore {
         let Some(mut stored) = self.read_sidecar(record) else {
             return Ok(());
         };
+        // Text recognized for one document frame must never be masked
+        // with — or stored over — a record holding another frame.
+        if stored.geometry_id != record.geometry_id {
+            return Ok(());
+        }
         if stored.redacted {
             let precise = doc.positioned || stored.ocr_text.is_none();
             if !precise || !has_redaction(&stored.redactions) {
@@ -972,6 +996,7 @@ impl HistoryStore for FsHistoryStore {
             redacted: false,
             redactions: Vec::new(),
             scrub_pending: false,
+            geometry_id: None,
         };
         let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&record_for_path)));
         self.remove_staging_for(&record_for_path);
@@ -1847,5 +1872,56 @@ mod tests {
         let listed = &s.list().unwrap()[0];
         assert_eq!(listed.annotation_model, r.annotation_model);
         assert_eq!(listed.ocr_text.as_deref(), Some("██████"));
+    }
+
+    #[test]
+    fn recognized_text_never_lands_in_a_record_of_another_frame() {
+        use crate::text_lines::TextDocument;
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsHistoryStore::new(dir.path());
+        let mut r = CaptureRecord::new(Utc::now(), 4, 4, "d");
+        r.geometry_id = Some("nonce:rot=1".into());
+        let png = crate::encode_png_fast(&image::RgbaImage::new(4, 4)).unwrap();
+        store.save(&r, &png).unwrap();
+        let doc = TextDocument::from_plain("hello");
+        let mut stale = r.clone();
+        stale.geometry_id = None;
+        store.record_recognized_text(&stale, &doc, true).unwrap();
+        assert_eq!(
+            store.list().unwrap()[0].ocr_text,
+            None,
+            "another frame's text is ignored"
+        );
+        store.record_recognized_text(&r, &doc, true).unwrap();
+        assert_eq!(store.list().unwrap()[0].ocr_text.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn geometry_id_is_omitted_when_none_and_round_trips() {
+        let mut r = CaptureRecord::new(Utc::now(), 4, 4, "d");
+        assert!(!serde_json::to_string(&r).unwrap().contains("geometry_id"));
+        r.geometry_id = Some("x".into());
+        let back: CaptureRecord =
+            serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back.geometry_id.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn a_scrub_of_another_frame_never_keeps_text_masked_for_this_one() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let mut scrubbed = with_redaction(scrubbed_of(&r));
+        scrubbed.ocr_text = Some("pin ████ ok".into());
+        s.rewrite(&scrubbed, &valid_png(4, 4)).unwrap();
+        // Same redactions (by value), but in another document frame: the
+        // stored masking may not cover them, so nothing is kept.
+        let mut rotated = scrubbed.clone();
+        rotated.geometry_id = Some("n:rot=1".into());
+        rotated.ocr_text = None;
+        s.rewrite(&rotated, &valid_png(4, 4)).unwrap();
+        let listed = &s.list().unwrap()[0];
+        assert_eq!(listed.geometry_id.as_deref(), Some("n:rot=1"));
+        assert_eq!(listed.ocr_text, None);
     }
 }
