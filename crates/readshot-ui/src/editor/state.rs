@@ -12,8 +12,11 @@
 //! `EditorState` and feeds it iced messages.
 
 use image::RgbaImage;
-use readshot_core::{render, Annotation, PointLike, RectLike, Rgba};
+use readshot_core::line_geom::{bend_after_drag, curve_apex, path_points};
+use readshot_core::render::text_pill_rect;
+use readshot_core::{render, Annotation, LinePath, PointLike, RectLike, Rgba};
 
+use super::style::{apply_style_to_annotation, StyleMessage, TextSize, ToolStyle};
 use super::tool_state::ToolState;
 use super::undo::History;
 
@@ -52,6 +55,8 @@ pub enum ResizeHandle {
     West,
     Start,
     End,
+    /// Apex of a curved line or arrow; dragging it changes the bend.
+    Bend,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,6 +73,7 @@ pub struct EditorState {
     active_tool: ToolState,
     current_color: Rgba,
     current_line_width: f32,
+    tool_style: ToolStyle,
     selected_annotation: Option<usize>,
     /// Cached flattened image. Invalidated (reset to `None`) whenever the
     /// annotation `history` changes — commit, undo/redo, delete, discard,
@@ -87,6 +93,7 @@ impl EditorState {
             active_tool: ToolState::default(),
             current_color: Rgba::new(1.0, 0.0, 0.0, 1.0),
             current_line_width: DEFAULT_LINE_WIDTH,
+            tool_style: ToolStyle::default(),
             selected_annotation: None,
             flattened_cache: None,
         }
@@ -99,6 +106,7 @@ impl EditorState {
             active_tool: ToolState::default(),
             current_color: Rgba::new(1.0, 0.0, 0.0, 1.0),
             current_line_width: DEFAULT_LINE_WIDTH,
+            tool_style: ToolStyle::default(),
             selected_annotation: None,
             flattened_cache: None,
         }
@@ -160,6 +168,74 @@ impl EditorState {
         // anything larger doesn't fit on the toolbar's slider in the
         // editor and is almost always a mistake.
         self.current_line_width = width.clamp(0.5, 64.0);
+    }
+
+    pub fn tool_style(&self) -> ToolStyle {
+        self.tool_style
+    }
+
+    /// Change the style the next annotation gets. Does not touch the
+    /// selection — see [`Self::apply_style_to_selected`].
+    pub fn set_style(&mut self, msg: StyleMessage) {
+        self.tool_style.apply(msg);
+    }
+
+    /// Restore a saved tool style (a cancelled options-bar slider).
+    pub fn set_tool_style(&mut self, style: ToolStyle) {
+        self.tool_style = style;
+    }
+
+    /// The tool style with the selected annotation's settings layered on
+    /// top — what the options bar displays.
+    pub fn effective_style(&self) -> ToolStyle {
+        match self.selected_annotation() {
+            Some(idx) => self
+                .tool_style
+                .with_annotation(&self.history.current()[idx]),
+            None => self.tool_style,
+        }
+    }
+
+    /// The selected annotation's color when it has one, else the tool color.
+    pub fn effective_color(&self) -> Rgba {
+        self.selected_annotation()
+            .and_then(|idx| annotation_color(&self.history.current()[idx]))
+            .unwrap_or(self.current_color)
+    }
+
+    pub fn apply_style_to_selected(&mut self, msg: StyleMessage) -> bool {
+        let Some(idx) = self.selected_annotation() else {
+            return false;
+        };
+        let mut next = self.history.current().to_vec();
+        if !apply_style_to_annotation(&mut next[idx], msg) {
+            return false;
+        }
+        self.history.push(next);
+        self.selected_annotation = Some(idx);
+        self.flattened_cache = None;
+        true
+    }
+
+    /// Slider preview: restyle the selection from `baseline` without
+    /// pushing history; `commit_preview_from_baseline` makes it one step.
+    pub fn preview_style_selected_from(
+        &mut self,
+        baseline: &[Annotation],
+        msg: StyleMessage,
+    ) -> bool {
+        let Some(idx) = self.selected_annotation else {
+            return false;
+        };
+        if idx >= baseline.len() {
+            self.selected_annotation = None;
+            return false;
+        }
+        let mut next = baseline.to_vec();
+        let changed = apply_style_to_annotation(&mut next[idx], msg);
+        self.history.replace_present(next);
+        self.flattened_cache = None;
+        changed
     }
 
     /// Append a new annotation, snapshotting the previous state to
@@ -540,11 +616,24 @@ pub(crate) fn annotation_hit_test(annotation: &Annotation, point: PointLike, sca
     let tolerance = hit_tolerance_base(HIT_TOLERANCE_SCREEN, scale);
     match annotation {
         Annotation::Line {
-            a, b, line_width, ..
+            a,
+            b,
+            line_width,
+            style,
+            ..
         }
         | Annotation::Arrow {
-            a, b, line_width, ..
-        } => distance_to_segment(point, *a, *b) <= (*line_width * 0.5).max(tolerance),
+            a,
+            b,
+            line_width,
+            style,
+            ..
+        } => {
+            let reach = (*line_width * 0.5).max(tolerance);
+            path_points(*a, *b, style.path, *line_width)
+                .windows(2)
+                .any(|pair| distance_to_segment(point, pair[0], pair[1]) <= reach)
+        }
         Annotation::Pen {
             points, line_width, ..
         }
@@ -603,6 +692,20 @@ fn set_annotation_color(annotation: &mut Annotation, color: Rgba) -> bool {
     }
 }
 
+fn annotation_color(annotation: &Annotation) -> Option<Rgba> {
+    match annotation {
+        Annotation::Rectangle { color, .. }
+        | Annotation::Ellipse { color, .. }
+        | Annotation::Line { color, .. }
+        | Annotation::Arrow { color, .. }
+        | Annotation::Pen { color, .. }
+        | Annotation::Highlighter { color, .. }
+        | Annotation::Text { color, .. }
+        | Annotation::NumberedPin { color, .. } => Some(*color),
+        Annotation::Blur { .. } | Annotation::Pixelate { .. } | Annotation::Crop { .. } => None,
+    }
+}
+
 fn set_annotation_width(annotation: &mut Annotation, width: f32) -> bool {
     match annotation {
         Annotation::Rectangle { line_width, .. }
@@ -625,7 +728,7 @@ fn set_annotation_width(annotation: &mut Annotation, width: f32) -> bool {
             true
         }
         Annotation::Text { size, .. } => {
-            let next = (width * 4.0 + 8.0).clamp(12.0, 96.0);
+            let next = TextSize::nearest((width * 4.0 + 8.0).clamp(12.0, 96.0)).px();
             if (*size - next).abs() < f32::EPSILON {
                 return false;
             }
@@ -652,7 +755,7 @@ fn set_annotation_width(annotation: &mut Annotation, width: f32) -> bool {
     }
 }
 
-fn annotation_bounds(annotation: &Annotation) -> Option<RectLike> {
+pub(crate) fn annotation_bounds(annotation: &Annotation) -> Option<RectLike> {
     match annotation {
         Annotation::Rectangle { rect, .. }
         | Annotation::Ellipse { rect, .. }
@@ -660,11 +763,22 @@ fn annotation_bounds(annotation: &Annotation) -> Option<RectLike> {
         | Annotation::Pixelate { rect, .. }
         | Annotation::Crop { rect } => Some(*rect),
         Annotation::Line {
-            a, b, line_width, ..
+            a,
+            b,
+            line_width,
+            style,
+            ..
         }
         | Annotation::Arrow {
-            a, b, line_width, ..
-        } => bounds_for_points(&[*a, *b], (*line_width * 0.5).max(6.0)),
+            a,
+            b,
+            line_width,
+            style,
+            ..
+        } => bounds_for_points(
+            &path_points(*a, *b, style.path, *line_width),
+            (*line_width * 0.5).max(6.0),
+        ),
         Annotation::Pen {
             points, line_width, ..
         }
@@ -675,8 +789,13 @@ fn annotation_bounds(annotation: &Annotation) -> Option<RectLike> {
             content,
             origin,
             size,
+            style,
             ..
         } => {
+            if style.pill {
+                // The exact rect render fills, so selection matches export.
+                return text_pill_rect(content, *size, *origin);
+            }
             // Multi-line text: width is the widest line, height grows
             // one line per `\n`. `origin` is the first line's baseline,
             // so the box starts `size` above it (cap height) and each
@@ -721,8 +840,12 @@ fn annotation_resize_handles(annotation: &Annotation) -> Vec<(ResizeHandle, Poin
         | Annotation::Blur { rect, .. }
         | Annotation::Pixelate { rect, .. }
         | Annotation::Crop { rect } => rect_resize_handles(*rect),
-        Annotation::Line { a, b, .. } | Annotation::Arrow { a, b, .. } => {
-            vec![(ResizeHandle::Start, *a), (ResizeHandle::End, *b)]
+        Annotation::Line { a, b, style, .. } | Annotation::Arrow { a, b, style, .. } => {
+            let mut handles = vec![(ResizeHandle::Start, *a), (ResizeHandle::End, *b)];
+            if let LinePath::Curved { bend } = style.path {
+                handles.push((ResizeHandle::Bend, curve_apex(*a, *b, bend)));
+            }
+            handles
         }
         _ => Vec::new(),
     }
@@ -784,23 +907,35 @@ fn resize_annotation(annotation: &mut Annotation, handle: ResizeHandle, dx: f32,
         | Annotation::Blur { rect, .. }
         | Annotation::Pixelate { rect, .. }
         | Annotation::Crop { rect } => {
-            if matches!(handle, ResizeHandle::Start | ResizeHandle::End) {
+            if matches!(
+                handle,
+                ResizeHandle::Start | ResizeHandle::End | ResizeHandle::Bend
+            ) {
                 return false;
             }
             resize_rect(rect, handle, dx, dy);
             true
         }
-        Annotation::Line { a, b, .. } | Annotation::Arrow { a, b, .. } => match handle {
-            ResizeHandle::Start => {
-                translate_point(a, dx, dy);
-                true
+        Annotation::Line { a, b, style, .. } | Annotation::Arrow { a, b, style, .. } => {
+            match handle {
+                ResizeHandle::Start => {
+                    translate_point(a, dx, dy);
+                    true
+                }
+                ResizeHandle::End => {
+                    translate_point(b, dx, dy);
+                    true
+                }
+                ResizeHandle::Bend => match &mut style.path {
+                    LinePath::Curved { bend } => {
+                        *bend = bend_after_drag(*a, *b, *bend, dx, dy);
+                        true
+                    }
+                    _ => false,
+                },
+                _ => false,
             }
-            ResizeHandle::End => {
-                translate_point(b, dx, dy);
-                true
-            }
-            _ => false,
-        },
+        }
         _ => false,
     }
 }
@@ -831,7 +966,7 @@ fn resize_rect(rect: &mut RectLike, handle: ResizeHandle, dx: f32, dy: f32) {
             bottom += dy;
         }
         ResizeHandle::West => left += dx,
-        ResizeHandle::Start | ResizeHandle::End => return,
+        ResizeHandle::Start | ResizeHandle::End | ResizeHandle::Bend => return,
     }
 
     let x = left.min(right);
@@ -1566,6 +1701,192 @@ mod tests {
                 assert!(rect.y + rect.height >= 8.0, "rect.y = {}", rect.y);
             }
             other => panic!("expected rectangle, got {other:?}"),
+        }
+    }
+
+    use super::super::style::{StyleMessage, TextSize};
+    use readshot_core::{FillMode, LinePath, LineStyle, ShapeStyle, TextStyle};
+
+    #[test]
+    fn style_applies_to_the_selected_rectangle_as_one_undo_step() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        let depth = s.undo_depth();
+        assert!(s.apply_style_to_selected(StyleMessage::Fill(FillMode::Filled)));
+        assert_eq!(s.undo_depth(), depth + 1);
+        assert!(matches!(
+            &s.annotations()[0],
+            Annotation::Rectangle { style, .. } if style.fill == FillMode::Filled
+        ));
+        assert!(s.undo());
+        assert!(matches!(
+            &s.annotations()[0],
+            Annotation::Rectangle { style, .. } if *style == ShapeStyle::default()
+        ));
+    }
+
+    #[test]
+    fn style_for_another_kind_is_a_no_op_on_the_selection() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        let depth = s.undo_depth();
+        assert!(!s.apply_style_to_selected(StyleMessage::TextBold(true)));
+        assert_eq!(s.undo_depth(), depth);
+    }
+
+    #[test]
+    fn style_preview_commits_as_one_undo_step() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        let baseline = s.annotations().to_vec();
+        let depth = s.undo_depth();
+        for r in [4.0, 8.0, 12.0] {
+            s.set_style(StyleMessage::CornerRadius(r));
+            s.preview_style_selected_from(&baseline, StyleMessage::CornerRadius(r));
+        }
+        assert!(s.commit_preview_from_baseline(baseline));
+        assert_eq!(s.undo_depth(), depth + 1);
+        assert_eq!(s.tool_style().corner_radius, 12.0);
+        assert!(matches!(
+            &s.annotations()[0],
+            Annotation::Rectangle { style, .. } if style.corner_radius == 12.0
+        ));
+    }
+
+    #[test]
+    fn effective_style_and_color_follow_the_selection() {
+        let mut s = EditorState::new(solid_base(200, 200));
+        s.commit_annotation(Annotation::Text {
+            content: "hi".into(),
+            origin: PointLike::new(20.0, 40.0),
+            color: Rgba::new(0.0, 0.0, 1.0, 1.0),
+            font_family: "system-ui".into(),
+            size: 36.0,
+            style: TextStyle {
+                pill: true,
+                bold: false,
+            },
+        });
+        let eff = s.effective_style();
+        assert_eq!(eff.text_size, TextSize::L);
+        assert!(eff.text_pill);
+        assert_eq!(s.effective_color(), Rgba::new(0.0, 0.0, 1.0, 1.0));
+        s.clear_selection();
+        assert_eq!(s.effective_style(), s.tool_style());
+        assert_eq!(s.effective_color(), s.current_color());
+    }
+
+    fn curved_line() -> Annotation {
+        Annotation::Line {
+            a: PointLike::new(10.0, 50.0),
+            b: PointLike::new(110.0, 50.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: LineStyle {
+                path: LinePath::Curved { bend: 0.4 },
+                ..LineStyle::default()
+            },
+        }
+    }
+
+    #[test]
+    fn curved_line_hit_test_follows_the_curve() {
+        let mut s = EditorState::new(solid_base(200, 120));
+        s.commit_annotation(curved_line());
+        s.clear_selection();
+        // Apex at y = 50 + 0.5 * 0.4 * 100 = 70; the chord (y = 50) is empty.
+        assert_eq!(s.select_at(PointLike::new(60.0, 70.0)), Some(0));
+        s.clear_selection();
+        assert_eq!(s.select_at(PointLike::new(60.0, 50.0)), None);
+    }
+
+    #[test]
+    fn bend_handle_reshapes_a_curved_line_as_one_undo_step() {
+        let mut s = EditorState::new(solid_base(200, 140));
+        s.commit_annotation(curved_line());
+        let handles = s.selected_handles();
+        let (_, apex) = handles
+            .iter()
+            .copied()
+            .find(|(h, _)| *h == ResizeHandle::Bend)
+            .expect("curved line exposes a bend handle");
+        assert_eq!(s.resize_handle_at(apex), Some(ResizeHandle::Bend));
+        let baseline = s.annotations().to_vec();
+        let depth = s.undo_depth();
+        assert!(s.preview_resize_selected_from(&baseline, ResizeHandle::Bend, 0.0, 10.0));
+        assert!(s.commit_preview_from_baseline(baseline));
+        assert_eq!(s.undo_depth(), depth + 1);
+        match &s.annotations()[0] {
+            // bend 0.4 + 2 × 10 / 100 = 0.6
+            Annotation::Line {
+                style:
+                    LineStyle {
+                        path: LinePath::Curved { bend },
+                        ..
+                    },
+                ..
+            } => assert!((bend - 0.6).abs() < 1e-5, "{bend}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn straight_lines_have_no_bend_handle() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(Annotation::Line {
+            a: PointLike::new(0.0, 0.0),
+            b: PointLike::new(40.0, 0.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: LineStyle::default(),
+        });
+        assert!(s
+            .selected_handles()
+            .iter()
+            .all(|(h, _)| *h != ResizeHandle::Bend));
+    }
+
+    #[test]
+    fn pill_text_bounds_are_the_rendered_pill() {
+        let pill = Annotation::Text {
+            content: "Hi\nthere".into(),
+            origin: PointLike::new(50.0, 50.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 20.0,
+            style: TextStyle {
+                pill: true,
+                bold: false,
+            },
+        };
+        assert_eq!(
+            annotation_bounds(&pill),
+            text_pill_rect("Hi\nthere", 20.0, PointLike::new(50.0, 50.0))
+        );
+    }
+
+    #[test]
+    fn width_changes_snap_text_to_size_steps() {
+        let mut s = EditorState::new(solid_base(200, 200));
+        s.commit_annotation(Annotation::Text {
+            content: "hi".into(),
+            origin: PointLike::new(20.0, 40.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 24.0,
+            style: TextStyle::default(),
+        });
+        for width in [1.0, 3.0, 5.0, 7.0, 9.0, 20.0] {
+            s.apply_line_width_to_selected(width);
+            match &s.annotations()[0] {
+                Annotation::Text { size, .. } => {
+                    assert!(
+                        [16.0, 24.0, 36.0, 52.0].contains(size),
+                        "width {width} → {size}"
+                    )
+                }
+                other => panic!("{other:?}"),
+            }
         }
     }
 }

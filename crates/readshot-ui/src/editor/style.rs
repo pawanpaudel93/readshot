@@ -1,0 +1,402 @@
+//! Per-tool drawing options (spec §2.2, §3.3).
+//!
+//! [`ToolStyle`] is what the next shape gets; [`StyleMessage`] is one
+//! change from the options bar. [`options_for`] says which controls the
+//! bar shows: the selected annotation's kind wins over the active tool,
+//! and Select with nothing selected shows nothing (the bar hides).
+
+use readshot_core::line_geom::{seed_for, DEFAULT_BEND};
+use readshot_core::{
+    Annotation, ArrowHeads, FillMode, LinePath, LineStyle, PointLike, ShapeStyle, TextStyle,
+};
+
+use super::tool_state::ToolState;
+
+pub const MAX_CORNER_RADIUS: f32 = 32.0;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LinePathKind {
+    #[default]
+    Straight,
+    Curved,
+    HandDrawn,
+}
+
+impl LinePathKind {
+    pub fn of(path: LinePath) -> Self {
+        match path {
+            LinePath::Straight => Self::Straight,
+            LinePath::Curved { .. } => Self::Curved,
+            LinePath::HandDrawn { .. } => Self::HandDrawn,
+        }
+    }
+
+    /// Concrete path for a new or restyled line. An unchanged kind keeps
+    /// the existing bend / seed so restyling never reshuffles a line.
+    pub fn to_path(self, existing: LinePath, anchor: PointLike) -> LinePath {
+        match (self, existing) {
+            (Self::Straight, _) => LinePath::Straight,
+            (Self::Curved, LinePath::Curved { bend }) => LinePath::Curved { bend },
+            (Self::Curved, _) => LinePath::Curved { bend: DEFAULT_BEND },
+            (Self::HandDrawn, LinePath::HandDrawn { seed }) => LinePath::HandDrawn { seed },
+            (Self::HandDrawn, _) => LinePath::HandDrawn {
+                seed: seed_for(anchor),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextSize {
+    S,
+    #[default]
+    M,
+    L,
+    Xl,
+}
+
+impl TextSize {
+    pub const ALL: [Self; 4] = [Self::S, Self::M, Self::L, Self::Xl];
+
+    pub fn px(self) -> f32 {
+        match self {
+            Self::S => 16.0,
+            Self::M => 24.0,
+            Self::L => 36.0,
+            Self::Xl => 52.0,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::S => "S",
+            Self::M => "M",
+            Self::L => "L",
+            Self::Xl => "XL",
+        }
+    }
+
+    /// One step up or down, clamped at S and XL (`]` / `[` on text).
+    pub fn step(self, up: bool) -> Self {
+        let i = Self::ALL.iter().position(|s| *s == self).unwrap_or(1);
+        let next = if up {
+            (i + 1).min(Self::ALL.len() - 1)
+        } else {
+            i.saturating_sub(1)
+        };
+        Self::ALL[next]
+    }
+
+    pub fn nearest(size: f32) -> Self {
+        *Self::ALL
+            .iter()
+            .min_by(|a, b| (a.px() - size).abs().total_cmp(&(b.px() - size).abs()))
+            .expect("ALL is non-empty")
+    }
+}
+
+/// Options applied to the next annotation drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ToolStyle {
+    pub fill: FillMode,
+    pub dashed: bool,
+    pub corner_radius: f32,
+    pub line_path: LinePathKind,
+    pub heads: ArrowHeads,
+    pub text_size: TextSize,
+    pub text_pill: bool,
+    pub text_bold: bool,
+}
+
+/// One options-bar change.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StyleMessage {
+    Fill(FillMode),
+    Dashed(bool),
+    CornerRadius(f32),
+    LinePath(LinePathKind),
+    Heads(ArrowHeads),
+    TextSize(TextSize),
+    TextPill(bool),
+    TextBold(bool),
+}
+
+/// Controls the options bar can show, in display order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptionControl {
+    Color,
+    Width,
+    Fill,
+    Dash,
+    CornerRadius,
+    LinePath,
+    Heads,
+    TextSize,
+    TextPill,
+    TextBold,
+}
+
+/// The tool that draws `annotation` — the options-bar target for a selection.
+pub fn tool_for_annotation(annotation: &Annotation) -> ToolState {
+    match annotation {
+        Annotation::Rectangle { .. } => ToolState::Rectangle,
+        Annotation::Ellipse { .. } => ToolState::Ellipse,
+        Annotation::Line { .. } => ToolState::Line,
+        Annotation::Arrow { .. } => ToolState::Arrow,
+        Annotation::Pen { .. } => ToolState::Pen,
+        Annotation::Highlighter { .. } => ToolState::Highlighter,
+        Annotation::Text { .. } => ToolState::Text,
+        Annotation::Blur { .. } => ToolState::Blur,
+        Annotation::Pixelate { .. } => ToolState::Pixelate,
+        Annotation::NumberedPin { .. } => ToolState::NumberedPin,
+        Annotation::Crop { .. } => ToolState::Crop,
+    }
+}
+
+pub fn options_for(active: ToolState, selected: Option<&Annotation>) -> &'static [OptionControl] {
+    use OptionControl::*;
+    match selected.map(tool_for_annotation).unwrap_or(active) {
+        ToolState::Select | ToolState::Crop => &[],
+        ToolState::Rectangle => &[Color, Width, Fill, Dash, CornerRadius],
+        ToolState::Ellipse => &[Color, Width, Fill, Dash],
+        ToolState::Line => &[Color, Width, LinePath, Dash],
+        ToolState::Arrow => &[Color, Width, LinePath, Dash, Heads],
+        ToolState::Pen | ToolState::Highlighter => &[Color, Width],
+        ToolState::Text => &[Color, TextSize, TextPill, TextBold],
+        ToolState::Blur | ToolState::Pixelate => &[Width],
+        ToolState::NumberedPin => &[Color],
+    }
+}
+
+impl ToolStyle {
+    pub fn apply(&mut self, msg: StyleMessage) {
+        match msg {
+            StyleMessage::Fill(f) => self.fill = f,
+            StyleMessage::Dashed(d) => self.dashed = d,
+            StyleMessage::CornerRadius(r) => self.corner_radius = r.clamp(0.0, MAX_CORNER_RADIUS),
+            StyleMessage::LinePath(k) => self.line_path = k,
+            StyleMessage::Heads(h) => self.heads = h,
+            StyleMessage::TextSize(s) => self.text_size = s,
+            StyleMessage::TextPill(p) => self.text_pill = p,
+            StyleMessage::TextBold(b) => self.text_bold = b,
+        }
+    }
+
+    pub fn shape_style(&self, tool: ToolState) -> ShapeStyle {
+        ShapeStyle {
+            fill: self.fill,
+            dashed: self.dashed,
+            corner_radius: if tool == ToolState::Rectangle {
+                self.corner_radius
+            } else {
+                0.0
+            },
+        }
+    }
+
+    pub fn line_style(&self, anchor: PointLike) -> LineStyle {
+        LineStyle {
+            path: self.line_path.to_path(LinePath::Straight, anchor),
+            dashed: self.dashed,
+            heads: self.heads,
+        }
+    }
+
+    pub fn text_style(&self) -> TextStyle {
+        TextStyle {
+            pill: self.text_pill,
+            bold: self.text_bold,
+        }
+    }
+
+    /// `annotation`'s settings layered over `self`, so the options bar
+    /// shows what the selection uses.
+    pub fn with_annotation(mut self, annotation: &Annotation) -> Self {
+        match annotation {
+            Annotation::Rectangle { style, .. } => {
+                self.fill = style.fill;
+                self.dashed = style.dashed;
+                self.corner_radius = style.corner_radius;
+            }
+            Annotation::Ellipse { style, .. } => {
+                self.fill = style.fill;
+                self.dashed = style.dashed;
+            }
+            Annotation::Line { style, .. } | Annotation::Arrow { style, .. } => {
+                self.line_path = LinePathKind::of(style.path);
+                self.dashed = style.dashed;
+                self.heads = style.heads;
+            }
+            Annotation::Text { size, style, .. } => {
+                self.text_size = TextSize::nearest(*size);
+                self.text_pill = style.pill;
+                self.text_bold = style.bold;
+            }
+            _ => {}
+        }
+        self
+    }
+}
+
+/// Apply `msg` to `annotation` when it applies to that kind. Returns
+/// whether anything changed.
+pub fn apply_style_to_annotation(annotation: &mut Annotation, msg: StyleMessage) -> bool {
+    let before = annotation.clone();
+    match (&mut *annotation, msg) {
+        (
+            Annotation::Rectangle { style, .. } | Annotation::Ellipse { style, .. },
+            StyleMessage::Fill(f),
+        ) => style.fill = f,
+        (
+            Annotation::Rectangle { style, .. } | Annotation::Ellipse { style, .. },
+            StyleMessage::Dashed(d),
+        ) => style.dashed = d,
+        (Annotation::Rectangle { style, .. }, StyleMessage::CornerRadius(r)) => {
+            style.corner_radius = r.clamp(0.0, MAX_CORNER_RADIUS)
+        }
+        (
+            Annotation::Line { a, style, .. } | Annotation::Arrow { a, style, .. },
+            StyleMessage::LinePath(kind),
+        ) => style.path = kind.to_path(style.path, *a),
+        (
+            Annotation::Line { style, .. } | Annotation::Arrow { style, .. },
+            StyleMessage::Dashed(d),
+        ) => style.dashed = d,
+        (Annotation::Arrow { style, .. }, StyleMessage::Heads(h)) => style.heads = h,
+        (Annotation::Text { size, .. }, StyleMessage::TextSize(s)) => *size = s.px(),
+        (Annotation::Text { style, .. }, StyleMessage::TextPill(p)) => style.pill = p,
+        (Annotation::Text { style, .. }, StyleMessage::TextBold(b)) => style.bold = b,
+        _ => return false,
+    }
+    *annotation != before
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use readshot_core::{RectLike, Rgba};
+
+    fn rect() -> Annotation {
+        Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 10.0, 10.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: ShapeStyle::default(),
+        }
+    }
+
+    fn arrow() -> Annotation {
+        Annotation::Arrow {
+            a: PointLike::new(0.0, 0.0),
+            b: PointLike::new(40.0, 0.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: LineStyle::default(),
+        }
+    }
+
+    #[test]
+    fn options_bar_is_hidden_for_select_without_selection() {
+        assert!(options_for(ToolState::Select, None).is_empty());
+        assert!(options_for(ToolState::Crop, None).is_empty());
+    }
+
+    #[test]
+    fn options_follow_the_selection_over_the_active_tool() {
+        let a = arrow();
+        assert_eq!(
+            options_for(ToolState::Select, Some(&a)),
+            options_for(ToolState::Arrow, None)
+        );
+        assert_eq!(
+            options_for(ToolState::Text, Some(&a)),
+            options_for(ToolState::Arrow, None)
+        );
+    }
+
+    #[test]
+    fn options_per_tool_match_the_spec() {
+        use OptionControl::*;
+        assert_eq!(
+            options_for(ToolState::Rectangle, None),
+            &[Color, Width, Fill, Dash, CornerRadius]
+        );
+        assert_eq!(
+            options_for(ToolState::Arrow, None),
+            &[Color, Width, LinePath, Dash, Heads]
+        );
+        assert_eq!(
+            options_for(ToolState::Text, None),
+            &[Color, TextSize, TextPill, TextBold]
+        );
+        assert_eq!(options_for(ToolState::Blur, None), &[Width]);
+    }
+
+    #[test]
+    fn line_path_kind_keeps_existing_bend_and_seed() {
+        let anchor = PointLike::new(3.0, 4.0);
+        let curved = LinePath::Curved { bend: -0.7 };
+        assert_eq!(LinePathKind::Curved.to_path(curved, anchor), curved);
+        assert_eq!(
+            LinePathKind::Curved.to_path(LinePath::Straight, anchor),
+            LinePath::Curved { bend: DEFAULT_BEND }
+        );
+        assert_eq!(
+            LinePathKind::HandDrawn.to_path(LinePath::Straight, anchor),
+            LinePath::HandDrawn {
+                seed: seed_for(anchor)
+            }
+        );
+    }
+
+    #[test]
+    fn apply_style_only_touches_matching_kinds() {
+        let mut r = rect();
+        assert!(apply_style_to_annotation(
+            &mut r,
+            StyleMessage::Fill(FillMode::Filled)
+        ));
+        assert!(!apply_style_to_annotation(
+            &mut r,
+            StyleMessage::Fill(FillMode::Filled)
+        ));
+        assert!(!apply_style_to_annotation(
+            &mut r,
+            StyleMessage::Heads(ArrowHeads::Both)
+        ));
+        let mut a = arrow();
+        assert!(apply_style_to_annotation(
+            &mut a,
+            StyleMessage::Heads(ArrowHeads::Both)
+        ));
+        assert!(!apply_style_to_annotation(
+            &mut a,
+            StyleMessage::CornerRadius(8.0)
+        ));
+    }
+
+    #[test]
+    fn text_size_maps_to_px_and_back() {
+        assert_eq!(TextSize::L.px(), 36.0);
+        assert_eq!(TextSize::nearest(20.0), TextSize::S);
+        assert_eq!(TextSize::nearest(23.0), TextSize::M);
+        assert_eq!(TextSize::nearest(80.0), TextSize::Xl);
+    }
+
+    #[test]
+    fn ellipses_never_get_a_corner_radius() {
+        let style = ToolStyle {
+            corner_radius: 12.0,
+            ..ToolStyle::default()
+        };
+        assert_eq!(style.shape_style(ToolState::Ellipse).corner_radius, 0.0);
+        assert_eq!(style.shape_style(ToolState::Rectangle).corner_radius, 12.0);
+    }
+
+    #[test]
+    fn text_size_steps_clamp_at_the_ends() {
+        assert_eq!(TextSize::M.step(true), TextSize::L);
+        assert_eq!(TextSize::Xl.step(true), TextSize::Xl);
+        assert_eq!(TextSize::S.step(false), TextSize::S);
+    }
+}

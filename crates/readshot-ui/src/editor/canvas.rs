@@ -874,7 +874,9 @@ fn resize_handle_cursor(handle: ResizeHandle) -> iced::mouse::Interaction {
         ResizeHandle::NorthEast | ResizeHandle::SouthWest => {
             iced::mouse::Interaction::ResizingDiagonallyUp
         }
-        ResizeHandle::Start | ResizeHandle::End => iced::mouse::Interaction::Move,
+        ResizeHandle::Start | ResizeHandle::End | ResizeHandle::Bend => {
+            iced::mouse::Interaction::Move
+        }
     }
 }
 

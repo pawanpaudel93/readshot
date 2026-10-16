@@ -28,6 +28,7 @@ use readshot_core::ExportFormat;
 pub mod action_bar;
 pub mod canvas;
 pub mod state;
+pub mod style;
 pub mod tool_state;
 pub mod toolbar;
 pub mod undo;
@@ -35,6 +36,10 @@ pub mod undo;
 pub use action_bar::ActionMessage;
 pub use canvas::{CanvasMessage, EditorCanvas};
 pub use state::{EditorState, ResizeHandle, TextEdit};
+pub use style::{
+    apply_style_to_annotation, options_for, tool_for_annotation, LinePathKind, OptionControl,
+    StyleMessage, TextSize, ToolStyle,
+};
 pub use tool_state::ToolState;
 pub use toolbar::ToolbarMessage;
 pub use undo::History;
