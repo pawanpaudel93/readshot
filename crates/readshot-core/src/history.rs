@@ -469,6 +469,28 @@ impl FsHistoryStore {
             .join(format!("{}.thumb.png", record.id))
     }
 
+    /// Remove every staging file of `record` (`<id>.*.stage*.png`): a
+    /// crash can leave one holding unredacted bytes, and a deleted or
+    /// pruned record must not keep any of its image data on disk.
+    fn remove_staging_for(&self, record: &CaptureRecord) {
+        let abs_png = self.root.join(Self::png_path(record));
+        let Some(dir) = abs_png.parent() else {
+            return;
+        };
+        let Ok(files) = fs::read_dir(dir) else {
+            return;
+        };
+        let prefix = format!("{}.", record.id);
+        for file in files.flatten() {
+            let name = file.file_name();
+            let name = name.to_string_lossy();
+            let staging = name.ends_with(".stage.png") || name.ends_with(".stage-thumb.png");
+            if staging && name.starts_with(&prefix) {
+                let _ = fs::remove_file(file.path());
+            }
+        }
+    }
+
     /// Rename a staged PNG (and thumbnail) into place. The staged PNG was
     /// fully written and fsynced by `stage_image`, so the rename can't
     /// leave a torn image. A missing staged thumbnail removes the old one
@@ -806,6 +828,7 @@ impl HistoryStore for FsHistoryStore {
                     scrub_pending: false,
                 };
                 let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&record_for_path)));
+                self.remove_staging_for(&record_for_path);
             }
         }
 
@@ -951,6 +974,7 @@ impl HistoryStore for FsHistoryStore {
             scrub_pending: false,
         };
         let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&record_for_path)));
+        self.remove_staging_for(&record_for_path);
         index.updated_at = Some(Utc::now());
         self.write_index(&index)?;
         Ok(())
@@ -1544,6 +1568,40 @@ mod tests {
         let staged = s.stage_image(&gone, &png, None).unwrap();
         assert!(!s.commit_rewrite(&scrubbed_of(&gone), staged).unwrap());
         assert!(staging_files(&s, &gone).is_empty());
+    }
+
+    #[test]
+    fn delete_and_retention_remove_a_records_staging_files() {
+        let (_dir, s) = store();
+        let keep = record_at(Utc::now());
+        let pruned = record_at(Utc::now() - Duration::days(60));
+        let deleted = record_at(Utc::now());
+        for r in [&keep, &pruned, &deleted] {
+            s.save(r, &valid_png(4, 4)).unwrap();
+        }
+        let stage = |r: &CaptureRecord| {
+            let dir = s
+                .root()
+                .join(FsHistoryStore::png_path(r))
+                .parent()
+                .unwrap()
+                .to_path_buf();
+            let png = dir.join(format!("{}.9-0.stage.png", r.id));
+            let thumb = dir.join(format!("{}.9-0.stage-thumb.png", r.id));
+            fs::write(&png, b"raw").unwrap();
+            fs::write(&thumb, b"raw").unwrap();
+            [png, thumb]
+        };
+        let (k, p, d) = (stage(&keep), stage(&pruned), stage(&deleted));
+        s.delete(deleted.id).unwrap();
+        assert!(d.iter().all(|f| !f.exists()));
+        s.apply_retention(HistoryRetention::Last30Days, Utc::now())
+            .unwrap();
+        assert!(p.iter().all(|f| !f.exists()));
+        assert!(
+            k.iter().all(|f| f.exists()),
+            "other records' stages untouched"
+        );
     }
 
     #[test]
