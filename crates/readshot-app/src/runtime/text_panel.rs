@@ -984,6 +984,45 @@ pub(crate) fn text_marks(
     )
 }
 
+/// Smart highlighter (spec §3.6): with Snap to text on and line
+/// positions available, a highlighter stroke over a text line becomes a
+/// straight mark across the touched words, as tall as the line. Every
+/// other annotation, and strokes off text, pass through unchanged.
+pub(crate) fn snap_highlight_annotation(
+    ed: &EditorSession,
+    annotation: readshot_core::Annotation,
+) -> readshot_core::Annotation {
+    use readshot_core::Annotation;
+    match annotation {
+        Annotation::Highlighter {
+            points,
+            color,
+            line_width,
+        } => {
+            let snapped = ed
+                .model
+                .tool_style()
+                .snap_to_text
+                .then(|| ed.text_panel.positioned_document())
+                .flatten()
+                .and_then(|doc| readshot_core::text_lines::snap_highlight(doc, &points));
+            match snapped {
+                Some((points, width)) => Annotation::Highlighter {
+                    points,
+                    color,
+                    line_width: width,
+                },
+                None => Annotation::Highlighter {
+                    points,
+                    color,
+                    line_width,
+                },
+            }
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

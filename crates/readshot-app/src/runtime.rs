@@ -8487,6 +8487,82 @@ mod tests {
         );
     }
 
+    fn highlight_stroke() -> Annotation {
+        // Over "priya@example.com" (line 1: y 19.2–25.6, word x 22.4–57.6).
+        Annotation::Highlighter {
+            points: vec![PointLike::new(25.0, 22.0), PointLike::new(40.0, 23.0)],
+            color: Rgba::new(1.0, 1.0, 0.0, 0.45),
+            line_width: 12.0,
+        }
+    }
+
+    #[test]
+    fn snap_to_text_turns_a_stroke_into_the_line_box() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+                readshot_ui::editor::ToolState::Highlighter,
+            )),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorStyle(readshot_ui::editor::StyleMessage::SnapToText(true)),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                highlight_stroke(),
+            )),
+        );
+        match &app.editor.as_ref().unwrap().model.annotations()[0] {
+            Annotation::Highlighter {
+                points, line_width, ..
+            } => {
+                assert_eq!(points.len(), 2);
+                assert!((points[0].x - 22.4).abs() < 0.01, "{points:?}");
+                assert!((points[1].x - 57.6).abs() < 0.01, "{points:?}");
+                assert!((points[0].y - 22.4).abs() < 0.01 && (points[1].y - 22.4).abs() < 0.01);
+                assert!((line_width - 6.4).abs() < 0.01);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn snap_off_keeps_the_freehand_stroke() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                highlight_stroke(),
+            )),
+        );
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.annotations()[0],
+            highlight_stroke()
+        );
+    }
+
+    #[test]
+    fn choosing_the_highlighter_starts_recognition() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.preferences.editor_panel_open = false;
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+                readshot_ui::editor::ToolState::Highlighter,
+            )),
+        );
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
+    }
+
     #[test]
     fn text_recognition_result_for_the_current_session_is_kept() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));

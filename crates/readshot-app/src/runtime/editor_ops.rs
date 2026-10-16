@@ -744,6 +744,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 // Presets are ignored; a custom (Recent) color moves to the front.
                 state.remember_custom_color(color);
             }
+            if selected_tool == Some(readshot_ui::editor::ToolState::Highlighter) {
+                // Snap to text needs line positions; recognize now if the
+                // panel hasn't already.
+                return super::text_panel::request_text_recognition(state);
+            }
             Task::none()
         }
 
@@ -1024,6 +1029,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 readshot_ui::CanvasMessage::CommitAnnotation(annotation) => {
                     ed.canvas_drag_active = false;
                     cancel_editor_previews(ed);
+                    let annotation = super::text_panel::snap_highlight_annotation(ed, annotation);
                     handle_commit_annotation(ed, annotation);
                     sync_editor_history(ed, &state.coordinator);
                 }

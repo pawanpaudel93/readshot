@@ -117,6 +117,8 @@ pub struct ToolStyle {
     pub spotlight_shape: SpotlightShape,
     pub dim: f32,
     pub stamp: StampKind,
+    /// Highlighter: snap strokes to recognized text lines (spec §3.6).
+    pub snap_to_text: bool,
 }
 
 impl Default for ToolStyle {
@@ -133,6 +135,7 @@ impl Default for ToolStyle {
             spotlight_shape: SpotlightShape::default(),
             dim: readshot_core::annotation::DEFAULT_SPOTLIGHT_DIM,
             stamp: StampKind::default(),
+            snap_to_text: false,
         }
     }
 }
@@ -151,6 +154,7 @@ pub enum StyleMessage {
     SpotlightShape(SpotlightShape),
     Dim(f32),
     Stamp(StampKind),
+    SnapToText(bool),
 }
 
 /// Controls the options bar can show, in display order.
@@ -169,6 +173,7 @@ pub enum OptionControl {
     Dim,
     SpotlightShape,
     StampPicker,
+    SnapToText,
 }
 
 /// The tool that draws `annotation` — the options-bar target for a selection.
@@ -198,7 +203,11 @@ pub fn options_for(active: ToolState, selected: Option<&Annotation>) -> &'static
         ToolState::Ellipse => &[Color, Width, Fill, Dash],
         ToolState::Line => &[Color, Width, LinePath, Dash],
         ToolState::Arrow => &[Color, Width, LinePath, Dash, Heads],
-        ToolState::Pen | ToolState::Highlighter => &[Color, Width],
+        ToolState::Pen => &[Color, Width],
+        // Snap to text shapes the next stroke, so a selected highlighter
+        // doesn't offer it.
+        ToolState::Highlighter if selected.is_none() => &[Color, Width, SnapToText],
+        ToolState::Highlighter => &[Color, Width],
         ToolState::Text => &[Color, TextSize, TextPill, TextBold],
         ToolState::Blur | ToolState::Pixelate => &[Width],
         ToolState::Spotlight => &[Dim, SpotlightShape],
@@ -221,6 +230,7 @@ impl ToolStyle {
             StyleMessage::SpotlightShape(s) => self.spotlight_shape = s,
             StyleMessage::Dim(d) => self.dim = d.clamp(MIN_DIM, MAX_DIM),
             StyleMessage::Stamp(k) => self.stamp = k,
+            StyleMessage::SnapToText(v) => self.snap_to_text = v,
         }
     }
 
@@ -470,5 +480,34 @@ mod tests {
         };
         assert_eq!(style.shape_style(ToolState::Ellipse).corner_radius, 0.0);
         assert_eq!(style.shape_style(ToolState::Rectangle).corner_radius, 12.0);
+    }
+
+    #[test]
+    fn snap_to_text_is_a_highlighter_drawing_option_off_by_default() {
+        use OptionControl::*;
+        assert_eq!(
+            options_for(ToolState::Highlighter, None),
+            &[Color, Width, SnapToText]
+        );
+        let h = Annotation::Highlighter {
+            points: vec![
+                readshot_core::geom::PointLike::new(0.0, 0.0),
+                readshot_core::geom::PointLike::new(9.0, 0.0),
+            ],
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 12.0,
+        };
+        // A selected highlighter has nothing to snap.
+        assert_eq!(options_for(ToolState::Select, Some(&h)), &[Color, Width]);
+        assert_eq!(options_for(ToolState::Pen, None), &[Color, Width]);
+        let mut s = ToolStyle::default();
+        assert!(!s.snap_to_text);
+        s.apply(StyleMessage::SnapToText(true));
+        assert!(s.snap_to_text);
+        let mut h2 = h.clone();
+        assert!(!apply_style_to_annotation(
+            &mut h2,
+            StyleMessage::SnapToText(true)
+        ));
     }
 }

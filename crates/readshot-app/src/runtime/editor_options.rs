@@ -26,15 +26,27 @@ pub(crate) const EDITOR_OPTIONS_TOP: f32 = 100.0;
 /// A small icon button plus the bar's 3 px padding above and below.
 pub(crate) const EDITOR_OPTIONS_HEIGHT: f32 = ICON_BTN_SM + 6.0;
 
-pub(crate) fn editor_options_bar<'a>(
-    ed: &'a EditorSession,
-    p: &'static Palette,
-) -> Option<Element<'a, Message>> {
+/// The options bar's controls: `options_for`, minus Snap to text when
+/// recognition has no line positions yet (or never will: Windows, Linux).
+pub(crate) fn visible_option_controls(ed: &EditorSession) -> Vec<OptionControl> {
     let selected = ed
         .model
         .selected_annotation()
         .and_then(|idx| ed.model.annotations().get(idx));
-    let controls = options_for(ed.model.active_tool(), selected);
+    options_for(ed.model.active_tool(), selected)
+        .iter()
+        .copied()
+        .filter(|c| {
+            *c != OptionControl::SnapToText || ed.text_panel.positioned_document().is_some()
+        })
+        .collect()
+}
+
+pub(crate) fn editor_options_bar<'a>(
+    ed: &'a EditorSession,
+    p: &'static Palette,
+) -> Option<Element<'a, Message>> {
+    let controls = visible_option_controls(ed);
     if controls.is_empty() {
         return None;
     }
@@ -179,6 +191,11 @@ fn option_control<'a>(
             busy,
             p,
             |s| send(StyleMessage::SpotlightShape(s)),
+        ),
+        O::SnapToText => text_segment(
+            &[("Freehand", false), ("Snap to text", true)],
+            style.snap_to_text,
+            |v| send(StyleMessage::SnapToText(v)),
         ),
         O::StampPicker => {
             let mut r = row![].spacing(1).align_y(Alignment::Center);
@@ -590,5 +607,33 @@ mod tests {
         let mut ed = blank_session();
         ed.model.set_tool(readshot_ui::editor::ToolState::Arrow);
         assert!(editor_options_bar(&ed, &DARK).is_some());
+    }
+
+    #[test]
+    fn snap_to_text_shows_only_with_line_positions() {
+        use readshot_core::text_lines::TextDocument;
+        let mut ed = blank_session();
+        ed.model
+            .set_tool(readshot_ui::editor::ToolState::Highlighter);
+        assert!(!visible_option_controls(&ed).contains(&OptionControl::SnapToText));
+        let positioned = TextDocument::from_recognized(
+            &[readshot_core::ocr_layout::RecognizedLine {
+                text: "hi".into(),
+                x: 0.1,
+                y: 0.1,
+                w: 0.5,
+                h: 0.2,
+                words: Vec::new(),
+            }],
+            32,
+            32,
+        );
+        ed.text_panel.recognition =
+            crate::editor::TextRecognition::Ready(std::sync::Arc::new(positioned));
+        assert!(visible_option_controls(&ed).contains(&OptionControl::SnapToText));
+        ed.text_panel.recognition = crate::editor::TextRecognition::Ready(std::sync::Arc::new(
+            TextDocument::from_plain("hi"),
+        ));
+        assert!(!visible_option_controls(&ed).contains(&OptionControl::SnapToText));
     }
 }
