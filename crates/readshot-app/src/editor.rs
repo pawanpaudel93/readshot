@@ -22,36 +22,49 @@ use readshot_ui::editor::EditorState as Model;
 pub enum EditorPopover {
     Color,
     Width,
-    Frame,
+}
+
+/// What an eyedropper pick sets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EyedropperTarget {
+    /// The tool / selection color (spec §3.5).
+    #[default]
+    Annotation,
+    /// Beautify's solid background (spec §3.9).
+    BeautifyBackground,
 }
 
 /// Eyedropper mode state. The loupe updates as the cursor moves.
 #[derive(Clone, Debug, Default)]
 pub struct EyedropperState {
     pub loupe: Option<readshot_ui::editor::Loupe>,
+    pub target: EyedropperTarget,
 }
 
-/// Side-panel tabs (spec §2.3). Phase C adds `Beautify`: a variant here,
-/// its id, and one arm in `runtime::side_panel::side_panel`. The stored
-/// preference is the tab's `id()`.
+/// Side-panel tabs (spec §2.3): Text and Beautify. A new tab is a
+/// variant here, its id, and one arm in `runtime::side_panel::side_panel`.
+/// The stored preference is the tab's `id()`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PanelTab {
     #[default]
     Text,
+    Beautify,
 }
 
 impl PanelTab {
-    pub const ALL: [Self; 1] = [Self::Text];
+    pub const ALL: [Self; 2] = [Self::Text, Self::Beautify];
 
     pub fn id(self) -> &'static str {
         match self {
             Self::Text => "text",
+            Self::Beautify => "beautify",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Text => "Text",
+            Self::Beautify => "Beautify",
         }
     }
 
@@ -193,7 +206,13 @@ pub struct EditorSession {
     pub width_drag_baseline: Option<Vec<Annotation>>,
     /// Baseline for an options-bar slider drag; see [`StyleDrag`].
     pub style_drag_baseline: Option<StyleDrag>,
-    /// Open color / line-width / frame popover, if any. Esc and a
+    /// Baseline while a snapshot slider (Beautify padding/radius/shadow,
+    /// combine gap) is dragged. Release commits one undo step; esc
+    /// restores it.
+    pub snapshot_drag_baseline: Option<readshot_ui::editor::Snapshot>,
+    /// Draft of the Beautify tab's background hex field.
+    pub beautify_hex_draft: String,
+    /// Open color / line-width popover, if any. Esc and a
     /// click outside close it before any other Esc behaviour runs.
     pub popover: Option<EditorPopover>,
     /// Draft text of the color popover's hex field.
@@ -462,6 +481,8 @@ impl EditorSession {
             move_drag: None,
             width_drag_baseline: None,
             style_drag_baseline: None,
+            snapshot_drag_baseline: None,
+            beautify_hex_draft: String::new(),
             canvas_drag_active: false,
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
@@ -512,6 +533,8 @@ impl EditorSession {
             move_drag: None,
             width_drag_baseline: None,
             style_drag_baseline: None,
+            snapshot_drag_baseline: None,
+            beautify_hex_draft: String::new(),
             canvas_drag_active: false,
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
@@ -960,7 +983,8 @@ mod tests {
         for tab in PanelTab::ALL {
             assert_eq!(PanelTab::from_id(tab.id()), tab);
         }
-        assert_eq!(PanelTab::from_id("beautify"), PanelTab::Text);
+        assert_eq!(PanelTab::from_id("beautify"), PanelTab::Beautify);
+        assert_eq!(PanelTab::from_id("future"), PanelTab::Text);
         assert_eq!(PanelTab::from_id(""), PanelTab::Text);
     }
 

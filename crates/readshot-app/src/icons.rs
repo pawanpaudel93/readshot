@@ -37,8 +37,7 @@ pub enum AppIcon {
     Power,
     History,
     Gear,
-    Chevron,
-    Frame,
+    Sparkle,
     SolidLine,
     Dashed,
     LineStraight,
@@ -621,11 +620,19 @@ fn shapes(icon: AppIcon) -> &'static [Shape] {
             Line(4.9, 19.1, 6.7, 17.3),
             Line(17.3, 6.7, 19.1, 4.9),
         ],
-        AppIcon::Chevron => &[Poly(&[(6.0, 9.0), (12.0, 15.0), (18.0, 9.0)], false)],
-        AppIcon::Frame => &[
-            Rect(2.0, 2.0, 20.0, 20.0, 3.0),
-            Rect(6.0, 6.0, 12.0, 12.0, 1.0),
-        ],
+        AppIcon::Sparkle => &[Poly(
+            &[
+                (12.0, 3.0),
+                (14.0, 10.0),
+                (21.0, 12.0),
+                (14.0, 14.0),
+                (12.0, 21.0),
+                (10.0, 14.0),
+                (3.0, 12.0),
+                (10.0, 10.0),
+            ],
+            true,
+        )],
         AppIcon::SolidLine => &[Line(4.0, 12.0, 20.0, 12.0)],
         AppIcon::Dashed => &[
             Line(3.0, 12.0, 7.0, 12.0),
@@ -673,7 +680,7 @@ fn shapes(icon: AppIcon) -> &'static [Shape] {
 
 impl AppIcon {
     #[cfg(test)]
-    pub const SHAPED: [AppIcon; 33] = [
+    pub const SHAPED: [AppIcon; 32] = [
         AppIcon::Edit,
         AppIcon::Copy,
         AppIcon::ScanText,
@@ -697,8 +704,7 @@ impl AppIcon {
         AppIcon::Power,
         AppIcon::History,
         AppIcon::Gear,
-        AppIcon::Chevron,
-        AppIcon::Frame,
+        AppIcon::Sparkle,
         AppIcon::SolidLine,
         AppIcon::Dashed,
         AppIcon::LineStraight,

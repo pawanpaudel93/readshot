@@ -299,8 +299,9 @@ impl EditorState {
     }
 
     pub fn undo(&mut self) -> bool {
-        self.close_preview();
-        let changed = self.history.undo().is_some();
+        // Closing a preview moved the present, so that alone is a change.
+        let closed = self.close_preview();
+        let changed = self.history.undo().is_some() || closed;
         if changed {
             self.sync_base();
             self.clamp_selection();
@@ -310,8 +311,9 @@ impl EditorState {
     }
 
     pub fn redo(&mut self) -> bool {
-        self.close_preview();
-        let changed = self.history.redo().is_some();
+        // Closing a preview moved the present, so that alone is a change.
+        let closed = self.close_preview();
+        let changed = self.history.redo().is_some() || closed;
         if changed {
             self.sync_base();
             self.clamp_selection();
@@ -390,7 +392,7 @@ impl EditorState {
         // Refuse when no preview is open or the history moved since it
         // opened: the baseline is stale and would clobber a newer edit.
         match self.preview_baseline.take() {
-            Some((_, g)) if g == self.history.generation() => {}
+            Some((b, g)) if g == self.history.generation() && b == baseline => {}
             _ => return false,
         }
         let current = self.snapshot();
@@ -404,22 +406,34 @@ impl EditorState {
         true
     }
 
+    /// Restore `baseline`, but only while the preview it belongs to is
+    /// open and the history has not moved; a stale baseline would
+    /// clobber newer edits.
     pub fn cancel_preview_snapshot(&mut self, baseline: Snapshot) {
+        match self.preview_baseline.take() {
+            Some((_, g)) if g == self.history.generation() => {}
+            _ => return,
+        }
         // `baseline` came from `snapshot()`, so its geometry is valid.
-        let _ = self.preview_snapshot(baseline);
-        self.preview_baseline = None;
+        self.history.replace_present_snapshot(baseline);
+        self.sync_base();
+        self.clamp_selection();
+        self.flattened_cache = None;
     }
 
     /// Close an open snapshot preview, restoring its baseline.
-    fn close_preview(&mut self) {
+    /// `true` when a baseline was restored.
+    fn close_preview(&mut self) -> bool {
         // Restore only while the history has not moved; otherwise the
         // baseline is stale and the present already holds newer edits.
         if let Some((b, g)) = self.preview_baseline.take() {
             if g == self.history.generation() {
                 self.history.replace_present_snapshot(b);
                 self.sync_base();
+                return true;
             }
         }
+        false
     }
 
     /// Move to `next` as one undo step; annotations follow their parts.
@@ -2527,5 +2541,50 @@ mod tests {
         assert!(s.undo());
         assert!(s.redo());
         assert_eq!(s.base().dimensions(), (2, 3));
+    }
+
+    #[test]
+    fn undo_that_only_closes_a_preview_reports_a_change() {
+        use readshot_core::beautify::BuiltinPreset;
+        let mut s = EditorState::new(px_grid(4, 4));
+        let mut next = s.snapshot();
+        next.doc.beautify = BuiltinPreset::Soft.settings();
+        s.preview_snapshot(next).unwrap();
+        assert!(s.undo(), "closing the preview is a change");
+        assert!(s.beautify().is_identity());
+        assert_eq!(s.undo_depth(), 0);
+        let mut next = s.snapshot();
+        next.doc.beautify = BuiltinPreset::Soft.settings();
+        s.preview_snapshot(next).unwrap();
+        assert!(s.redo(), "redo closing a preview is a change too");
+        assert!(s.beautify().is_identity());
+    }
+
+    #[test]
+    fn commit_preview_snapshot_refuses_a_different_baseline() {
+        use readshot_core::beautify::BuiltinPreset;
+        let mut s = EditorState::new(px_grid(4, 4));
+        let baseline = s.snapshot();
+        let mut next = baseline.clone();
+        next.doc.beautify = BuiltinPreset::Soft.settings();
+        s.preview_snapshot(next).unwrap();
+        let mut other = baseline.clone();
+        other.doc.beautify = BuiltinPreset::Dark.settings();
+        assert!(!s.commit_preview_snapshot(other));
+        assert_eq!(s.undo_depth(), 0);
+    }
+
+    #[test]
+    fn cancel_preview_snapshot_ignores_a_stale_baseline() {
+        use readshot_core::beautify::BuiltinPreset;
+        let mut s = EditorState::new(px_grid(4, 4));
+        let baseline = s.snapshot();
+        let mut next = baseline.clone();
+        next.doc.beautify = BuiltinPreset::Soft.settings();
+        s.preview_snapshot(next).unwrap();
+        s.commit_annotation(block(0.0, 0.0));
+        s.cancel_preview_snapshot(baseline);
+        assert_eq!(s.annotations().len(), 1, "the newer edit survives");
+        assert_eq!(s.beautify(), BuiltinPreset::Soft.settings());
     }
 }

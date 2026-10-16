@@ -265,7 +265,7 @@ pub(crate) fn with_new_tool_dot<'a>(button: Element<'a, Message>) -> Element<'a,
 /// teal selected state as the icon buttons (§2.1: teal marks selection),
 /// so every current value in the bar reads the same way.
 /// `msg: None` renders it disabled.
-fn segment_button<'a>(
+pub(crate) fn segment_button<'a>(
     content: Element<'a, Message>,
     selected: bool,
     msg: Option<Message>,

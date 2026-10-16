@@ -466,6 +466,25 @@ pub enum Message {
     /// User selected a presentation frame for image outputs.
     /// A built-in Beautify preset was chosen (Frame popover; Beautify tab).
     EditorBeautifyPreset(readshot_core::beautify::BuiltinPreset),
+    /// A saved Beautify preset (by list index) was chosen.
+    EditorBeautifySavedPresetApplied(usize),
+    /// A discrete Beautify control changed (swatch, canvas size, toggle).
+    EditorBeautifyEdit(readshot_core::beautify::BeautifyEdit),
+    /// A Beautify slider moved: live preview, no undo step yet.
+    EditorBeautifySliderPreview(readshot_core::beautify::BeautifyEdit),
+    /// A snapshot slider (Beautify, combine gap) was released: commit
+    /// the preview as one undo step.
+    EditorSnapshotSliderCommit,
+    /// Save the current Beautify settings as a named preset.
+    EditorBeautifySavePreset,
+    /// Remove a saved Beautify preset (by list index).
+    EditorBeautifyDeletePreset(usize),
+    /// The Beautify background hex field was edited.
+    EditorBeautifyHexChanged(String),
+    /// The Beautify background hex field was submitted.
+    EditorBeautifyHexSubmitted,
+    /// Start the eyedropper to pick Beautify's background color.
+    EditorBeautifyPickBackground,
     /// User clicked Copy Text (run OCR + clipboard).
     EditorCopyTextRequested,
     /// OCR + clipboard write completed.
@@ -1274,6 +1293,36 @@ impl App {
     pub(crate) fn set_editor_panel_tab(&mut self, tab: crate::editor::PanelTab) {
         if self.preferences.editor_panel_tab != tab.id() {
             self.preferences.editor_panel_tab = tab.id().to_string();
+            self.persist_preferences_if_configured();
+        }
+    }
+
+    /// Save `settings` as "Preset N" (smallest unused N). `None` when the
+    /// list is full.
+    pub(crate) fn save_beautify_preset(
+        &mut self,
+        settings: readshot_core::beautify::BeautifySettings,
+    ) -> Option<String> {
+        use readshot_core::beautify::{SavedBeautifyPreset, MAX_SAVED_PRESETS};
+        let list = &mut self.preferences.editor_beautify_presets;
+        if list.len() >= MAX_SAVED_PRESETS {
+            return None;
+        }
+        let name = (1..)
+            .map(|n| format!("Preset {n}"))
+            .find(|n| !list.iter().any(|p| &p.name == n))
+            .expect("unbounded");
+        list.push(SavedBeautifyPreset {
+            name: name.clone(),
+            settings,
+        });
+        self.persist_preferences_if_configured();
+        Some(name)
+    }
+
+    pub(crate) fn delete_beautify_preset(&mut self, index: usize) {
+        if index < self.preferences.editor_beautify_presets.len() {
+            self.preferences.editor_beautify_presets.remove(index);
             self.persist_preferences_if_configured();
         }
     }

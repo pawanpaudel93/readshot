@@ -182,13 +182,17 @@ pub struct Preferences {
     /// Editor side panel shown (spec §2.3). Remembered across sessions.
     pub editor_panel_open: bool,
 
-    /// Last side-panel tab id (`"text"`; Phase C adds `"beautify"`). A
+    /// Last side-panel tab id (`"text"` or `"beautify"`). A
     /// string, not an enum, so a newer build's tab id can never make an
     /// older build fail to read this file. Unknown ids mean Text.
     pub editor_panel_tab: String,
 
     /// Text panel: "Remove line breaks when copying" (spec §3.7).
     pub editor_copy_remove_line_breaks: bool,
+
+    /// Beautify presets the user saved (Save Preset), oldest first, at
+    /// most `beautify::MAX_SAVED_PRESETS`.
+    pub editor_beautify_presets: Vec<crate::beautify::SavedBeautifyPreset>,
 }
 
 impl Default for Preferences {
@@ -211,6 +215,7 @@ impl Default for Preferences {
             editor_panel_open: true,
             editor_panel_tab: "text".to_string(),
             editor_copy_remove_line_breaks: false,
+            editor_beautify_presets: Vec::new(),
         }
     }
 }
@@ -225,6 +230,7 @@ impl Preferences {
         let content = std::fs::read_to_string(path)?;
         let mut prefs: Preferences = toml::from_str(&content)?;
         prefs.migrate();
+        prefs.sanitize_beautify_presets();
         Ok(prefs)
     }
 
@@ -271,6 +277,21 @@ impl Preferences {
         self.editor_recent_colors.insert(0, hex);
         self.editor_recent_colors.truncate(RECENT_COLORS_MAX);
         true
+    }
+
+    /// Make hand-edited or corrupt saved presets safe to show: cap the
+    /// list, clamp every setting into the range the UI can produce, and
+    /// bound the name length.
+    pub fn sanitize_beautify_presets(&mut self) {
+        use crate::beautify::MAX_SAVED_PRESETS;
+        const MAX_NAME_CHARS: usize = 24;
+        self.editor_beautify_presets.truncate(MAX_SAVED_PRESETS);
+        for p in &mut self.editor_beautify_presets {
+            p.settings = p.settings.clamped();
+            if p.name.chars().count() > MAX_NAME_CHARS {
+                p.name = p.name.chars().take(MAX_NAME_CHARS).collect();
+            }
+        }
     }
 
     /// Apply schema migrations in place.
@@ -490,5 +511,43 @@ ocr_languages = ["en"]
         assert!(p.editor_panel_open);
         assert_eq!(p.editor_panel_tab, "text");
         assert!(!p.editor_copy_remove_line_breaks);
+        assert!(p.editor_beautify_presets.is_empty());
+    }
+
+    #[test]
+    fn saved_beautify_presets_round_trip() {
+        use crate::beautify::{BuiltinPreset, SavedBeautifyPreset};
+        let (_dir, path) = temp_path();
+        let p = Preferences {
+            editor_beautify_presets: vec![SavedBeautifyPreset {
+                name: "Mine".into(),
+                settings: BuiltinPreset::Soft.settings(),
+            }],
+            ..Preferences::default()
+        };
+        p.save(&path).unwrap();
+        assert_eq!(Preferences::load(&path).unwrap(), p);
+    }
+
+    #[test]
+    fn corrupt_saved_presets_are_clamped_capped_and_defaulted_on_load() {
+        use crate::beautify::{MAX_CORNER_RADIUS, MAX_PADDING, MAX_SAVED_PRESETS};
+        let (_dir, path) = temp_path();
+        let mut text = String::from("schema_version = 3\n");
+        for i in 0..(MAX_SAVED_PRESETS + 5) {
+            text.push_str(&format!(
+                "[[editor_beautify_presets]]\nname = \"{}\"\n[editor_beautify_presets.settings]\npadding = 4000000000\ncorner_radius = 999\n",
+                "n".repeat(100 + i)
+            ));
+        }
+        text.push_str("[[editor_beautify_presets]]\n");
+        std::fs::write(&path, text).unwrap();
+        let p = Preferences::load(&path).unwrap();
+        assert_eq!(p.editor_beautify_presets.len(), MAX_SAVED_PRESETS);
+        for s in &p.editor_beautify_presets {
+            assert_eq!(s.settings.padding, MAX_PADDING);
+            assert_eq!(s.settings.corner_radius, MAX_CORNER_RADIUS);
+            assert!(s.name.chars().count() <= 24);
+        }
     }
 }

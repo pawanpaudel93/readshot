@@ -162,6 +162,7 @@ impl History {
         self.past.clear();
         self.future.clear();
         self.present.annotations.clear();
+        self.generation += 1;
     }
 }
 
@@ -253,6 +254,14 @@ mod tests {
         assert!(!h.can_undo());
         assert!(!h.can_redo());
     }
+    #[test]
+    fn clear_bumps_the_generation() {
+        let mut h = History::new();
+        let g = h.generation();
+        h.clear();
+        assert_ne!(h.generation(), g);
+    }
+
     #[test]
     fn snapshots_keep_the_document_across_plain_pushes_and_clear() {
         use readshot_core::beautify::BuiltinPreset;

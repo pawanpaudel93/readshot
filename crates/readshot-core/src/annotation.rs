@@ -48,6 +48,12 @@ impl Rgba {
         )
     }
 
+    /// 8-bit straight RGBA (inverse of [`Self::from_rgba8`]).
+    pub fn to_rgba8(&self) -> [u8; 4] {
+        let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        [c(self.r), c(self.g), c(self.b), c(self.a)]
+    }
+
     /// `#RRGGBB`, uppercase. Alpha is not encoded.
     pub fn to_hex(&self) -> String {
         let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -581,6 +587,17 @@ mod tests {
         for bad in ["", "#", "#12", "#12345", "#1234567", "#GGGGGG", "red"] {
             assert!(Rgba::from_hex(bad).is_none(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn to_rgba8_round_trips_and_clamps() {
+        for px in [[0, 0, 0, 0], [255, 255, 255, 255], [16, 32, 48, 200]] {
+            assert_eq!(Rgba::from_rgba8(px).to_rgba8(), px);
+        }
+        assert_eq!(
+            Rgba::new(2.0, -1.0, 0.5, 1.0).to_rgba8(),
+            [255, 0, 128, 255]
+        );
     }
 
     #[test]

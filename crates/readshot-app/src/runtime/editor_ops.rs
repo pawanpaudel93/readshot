@@ -238,6 +238,10 @@ pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
             refresh = true;
         }
     }
+    if let Some(baseline) = ed.snapshot_drag_baseline.take() {
+        ed.model.cancel_preview_snapshot(baseline);
+        refresh = true;
+    }
     if refresh {
         ed.refresh_image();
     }
@@ -663,6 +667,19 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             Task::none()
         }
 
+        Message::EditorSnapshotSliderCommit => {
+            if let Some(ed) = state.editor.as_mut() {
+                if let Some(baseline) = ed.snapshot_drag_baseline.take() {
+                    if ed.model.commit_preview_snapshot(baseline) {
+                        ed.clear_discard_confirmation();
+                        ed.refresh_image();
+                        sync_editor_history(ed, &state.coordinator);
+                    }
+                }
+            }
+            Task::none()
+        }
+
         Message::EditorCopyTextRequested => {
             let remove_breaks = state.preferences.editor_copy_remove_line_breaks;
             let Some(ed) = state.editor.as_mut() else {
@@ -1022,19 +1039,40 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 readshot_ui::CanvasMessage::EyedropperPick(p) => {
                     // One pick, then the eyedropper exits. The source image
                     // is sampled, so annotations drawn over it never count.
-                    if ed.eyedropper.take().is_some() {
+                    if let Some(eye) = ed.eyedropper.take() {
                         let shown =
                             readshot_core::eyedropper::displayed_base_point(p, ed.crop_offset());
                         if let Some(color) =
                             readshot_core::eyedropper::sample(ed.model.base(), shown)
                         {
-                            let undoable = apply_editor_color(ed, &state.coordinator, color);
-                            ed.set_status(if undoable {
-                                format!("Picked {}. ⌘Z to undo.", color.to_hex())
-                            } else {
-                                format!("Picked {}.", color.to_hex())
-                            });
-                            picked = Some(color);
+                            match eye.target {
+                                crate::editor::EyedropperTarget::Annotation => {
+                                    let undoable =
+                                        apply_editor_color(ed, &state.coordinator, color);
+                                    ed.set_status(if undoable {
+                                        format!("Picked {}. ⌘Z to undo.", color.to_hex())
+                                    } else {
+                                        format!("Picked {}.", color.to_hex())
+                                    });
+                                    picked = Some(color);
+                                }
+                                crate::editor::EyedropperTarget::BeautifyBackground => {
+                                    cancel_editor_previews(ed);
+                                    let mut s = ed.model.beautify();
+                                    s.apply(readshot_core::beautify::BeautifyEdit::Background(
+                                        readshot_core::beautify::Background::Solid {
+                                            rgba: color.to_rgba8(),
+                                        },
+                                    ));
+                                    if ed.model.set_beautify(s) {
+                                        ed.clear_discard_confirmation();
+                                        ed.set_status(format!(
+                                            "Background set to {}. ⌘Z to undo.",
+                                            color.to_hex()
+                                        ));
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1302,7 +1340,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
                 // One Esc = one step: a live options-bar slider drag is
                 // cancelled on its own, keeping the selection (and the bar).
-                if ed.style_drag_baseline.is_some() {
+                if ed.style_drag_baseline.is_some() || ed.snapshot_drag_baseline.is_some() {
                     cancel_editor_previews(ed);
                     return Task::none();
                 }
@@ -1542,6 +1580,16 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         | Message::EditorRedactLine(..)
         | Message::EditorHistoryWritten { .. }) => {
             super::text_panel::handle_text_panel_message(state, msg)
+        }
+        msg @ (Message::EditorBeautifySavedPresetApplied(..)
+        | Message::EditorBeautifyEdit(..)
+        | Message::EditorBeautifySliderPreview(..)
+        | Message::EditorBeautifySavePreset
+        | Message::EditorBeautifyDeletePreset(..)
+        | Message::EditorBeautifyHexChanged(..)
+        | Message::EditorBeautifyHexSubmitted
+        | Message::EditorBeautifyPickBackground) => {
+            super::beautify_panel::handle_beautify_message(state, msg)
         }
         other => unreachable!("non-editor message routed to the editor handler: {other:?}"),
     }

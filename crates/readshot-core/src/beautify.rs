@@ -309,7 +309,8 @@ pub enum BeautifyEdit {
 }
 
 /// A user-saved preset (Save Preset), persisted in `Preferences`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SavedBeautifyPreset {
     pub name: String,
     pub settings: BeautifySettings,
@@ -792,6 +793,40 @@ mod tests {
                 w
             );
         }
+    }
+
+    #[test]
+    fn overflowing_output_geometry_is_none() {
+        assert_eq!(
+            output_geometry(u32::MAX - 1, 20, &BuiltinPreset::Minimal.settings()),
+            None
+        );
+    }
+
+    #[test]
+    fn builtin_labels_are_pinned_and_fit_a_chip() {
+        let labels = BuiltinPreset::ALL.map(BuiltinPreset::label);
+        assert_eq!(
+            labels,
+            [
+                "No Frame",
+                "Soft Shadow",
+                "Light Card",
+                "Dark Card",
+                "Minimal Border",
+                "Transparent"
+            ]
+        );
+        assert!(labels.iter().all(|l| l.chars().count() <= 14));
+    }
+
+    #[test]
+    fn a_saved_preset_with_missing_fields_still_loads() {
+        let p: SavedBeautifyPreset = serde_json::from_str(r#"{"name":"X"}"#).unwrap();
+        assert_eq!(p.name, "X");
+        assert_eq!(p.settings, BeautifySettings::default());
+        let p: SavedBeautifyPreset = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.settings, BeautifySettings::default());
     }
 
     #[test]

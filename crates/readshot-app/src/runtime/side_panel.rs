@@ -1,5 +1,5 @@
-//! Editor side panel (spec §2.3): right, 300 px, tabs (Text now,
-//! Beautify in Phase C), hide/show ⌥⌘P, open state and tab remembered.
+//! Editor side panel (spec §2.3): right, 300 px, tabs (Text,
+//! Beautify), hide/show ⌥⌘P, open state and tab remembered.
 //! Docks and reflows the canvas when the window is wide enough. Below
 //! `PANEL_DOCK_MIN_WINDOW` it collapses to the title-row "Show panel"
 //! button, which opens a temporary overlay (esc / ⌥⌘P / click outside
@@ -58,6 +58,7 @@ pub(crate) fn editor_panel_mode(state: &App, ed: &EditorSession) -> PanelMode {
 fn tab_icon(tab: PanelTab) -> AppIcon {
     match tab {
         PanelTab::Text => AppIcon::ScanText,
+        PanelTab::Beautify => AppIcon::Sparkle,
     }
 }
 
@@ -102,7 +103,7 @@ fn panel_style(theme: &Theme, overlay: bool) -> container::Style {
 }
 
 /// The whole panel: tab header (with Hide panel ⌥⌘P) over the current
-/// tab's body. Phase C adds Beautify as one more `match` arm.
+/// tab's body.
 pub(crate) fn side_panel<'a>(
     state: &'a App,
     ed: &'a EditorSession,
@@ -147,6 +148,7 @@ pub(crate) fn side_panel<'a>(
     .height(Length::Fixed(TITLEBAR_HEIGHT));
     let body: Element<'a, Message> = match current {
         PanelTab::Text => text_tab(state, ed, p),
+        PanelTab::Beautify => super::beautify_panel::beautify_tab(state, ed, p),
     };
     let hline =
         container(Space::new().width(Length::Fill).height(Length::Fixed(1.0))).style(divider_style);

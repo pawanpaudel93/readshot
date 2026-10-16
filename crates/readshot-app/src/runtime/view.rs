@@ -2304,7 +2304,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         .style(bg_style);
 
     // --- Title row: capture size + zoom ---
-    let (img_w, img_h) = ed.effective_image_size();
+    let size_label = editor_size_label(ed);
     // In Fit mode the scale is only known once the stage has laid out
     // (it depends on the stage size), and iced re-runs layout — not
     // `view` — on a window resize. So the zoom readout is built inside a
@@ -2317,7 +2317,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         let shown_scale = zoom.explicit_scale().unwrap_or_else(|| live_scale.get());
         let mut title = row![
             text("Capture").size(TYPE_BODY).style(text_t2),
-            text(format!("{img_w} × {img_h} px"))
+            text(size_label.clone())
                 .font(mono)
                 .size(TYPE_CAPTION)
                 .style(text_t3),
@@ -2517,38 +2517,9 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             .align_y(Alignment::End)
     });
 
-    // --- Action bar: history · frame · outputs · discard ---
+    // --- Action bar: history · outputs · discard ---
     let undo_enabled = !busy && can_undo;
     let redo_enabled = !busy && can_redo;
-    let frame_open = popover == Some(EditorPopover::Frame);
-    let frame_btn = tooltip_with_key(
-        bar_button(
-            row![
-                crate::icons::icon(AppIcon::Frame, p.t2, 15.0),
-                text(
-                    ed.model
-                        .beautify()
-                        .matching_builtin()
-                        .map_or("Custom", |p| p.label())
-                )
-                .size(ButtonSize::Sm.text_size()),
-                crate::icons::icon(AppIcon::Chevron, p.t3, 13.0),
-            ]
-            .spacing(6)
-            .align_y(Alignment::Center)
-            .into(),
-            if frame_open {
-                ButtonKind::Secondary
-            } else {
-                ButtonKind::Ghost
-            },
-            ButtonSize::Sm,
-            (!busy).then_some(Message::EditorPopoverToggled(EditorPopover::Frame)),
-        ),
-        "Frame style for Copy, Save and Pin",
-        None,
-        Position::Top,
-    );
     let copy_image = tooltip_with_key(
         bar_button(
             row![
@@ -2591,8 +2562,6 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             ICON_BTN,
             Position::Top,
         ),
-        vsep(),
-        frame_btn,
         vsep(),
         icon_button(
             AppIcon::Pin,
@@ -2682,7 +2651,6 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 busy,
                 mono,
             ),
-            EditorPopover::Frame => frame_popover(ed.model.beautify().matching_builtin(), busy, p),
         };
         // `opaque` keeps clicks on the card's padding from reaching the
         // scrim underneath (which would close it).
@@ -2695,13 +2663,6 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                     ..iced::Padding::ZERO
                 })
                 .align_y(Alignment::Start),
-            // Frame opens from the action bar: above it.
-            EditorPopover::Frame => container(card)
-                .padding(iced::Padding {
-                    bottom: EDITOR_TOAST_BOTTOM,
-                    ..iced::Padding::ZERO
-                })
-                .align_y(Alignment::End),
         };
         layers.push(
             placed
@@ -3013,46 +2974,14 @@ fn width_popover<'a>(
     .into()
 }
 
-fn frame_popover<'a>(
-    current: Option<readshot_core::beautify::BuiltinPreset>,
-    busy: bool,
-    p: &'static Palette,
-) -> Element<'a, Message> {
-    const W: f32 = 240.0;
-    let mut list = column![].spacing(2).width(Length::Fixed(W));
-    for style in readshot_core::beautify::BuiltinPreset::ALL {
-        let mut r = row![text(style.label()).size(TYPE_BODY).style(text_t1)]
-            .spacing(8)
-            .align_y(Alignment::Center);
-        r = r.push(Space::new().width(Length::Fill));
-        if Some(style) == current {
-            r = r.push(crate::icons::icon(
-                crate::icons::AppIcon::CheckCircle,
-                p.acc_text,
-                14.0,
-            ));
-        }
-        list = list.push(
-            bar_button(
-                r.width(Length::Fill).into(),
-                ButtonKind::Ghost,
-                ButtonSize::Sm,
-                (!busy).then_some(Message::EditorBeautifyPreset(style)),
-            )
-            .width(Length::Fill),
-        );
+/// Title-row size: the image, and the beautified output when it differs.
+pub(crate) fn editor_size_label(ed: &crate::editor::EditorSession) -> String {
+    let (w, h) = ed.effective_image_size();
+    let s = ed.model.beautify();
+    match readshot_core::beautify::output_geometry(w, h, &s) {
+        Some(g) if !s.is_identity() => format!("{w} × {h} px → {} × {} px", g.width, g.height),
+        _ => format!("{w} × {h} px"),
     }
-    column![
-        popover_heading("Frame style"),
-        list,
-        text("Applies to Copy Image, Save and Pin. The canvas previews it.")
-            .size(TYPE_CAPTION)
-            .style(text_t3)
-            .width(Length::Fixed(W))
-            .wrapping(iced::widget::text::Wrapping::Word),
-    ]
-    .spacing(6)
-    .into()
 }
 
 pub(crate) fn editor_chrome_style(theme: &Theme) -> container::Style {

@@ -66,6 +66,7 @@ pub(crate) use side_panel::*;
 mod history_ops;
 mod settings_ops;
 
+mod beautify_panel;
 mod beautify_preview;
 pub(crate) use beautify_preview::*;
 
@@ -1780,6 +1781,15 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorCopyImageRequested
         | Message::EditorCopyImageDone(..)
         | Message::EditorBeautifyPreset(..)
+        | Message::EditorBeautifySavedPresetApplied(..)
+        | Message::EditorBeautifyEdit(..)
+        | Message::EditorBeautifySliderPreview(..)
+        | Message::EditorSnapshotSliderCommit
+        | Message::EditorBeautifySavePreset
+        | Message::EditorBeautifyDeletePreset(..)
+        | Message::EditorBeautifyHexChanged(..)
+        | Message::EditorBeautifyHexSubmitted
+        | Message::EditorBeautifyPickBackground
         | Message::EditorCopyTextRequested
         | Message::EditorCopyTextDone(..)
         | Message::EditorDiscardRequested
@@ -3084,17 +3094,201 @@ mod tests {
     }
 
     #[test]
-    fn picking_a_frame_style_closes_the_frame_popover() {
+    fn beautify_slider_drag_is_one_undo_step_and_esc_cancels_it() {
+        use readshot_core::beautify::{BeautifyEdit, BuiltinPreset};
         let mut app = build_app(Arc::new(FakePermissions::granted()));
-        app.editor = Some(debug_editor_qa_session());
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
         let _ = update(
             &mut app,
-            Message::EditorPopoverToggled(crate::editor::EditorPopover::Frame),
+            Message::EditorBeautifyPreset(BuiltinPreset::Minimal),
         );
-        let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Soft));
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        for p in [30, 60, 90] {
+            let _ = update(
+                &mut app,
+                Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(p)),
+            );
+        }
+        let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
         let ed = app.editor.as_ref().unwrap();
-        assert_eq!(ed.popover, None);
-        assert_eq!(ed.model.beautify(), BuiltinPreset::Soft.settings());
+        assert_eq!(ed.model.beautify().padding, 90);
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
+        );
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            ed.model.beautify().padding,
+            90,
+            "esc restores the value before the drag"
+        );
+        assert!(ed.snapshot_drag_baseline.is_none());
+    }
+
+    #[test]
+    fn a_preset_click_mid_drag_keeps_the_pre_drag_state_in_undo() {
+        use readshot_core::beautify::{BeautifyEdit, BuiltinPreset};
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifyPreset(BuiltinPreset::Minimal),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
+        );
+        let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Dark));
+        let ed = app.editor.as_mut().unwrap();
+        assert!(ed.snapshot_drag_baseline.is_none());
+        assert_eq!(ed.model.beautify(), BuiltinPreset::Dark.settings());
+        assert!(ed.model.undo());
+        assert_eq!(
+            ed.model.beautify(),
+            BuiltinPreset::Minimal.settings(),
+            "no drag value leaked into history"
+        );
+    }
+
+    #[test]
+    fn undo_ends_a_slider_drag() {
+        use readshot_core::beautify::{BeautifyEdit, BuiltinPreset};
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifyPreset(BuiltinPreset::Minimal),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.snapshot_drag_baseline.is_none());
+        assert_ne!(ed.model.beautify().padding, 150);
+    }
+
+    #[test]
+    fn saved_presets_persist_apply_and_cap_at_twelve() {
+        use readshot_core::beautify::{BuiltinPreset, MAX_SAVED_PRESETS};
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+        let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Dark));
+        let _ = update(&mut app, Message::EditorBeautifySavePreset);
+        assert_eq!(app.preferences.editor_beautify_presets.len(), 1);
+        assert_eq!(app.preferences.editor_beautify_presets[0].name, "Preset 1");
+        assert_eq!(
+            app.preferences.editor_beautify_presets[0].settings,
+            BuiltinPreset::Dark.settings()
+        );
+        let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::None));
+        let _ = update(&mut app, Message::EditorBeautifySavedPresetApplied(0));
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.beautify(),
+            BuiltinPreset::Dark.settings()
+        );
+        for _ in 0..20 {
+            let _ = update(&mut app, Message::EditorBeautifySavePreset);
+        }
+        assert_eq!(
+            app.preferences.editor_beautify_presets.len(),
+            MAX_SAVED_PRESETS
+        );
+        let _ = update(&mut app, Message::EditorBeautifyDeletePreset(0));
+        assert_eq!(
+            app.preferences.editor_beautify_presets.len(),
+            MAX_SAVED_PRESETS - 1
+        );
+    }
+
+    #[test]
+    fn an_out_of_range_saved_preset_applies_clamped_and_never_panics() {
+        use readshot_core::beautify::{SavedBeautifyPreset, MAX_PADDING};
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+        let mut bad = SavedBeautifyPreset::default();
+        bad.settings.padding = u32::MAX;
+        app.preferences.editor_beautify_presets.push(bad);
+        let _ = update(&mut app, Message::EditorBeautifySavedPresetApplied(0));
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.beautify().padding,
+            MAX_PADDING
+        );
+        let _ = update(&mut app, Message::EditorBeautifySavedPresetApplied(99));
+        let _ = update(&mut app, Message::EditorBeautifyDeletePreset(99));
+    }
+
+    #[test]
+    fn background_hex_and_eyedropper_set_a_solid_background() {
+        use readshot_core::beautify::Background;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifyHexChanged("#102030".into()),
+        );
+        let _ = update(&mut app, Message::EditorBeautifyHexSubmitted);
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.beautify().background,
+            Background::Solid {
+                rgba: [0x10, 0x20, 0x30, 255]
+            }
+        );
+        let _ = update(&mut app, Message::EditorBeautifyPickBackground);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            ed.eyedropper.as_ref().unwrap().target,
+            crate::editor::EyedropperTarget::BeautifyBackground
+        );
+        let tool_color = ed.model.current_color();
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(
+                readshot_core::PointLike::new(2.0, 2.0),
+            )),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        let px = solid(16, 16).get_pixel(2, 2).0;
+        assert_eq!(
+            ed.model.beautify().background,
+            Background::Solid { rgba: px }
+        );
+        assert_eq!(
+            ed.model.current_color(),
+            tool_color,
+            "the tool color is untouched"
+        );
+    }
+
+    #[test]
+    fn title_shows_the_output_size_when_beautified() {
+        use readshot_core::beautify::BuiltinPreset;
+        let mut ed = crate::editor::EditorSession::new(solid(100, 50));
+        assert_eq!(editor_size_label(&ed), "100 × 50 px");
+        ed.model.set_beautify(BuiltinPreset::Minimal.settings());
+        assert_eq!(editor_size_label(&ed), "100 × 50 px → 148 × 98 px");
+    }
+
+    #[test]
+    fn preview_metrics_fall_back_to_the_bare_image_when_output_overflows() {
+        use readshot_core::beautify::BuiltinPreset;
+        let w = u32::MAX - 1;
+        let m = preview_metrics(
+            w,
+            20,
+            &BuiltinPreset::Minimal.settings(),
+            iced::Size::new(800.0, 600.0),
+            None,
+        );
+        assert_eq!(m.pad, iced::Padding::ZERO);
+        assert_eq!(m.output_w, w as f32 * m.scale);
     }
 
     #[cfg(target_os = "macos")]
@@ -3204,7 +3398,7 @@ mod tests {
         app.editor = Some(ed);
         let _ = update(
             &mut app,
-            Message::EditorPopoverToggled(crate::editor::EditorPopover::Frame),
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
         );
 
         press_escape(&mut app, id);
@@ -3407,11 +3601,11 @@ mod tests {
         );
         let _ = update(
             &mut app,
-            Message::EditorPopoverToggled(crate::editor::EditorPopover::Frame),
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
         );
         assert_eq!(
             app.editor.as_ref().unwrap().popover,
-            Some(crate::editor::EditorPopover::Frame)
+            Some(crate::editor::EditorPopover::Color)
         );
         let _ = update(&mut app, Message::EditorPopoverClosed);
         assert_eq!(app.editor.as_ref().unwrap().popover, None);
