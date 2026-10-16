@@ -580,9 +580,13 @@ fn after_data_uri_header(cs: &[char], s: usize) -> bool {
     if b < 5 || !cs[b - 5..b].iter().copied().eq("data:".chars()) {
         return false;
     }
-    // `data:` must start its own token: `metadata:…` or `secret=data:…`
-    // is a word or a value, not a data URI.
-    if b > 5 && (cs[b - 6].is_alphanumeric() || matches!(cs[b - 6], '=' | '_')) {
+    // `data:` must start its own token: the line start, whitespace, or an
+    // opening quote/bracket/separator. `metadata:…`, `secret=data:…` or
+    // `x-data:…` is a word or a value, not a data URI.
+    if b > 5
+        && !(cs[b - 6].is_whitespace()
+            || matches!(cs[b - 6], '"' | '\'' | '(' | '<' | '[' | ',' | ';'))
+    {
         return false;
     }
     let header: String = cs[b..end].iter().collect();
@@ -1382,6 +1386,10 @@ mod tests {
             format!("metadata:text/plain;base64,{tok}"),
             format!("secret=data:a/b;base64,{tok}"),
             format!("my_data:a/b;base64,{tok}"),
+            format!("x-data:a/b;base64,{tok}"),
+            format!("x.data:a/b;base64,{tok}"),
+            format!("x:data:a/b;base64,{tok}"),
+            format!("x/data:a/b;base64,{tok}"),
         ] {
             assert!(
                 covered(&line, &tok, RedactKind::ApiKey),
@@ -1397,6 +1405,10 @@ mod tests {
             format!("src=\"data:image/png;base64,{png}\""),
             format!("url(data:image/png;base64,{png})"),
             format!("img data:image/png;base64,{png}"),
+            format!("<data:image/png;base64,{png}>"),
+            format!("'data:image/png;base64,{png}'"),
+            format!("[data:image/png;base64,{png}]"),
+            format!("a,data:image/png;base64,{png}"),
         ] {
             assert!(found(&line).is_empty(), "{line}: {:?}", found(&line));
         }
