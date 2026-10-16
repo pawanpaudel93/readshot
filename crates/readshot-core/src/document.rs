@@ -349,6 +349,10 @@ pub struct DocGeometry {
     pub gap: u32,
     pub align: Align,
     pub transform: Transform,
+    /// Fingerprint of the frame this geometry was baked from, so two bakes
+    /// of one original (different pixels, same fresh part id) never share a
+    /// fingerprint.
+    pub baked_from: Option<String>,
 }
 
 fn clamp_u32(v: i64) -> u32 {
@@ -535,6 +539,12 @@ impl DocGeometry {
             return Ok(());
         }
         let l = self.layout();
+        if l.width > MAX_DOC_SIDE.saturating_mul(4) || l.height > MAX_DOC_SIDE.saturating_mul(4) {
+            return Err(GeometryError::TooLarge {
+                width: l.width,
+                height: l.height,
+            });
+        }
         let layout_px = u64::from(l.width) * u64::from(l.height);
         if layout_px > MAX_DOC_PIXELS.saturating_mul(4) {
             return Err(GeometryError::TooManyPixels {
@@ -558,7 +568,7 @@ impl DocGeometry {
             .collect();
         let t = self.transform.sanitized();
         Some(format!(
-            "parts={};gap={};align={:?};rot={};fh={};fv={};sx={:.6};sy={:.6}",
+            "parts={};gap={};align={:?};rot={};fh={};fv={};sx={:.6};sy={:.6};from=[{}]",
             parts.join(","),
             self.gap.min(MAX_GAP),
             self.align,
@@ -566,7 +576,8 @@ impl DocGeometry {
             t.flip_h,
             t.flip_v,
             t.scale_x,
-            t.scale_y
+            t.scale_y,
+            self.baked_from.as_deref().unwrap_or("")
         ))
     }
 
@@ -617,6 +628,7 @@ impl DocGeometry {
             gap: self.gap,
             align: self.align,
             transform: Transform::default(),
+            baked_from: Some(self.fingerprint().unwrap_or_else(|| "original".into())),
         })
     }
 }
@@ -802,7 +814,8 @@ fn part_map(old: &DocGeometry, new: &DocGeometry, id: PartId) -> Option<Affine> 
 /// `anns` (document px of `old`) in document px of `new`. Each annotation
 /// moves with the part under its anchor; parts missing from either side
 /// leave it where it is. A redaction (see `scrub::is_redaction`) that
-/// overlaps two or more parts is split along the parts, and each piece
+/// overlaps a part moves with that part; one that overlaps two or more is split
+/// along the parts, and each piece
 /// moves with its own part and snaps outward, so no covered pixel is lost
 /// when the parts move apart.
 pub fn remap_annotations(
@@ -819,9 +832,17 @@ pub fn remap_annotations(
                     .iter()
                     .filter_map(|p| Some((p.id, intersect(r, old.part_rect(p.id)?)?)))
                     .collect();
-                if pieces.len() >= 2 {
+                if !pieces.is_empty() {
+                    // One overlapped part: its affine maps the whole rect.
+                    // Several: split along the parts. Only a redaction
+                    // entirely in a gutter falls to the center rule.
+                    let single = pieces.len() == 1;
                     for (id, piece) in pieces {
-                        let moved = with_redaction_rect(a, piece);
+                        let moved = if single {
+                            a.clone()
+                        } else {
+                            with_redaction_rect(a, piece)
+                        };
                         out.push(match part_map(old, new, id) {
                             Some(m) if m != Affine::IDENTITY => map_annotation(&moved, &m),
                             _ => moved,
@@ -1196,9 +1217,41 @@ mod tests {
         };
         assert_eq!(seven.size(), (6016, 23688));
         assert_eq!(seven.validate(), Ok(()));
-        // A downscale makes an over-budget layout fit.
-        let half = seven.with_transform(seven.transform.scaled(0.5, 0.5));
+        // A layout over the pixel budget (and a side) fits once downscaled.
+        let shared = Arc::new(RgbaImage::new(6016, 3384));
+        let fourteen = DocGeometry {
+            parts: (0..14)
+                .map(|id| Part {
+                    id,
+                    image: Arc::clone(&shared),
+                    join: Join::Below,
+                })
+                .collect(),
+            ..DocGeometry::default()
+        };
+        let l = fourteen.layout();
+        assert!(u64::from(l.width) * u64::from(l.height) > MAX_DOC_PIXELS);
+        assert!(fourteen.validate().is_err());
+        let half = fourteen.with_transform(fourteen.transform.scaled(0.5, 0.5));
+        assert_eq!(half.size(), (3008, 23688));
         assert_eq!(half.validate(), Ok(()));
+        // Layout sides are capped too.
+        let px = Arc::new(RgbaImage::new(1, 1));
+        let long = DocGeometry {
+            parts: (0..140_000)
+                .map(|id| Part {
+                    id,
+                    image: Arc::clone(&px),
+                    join: Join::Beside,
+                })
+                .collect(),
+            ..DocGeometry::default()
+        };
+        assert!(matches!(
+            long.with_transform(long.transform.scaled(0.001, 1.0))
+                .validate(),
+            Err(GeometryError::TooLarge { .. })
+        ));
         // Over the pixel budget gets its own error; over a side keeps TooLarge.
         let g = DocGeometry::original(grid(3, 2));
         let dense = g.with_transform(g.transform.scaled(10_000.0, 10_000.0));
@@ -1226,6 +1279,60 @@ mod tests {
         assert!(!baked.is_original());
         assert!(baked.fingerprint().is_some());
         assert_eq!(*baked.compose(), *r.compose());
+    }
+
+    #[test]
+    fn different_bakes_of_one_original_fingerprint_differently() {
+        let g = DocGeometry::original(grid(3, 2));
+        let r = g.with_transform(g.transform.rotated_cw()).baked(1).unwrap();
+        let f = g
+            .with_transform(g.transform.flipped(FlipAxis::Horizontal))
+            .baked(1)
+            .unwrap();
+        assert_ne!(r.fingerprint(), f.fingerprint());
+        assert_ne!(r.fingerprint(), None);
+    }
+
+    #[test]
+    fn a_redaction_touching_one_part_follows_that_part_not_the_nearest_center() {
+        let big = Part {
+            id: ORIGINAL_PART,
+            image: grid(100, 100),
+            join: Join::Below,
+        };
+        let small = Part {
+            id: 1,
+            image: grid(10, 10),
+            join: Join::Beside,
+        };
+        let g = DocGeometry {
+            parts: vec![big, small],
+            ..DocGeometry::default()
+        };
+        // Overlaps only part 0 (cols 90..100, rows 50..60); its center is nearer part 1.
+        let block = solid_block(RectLike::new(90.0, 50.0, 70.0, 10.0));
+        assert_eq!(g.part_at(PointLike::new(125.0, 55.0)), Some(1));
+        for new in [
+            g.with_layout(40, Align::Start),
+            g.with_layout(0, Align::End),
+            g.with_layout(0, Align::Center),
+        ] {
+            let moved = remap_annotations(&g, &new, std::slice::from_ref(&block));
+            let want = new
+                .part_affine(ORIGINAL_PART)
+                .unwrap()
+                .map_rect(RectLike::new(90.0, 50.0, 10.0, 10.0));
+            assert!(
+                moved.iter().any(|m| {
+                    let r = rect_of(m);
+                    r.x <= want.x
+                        && r.y <= want.y
+                        && r.x + r.width >= want.x + want.width
+                        && r.y + r.height >= want.y + want.height
+                }),
+                "{new:?} {moved:?}"
+            );
+        }
     }
 
     #[test]
