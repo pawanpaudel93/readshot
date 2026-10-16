@@ -127,10 +127,31 @@ mod platform {
             let controller = &*(raw as *mut AnyObject);
             let _: () = msg_send![controller, startUpdater];
             configure_manual_checks_only(controller);
+            activate_app();
             let _: () = msg_send![controller, checkForUpdates: Option::<&AnyObject>::None];
         }
 
         Ok(())
+    }
+
+    /// Readshot is an `LSUIElement` menu-bar app, so it is never the
+    /// active app when the tray menu fires. Without activating first,
+    /// Sparkle's "new version available" window opens behind whatever
+    /// app is in front and the check looks like it did nothing.
+    fn activate_app() {
+        let Some(class) = AnyClass::get(c"NSApplication") else {
+            return;
+        };
+        // SAFETY: `sharedApplication` returns the process-wide
+        // NSApplication singleton (never nil once AppKit is running,
+        // which it is by the time the tray exists). Activation is a
+        // main-thread AppKit call; our caller asserts the main thread.
+        unsafe {
+            let app: *mut AnyObject = msg_send![class, sharedApplication];
+            if let Some(app) = app.as_ref() {
+                let _: () = msg_send![app, activateIgnoringOtherApps: true];
+            }
+        }
     }
 
     fn configure_manual_checks_only(controller: &AnyObject) {
