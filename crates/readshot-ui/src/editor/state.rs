@@ -196,6 +196,15 @@ impl EditorState {
         }
     }
 
+    /// The selected annotation's width (stroke width, blur radius or
+    /// pixel block size) when it has one, else the tool width — what the
+    /// options bar's Width control shows and steps from.
+    pub fn effective_line_width(&self) -> f32 {
+        self.selected_annotation()
+            .and_then(|idx| annotation_width(&self.history.current()[idx]))
+            .unwrap_or(self.current_line_width)
+    }
+
     /// The selected annotation's color when it has one, else the tool color.
     pub fn effective_color(&self) -> Rgba {
         self.selected_annotation()
@@ -706,6 +715,20 @@ fn annotation_color(annotation: &Annotation) -> Option<Rgba> {
     }
 }
 
+fn annotation_width(annotation: &Annotation) -> Option<f32> {
+    match annotation {
+        Annotation::Rectangle { line_width, .. }
+        | Annotation::Ellipse { line_width, .. }
+        | Annotation::Line { line_width, .. }
+        | Annotation::Arrow { line_width, .. }
+        | Annotation::Pen { line_width, .. }
+        | Annotation::Highlighter { line_width, .. } => Some(*line_width),
+        Annotation::Blur { radius, .. } => Some(*radius),
+        Annotation::Pixelate { block_size, .. } => Some(*block_size),
+        Annotation::Text { .. } | Annotation::NumberedPin { .. } | Annotation::Crop { .. } => None,
+    }
+}
+
 fn set_annotation_width(annotation: &mut Annotation, width: f32) -> bool {
     match annotation {
         Annotation::Rectangle { line_width, .. }
@@ -1086,6 +1109,27 @@ mod tests {
             line_width: 1.0,
             style: Default::default(),
         }
+    }
+
+    #[test]
+    fn effective_line_width_reads_the_selection_then_the_tool() {
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.set_line_width(3.0);
+        assert_eq!(s.effective_line_width(), 3.0);
+        s.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 10.0, 10.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 8.0,
+            style: Default::default(),
+        });
+        assert_eq!(s.effective_line_width(), 8.0);
+        s.commit_annotation(Annotation::Blur {
+            rect: RectLike::new(0.0, 0.0, 10.0, 10.0),
+            radius: 12.0,
+        });
+        assert_eq!(s.effective_line_width(), 12.0);
+        s.clear_selection();
+        assert_eq!(s.effective_line_width(), 3.0);
     }
 
     #[test]

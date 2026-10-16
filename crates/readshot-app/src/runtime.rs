@@ -5442,9 +5442,11 @@ mod tests {
 
         let _ = update(&mut app, Message::EditorWidthBump(3.0));
 
+        // Steps from the selection's own width (2), which the options
+        // bar's Width control shows, not the tool width (3).
         let ed = app.editor.as_ref().unwrap();
         match &ed.model.annotations()[0] {
-            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 6.0),
+            Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 5.0),
             other => panic!("expected rectangle, got {other:?}"),
         }
     }
@@ -7509,5 +7511,114 @@ mod tests {
             ed.model.annotations().last(),
             Some(Annotation::Text { size, style, .. }) if *size == 36.0 && style.pill && !style.bold
         ));
+    }
+
+    fn app_with_text(size: f32) -> App {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(200, 200));
+        ed.model.commit_annotation(Annotation::Text {
+            content: "hi".into(),
+            origin: PointLike::new(20.0, 60.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size,
+            style: Default::default(),
+        });
+        app.editor = Some(ed);
+        app
+    }
+
+    #[test]
+    fn bracket_keys_step_legacy_text_relative_to_its_size() {
+        let size = |app: &App| match &app.editor.as_ref().unwrap().model.annotations()[0] {
+            Annotation::Text { size, .. } => *size,
+            other => panic!("{other:?}"),
+        };
+        let depth = |app: &App| app.editor.as_ref().unwrap().model.undo_depth();
+        for (start, delta, want) in [
+            (96.0, 1.0, 96.0),
+            (12.0, -1.0, 12.0),
+            (20.0, 1.0, 24.0),
+            (20.0, -1.0, 16.0),
+            (30.0, -1.0, 24.0),
+        ] {
+            let mut app = app_with_text(start);
+            let before = depth(&app);
+            let _ = update(&mut app, Message::EditorWidthBump(delta));
+            assert_eq!(size(&app), want, "{start} {delta}");
+            let pushed = if want == start { 0 } else { 1 };
+            assert_eq!(depth(&app), before + pushed, "{start} {delta}");
+        }
+    }
+
+    #[test]
+    fn bracket_keys_with_the_text_tool_step_the_text_size() {
+        use readshot_ui::editor::{TextSize, ToolState};
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.set_tool(ToolState::Text);
+        let width = ed.model.current_line_width();
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorWidthBump(1.0));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.tool_style().text_size, TextSize::L);
+        assert_eq!(ed.model.current_line_width(), width);
+        let _ = update(&mut app, Message::EditorWidthBump(-1.0));
+        let _ = update(&mut app, Message::EditorWidthBump(-1.0));
+        let _ = update(&mut app, Message::EditorWidthBump(-1.0));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.tool_style().text_size, TextSize::S);
+        assert_eq!(ed.model.current_line_width(), width);
+    }
+
+    #[test]
+    fn bracket_keys_bump_a_selected_shape_from_its_own_width() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.set_line_width(3.0);
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 8.0,
+            style: Default::default(),
+        });
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorWidthBump(1.0));
+        assert!(matches!(
+            &app.editor.as_ref().unwrap().model.annotations()[0],
+            Annotation::Rectangle { line_width, .. } if *line_width == 9.0
+        ));
+    }
+
+    #[test]
+    fn esc_during_a_slider_drag_only_cancels_the_drag() {
+        use readshot_ui::editor::StyleMessage;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 40.0, 40.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorStylePreview(StyleMessage::CornerRadius(20.0)),
+        );
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.style_drag_baseline.is_none());
+        assert_eq!(ed.model.selected_annotation(), Some(0));
+        assert!(matches!(
+            &ed.model.annotations()[0],
+            Annotation::Rectangle { style, .. } if style.corner_radius == 0.0
+        ));
+        // The next Esc clears the selection as before.
+        let _ = update(&mut app, Message::EditorTextCancel);
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.selected_annotation(),
+            None
+        );
     }
 }

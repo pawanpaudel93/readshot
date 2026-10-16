@@ -2602,7 +2602,12 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         );
         let body = match which {
             EditorPopover::Color => color_popover(ed.model.effective_color(), busy),
-            EditorPopover::Width => width_popover(line_width, active_color, busy, mono),
+            EditorPopover::Width => width_popover(
+                ed.model.effective_line_width(),
+                ed.model.effective_color(),
+                busy,
+                mono,
+            ),
             EditorPopover::Frame => frame_popover(frame_style, busy, p),
         };
         // `opaque` keeps clicks on the card's padding from reaching the

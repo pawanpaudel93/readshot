@@ -106,6 +106,23 @@ pub(crate) fn apply_editor_style(
     }
 }
 
+/// The text size `[` / `]` step from: the selected text's px, or the
+/// tool's text size when the Text tool is active with nothing selected.
+/// `None` means the keys bump a width instead.
+pub(crate) fn bump_text_px(model: &readshot_ui::editor::EditorState) -> Option<f32> {
+    match model
+        .selected_annotation()
+        .and_then(|i| model.annotations().get(i))
+    {
+        Some(readshot_core::Annotation::Text { size, .. }) => Some(*size),
+        Some(_) => None,
+        None if model.active_tool() == readshot_ui::editor::ToolState::Text => {
+            Some(model.tool_style().text_size.px())
+        }
+        None => None,
+    }
+}
+
 pub(crate) fn preview_editor_style(
     ed: &mut crate::editor::EditorSession,
     msg: readshot_ui::editor::StyleMessage,
@@ -971,6 +988,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if ed.busy {
                     return Task::none();
                 }
+                // One Esc = one step: a live options-bar slider drag is
+                // cancelled on its own, keeping the selection (and the bar).
+                if ed.style_drag_baseline.is_some() {
+                    cancel_editor_previews(ed);
+                    return Task::none();
+                }
                 let keep_selection = ed
                     .pending_text
                     .as_ref()
@@ -988,20 +1011,20 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if ed.busy {
                     return Task::none();
                 }
-                let selected_text = ed
-                    .model
-                    .selected_annotation()
-                    .and_then(|i| ed.model.annotations().get(i))
-                    .is_some_and(|a| matches!(a, readshot_core::Annotation::Text { .. }));
-                if selected_text {
-                    let next = ed.model.effective_style().text_size.step(delta > 0.0);
-                    apply_editor_style(
-                        ed,
-                        &state.coordinator,
-                        readshot_ui::editor::StyleMessage::TextSize(next),
-                    );
+                // Text (selected, or the Text tool with nothing selected)
+                // steps its size preset from the actual px; anything
+                // else bumps the width the options bar shows.
+                if let Some(px) = bump_text_px(&ed.model) {
+                    if let Some(next) = readshot_ui::editor::TextSize::step_from_px(px, delta > 0.0)
+                    {
+                        apply_editor_style(
+                            ed,
+                            &state.coordinator,
+                            readshot_ui::editor::StyleMessage::TextSize(next),
+                        );
+                    }
                 } else {
-                    let next = ed.model.current_line_width() + delta;
+                    let next = ed.model.effective_line_width() + delta;
                     apply_editor_line_width(ed, &state.coordinator, next);
                 }
             }

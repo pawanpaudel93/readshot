@@ -87,6 +87,22 @@ impl TextSize {
         Self::ALL[next]
     }
 
+    /// The next preset above (`up`) or below an actual pixel size, or
+    /// `None` when there is none. Steps from the real size, so an
+    /// off-scale legacy text (e.g. 96 px) never jumps the wrong way.
+    pub fn step_from_px(size: f32, up: bool) -> Option<Self> {
+        const EPS: f32 = 0.01;
+        if up {
+            Self::ALL.iter().copied().find(|s| s.px() > size + EPS)
+        } else {
+            Self::ALL
+                .iter()
+                .rev()
+                .copied()
+                .find(|s| s.px() < size - EPS)
+        }
+    }
+
     pub fn nearest(size: f32) -> Self {
         *Self::ALL
             .iter()
@@ -275,6 +291,21 @@ pub fn apply_style_to_annotation(annotation: &mut Annotation, msg: StyleMessage)
 mod tests {
     use super::*;
     use readshot_core::{RectLike, Rgba};
+
+    #[test]
+    fn step_from_px_moves_relative_to_the_actual_size() {
+        // Legacy off-scale sizes never jump the wrong way.
+        assert_eq!(TextSize::step_from_px(96.0, true), None);
+        assert_eq!(TextSize::step_from_px(12.0, false), None);
+        assert_eq!(TextSize::step_from_px(20.0, true), Some(TextSize::M));
+        assert_eq!(TextSize::step_from_px(20.0, false), Some(TextSize::S));
+        assert_eq!(TextSize::step_from_px(30.0, false), Some(TextSize::M));
+        // On-scale sizes step one preset; the ends clamp to no-op.
+        assert_eq!(TextSize::step_from_px(24.0, true), Some(TextSize::L));
+        assert_eq!(TextSize::step_from_px(24.0, false), Some(TextSize::S));
+        assert_eq!(TextSize::step_from_px(52.0, true), None);
+        assert_eq!(TextSize::step_from_px(16.0, false), None);
+    }
 
     fn rect() -> Annotation {
         Annotation::Rectangle {

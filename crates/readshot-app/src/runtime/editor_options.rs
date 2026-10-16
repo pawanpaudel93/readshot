@@ -72,7 +72,7 @@ fn option_control<'a>(
             busy,
         ),
         O::Width => width_button(
-            ed.model.current_line_width(),
+            ed.model.effective_line_width(),
             ed.popover == Some(EditorPopover::Width),
             busy,
         ),
@@ -138,7 +138,7 @@ fn option_control<'a>(
             send(StyleMessage::TextPill(v))
         }),
         O::TextBold => tooltip_with_key(
-            bar_button(
+            segment_button(
                 text("B")
                     .size(ButtonSize::Xs.text_size())
                     .font(iced::Font {
@@ -146,12 +146,7 @@ fn option_control<'a>(
                         ..iced::Font::DEFAULT
                     })
                     .into(),
-                if style.text_bold {
-                    ButtonKind::Secondary
-                } else {
-                    ButtonKind::Ghost
-                },
-                ButtonSize::Xs,
+                style.text_bold,
                 send(StyleMessage::TextBold(!style.text_bold)),
             ),
             "Bold",
@@ -161,7 +156,27 @@ fn option_control<'a>(
     }
 }
 
-/// Text segment: the current value reads as Secondary, the rest Ghost.
+/// A text (or swatch + text) button in the bar. `selected` uses the same
+/// teal selected state as the icon buttons (§2.1: teal marks selection),
+/// so every current value in the bar reads the same way.
+/// `msg: None` renders it disabled.
+fn segment_button<'a>(
+    content: Element<'a, Message>,
+    selected: bool,
+    msg: Option<Message>,
+) -> iced::widget::Button<'a, Message> {
+    let size = ButtonSize::Xs;
+    let mut b = button(container(content).center_y(Length::Fill))
+        .height(Length::Fixed(size.height()))
+        .padding([0.0, size.padding_x()])
+        .style(move |t, s| icon_button_style(t, s, selected));
+    if let Some(m) = msg {
+        b = b.on_press(m);
+    }
+    b
+}
+
+/// Text segment: the current value is the (teal) selected state.
 pub(crate) fn text_segment<'a, T: Copy + PartialEq>(
     items: &[(&'static str, T)],
     current: T,
@@ -169,14 +184,9 @@ pub(crate) fn text_segment<'a, T: Copy + PartialEq>(
 ) -> Element<'a, Message> {
     let mut r = row![].spacing(1).align_y(Alignment::Center);
     for &(label, value) in items {
-        r = r.push(bar_button(
+        r = r.push(segment_button(
             text(label).size(ButtonSize::Xs.text_size()).into(),
-            if value == current {
-                ButtonKind::Secondary
-            } else {
-                ButtonKind::Ghost
-            },
-            ButtonSize::Xs,
+            value == current,
             msg(value),
         ));
     }
@@ -289,7 +299,7 @@ fn color_button<'a>(color: Rgba, open: bool, busy: bool) -> Element<'a, Message>
 }
 
 fn width_button<'a>(line_width: f32, open: bool, busy: bool) -> Element<'a, Message> {
-    let b = bar_button(
+    let b = segment_button(
         row![
             container(
                 Space::new()
@@ -311,12 +321,7 @@ fn width_button<'a>(line_width: f32, open: bool, busy: bool) -> Element<'a, Mess
         .spacing(6)
         .align_y(Alignment::Center)
         .into(),
-        if open {
-            ButtonKind::Secondary
-        } else {
-            ButtonKind::Ghost
-        },
-        ButtonSize::Xs,
+        open,
         (!busy).then_some(Message::EditorPopoverToggled(EditorPopover::Width)),
     );
     tooltip_with_key(b, "Line width", Some("[ ]"), Position::Bottom)
