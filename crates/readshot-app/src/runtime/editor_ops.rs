@@ -696,7 +696,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     }
                 }
             }
-            if let Some(t) = selected_tool {
+            // Only tools that show a "new" dot are worth remembering;
+            // others would just grow the prefs file.
+            if let Some(t) =
+                selected_tool.filter(|t| readshot_ui::editor::toolbar::NEW_TOOLS.contains(t))
+            {
                 state.mark_editor_tool_seen(t.id());
             }
             if let Some(color) = picked_color {

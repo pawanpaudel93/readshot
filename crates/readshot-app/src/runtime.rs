@@ -7064,6 +7064,23 @@ mod tests {
     }
 
     #[test]
+    fn selecting_an_old_tool_records_nothing() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        for tool in [
+            readshot_ui::editor::ToolState::Rectangle,
+            readshot_ui::editor::ToolState::Arrow,
+            readshot_ui::editor::ToolState::Text,
+        ] {
+            let _ = update(
+                &mut app,
+                Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(tool)),
+            );
+        }
+        assert!(app.preferences.editor_tools_seen.is_empty());
+    }
+
+    #[test]
     fn spotlight_drag_commits_an_undoable_spotlight() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
