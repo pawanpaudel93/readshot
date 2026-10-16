@@ -49,18 +49,21 @@ pub(crate) fn editor_selected_hint(kind: &str, text_editable: bool) -> String {
     }
 }
 
+/// Returns whether the color was applied to a selection (an undo step).
 pub(crate) fn apply_editor_color(
     ed: &mut crate::editor::EditorSession,
     coord: &CaptureCoordinator,
     color: readshot_core::Rgba,
-) {
+) -> bool {
     cancel_editor_previews(ed);
     ed.model.set_color(color);
     if ed.model.apply_color_to_selected(color) {
         ed.refresh_image();
         ed.set_status("Updated selected annotation color. ⌘Z to undo.");
         sync_editor_history(ed, coord);
+        return true;
     }
+    false
 }
 
 pub(crate) fn apply_editor_line_width(
@@ -759,7 +762,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         }
         Message::EditorEyedropperToggled => {
             if let Some(ed) = state.editor.as_mut() {
-                if ed.busy {
+                // A held drag can't be hijacked into a pick.
+                if ed.busy || ed.canvas_drag_active {
                     return Task::none();
                 }
                 close_editor_popover(ed);
@@ -822,9 +826,13 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             match msg {
                 readshot_ui::CanvasMessage::EyedropperHover(p) => {
                     if ed.eyedropper.is_some() {
+                        // Sample what the canvas shows: a fractional crop
+                        // origin is truncated by the renderer.
+                        let shown =
+                            readshot_core::eyedropper::displayed_base_point(p, ed.crop_offset());
                         let pixels = readshot_core::eyedropper::sample_grid(
                             ed.model.base(),
-                            p,
+                            shown,
                             readshot_ui::editor::LOUPE_RADIUS,
                         );
                         if let Some(eye) = ed.eyedropper.as_mut() {
@@ -836,9 +844,17 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     // One pick, then the eyedropper exits. The source image
                     // is sampled, so annotations drawn over it never count.
                     if ed.eyedropper.take().is_some() {
-                        if let Some(color) = readshot_core::eyedropper::sample(ed.model.base(), p) {
-                            apply_editor_color(ed, &state.coordinator, color);
-                            ed.set_status(format!("Picked {}.", color.to_hex()));
+                        let shown =
+                            readshot_core::eyedropper::displayed_base_point(p, ed.crop_offset());
+                        if let Some(color) =
+                            readshot_core::eyedropper::sample(ed.model.base(), shown)
+                        {
+                            let undoable = apply_editor_color(ed, &state.coordinator, color);
+                            ed.set_status(if undoable {
+                                format!("Picked {}. ⌘Z to undo.", color.to_hex())
+                            } else {
+                                format!("Picked {}.", color.to_hex())
+                            });
                             picked = Some(color);
                         }
                     }
@@ -1170,6 +1186,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 // rendered at, resolved now: a view built before a window
                 // resize would carry a stale scale.
                 ed.zoom = ed.zoom.zoom_in_from_display_scale(ed.render_scale.get());
+                ed.clear_eyedropper_loupe();
             }
             Task::none()
         }
@@ -1180,6 +1197,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
                 // See `EditorZoomIn`.
                 ed.zoom = ed.zoom.zoom_out_from_display_scale(ed.render_scale.get());
+                ed.clear_eyedropper_loupe();
             }
             Task::none()
         }
@@ -1189,6 +1207,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     return Task::none();
                 }
                 ed.zoom = ed.actual_size_zoom();
+                ed.clear_eyedropper_loupe();
             }
             Task::none()
         }
@@ -1198,6 +1217,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     return Task::none();
                 }
                 ed.zoom = crate::editor::EditorZoom::Fit;
+                ed.clear_eyedropper_loupe();
             }
             Task::none()
         }

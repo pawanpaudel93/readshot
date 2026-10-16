@@ -461,6 +461,15 @@ impl EditorSession {
     /// Any status set here replaces the armed-discard prompt, so it also
     /// disarms Discard (the armed prompt itself is written directly by
     /// `EditorDiscardRequested`, not through this method).
+    /// Drop the loupe after the view moves under a still cursor (zoom),
+    /// so it never shows a pixel other than the one a click would pick.
+    /// The next hover refills it.
+    pub fn clear_eyedropper_loupe(&mut self) {
+        if let Some(eye) = self.eyedropper.as_mut() {
+            eye.loupe = None;
+        }
+    }
+
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.discard_pending_at = None;
         self.status = Some(msg.into());

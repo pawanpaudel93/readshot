@@ -18,6 +18,16 @@ fn pixel(img: &RgbaImage, x: i64, y: i64) -> Option<Rgba> {
 
 /// Color under `at` (base-image pixels). The far edge (`x == width`,
 /// which the canvas's clamped mapping can produce) reads the last pixel.
+/// Map a canvas base point to the base pixel the editor actually shows
+/// there. The canvas adds the crop origin as-is (`x0 = 10.6`), but
+/// `render::blit_base` truncates its offset (`(-10.6) as i32 = -10`), so
+/// displayed column `j` shows base column `j + trunc(x0)`. Subtracting
+/// `fract()` (which is `x - trunc(x)` for either sign) lands on that
+/// same column.
+pub fn displayed_base_point(at: PointLike, crop_origin: (f32, f32)) -> PointLike {
+    PointLike::new(at.x - crop_origin.0.fract(), at.y - crop_origin.1.fract())
+}
+
 pub fn sample(img: &RgbaImage, at: PointLike) -> Option<Rgba> {
     if !(at.x.is_finite() && at.y.is_finite()) || at.x < 0.0 || at.y < 0.0 {
         return None;
@@ -80,5 +90,22 @@ mod tests {
         assert_eq!(g[0], None);
         assert_eq!(g[4], Some(Rgba::new(0.0, 0.0, 0.0, 1.0)));
         assert!(g[8].is_some());
+    }
+
+    #[test]
+    fn displayed_base_point_drops_the_fraction_blit_base_truncates() {
+        // A crop at (10.6, 3.7): render shows base column j + 10 at
+        // displayed column j, so local 0.5 (base 11.1) is column 10.
+        let p = displayed_base_point(PointLike::new(11.1, 4.2), (10.6, 3.7));
+        assert!(
+            (p.x - 10.5).abs() < 1e-4 && (p.y - 3.5).abs() < 1e-4,
+            "{p:?}"
+        );
+        assert_eq!(p.x.floor(), 10.0);
+        assert_eq!(p.y.floor(), 3.0);
+        // Whole-pixel and no crop: unchanged.
+        let q = PointLike::new(12.5, 4.5);
+        assert_eq!(displayed_base_point(q, (10.0, 3.0)), q);
+        assert_eq!(displayed_base_point(q, (0.0, 0.0)), q);
     }
 }

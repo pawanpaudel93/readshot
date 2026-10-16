@@ -8058,4 +8058,145 @@ mod tests {
         );
         assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
     }
+
+    fn pick(app: &mut App, x: f32, y: f32) {
+        let _ = update(app, Message::EditorEyedropperToggled);
+        let _ = update(
+            app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
+                x, y,
+            ))),
+        );
+    }
+
+    #[test]
+    fn eyedropper_pick_matches_the_pixel_shown_after_a_fractional_crop() {
+        let mut img = solid(32, 16);
+        img.put_pixel(10, 3, image::Rgba([79, 70, 229, 255]));
+        img.put_pixel(11, 4, image::Rgba([200, 10, 10, 255]));
+        let crop = |x: f32, y: f32| Annotation::Crop {
+            rect: RectLike::new(x, y, 12.0, 8.0),
+        };
+        // x0 = 10.6, y0 = 3.6: local (0.5, 0.5) → base (11.1, 4.1),
+        // but blit_base shows base (10, 3) at displayed (0, 0).
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(img.clone());
+        ed.model.commit_annotation(crop(10.6, 3.6));
+        ed.model.clear_selection();
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(
+                11.1, 4.1,
+            ))),
+        );
+        let loupe = app
+            .editor
+            .as_ref()
+            .unwrap()
+            .eyedropper
+            .as_ref()
+            .unwrap()
+            .loupe
+            .clone()
+            .unwrap();
+        let n = (readshot_ui::editor::LOUPE_RADIUS * 2 + 1) as usize;
+        assert_eq!(
+            loupe.pixels[n * n / 2].map(|c| c.to_hex()),
+            Some("#4F46E5".to_string())
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
+                11.1, 4.1,
+            ))),
+        );
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.current_color().to_hex(),
+            "#4F46E5"
+        );
+
+        // Whole-pixel crop: no shift.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(img);
+        ed.model.commit_annotation(crop(10.0, 3.0));
+        ed.model.clear_selection();
+        app.editor = Some(ed);
+        pick(&mut app, 11.5, 4.5);
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.current_color().to_hex(),
+            "#C80A0A"
+        );
+    }
+
+    #[test]
+    fn zoom_clears_the_eyedropper_loupe() {
+        for zoom in [
+            Message::EditorZoomIn,
+            Message::EditorZoomOut,
+            Message::EditorZoomActual,
+            Message::EditorZoomFit,
+        ] {
+            let mut app = build_app(Arc::new(FakePermissions::granted()));
+            app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
+            let _ = update(&mut app, Message::EditorEyedropperToggled);
+            let _ = update(
+                &mut app,
+                Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(
+                    3.5, 4.5,
+                ))),
+            );
+            let label = format!("{zoom:?}");
+            let _ = update(&mut app, zoom);
+            let eye = app
+                .editor
+                .as_ref()
+                .unwrap()
+                .eyedropper
+                .as_ref()
+                .expect("still on");
+            assert!(eye.loupe.is_none(), "{label} kept a stale loupe");
+        }
+    }
+
+    #[test]
+    fn eyedropper_pick_on_a_selection_keeps_the_undo_hint() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut img = solid(16, 16);
+        img.put_pixel(3, 4, image::Rgba([79, 70, 229, 255]));
+        let mut ed = crate::editor::EditorSession::new(img);
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 16.0, 16.0),
+            color: Rgba::new(1.0, 0.0, 0.0, 1.0),
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        app.editor = Some(ed);
+        pick(&mut app, 3.5, 4.5);
+        assert_eq!(
+            app.editor.as_ref().unwrap().status.as_deref(),
+            Some("Picked #4F46E5. ⌘Z to undo.")
+        );
+        // Without a selection there is nothing to undo.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut img = solid(16, 16);
+        img.put_pixel(3, 4, image::Rgba([79, 70, 229, 255]));
+        app.editor = Some(crate::editor::EditorSession::new(img));
+        pick(&mut app, 3.5, 4.5);
+        assert_eq!(
+            app.editor.as_ref().unwrap().status.as_deref(),
+            Some("Picked #4F46E5.")
+        );
+    }
+
+    #[test]
+    fn i_is_ignored_during_a_canvas_drag() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(16, 16));
+        ed.canvas_drag_active = true;
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
+    }
 }

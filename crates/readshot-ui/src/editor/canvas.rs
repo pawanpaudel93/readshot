@@ -1124,13 +1124,29 @@ fn preview_drag_label(
 }
 
 impl EditorCanvas {
-    /// The loupe shows only while the eyedropper is on and the cursor
-    /// is over the image (not the letterbox).
+    /// The loupe shows only while the eyedropper is on, the cursor is
+    /// over the image (not the letterbox), and the loupe still describes
+    /// the pixel under the cursor. A wheel scroll or re-layout without a
+    /// mouse move would otherwise leave it showing a pixel a click would
+    /// not pick.
     fn loupe_visible(&self, bounds: Rectangle, cursor: Cursor) -> bool {
-        self.eyedropper
-            && cursor.position_in(bounds).is_some_and(|p| {
-                canvas_to_image(p, bounds, self.image_size, self.display_scale).is_some()
-            })
+        if !self.eyedropper {
+            return false;
+        }
+        let Some(base) = cursor.position_in(bounds).and_then(|p| {
+            canvas_to_base(
+                p,
+                bounds,
+                self.image_size,
+                self.image_offset,
+                self.display_scale,
+            )
+        }) else {
+            return false;
+        };
+        self.loupe.as_ref().is_none_or(|l| {
+            l.center.x.floor() == base.x.floor() && l.center.y.floor() == base.y.floor()
+        })
     }
 }
 
@@ -2563,5 +2579,29 @@ mod tests {
             ),
             iced::mouse::Interaction::Crosshair
         );
+    }
+
+    #[test]
+    fn loupe_hides_when_it_no_longer_matches_the_cursor_pixel() {
+        // After a wheel scroll (or any re-layout) without a mouse move,
+        // the stored loupe describes another pixel: it must not show.
+        let canvas = EditorCanvas {
+            eyedropper: true,
+            loupe: Some(Loupe {
+                center: PointLike::new(50.2, 40.7),
+                pixels: Vec::new(),
+            }),
+            ..test_canvas()
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        // (300, 280) → base (50, 40): same pixel.
+        assert!(canvas.loupe_visible(bounds, Cursor::Available(Point::new(301.0, 281.0))));
+        // (310, 280) → base (55, 40): stale.
+        assert!(!canvas.loupe_visible(bounds, Cursor::Available(Point::new(310.0, 280.0))));
     }
 }
