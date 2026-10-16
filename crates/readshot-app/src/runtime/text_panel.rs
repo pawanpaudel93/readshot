@@ -293,27 +293,77 @@ fn placed_matches(ed: &EditorSession) -> Vec<(&RedactMatch, Option<RectLike>)> {
         .collect()
 }
 
-/// Matches not yet covered by a redaction, each with the rect its
-/// redaction gets (span-precise, padded, whole-pixel). Empty without
-/// line positions. Matches that can't be placed are in
-/// [`unlocatable_matches`], never silently dropped.
-pub(crate) fn pending_matches(ed: &EditorSession) -> Vec<(&RedactMatch, RectLike)> {
-    placed_matches(ed)
-        .into_iter()
-        .filter_map(|(m, rect)| {
-            let rect = rect?;
-            (!is_covered(rect, ed.model.annotations())).then_some((m, rect))
-        })
-        .collect()
+/// How well existing annotations cover a redaction rect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Coverage {
+    None,
+    /// Only a Blur or Pixelate (any strength) contains it: weaker than a
+    /// solid block, so it doesn't count as redacted when Solid is chosen.
+    Weak,
+    /// An opaque, square-cornered filled rectangle contains it.
+    Solid,
 }
 
-/// Detected matches that have no place on the image, so smart redact
-/// can't cover them: the user is told to cover them by hand.
-pub(crate) fn unlocatable_matches(ed: &EditorSession) -> Vec<&RedactMatch> {
-    placed_matches(ed)
-        .into_iter()
-        .filter_map(|(m, rect)| rect.is_none().then_some(m))
-        .collect()
+pub(crate) fn coverage(rect: RectLike, annotations: &[readshot_core::Annotation]) -> Coverage {
+    use readshot_core::Annotation as A;
+    let covered_by = |pred: fn(&A) -> bool| {
+        annotations
+            .iter()
+            .any(|a| pred(a) && is_covered(rect, std::slice::from_ref(a)))
+    };
+    if covered_by(|a| matches!(a, A::Rectangle { .. })) {
+        Coverage::Solid
+    } else if covered_by(|a| matches!(a, A::Blur { .. } | A::Pixelate { .. })) {
+        Coverage::Weak
+    } else {
+        Coverage::None
+    }
+}
+
+/// Smart-redact bookkeeping for the current document and style. Empty
+/// without line positions; matches that can't be placed are listed in
+/// `unlocatable`, never silently dropped.
+#[derive(Debug, Default)]
+pub(crate) struct RedactState<'a> {
+    /// Still to redact with the chosen style, each with the rect its
+    /// redaction gets (span-precise, padded, whole-pixel).
+    pub pending: Vec<(&'a RedactMatch, RectLike)>,
+    /// Covered only by a Blur/Pixelate (pending too when Solid is chosen).
+    pub weak: Vec<&'a RedactMatch>,
+    /// Covered by any redaction (solid or weak).
+    pub covered: Vec<&'a RedactMatch>,
+    /// Detected but can't be placed on the image.
+    pub unlocatable: Vec<&'a RedactMatch>,
+}
+
+/// Classify every match. With Solid chosen only a solid block counts as
+/// redacted (a blur can sometimes be reversed); with Blur or Pixelate
+/// chosen any existing redaction counts, so nothing is doubled up.
+pub(crate) fn redact_state(ed: &EditorSession) -> RedactState<'_> {
+    let solid = ed.text_panel.redact_style == RedactStyle::Solid;
+    let mut out = RedactState::default();
+    for (m, rect) in placed_matches(ed) {
+        let Some(rect) = rect else {
+            out.unlocatable.push(m);
+            continue;
+        };
+        let cov = coverage(rect, ed.model.annotations());
+        if cov != Coverage::None {
+            out.covered.push(m);
+        }
+        if cov == Coverage::Weak {
+            out.weak.push(m);
+        }
+        let done = match cov {
+            Coverage::Solid => true,
+            Coverage::Weak => !solid,
+            Coverage::None => false,
+        };
+        if !done {
+            out.pending.push((m, rect));
+        }
+    }
+    out
 }
 
 fn items(n: usize) -> String {
@@ -352,15 +402,14 @@ fn redact(state: &mut App, only_line: Option<usize>) -> Task<Message> {
     commit_pending_editor_text(ed, &state.coordinator);
     let in_scope = |m: &RedactMatch| only_line.is_none_or(|line| m.line == line);
     let style = ed.text_panel.redact_style;
-    let annotations: Vec<readshot_core::Annotation> = pending_matches(ed)
+    let rs = redact_state(ed);
+    let annotations: Vec<readshot_core::Annotation> = rs
+        .pending
         .into_iter()
         .filter(|(m, _)| in_scope(m))
         .map(|(_, rect)| redaction_annotation(rect, style))
         .collect();
-    let missed = unlocatable_matches(ed)
-        .into_iter()
-        .filter(|m| in_scope(m))
-        .count();
+    let missed = rs.unlocatable.into_iter().filter(|m| in_scope(m)).count();
     let n = ed.model.commit_annotations(annotations);
     let status = redact_status(n, missed);
     if n == 0 {
@@ -419,14 +468,35 @@ pub(crate) fn copy_lines_label(n: usize) -> String {
     }
 }
 
-/// `text` split into `(segment, marked)` runs; `marks` are char ranges.
-pub(crate) fn line_spans(text: &str, marks: &[Range<usize>]) -> Vec<(String, bool)> {
-    let mut out: Vec<(String, bool)> = Vec::new();
+/// How a run of a Text-panel line is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Run {
+    Plain,
+    /// A sensitive span still to redact (underlined).
+    Marked,
+    /// A span already covered on the image (muted).
+    Redacted,
+}
+
+/// `text` split into runs; `marks` and `redacted` are char ranges
+/// (`marks` wins where both apply).
+pub(crate) fn line_spans(
+    text: &str,
+    marks: &[Range<usize>],
+    redacted: &[Range<usize>],
+) -> Vec<(String, Run)> {
+    let mut out: Vec<(String, Run)> = Vec::new();
     for (i, c) in text.chars().enumerate() {
-        let marked = marks.iter().any(|r| r.contains(&i));
+        let run = if marks.iter().any(|r| r.contains(&i)) {
+            Run::Marked
+        } else if redacted.iter().any(|r| r.contains(&i)) {
+            Run::Redacted
+        } else {
+            Run::Plain
+        };
         match out.last_mut() {
-            Some((s, m)) if *m == marked => s.push(c),
-            _ => out.push((c.to_string(), marked)),
+            Some((s, r)) if *r == run => s.push(c),
+            _ => out.push((c.to_string(), run)),
         }
     }
     out
@@ -587,10 +657,27 @@ fn chip_style(theme: &Theme) -> container::Style {
 
 /// Title of the redact card: pending plus unlocatable items, or "All …
 /// redacted" once nothing is left.
-pub(crate) fn redact_card_title(pending: usize, unlocatable: usize) -> String {
-    match pending + unlocatable {
-        0 => "All sensitive items redacted".to_string(),
-        n => format!("{n} sensitive item{}", if n == 1 { "" } else { "s" }),
+/// Only says "redacted" when every item is under a solid block; items
+/// left blurred or pixelated (the chosen weaker style) are named as such.
+pub(crate) fn redact_card_title(pending: usize, unlocatable: usize, weak: usize) -> String {
+    match (pending + unlocatable, weak) {
+        (0, 0) => "All sensitive items redacted".to_string(),
+        (0, _) => "All sensitive items blurred or pixelated".to_string(),
+        (n, _) => format!("{n} sensitive item{}", if n == 1 { "" } else { "s" }),
+    }
+}
+
+/// Card note for items covered only by a Blur or Pixelate.
+pub(crate) fn weak_note(weak: usize, style: RedactStyle) -> String {
+    let (lead, verb) = if weak == 1 {
+        ("1 item is".to_string(), "it")
+    } else {
+        (format!("{weak} items are"), "them")
+    };
+    if style == RedactStyle::Solid {
+        format!("{lead} only blurred or pixelated (weaker). Redact adds a solid block over {verb}.")
+    } else {
+        format!("{lead} blurred or pixelated, which is weaker than a solid block.")
     }
 }
 
@@ -601,18 +688,19 @@ pub(crate) fn redact_card_title(pending: usize, unlocatable: usize) -> String {
 /// Items that can't be located are named, never silently left out.
 fn redact_card<'a>(
     ed: &'a EditorSession,
-    pending: &[(&RedactMatch, RectLike)],
+    rs: &RedactState<'_>,
     p: &'static Palette,
 ) -> Option<Element<'a, Message>> {
     ed.text_panel.positioned_document()?;
     if ed.text_panel.matches.is_empty() {
         return None;
     }
+    let pending = &rs.pending;
     let n = pending.len();
-    let unlocatable = unlocatable_matches(ed);
+    let unlocatable = &rs.unlocatable;
     let head = row![
         crate::icons::icon(AppIcon::Shield, p.warn, ICON_SIZE),
-        text(redact_card_title(n, unlocatable.len()))
+        text(redact_card_title(n, unlocatable.len(), rs.weak.len()))
             .size(TYPE_BODY)
             .font(semibold())
             .style(text_t1),
@@ -660,6 +748,13 @@ fn redact_card<'a>(
     if n > 0 {
         body = body.push(chips);
     }
+    if !rs.weak.is_empty() {
+        body = body.push(
+            text(weak_note(rs.weak.len(), ed.text_panel.redact_style))
+                .size(TYPE_MICRO)
+                .style(text_t2),
+        );
+    }
     if !unlocatable.is_empty() {
         let m = unlocatable.len();
         body = body.push(
@@ -682,9 +777,11 @@ fn redact_card<'a>(
 }
 
 /// One recognized line: hover outlines it on the image, click selects
-/// (⇧ range, ⌘ toggle). `marks` (char ranges) are underlined. With
-/// `redact_button` (hovered line with pending matches) a Redact button
-/// sits on the row's trailing edge.
+/// (⇧ range, ⌘ toggle). `marks` (char ranges) are underlined;
+/// `redacted` spans (already covered on the image) are muted and the
+/// row gets a "redacted" marker, because copying still copies the
+/// original text. With `redact_button` (hovered line with pending
+/// matches) a Redact button sits on the row's trailing edge.
 #[allow(clippy::too_many_arguments)]
 fn line_row<'a>(
     index: usize,
@@ -692,42 +789,60 @@ fn line_row<'a>(
     hovered: bool,
     selected: bool,
     marks: &[Range<usize>],
+    redacted: &[Range<usize>],
     redact_button: bool,
     p: &'static Palette,
 ) -> Element<'a, Message> {
     let ink = if hovered || selected { p.t1 } else { p.t2 };
     let mark_bg = Color { a: 0.16, ..p.warn };
-    let spans: Vec<iced::widget::text::Span<'a, (), iced::Font>> = line_spans(&line.text, marks)
-        .into_iter()
-        .map(|(segment, marked)| {
-            let s = iced::widget::span(segment).color(ink);
-            if marked {
-                s.underline(true).background(mark_bg)
-            } else {
-                s
-            }
-        })
-        .collect();
-    let content = container(iced::widget::rich_text(spans).size(TYPE_CAPTION))
-        .padding([6, 8])
-        .width(Length::Fill)
-        .style(move |theme: &Theme| {
-            let p = palette_for(theme);
-            container::Style {
-                background: if selected {
-                    Some(p.acc_tint.into())
-                } else if hovered {
-                    Some(p.hover.into())
-                } else {
-                    None
-                },
-                border: iced::Border {
-                    radius: R_CHIP.into(),
-                    ..iced::Border::default()
-                },
-                ..container::Style::default()
-            }
-        });
+    let spans: Vec<iced::widget::text::Span<'a, (), iced::Font>> =
+        line_spans(&line.text, marks, redacted)
+            .into_iter()
+            .map(|(segment, run)| {
+                let s = iced::widget::span(segment);
+                match run {
+                    Run::Plain => s.color(ink),
+                    Run::Marked => s.color(ink).underline(true).background(mark_bg),
+                    Run::Redacted => s.color(p.t3),
+                }
+            })
+            .collect();
+    let mut inner = row![iced::widget::rich_text(spans)
+        .size(TYPE_CAPTION)
+        .width(Length::Fill)]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    if !redacted.is_empty() && !redact_button {
+        inner = inner.push(tooltip_with_key(
+            container(text("redacted").size(TYPE_MICRO).style(text_t3))
+                .padding([1, 6])
+                .style(chip_style),
+            "Copies the original text",
+            None,
+            iced::widget::tooltip::Position::Top,
+        ));
+    }
+    let content =
+        container(inner)
+            .padding([6, 8])
+            .width(Length::Fill)
+            .style(move |theme: &Theme| {
+                let p = palette_for(theme);
+                container::Style {
+                    background: if selected {
+                        Some(p.acc_tint.into())
+                    } else if hovered {
+                        Some(p.hover.into())
+                    } else {
+                        None
+                    },
+                    border: iced::Border {
+                        radius: R_CHIP.into(),
+                        ..iced::Border::default()
+                    },
+                    ..container::Style::default()
+                }
+            });
     let body: Element<'a, Message> = if redact_button {
         iced::widget::stack![
             content,
@@ -773,13 +888,20 @@ fn lines_view<'a>(
             .style(text_t3),
     ]
     .align_y(Alignment::Center);
-    let pending = pending_matches(ed);
+    let rs = redact_state(ed);
     let mut list = column![].spacing(1);
     for (i, line) in doc.lines.iter().enumerate() {
-        let marks: Vec<Range<usize>> = pending
+        let marks: Vec<Range<usize>> = rs
+            .pending
             .iter()
             .filter(|(m, _)| m.line == i)
             .map(|(m, _)| m.span.clone())
+            .collect();
+        let redacted: Vec<Range<usize>> = rs
+            .covered
+            .iter()
+            .filter(|m| m.line == i)
+            .map(|m| m.span.clone())
             .collect();
         let hovered = tp.hovered == Some(i);
         list = list.push(line_row(
@@ -788,12 +910,13 @@ fn lines_view<'a>(
             hovered,
             tp.selected.contains(&i),
             &marks,
+            &redacted,
             hovered && !marks.is_empty() && !ed.busy,
             p,
         ));
     }
     let mut col = column![].spacing(SP2);
-    if let Some(card) = redact_card(ed, &pending, p) {
+    if let Some(card) = redact_card(ed, &rs, p) {
         col = col.push(card);
     }
     col = col.push(header).push(scrollable(list).height(Length::Fill));
@@ -937,18 +1060,41 @@ mod tests {
     #[allow(clippy::single_range_in_vec_init)]
     fn line_spans_mark_char_ranges() {
         assert_eq!(
-            line_spans("Email a@b.co", &[6..12]),
-            vec![("Email ".to_string(), false), ("a@b.co".to_string(), true)]
-        );
-        assert_eq!(
-            line_spans("é@x", &[1..2]),
+            line_spans("Email a@b.co", &[6..12], &[]),
             vec![
-                ("é".to_string(), false),
-                ("@".to_string(), true),
-                ("x".to_string(), false)
+                ("Email ".to_string(), Run::Plain),
+                ("a@b.co".to_string(), Run::Marked)
             ]
         );
-        assert!(line_spans("", &[]).is_empty());
+        assert_eq!(
+            line_spans("é@x", &[1..2], &[]),
+            vec![
+                ("é".to_string(), Run::Plain),
+                ("@".to_string(), Run::Marked),
+                ("x".to_string(), Run::Plain)
+            ]
+        );
+        assert!(line_spans("", &[], &[]).is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn line_spans_mute_redacted_ranges_and_marks_win() {
+        assert_eq!(
+            line_spans("ab cd", &[3..5], &[0..2]),
+            vec![
+                ("ab".to_string(), Run::Redacted),
+                (" ".to_string(), Run::Plain),
+                ("cd".to_string(), Run::Marked)
+            ]
+        );
+        assert_eq!(
+            line_spans("ab", &[0..1], &[0..2]),
+            vec![
+                ("a".to_string(), Run::Marked),
+                ("b".to_string(), Run::Redacted)
+            ]
+        );
     }
 
     #[test]
@@ -968,9 +1114,27 @@ mod tests {
 
     #[test]
     fn redact_card_title_counts_unlocatable_items_too() {
-        assert_eq!(redact_card_title(0, 0), "All sensitive items redacted");
-        assert_eq!(redact_card_title(1, 0), "1 sensitive item");
-        assert_eq!(redact_card_title(0, 2), "2 sensitive items");
-        assert_eq!(redact_card_title(3, 1), "4 sensitive items");
+        assert_eq!(redact_card_title(0, 0, 0), "All sensitive items redacted");
+        assert_eq!(redact_card_title(1, 0, 0), "1 sensitive item");
+        assert_eq!(redact_card_title(0, 2, 0), "2 sensitive items");
+        assert_eq!(redact_card_title(3, 1, 0), "4 sensitive items");
+        // Weakly covered items never read as "redacted".
+        assert_eq!(
+            redact_card_title(0, 0, 2),
+            "All sensitive items blurred or pixelated"
+        );
+        assert_eq!(redact_card_title(2, 0, 2), "2 sensitive items");
+    }
+
+    #[test]
+    fn weak_note_says_what_solid_redact_will_do() {
+        assert_eq!(
+            weak_note(1, RedactStyle::Solid),
+            "1 item is only blurred or pixelated (weaker). Redact adds a solid block over it."
+        );
+        assert_eq!(
+            weak_note(2, RedactStyle::Blur),
+            "2 items are blurred or pixelated, which is weaker than a solid block."
+        );
     }
 }

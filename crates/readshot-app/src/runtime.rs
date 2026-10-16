@@ -9360,8 +9360,8 @@ mod tests {
                 kind: readshot_core::redact::RedactKind::Email,
             });
         let ed = app.editor.as_ref().unwrap();
-        assert_eq!(super::text_panel::pending_matches(ed).len(), 2);
-        assert_eq!(super::text_panel::unlocatable_matches(ed).len(), 1);
+        assert_eq!(super::text_panel::redact_state(ed).pending.len(), 2);
+        assert_eq!(super::text_panel::redact_state(ed).unlocatable.len(), 1);
 
         let _ = update(&mut app, Message::EditorRedactAll);
         let ed = app.editor.as_ref().unwrap();
@@ -9426,5 +9426,80 @@ mod tests {
         let ed = app.editor.as_ref().unwrap();
         assert!(ed.discard_pending_at.is_some());
         assert_eq!(ed.toast_action, None);
+    }
+
+    #[test]
+    fn a_blur_redaction_does_not_count_as_solid() {
+        use readshot_core::redact::RedactStyle;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(
+            &mut app,
+            Message::EditorRedactStyleChanged(RedactStyle::Blur),
+        );
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.annotations().len(), 2);
+        let rs = super::text_panel::redact_state(ed);
+        assert!(rs.pending.is_empty(), "Blur chosen: blurred items are done");
+        assert_eq!(rs.weak.len(), 2);
+        // Blur again: no duplicates.
+        let _ = update(&mut app, Message::EditorRedactAll);
+        assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 2);
+
+        // Switch to Solid: the blurred items are pending again and Redact
+        // All puts a solid block on top of each.
+        let _ = update(
+            &mut app,
+            Message::EditorRedactStyleChanged(RedactStyle::Solid),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(super::text_panel::redact_state(ed).pending.len(), 2);
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.status.as_deref(), Some("Redacted 2 items."));
+        let anns = ed.model.annotations();
+        assert_eq!(anns.len(), 4);
+        assert!(matches!(anns[2], Annotation::Rectangle { .. }));
+        let rs = super::text_panel::redact_state(ed);
+        assert!(rs.pending.is_empty() && rs.weak.is_empty());
+        assert_eq!(rs.covered.len(), 2);
+    }
+
+    #[test]
+    fn a_weak_manual_blur_is_not_reported_as_redacted() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        app.editor
+            .as_mut()
+            .unwrap()
+            .model
+            .commit_annotation(Annotation::Blur {
+                rect: RectLike::new(0.0, 0.0, 64.0, 64.0),
+                radius: 2.0,
+            });
+        let ed = app.editor.as_ref().unwrap();
+        let rs = super::text_panel::redact_state(ed);
+        assert_eq!(rs.pending.len(), 2, "Solid (default) still offers both");
+        assert_eq!(rs.weak.len(), 2);
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.annotations().len(), 3);
+        assert!(super::text_panel::redact_state(ed).pending.is_empty());
+    }
+
+    #[test]
+    fn copy_all_after_a_redaction_recognizes_the_output() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let _ = update(&mut app, Message::EditorCopyTextRequested);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.busy);
+        assert_eq!(
+            ed.status.as_deref(),
+            Some("Recognizing text…"),
+            "redacted text must not come from the cached panel text"
+        );
     }
 }
