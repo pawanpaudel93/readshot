@@ -200,20 +200,6 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
             );
             update(state, Message::OpenSettingsRequested)
         }
-        Message::EditorTextLineHovered(index) => {
-            if let Some(ed) = state.editor.as_mut() {
-                ed.text_panel.hovered = Some(index);
-            }
-            Task::none()
-        }
-        Message::EditorTextLineUnhovered(index) => {
-            if let Some(ed) = state.editor.as_mut() {
-                if ed.text_panel.hovered == Some(index) {
-                    ed.text_panel.hovered = None;
-                }
-            }
-            Task::none()
-        }
         Message::EditorTextLineClicked(index) => {
             let (shift, command) = (state.editor_shift_held, state.editor_command_held);
             if let Some(ed) = state.editor.as_mut() {

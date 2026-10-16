@@ -492,9 +492,10 @@ pub enum Message {
     EditorPanelTick,
     /// "Open Settings" on the Text tab's no-text state.
     EditorOpenTextSettings,
-    /// Pointer entered Text-panel line `index`.
+    /// Pointer entered Text-panel line `index`. Handled at top level
+    /// (no cache clear): it fires per pointer move.
     EditorTextLineHovered(usize),
-    /// Pointer left Text-panel line `index`.
+    /// Pointer left Text-panel line `index`. Handled at top level.
     EditorTextLineUnhovered(usize),
     /// Click on Text-panel line `index` (⇧ range, ⌘ toggle).
     EditorTextLineClicked(usize),

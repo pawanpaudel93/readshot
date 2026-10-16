@@ -1415,8 +1415,6 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         | Message::EditorPanelTabSelected(..)
         | Message::EditorPanelOverlayDismissed
         | Message::EditorOpenTextSettings
-        | Message::EditorTextLineHovered(..)
-        | Message::EditorTextLineUnhovered(..)
         | Message::EditorTextLineClicked(..)
         | Message::EditorCopyLines
         | Message::EditorCopyLinesDone(..)

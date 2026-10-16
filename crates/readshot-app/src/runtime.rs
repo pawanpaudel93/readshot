@@ -1730,6 +1730,23 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        // Text-panel hover fires per pointer move; its outline is drawn in
+        // the canvas's uncached marks layer, so the annotation geometry
+        // cache stays valid.
+        Message::EditorTextLineHovered(index) => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.text_panel.hovered = Some(index);
+            }
+            Task::none()
+        }
+        Message::EditorTextLineUnhovered(index) => {
+            if let Some(ed) = state.editor.as_mut() {
+                if ed.text_panel.hovered == Some(index) {
+                    ed.text_panel.hovered = None;
+                }
+            }
+            Task::none()
+        }
         Message::EditorWindowResized(window, width) => {
             let mut docked_overlay = false;
             if let Some(ed) = state.editor.as_mut() {
@@ -1804,8 +1821,6 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorPanelTabSelected(..)
         | Message::EditorPanelOverlayDismissed
         | Message::EditorOpenTextSettings
-        | Message::EditorTextLineHovered(..)
-        | Message::EditorTextLineUnhovered(..)
         | Message::EditorTextLineClicked(..)
         | Message::EditorCopyLines
         | Message::EditorCopyLinesDone(..)
