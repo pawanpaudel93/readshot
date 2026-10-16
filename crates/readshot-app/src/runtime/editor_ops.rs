@@ -274,15 +274,109 @@ pub(crate) fn sync_editor_history(
             ed.toast_action = None;
         }
     }
+    write_editor_history(ed, coord);
+}
+
+/// Write the editor's state to its History record, if it has one.
+///
+/// - Any redaction ([`readshot_core::scrub::has_redaction`]): **scrub**.
+///   History gets the flattened output as its image (rendered and
+///   encoded on the writer thread) and the text with every hidden word
+///   masked; the annotations are baked in, so the sidecar stores none.
+/// - No redaction left after a scrub (all undone): **restore** the
+///   original image and text, both still in memory.
+/// - Otherwise the plain sidecar sync (annotations only).
+///
+/// Everything is queued on the coordinator's ordered background writer
+/// (the writes fsync, and this runs on every commit/undo/redo); rapid
+/// rewrites coalesce to the newest. A rewrite's outcome comes back as
+/// `Message::EditorHistoryWritten` via [`history_write_followups`].
+pub(crate) fn write_editor_history(
+    ed: &mut crate::editor::EditorSession,
+    coord: &CaptureCoordinator,
+) {
     let Some(record) = ed.source_record.as_mut() else {
         return;
     };
     record.annotation_model = ed.model.annotations().to_vec();
-    // Queued on the coordinator's ordered background writer: the
-    // sidecar write fsyncs, and this runs on every commit/undo/redo —
-    // a synchronous write would jank the UI thread. Failures are
-    // logged by the worker.
-    coord.update_history_async(record.clone());
+    let record = record.clone();
+    let annotations = ed.model.annotations();
+    if readshot_core::scrub::has_redaction(annotations) {
+        let mut scrubbed = record;
+        scrubbed.ocr_text = scrubbed_history_text(ed);
+        scrubbed.annotation_model = Vec::new();
+        scrubbed.redacted = true;
+        let bake = annotations.to_vec();
+        ed.history_scrubbed = true;
+        ed.history_write =
+            Some(coord.rewrite_history_async(scrubbed, ed.model.shared_base(), bake));
+    } else if ed.history_scrubbed {
+        let mut restored = record;
+        restored.ocr_text = original_history_text(ed);
+        ed.history_scrubbed = false;
+        ed.history_write =
+            Some(coord.rewrite_history_async(restored, ed.model.shared_base(), Vec::new()));
+    } else {
+        coord.update_history_async(record);
+    }
+}
+
+/// The capture's unredacted text: what History held when the editor
+/// opened, or (a fresh capture, whose text lands later) the Text panel's
+/// recognition of the same base image.
+fn original_history_text(ed: &crate::editor::EditorSession) -> Option<String> {
+    ed.source_record
+        .as_ref()
+        .and_then(|r| r.ocr_text.clone())
+        .or_else(|| ed.text_panel.document().map(|d| d.layout_text.clone()))
+}
+
+/// The text History keeps while redactions are present: the recognized
+/// text with every hidden word masked. Uses the Text panel's document
+/// (word boxes) when there is one, else the stored text without
+/// positions (detected items masked). `None` when no text is known yet;
+/// the record's text is then cleared (fail closed) until recognition
+/// lands and the record is scrubbed again.
+fn scrubbed_history_text(ed: &crate::editor::EditorSession) -> Option<String> {
+    use readshot_core::scrub::{hidden_spans, masked_layout_text};
+    use readshot_core::text_lines::TextDocument;
+    let annotations = ed.model.annotations();
+    let mask = |doc: &TextDocument| masked_layout_text(doc, &hidden_spans(doc, annotations));
+    match ed.text_panel.document() {
+        Some(doc) => Some(mask(doc)),
+        None => original_history_text(ed).map(|t| mask(&TextDocument::from_plain(&t))),
+    }
+}
+
+/// Follow-ups after a message that may have written History: await the
+/// newest rewrite's outcome, and when a redaction exists but the panel
+/// never recognized the image (and the engine reports positions), start
+/// recognition so the stored text gets word-precise masking instead of
+/// the detected-items fallback.
+pub(crate) fn history_write_followups(state: &mut App) -> Task<Message> {
+    let positions = state.coordinator.engine_reports_positions();
+    let Some(ed) = state.editor.as_mut() else {
+        return Task::none();
+    };
+    let mut tasks = Vec::new();
+    if let Some(rx) = ed.history_write.take() {
+        let session = ed.session_id;
+        tasks.push(Task::perform(rx, move |r| Message::EditorHistoryWritten {
+            session,
+            result: r.ok(),
+        }));
+    }
+    let needs_text = positions
+        && ed.source_record.is_some()
+        && matches!(
+            ed.text_panel.recognition,
+            crate::editor::TextRecognition::Idle
+        )
+        && readshot_core::scrub::has_redaction(ed.model.annotations());
+    if needs_text {
+        tasks.push(super::text_panel::request_text_recognition(state));
+    }
+    Task::batch(tasks)
 }
 
 /// Every editor message arm, extracted from `runtime::update` so the
@@ -1421,7 +1515,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         | Message::EditorRemoveLineBreaksToggled(..)
         | Message::EditorRedactStyleChanged(..)
         | Message::EditorRedactAll
-        | Message::EditorRedactLine(..)) => {
+        | Message::EditorRedactLine(..)
+        | Message::EditorHistoryWritten { .. }) => {
             super::text_panel::handle_text_panel_message(state, msg)
         }
         other => unreachable!("non-editor message routed to the editor handler: {other:?}"),

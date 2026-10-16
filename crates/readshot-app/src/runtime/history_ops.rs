@@ -12,6 +12,18 @@ use super::*;
 pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<Message> {
     match message {
         Message::HistoryRecordSaved => {
+            // The save carries the raw capture. If the editor redacted
+            // before it landed, its scrub found no record and did
+            // nothing: scrub again now that the record exists. (A later
+            // OCR text update can't undo this; the store ignores plain
+            // updates to a scrubbed record.)
+            if let Some(ed) = state.editor.as_mut() {
+                if ed.source_record.is_some()
+                    && readshot_core::scrub::has_redaction(ed.model.annotations())
+                {
+                    super::editor_ops::write_editor_history(ed, &state.coordinator);
+                }
+            }
             // The record's PNG + sidecar have landed on disk (OCR is
             // still pending). Refresh an open browser so the new row
             // shows immediately instead of only once OCR finishes.

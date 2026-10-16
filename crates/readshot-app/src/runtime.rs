@@ -1613,7 +1613,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::HistoryDeleteConfirmed(..)
         | Message::HistoryDeleteCancelled
         | Message::HistoryRecordSaved
-        | Message::HistoryShowMore) => history_ops::handle_history_message(state, msg),
+        | Message::HistoryShowMore) => {
+            let task = history_ops::handle_history_message(state, msg);
+            Task::batch([task, editor_ops::history_write_followups(state)])
+        }
         Message::WindowCloseRequested(id) => {
             // Only the editor window opts out of auto-close. If the
             // close request is for it, route through the same two-stage
@@ -1827,7 +1830,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorRemoveLineBreaksToggled(..)
         | Message::EditorRedactStyleChanged(..)
         | Message::EditorRedactAll
-        | Message::EditorRedactLine(..)) => editor_ops::handle_editor_message(state, msg),
+        | Message::EditorRedactLine(..)
+        | Message::EditorHistoryWritten { .. }) => {
+            let task = editor_ops::handle_editor_message(state, msg);
+            Task::batch([task, editor_ops::history_write_followups(state)])
+        }
         Message::OverlayCopyDone(result) => {
             state.last_capture_status = Some(match result {
                 Ok(()) => "Copied image to clipboard.".into(),
@@ -9673,6 +9680,220 @@ mod tests {
             ed.status.as_deref(),
             Some("Recognizing text…"),
             "redacted text must not come from the cached panel text"
+        );
+    }
+
+    // --- History scrub after a redaction (B10) -------------------------
+
+    fn decode_png(bytes: &[u8]) -> image::RgbaImage {
+        image::load_from_memory(bytes).unwrap().to_rgba8()
+    }
+
+    fn stored(store: &FsHistoryStore) -> (readshot_core::CaptureRecord, image::RgbaImage) {
+        let record = store.list().unwrap().remove(0);
+        let png = std::fs::read(FsHistoryStore::abs_png_path(store.root(), &record)).unwrap();
+        (record, decode_png(&png))
+    }
+
+    /// An editor opened on a saved History record whose text is
+    /// `sample_doc()`'s, with the panel recognized. `save` false leaves
+    /// the record off disk (a fresh capture whose save hasn't landed).
+    fn scrub_app(save: bool) -> (tempfile::TempDir, Arc<FsHistoryStore>, App) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(FsHistoryStore::new(dir.path().join("history")));
+        let mut app = build_app_with_history(
+            Arc::new(FakePermissions::granted()),
+            store.clone() as Arc<dyn HistoryStore>,
+        );
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 64, 64, "d");
+        record.ocr_text = Some(sample_doc().layout_text);
+        if save {
+            store
+                .save(&record, &readshot_core::encode_png(&solid(64, 64)).unwrap())
+                .unwrap();
+        }
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            solid(64, 64),
+            record,
+        ));
+        let session = app.editor.as_ref().unwrap().session_id;
+        let _ = update(
+            &mut app,
+            Message::EditorTextRecognized {
+                session,
+                result: Ok(sample_doc()),
+            },
+        );
+        (dir, store, app)
+    }
+
+    const EMAIL: &str = "priya@example.com";
+    const PHONE: &str = "555-0142";
+
+    #[test]
+    fn redact_all_scrubs_the_history_image_and_text() {
+        let (_dir, store, mut app) = scrub_app(true);
+        let _ = update(&mut app, Message::EditorRedactAll);
+        app.coordinator.flush_history_updates();
+        let (record, png) = stored(&store);
+        let text = record.ocr_text.clone().unwrap();
+        assert!(record.redacted);
+        assert!(!text.contains(EMAIL) && !text.contains(PHONE), "{text}");
+        assert!(text.contains("Name Priya"), "{text}");
+        assert!(text.contains(&"█".repeat(EMAIL.chars().count())), "{text}");
+        assert!(
+            record.annotation_model.is_empty(),
+            "the PNG already shows them: reopening must not apply them twice"
+        );
+        let ed = app.editor.as_mut().unwrap();
+        assert_eq!(png, ed.model.flatten(), "the PNG is the exported image");
+        assert!(ed.history_scrubbed);
+    }
+
+    #[test]
+    fn undoing_every_redaction_restores_the_original_record() {
+        let (_dir, store, mut app) = scrub_app(true);
+        let original = sample_doc().layout_text;
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        );
+        app.coordinator.flush_history_updates();
+        let (record, png) = stored(&store);
+        assert!(!record.redacted);
+        assert_eq!(record.ocr_text.as_deref(), Some(original.as_str()));
+        assert!(record.annotation_model.is_empty());
+        assert_eq!(png, solid(64, 64));
+        assert!(!app.editor.as_ref().unwrap().history_scrubbed);
+    }
+
+    #[test]
+    fn a_non_redaction_edit_keeps_the_plain_sidecar_sync() {
+        let (_dir, store, mut app) = scrub_app(true);
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                highlight_stroke(),
+            )),
+        );
+        app.coordinator.flush_history_updates();
+        let (record, png) = stored(&store);
+        assert!(!record.redacted);
+        assert_eq!(record.annotation_model.len(), 1);
+        assert_eq!(png, solid(64, 64), "the original image is untouched");
+    }
+
+    #[test]
+    fn without_positions_a_redaction_masks_every_detected_item() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(FsHistoryStore::new(dir.path().join("history")));
+        let mut app = build_app_with_history(
+            Arc::new(FakePermissions::granted()),
+            store.clone() as Arc<dyn HistoryStore>,
+        );
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 64, 64, "d");
+        record.ocr_text = Some(format!("Contact\nmail {EMAIL} today"));
+        store
+            .save(&record, &readshot_core::encode_png(&solid(64, 64)).unwrap())
+            .unwrap();
+        let mut ed = crate::editor::EditorSession::from_history(solid(64, 64), record);
+        super::text_panel::seed_text_from_history(&mut ed, false);
+        app.editor = Some(ed);
+        // A solid block drawn by hand somewhere: positions are unknown,
+        // so every detected item is masked.
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                readshot_core::redact::redaction_annotation(
+                    RectLike::new(0.0, 0.0, 10.0, 10.0),
+                    readshot_core::redact::RedactStyle::Solid,
+                ),
+            )),
+        );
+        app.coordinator.flush_history_updates();
+        let (record, _) = stored(&store);
+        assert_eq!(
+            record.ocr_text.as_deref(),
+            Some(format!("Contact\nmail {} today", "█".repeat(EMAIL.len())).as_str())
+        );
+    }
+
+    #[test]
+    fn a_capture_saved_after_the_redaction_is_scrubbed_when_it_lands() {
+        let (_dir, store, mut app) = scrub_app(false);
+        let _ = update(&mut app, Message::EditorRedactAll);
+        app.coordinator.flush_history_updates();
+        assert!(store.list().unwrap().is_empty(), "nothing to scrub yet");
+        // The capture's history save lands with the raw image and text.
+        let record = app.editor.as_ref().unwrap().source_record.clone().unwrap();
+        store
+            .save(&record, &readshot_core::encode_png(&solid(64, 64)).unwrap())
+            .unwrap();
+        let _ = update(&mut app, Message::HistoryRecordSaved);
+        app.coordinator.flush_history_updates();
+        let (record, png) = stored(&store);
+        assert!(record.redacted);
+        assert!(!record.ocr_text.unwrap().contains(EMAIL));
+        assert_eq!(png, app.editor.as_mut().unwrap().model.flatten());
+    }
+
+    #[test]
+    fn a_failed_history_write_shows_an_error_and_forces_a_full_rewrite_next() {
+        let (_dir, _store, mut app) = scrub_app(true);
+        let session = app.editor.as_ref().unwrap().session_id;
+        let _ = update(
+            &mut app,
+            Message::EditorHistoryWritten {
+                session,
+                result: Some(Err("No space left on device".into())),
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.status_is_error(), "{:?}", ed.status);
+        assert!(
+            ed.history_scrubbed,
+            "disk state unknown: next sync rewrites"
+        );
+        // A superseded write reports nothing.
+        let _ = update(&mut app, Message::EditorStatusDismissed);
+        let _ = update(
+            &mut app,
+            Message::EditorHistoryWritten {
+                session,
+                result: None,
+            },
+        );
+        assert_eq!(app.editor.as_ref().unwrap().status, None);
+    }
+
+    #[test]
+    fn a_successful_history_write_reloads_an_open_history_window() {
+        let (_dir, _store, mut app) = scrub_app(true);
+        let session = app.editor.as_ref().unwrap().session_id;
+        let msg = || Message::EditorHistoryWritten {
+            session,
+            result: Some(Ok(())),
+        };
+        assert_eq!(update(&mut app, msg()).units(), 0);
+        app.history_window_id = Some(iced::window::Id::unique());
+        assert_eq!(update(&mut app, msg()).units(), 1);
+    }
+
+    #[test]
+    fn copy_lines_masks_redacted_words() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            super::text_panel::copy_lines_text(ed, &[1], false).as_deref(),
+            Some(format!("Email {EMAIL}").as_str())
+        );
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            super::text_panel::copy_lines_text(ed, &[0, 1], false).as_deref(),
+            Some(format!("Name Priya\nEmail {}", "█".repeat(EMAIL.len())).as_str())
         );
     }
 }

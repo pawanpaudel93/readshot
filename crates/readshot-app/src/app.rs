@@ -477,6 +477,13 @@ pub enum Message {
         session: u64,
         result: Result<readshot_core::text_lines::TextDocument, String>,
     },
+    /// The newest History rewrite (scrub after a redaction, or restore)
+    /// queued by editor session `session` finished. `None` when a newer
+    /// rewrite of the same record superseded it before it ran.
+    EditorHistoryWritten {
+        session: u64,
+        result: Option<Result<(), String>>,
+    },
     /// Show / hide the editor side panel (⌥⌘P, or the panel buttons). In
     /// narrow windows this opens / closes the temporary overlay instead.
     EditorPanelToggled,

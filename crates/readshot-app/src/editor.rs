@@ -299,6 +299,16 @@ pub struct EditorSession {
     /// Narrow windows only: the temporary overlay panel is open. Never
     /// persisted; esc, ⌥⌘P or a click outside closes it.
     pub panel_overlay_open: bool,
+    /// History may hold a scrubbed (redacted, flattened) copy of this
+    /// capture written by this session, or its state is unknown after a
+    /// failed write. While set, an edit that leaves no redaction rewrites
+    /// the record in full (restoring the original) instead of the plain
+    /// sidecar sync, which can't change a scrubbed record.
+    pub history_scrubbed: bool,
+    /// Outcome of the newest queued History rewrite, taken by the runtime
+    /// and turned into `Message::EditorHistoryWritten`.
+    pub history_write:
+        Option<iced::futures::channel::oneshot::Receiver<crate::coordinator::HistoryRewriteResult>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -519,6 +529,8 @@ impl EditorSession {
             toast_action: None,
             window_width: DEFAULT_WINDOW_WIDTH,
             panel_overlay_open: false,
+            history_scrubbed: false,
+            history_write: None,
         }
     }
 
@@ -569,6 +581,8 @@ impl EditorSession {
             toast_action: None,
             window_width: DEFAULT_WINDOW_WIDTH,
             panel_overlay_open: false,
+            history_scrubbed: false,
+            history_write: None,
         }
     }
 

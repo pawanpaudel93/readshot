@@ -114,6 +114,11 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
                     tp.selected.clear();
                     tp.anchor = None;
                     tp.recognition = TextRecognition::Ready(std::sync::Arc::new(doc));
+                    // Redacted before the text was known: scrub History
+                    // again, now with word-precise masking.
+                    if readshot_core::scrub::has_redaction(ed.model.annotations()) {
+                        write_editor_history(ed, &state.coordinator);
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(target: "readshot::editor", "text recognition failed: {e}");
@@ -223,13 +228,12 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
                 return Task::none();
             }
             let indices: Vec<usize> = ed.text_panel.selected.iter().copied().collect();
-            let Some(doc) = ed.text_panel.document() else {
-                return Task::none();
-            };
             if indices.is_empty() {
                 return Task::none();
             }
-            let text = readshot_core::text_lines::copy_lines(doc, &indices, remove_breaks);
+            let Some(text) = copy_lines_text(ed, &indices, remove_breaks) else {
+                return Task::none();
+            };
             let n = indices.len();
             ed.set_status("Copying text…");
             Task::perform(copy_cached_text(text), move |r| {
@@ -264,6 +268,37 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
         }
         Message::EditorRedactAll => redact(state, None),
         Message::EditorRedactLine(index) => redact(state, Some(index)),
+        Message::EditorHistoryWritten { session, result } => {
+            match result {
+                // Superseded by a newer rewrite, which reports instead.
+                None => Task::none(),
+                Some(Ok(())) => {
+                    // The record's image and text changed: an open
+                    // History window must show and search the new ones.
+                    if state.history_window_id.is_some() {
+                        history_list_task(state.coordinator.clone())
+                    } else {
+                        Task::none()
+                    }
+                }
+                Some(Err(e)) => {
+                    tracing::warn!(target: "readshot::history", "history rewrite failed: {e}");
+                    if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
+                        // What's on disk is unknown now: the next sync
+                        // rewrites the whole record again.
+                        ed.history_scrubbed = true;
+                        if !ed.busy {
+                            ed.set_status(super::history_ops::friendly_string_error_with(
+                                "update this capture in History",
+                                &e,
+                                Some("Your next edit will try again."),
+                            ));
+                        }
+                    }
+                    Task::none()
+                }
+            }
+        }
         other => unreachable!("non-text-panel message routed to the text panel handler: {other:?}"),
     }
 }
@@ -439,6 +474,24 @@ pub(crate) fn click_selection(
         selected.insert(index);
         *anchor = Some(index);
     }
+}
+
+/// Copy N Lines text: the lines at `indices` with every word a
+/// redaction hides masked (`█` per char), matching the exported image.
+/// `None` without recognized text.
+pub(crate) fn copy_lines_text(
+    ed: &EditorSession,
+    indices: &[usize],
+    remove_breaks: bool,
+) -> Option<String> {
+    use readshot_core::scrub::{hidden_spans, mask_document};
+    let doc = ed.text_panel.document()?;
+    let spans = hidden_spans(doc, ed.model.annotations());
+    Some(if spans.is_empty() {
+        readshot_core::text_lines::copy_lines(doc, indices, remove_breaks)
+    } else {
+        readshot_core::text_lines::copy_lines(&mask_document(doc, &spans), indices, remove_breaks)
+    })
 }
 
 pub(crate) fn copy_lines_label(n: usize) -> String {
@@ -798,7 +851,7 @@ fn line_row<'a>(
             container(text("redacted").size(TYPE_MICRO).style(text_t3))
                 .padding([1, 6])
                 .style(chip_style),
-            "Copies the original text",
+            "Copied as ████",
             None,
             iced::widget::tooltip::Position::Top,
         ));
