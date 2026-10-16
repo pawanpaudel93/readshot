@@ -642,7 +642,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
                 ))
             ) && state.editor.as_ref().is_some_and(|ed| {
-                ed.popover == Some(crate::editor::EditorPopover::Color) || ed.pending_text.is_some()
+                matches!(
+                    ed.popover,
+                    Some(
+                        crate::editor::EditorPopover::Color | crate::editor::EditorPopover::Resize
+                    )
+                ) || ed.pending_text.is_some()
             }) {
                 return Task::none();
             }
@@ -719,8 +724,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if ed.busy {
                 return Task::none();
             }
-            commit_pending_editor_text(ed, &state.coordinator);
+            // Settle an open slider preview first: a text commit moves the
+            // history generation and would make the preview stale.
             commit_snapshot_drag(ed, &state.coordinator);
+            commit_pending_editor_text(ed, &state.coordinator);
             cancel_editor_previews(ed);
             ed.busy = true;
             ed.set_status("Choose a save location…");
@@ -769,8 +776,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if ed.busy {
                 return Task::none();
             }
-            commit_pending_editor_text(ed, &state.coordinator);
+            // Settle an open slider preview first: a text commit moves the
+            // history generation and would make the preview stale.
             commit_snapshot_drag(ed, &state.coordinator);
+            commit_pending_editor_text(ed, &state.coordinator);
             cancel_editor_previews(ed);
             ed.busy = true;
             ed.set_status(if ed.model.beautify().is_identity() {
@@ -1630,8 +1639,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if ed.busy {
                 return Task::none();
             }
-            commit_pending_editor_text(ed, &state.coordinator);
+            // Settle an open slider preview first: a text commit moves the
+            // history generation and would make the preview stale.
             commit_snapshot_drag(ed, &state.coordinator);
+            commit_pending_editor_text(ed, &state.coordinator);
             cancel_editor_previews(ed);
             let img = editor_output_image(ed);
             let size = (img.width(), img.height());

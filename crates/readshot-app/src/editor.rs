@@ -884,7 +884,9 @@ impl EditorSession {
             let y = ry.max(0.0).min(bh_f);
             let w = (rw + rx - x).min(bw_f - x).max(1.0);
             let h = (rh + ry - y).min(bh_f - y).max(1.0);
-            (w as u32, h as u32)
+            // Round like the renderer does: a crop remapped by a resize
+            // is fractional, and truncating would read 1 px small.
+            (w.round() as u32, h.round() as u32)
         } else {
             (bw, bh)
         }
@@ -905,7 +907,7 @@ impl EditorSession {
         }
     }
 
-    fn last_crop(&self) -> Option<readshot_core::RectLike> {
+    pub(crate) fn last_crop(&self) -> Option<readshot_core::RectLike> {
         self.model.annotations().iter().rev().find_map(|a| match a {
             readshot_core::Annotation::Crop { rect } => Some(*rect),
             _ => None,

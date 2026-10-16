@@ -2318,11 +2318,17 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         let shown_scale = zoom.explicit_scale().unwrap_or_else(|| live_scale.get());
         let mut title = row![
             text("Capture").size(TYPE_BODY).style(text_t2),
-            text(size_label.clone())
-                .font(mono)
-                .size(TYPE_CAPTION)
-                .style(text_t3),
-            IcedSpace::new().width(Length::Fill),
+            // The label takes the slack and clips, so a long size never
+            // pushes the buttons (or Fit) off the row.
+            container(
+                text(size_label.clone())
+                    .font(mono)
+                    .size(TYPE_CAPTION)
+                    .style(text_t3)
+                    .wrapping(iced::widget::text::Wrapping::None),
+            )
+            .width(Length::Fill)
+            .clip(true),
         ];
         title = title.push(tooltip_with_key(
             bar_button(

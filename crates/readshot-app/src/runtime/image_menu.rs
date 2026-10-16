@@ -23,8 +23,11 @@ use crate::icons::AppIcon;
 /// Commit the text draft, drop previews and the open popover: what every
 /// document-changing action does first.
 fn prepare(ed: &mut EditorSession, coord: &crate::coordinator::CaptureCoordinator) {
-    commit_pending_editor_text(ed, coord);
+    // Cancel previews first (as Undo does): a text commit moves the
+    // history generation, which would make an open slider preview stale
+    // and bake it into history instead of dropping it.
     cancel_editor_previews(ed);
+    commit_pending_editor_text(ed, coord);
     close_editor_popover(ed);
 }
 
@@ -38,10 +41,17 @@ fn changed(ed: &mut EditorSession, coord: &crate::coordinator::CaptureCoordinato
 
 /// The status for a refused geometry change; `action` is the verb
 /// ("rotate", "flip", "resize").
-pub(crate) fn geometry_error_status(action: &str, e: GeometryError) -> String {
+pub(crate) fn geometry_error_status(action: &str, cropped: bool, e: GeometryError) -> String {
+    // With a crop active the displayed size is the crop's, but the limit
+    // applies to the whole document.
+    let what = if cropped {
+        "the uncropped image would be"
+    } else {
+        "that would be"
+    };
     match e {
         GeometryError::TooLarge { width, height } => format!(
-            "Couldn't {action} — that would be {width} × {height} px, and the limit is {MAX_DOC_SIDE} px on a side."
+            "Couldn't {action} — {what} {width} × {height} px, and the limit is {MAX_DOC_SIDE} px on a side."
         ),
         GeometryError::TooManyPixels { pixels, .. } => format!(
             "Couldn't {action} — image too large: {pixels} px is over the {MAX_DOC_PIXELS} px limit."
@@ -61,17 +71,19 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
     match message {
         Message::EditorRotate { clockwise } => {
             prepare(ed, &coord);
+            let cropped = ed.last_crop().is_some();
             match ed.model.rotate(clockwise) {
                 Ok(true) => {
                     let dir = if clockwise { "right" } else { "left" };
                     changed(ed, &coord, format!("Rotated {dir}. ⌘Z to undo."));
                 }
                 Ok(false) => {}
-                Err(e) => ed.set_status(geometry_error_status("rotate", e)),
+                Err(e) => ed.set_status(geometry_error_status("rotate", cropped, e)),
             }
         }
         Message::EditorFlip(axis) => {
             prepare(ed, &coord);
+            let cropped = ed.last_crop().is_some();
             match ed.model.flip(axis) {
                 Ok(true) => {
                     let what = match axis {
@@ -81,10 +93,14 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
                     changed(ed, &coord, format!("Flipped {what}. ⌘Z to undo."));
                 }
                 Ok(false) => {}
-                Err(e) => ed.set_status(geometry_error_status("flip", e)),
+                Err(e) => ed.set_status(geometry_error_status("flip", cropped, e)),
             }
         }
         Message::EditorResizeOpen => {
+            // Already open (⌥⌘I while typing in a field): keep the draft.
+            if ed.popover == Some(EditorPopover::Resize) {
+                return Task::none();
+            }
             prepare(ed, &coord);
             ed.resize_draft = Some(ResizeDraft::new(ed.effective_image_size()));
             ed.popover = Some(EditorPopover::Resize);
@@ -127,6 +143,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
             }
             let (bw, bh) = d.base;
             let (sx, sy) = (w as f32 / bw.max(1) as f32, h as f32 / bh.max(1) as f32);
+            let cropped = ed.last_crop().is_some();
             match ed.model.scale_by(sx, sy) {
                 Ok(true) => {
                     close_editor_popover(ed);
@@ -135,7 +152,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
                 Ok(false) => {
                     close_editor_popover(ed);
                 }
-                Err(e) => ed.set_status(geometry_error_status("resize", e)),
+                Err(e) => ed.set_status(geometry_error_status("resize", cropped, e)),
             }
         }
         other => unreachable!("non-image message routed to the image menu: {other:?}"),

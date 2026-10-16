@@ -11026,14 +11026,17 @@ mod tests {
     fn a_geometry_error_reaches_the_user_as_a_status() {
         let s = geometry_error_status(
             "rotate",
+            true,
             readshot_core::document::GeometryError::TooLarge {
                 width: 40000,
                 height: 10,
             },
         );
         assert!(s.starts_with("Couldn't rotate"), "{s}");
+        assert!(s.contains("uncropped image would be 40000"), "{s}");
         let s = geometry_error_status(
             "flip",
+            false,
             readshot_core::document::GeometryError::TooManyPixels { pixels: 9, max: 8 },
         );
         assert!(
@@ -11044,6 +11047,7 @@ mod tests {
 
     #[test]
     fn rotating_a_redacted_capture_keeps_boxes_and_history_in_one_frame_through_undo() {
+        use readshot_core::text_lines::{TextDocument, TextLine, WordRect};
         let dir = tempfile::TempDir::new().unwrap();
         let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
         let mut app = build_app_with_positions_and_history(store.clone());
@@ -11056,38 +11060,178 @@ mod tests {
             img,
             record.clone(),
         ));
+        let hidden = hidden_word();
+        let shown = "visible";
         let word = RectLike::new(2.0, 4.0, 10.0, 3.0);
+        let other = RectLike::new(2.0, 12.0, 10.0, 3.0);
+        let line = |t: &str, r: RectLike| TextLine {
+            text: t.into(),
+            rect: Some(r),
+            words: vec![WordRect {
+                start: 0,
+                end: t.chars().count(),
+                rect: r,
+            }],
+        };
         recognized(
             &mut app,
             readshot_core::document::ORIGINAL_PART,
-            positioned_doc(&hidden_word(), word),
+            TextDocument {
+                lines: vec![line(&hidden, word), line(shown, other)],
+                positioned: true,
+                layout_text: format!("{hidden}\n{shown}"),
+            },
         );
         app.editor
             .as_mut()
             .unwrap()
             .model
             .commit_annotation(word_blur(word));
+        // The rotated frame masks exactly the hidden word, not its neighbour.
+        let check = |app: &App, rotated: bool| {
+            app.coordinator.flush_history_updates();
+            let ed = app.editor.as_ref().unwrap();
+            let doc = ed.text_panel.positioned_document().expect("boxes follow");
+            let (r0, r1, size) = if rotated {
+                (
+                    RectLike::new(13.0, 2.0, 3.0, 10.0),
+                    RectLike::new(5.0, 2.0, 3.0, 10.0),
+                    (20, 30),
+                )
+            } else {
+                (word, other, (30, 20))
+            };
+            assert_eq!(doc.lines[0].rect, Some(r0));
+            assert_eq!(doc.lines[1].rect, Some(r1));
+            assert_eq!(ed.image_size(), size);
+            let stored = stored_record(&store, record.id);
+            assert!(stored.redacted, "still a scrub");
+            assert_eq!((stored.width_px, stored.height_px), size);
+            let text = stored.ocr_text.expect("masked text");
+            assert!(!text.contains(&hidden), "{text}");
+            assert!(text.contains(shown), "neighbour stays readable: {text}");
+            assert_eq!(stored.geometry_id.is_some(), rotated);
+        };
         let _ = update(&mut app, Message::EditorRotate { clockwise: true });
-        app.coordinator.flush_history_updates();
-        let ed = app.editor.as_ref().unwrap();
-        let doc = ed.text_panel.positioned_document().expect("boxes follow");
-        assert_eq!(doc.lines[0].rect, Some(RectLike::new(13.0, 2.0, 3.0, 10.0)));
-        let stored = stored_record(&store, record.id);
-        assert!(stored.redacted && stored.geometry_id.is_some());
-        assert_eq!((stored.width_px, stored.height_px), (20, 30));
-        assert_eq!(stored.ocr_text.as_deref(), Some("██████"));
-        // Undo the rotation: geometry, annotations and boxes come back.
+        check(&app, true);
         let _ = update(
             &mut app,
             Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
         );
-        app.coordinator.flush_history_updates();
+        check(&app, false);
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
+        );
+        check(&app, true);
+    }
+
+    #[test]
+    fn rotate_drops_an_open_slider_preview_even_with_a_text_draft() {
+        use readshot_core::beautify::BeautifyEdit;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.set_tool(readshot_ui::editor::ToolState::Text);
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "draft".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+        let start = app.editor.as_ref().unwrap().model.beautify().padding;
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
+        );
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        let ed = app.editor.as_mut().unwrap();
+        assert_eq!(ed.model.beautify().padding, start, "preview dropped");
+        assert!(ed.snapshot_drag_baseline.is_none());
+        while ed.model.undo() {
+            assert_ne!(ed.model.beautify().padding, 150, "never baked into history");
+        }
+        assert_eq!(ed.model.beautify().padding, start);
+    }
+
+    #[test]
+    fn copy_commits_an_open_slider_preview_and_the_text_draft() {
+        use readshot_core::beautify::BeautifyEdit;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.set_tool(readshot_ui::editor::ToolState::Text);
+        ed.pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(8.0, 9.0),
+            content: "draft".into(),
+            edit_index: None,
+        });
+        app.editor = Some(ed);
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(25)),
+        );
+        let _ = update(&mut app, Message::EditorCopyImageRequested);
         let ed = app.editor.as_ref().unwrap();
-        assert_eq!(ed.image_size(), (30, 20));
-        let doc = ed.text_panel.positioned_document().expect("boxes follow");
-        assert_eq!(doc.lines[0].rect, Some(word));
-        let stored = stored_record(&store, record.id);
-        assert_eq!(stored.geometry_id, None);
-        assert_eq!(stored.ocr_text.as_deref(), Some("██████"));
+        assert_eq!(ed.model.beautify().padding, 25, "output keeps the preview");
+        assert_eq!(ed.model.undo_depth(), depth + 2, "preview and text");
+        assert!(ed.snapshot_drag_baseline.is_none());
+        assert_eq!(ed.model.annotations().len(), 1);
+    }
+
+    #[test]
+    fn cmd_z_is_ignored_while_the_resize_dialog_is_open() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(32, 32));
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(2.0, 2.0, 10.0, 10.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorResizeOpen);
+        let cmd = iced::keyboard::Modifiers::COMMAND;
+        for mods in [cmd, cmd | iced::keyboard::Modifiers::SHIFT] {
+            let _ = update(
+                &mut app,
+                Message::EditorKeyPressed {
+                    window: id,
+                    key: iced::keyboard::Key::Character("z".into()),
+                    modifiers: mods,
+                    status_ignored: false,
+                },
+            );
+            assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 1);
+        }
+    }
+
+    #[test]
+    fn reopening_resize_while_it_is_open_keeps_the_typed_draft() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(40, 20)));
+        let _ = update(&mut app, Message::EditorResizeOpen);
+        let _ = update(&mut app, Message::EditorResizeWidthChanged("12".into()));
+        let _ = update(&mut app, Message::EditorResizeOpen);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.resize_draft.as_ref().unwrap().width, "12");
+        assert_eq!(ed.popover, Some(crate::editor::EditorPopover::Resize));
+    }
+
+    #[test]
+    fn resizing_a_cropped_image_reports_the_exact_size() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(200, 150));
+        ed.model.commit_annotation(Annotation::Crop {
+            rect: RectLike::new(10.0, 10.0, 101.0, 77.0),
+        });
+        assert_eq!(ed.effective_image_size(), (101, 77));
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorResizeOpen);
+        let _ = update(&mut app, Message::EditorResizeWidthChanged("999".into()));
+        let _ = update(&mut app, Message::EditorResizeApply);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.effective_image_size(), (999, 762));
     }
 }
