@@ -113,28 +113,32 @@ impl TextDocument {
 
 impl TextLine {
     /// Box around chars `span` of this line, in base pixels. Safety over
-    /// precision: the union of the **whole** boxes of every word the span
-    /// touches, because cutting a word box by character count can leak a
-    /// glyph or two. Without word boxes, the span is widened to whitespace
-    /// boundaries and cut from the line box in proportion to the character
-    /// count. `None` without a line box or for an empty span.
+    /// precision, because this feeds redaction:
+    /// - every word box the span touches is covered **whole** (cutting a
+    ///   box by character count can leak a glyph or two);
+    /// - a touched word without a usable box (none reported, or one that
+    ///   clamped to zero area) is covered by a proportional slice of the
+    ///   line box, widened to whitespace and padded horizontally;
+    /// - `None` without a line box, for an empty or out-of-range span, or
+    ///   when the result would have no area (callers can warn).
     pub fn span_rect(&self, span: Range<usize>) -> Option<RectLike> {
         let line = self.rect?;
-        if span.start >= span.end {
+        let chars: Vec<char> = self.text.chars().collect();
+        let n = chars.len();
+        if span.start >= span.end || span.start >= n {
             return None;
         }
-        let touched = self
+        let usable = |w: &&WordRect| w.rect.width > 0.0 && w.rect.height > 0.0;
+        let mut acc = self
             .words
             .iter()
+            .filter(usable)
             .filter(|w| span.start < w.end && w.start < span.end)
             .map(|w| w.rect)
             .reduce(union);
-        if touched.is_some() {
-            return touched;
-        }
-        let chars: Vec<char> = self.text.chars().collect();
-        let n = chars.len();
-        let mut s = span.start.min(n);
+        // Widen the span to whitespace, then cover every token inside it
+        // that no usable word box accounts for.
+        let mut s = span.start;
         let mut e = span.end.min(n);
         while s > 0 && !chars[s - 1].is_whitespace() {
             s -= 1;
@@ -142,21 +146,39 @@ impl TextLine {
         while e < n && !chars[e].is_whitespace() {
             e += 1;
         }
-        if e <= s {
-            return None;
+        let pad = line.height * 0.15;
+        let mut i = s;
+        while i < e {
+            if chars[i].is_whitespace() {
+                i += 1;
+                continue;
+            }
+            let ts = i;
+            while i < e && !chars[i].is_whitespace() {
+                i += 1;
+            }
+            let boxed = self
+                .words
+                .iter()
+                .filter(usable)
+                .any(|w| ts < w.end && w.start < i);
+            if boxed {
+                continue;
+            }
+            let nf = n as f32;
+            let x0 = (line.x + line.width * ts as f32 / nf - pad).max(line.x);
+            let x1 = (line.x + line.width * i as f32 / nf + pad).min(line.x + line.width);
+            let r = RectLike::new(x0, line.y, x1 - x0, line.height);
+            acc = Some(acc.map_or(r, |a| union(a, r)));
         }
-        let nf = n as f32;
-        Some(RectLike::new(
-            line.x + line.width * s as f32 / nf,
-            line.y,
-            line.width * (e - s) as f32 / nf,
-            line.height,
-        ))
+        acc.filter(|r| r.width > 0.0 && r.height > 0.0)
     }
 }
 
 /// "Remove line breaks when copying": trim each line, drop blank lines,
-/// join with single spaces.
+/// join with single spaces. It does not de-hyphenate (`foo-` / `bar`
+/// becomes `foo- bar`) and blank lines are dropped, so paragraph breaks
+/// are lost by design.
 pub fn remove_line_breaks(text: &str) -> String {
     text.lines()
         .map(str::trim)
@@ -165,11 +187,14 @@ pub fn remove_line_breaks(text: &str) -> String {
         .join(" ")
 }
 
-/// Copy N Lines: the lines at `indices` (in the order given), joined by
-/// newlines or, with `remove_breaks`, by spaces. Unknown indices are
-/// skipped.
+/// Copy N Lines: the lines at `indices`, always in reading order and each
+/// once whatever order the caller selected them in, joined by newlines or,
+/// with `remove_breaks`, by spaces. Unknown indices are skipped.
 pub fn copy_lines(doc: &TextDocument, indices: &[usize], remove_breaks: bool) -> String {
-    let joined = indices
+    let mut sorted = indices.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let joined = sorted
         .iter()
         .filter_map(|&i| doc.lines.get(i))
         .map(|l| l.text.as_str())
@@ -367,10 +392,9 @@ mod tests {
         let line = &d.lines[1]; // "second line", 11 chars, (100, 200, 300, 20)
                                 // "ine" widens to "line" (chars 7..11).
         let r = line.span_rect(8..11).unwrap();
-        assert!(rect_close(
-            r,
-            RectLike::new(100.0 + 300.0 * 7.0 / 11.0, 200.0, 300.0 * 4.0 / 11.0, 20.0)
-        ));
+        // Padded by 0.15 x line height (3 px), clamped to the line box.
+        let x0 = 100.0 + 300.0 * 7.0 / 11.0 - 3.0;
+        assert!(rect_close(r, RectLike::new(x0, 200.0, 400.0 - x0, 20.0)));
         let plain = TextDocument::from_plain("abc");
         assert!(plain.lines[0].span_rect(0..1).is_none());
     }
@@ -380,7 +404,7 @@ mod tests {
         let d = doc();
         assert_eq!(
             copy_lines(&d, &[1, 0], false),
-            "second line\nEmail priya@example.com"
+            "Email priya@example.com\nsecond line"
         );
         assert_eq!(
             copy_lines(&d, &[0, 1], true),
@@ -465,5 +489,97 @@ mod tests {
             d.lines[0].words[0].rect,
             RectLike::new(950.0, 475.0, 50.0, 25.0)
         ));
+    }
+
+    fn line_with(text: &str, words: Vec<WordRect>) -> TextLine {
+        TextLine {
+            text: text.into(),
+            rect: Some(RectLike::new(0.0, 0.0, 100.0, 10.0)),
+            words,
+        }
+    }
+
+    #[test]
+    fn span_rect_counts_chars_not_bytes() {
+        // "Zürich ✓ token": 14 chars, "token" is chars 9..14 of 100 px.
+        let line = line_with("Zürich ✓ token", Vec::new());
+        let r = line.span_rect(9..14).unwrap();
+        let x0 = 100.0 * 9.0 / 14.0 - 1.5;
+        assert!(
+            rect_close(r, RectLike::new(x0, 0.0, 100.0 - x0, 10.0)),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn out_of_range_span_is_none() {
+        let line = line_with("abc def", Vec::new());
+        assert!(line.span_rect(7..9).is_none());
+        assert!(line.span_rect(20..30).is_none());
+    }
+
+    #[test]
+    fn partially_boxed_span_covers_every_touched_word() {
+        // "aa bb cc": only "aa" has a box; "bb" and "cc" fall back.
+        let line = line_with(
+            "aa bb cc",
+            vec![WordRect {
+                start: 0,
+                end: 2,
+                rect: RectLike::new(0.0, 0.0, 20.0, 10.0),
+            }],
+        );
+        let r = line.span_rect(0..8).unwrap();
+        assert!(rect_close(r, RectLike::new(0.0, 0.0, 100.0, 10.0)), "{r:?}");
+        // Just "bb": no box, so the proportional slice (3..5 of 8, padded).
+        let bb = line.span_rect(3..5).unwrap();
+        assert!(bb.x < 37.5 && bb.x + bb.width > 62.5, "{bb:?}");
+    }
+
+    #[test]
+    fn word_box_outside_the_image_is_ignored() {
+        let lines = [RecognizedLine {
+            text: "ghost real".into(),
+            x: 0.0,
+            y: 0.2,
+            w: 0.5,
+            h: 0.04,
+            words: vec![
+                WordBox {
+                    start: 0,
+                    end: 5,
+                    x: 1.2,
+                    y: 0.2,
+                    w: 0.1,
+                    h: 0.04,
+                },
+                WordBox {
+                    start: 6,
+                    end: 10,
+                    x: 0.3,
+                    y: 0.2,
+                    w: 0.2,
+                    h: 0.04,
+                },
+            ],
+        }];
+        let d = TextDocument::from_recognized(&lines, 1000, 500);
+        let line = &d.lines[0];
+        // The degenerate box is skipped, so "ghost" falls back to the
+        // line slice instead of vanishing.
+        let r = line.span_rect(0..5).unwrap();
+        assert!(r.width > 0.0 && r.x < 100.0, "{r:?}");
+        let both = line.span_rect(0..10).unwrap();
+        assert!(
+            both.x < 100.0 && close(both.x + both.width, 500.0),
+            "{both:?}"
+        );
+    }
+
+    #[test]
+    fn zero_area_result_is_none() {
+        let mut line = line_with("abc", Vec::new());
+        line.rect = Some(RectLike::new(0.0, 0.0, 0.0, 10.0));
+        assert!(line.span_rect(0..3).is_none());
     }
 }
