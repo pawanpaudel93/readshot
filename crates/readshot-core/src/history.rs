@@ -52,6 +52,27 @@ fn safe_relative_join(root: &Path, rel: &Path) -> Option<PathBuf> {
     Some(root.join(rel))
 }
 
+/// Longest `CaptureRecord::geometry_id` kept as is on load (bytes).
+pub const MAX_GEOMETRY_ID_LEN: usize = 4096;
+
+/// What an over-long `geometry_id` loads as: a frame id no editor
+/// geometry ever has, so recognized text of any frame is dropped for it.
+pub const INVALID_GEOMETRY_ID: &str = "";
+
+fn deserialize_geometry_id<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let id: Option<String> = Deserialize::deserialize(d)?;
+    Ok(id.map(|id| {
+        if id.len() > MAX_GEOMETRY_ID_LEN {
+            INVALID_GEOMETRY_ID.to_owned()
+        } else {
+            id
+        }
+    }))
+}
+
 /// One captured screenshot with metadata. The PNG bytes themselves live
 /// alongside the sidecar JSON, not inside the record.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -88,8 +109,15 @@ pub struct CaptureRecord {
     /// Recognized text is only stored — and masked — for a record of the
     /// same frame ([`HistoryStore::record_recognized_text`]), so OCR of
     /// one frame never masks, or replaces the text of, another. Absent in
-    /// older records and never written while `None`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// older records and never written while `None`. An over-long id
+    /// loads as [`INVALID_GEOMETRY_ID`]: never `None` (that would match
+    /// the original frame and fail open), and never an id the editor
+    /// produces for any frame.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_geometry_id"
+    )]
     pub geometry_id: Option<String>,
 }
 
@@ -895,6 +923,15 @@ impl HistoryStore for FsHistoryStore {
         // background OCR landing after the editor redacted — would put
         // the unmasked text and the pre-flatten annotations back.
         if prev.as_ref().is_some_and(|p| p.redacted) && !record.redacted {
+            return Ok(());
+        }
+        // A sidecar sync made for another document frame than the stored
+        // image (a rewrite to a new frame landed meanwhile, or failed) must
+        // not relabel it: its annotations and frame id belong elsewhere.
+        if prev
+            .as_ref()
+            .is_some_and(|p| p.geometry_id != record.geometry_id)
+        {
             return Ok(());
         }
         let mut merged = record.clone();
@@ -1923,5 +1960,45 @@ mod tests {
         let listed = &s.list().unwrap()[0];
         assert_eq!(listed.geometry_id.as_deref(), Some("n:rot=1"));
         assert_eq!(listed.ocr_text, None);
+    }
+
+    #[test]
+    fn an_oversized_geometry_id_loads_as_a_frame_no_editor_matches() {
+        let mut r = CaptureRecord::new(Utc::now(), 4, 4, "d");
+        r.geometry_id = Some("x".repeat(MAX_GEOMETRY_ID_LEN + 1));
+        let back: CaptureRecord =
+            serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back.geometry_id.as_deref(), Some(INVALID_GEOMETRY_ID));
+        r.geometry_id = Some("x".repeat(MAX_GEOMETRY_ID_LEN));
+        let back: CaptureRecord =
+            serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back.geometry_id, r.geometry_id);
+        // Absent stays `None` (older records).
+        let mut plain = serde_json::to_value(CaptureRecord::new(Utc::now(), 4, 4, "d")).unwrap();
+        plain.as_object_mut().unwrap().remove("geometry_id");
+        let back: CaptureRecord = serde_json::from_value(plain).unwrap();
+        assert_eq!(back.geometry_id, None);
+    }
+
+    #[test]
+    fn a_plain_update_of_another_frame_is_ignored() {
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        r.geometry_id = Some("n:rot=1".into());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let mut stale = r.clone();
+        stale.geometry_id = None;
+        stale.annotation_model = vec![Annotation::Blur {
+            rect: crate::RectLike::new(0.0, 0.0, 2.0, 2.0),
+            radius: 2.0,
+        }];
+        s.update(&stale).unwrap();
+        let listed = &s.list().unwrap()[0];
+        assert_eq!(listed.geometry_id.as_deref(), Some("n:rot=1"));
+        assert!(listed.annotation_model.is_empty());
+        let mut same = r.clone();
+        same.ocr_text = Some("t".into());
+        s.update(&same).unwrap();
+        assert_eq!(s.list().unwrap()[0].ocr_text.as_deref(), Some("t"));
     }
 }

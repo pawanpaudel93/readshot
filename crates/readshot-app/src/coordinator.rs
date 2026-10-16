@@ -581,7 +581,9 @@ impl CaptureCoordinator {
     }
 
     /// Replace `record` in History: its PNG becomes `bake` rendered onto
-    /// `base` (`base` as is when `bake` is empty), its thumbnail is
+    /// `base` (`base` as is when `bake` is empty). A scrub's stored
+    /// redactions are `record.redactions` (those already in `base`) plus
+    /// the redactions in `bake`; its thumbnail is
     /// regenerated and its sidecar written as given (`ocr_text: None`
     /// clears the text, except a scrub keeps text already masked for the
     /// same redactions). The receiver resolves with the outcome; it is
@@ -613,11 +615,14 @@ impl CaptureCoordinator {
         };
         let id = record.id;
         if record.redacted {
-            record.redactions = bake
-                .iter()
-                .filter(|a| readshot_core::scrub::is_redaction(a))
-                .cloned()
-                .collect();
+            // Redactions the caller says are already in `base` (a
+            // reopened scrubbed record's, mapped into this frame), then
+            // the ones baked now.
+            record.redactions.extend(
+                bake.iter()
+                    .filter(|a| readshot_core::scrub::is_redaction(a))
+                    .cloned(),
+            );
         }
         if !record.redacted {
             // A restore (rare). Under the commit gate, then the state
@@ -677,6 +682,8 @@ impl CaptureCoordinator {
                         target: "readshot::history",
                         "history scrub (phase one) failed: {e}"
                     );
+                    // On-disk state unknown: phase one is redone next time.
+                    lock(&self.scrubs.state).secured.remove(&id);
                     b.unsecured.insert(id, (seq, record));
                 }
             }
@@ -1661,6 +1668,46 @@ mod tests {
         let stored = sidecar(&fs_store, &record);
         assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
         assert!(stored.redacted);
+        coord.flush_history_updates();
+    }
+
+    #[test]
+    fn the_same_redactions_in_another_frame_run_phase_one_again() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let fs_store = readshot_core::FsHistoryStore::new(dir.path().join("h"));
+        let (entered_tx, entered) = std::sync::mpsc::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let store = Arc::new(BlockingStore {
+            inner: readshot_core::FsHistoryStore::new(dir.path().join("h")),
+            block_stage: std::sync::atomic::AtomicBool::new(false),
+            block_commit: std::sync::atomic::AtomicBool::new(false),
+            entered: std::sync::Mutex::new(entered_tx),
+            release: std::sync::Mutex::new(release_rx),
+        });
+        let coord = history_coord(store.clone());
+        let base = Arc::new(white(8, 8));
+        // Frame A: secured and landed.
+        drop(coord.rewrite_history_async(scrubbed(&record), Arc::clone(&base), pixelate()));
+        coord.flush_history_updates();
+        assert_eq!(sidecar(&fs_store, &record).geometry_id, None);
+        // Frame B, the same redaction values: phase two is held up, so
+        // only phase one can change what History serves.
+        store
+            .block_stage
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut framed = scrubbed(&record);
+        framed.geometry_id = Some("n:rot=2".into());
+        drop(coord.rewrite_history_async(framed, Arc::clone(&base), pixelate()));
+        entered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(
+            sidecar(&fs_store, &record).geometry_id.as_deref(),
+            Some("n:rot=2"),
+            "phase one ran for the new frame"
+        );
+        let _ = release.send(());
         coord.flush_history_updates();
     }
 }

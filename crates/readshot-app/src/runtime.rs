@@ -10557,4 +10557,325 @@ mod tests {
         assert_eq!(stored.geometry_id, None);
         assert_eq!((stored.width_px, stored.height_px), (8, 4));
     }
+
+    fn build_app_with_positions_and_history(history: Arc<dyn HistoryStore>) -> App {
+        let perms = Arc::new(FakePermissions::granted());
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_lines(Vec::new())),
+            perms.clone(),
+            Some(history),
+        );
+        App::new(coord, perms, Preferences::default())
+    }
+
+    fn stored_record(
+        store: &readshot_core::FsHistoryStore,
+        id: readshot_core::Uuid,
+    ) -> readshot_core::CaptureRecord {
+        store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap()
+    }
+
+    fn recognized(
+        app: &mut App,
+        part: readshot_core::document::PartId,
+        doc: readshot_core::text_lines::TextDocument,
+    ) {
+        let session = app.editor.as_ref().unwrap().session_id;
+        let _ = update(
+            app,
+            Message::EditorTextRecognized {
+                session,
+                part,
+                result: Ok(doc),
+            },
+        );
+    }
+
+    fn word_blur(rect: RectLike) -> Annotation {
+        Annotation::Blur { rect, radius: 2.0 }
+    }
+
+    /// A History record scrubbed in an earlier session: the stored image
+    /// has `word_blur` baked in, its text isn't known yet, and a weak blur
+    /// leaves the word readable to OCR of the flattened image.
+    fn reopened_scrubbed(
+        store: &readshot_core::FsHistoryStore,
+    ) -> (image::RgbaImage, readshot_core::CaptureRecord) {
+        let img = solid(30, 20);
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 30, 20, "d");
+        record.redacted = true;
+        record.redactions = vec![word_blur(RectLike::new(2.0, 4.0, 10.0, 3.0))];
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        (img, record)
+    }
+
+    fn hidden_word() -> String {
+        ["sec", "ret"].concat()
+    }
+
+    #[test]
+    fn a_rotated_reopened_scrub_never_stores_the_raw_text_of_its_flattened_image() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_positions_and_history(store.clone());
+        let (img, record) = reopened_scrubbed(&store);
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            img,
+            record.clone(),
+        ));
+        recognized(
+            &mut app,
+            readshot_core::document::ORIGINAL_PART,
+            positioned_doc(&hidden_word(), RectLike::new(2.0, 4.0, 10.0, 3.0)),
+        );
+        let ed = app.editor.as_mut().unwrap();
+        ed.model.rotate(true).unwrap();
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let stored = stored_record(&store, record.id);
+        assert!(stored.redacted);
+        assert!(stored.geometry_id.is_some());
+        let text = stored.ocr_text.unwrap_or_default();
+        assert!(!text.contains(&hidden_word()), "{text}");
+        assert_eq!(text, "█".repeat(6));
+        // The inherited redaction, in the rotated frame.
+        assert_eq!(
+            stored.redactions,
+            vec![word_blur(RectLike::new(13.0, 2.0, 3.0, 10.0))]
+        );
+    }
+
+    #[test]
+    fn redacting_then_undoing_on_a_reopened_scrub_never_stores_the_raw_text() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_positions_and_history(store.clone());
+        let (img, record) = reopened_scrubbed(&store);
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            img,
+            record.clone(),
+        ));
+        recognized(
+            &mut app,
+            readshot_core::document::ORIGINAL_PART,
+            positioned_doc(&hidden_word(), RectLike::new(2.0, 4.0, 10.0, 3.0)),
+        );
+        let ed = app.editor.as_mut().unwrap();
+        ed.model
+            .commit_annotation(word_blur(RectLike::new(20.0, 10.0, 5.0, 5.0)));
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let stored = stored_record(&store, record.id);
+        let text = stored.ocr_text.clone().unwrap_or_default();
+        assert!(!text.contains(&hidden_word()), "{text}");
+        assert_eq!(stored.redactions.len(), 2, "inherited + new");
+        ed.model.undo();
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let stored = stored_record(&store, record.id);
+        assert!(stored.redacted);
+        let text = stored.ocr_text.clone().unwrap_or_default();
+        assert!(!text.contains(&hidden_word()), "{text}");
+        assert_eq!(stored.redactions, record.redactions);
+    }
+
+    #[test]
+    fn a_plain_sync_keeps_the_merged_text_of_a_combined_record() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_positions_and_history(store.clone());
+        let img = solid(20, 10);
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 20, 10, "d");
+        record.ocr_text = Some("first".into());
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            img,
+            record.clone(),
+        ));
+        recognized(
+            &mut app,
+            readshot_core::document::ORIGINAL_PART,
+            positioned_doc("first", RectLike::new(1.0, 1.0, 10.0, 4.0)),
+        );
+        let ed = app.editor.as_mut().unwrap();
+        let id = ed
+            .model
+            .add_part(solid(20, 10), readshot_core::document::Join::Below)
+            .unwrap();
+        sync_editor_history(ed, &app.coordinator);
+        recognized(
+            &mut app,
+            id,
+            positioned_doc("second", RectLike::new(1.0, 1.0, 10.0, 4.0)),
+        );
+        app.coordinator.flush_history_updates();
+        assert_eq!(
+            stored_record(&store, record.id).ocr_text.as_deref(),
+            Some("first\n\nsecond")
+        );
+        let ed = app.editor.as_mut().unwrap();
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(1.0, 1.0, 2.0, 2.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+            style: Default::default(),
+        });
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let stored = stored_record(&store, record.id);
+        assert_eq!(stored.annotation_model.len(), 1);
+        assert_eq!(stored.ocr_text.as_deref(), Some("first\n\nsecond"));
+    }
+
+    #[test]
+    fn redact_after_a_cancelled_geometry_preview_places_rects_in_the_restored_frame() {
+        let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
+        let email = format!("{}@{}", "priya", "example.com");
+        let line = RectLike::new(2.0, 4.0, 20.0, 3.0);
+        let mut ed = crate::editor::EditorSession::new(solid(30, 20));
+        ed.text_panel.part_docs.insert(
+            readshot_core::document::ORIGINAL_PART,
+            Arc::new(positioned_doc(&email, line)),
+        );
+        // A geometry preview is open, and the panel was rebuilt for it.
+        let baseline = ed.model.snapshot();
+        let g = ed.model.geometry();
+        let rotated = g.with_transform(g.transform.rotated_cw());
+        ed.model.preview_geometry(&baseline, rotated).unwrap();
+        ed.snapshot_drag_baseline = Some(baseline);
+        refresh_text_for_geometry(&mut ed);
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.model.geometry().is_original(), "preview cancelled");
+        let rects: Vec<RectLike> = ed
+            .model
+            .annotations()
+            .iter()
+            .filter_map(|a| match a {
+                Annotation::Rectangle { rect, .. }
+                | Annotation::Blur { rect, .. }
+                | Annotation::Pixelate { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rects.len(), 1, "{rects:?}");
+        let r = rects[0];
+        assert!(
+            r.x <= line.x + 1.0
+                && r.y <= line.y
+                && r.x + r.width >= line.x + line.width - 1.0
+                && r.y + r.height >= line.y + line.height,
+            "{r:?} misses the line {line:?}"
+        );
+    }
+
+    #[test]
+    fn a_late_failure_for_another_part_leaves_the_running_recognition_alone() {
+        let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(20, 10));
+        let session = ed.session_id;
+        ed.text_panel.recognition = crate::editor::TextRecognition::Recognizing {
+            since: std::time::Instant::now(),
+        };
+        ed.text_panel.recognizing_part = Some(5);
+        ed.text_panel.user_requested = true;
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorTextRecognized {
+                session,
+                part: readshot_core::document::ORIGINAL_PART,
+                result: Err("late".into()),
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert!(matches!(
+            ed.text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
+        assert_eq!(ed.text_panel.recognizing_part, Some(5));
+        assert!(ed.text_panel.user_requested);
+    }
+
+    #[test]
+    fn a_redaction_follows_a_rotation_and_its_undo_in_history() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_positions_and_history(store.clone());
+        let img = solid(30, 20);
+        let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 30, 20, "d");
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            img,
+            record.clone(),
+        ));
+        let word = RectLike::new(2.0, 4.0, 10.0, 3.0);
+        recognized(
+            &mut app,
+            readshot_core::document::ORIGINAL_PART,
+            positioned_doc(&hidden_word(), word),
+        );
+        let ed = app.editor.as_mut().unwrap();
+        // A: redact the word.
+        ed.model.commit_annotation(word_blur(word));
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let a = stored_record(&store, record.id);
+        assert!(a.redacted);
+        assert_eq!(a.geometry_id, None);
+        assert_eq!(a.ocr_text.as_deref(), Some("██████"));
+        assert_eq!(a.redactions, vec![word_blur(word)]);
+        // B: rotate; the redaction and the boxes follow.
+        ed.model.rotate(true).unwrap();
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let b = stored_record(&store, record.id);
+        assert!(b.redacted);
+        assert!(b.geometry_id.is_some());
+        assert_eq!(b.ocr_text.as_deref(), Some("██████"));
+        assert_eq!(
+            b.redactions,
+            vec![word_blur(RectLike::new(13.0, 2.0, 3.0, 10.0))]
+        );
+        // Back to A.
+        ed.model.undo();
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let back = stored_record(&store, record.id);
+        assert_eq!(back.geometry_id, None);
+        assert_eq!(back.ocr_text.as_deref(), Some("██████"));
+        assert_eq!(back.redactions, vec![word_blur(word)]);
+    }
+
+    #[test]
+    fn without_positions_a_rotated_capture_still_masks_its_own_text() {
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 20, 10, "d");
+        let email = format!("{}@{}", "priya", "example.com");
+        record.ocr_text = Some(format!("Email {email}"));
+        let mut ed = crate::editor::EditorSession::from_history(solid(20, 10), record);
+        ed.model
+            .commit_annotation(word_blur(RectLike::new(0.0, 0.0, 4.0, 4.0)));
+        ed.model.rotate(true).unwrap();
+        let text = scrubbed_history_text(&ed, false).expect("the capture's own text, masked");
+        assert!(!text.contains(&email), "{text}");
+        assert!(text.starts_with("Email "), "{text}");
+        // Another part with no text: nothing at all.
+        ed.model
+            .add_part(solid(20, 10), readshot_core::document::Join::Below)
+            .unwrap();
+        assert_eq!(scrubbed_history_text(&ed, false), None);
+    }
 }

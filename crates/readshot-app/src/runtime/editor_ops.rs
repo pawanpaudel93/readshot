@@ -250,6 +250,9 @@ pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
     if refresh {
         ed.refresh_image();
     }
+    // A cancelled geometry preview puts the document back in another
+    // frame: OCR boxes built meanwhile must follow it.
+    super::text_panel::refresh_text_if_stale(ed);
 }
 
 /// Keep an open snapshot slider preview as one undo step. Slider
@@ -336,7 +339,12 @@ pub(crate) fn write_editor_history(
     };
     record.annotation_model = ed.model.annotations().to_vec();
     record.geometry_id = frame.clone();
-    let record = record.clone();
+    let mut record = record.clone();
+    // A reopened scrubbed record keeps its baked-in redactions, mapped
+    // into this frame, so text recognized later is still masked with
+    // them (none when they can't be placed: the text then stays as
+    // masked as it is, or absent).
+    record.redactions = inherited_redactions(ed).unwrap_or_default();
     let annotations = ed.model.annotations();
     let known = crate::editor::HistoryFrame::Known(frame);
     if readshot_core::scrub::has_redaction(annotations) {
@@ -354,13 +362,61 @@ pub(crate) fn write_editor_history(
         // must change, with the annotations still editable.
         let mut restored = record;
         restored.ocr_text = history_plain_text(ed);
+        // A reopened scrubbed record stays a scrub (`redacted` as loaded):
+        // its image still has the redactions baked in.
         ed.history_scrubbed = false;
         ed.history_frame_written = known;
         ed.history_write =
             Some(coord.rewrite_history_async(restored, ed.model.shared_base(), Vec::new()));
     } else {
+        // `None` keeps the stored text: it may be the merged text of
+        // several parts, or text masked since the editor opened.
+        record.ocr_text = None;
         coord.update_history_async(record);
     }
+}
+
+/// The opened image is a scrubbed History record: redactions are baked
+/// into its pixels, so recognition of it may still read weakly hidden
+/// words and its raw text must never be stored.
+fn source_scrubbed(ed: &crate::editor::EditorSession) -> bool {
+    ed.source_record.as_ref().is_some_and(|r| r.redacted)
+}
+
+/// The redactions baked into the opened image (a scrubbed record's
+/// stored ones, in its own px = the original part's), mapped into the
+/// present document frame. Empty when the record isn't scrubbed; `None`
+/// when they can't be placed (no stored redactions, or the original part
+/// isn't in the document): callers then fail closed.
+fn inherited_redactions(
+    ed: &crate::editor::EditorSession,
+) -> Option<Vec<readshot_core::Annotation>> {
+    let Some(record) = ed.source_record.as_ref().filter(|r| r.redacted) else {
+        return Some(Vec::new());
+    };
+    if !readshot_core::scrub::has_redaction(&record.redactions) {
+        return None;
+    }
+    let m = ed
+        .model
+        .geometry()
+        .part_affine(readshot_core::document::ORIGINAL_PART)?;
+    Some(
+        record
+            .redactions
+            .iter()
+            .map(|a| readshot_core::document::map_annotation(a, &m))
+            .collect(),
+    )
+}
+
+/// `doc` with every word hidden by `hide` masked.
+fn masked_text(
+    doc: &readshot_core::text_lines::TextDocument,
+    hide: &[readshot_core::Annotation],
+) -> String {
+    use readshot_core::scrub::{hidden_spans, masked_layout_text};
+    masked_layout_text(doc, &hidden_spans(doc, hide))
 }
 
 /// History's id for the document frame the editor shows now (D2): the
@@ -373,9 +429,20 @@ pub(crate) fn history_geometry_id(ed: &crate::editor::EditorSession) -> Option<S
     }
 }
 
-/// Unmasked text for an unredacted rewrite: the panel's (merged)
-/// document when it covers several parts, else the capture's text.
+/// Text for a rewrite without (new) redactions: the panel's (merged)
+/// document when it covers several parts, else the capture's text. For a
+/// reopened scrubbed record never the panel's raw text: its document
+/// masked with the inherited redactions, else the stored (masked) text.
 fn history_plain_text(ed: &crate::editor::EditorSession) -> Option<String> {
+    if source_scrubbed(ed) {
+        if let (Some(doc), Some(hide)) = (
+            super::text_panel::current_positioned_document(ed),
+            inherited_redactions(ed),
+        ) {
+            return Some(masked_text(doc, &hide));
+        }
+        return original_history_text(ed);
+    }
     if ed.model.geometry().parts.len() > 1 {
         if let Some(doc) = ed.text_panel.document() {
             return Some(doc.layout_text.clone());
@@ -386,8 +453,12 @@ fn history_plain_text(ed: &crate::editor::EditorSession) -> Option<String> {
 
 /// The capture's unredacted text: what History held when the editor
 /// opened, or (a fresh capture, whose text lands later) the Text panel's
-/// recognition of the same base image.
+/// recognition of the same base image — never for a scrubbed record,
+/// whose stored text is the only masked one.
 fn original_history_text(ed: &crate::editor::EditorSession) -> Option<String> {
+    if source_scrubbed(ed) {
+        return ed.source_record.as_ref().and_then(|r| r.ocr_text.clone());
+    }
     ed.source_record
         .as_ref()
         .and_then(|r| r.ocr_text.clone())
@@ -414,15 +485,24 @@ pub(crate) fn scrubbed_history_text(
     ed: &crate::editor::EditorSession,
     engine_reports_positions: bool,
 ) -> Option<String> {
-    use readshot_core::scrub::{hidden_spans, masked_layout_text};
     use readshot_core::text_lines::TextDocument;
-    let annotations = ed.model.annotations();
-    let mask = |doc: &TextDocument| masked_layout_text(doc, &hidden_spans(doc, annotations));
-    if let Some(doc) = ed.text_panel.positioned_document() {
-        return Some(mask(doc));
+    // The editor's redactions plus, for a reopened scrubbed record, the
+    // ones baked into its image (recognition may still read words under a
+    // weak blur).
+    let inherited = inherited_redactions(ed);
+    let mut hide = ed.model.annotations().to_vec();
+    hide.extend(inherited.iter().flatten().cloned());
+    let mask = |doc: &TextDocument| masked_text(doc, &hide);
+    if let Some(doc) = super::text_panel::current_positioned_document(ed) {
+        return inherited.is_some().then(|| mask(doc));
     }
     if engine_reports_positions {
         return None;
+    }
+    if source_scrubbed(ed) {
+        // Only the stored text is known to be masked; a fresh plain
+        // recognition of the flattened image is not.
+        return original_history_text(ed).map(|t| mask(&TextDocument::from_plain(&t)));
     }
     match ed.text_panel.document() {
         Some(doc) => Some(mask(doc)),
@@ -443,9 +523,11 @@ fn only_the_original_part(ed: &crate::editor::EditorSession) -> bool {
 /// Follow-ups after a message that may have written History: await the
 /// newest rewrite's outcome, and when a redaction exists but the panel
 /// has no recognition (never ran, or failed) and the engine reports
-/// positions, start recognition. Its result is stored in History by the
-/// task itself, so the precise masked text lands even if the editor
-/// closes first.
+/// positions, start recognition. While the document is the original
+/// frame its result is stored in History by the task itself, so the
+/// precise masked text lands even if the editor closes first; in any
+/// other frame only the editor stores it (on `EditorTextRecognized`), and
+/// History keeps no text until then.
 pub(crate) fn history_write_followups(state: &mut App) -> Task<Message> {
     let positions = state.coordinator.engine_reports_positions();
     let Some(ed) = state.editor.as_mut() else {

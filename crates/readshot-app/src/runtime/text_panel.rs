@@ -79,6 +79,20 @@ pub(crate) fn refresh_text_if_stale(ed: &mut EditorSession) {
     }
 }
 
+/// The panel's positioned document, but only while its boxes are in the
+/// present frame. Read-only callers (view, canvas marks, snap) can't
+/// rebuild it; they get nothing rather than boxes in another frame.
+pub(crate) fn current_positioned_document(ed: &EditorSession) -> Option<&TextDocument> {
+    let current = ed
+        .text_panel
+        .built_for
+        .as_ref()
+        .is_none_or(|g| std::sync::Arc::ptr_eq(g, ed.model.geometry()));
+    current
+        .then(|| ed.text_panel.positioned_document())
+        .flatten()
+}
+
 /// Start recognizing the first part of the document that has no
 /// recognition yet, unless one is already running (one request at a
 /// time) or every part is done. Each part is recognized in its own
@@ -230,19 +244,20 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
             if ed.session_id != session {
                 return Task::none();
             }
-            let user_requested = std::mem::take(&mut ed.text_panel.user_requested);
+            // A late result for another part than the running request's
+            // (the capture's own OCR, say) leaves that request be: its
+            // state, and whether the user asked for it.
+            let other_running = matches!(
+                ed.text_panel.recognition,
+                TextRecognition::Recognizing { .. }
+            ) && ed.text_panel.recognizing_part.is_some_and(|p| p != part);
+            let user_requested =
+                !other_running && std::mem::take(&mut ed.text_panel.user_requested);
             match result {
                 Ok(doc) => {
                     ed.text_panel
                         .part_docs
                         .insert(part, std::sync::Arc::new(doc));
-                    // A late result for another part (the capture's own
-                    // OCR, say) leaves a running request for this one be.
-                    let other_running =
-                        matches!(
-                            ed.text_panel.recognition,
-                            TextRecognition::Recognizing { .. }
-                        ) && ed.text_panel.recognizing_part.is_some_and(|p| p != part);
                     if !other_running {
                         ed.text_panel.recognizing_part = None;
                         ed.text_panel.recognition = TextRecognition::Idle;
@@ -268,6 +283,12 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
                         }
                         return request_text_recognition(state);
                     }
+                }
+                Err(e) if other_running => {
+                    tracing::warn!(
+                        target: "readshot::editor",
+                        "text recognition of part {part} failed: {e}"
+                    );
                 }
                 Err(e) => {
                     tracing::warn!(target: "readshot::editor", "text recognition failed: {e}");
@@ -501,7 +522,7 @@ pub(crate) struct RedactState {
 /// redacted (a blur can sometimes be reversed); with Blur or Pixelate
 /// chosen any existing redaction counts, so nothing is doubled up.
 pub(crate) fn redact_state(ed: &EditorSession) -> RedactState {
-    let Some(doc) = ed.text_panel.positioned_document() else {
+    let Some(doc) = current_positioned_document(ed) else {
         return RedactState::default();
     };
     let solid = ed.text_panel.redact_style == RedactStyle::Solid;
@@ -566,6 +587,8 @@ fn redact(state: &mut App, only_line: Option<usize>) -> Task<Message> {
         return Task::none();
     }
     cancel_editor_previews(ed);
+    // The preview may have moved the frame; boxes must be in this one.
+    refresh_text_if_stale(ed);
     commit_pending_editor_text(ed, &state.coordinator);
     let in_scope = |m: &RedactMatch| only_line.is_none_or(|line| m.line == line);
     let style = ed.text_panel.redact_style;
@@ -1155,7 +1178,7 @@ pub(crate) fn text_marks(
     if !panel_visible {
         return (None, Vec::new());
     }
-    let Some(doc) = ed.text_panel.positioned_document() else {
+    let Some(doc) = current_positioned_document(ed) else {
         return (None, Vec::new());
     };
     let rect = |i: usize| doc.lines.get(i).and_then(|l| l.rect);
@@ -1197,7 +1220,7 @@ pub(crate) fn snap_highlight_annotation(
                 .model
                 .tool_style()
                 .snap_to_text
-                .then(|| ed.text_panel.positioned_document())
+                .then(|| current_positioned_document(ed))
                 .flatten()
                 .and_then(|doc| readshot_core::text_lines::snap_highlight(doc, &points));
             match snapped {
