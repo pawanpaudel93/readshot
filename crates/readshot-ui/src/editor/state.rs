@@ -19,7 +19,12 @@ use readshot_core::{render, Annotation, LinePath, PointLike, RectLike, Rgba};
 
 use super::style::{apply_style_to_annotation, StyleMessage, TextSize, ToolStyle};
 use super::tool_state::ToolState;
-use super::undo::History;
+use super::undo::{DocState, History, Snapshot};
+use readshot_core::beautify::BeautifySettings;
+use readshot_core::document::{
+    remap_annotations, Align, DocGeometry, FlipAxis, GeometryError, Join, Part, PartId,
+    ORIGINAL_PART,
+};
 
 const DEFAULT_LINE_WIDTH: f32 = 3.0;
 
@@ -72,6 +77,9 @@ pub struct EditorState {
     /// Shared so background work (OCR) can take the image without a
     /// deep copy on the UI thread.
     base: Arc<RgbaImage>,
+    /// The geometry `base` was composed from.
+    base_geometry: Arc<DocGeometry>,
+    next_part_id: PartId,
     history: History,
     active_tool: ToolState,
     current_color: Rgba,
@@ -90,31 +98,33 @@ pub struct EditorState {
 
 impl EditorState {
     pub fn new(base: RgbaImage) -> Self {
-        Self {
-            base: Arc::new(base),
-            history: History::new(),
-            active_tool: ToolState::default(),
-            current_color: Rgba::new(1.0, 0.0, 0.0, 1.0),
-            current_line_width: DEFAULT_LINE_WIDTH,
-            tool_style: ToolStyle::default(),
-            selected_annotation: None,
-            flattened_cache: None,
-        }
+        Self::with_annotations(base, Vec::new())
     }
 
     pub fn with_annotations(base: RgbaImage, annotations: Vec<Annotation>) -> Self {
+        let base = Arc::new(base);
+        let geometry = Arc::new(DocGeometry::original(Arc::clone(&base)));
         Self {
-            base: Arc::new(base),
-            history: History::from_present(annotations),
+            base,
+            base_geometry: Arc::clone(&geometry),
+            history: History::from_snapshot(Snapshot {
+                annotations,
+                doc: DocState {
+                    geometry,
+                    beautify: BeautifySettings::default(),
+                },
+            }),
             active_tool: ToolState::default(),
             current_color: Rgba::new(1.0, 0.0, 0.0, 1.0),
             current_line_width: DEFAULT_LINE_WIDTH,
             tool_style: ToolStyle::default(),
             selected_annotation: None,
             flattened_cache: None,
+            next_part_id: ORIGINAL_PART + 1,
         }
     }
 
+    /// The composed document image for the present geometry.
     pub fn base(&self) -> &RgbaImage {
         &self.base
     }
@@ -288,6 +298,7 @@ impl EditorState {
     pub fn undo(&mut self) -> bool {
         let changed = self.history.undo().is_some();
         if changed {
+            self.sync_base();
             self.clamp_selection();
             self.flattened_cache = None;
         }
@@ -297,10 +308,185 @@ impl EditorState {
     pub fn redo(&mut self) -> bool {
         let changed = self.history.redo().is_some();
         if changed {
+            self.sync_base();
             self.clamp_selection();
             self.flattened_cache = None;
         }
         changed
+    }
+
+    /// Recompose `base` when the present snapshot's geometry differs from
+    /// the one it was built from (undo/redo across a transform).
+    fn sync_base(&mut self) {
+        let g = &self.history.doc().geometry;
+        if !Arc::ptr_eq(g, &self.base_geometry) {
+            self.base = g.compose();
+            self.base_geometry = Arc::clone(g);
+            self.flattened_cache = None;
+        }
+    }
+
+    fn alloc_part_id(&mut self) -> PartId {
+        let id = self.next_part_id;
+        self.next_part_id += 1;
+        id
+    }
+
+    pub fn geometry(&self) -> &Arc<DocGeometry> {
+        &self.history.doc().geometry
+    }
+
+    pub fn part_ids(&self) -> Vec<PartId> {
+        self.geometry().parts.iter().map(|p| p.id).collect()
+    }
+
+    pub fn beautify(&self) -> BeautifySettings {
+        self.history.doc().beautify
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        self.history.snapshot().clone()
+    }
+
+    /// New Beautify settings as one undo step; `false` when unchanged.
+    pub fn set_beautify(&mut self, beautify: BeautifySettings) -> bool {
+        if self.beautify() == beautify {
+            return false;
+        }
+        let mut next = self.snapshot();
+        next.doc.beautify = beautify;
+        self.history.push_snapshot(next);
+        true
+    }
+
+    /// Live preview (slider drags): replaces the present, no undo step.
+    pub fn preview_snapshot(&mut self, snapshot: Snapshot) {
+        self.history.replace_present_snapshot(snapshot);
+        self.sync_base();
+        self.clamp_selection();
+        self.flattened_cache = None;
+    }
+
+    /// Keep the previewed state as one undo step over `baseline`.
+    pub fn commit_preview_snapshot(&mut self, baseline: Snapshot) -> bool {
+        let current = self.snapshot();
+        if current == baseline {
+            return false;
+        }
+        self.history.replace_present_snapshot(baseline);
+        self.history.push_snapshot(current);
+        self.sync_base();
+        self.flattened_cache = None;
+        true
+    }
+
+    pub fn cancel_preview_snapshot(&mut self, baseline: Snapshot) {
+        self.preview_snapshot(baseline);
+    }
+
+    /// Move to `next` as one undo step; annotations follow their parts.
+    pub fn apply_geometry(&mut self, next: DocGeometry) -> Result<bool, GeometryError> {
+        next.validate()?;
+        if **self.geometry() == next {
+            return Ok(false);
+        }
+        let annotations = remap_annotations(self.geometry(), &next, self.annotations());
+        let beautify = self.beautify();
+        self.history.push_snapshot(Snapshot {
+            annotations,
+            doc: DocState {
+                geometry: Arc::new(next),
+                beautify,
+            },
+        });
+        self.sync_base();
+        self.clamp_selection();
+        self.flattened_cache = None;
+        Ok(true)
+    }
+
+    /// Preview `next` relative to `baseline` (gap slider), no undo step.
+    pub fn preview_geometry(
+        &mut self,
+        baseline: &Snapshot,
+        next: DocGeometry,
+    ) -> Result<(), GeometryError> {
+        next.validate()?;
+        let annotations = remap_annotations(&baseline.doc.geometry, &next, &baseline.annotations);
+        self.preview_snapshot(Snapshot {
+            annotations,
+            doc: DocState {
+                geometry: Arc::new(next),
+                beautify: baseline.doc.beautify,
+            },
+        });
+        Ok(())
+    }
+
+    pub fn rotate(&mut self, clockwise: bool) -> bool {
+        let g = self.geometry();
+        let t = if clockwise {
+            g.transform.rotated_cw()
+        } else {
+            g.transform.rotated_ccw()
+        };
+        let next = g.with_transform(t);
+        // A quarter turn never changes the area, so it can't exceed limits.
+        self.apply_geometry(next).unwrap_or(false)
+    }
+
+    pub fn flip(&mut self, axis: FlipAxis) -> bool {
+        let g = self.geometry();
+        let next = g.with_transform(g.transform.flipped(axis));
+        self.apply_geometry(next).unwrap_or(false)
+    }
+
+    pub fn scale_by(&mut self, sx: f32, sy: f32) -> Result<bool, GeometryError> {
+        let g = self.geometry();
+        let next = g.with_transform(g.transform.scaled(sx, sy));
+        self.apply_geometry(next)
+    }
+
+    /// Append `image` joined `join` (decision D4: a transformed document
+    /// is baked into one part first). One undo step; returns the new id.
+    pub fn add_part(&mut self, image: RgbaImage, join: Join) -> Result<PartId, GeometryError> {
+        let old = Arc::clone(self.geometry());
+        old.validate()?;
+        // Two steps when a bake is involved: old -> baked, then
+        // baked -> baked + part. Never old -> baked + part directly.
+        let (staged, annotations) = if old.transform.is_identity() {
+            ((*old).clone(), self.annotations().to_vec())
+        } else {
+            let baked_id = self.alloc_part_id();
+            let baked = old.baked(baked_id)?;
+            let annotations = remap_annotations(&old, &baked, self.annotations());
+            (baked, annotations)
+        };
+        let id = self.alloc_part_id();
+        let next = staged.with_part(Part {
+            id,
+            image: Arc::new(image),
+            join,
+        });
+        next.validate()?;
+        let annotations = remap_annotations(&staged, &next, &annotations);
+        let beautify = self.beautify();
+        self.history.push_snapshot(Snapshot {
+            annotations,
+            doc: DocState {
+                geometry: Arc::new(next),
+                beautify,
+            },
+        });
+        self.sync_base();
+        self.clamp_selection();
+        self.flattened_cache = None;
+        Ok(id)
+    }
+
+    pub fn set_layout(&mut self, gap: u32, align: Align) -> Result<bool, GeometryError> {
+        let next = self.geometry().with_layout(gap, align);
+        self.apply_geometry(next)
     }
 
     /// Discard all annotations and reset undo/redo. Used by the
@@ -562,6 +748,7 @@ impl EditorState {
 
     pub fn cancel_preview_from_baseline(&mut self, baseline: Vec<Annotation>) {
         self.history.replace_present(baseline);
+        self.sync_base();
         self.clamp_selection();
         self.flattened_cache = None;
     }
@@ -2099,5 +2286,118 @@ mod tests {
         assert_eq!(s.selected_annotation(), None);
         assert!(s.undo());
         assert!(s.annotations().is_empty());
+    }
+    fn px_grid(w: u32, h: u32) -> RgbaImage {
+        RgbaImage::from_fn(w, h, |x, y| image::Rgba([(x + 10 * y) as u8, 0, 0, 255]))
+    }
+
+    fn block(x: f32, y: f32) -> Annotation {
+        Annotation::Rectangle {
+            rect: RectLike::new(x, y, 1.0, 1.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+            style: Default::default(),
+        }
+    }
+
+    #[test]
+    fn rotate_turns_the_base_and_its_annotations_and_undo_restores_both() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        s.commit_annotation(block(2.0, 0.0));
+        assert!(s.rotate(true));
+        assert_eq!(s.base().dimensions(), (2, 3));
+        match &s.annotations()[0] {
+            Annotation::Rectangle { rect, .. } => assert_eq!((rect.x, rect.y), (1.0, 2.0)),
+            other => panic!("{other:?}"),
+        }
+        assert!(s.undo());
+        assert_eq!(s.base().dimensions(), (3, 2));
+        assert!(s.geometry().is_original());
+        match &s.annotations()[0] {
+            Annotation::Rectangle { rect, .. } => assert_eq!((rect.x, rect.y), (2.0, 0.0)),
+            other => panic!("{other:?}"),
+        }
+        assert!(s.redo());
+        assert_eq!(s.base().dimensions(), (2, 3));
+    }
+
+    #[test]
+    fn beautify_changes_are_one_undo_step_each() {
+        use readshot_core::beautify::BuiltinPreset;
+        let mut s = EditorState::new(px_grid(4, 4));
+        assert!(s.set_beautify(BuiltinPreset::Dark.settings()));
+        assert!(!s.set_beautify(BuiltinPreset::Dark.settings()));
+        assert_eq!(s.undo_depth(), 1);
+        s.undo();
+        assert!(s.beautify().is_identity());
+    }
+
+    #[test]
+    fn snapshot_preview_commits_as_one_step_and_cancel_restores() {
+        use readshot_core::beautify::{BeautifyEdit, BuiltinPreset};
+        let mut s = EditorState::new(px_grid(4, 4));
+        let baseline = s.snapshot();
+        for p in [10, 20, 30] {
+            let mut next = baseline.clone();
+            next.doc.beautify = BuiltinPreset::Minimal.settings();
+            next.doc.beautify.apply(BeautifyEdit::Padding(p));
+            s.preview_snapshot(next);
+        }
+        assert_eq!(s.undo_depth(), 0, "previews never push");
+        assert!(s.commit_preview_snapshot(baseline.clone()));
+        assert_eq!(s.undo_depth(), 1);
+        assert_eq!(s.beautify().padding, 30);
+        let base2 = s.snapshot();
+        let mut next = base2.clone();
+        next.doc.beautify.padding = 99;
+        s.preview_snapshot(next);
+        s.cancel_preview_snapshot(base2);
+        assert_eq!(s.beautify().padding, 30);
+    }
+
+    #[test]
+    fn add_part_appends_below_and_undo_removes_it() {
+        let mut s = EditorState::new(px_grid(4, 2));
+        let id = s
+            .add_part(px_grid(4, 3), readshot_core::document::Join::Below)
+            .unwrap();
+        assert_ne!(id, readshot_core::document::ORIGINAL_PART);
+        assert_eq!(s.base().dimensions(), (4, 5));
+        assert_eq!(s.part_ids().len(), 2);
+        s.undo();
+        assert_eq!(s.base().dimensions(), (4, 2));
+        assert!(s.geometry().is_original());
+    }
+
+    #[test]
+    fn adding_to_a_rotated_document_bakes_the_rotation_first() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        s.commit_annotation(block(2.0, 0.0));
+        s.rotate(true);
+        let before = s.annotations().to_vec();
+        s.add_part(px_grid(2, 2), readshot_core::document::Join::Below)
+            .unwrap();
+        let g = s.geometry();
+        assert!(g.transform.is_identity());
+        assert_eq!(g.parts.len(), 2);
+        assert_ne!(g.parts[0].id, readshot_core::document::ORIGINAL_PART);
+        assert_eq!(
+            s.annotations(),
+            &before[..],
+            "the first part stays at the origin"
+        );
+        assert_eq!(s.base().dimensions(), (2, 5));
+    }
+
+    #[test]
+    fn oversized_scale_is_refused_and_changes_nothing() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        let err = s.scale_by(20_000.0, 1.0).unwrap_err();
+        assert!(matches!(
+            err,
+            readshot_core::document::GeometryError::TooLarge { .. }
+        ));
+        assert!(s.geometry().is_original());
+        assert_eq!(s.undo_depth(), 0);
     }
 }

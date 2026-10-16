@@ -1,27 +1,44 @@
-//! Undo/redo for the editor's annotation list.
+//! Undo/redo for the editor's document.
 //!
 //! Implementation: two stacks (`past`, `future`) plus the current
 //! state, capped at [`MAX_HISTORY`] entries on the past stack. Pushing
 //! a new state clears the redo stack — the standard "make a change,
 //! lose your future" semantics every editor uses.
 //!
-//! The history holds owned `Vec<Annotation>` snapshots rather than
-//! diffs because annotation-tree mutations are coarse-grained (one
-//! per drag) and the snapshots are small (annotations are values, no
-//! nested trees beyond the pen-points vec).
+//! States are [`Snapshot`]s: the annotations plus the document (geometry
+//! and Beautify).
+//!
+//! The history holds owned snapshots rather than diffs because
+//! mutations are coarse-grained (one per drag) and the snapshots are
+//! small (annotations are values; images inside the geometry are `Arc`s).
 
+use std::sync::Arc;
+
+use readshot_core::beautify::BeautifySettings;
+use readshot_core::document::DocGeometry;
 use readshot_core::Annotation;
 
-/// Maximum number of past states held on the undo stack. Once
-/// exceeded the oldest entry is dropped — a hard memory bound for
-/// editors that get heavy use without explicit save.
 pub const MAX_HISTORY: usize = 64;
+
+/// The document an annotation list is drawn on. Images inside the
+/// geometry are `Arc`s, so a snapshot is cheap to clone.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DocState {
+    pub geometry: Arc<DocGeometry>,
+    pub beautify: BeautifySettings,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Snapshot {
+    pub annotations: Vec<Annotation>,
+    pub doc: DocState,
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct History {
-    past: Vec<Vec<Annotation>>,
-    present: Vec<Annotation>,
-    future: Vec<Vec<Annotation>>,
+    past: Vec<Snapshot>,
+    present: Snapshot,
+    future: Vec<Snapshot>,
 }
 
 impl History {
@@ -30,6 +47,13 @@ impl History {
     }
 
     pub fn from_present(present: Vec<Annotation>) -> Self {
+        Self::from_snapshot(Snapshot {
+            annotations: present,
+            doc: DocState::default(),
+        })
+    }
+
+    pub fn from_snapshot(present: Snapshot) -> Self {
         Self {
             past: Vec::new(),
             present,
@@ -37,50 +61,56 @@ impl History {
         }
     }
 
-    /// Snapshot accessor — the slice the renderer should render.
     pub fn current(&self) -> &[Annotation] {
+        &self.present.annotations
+    }
+
+    pub fn doc(&self) -> &DocState {
+        &self.present.doc
+    }
+
+    pub fn snapshot(&self) -> &Snapshot {
         &self.present
     }
 
-    /// Replace the current state without touching undo / redo. Used
-    /// for live edit previews that are later committed as one undoable
-    /// action when the drag ends.
     pub(crate) fn replace_present(&mut self, present: Vec<Annotation>) {
+        self.present.annotations = present;
+    }
+
+    pub(crate) fn replace_present_snapshot(&mut self, present: Snapshot) {
         self.present = present;
     }
 
-    /// Push a new state, truncating the redo stack and capping the
-    /// undo stack at `MAX_HISTORY`. The previous present moves onto
-    /// `past`.
+    /// New annotations on the same document.
     pub fn push(&mut self, new_state: Vec<Annotation>) {
-        let prev = std::mem::replace(&mut self.present, new_state);
+        let doc = self.present.doc.clone();
+        self.push_snapshot(Snapshot {
+            annotations: new_state,
+            doc,
+        });
+    }
+
+    pub fn push_snapshot(&mut self, next: Snapshot) {
+        let prev = std::mem::replace(&mut self.present, next);
         self.past.push(prev);
         if self.past.len() > MAX_HISTORY {
-            // Drop the oldest entry. `Vec::remove(0)` is O(n) but the
-            // alternative (a `VecDeque`) gives no allocator advantage
-            // at this size and complicates the snapshot iteration.
             let _ = self.past.remove(0);
         }
         self.future.clear();
     }
 
-    /// Move the current state onto the redo stack and pop the most
-    /// recent past state into the present. Returns the new present
-    /// slice on success or `None` if the undo stack is empty.
     pub fn undo(&mut self) -> Option<&[Annotation]> {
         let prev = self.past.pop()?;
-        let current_to_redo = std::mem::replace(&mut self.present, prev);
-        self.future.push(current_to_redo);
-        Some(&self.present)
+        let current = std::mem::replace(&mut self.present, prev);
+        self.future.push(current);
+        Some(&self.present.annotations)
     }
 
-    /// Inverse of [`History::undo`]. Pops from `future`, pushes the current
-    /// state to `past`.
     pub fn redo(&mut self) -> Option<&[Annotation]> {
         let next = self.future.pop()?;
-        let current_to_past = std::mem::replace(&mut self.present, next);
-        self.past.push(current_to_past);
-        Some(&self.present)
+        let current = std::mem::replace(&mut self.present, next);
+        self.past.push(current);
+        Some(&self.present.annotations)
     }
 
     pub fn can_undo(&self) -> bool {
@@ -91,24 +121,19 @@ impl History {
         !self.future.is_empty()
     }
 
-    /// Number of states currently available on the undo stack — used
-    /// by the editor toolbar to surface "X actions to undo" in the
-    /// button tooltip.
     pub fn past_len(&self) -> usize {
         self.past.len()
     }
 
-    /// Number of states currently available on the redo stack.
     pub fn future_len(&self) -> usize {
         self.future.len()
     }
 
-    /// Drop everything: clears all stacks and resets to an empty
-    /// present. Used when the editor opens a new capture.
+    /// Drop every annotation and both stacks; the document stays.
     pub fn clear(&mut self) {
         self.past.clear();
-        self.present.clear();
         self.future.clear();
+        self.present.annotations.clear();
     }
 }
 
@@ -199,5 +224,28 @@ mod tests {
         assert!(h.current().is_empty());
         assert!(!h.can_undo());
         assert!(!h.can_redo());
+    }
+    #[test]
+    fn snapshots_keep_the_document_across_plain_pushes_and_clear() {
+        use readshot_core::beautify::BuiltinPreset;
+        let mut h = History::new();
+        let doc = DocState {
+            beautify: BuiltinPreset::Soft.settings(),
+            ..DocState::default()
+        };
+        h.push_snapshot(Snapshot {
+            annotations: vec![rect_annotation(0.0)],
+            doc: doc.clone(),
+        });
+        h.push(vec![rect_annotation(1.0)]);
+        assert_eq!(h.doc(), &doc, "an annotation push keeps the document");
+        h.undo();
+        h.undo();
+        assert_eq!(h.doc(), &DocState::default());
+        h.redo();
+        assert_eq!(h.doc(), &doc);
+        h.clear();
+        assert!(h.current().is_empty());
+        assert_eq!(h.doc(), &doc, "clear drops annotations, not the document");
     }
 }

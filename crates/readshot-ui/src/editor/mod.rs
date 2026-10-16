@@ -43,6 +43,7 @@ pub use style::{
 pub use tool_state::ToolState;
 pub use toolbar::ToolbarMessage;
 pub use undo::History;
+pub use undo::{DocState, Snapshot};
 
 /// What the editor returns to the capture coordinator when the user
 /// commits an action. Mirrors spec §3.3's `EditorOutcome` enum.
