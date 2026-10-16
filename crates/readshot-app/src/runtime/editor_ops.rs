@@ -340,7 +340,21 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     }
                 }
             }
-            match editor_key_message(key, modifiers, status_ignored) {
+            let message = editor_key_message(key, modifiers, status_ignored);
+            // While the Color popover is open its hex field may have focus.
+            // iced's text_input has no undo and doesn't capture Cmd+Z, so
+            // undo/redo would silently rewind the drawing under the popover.
+            if matches!(
+                message,
+                Some(Message::EditorToolbar(
+                    readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
+                ))
+            ) && state.editor.as_ref().and_then(|ed| ed.popover)
+                == Some(crate::editor::EditorPopover::Color)
+            {
+                return Task::none();
+            }
+            match message {
                 Some(message) => update(state, message),
                 None => Task::none(),
             }
@@ -733,6 +747,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 ed.hex_draft = raw
                     .chars()
                     .filter(|c| *c == '#' || c.is_ascii_hexdigit())
+                    .enumerate()
+                    // '#' is only valid as the first kept character.
+                    .filter(|(i, c)| *c != '#' || *i == 0)
+                    .map(|(_, c)| c)
                     .take(7)
                     .collect();
             }

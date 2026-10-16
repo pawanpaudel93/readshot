@@ -2844,6 +2844,55 @@ mod tests {
     }
 
     #[test]
+    fn cmd_z_is_ignored_while_the_color_popover_is_open() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(32, 32));
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        ed.model
+            .commit_annotation(readshot_core::Annotation::Rectangle {
+                rect: readshot_core::RectLike::new(2.0, 2.0, 10.0, 10.0),
+                color: readshot_core::Rgba::OPAQUE_BLACK,
+                line_width: 2.0,
+                style: Default::default(),
+            });
+        app.editor = Some(ed);
+        let cmd = iced::keyboard::Modifiers::COMMAND;
+        let press = |app: &mut App, mods| {
+            let _ = update(
+                app,
+                Message::EditorKeyPressed {
+                    window: id,
+                    key: iced::keyboard::Key::Character("z".into()),
+                    modifiers: mods,
+                    status_ignored: false,
+                },
+            );
+        };
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        press(&mut app, cmd);
+        assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 1);
+        press(&mut app, cmd | iced::keyboard::Modifiers::SHIFT);
+        assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 1);
+        let _ = update(&mut app, Message::EditorPopoverClosed);
+        press(&mut app, cmd);
+        assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 0);
+    }
+
+    #[test]
+    fn hex_field_allows_hash_only_first() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+        let _ = update(&mut app, Message::EditorHexChanged("#ab#cd#".into()));
+        assert_eq!(app.editor.as_ref().unwrap().hex_draft, "#abcd");
+        let _ = update(&mut app, Message::EditorHexChanged("ab#cd".into()));
+        assert_eq!(app.editor.as_ref().unwrap().hex_draft, "abcd");
+    }
+
+    #[test]
     fn picking_a_color_closes_the_color_popover() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         app.editor = Some(debug_editor_qa_session());

@@ -366,7 +366,19 @@ pub(crate) fn color_popover<'a>(
         grid = grid.push(swatch_row(chunk.iter().copied(), current, busy));
     }
     let mut body = column![popover_heading("Color"), grid].spacing(8);
-    let recent: Vec<Rgba> = recent.iter().filter_map(|h| Rgba::from_hex(h)).collect();
+    // A hand-edited preferences file may hold duplicates or too many.
+    let mut seen: Vec<String> = Vec::new();
+    let recent: Vec<Rgba> = recent
+        .iter()
+        .filter_map(|h| Rgba::from_hex(h))
+        .filter(|c| {
+            let hex = c.to_hex();
+            let fresh = !seen.contains(&hex);
+            seen.push(hex);
+            fresh
+        })
+        .take(readshot_core::preferences::RECENT_COLORS_MAX)
+        .collect();
     if !recent.is_empty() {
         body = body.push(text("Recent").size(TYPE_MICRO).style(text_t3));
         body = body.push(swatch_row(recent.into_iter(), current, busy));
@@ -449,7 +461,7 @@ fn swatch_row<'a>(
                 readshot_ui::ToolbarMessage::SelectColor(swatch),
             ));
         }
-        r = r.push(b);
+        r = r.push(tooltip_with_key(b, swatch.to_hex(), None, Position::Bottom));
     }
     r
 }
