@@ -469,6 +469,14 @@ pub enum Message {
     EditorCopyTextRequested,
     /// OCR + clipboard write completed.
     EditorCopyTextDone(Result<String, String>),
+    /// Start (or retry) recognizing the editor's base image for the Text
+    /// panel. No-op while recognizing or once ready.
+    EditorTextRecognize,
+    /// Text-panel recognition finished for editor session `session`.
+    EditorTextRecognized {
+        session: u64,
+        result: Result<readshot_core::text_lines::TextDocument, String>,
+    },
     /// User clicked Discard. Closes the editor window.
     EditorDiscardRequested,
     /// "Keep Editing" on the armed-discard toast: back out of Discard.

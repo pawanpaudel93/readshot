@@ -106,6 +106,11 @@ pub(crate) fn open_editor_window_replacing(
     }
     editor.source_display_bounds = display_bounds;
     state.editor = Some(editor);
+    // The Text panel recognizes in the background as soon as the editor
+    // opens, so the list is ready by the time the user looks at it.
+    if state.preferences.editor_panel_open {
+        tasks.push(request_text_recognition(state));
+    }
     let (id, open_task) = window::open(editor_window_settings(display_bounds));
     register_window(state, id, WindowKind::Editor);
     tasks.push(open_task.map(Message::EditorWindowReady));

@@ -178,6 +178,17 @@ pub struct Preferences {
     /// Last custom annotation colors (`#RRGGBB`), most recent first, at
     /// most `RECENT_COLORS_MAX`. Presets are never stored here.
     pub editor_recent_colors: Vec<String>,
+
+    /// Editor side panel shown (spec §2.3). Remembered across sessions.
+    pub editor_panel_open: bool,
+
+    /// Last side-panel tab id (`"text"`; Phase C adds `"beautify"`). A
+    /// string, not an enum, so a newer build's tab id can never make an
+    /// older build fail to read this file. Unknown ids mean Text.
+    pub editor_panel_tab: String,
+
+    /// Text panel: "Remove line breaks when copying" (spec §3.7).
+    pub editor_copy_remove_line_breaks: bool,
 }
 
 impl Default for Preferences {
@@ -197,6 +208,9 @@ impl Default for Preferences {
             onboarding_completed: false,
             editor_tools_seen: Vec::new(),
             editor_recent_colors: Vec::new(),
+            editor_panel_open: true,
+            editor_panel_tab: "text".to_string(),
+            editor_copy_remove_line_breaks: false,
         }
     }
 }
@@ -444,5 +458,37 @@ ocr_languages = ["en"]
         assert!(toml_text.contains("history_retention = \"last30_days\""));
         assert!(toml_text.contains("default_format = \"webp\""));
         assert!(toml_text.contains("update_channel = \"beta\""));
+    }
+
+    #[test]
+    fn panel_preferences_default_and_round_trip() {
+        let p = Preferences::default();
+        assert!(p.editor_panel_open);
+        assert_eq!(p.editor_panel_tab, "text");
+        assert!(!p.editor_copy_remove_line_breaks);
+
+        let (_dir, path) = temp_path();
+        let p = Preferences {
+            editor_panel_open: false,
+            editor_panel_tab: "beautify".into(),
+            editor_copy_remove_line_breaks: true,
+            ..Preferences::default()
+        };
+        p.save(&path).unwrap();
+        assert_eq!(Preferences::load(&path).unwrap(), p);
+    }
+
+    #[test]
+    fn files_without_panel_preferences_load_with_defaults() {
+        let (_dir, path) = temp_path();
+        std::fs::write(
+            &path,
+            "schema_version = 3\ncapture_hotkey = \"cmd+shift+x\"\n",
+        )
+        .unwrap();
+        let p = Preferences::load(&path).unwrap();
+        assert!(p.editor_panel_open);
+        assert_eq!(p.editor_panel_tab, "text");
+        assert!(!p.editor_copy_remove_line_breaks);
     }
 }

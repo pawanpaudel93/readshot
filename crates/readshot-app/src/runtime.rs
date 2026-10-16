@@ -59,6 +59,8 @@ mod editor_ops;
 pub(crate) use editor_ops::*;
 mod editor_options;
 pub(crate) use editor_options::*;
+mod text_panel;
+pub(crate) use text_panel::*;
 mod history_ops;
 mod settings_ops;
 
@@ -1393,6 +1395,37 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         &display_id,
                         state.preferences.history_retention,
                     );
+                    // Build the editor first so the history OCR (same base
+                    // image) can feed its Text panel: one OCR per capture.
+                    let mut editor =
+                        (intent == crate::app::CaptureIntent::Editor).then(|| match history_record
+                            .clone()
+                        {
+                            Some(record) => {
+                                crate::editor::EditorSession::from_history_with_display_scale(
+                                    image.clone(),
+                                    record,
+                                    display_scale,
+                                )
+                            }
+                            None => crate::editor::EditorSession::new_with_display_scale(
+                                image.clone(),
+                                display_scale,
+                            ),
+                        });
+                    // A record exists only when history is on, i.e. the
+                    // history task will OCR. Mark the panel Recognizing so
+                    // `request_text_recognition` doesn't start a second OCR.
+                    let shared_session = match (editor.as_mut(), history_record.is_some()) {
+                        (Some(ed), true) => {
+                            ed.text_panel.recognition =
+                                crate::editor::TextRecognition::Recognizing {
+                                    since: std::time::Instant::now(),
+                                };
+                            Some(ed.session_id)
+                        }
+                        _ => None,
+                    };
                     // Persist a history record in parallel with the
                     // user-visible intent action. The history task is
                     // gated on `preferences.history_retention` and
@@ -1407,25 +1440,16 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                             history_record.clone(),
                             state.preferences.history_retention,
                             state.preferences.clone(),
+                            shared_session,
                         )
                     };
                     let intent_task = match intent {
-                        crate::app::CaptureIntent::Editor => {
-                            let editor = match history_record {
-                                Some(record) => {
-                                    crate::editor::EditorSession::from_history_with_display_scale(
-                                        image,
-                                        record,
-                                        display_scale,
-                                    )
-                                }
-                                None => crate::editor::EditorSession::new_with_display_scale(
-                                    image,
-                                    display_scale,
-                                ),
-                            };
-                            open_editor_window_replacing(state, editor, display_bounds)
-                        }
+                        crate::app::CaptureIntent::Editor => match editor {
+                            Some(editor) => {
+                                open_editor_window_replacing(state, editor, display_bounds)
+                            }
+                            None => Task::none(),
+                        },
                         crate::app::CaptureIntent::CopyToClipboard => {
                             Task::perform(copy_image_to_clipboard(image), |r| {
                                 Message::OverlayCopyDone(r.map_err(|e| e.to_string()))
@@ -1711,7 +1735,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::PinOpacityChanged(..)
         | Message::PinLockToggled(..)
         | Message::PinHovered(..)
-        | Message::PinKeyPressed { .. }) => editor_ops::handle_editor_message(state, msg),
+        | Message::PinKeyPressed { .. }
+        | Message::EditorTextRecognize
+        | Message::EditorTextRecognized { .. }) => editor_ops::handle_editor_message(state, msg),
         Message::OverlayCopyDone(result) => {
             state.last_capture_status = Some(match result {
                 Ok(()) => "Copied image to clipboard.".into(),
@@ -2169,27 +2195,30 @@ fn reset_settings_to_defaults(state: &mut App) {
     )));
 }
 
-/// Spawn a fire-and-forget history-persistence task. The chain is:
-/// encode PNG → save record (empty OCR) → run Apple Vision OCR →
-/// update sidecar with the recognised text. Each stage logs its own
+/// Spawn a fire-and-forget history-persistence task: encode the PNG and
+/// save the record (empty OCR) while OCR runs **concurrently**, then
+/// update the sidecar with the recognised text. Each stage logs its own
 /// failures and the user-visible flow never blocks on this work.
 ///
-/// Emits two messages so an open browser stays live:
-/// * [`Message::HistoryRecordSaved`] the moment the record hits disk
-///   (empty OCR) — the new row shows up without waiting on OCR;
-/// * [`Message::HistoryRecordPersisted`] once OCR resolves —
-///   `Ok(true)` when text landed (reload to show it), `Ok(false)` when
-///   history was disabled or OCR failed/empty.
+/// Messages:
+/// * [`Message::HistoryRecordSaved`] the moment the record hits disk —
+///   the new row shows up without waiting on OCR;
+/// * [`Message::EditorTextRecognized`] when `editor_session` is set: the
+///   same OCR feeds that editor's Text panel (one OCR per capture),
+///   errors included so the panel can offer Retry;
+/// * [`Message::HistoryRecordPersisted`] once OCR resolves — `Ok(true)`
+///   when text landed, `Ok(false)` when OCR failed or the update did.
 fn persist_history_task(
     coord: CaptureCoordinator,
     img: image::RgbaImage,
     record: Option<readshot_core::CaptureRecord>,
     policy: readshot_core::HistoryRetention,
     preferences: Preferences,
+    editor_session: Option<u64>,
 ) -> Task<Message> {
     use iced::futures::SinkExt;
     Task::stream(iced::stream::channel(
-        2,
+        4,
         move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
             if matches!(policy, readshot_core::HistoryRetention::Off) {
                 return;
@@ -2198,41 +2227,47 @@ fn persist_history_task(
                 return;
             };
             let now = record.captured_at;
-            // Best-compression encode is CPU-heavy on large captures —
-            // keep it off the async workers. The image is threaded
-            // through the closure (OCR still needs it) to avoid a
-            // multi-megabyte clone.
-            let encoded = tokio::task::spawn_blocking(move || {
-                let buf = readshot_core::encode_png(&img);
-                (img, buf)
-            })
-            .await;
-            let (img, buf) = match encoded {
-                Ok(pair) => pair,
-                Err(e) => {
-                    tracing::warn!(target: "readshot::history", "png encode worker: {e}");
-                    return;
+            let ocr = coord.recognise_document(ocr_request_for_image(img.clone(), &preferences));
+            let save = {
+                let coord = coord.clone();
+                let record = record.clone();
+                let mut output = output.clone();
+                async move {
+                    // Best-compression encode is CPU-heavy on large
+                    // captures — keep it off the async workers.
+                    let encoded =
+                        tokio::task::spawn_blocking(move || readshot_core::encode_png(&img)).await;
+                    let buf = match encoded {
+                        Ok(Ok(buf)) => buf,
+                        Ok(Err(e)) => {
+                            tracing::warn!(target: "readshot::history", "png encode: {e}");
+                            return false;
+                        }
+                        Err(e) => {
+                            tracing::warn!(target: "readshot::history", "png encode worker: {e}");
+                            return false;
+                        }
+                    };
+                    coord.record_history(record, buf, policy, now).await;
+                    let _ = output.send(Message::HistoryRecordSaved).await;
+                    true
                 }
             };
-            let buf = match buf {
-                Ok(buf) => buf,
-                Err(e) => {
-                    tracing::warn!(target: "readshot::history", "png encode: {e}");
-                    return;
-                }
-            };
-            // Save with empty OCR first so the capture is visible in the
-            // browser immediately (OCR is the slow bit).
-            coord.record_history(record.clone(), buf, policy, now).await;
-            // Nudge the browser to show the freshly-saved (text-less) row.
-            let _ = output.send(Message::HistoryRecordSaved).await;
-
-            // Background OCR — fills `ocr_text` so the search index has
-            // something to match. Failure is logged but non-fatal: the
-            // record is still useful (and already listed) without text.
-            let ocr_req = ocr_request_for_image(img, &preferences);
-            let persisted = match coord.recognise(ocr_req).await {
-                Ok(text) => {
+            let (doc, saved) = iced::futures::future::join(ocr, save).await;
+            if let Some(session) = editor_session {
+                let result = match &doc {
+                    Ok(d) => Ok(d.clone()),
+                    Err(e) => Err(e.to_string()),
+                };
+                let _ = output
+                    .send(Message::EditorTextRecognized { session, result })
+                    .await;
+            }
+            if !saved {
+                return;
+            }
+            let persisted = match doc {
+                Ok(doc) => {
                     let list_coord = coord.clone();
                     let listed =
                         tokio::task::spawn_blocking(move || list_coord.history_list()).await;
@@ -2241,7 +2276,8 @@ fn persist_history_task(
                             record.annotation_model = latest.annotation_model;
                         }
                     }
-                    record.ocr_text = Some(text);
+                    // The same string `recognise` returned before.
+                    record.ocr_text = Some(doc.layout_text);
                     if let Err(e) = coord.update_history(&record) {
                         tracing::warn!(target: "readshot::history", "ocr update failed: {e}");
                         false
@@ -8280,5 +8316,220 @@ mod tests {
         app.editor = Some(ed);
         let _ = update(&mut app, Message::EditorEyedropperToggled);
         assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
+    }
+
+    /// 64 × 64 capture: "Name Priya" / "Email priya@example.com" (two
+    /// word boxes) / "Phone +1 (415) 555-0142". Two sensitive items.
+    fn sample_doc() -> readshot_core::text_lines::TextDocument {
+        use readshot_core::ocr_layout::{RecognizedLine, WordBox};
+        let line = |text: &str, y: f32, words: Vec<WordBox>| RecognizedLine {
+            text: text.into(),
+            x: 0.1,
+            y,
+            w: 0.8,
+            h: 0.1,
+            words,
+        };
+        readshot_core::text_lines::TextDocument::from_recognized(
+            &[
+                line("Name Priya", 0.1, Vec::new()),
+                line(
+                    "Email priya@example.com",
+                    0.3,
+                    vec![
+                        WordBox {
+                            start: 0,
+                            end: 5,
+                            x: 0.1,
+                            y: 0.3,
+                            w: 0.2,
+                            h: 0.1,
+                        },
+                        WordBox {
+                            start: 6,
+                            end: 23,
+                            x: 0.35,
+                            y: 0.3,
+                            w: 0.55,
+                            h: 0.1,
+                        },
+                    ],
+                ),
+                line("Phone +1 (415) 555-0142", 0.5, Vec::new()),
+            ],
+            64,
+            64,
+        )
+    }
+
+    /// An editor whose Text panel finished recognizing `sample_doc()`.
+    fn ready_editor(app: &mut App) {
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(app, Message::EditorTextRecognize);
+        let session = app.editor.as_ref().unwrap().session_id;
+        let _ = update(
+            app,
+            Message::EditorTextRecognized {
+                session,
+                result: Ok(sample_doc()),
+            },
+        );
+    }
+
+    #[test]
+    fn text_recognition_result_for_the_current_session_is_kept() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(&mut app, Message::EditorTextRecognize);
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
+        ready_editor(&mut app);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.text_panel.document().unwrap().lines.len(), 3);
+        assert_eq!(ed.text_panel.matches.len(), 2);
+        assert!(!ed.busy, "recognition never blocks editing");
+    }
+
+    #[test]
+    fn stale_text_recognition_result_is_dropped() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(&mut app, Message::EditorTextRecognize);
+        let session = app.editor.as_ref().unwrap().session_id + 1000;
+        let _ = update(
+            &mut app,
+            Message::EditorTextRecognized {
+                session,
+                result: Ok(sample_doc()),
+            },
+        );
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
+    }
+
+    #[test]
+    fn failed_recognition_toasts_retry_and_retry_restarts() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(&mut app, Message::EditorTextRecognize);
+        let session = app.editor.as_ref().unwrap().session_id;
+        let _ = update(
+            &mut app,
+            Message::EditorTextRecognized {
+                session,
+                result: Err("Vision OCR timed out".into()),
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert!(matches!(
+            ed.text_panel.recognition,
+            crate::editor::TextRecognition::Failed(_)
+        ));
+        assert!(ed.status_is_error(), "{:?}", ed.status);
+        assert_eq!(
+            ed.toast_action,
+            Some(crate::editor::EditorToastAction::RetryRecognition)
+        );
+
+        let _ = update(&mut app, Message::EditorTextRecognize);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(matches!(
+            ed.text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
+        assert!(ed.status.is_none() && ed.toast_action.is_none());
+    }
+
+    #[test]
+    fn recognition_is_not_restarted_once_ready() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorTextRecognize);
+        assert!(app.editor.as_ref().unwrap().text_panel.document().is_some());
+    }
+
+    #[test]
+    fn opening_an_editor_starts_recognition_only_with_the_panel_open() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let _ = open_editor_window_replacing(
+            &mut app,
+            crate::editor::EditorSession::new(solid(64, 64)),
+            None,
+        );
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
+        app.preferences.editor_panel_open = false;
+        let _ = open_editor_window_replacing(
+            &mut app,
+            crate::editor::EditorSession::new(solid(64, 64)),
+            None,
+        );
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Idle
+        ));
+    }
+
+    #[test]
+    fn a_fresh_capture_with_history_shares_its_ocr_with_the_text_panel() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        // Panel closed, so only the history OCR could mark it Recognizing.
+        app.preferences.editor_panel_open = false;
+        app.preferences.history_retention = readshot_core::HistoryRetention::Last50;
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 64))));
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
+        app.preferences.history_retention = readshot_core::HistoryRetention::Off;
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 64))));
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Idle
+        ));
+    }
+
+    #[test]
+    fn reopening_from_history_without_positions_reuses_the_stored_text() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 64, 64, "fake-0");
+        record.ocr_text = Some("one\ntwo".into());
+        let _ = update(
+            &mut app,
+            Message::HistoryOpenInEditorReady(Ok((solid(64, 64), record.clone()))),
+        );
+        let doc = app
+            .editor
+            .as_ref()
+            .unwrap()
+            .text_panel
+            .document()
+            .expect("seeded, no OCR");
+        assert_eq!(doc.lines.len(), 2);
+        assert!(!doc.positioned);
+
+        // A positioned engine (Apple Vision) recognizes again for boxes.
+        let perms = Arc::new(FakePermissions::granted());
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_lines(Vec::new())),
+            perms.clone(),
+            None,
+        );
+        let mut app = App::new(coord, perms, Preferences::default());
+        let _ = update(
+            &mut app,
+            Message::HistoryOpenInEditorReady(Ok((solid(64, 64), record))),
+        );
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
     }
 }

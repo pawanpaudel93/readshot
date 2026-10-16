@@ -70,6 +70,96 @@ pub struct EyedropperState {
     pub loupe: Option<readshot_ui::editor::Loupe>,
 }
 
+/// Side-panel tabs (spec §2.3). Phase C adds `Beautify`: a variant here,
+/// its id, and one arm in `runtime::side_panel::side_panel`. The stored
+/// preference is the tab's `id()`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PanelTab {
+    #[default]
+    Text,
+}
+
+impl PanelTab {
+    pub const ALL: [Self; 1] = [Self::Text];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Text => "Text",
+        }
+    }
+
+    /// Unknown ids (another build's tab) fall back to Text.
+    pub fn from_id(id: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|t| t.id() == id)
+            .unwrap_or_default()
+    }
+}
+
+/// Text-panel recognition of the session's base image.
+#[derive(Clone, Debug, Default)]
+pub enum TextRecognition {
+    #[default]
+    Idle,
+    Recognizing {
+        since: std::time::Instant,
+    },
+    Ready(std::sync::Arc<readshot_core::text_lines::TextDocument>),
+    Failed(String),
+}
+
+/// Everything the Text tab shows or edits.
+#[derive(Clone, Debug, Default)]
+pub struct TextPanelState {
+    pub recognition: TextRecognition,
+    /// Line under the pointer in the panel (outlined on the image).
+    pub hovered: Option<usize>,
+    /// Selected line indices (Copy N Lines).
+    pub selected: std::collections::BTreeSet<usize>,
+    /// ⇧-click range anchor.
+    pub anchor: Option<usize>,
+    pub redact_style: readshot_core::redact::RedactStyle,
+    /// Sensitive spans found when recognition returned positions.
+    pub matches: Vec<readshot_core::redact::RedactMatch>,
+}
+
+impl TextPanelState {
+    pub fn document(&self) -> Option<&readshot_core::text_lines::TextDocument> {
+        match &self.recognition {
+            TextRecognition::Ready(doc) => Some(doc),
+            _ => None,
+        }
+    }
+
+    /// The document, only when the engine reported line positions.
+    pub fn positioned_document(&self) -> Option<&readshot_core::text_lines::TextDocument> {
+        self.document().filter(|d| d.positioned)
+    }
+}
+
+/// Button in the status toast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorToastAction {
+    /// "Redacted N items" → Undo ⌘Z. `undo_depth` is the model's undo
+    /// depth right after the redaction: the button shows only while it
+    /// still matches, so it can never undo a later edit.
+    UndoRedaction { undo_depth: usize },
+    /// Recognition failed → Retry.
+    RetryRecognition,
+}
+
+fn next_session_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// One open editor window, plus the iced-side state that doesn't
 /// belong inside the pure model.
 pub struct EditorSession {
@@ -188,6 +278,13 @@ pub struct EditorSession {
     /// exists while `pending_text` is `Some`. Not `Clone`, which is why
     /// [`EditorSession`] itself is not `Clone`.
     pub text_edit_content: Option<iced::widget::text_editor::Content>,
+    /// Unique per session. Tags background recognition results so one
+    /// that lands after the editor was replaced is dropped.
+    pub session_id: u64,
+    /// Text panel: recognition, hover, line selection, redact.
+    pub text_panel: TextPanelState,
+    /// Button shown in the status toast. Cleared by every `set_status`.
+    pub toast_action: Option<EditorToastAction>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -400,6 +497,9 @@ impl EditorSession {
             output_checkpoint,
             crop_drag_flat: None,
             text_edit_content: None,
+            session_id: next_session_id(),
+            text_panel: TextPanelState::default(),
+            toast_action: None,
         }
     }
 
@@ -445,6 +545,9 @@ impl EditorSession {
             output_checkpoint,
             crop_drag_flat: None,
             text_edit_content: None,
+            session_id: next_session_id(),
+            text_panel: TextPanelState::default(),
+            toast_action: None,
         }
     }
 
@@ -471,9 +574,27 @@ impl EditorSession {
     /// disarms Discard (the armed prompt itself is written directly by
     /// `EditorDiscardRequested`, not through this method).
     pub fn set_status(&mut self, msg: impl Into<String>) {
+        self.toast_action = None;
         self.discard_pending_at = None;
         self.status = Some(msg.into());
         self.status_set_at = Some(std::time::Instant::now());
+    }
+
+    /// [`Self::set_status`] plus a button in the toast.
+    pub fn set_status_with_action(&mut self, msg: impl Into<String>, action: EditorToastAction) {
+        self.set_status(msg);
+        self.toast_action = Some(action);
+    }
+
+    /// The toast button to show: a redaction's Undo only while that
+    /// redaction is still the newest history step.
+    pub fn visible_toast_action(&self) -> Option<EditorToastAction> {
+        self.toast_action.filter(|a| match a {
+            EditorToastAction::UndoRedaction { undo_depth } => {
+                self.model.undo_depth() == *undo_depth
+            }
+            EditorToastAction::RetryRecognition => true,
+        })
     }
 
     /// Open the inline text editor for `pending`, seeding the
@@ -847,5 +968,58 @@ mod tests {
 
         s.zoom = EditorZoom::Percent(1.0);
         assert_eq!(s.zoom_label(), "200%");
+    }
+
+    #[test]
+    fn set_status_clears_a_toast_action() {
+        let mut ed = EditorSession::new(image::RgbaImage::new(4, 4));
+        let undo = EditorToastAction::UndoRedaction { undo_depth: 0 };
+        ed.set_status_with_action("Redacted 1 item.", undo);
+        assert_eq!(ed.toast_action, Some(undo));
+        ed.set_status("Saved.");
+        assert_eq!(ed.toast_action, None);
+    }
+
+    #[test]
+    fn redaction_undo_button_hides_after_any_other_history_change() {
+        let mut ed = EditorSession::new(image::RgbaImage::new(8, 8));
+        let blur = readshot_core::Annotation::Blur {
+            rect: readshot_core::RectLike::new(0.0, 0.0, 2.0, 2.0),
+            radius: 2.0,
+        };
+        ed.model.commit_annotation(blur.clone());
+        let undo_depth = ed.model.undo_depth();
+        ed.toast_action = Some(EditorToastAction::UndoRedaction { undo_depth });
+        assert!(ed.visible_toast_action().is_some());
+        ed.model.commit_annotation(blur);
+        assert!(
+            ed.visible_toast_action().is_none(),
+            "Undo would undo the newer edit"
+        );
+        ed.model.undo();
+        assert!(
+            ed.visible_toast_action().is_some(),
+            "the redaction is newest again"
+        );
+        ed.toast_action = Some(EditorToastAction::RetryRecognition);
+        assert!(ed.visible_toast_action().is_some());
+    }
+
+    #[test]
+    fn panel_tab_ids_round_trip_and_unknown_ids_fall_back_to_text() {
+        for tab in PanelTab::ALL {
+            assert_eq!(PanelTab::from_id(tab.id()), tab);
+        }
+        assert_eq!(PanelTab::from_id("beautify"), PanelTab::Text);
+        assert_eq!(PanelTab::from_id(""), PanelTab::Text);
+    }
+
+    #[test]
+    fn sessions_get_distinct_ids_and_start_idle() {
+        let a = EditorSession::new(image::RgbaImage::new(4, 4));
+        let b = EditorSession::new(image::RgbaImage::new(4, 4));
+        assert_ne!(a.session_id, b.session_id);
+        assert!(matches!(a.text_panel.recognition, TextRecognition::Idle));
+        assert!(a.text_panel.document().is_none());
     }
 }

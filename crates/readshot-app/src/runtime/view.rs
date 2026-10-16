@@ -2441,6 +2441,35 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .spacing(SP2)
                 .into(),
             )
+        } else if let Some(act) = ed.visible_toast_action() {
+            let (label, key, msg) = toast_action_parts(act);
+            let mut content = row![text(label).size(ButtonSize::Xs.text_size())]
+                .spacing(6)
+                .align_y(Alignment::Center);
+            if let Some(k) = key {
+                content = content.push(key_chip(k));
+            }
+            let mut r = row![bar_button(
+                content.into(),
+                ButtonKind::Secondary,
+                ButtonSize::Xs,
+                (!busy).then_some(msg),
+            )]
+            .spacing(SP1)
+            .align_y(Alignment::Center);
+            if kind == ToastKind::Error {
+                r = r.push(icon_button(
+                    AppIcon::Close,
+                    p.t2,
+                    "Dismiss",
+                    None,
+                    Some(Message::EditorStatusDismissed),
+                    false,
+                    ICON_BTN_XS,
+                    Position::Top,
+                ));
+            }
+            Some(r.into())
         } else if kind == ToastKind::Error {
             Some(icon_button(
                 AppIcon::Close,
@@ -2676,6 +2705,21 @@ pub(crate) const EDITOR_POPOVER_TOP: f32 = 140.0;
 pub(crate) const EDITOR_ACTION_BAR_BOTTOM: f32 = 20.0;
 /// Toasts and the frame popover sit just above the action bar.
 pub(crate) const EDITOR_TOAST_BOTTOM: f32 = 66.0;
+
+/// Label, key chip and message of a status-toast button.
+pub(crate) fn toast_action_parts(
+    action: crate::editor::EditorToastAction,
+) -> (&'static str, Option<&'static str>, Message) {
+    use crate::editor::EditorToastAction as A;
+    match action {
+        A::UndoRedaction { .. } => (
+            "Undo",
+            Some("⌘Z"),
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        ),
+        A::RetryRecognition => ("Retry", None, Message::EditorTextRecognize),
+    }
+}
 
 /// Toast kind for the editor status line. Armed discard wins (amber),
 /// then errors, then in-flight work; everything else is a success.
@@ -5261,5 +5305,19 @@ mod tests {
         // An unrecognised / future OS code renders verbatim, never blank.
         assert_eq!(ocr_language_display_name("xx-YY"), "xx-YY");
         assert_eq!(ocr_language_display_name(""), "");
+    }
+
+    #[test]
+    fn toast_actions_name_their_key() {
+        use crate::editor::EditorToastAction as A;
+        let (label, key, msg) = super::toast_action_parts(A::UndoRedaction { undo_depth: 0 });
+        assert_eq!((label, key), ("Undo", Some("⌘Z")));
+        assert!(matches!(
+            msg,
+            crate::app::Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)
+        ));
+        let (label, _, msg) = super::toast_action_parts(A::RetryRecognition);
+        assert_eq!(label, "Retry");
+        assert!(matches!(msg, crate::app::Message::EditorTextRecognize));
     }
 }

@@ -386,6 +386,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 {
                     ed.status = None;
                     ed.status_set_at = None;
+                    ed.toast_action = None;
                 }
                 if let Some(t) = ed.discard_pending_at {
                     if t.elapsed() > crate::editor::DISCARD_CONFIRM_WINDOW {
@@ -579,6 +580,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 ed.discard_pending_at = None;
                 ed.status = None;
                 ed.status_set_at = None;
+                ed.toast_action = None;
             }
             Task::none()
         }
@@ -586,6 +588,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if let Some(ed) = state.editor.as_mut() {
                 ed.status = None;
                 ed.status_set_at = None;
+                ed.toast_action = None;
             }
             Task::none()
         }
@@ -1347,6 +1350,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
                 None => Task::none(),
             }
+        }
+        msg @ (Message::EditorTextRecognize | Message::EditorTextRecognized { .. }) => {
+            super::text_panel::handle_text_panel_message(state, msg)
         }
         other => unreachable!("non-editor message routed to the editor handler: {other:?}"),
     }

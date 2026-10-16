@@ -125,22 +125,37 @@ impl CaptureCoordinator {
         self.capturer.capture_region(req).await
     }
 
-    pub async fn recognise(&self, req: OCRRequest) -> Result<String, OCRError> {
+    /// OCR for the editor's Text panel: lines in reading order, with
+    /// base-pixel boxes when the engine reports positions (Apple Vision
+    /// today), plus the layout-aware text Copy Text has always produced.
+    pub async fn recognise_document(
+        &self,
+        req: OCRRequest,
+    ) -> Result<readshot_core::text_lines::TextDocument, OCRError> {
+        use readshot_core::text_lines::TextDocument;
+        let (w, h) = (req.image.width(), req.image.height());
         let result = self.ocr.recognise(req).await?;
-        // Layout-aware reconstruction when the engine exposes per-line
-        // bounding boxes (Apple Vision today); fall back to the
-        // engine's flat newline-joined text otherwise. Then run the
-        // result through the cleanup pass so trailing whitespace,
-        // line endings, and blank-line runs are normalised.
-        //
-        // This is the single chokepoint — every consumer (overlay /
-        // history sidecar / editor Copy Text) gets the same string.
-        let text = if !result.lines.is_empty() {
-            readshot_core::ocr_layout::reconstruct(&result.lines)
+        Ok(if result.lines.is_empty() {
+            TextDocument::from_plain(&result.text)
         } else {
-            result.text
-        };
-        Ok(readshot_core::ocr_text::clean(&text))
+            TextDocument::from_recognized(&result.lines, w, h)
+        })
+    }
+
+    /// Whether the engine reports line positions (Apple Vision). Without
+    /// them, OCR of a History capture could only reproduce its stored
+    /// `ocr_text`.
+    pub fn engine_reports_positions(&self) -> bool {
+        self.ocr.reports_positions()
+    }
+
+    pub async fn recognise(&self, req: OCRRequest) -> Result<String, OCRError> {
+        // Layout-aware reconstruction when the engine exposes per-line
+        // bounding boxes, the engine's flat text otherwise, then the
+        // cleanup pass. This is the single chokepoint — every consumer
+        // (overlay / history sidecar / editor Copy Text) gets the same
+        // string.
+        Ok(self.recognise_document(req).await?.layout_text)
     }
 
     pub fn supported_languages(&self) -> Vec<String> {
@@ -334,5 +349,52 @@ mod tests {
         let denied = Arc::new(FakePermissions::denied());
         let coord = coordinator(denied);
         assert_eq!(coord.pre_capture_gate(), PermissionStatus::Denied);
+    }
+
+    fn request(w: u32, h: u32) -> OCRRequest {
+        OCRRequest {
+            image: image::RgbaImage::new(w, h),
+            languages: vec![],
+            use_language_correction: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn recognise_document_keeps_positions_from_positioned_engines() {
+        use readshot_core::geom::RectLike;
+        use readshot_core::ocr_layout::RecognizedLine;
+        let line = RecognizedLine {
+            text: "hello".into(),
+            x: 0.25,
+            y: 0.5,
+            w: 0.5,
+            h: 0.25,
+            words: Vec::new(),
+        };
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_lines(vec![line])),
+            Arc::new(FakePermissions::granted()),
+            None,
+        );
+        let doc = coord.recognise_document(request(8, 4)).await.unwrap();
+        assert!(doc.positioned);
+        assert_eq!(doc.lines[0].rect, Some(RectLike::new(2.0, 2.0, 4.0, 1.0)));
+        assert_eq!(coord.recognise(request(8, 4)).await.unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn recognise_document_without_positions_lists_plain_lines() {
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_text("one\n\ntwo")),
+            Arc::new(FakePermissions::granted()),
+            None,
+        );
+        let doc = coord.recognise_document(request(8, 8)).await.unwrap();
+        assert!(!doc.positioned);
+        let texts: Vec<&str> = doc.lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, ["one", "two"]);
+        assert_eq!(doc.layout_text, "one\n\ntwo");
     }
 }

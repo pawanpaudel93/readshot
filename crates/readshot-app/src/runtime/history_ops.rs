@@ -260,7 +260,11 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
         }
         Message::HistoryOpenInEditorReady(result) => match result {
             Ok((image, record)) => {
-                let editor = crate::editor::EditorSession::from_history(image, record);
+                let mut editor = crate::editor::EditorSession::from_history(image, record);
+                super::text_panel::seed_text_from_history(
+                    &mut editor,
+                    state.coordinator.engine_reports_positions(),
+                );
                 open_editor_window_replacing(state, editor, None)
             }
             Err(e) => {
