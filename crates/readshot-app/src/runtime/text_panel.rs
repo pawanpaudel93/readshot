@@ -661,8 +661,8 @@ fn chip_style(theme: &Theme) -> container::Style {
 /// left blurred or pixelated (the chosen weaker style) are named as such.
 pub(crate) fn redact_card_title(pending: usize, unlocatable: usize, weak: usize) -> String {
     match (pending + unlocatable, weak) {
-        (0, 0) => "All sensitive items redacted".to_string(),
-        (0, _) => "All sensitive items blurred or pixelated".to_string(),
+        (0, 0) => "All detected items redacted".to_string(),
+        (0, _) => "All detected items blurred or pixelated".to_string(),
         (n, _) => format!("{n} sensitive item{}", if n == 1 { "" } else { "s" }),
     }
 }
@@ -1153,14 +1153,14 @@ mod tests {
 
     #[test]
     fn redact_card_title_counts_unlocatable_items_too() {
-        assert_eq!(redact_card_title(0, 0, 0), "All sensitive items redacted");
+        assert_eq!(redact_card_title(0, 0, 0), "All detected items redacted");
         assert_eq!(redact_card_title(1, 0, 0), "1 sensitive item");
         assert_eq!(redact_card_title(0, 2, 0), "2 sensitive items");
         assert_eq!(redact_card_title(3, 1, 0), "4 sensitive items");
         // Weakly covered items never read as "redacted".
         assert_eq!(
             redact_card_title(0, 0, 2),
-            "All sensitive items blurred or pixelated"
+            "All detected items blurred or pixelated"
         );
         assert_eq!(redact_card_title(2, 0, 2), "2 sensitive items");
     }
