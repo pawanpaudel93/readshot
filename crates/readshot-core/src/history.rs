@@ -62,6 +62,14 @@ pub struct CaptureRecord {
     pub display_id: String,
     pub ocr_text: Option<String>,
     pub annotation_model: Vec<Annotation>,
+    /// The stored PNG is a redacted, flattened editor output and
+    /// `ocr_text` is masked to match (see [`HistoryStore::rewrite`]).
+    /// The PNG already shows the redaction annotations, so they are not
+    /// in `annotation_model` (reopening would apply them twice). Absent
+    /// in records written before this field existed, and never written
+    /// while false, so unredacted records keep the original schema.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redacted: bool,
 }
 
 impl CaptureRecord {
@@ -81,6 +89,7 @@ impl CaptureRecord {
             display_id: display_id.into(),
             ocr_text: None,
             annotation_model: Vec::new(),
+            redacted: false,
         }
     }
 }
@@ -123,11 +132,30 @@ pub trait HistoryStore: Send + Sync {
     /// "clear it": callers that never ran OCR must not erase text a
     /// concurrent OCR pass already persisted.
     ///
+    /// An update with `redacted: false` onto a stored record with
+    /// `redacted: true` is ignored: only a writer that knows the record
+    /// was scrubbed may change it (see [`Self::rewrite`]).
+    ///
     /// Best-effort by default: a record that's been retention-pruned
     /// before `update` runs is silently ignored. Implementations that
     /// can do better should override.
     fn update(&self, record: &CaptureRecord) -> Result<(), HistoryError> {
         let _ = record;
+        Ok(())
+    }
+    /// Replace an existing record wholesale: its PNG (atomically), its
+    /// thumbnail (regenerated from `png`) and its sidecar, written
+    /// exactly as given — unlike [`Self::update`], `ocr_text: None`
+    /// clears the stored text. Used by the editor to scrub a record
+    /// after a redaction and to restore it when the redactions are
+    /// undone.
+    ///
+    /// The PNG is written first: if it fails, nothing changed; if the
+    /// sidecar then fails, the image is already the new one and the
+    /// error is returned so the caller can retry. Best-effort like
+    /// `update`: a record that's been pruned is not recreated.
+    fn rewrite(&self, record: &CaptureRecord, png: &[u8]) -> Result<(), HistoryError> {
+        let _ = (record, png);
         Ok(())
     }
     /// Hard-delete a single record by id (PNG + sidecar JSON + index
@@ -337,6 +365,21 @@ impl FsHistoryStore {
         let _ = crate::save_png(&thumb.to_rgba8(), &abs_thumb);
     }
 
+    /// Regenerate a record's thumbnail from `png`, atomically. If that
+    /// fails the old thumbnail is removed rather than left showing the
+    /// previous image; `list` backfills it from the PNG later.
+    fn replace_thumbnail(&self, record: &CaptureRecord, png: &[u8]) {
+        let abs_thumb = self.root.join(Self::thumbnail_path(record));
+        let written = image::load_from_memory(png)
+            .ok()
+            .map(|img| img.thumbnail(THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT))
+            .and_then(|thumb| crate::encode_png(&thumb.to_rgba8()).ok())
+            .is_some_and(|bytes| write_atomic(&abs_thumb, &bytes).is_ok());
+        if !written {
+            let _ = fs::remove_file(&abs_thumb);
+        }
+    }
+
     /// Acquire the in-process mutex only. Used by `clear_all`, which
     /// wipes the whole root (including the on-disk lock file) and so
     /// can't meaningfully hold a file lock on it.
@@ -504,6 +547,7 @@ impl HistoryStore for FsHistoryStore {
                     display_id: String::new(),
                     ocr_text: None,
                     annotation_model: Vec::new(),
+                    redacted: false,
                 };
                 let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&record_for_path)));
             }
@@ -544,12 +588,20 @@ impl HistoryStore for FsHistoryStore {
         // predates the background OCR pass) must not wipe text another
         // writer already persisted. Merging here, under the index lock,
         // keeps the two writers race-free in-process.
+        let prev = fs::read_to_string(&abs_json)
+            .ok()
+            .and_then(|s| serde_json::from_str::<CaptureRecord>(&s).ok());
+        // A scrubbed record is only ever changed by a writer that knows
+        // it is scrubbed (`rewrite`, or an update carrying
+        // `redacted: true`). A late writer that doesn't — the capture's
+        // background OCR landing after the editor redacted — would put
+        // the unmasked text and the pre-flatten annotations back.
+        if prev.as_ref().is_some_and(|p| p.redacted) && !record.redacted {
+            return Ok(());
+        }
         let mut merged = record.clone();
         if merged.ocr_text.is_none() {
-            if let Some(prev) = fs::read_to_string(&abs_json)
-                .ok()
-                .and_then(|s| serde_json::from_str::<CaptureRecord>(&s).ok())
-            {
+            if let Some(prev) = prev {
                 merged.ocr_text = prev.ocr_text;
             }
         }
@@ -559,6 +611,20 @@ impl HistoryStore for FsHistoryStore {
         // the sidecar, nothing reads the index's `updated_at`, and the
         // editor calls this on every annotation edit — a full index
         // read-rewrite (two more fsyncs) per keystroke is pure waste.
+        Ok(())
+    }
+
+    fn rewrite(&self, record: &CaptureRecord, png: &[u8]) -> Result<(), HistoryError> {
+        let _index_guard = self.lock_index()?;
+        let (rel_png, rel_json) = Self::record_paths(record);
+        let abs_json = self.root.join(&rel_json);
+        if !abs_json.exists() {
+            return Ok(());
+        }
+        write_atomic(&self.root.join(&rel_png), png)?;
+        self.replace_thumbnail(record, png);
+        let json_content = serde_json::to_string_pretty(record)?;
+        write_atomic(&abs_json, json_content.as_bytes())?;
         Ok(())
     }
 
@@ -580,6 +646,7 @@ impl HistoryStore for FsHistoryStore {
             display_id: String::new(),
             ocr_text: None,
             annotation_model: Vec::new(),
+            redacted: false,
         };
         let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&record_for_path)));
         index.updated_at = Some(Utc::now());
@@ -1015,5 +1082,139 @@ mod tests {
         let list = s.list().unwrap();
         assert_eq!(list.len(), 1);
         assert!(thumb_path.exists());
+    }
+
+    fn decode(png: &[u8]) -> image::RgbaImage {
+        image::load_from_memory(png).unwrap().to_rgba8()
+    }
+
+    fn png_of(img: &image::RgbaImage) -> Vec<u8> {
+        crate::encode_png(img).unwrap()
+    }
+
+    #[test]
+    fn records_without_the_redacted_field_load_and_plain_records_serialise_without_it() {
+        // An old sidecar (no `redacted` key) loads unchanged.
+        let old = r#"{
+            "id": "6f1c1d2e-0000-4000-8000-000000000001",
+            "captured_at": "2026-01-01T00:00:00Z",
+            "width_px": 4,
+            "height_px": 4,
+            "display_id": "d",
+            "ocr_text": "hello",
+            "annotation_model": []
+        }"#;
+        let r: CaptureRecord = serde_json::from_str(old).unwrap();
+        assert!(!r.redacted);
+        assert_eq!(r.ocr_text.as_deref(), Some("hello"));
+        // An unredacted record writes exactly the old schema.
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(!json.contains("redacted"), "{json}");
+        let mut scrubbed = r.clone();
+        scrubbed.redacted = true;
+        let json = serde_json::to_string(&scrubbed).unwrap();
+        assert!(json.contains("\"redacted\":true"), "{json}");
+    }
+
+    #[test]
+    fn rewrite_replaces_png_thumbnail_text_and_annotations() {
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        r.ocr_text = Some("token ABC123 here".into());
+        r.annotation_model = vec![Annotation::Blur {
+            rect: crate::RectLike::new(0.0, 0.0, 2.0, 2.0),
+            radius: 2.0,
+        }];
+        s.save(&r, &valid_png(8, 8)).unwrap();
+
+        let mut scrubbed_img = image::RgbaImage::new(8, 8);
+        for px in scrubbed_img.pixels_mut() {
+            *px = image::Rgba([0, 0, 0, 255]);
+        }
+        let mut scrubbed = r.clone();
+        scrubbed.ocr_text = Some("token ██████ here".into());
+        scrubbed.annotation_model = Vec::new();
+        scrubbed.redacted = true;
+        s.rewrite(&scrubbed, &png_of(&scrubbed_img)).unwrap();
+
+        let listed = s.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0], scrubbed);
+        assert!(!listed[0].ocr_text.as_deref().unwrap().contains("ABC123"));
+        // What the MCP server reads: the PNG at `abs_png_path`.
+        let on_disk = fs::read(FsHistoryStore::abs_png_path(s.root(), &listed[0])).unwrap();
+        assert_eq!(decode(&on_disk), scrubbed_img);
+        let thumb = fs::read(FsHistoryStore::abs_thumbnail_path(s.root(), &listed[0])).unwrap();
+        assert!(decode(&thumb)
+            .pixels()
+            .all(|p| *p == image::Rgba([0, 0, 0, 255])));
+    }
+
+    #[test]
+    fn rewrite_with_no_text_clears_the_stored_text() {
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        r.ocr_text = Some("secret".into());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        r.ocr_text = None;
+        s.rewrite(&r, &valid_png(4, 4)).unwrap();
+        assert_eq!(s.list().unwrap()[0].ocr_text, None);
+    }
+
+    #[test]
+    fn rewrite_is_a_noop_when_record_was_pruned() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.rewrite(&r, &valid_png(4, 4)).unwrap();
+        assert!(s.list().unwrap().is_empty());
+        assert!(!s.root().join(FsHistoryStore::png_path(&r)).exists());
+    }
+
+    #[test]
+    fn a_failed_rewrite_keeps_the_old_record() {
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        r.ocr_text = Some("original".into());
+        let original = valid_png(4, 4);
+        s.save(&r, &original).unwrap();
+        // Make the PNG write fail (its rename target is a directory):
+        // the PNG goes first, so the sidecar must stay untouched.
+        let png = s.root().join(FsHistoryStore::png_path(&r));
+        fs::remove_file(&png).unwrap();
+        fs::create_dir(&png).unwrap();
+        let mut scrubbed = r.clone();
+        scrubbed.ocr_text = Some("masked".into());
+        scrubbed.redacted = true;
+        assert!(s.rewrite(&scrubbed, &valid_png(4, 4)).is_err());
+        let listed = s.list().unwrap();
+        assert_eq!(listed[0].ocr_text.as_deref(), Some("original"));
+        assert!(!listed[0].redacted);
+    }
+
+    #[test]
+    fn plain_update_never_unscrubs_a_redacted_record() {
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let mut scrubbed = r.clone();
+        scrubbed.ocr_text = Some("██████".into());
+        scrubbed.redacted = true;
+        s.rewrite(&scrubbed, &valid_png(4, 4)).unwrap();
+        // A late OCR pass writes the raw text with stale annotations.
+        r.ocr_text = Some("secret".into());
+        r.annotation_model = vec![Annotation::Blur {
+            rect: crate::RectLike::new(0.0, 0.0, 2.0, 2.0),
+            radius: 2.0,
+        }];
+        s.update(&r).unwrap();
+        assert_eq!(s.list().unwrap()[0], scrubbed);
+        // An update that knows the record is scrubbed still applies.
+        let mut later = scrubbed.clone();
+        later.ocr_text = None;
+        later.annotation_model = r.annotation_model.clone();
+        s.update(&later).unwrap();
+        let listed = &s.list().unwrap()[0];
+        assert_eq!(listed.annotation_model, r.annotation_model);
+        assert_eq!(listed.ocr_text.as_deref(), Some("██████"));
     }
 }

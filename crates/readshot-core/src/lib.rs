@@ -26,6 +26,7 @@ pub mod preferences;
 pub mod redact;
 pub mod render;
 pub mod scroll_stitch;
+pub mod scrub;
 pub mod stamp;
 pub mod text_lines;
 
