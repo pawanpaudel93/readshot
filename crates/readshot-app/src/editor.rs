@@ -128,6 +128,11 @@ pub struct TextPanelState {
     pub redact_style: readshot_core::redact::RedactStyle,
     /// Sensitive spans found when recognition returned positions.
     pub matches: Vec<readshot_core::redact::RedactMatch>,
+    /// Recognition was asked for through `Message::EditorTextRecognize`
+    /// (panel, Retry) since the last result. A failure toasts only then
+    /// or while the panel is open; a background (history) OCR failure
+    /// with the panel closed just marks the panel Failed.
+    pub user_requested: bool,
 }
 
 impl TextPanelState {
@@ -155,7 +160,10 @@ pub enum EditorToastAction {
     RetryRecognition,
 }
 
-fn next_session_id() -> u64 {
+/// A fresh, process-unique editor session id. Normally assigned by the
+/// constructors; a fresh capture allocates one first so its history OCR
+/// can be tagged for the editor before the editor exists.
+pub(crate) fn next_session_id() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }

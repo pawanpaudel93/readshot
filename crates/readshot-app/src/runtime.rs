@@ -1395,43 +1395,22 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         &display_id,
                         state.preferences.history_retention,
                     );
-                    // Build the editor first so the history OCR (same base
-                    // image) can feed its Text panel: one OCR per capture.
-                    let mut editor =
-                        (intent == crate::app::CaptureIntent::Editor).then(|| match history_record
-                            .clone()
-                        {
-                            Some(record) => {
-                                crate::editor::EditorSession::from_history_with_display_scale(
-                                    image.clone(),
-                                    record,
-                                    display_scale,
-                                )
-                            }
-                            None => crate::editor::EditorSession::new_with_display_scale(
-                                image.clone(),
-                                display_scale,
-                            ),
-                        });
-                    // A record exists only when history is on, i.e. the
-                    // history task will OCR. Mark the panel Recognizing so
-                    // `request_text_recognition` doesn't start a second OCR.
-                    let shared_session = match (editor.as_mut(), history_record.is_some()) {
-                        (Some(ed), true) => {
-                            ed.text_panel.recognition =
-                                crate::editor::TextRecognition::Recognizing {
-                                    since: std::time::Instant::now(),
-                                };
-                            Some(ed.session_id)
-                        }
-                        _ => None,
-                    };
+                    // One OCR per capture: when history is on (a record
+                    // exists) its task OCRs the same base image, so an
+                    // editor opened for this capture shares that result.
+                    // Its session id is allocated up front so the history
+                    // task can tag the result before the editor exists.
+                    let shared_session = (intent == crate::app::CaptureIntent::Editor
+                        && history_record.is_some())
+                    .then(crate::editor::next_session_id);
                     // Persist a history record in parallel with the
                     // user-visible intent action. The history task is
                     // gated on `preferences.history_retention` and
                     // logs internally on failure, so it can never
                     // block or fail the user-visible flow.
-                    let history_task = if intent == crate::app::CaptureIntent::CliInteractive {
+                    let history_task = if intent == crate::app::CaptureIntent::CliInteractive
+                        || history_record.is_none()
+                    {
                         Task::none()
                     } else {
                         persist_history_task(
@@ -1444,12 +1423,32 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         )
                     };
                     let intent_task = match intent {
-                        crate::app::CaptureIntent::Editor => match editor {
-                            Some(editor) => {
-                                open_editor_window_replacing(state, editor, display_bounds)
+                        crate::app::CaptureIntent::Editor => {
+                            let mut editor = match history_record {
+                                Some(record) => {
+                                    crate::editor::EditorSession::from_history_with_display_scale(
+                                        image,
+                                        record,
+                                        display_scale,
+                                    )
+                                }
+                                None => crate::editor::EditorSession::new_with_display_scale(
+                                    image,
+                                    display_scale,
+                                ),
+                            };
+                            // Mark the panel Recognizing so
+                            // `request_text_recognition` doesn't start a
+                            // second OCR.
+                            if let Some(session) = shared_session {
+                                editor.session_id = session;
+                                editor.text_panel.recognition =
+                                    crate::editor::TextRecognition::Recognizing {
+                                        since: std::time::Instant::now(),
+                                    };
                             }
-                            None => Task::none(),
-                        },
+                            open_editor_window_replacing(state, editor, display_bounds)
+                        }
                         crate::app::CaptureIntent::CopyToClipboard => {
                             Task::perform(copy_image_to_clipboard(image), |r| {
                                 Message::OverlayCopyDone(r.map_err(|e| e.to_string()))
@@ -2198,16 +2197,8 @@ fn reset_settings_to_defaults(state: &mut App) {
 /// Spawn a fire-and-forget history-persistence task: encode the PNG and
 /// save the record (empty OCR) while OCR runs **concurrently**, then
 /// update the sidecar with the recognised text. Each stage logs its own
-/// failures and the user-visible flow never blocks on this work.
-///
-/// Messages:
-/// * [`Message::HistoryRecordSaved`] the moment the record hits disk —
-///   the new row shows up without waiting on OCR;
-/// * [`Message::EditorTextRecognized`] when `editor_session` is set: the
-///   same OCR feeds that editor's Text panel (one OCR per capture),
-///   errors included so the panel can offer Retry;
-/// * [`Message::HistoryRecordPersisted`] once OCR resolves — `Ok(true)`
-///   when text landed, `Ok(false)` when OCR failed or the update did.
+/// failures and the user-visible flow never blocks on this work. See
+/// [`persist_history`] for the messages it emits.
 fn persist_history_task(
     coord: CaptureCoordinator,
     img: image::RgbaImage,
@@ -2216,44 +2207,58 @@ fn persist_history_task(
     preferences: Preferences,
     editor_session: Option<u64>,
 ) -> Task<Message> {
-    use iced::futures::SinkExt;
     Task::stream(iced::stream::channel(
         4,
-        move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
-            if matches!(policy, readshot_core::HistoryRetention::Off) {
-                return;
-            }
-            let Some(mut record) = record else {
-                return;
-            };
-            let now = record.captured_at;
-            let ocr = coord.recognise_document(ocr_request_for_image(img.clone(), &preferences));
-            let save = {
-                let coord = coord.clone();
-                let record = record.clone();
-                let mut output = output.clone();
-                async move {
-                    // Best-compression encode is CPU-heavy on large
-                    // captures — keep it off the async workers.
-                    let encoded =
-                        tokio::task::spawn_blocking(move || readshot_core::encode_png(&img)).await;
-                    let buf = match encoded {
-                        Ok(Ok(buf)) => buf,
-                        Ok(Err(e)) => {
-                            tracing::warn!(target: "readshot::history", "png encode: {e}");
-                            return false;
-                        }
-                        Err(e) => {
-                            tracing::warn!(target: "readshot::history", "png encode worker: {e}");
-                            return false;
-                        }
-                    };
-                    coord.record_history(record, buf, policy, now).await;
-                    let _ = output.send(Message::HistoryRecordSaved).await;
-                    true
-                }
-            };
-            let (doc, saved) = iced::futures::future::join(ocr, save).await;
+        move |output: iced::futures::channel::mpsc::Sender<Message>| {
+            persist_history(
+                coord,
+                img,
+                record,
+                policy,
+                preferences,
+                editor_session,
+                output,
+            )
+        },
+    ))
+}
+
+/// Body of [`persist_history_task`], separate so tests can drive it.
+///
+/// Messages:
+/// * [`Message::EditorTextRecognized`] when `editor_session` is set, the
+///   moment OCR resolves (not after the slower PNG encode / save): the
+///   same OCR feeds that editor's Text panel (one OCR per capture),
+///   errors included so the editor never stays Recognizing. Engines map
+///   a panicked OCR worker to an error, so this is always sent;
+/// * [`Message::HistoryRecordSaved`] the moment the record hits disk —
+///   the new row shows up without waiting on OCR;
+/// * [`Message::HistoryRecordPersisted`] once both resolve — `Ok(true)`
+///   when text landed, `Ok(false)` when OCR failed or the update did.
+///   Not sent when the PNG encode failed (no record was saved).
+async fn persist_history(
+    coord: CaptureCoordinator,
+    img: image::RgbaImage,
+    record: Option<readshot_core::CaptureRecord>,
+    policy: readshot_core::HistoryRetention,
+    preferences: Preferences,
+    editor_session: Option<u64>,
+    mut output: iced::futures::channel::mpsc::Sender<Message>,
+) {
+    use iced::futures::SinkExt;
+    if matches!(policy, readshot_core::HistoryRetention::Off) {
+        return;
+    }
+    let Some(mut record) = record else {
+        return;
+    };
+    let now = record.captured_at;
+    let ocr = {
+        let coord = coord.clone();
+        let req = ocr_request_for_image(img.clone(), &preferences);
+        let mut output = output.clone();
+        async move {
+            let doc = coord.recognise_document(req).await;
             if let Some(session) = editor_session {
                 let result = match &doc {
                     Ok(d) => Ok(d.clone()),
@@ -2263,38 +2268,64 @@ fn persist_history_task(
                     .send(Message::EditorTextRecognized { session, result })
                     .await;
             }
-            if !saved {
-                return;
-            }
-            let persisted = match doc {
-                Ok(doc) => {
-                    let list_coord = coord.clone();
-                    let listed =
-                        tokio::task::spawn_blocking(move || list_coord.history_list()).await;
-                    if let Ok(Ok(records)) = listed {
-                        if let Some(latest) = records.into_iter().find(|r| r.id == record.id) {
-                            record.annotation_model = latest.annotation_model;
-                        }
-                    }
-                    // The same string `recognise` returned before.
-                    record.ocr_text = Some(doc.layout_text);
-                    if let Err(e) = coord.update_history(&record) {
-                        tracing::warn!(target: "readshot::history", "ocr update failed: {e}");
-                        false
-                    } else {
-                        true
-                    }
+            doc
+        }
+    };
+    let save = {
+        let coord = coord.clone();
+        let record = record.clone();
+        let mut output = output.clone();
+        async move {
+            // Best-compression encode is CPU-heavy on large captures —
+            // keep it off the async workers.
+            let encoded =
+                tokio::task::spawn_blocking(move || readshot_core::encode_png(&img)).await;
+            let buf = match encoded {
+                Ok(Ok(buf)) => buf,
+                Ok(Err(e)) => {
+                    tracing::warn!(target: "readshot::history", "png encode: {e}");
+                    return false;
                 }
                 Err(e) => {
-                    tracing::warn!(target: "readshot::history", "ocr failed: {e}");
-                    false
+                    tracing::warn!(target: "readshot::history", "png encode worker: {e}");
+                    return false;
                 }
             };
-            let _ = output
-                .send(Message::HistoryRecordPersisted(Ok(persisted)))
-                .await;
-        },
-    ))
+            coord.record_history(record, buf, policy, now).await;
+            let _ = output.send(Message::HistoryRecordSaved).await;
+            true
+        }
+    };
+    let (doc, saved) = iced::futures::future::join(ocr, save).await;
+    if !saved {
+        return;
+    }
+    let persisted = match doc {
+        Ok(doc) => {
+            let list_coord = coord.clone();
+            let listed = tokio::task::spawn_blocking(move || list_coord.history_list()).await;
+            if let Ok(Ok(records)) = listed {
+                if let Some(latest) = records.into_iter().find(|r| r.id == record.id) {
+                    record.annotation_model = latest.annotation_model;
+                }
+            }
+            // The same string `recognise` returned before.
+            record.ocr_text = Some(doc.layout_text);
+            if let Err(e) = coord.update_history(&record) {
+                tracing::warn!(target: "readshot::history", "ocr update failed: {e}");
+                false
+            } else {
+                true
+            }
+        }
+        Err(e) => {
+            tracing::warn!(target: "readshot::history", "ocr failed: {e}");
+            false
+        }
+    };
+    let _ = output
+        .send(Message::HistoryRecordPersisted(Ok(persisted)))
+        .await;
 }
 
 fn history_record_for_capture(
@@ -8531,5 +8562,159 @@ mod tests {
             app.editor.as_ref().unwrap().text_panel.recognition,
             crate::editor::TextRecognition::Recognizing { .. }
         ));
+    }
+
+    #[test]
+    fn background_recognition_failure_is_quiet_with_the_panel_closed() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.preferences.editor_panel_open = false;
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let session = app.editor.as_ref().unwrap().session_id;
+        // A history-shared OCR nobody asked for fails: no toast.
+        let _ = update(
+            &mut app,
+            Message::EditorTextRecognized {
+                session,
+                result: Err("no models".into()),
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert!(matches!(
+            ed.text_panel.recognition,
+            crate::editor::TextRecognition::Failed(_)
+        ));
+        assert!(ed.status.is_none() && ed.toast_action.is_none());
+
+        // Asked for explicitly: the failure toasts with Retry.
+        let _ = update(&mut app, Message::EditorTextRecognize);
+        let _ = update(
+            &mut app,
+            Message::EditorTextRecognized {
+                session,
+                result: Err("no models".into()),
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            ed.toast_action,
+            Some(crate::editor::EditorToastAction::RetryRecognition)
+        );
+    }
+
+    /// Run `persist_history` to completion and collect what it sent.
+    async fn run_persist_history(
+        ocr: FakeOcrEngine,
+        img: image::RgbaImage,
+        session: Option<u64>,
+    ) -> (
+        Vec<Message>,
+        CaptureCoordinator,
+        readshot_core::CaptureRecord,
+        tempfile::TempDir,
+    ) {
+        use iced::futures::StreamExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let store: Arc<dyn HistoryStore> =
+            Arc::new(FsHistoryStore::new(dir.path().join("history")));
+        let perms = Arc::new(FakePermissions::granted());
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(ocr),
+            perms,
+            Some(store),
+        );
+        let record = readshot_core::CaptureRecord::new(
+            chrono::Utc::now(),
+            img.width(),
+            img.height(),
+            "fake-0",
+        );
+        let (tx, rx) = iced::futures::channel::mpsc::channel(4);
+        persist_history(
+            coord.clone(),
+            img,
+            Some(record.clone()),
+            readshot_core::HistoryRetention::Last50,
+            Preferences::default(),
+            session,
+            tx,
+        )
+        .await;
+        let msgs: Vec<Message> = rx.collect().await;
+        (msgs, coord, record, dir)
+    }
+
+    #[tokio::test]
+    async fn history_ocr_feeds_the_editor_first_and_stores_the_layout_text() {
+        let (msgs, coord, record, _dir) = run_persist_history(
+            FakeOcrEngine::with_text("one\n\ntwo"),
+            solid(16, 16),
+            Some(7),
+        )
+        .await;
+        // OCR resolves before the PNG encode / save, so the panel isn't
+        // held back by them.
+        match &msgs[0] {
+            Message::EditorTextRecognized {
+                session: 7,
+                result: Ok(doc),
+            } => {
+                assert_eq!(doc.layout_text, "one\n\ntwo");
+            }
+            other => panic!("expected EditorTextRecognized first, got {other:?}"),
+        }
+        assert!(msgs
+            .iter()
+            .any(|m| matches!(m, Message::HistoryRecordSaved)));
+        assert!(matches!(
+            msgs.last(),
+            Some(Message::HistoryRecordPersisted(Ok(true)))
+        ));
+        let stored = coord.history_list().unwrap();
+        let stored = stored.iter().find(|r| r.id == record.id).unwrap();
+        assert_eq!(stored.ocr_text.as_deref(), Some("one\n\ntwo"));
+
+        // No editor session: nothing is sent to an editor.
+        let (msgs, _, _, _dir) =
+            run_persist_history(FakeOcrEngine::with_text("hi"), solid(16, 16), None).await;
+        assert!(!msgs
+            .iter()
+            .any(|m| matches!(m, Message::EditorTextRecognized { .. })));
+    }
+
+    #[tokio::test]
+    async fn history_ocr_errors_reach_the_editor_even_when_the_save_fails() {
+        let (msgs, _, _, _dir) =
+            run_persist_history(FakeOcrEngine::failing("boom"), solid(16, 16), Some(3)).await;
+        assert!(matches!(
+            &msgs[0],
+            Message::EditorTextRecognized {
+                session: 3,
+                result: Err(_)
+            }
+        ));
+        assert!(matches!(
+            msgs.last(),
+            Some(Message::HistoryRecordPersisted(Ok(false)))
+        ));
+
+        // A 0 × 0 image fails the PNG encode: no record is saved, but the
+        // editor still gets its OCR result (it never stays Recognizing).
+        let (msgs, _, _, _dir) = run_persist_history(
+            FakeOcrEngine::with_text("hi"),
+            image::RgbaImage::new(0, 0),
+            Some(4),
+        )
+        .await;
+        assert!(
+            matches!(
+                &msgs[..],
+                [Message::EditorTextRecognized {
+                    session: 4,
+                    result: Ok(_)
+                }]
+            ),
+            "{msgs:?}"
+        );
     }
 }

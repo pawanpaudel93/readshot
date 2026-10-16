@@ -64,14 +64,21 @@ pub(crate) fn seed_text_from_history(ed: &mut EditorSession, engine_reports_posi
 
 pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Task<Message> {
     match message {
-        Message::EditorTextRecognize => request_text_recognition(state),
+        Message::EditorTextRecognize => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.text_panel.user_requested = true;
+            }
+            request_text_recognition(state)
+        }
         Message::EditorTextRecognized { session, result } => {
+            let panel_open = state.preferences.editor_panel_open;
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
             if ed.session_id != session {
                 return Task::none();
             }
+            let user_requested = std::mem::take(&mut ed.text_panel.user_requested);
             match result {
                 Ok(doc) => {
                     let tp = &mut ed.text_panel;
@@ -89,8 +96,10 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
                     tracing::warn!(target: "readshot::editor", "text recognition failed: {e}");
                     ed.text_panel.recognition = TextRecognition::Failed(e.clone());
                     // Don't clobber a Saving…/Copying… toast; the panel's
-                    // Try Again state still offers the retry.
-                    if !ed.busy {
+                    // Try Again state still offers the retry. A background
+                    // OCR nobody is looking at (panel closed, not asked
+                    // for) fails quietly, as history OCR always did.
+                    if !ed.busy && (panel_open || user_requested) {
                         ed.set_status_with_action(
                             super::history_ops::friendly_string_error_with(
                                 "recognize the text",
