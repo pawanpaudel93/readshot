@@ -79,17 +79,6 @@ impl TextSize {
         }
     }
 
-    /// One step up or down, clamped at S and XL (`]` / `[` on text).
-    pub fn step(self, up: bool) -> Self {
-        let i = Self::ALL.iter().position(|s| *s == self).unwrap_or(1);
-        let next = if up {
-            (i + 1).min(Self::ALL.len() - 1)
-        } else {
-            i.saturating_sub(1)
-        };
-        Self::ALL[next]
-    }
-
     /// The next preset above (`up`) or below an actual pixel size, or
     /// `None` when there is none. Steps from the real size, so an
     /// off-scale legacy text (e.g. 96 px) never jumps the wrong way.
@@ -481,12 +470,5 @@ mod tests {
         };
         assert_eq!(style.shape_style(ToolState::Ellipse).corner_radius, 0.0);
         assert_eq!(style.shape_style(ToolState::Rectangle).corner_radius, 12.0);
-    }
-
-    #[test]
-    fn text_size_steps_clamp_at_the_ends() {
-        assert_eq!(TextSize::M.step(true), TextSize::L);
-        assert_eq!(TextSize::Xl.step(true), TextSize::Xl);
-        assert_eq!(TextSize::S.step(false), TextSize::S);
     }
 }
