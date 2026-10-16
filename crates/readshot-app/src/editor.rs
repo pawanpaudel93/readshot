@@ -64,14 +64,14 @@ pub enum EditorPopover {
     Frame,
 }
 
-/// One open editor window, plus the iced-side state that doesn't
-/// belong inside the pure model.
 /// Eyedropper mode state. The loupe updates as the cursor moves.
 #[derive(Clone, Debug, Default)]
 pub struct EyedropperState {
     pub loupe: Option<readshot_ui::editor::Loupe>,
 }
 
+/// One open editor window, plus the iced-side state that doesn't
+/// belong inside the pure model.
 pub struct EditorSession {
     pub model: Model,
     pub status: Option<String>,
@@ -452,15 +452,6 @@ impl EditorSession {
         EditorZoom::actual_size(self.display_scale)
     }
 
-    /// Set the toast text under the action row and stamp the
-    /// `status_set_at` clock so auto-dismiss can run on the runtime
-    /// tick. Use this everywhere `status = Some(…)` was set inline so
-    /// the auto-dismiss is uniform across save / copy / OCR / pin
-    /// paths.
-    ///
-    /// Any status set here replaces the armed-discard prompt, so it also
-    /// disarms Discard (the armed prompt itself is written directly by
-    /// `EditorDiscardRequested`, not through this method).
     /// Drop the loupe after the view moves under a still cursor (zoom),
     /// so it never shows a pixel other than the one a click would pick.
     /// The next hover refills it.
@@ -470,6 +461,15 @@ impl EditorSession {
         }
     }
 
+    /// Set the toast text under the action row and stamp the
+    /// `status_set_at` clock so auto-dismiss can run on the runtime
+    /// tick. Use this everywhere `status = Some(…)` was set inline so
+    /// the auto-dismiss is uniform across save / copy / OCR / pin
+    /// paths.
+    ///
+    /// Any status set here replaces the armed-discard prompt, so it also
+    /// disarms Discard (the armed prompt itself is written directly by
+    /// `EditorDiscardRequested`, not through this method).
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.discard_pending_at = None;
         self.status = Some(msg.into());

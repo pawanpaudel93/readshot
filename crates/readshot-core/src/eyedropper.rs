@@ -16,8 +16,6 @@ fn pixel(img: &RgbaImage, x: i64, y: i64) -> Option<Rgba> {
     Some(c)
 }
 
-/// Color under `at` (base-image pixels). The far edge (`x == width`,
-/// which the canvas's clamped mapping can produce) reads the last pixel.
 /// Map a canvas base point to the base pixel the editor actually shows
 /// there. The canvas adds the crop origin as-is (`x0 = 10.6`), but
 /// `render::blit_base` truncates its offset (`(-10.6) as i32 = -10`), so
@@ -28,6 +26,8 @@ pub fn displayed_base_point(at: PointLike, crop_origin: (f32, f32)) -> PointLike
     PointLike::new(at.x - crop_origin.0.fract(), at.y - crop_origin.1.fract())
 }
 
+/// Color under `at` (base-image pixels). The far edge (`x == width`,
+/// which the canvas's clamped mapping can produce) reads the last pixel.
 pub fn sample(img: &RgbaImage, at: PointLike) -> Option<Rgba> {
     if !(at.x.is_finite() && at.y.is_finite()) || at.x < 0.0 || at.y < 0.0 {
         return None;
