@@ -38,7 +38,7 @@ use readshot_capture::{display_local_bounds, CaptureRequest};
 use readshot_core::Preferences;
 use readshot_ui::SettingsMessage;
 
-use crate::editor::{EditorFrameStyle, EditorSession};
+use crate::editor::EditorSession;
 use crate::url_scheme::UrlAction;
 
 mod hotkeys;
@@ -66,8 +66,8 @@ pub(crate) use side_panel::*;
 mod history_ops;
 mod settings_ops;
 
-mod frame_render;
-pub(crate) use frame_render::*;
+mod beautify_preview;
+pub(crate) use beautify_preview::*;
 
 /// Initial URL action set from `main.rs` before `iced::daemon` starts.
 /// `start()` consumes this and feeds an extra `Message::UrlActionReceived`
@@ -1779,7 +1779,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorSaved(..)
         | Message::EditorCopyImageRequested
         | Message::EditorCopyImageDone(..)
-        | Message::EditorFrameStyleChanged(..)
+        | Message::EditorBeautifyPreset(..)
         | Message::EditorCopyTextRequested
         | Message::EditorCopyTextDone(..)
         | Message::EditorDiscardRequested
@@ -2566,10 +2566,7 @@ fn history_list_task(coord: CaptureCoordinator) -> Task<Message> {
 
 fn editor_output_image(ed: &mut EditorSession) -> image::RgbaImage {
     let img = ed.model.flatten();
-    match ed.frame_style {
-        EditorFrameStyle::None => img,
-        style => share_framed_image(&img, style),
-    }
+    readshot_core::beautify::render(&img, &ed.model.beautify())
 }
 
 fn can_preview_drag_annotation(annotations: &[readshot_core::Annotation], index: usize) -> bool {
@@ -2673,6 +2670,7 @@ mod tests {
     use iced::widget::button;
     use readshot_capture::fake::FakeCapturer;
     use readshot_capture::{Capturer, DisplayInfo};
+    use readshot_core::beautify::BuiltinPreset;
     use readshot_core::error::CaptureError;
     use readshot_core::{Annotation, FsHistoryStore, HistoryStore, PointLike, RectLike, Rgba};
     use readshot_ocr::fake::FakeOcrEngine;
@@ -3093,13 +3091,10 @@ mod tests {
             &mut app,
             Message::EditorPopoverToggled(crate::editor::EditorPopover::Frame),
         );
-        let _ = update(
-            &mut app,
-            Message::EditorFrameStyleChanged(crate::editor::EditorFrameStyle::Soft),
-        );
+        let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Soft));
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.popover, None);
-        assert_eq!(ed.frame_style, crate::editor::EditorFrameStyle::Soft);
+        assert_eq!(ed.model.beautify(), BuiltinPreset::Soft.settings());
     }
 
     #[cfg(target_os = "macos")]
@@ -5320,80 +5315,6 @@ mod tests {
     }
 
     #[test]
-    fn share_framed_image_none_returns_source_pixels() {
-        let mut img = image::RgbaImage::new(24, 16);
-        for px in img.pixels_mut() {
-            *px = image::Rgba([120, 40, 220, 255]);
-        }
-
-        let framed = share_framed_image(&img, EditorFrameStyle::None);
-
-        assert_eq!((framed.width(), framed.height()), (24, 16));
-        assert_eq!(framed.as_raw(), img.as_raw());
-    }
-
-    #[test]
-    fn framed_output_size_uses_checked_padding_math() {
-        assert_eq!(framed_output_size(10, 20, 4), Some((18, 28)));
-        assert_eq!(framed_output_size(0, 0, 0), Some((1, 1)));
-        assert_eq!(framed_output_size(u32::MAX - 1, 20, 1), None);
-        assert_eq!(framed_output_size(10, 20, u32::MAX), None);
-    }
-
-    #[test]
-    fn share_framed_image_soft_adds_padding_and_preserves_center_pixels() {
-        let mut img = image::RgbaImage::new(64, 64);
-        for px in img.pixels_mut() {
-            *px = image::Rgba([200, 10, 20, 255]);
-        }
-
-        let framed = share_framed_image(&img, EditorFrameStyle::Soft);
-
-        assert_eq!(framed.width(), 208);
-        assert_eq!(framed.height(), 208);
-        assert_eq!(*framed.get_pixel(104, 104), image::Rgba([200, 10, 20, 255]));
-        assert_eq!(*framed.get_pixel(0, 0), image::Rgba([229, 234, 240, 255]));
-        assert_eq!(*framed.get_pixel(72, 72), image::Rgba([229, 234, 240, 255]));
-        assert_ne!(
-            *framed.get_pixel(104, 71),
-            image::Rgba([229, 234, 240, 255])
-        );
-    }
-
-    #[test]
-    fn share_framed_image_presets_have_distinct_canvases() {
-        let mut img = image::RgbaImage::new(64, 64);
-        for px in img.pixels_mut() {
-            *px = image::Rgba([200, 10, 20, 255]);
-        }
-
-        let light = share_framed_image(&img, EditorFrameStyle::Light);
-        let dark = share_framed_image(&img, EditorFrameStyle::Dark);
-        let minimal = share_framed_image(&img, EditorFrameStyle::Minimal);
-
-        assert_eq!((light.width(), light.height()), (176, 176));
-        assert_eq!((dark.width(), dark.height()), (192, 192));
-        assert_eq!((minimal.width(), minimal.height()), (112, 112));
-        assert_eq!(*light.get_pixel(0, 0), image::Rgba([248, 250, 252, 255]));
-        assert_eq!(*dark.get_pixel(0, 0), image::Rgba([17, 24, 39, 255]));
-        assert_eq!(*minimal.get_pixel(0, 0), image::Rgba([255, 255, 255, 255]));
-    }
-
-    #[test]
-    fn share_framed_image_transparent_keeps_alpha_outside_image() {
-        let mut img = image::RgbaImage::new(32, 32);
-        for px in img.pixels_mut() {
-            *px = image::Rgba([20, 120, 240, 255]);
-        }
-
-        let framed = share_framed_image(&img, EditorFrameStyle::Transparent);
-
-        assert_eq!((framed.width(), framed.height()), (96, 96));
-        assert_eq!(*framed.get_pixel(0, 0), image::Rgba([0, 0, 0, 0]));
-        assert_eq!(*framed.get_pixel(48, 48), image::Rgba([20, 120, 240, 255]));
-    }
-
-    #[test]
     fn editor_output_image_bakes_annotations_and_selected_frame() {
         let mut ed = crate::editor::EditorSession::new(solid(32, 32));
         ed.model.commit_annotation(Annotation::Rectangle {
@@ -5402,7 +5323,8 @@ mod tests {
             line_width: 4.0,
             style: Default::default(),
         });
-        ed.frame_style = EditorFrameStyle::Minimal;
+        ed.model
+            .set_beautify(readshot_core::beautify::BuiltinPreset::Minimal.settings());
 
         let output = editor_output_image(&mut ed);
 
@@ -6494,15 +6416,12 @@ mod tests {
         app.editor = Some(ed);
 
         let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
-        let _ = update(
-            &mut app,
-            Message::EditorFrameStyleChanged(EditorFrameStyle::Soft),
-        );
+        let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Soft));
 
         let ed = app.editor.as_ref().unwrap();
-        assert_eq!(ed.frame_style, EditorFrameStyle::Soft);
+        assert_eq!(ed.model.beautify(), BuiltinPreset::Soft.settings());
         assert!(ed.width_drag_baseline.is_none());
-        assert_eq!(ed.model.undo_depth(), undo_depth);
+        assert_eq!(ed.model.undo_depth(), undo_depth + 1);
         match &ed.model.annotations()[0] {
             Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 2.0),
             other => panic!("expected rectangle, got {other:?}"),
@@ -6593,7 +6512,7 @@ mod tests {
             line_width: 2.0,
             style: Default::default(),
         });
-        ed.frame_style = EditorFrameStyle::Soft;
+        ed.model.set_beautify(BuiltinPreset::Soft.settings());
         let undo_depth = ed.model.undo_depth();
         app.editor = Some(ed);
 
@@ -6621,7 +6540,7 @@ mod tests {
             line_width: 2.0,
             style: Default::default(),
         });
-        ed.frame_style = EditorFrameStyle::Dark;
+        ed.model.set_beautify(BuiltinPreset::Dark.settings());
         app.editor = Some(ed);
 
         let _ = update(&mut app, Message::EditorCopyImageDone(Ok(())));
@@ -6866,7 +6785,7 @@ mod tests {
     fn editor_discard_requires_confirmation_for_selected_frame() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let mut ed = crate::editor::EditorSession::new(solid(64, 64));
-        ed.frame_style = EditorFrameStyle::Soft;
+        ed.model.set_beautify(BuiltinPreset::Soft.settings());
         app.editor = Some(ed);
 
         let _ = update(&mut app, Message::EditorDiscardRequested);
@@ -6894,10 +6813,7 @@ mod tests {
         let _ = update(&mut app, Message::EditorDiscardRequested);
         assert!(app.editor.as_ref().unwrap().discard_pending_at.is_some());
 
-        let _ = update(
-            &mut app,
-            Message::EditorFrameStyleChanged(EditorFrameStyle::Soft),
-        );
+        let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Soft));
         assert!(app.editor.as_ref().unwrap().discard_pending_at.is_none());
 
         let _ = update(&mut app, Message::EditorDiscardRequested);

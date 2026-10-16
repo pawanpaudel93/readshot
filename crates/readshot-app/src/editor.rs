@@ -17,45 +17,6 @@
 use readshot_core::{Annotation, CaptureRecord, PointLike};
 use readshot_ui::editor::EditorState as Model;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum EditorFrameStyle {
-    #[default]
-    None,
-    Soft,
-    Light,
-    Dark,
-    Minimal,
-    Transparent,
-}
-
-impl EditorFrameStyle {
-    pub const ALL: [Self; 6] = [
-        Self::None,
-        Self::Soft,
-        Self::Light,
-        Self::Dark,
-        Self::Minimal,
-        Self::Transparent,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::None => "No Frame",
-            Self::Soft => "Soft Shadow",
-            Self::Light => "Light Card",
-            Self::Dark => "Dark Card",
-            Self::Minimal => "Minimal Border",
-            Self::Transparent => "Transparent",
-        }
-    }
-}
-
-impl std::fmt::Display for EditorFrameStyle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.label())
-    }
-}
-
 /// Which floating popover is open over the editor (at most one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditorPopover {
@@ -232,9 +193,6 @@ pub struct EditorSession {
     pub width_drag_baseline: Option<Vec<Annotation>>,
     /// Baseline for an options-bar slider drag; see [`StyleDrag`].
     pub style_drag_baseline: Option<StyleDrag>,
-    /// Optional presentation frame applied to image outputs from this
-    /// editor window. `No Frame` keeps Save / Copy / Pin pixel-exact.
-    pub frame_style: EditorFrameStyle,
     /// Open color / line-width / frame popover, if any. Esc and a
     /// click outside close it before any other Esc behaviour runs.
     pub popover: Option<EditorPopover>,
@@ -311,20 +269,9 @@ pub struct EditorSession {
         Option<iced::futures::channel::oneshot::Receiver<crate::coordinator::HistoryRewriteResult>>,
 }
 
+/// What the user last copied/saved: annotations, geometry and Beautify.
 #[derive(Clone, Debug, PartialEq)]
-struct EditorOutputCheckpoint {
-    annotations: Vec<Annotation>,
-    frame_style: EditorFrameStyle,
-}
-
-impl EditorOutputCheckpoint {
-    fn new(annotations: &[Annotation], frame_style: EditorFrameStyle) -> Self {
-        Self {
-            annotations: annotations.to_vec(),
-            frame_style,
-        }
-    }
-}
+struct EditorOutputCheckpoint(readshot_ui::editor::Snapshot);
 
 /// How long the "Press Discard again" prompt stays armed
 /// before reverting to a fresh single-click state.
@@ -494,8 +441,7 @@ impl EditorSession {
     pub fn new_with_display_scale(image: image::RgbaImage, display_scale: f32) -> Self {
         let mut model = Model::new(image);
         let image_handle = build_handle(&mut model);
-        let output_checkpoint =
-            EditorOutputCheckpoint::new(model.annotations(), EditorFrameStyle::None);
+        let output_checkpoint = EditorOutputCheckpoint(model.snapshot());
         Self {
             model,
             status: None,
@@ -516,7 +462,6 @@ impl EditorSession {
             move_drag: None,
             width_drag_baseline: None,
             style_drag_baseline: None,
-            frame_style: EditorFrameStyle::None,
             canvas_drag_active: false,
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
@@ -546,8 +491,7 @@ impl EditorSession {
         let next_pin_number = next_pin_number_after(&record.annotation_model);
         let mut model = Model::with_annotations(image, record.annotation_model.clone());
         let image_handle = build_handle(&mut model);
-        let output_checkpoint =
-            EditorOutputCheckpoint::new(model.annotations(), EditorFrameStyle::None);
+        let output_checkpoint = EditorOutputCheckpoint(model.snapshot());
         Self {
             model,
             status: None,
@@ -568,7 +512,6 @@ impl EditorSession {
             move_drag: None,
             width_drag_baseline: None,
             style_drag_baseline: None,
-            frame_style: EditorFrameStyle::None,
             canvas_drag_active: false,
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
@@ -652,14 +595,12 @@ impl EditorSession {
     }
 
     pub fn mark_output_clean(&mut self) {
-        self.output_checkpoint =
-            EditorOutputCheckpoint::new(self.model.annotations(), self.frame_style);
+        self.output_checkpoint = EditorOutputCheckpoint(self.model.snapshot());
         self.clear_discard_confirmation();
     }
 
     pub fn has_output_changes(&self) -> bool {
-        self.output_checkpoint
-            != EditorOutputCheckpoint::new(self.model.annotations(), self.frame_style)
+        self.output_checkpoint.0 != self.model.snapshot()
     }
 
     pub fn clear_discard_confirmation(&mut self) {
@@ -920,32 +861,6 @@ mod tests {
             }]),
             1
         );
-    }
-
-    #[test]
-    fn frame_style_labels_describe_the_output() {
-        let labels: Vec<&str> = EditorFrameStyle::ALL
-            .iter()
-            .map(|style| style.label())
-            .collect();
-
-        assert_eq!(
-            labels,
-            vec![
-                "No Frame",
-                "Soft Shadow",
-                "Light Card",
-                "Dark Card",
-                "Minimal Border",
-                "Transparent",
-            ]
-        );
-        for label in labels {
-            assert!(
-                label.len() <= 14,
-                "frame labels should stay compact: {label}"
-            );
-        }
     }
 
     #[test]

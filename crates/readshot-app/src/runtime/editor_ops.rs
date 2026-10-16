@@ -611,14 +611,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             commit_pending_editor_text(ed, &state.coordinator);
             cancel_editor_previews(ed);
             ed.busy = true;
-            if ed.frame_style == EditorFrameStyle::None {
-                ed.set_status("Copying…");
+            ed.set_status(if ed.model.beautify().is_identity() {
+                "Copying…".to_string()
             } else {
-                ed.set_status(format!(
-                    "Copying image with {} frame…",
-                    ed.frame_style.label()
-                ));
-            }
+                "Copying beautified image…".to_string()
+            });
             let img = editor_output_image(ed);
             Task::perform(copy_image_to_clipboard(img), |r| {
                 Message::EditorCopyImageDone(r.map_err(|e| e.to_string()))
@@ -646,19 +643,22 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             Task::none()
         }
 
-        Message::EditorFrameStyleChanged(style) => {
+        Message::EditorBeautifyPreset(preset) => {
             if let Some(ed) = state.editor.as_mut() {
                 if ed.busy {
                     return Task::none();
                 }
                 cancel_editor_previews(ed);
                 ed.clear_discard_confirmation();
-                ed.frame_style = style;
-                ed.popover = None;
-                ed.set_status(match style {
-                    EditorFrameStyle::None => "Frame removed.".into(),
-                    _ => format!("Frame set to {}.", style.label()),
-                });
+                close_editor_popover(ed);
+                if ed.model.set_beautify(preset.settings()) {
+                    ed.set_status(match preset {
+                        readshot_core::beautify::BuiltinPreset::None => {
+                            "Frame removed. ⌘Z to undo.".to_string()
+                        }
+                        p => format!("Frame set to {}. ⌘Z to undo.", p.label()),
+                    });
+                }
             }
             Task::none()
         }

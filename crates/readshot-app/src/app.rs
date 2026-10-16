@@ -464,7 +464,8 @@ pub enum Message {
     /// Image-copy task completed.
     EditorCopyImageDone(Result<(), String>),
     /// User selected a presentation frame for image outputs.
-    EditorFrameStyleChanged(crate::editor::EditorFrameStyle),
+    /// A built-in Beautify preset was chosen (Frame popover; Beautify tab).
+    EditorBeautifyPreset(readshot_core::beautify::BuiltinPreset),
     /// User clicked Copy Text (run OCR + clipboard).
     EditorCopyTextRequested,
     /// OCR + clipboard write completed.

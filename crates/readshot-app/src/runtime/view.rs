@@ -11,7 +11,6 @@ use iced::{Alignment, Color, Element, Length, Theme};
 use readshot_ui::SettingsMessage;
 
 use crate::app::{App, Message, SettingsPane};
-use crate::editor::EditorFrameStyle;
 use crate::permissions::PermissionStatus;
 use crate::welcome::WelcomeState;
 
@@ -2053,7 +2052,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let image_handle = ed.image_handle.clone();
     let (image_w, image_h) = ed.effective_image_size();
     let image_offset = ed.crop_offset();
-    let frame_style = ed.frame_style;
+    let beautify = ed.model.beautify();
     let zoom = ed.zoom;
     let display_scale = ed.display_scale;
     let next_pin_number = ed.next_pin_number;
@@ -2081,20 +2080,21 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         let available = stage;
         let iw = image_w as f32;
         let ih = image_h as f32;
-        let fit_scale = editor_fit_scale(available, image_w, image_h);
-        let scale = zoom.explicit_scale().unwrap_or(fit_scale);
+        let m = preview_metrics(
+            image_w,
+            image_h,
+            &beautify,
+            available,
+            zoom.explicit_scale(),
+        );
+        let scale = m.scale;
         // Record the scale this frame renders at so the runtime's press
         // handlers hit-test handles/bodies with a screen-constant radius.
         render_scale.set(scale);
         let displayed_w = (iw * scale).max(1.0);
         let displayed_h = (ih * scale).max(1.0);
-        let frame_preset =
-            (frame_style != EditorFrameStyle::None).then(|| framed_image_preset(frame_style));
-        let frame_pad = frame_preset
-            .map(|preset| preset.pad as f32 * scale)
-            .unwrap_or(0.0);
-        let output_w = displayed_w + frame_pad * 2.0;
-        let output_h = displayed_h + frame_pad * 2.0;
+        let framed = !beautify.is_identity();
+        let (output_w, output_h) = (m.output_w, m.output_h);
         let content_w = output_w.max(available.width);
         let content_h = output_h.max(available.height);
 
@@ -2241,28 +2241,20 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             .height(Length::Fixed(displayed_h))
             .clip(true)
             .style(move |_theme: &Theme| {
-                if let Some(preset) = frame_preset {
-                    container::Style {
-                        background: preset.mat.map(|rgba| rgba_color(rgba).into()),
-                        border: iced::Border {
-                            radius: (preset.radius as f32 * scale).into(),
-                            color: preset.border.map(rgba_color).unwrap_or(Color::TRANSPARENT),
-                            width: if preset.border.is_some() { 1.0 } else { 0.0 },
-                        },
-                        ..Default::default()
-                    }
+                if framed {
+                    beautify_image_style(&beautify, m.out_scale)
                 } else {
                     container::Style::default()
                 }
             })
             .into();
 
-        let preview_content: Element<'_, Message> = if let Some(preset) = frame_preset {
+        let preview_content: Element<'_, Message> = if framed {
             container(editable_stack)
-                .padding(frame_pad)
+                .padding(m.pad)
                 .width(Length::Fixed(output_w))
                 .height(Length::Fixed(output_h))
-                .style(move |_theme: &Theme| frame_preview_container_style(preset, scale))
+                .style(move |_theme: &Theme| beautify_canvas_style(&beautify, m.out_scale))
                 .into()
         } else {
             editable_stack
@@ -2533,7 +2525,13 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         bar_button(
             row![
                 crate::icons::icon(AppIcon::Frame, p.t2, 15.0),
-                text(frame_style.label()).size(ButtonSize::Sm.text_size()),
+                text(
+                    ed.model
+                        .beautify()
+                        .matching_builtin()
+                        .map_or("Custom", |p| p.label())
+                )
+                .size(ButtonSize::Sm.text_size()),
                 crate::icons::icon(AppIcon::Chevron, p.t3, 13.0),
             ]
             .spacing(6)
@@ -2684,7 +2682,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 busy,
                 mono,
             ),
-            EditorPopover::Frame => frame_popover(frame_style, busy, p),
+            EditorPopover::Frame => frame_popover(ed.model.beautify().matching_builtin(), busy, p),
         };
         // `opaque` keeps clicks on the card's padding from reaching the
         // scrim underneath (which would close it).
@@ -3016,18 +3014,18 @@ fn width_popover<'a>(
 }
 
 fn frame_popover<'a>(
-    current: EditorFrameStyle,
+    current: Option<readshot_core::beautify::BuiltinPreset>,
     busy: bool,
     p: &'static Palette,
 ) -> Element<'a, Message> {
     const W: f32 = 240.0;
     let mut list = column![].spacing(2).width(Length::Fixed(W));
-    for style in EditorFrameStyle::ALL {
+    for style in readshot_core::beautify::BuiltinPreset::ALL {
         let mut r = row![text(style.label()).size(TYPE_BODY).style(text_t1)]
             .spacing(8)
             .align_y(Alignment::Center);
         r = r.push(Space::new().width(Length::Fill));
-        if style == current {
+        if Some(style) == current {
             r = r.push(crate::icons::icon(
                 crate::icons::AppIcon::CheckCircle,
                 p.acc_text,
@@ -3039,7 +3037,7 @@ fn frame_popover<'a>(
                 r.width(Length::Fill).into(),
                 ButtonKind::Ghost,
                 ButtonSize::Sm,
-                (!busy).then_some(Message::EditorFrameStyleChanged(style)),
+                (!busy).then_some(Message::EditorBeautifyPreset(style)),
             )
             .width(Length::Fill),
         );
