@@ -11,6 +11,7 @@
 pub mod annotation;
 pub mod arrowhead;
 pub mod error;
+pub mod eyedropper;
 pub mod filename;
 pub mod filters;
 pub(crate) mod fs_atomic;

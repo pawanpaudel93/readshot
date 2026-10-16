@@ -646,6 +646,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             match msg {
                 readshot_ui::ToolbarMessage::SelectTool(t) => {
                     cancel_editor_previews(ed);
+                    ed.eyedropper = None;
                     if t != readshot_ui::editor::ToolState::Text {
                         commit_pending_editor_text(ed, &state.coordinator);
                     }
@@ -756,6 +757,19 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }
             Task::none()
         }
+        Message::EditorEyedropperToggled => {
+            if let Some(ed) = state.editor.as_mut() {
+                if ed.busy {
+                    return Task::none();
+                }
+                close_editor_popover(ed);
+                ed.eyedropper = match ed.eyedropper {
+                    Some(_) => None,
+                    None => Some(crate::editor::EyedropperState::default()),
+                };
+            }
+            Task::none()
+        }
         Message::EditorHexSubmitted => {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
@@ -804,7 +818,31 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if ed.busy {
                 return Task::none();
             }
+            let mut picked: Option<readshot_core::Rgba> = None;
             match msg {
+                readshot_ui::CanvasMessage::EyedropperHover(p) => {
+                    if ed.eyedropper.is_some() {
+                        let pixels = readshot_core::eyedropper::sample_grid(
+                            ed.model.base(),
+                            p,
+                            readshot_ui::editor::LOUPE_RADIUS,
+                        );
+                        if let Some(eye) = ed.eyedropper.as_mut() {
+                            eye.loupe = Some(readshot_ui::editor::Loupe { center: p, pixels });
+                        }
+                    }
+                }
+                readshot_ui::CanvasMessage::EyedropperPick(p) => {
+                    // One pick, then the eyedropper exits. The source image
+                    // is sampled, so annotations drawn over it never count.
+                    if ed.eyedropper.take().is_some() {
+                        if let Some(color) = readshot_core::eyedropper::sample(ed.model.base(), p) {
+                            apply_editor_color(ed, &state.coordinator, color);
+                            ed.set_status(format!("Picked {}.", color.to_hex()));
+                            picked = Some(color);
+                        }
+                    }
+                }
                 readshot_ui::CanvasMessage::DragStarted => {
                     // A shape/freehand drag is now live; Escape should cancel
                     // it rather than trigger discard.
@@ -921,6 +959,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     handle_commit_annotation(ed, annotation);
                     sync_editor_history(ed, &state.coordinator);
                 }
+            }
+            if let Some(color) = picked {
+                state.remember_custom_color(color);
             }
             Task::none()
         }
@@ -1050,6 +1091,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         Message::EditorTextCancel => {
             if let Some(ed) = state.editor.as_mut() {
                 if close_editor_popover(ed) {
+                    return Task::none();
+                }
+                // Esc chain: popover, then the eyedropper, then the text
+                // draft / selection below.
+                if ed.eyedropper.take().is_some() {
                     return Task::none();
                 }
                 if ed.busy {

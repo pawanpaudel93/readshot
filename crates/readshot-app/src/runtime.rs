@@ -1689,6 +1689,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorStyleCommit
         | Message::EditorHexChanged(..)
         | Message::EditorHexSubmitted
+        | Message::EditorEyedropperToggled
         | Message::EditorCanvas(..)
         | Message::EditorEditSelectedText
         | Message::EditorDeleteSelected
@@ -7854,5 +7855,207 @@ mod tests {
             app.editor.as_ref().unwrap().model.selected_annotation(),
             None
         );
+    }
+
+    #[test]
+    fn i_toggles_the_eyedropper_but_not_while_typing() {
+        let toggled = editor_key_message(
+            iced::keyboard::Key::Character("i".into()),
+            iced::keyboard::Modifiers::empty(),
+            true,
+        );
+        assert!(matches!(toggled, Some(Message::EditorEyedropperToggled)));
+        let upper = editor_key_message(
+            iced::keyboard::Key::Character("I".into()),
+            iced::keyboard::Modifiers::SHIFT,
+            true,
+        );
+        assert!(matches!(upper, Some(Message::EditorEyedropperToggled)));
+        // A focused text field captures the key (status not ignored):
+        // tool letters and I do nothing while typing.
+        for key in ["i", "s", "e", "v", "r"] {
+            let typed = editor_key_message(
+                iced::keyboard::Key::Character(key.into()),
+                iced::keyboard::Modifiers::empty(),
+                false,
+            );
+            assert!(typed.is_none(), "{key} leaked while typing");
+        }
+    }
+
+    #[test]
+    fn eyedropper_pick_samples_the_source_image_and_exits() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut img = solid(16, 16);
+        img.put_pixel(3, 4, image::Rgba([79, 70, 229, 255]));
+        let mut ed = crate::editor::EditorSession::new(img);
+        // A red rectangle over the pixel must not affect the pick.
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 16.0, 16.0),
+            color: Rgba::new(1.0, 0.0, 0.0, 1.0),
+            line_width: 2.0,
+            style: readshot_core::ShapeStyle {
+                fill: readshot_core::FillMode::Filled,
+                ..Default::default()
+            },
+        });
+        ed.model.clear_selection();
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(
+                3.5, 4.5,
+            ))),
+        );
+        let loupe = app
+            .editor
+            .as_ref()
+            .unwrap()
+            .eyedropper
+            .as_ref()
+            .unwrap()
+            .loupe
+            .clone()
+            .expect("hover fills the loupe");
+        let n = (readshot_ui::editor::LOUPE_RADIUS * 2 + 1) as usize;
+        assert_eq!(loupe.pixels.len(), n * n);
+        assert_eq!(
+            loupe.pixels[n * n / 2].map(|c| c.to_hex()),
+            Some("#4F46E5".to_string())
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
+                3.5, 4.5,
+            ))),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.eyedropper.is_none());
+        assert_eq!(ed.model.current_color().to_hex(), "#4F46E5");
+        assert_eq!(
+            app.preferences.editor_recent_colors,
+            vec!["#4F46E5".to_string()]
+        );
+    }
+
+    #[test]
+    fn eyedropper_pick_recolors_the_selection_as_one_undo_step() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut img = solid(16, 16);
+        img.put_pixel(3, 4, image::Rgba([79, 70, 229, 255]));
+        let mut ed = crate::editor::EditorSession::new(img);
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 16.0, 16.0),
+            color: Rgba::new(1.0, 0.0, 0.0, 1.0),
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
+                3.5, 4.5,
+            ))),
+        );
+        let color_of = |app: &App| match &app.editor.as_ref().unwrap().model.annotations()[0] {
+            Annotation::Rectangle { color, .. } => color.to_hex(),
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!(color_of(&app), "#4F46E5");
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        );
+        assert_eq!(color_of(&app), "#FF0000");
+    }
+
+    #[test]
+    fn eyedropper_pick_of_a_preset_does_not_join_recent() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let preset = readshot_ui::editor::toolbar::PALETTE[0];
+        let mut img = solid(16, 16);
+        let to8 = |v: f32| (v * 255.0).round() as u8;
+        img.put_pixel(
+            3,
+            4,
+            image::Rgba([to8(preset.r), to8(preset.g), to8(preset.b), 255]),
+        );
+        app.editor = Some(crate::editor::EditorSession::new(img));
+        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
+                3.5, 4.5,
+            ))),
+        );
+        assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
+        assert!(app.preferences.editor_recent_colors.is_empty());
+    }
+
+    #[test]
+    fn esc_closes_the_popover_then_the_eyedropper() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
+        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Width),
+        );
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.popover, None);
+        assert!(ed.eyedropper.is_some(), "first esc only closes the popover");
+        let _ = update(&mut app, Message::EditorTextCancel);
+        assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
+    }
+
+    #[test]
+    fn esc_exits_the_eyedropper_before_clearing_the_selection() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(16, 16));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 8.0, 8.0),
+            color: Rgba::new(1.0, 0.0, 0.0, 1.0),
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.eyedropper.is_none());
+        assert_eq!(ed.model.selected_annotation(), Some(0));
+    }
+
+    #[test]
+    fn eyedropper_button_closes_the_color_popover() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.popover, None);
+        assert!(ed.eyedropper.is_some());
+        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
+    }
+
+    #[test]
+    fn choosing_a_tool_exits_the_eyedropper() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
+        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+                readshot_ui::editor::ToolState::Rectangle,
+            )),
+        );
+        assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
     }
 }

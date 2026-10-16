@@ -85,6 +85,20 @@ pub enum DrawState {
     Selecting { last: PointLike },
 }
 
+/// Radius of the eyedropper loupe grid in source pixels (9 × 9 cells).
+pub const LOUPE_RADIUS: u32 = 4;
+const LOUPE_CELL: f32 = 10.0;
+
+/// Pixels around the eyedropper cursor. The runtime samples them from
+/// the source image (the canvas has no image access) on each hover.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Loupe {
+    /// Sample centre, base-image pixels.
+    pub center: PointLike,
+    /// `(2 * LOUPE_RADIUS + 1)²` samples, row-major; `None` off the image.
+    pub pixels: Vec<Option<CoreRgba>>,
+}
+
 /// Messages the editor canvas publishes upward.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CanvasMessage {
@@ -113,6 +127,10 @@ pub enum CanvasMessage {
     SelectDragged(PointLike),
     /// Select tool released.
     SelectReleased,
+    /// Eyedropper mode: the cursor moved over the image (base coords).
+    EyedropperHover(PointLike),
+    /// Eyedropper mode: the user clicked to pick the color at this point.
+    EyedropperPick(PointLike),
     /// User pressed Escape or released a zero-area drag — drop
     /// in-progress preview without committing anything.
     Cancelled,
@@ -183,6 +201,10 @@ pub struct EditorCanvas {
     pub cancel_seq: u64,
     /// Options the next annotation gets (fill, dashes, curve, text…).
     pub style: ToolStyle,
+    /// Eyedropper mode: presses pick a color instead of drawing.
+    pub eyedropper: bool,
+    /// Loupe to draw near the cursor while the eyedropper is active.
+    pub loupe: Option<Loupe>,
     /// Shared tessellated-geometry cache, owned by the editor session.
     /// `draw` reuses the stored geometry unless the canvas size changed
     /// or the session explicitly cleared it (on editor messages). This
@@ -329,6 +351,42 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Option<canvas::Action<CanvasMessage>> {
+        if self.eyedropper {
+            match event {
+                Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
+                    let point = cursor.position_in(bounds)?;
+                    let base = canvas_to_base(
+                        point,
+                        bounds,
+                        self.image_size,
+                        self.image_offset,
+                        self.display_scale,
+                    )?;
+                    return Some(
+                        canvas::Action::publish(CanvasMessage::EyedropperPick(PointLike::new(
+                            base.x, base.y,
+                        )))
+                        .and_capture(),
+                    );
+                }
+                Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
+                    let base = cursor.position_in(bounds).and_then(|p| {
+                        canvas_to_base(
+                            p,
+                            bounds,
+                            self.image_size,
+                            self.image_offset,
+                            self.display_scale,
+                        )
+                    })?;
+                    return Some(canvas::Action::publish(CanvasMessage::EyedropperHover(
+                        PointLike::new(base.x, base.y),
+                    )));
+                }
+                // Escape still falls through to the arm below (Cancelled).
+                _ => {}
+            }
+        }
         match event {
             Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) => {
                 let point = cursor.position_in(bounds)?;
@@ -634,7 +692,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
-        _cursor: Cursor,
+        cursor: Cursor,
     ) -> Vec<Geometry> {
         // Cache the tessellated geometry. iced redraws every window on
         // each background tick (hotkey/tray/url drains); without this
@@ -826,7 +884,26 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
             }
         });
 
-        vec![geometry]
+        // The loupe is drawn outside the cache: it must vanish as soon
+        // as the cursor leaves the image, which changes the mouse
+        // interaction (and so redraws) without any editor message.
+        let mut layers = vec![geometry];
+        if let Some(loupe) = self.loupe.as_ref() {
+            if self.loupe_visible(bounds, cursor) {
+                if let Some(anchor) = base_point_to_canvas(
+                    loupe.center,
+                    bounds,
+                    self.image_size,
+                    self.image_offset,
+                    self.display_scale,
+                ) {
+                    let mut frame = Frame::new(renderer, bounds.size());
+                    draw_loupe(&mut frame, bounds, anchor, loupe);
+                    layers.push(frame.into_geometry());
+                }
+            }
+        }
+        layers
     }
 
     /// Tool-aware cursor — crosshair for shape / line / drag tools,
@@ -845,6 +922,9 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
         };
         if canvas_to_image(point, bounds, self.image_size, self.display_scale).is_none() {
             return iced::mouse::Interaction::default();
+        }
+        if self.eyedropper {
+            return iced::mouse::Interaction::Crosshair;
         }
         let base = canvas_to_base(
             point,
@@ -1041,6 +1121,67 @@ fn preview_drag_label(
     let width = (a.x - b.x).abs().round().max(1.0) as u32;
     let height = (a.y - b.y).abs().round().max(1.0) as u32;
     Some(format!("{label_prefix}{width} × {height}px"))
+}
+
+impl EditorCanvas {
+    /// The loupe shows only while the eyedropper is on and the cursor
+    /// is over the image (not the letterbox).
+    fn loupe_visible(&self, bounds: Rectangle, cursor: Cursor) -> bool {
+        self.eyedropper
+            && cursor.position_in(bounds).is_some_and(|p| {
+                canvas_to_image(p, bounds, self.image_size, self.display_scale).is_some()
+            })
+    }
+}
+
+fn draw_loupe(frame: &mut Frame, bounds: Rectangle, anchor: Point, loupe: &Loupe) {
+    let n = (LOUPE_RADIUS * 2 + 1) as usize;
+    let side = LOUPE_CELL * n as f32;
+    let x = (anchor.x + 18.0).min(bounds.width - side - 2.0).max(2.0);
+    let y = (anchor.y + 18.0).min(bounds.height - side - 26.0).max(2.0);
+    for (i, px) in loupe.pixels.iter().enumerate().take(n * n) {
+        let (cx, cy) = ((i % n) as f32, (i / n) as f32);
+        let cell = Path::rectangle(
+            Point::new(x + cx * LOUPE_CELL, y + cy * LOUPE_CELL),
+            iced::Size::new(LOUPE_CELL, LOUPE_CELL),
+        );
+        frame.fill(
+            &cell,
+            px.map(core_rgba_to_color)
+                .unwrap_or(Color::from_rgba(0.0, 0.0, 0.0, 0.35)),
+        );
+    }
+    let outline = Path::rectangle(Point::new(x, y), iced::Size::new(side, side));
+    frame.stroke(
+        &outline,
+        Stroke::default().with_color(Color::BLACK).with_width(3.0),
+    );
+    frame.stroke(
+        &outline,
+        Stroke::default().with_color(Color::WHITE).with_width(1.5),
+    );
+    let mid = (n / 2) as f32 * LOUPE_CELL;
+    let centre = Path::rectangle(
+        Point::new(x + mid, y + mid),
+        iced::Size::new(LOUPE_CELL, LOUPE_CELL),
+    );
+    frame.stroke(
+        &centre,
+        Stroke::default().with_color(Color::WHITE).with_width(1.5),
+    );
+    if let Some(Some(c)) = loupe.pixels.get(n * n / 2) {
+        draw_preview_badge(
+            frame,
+            bounds,
+            Rectangle {
+                x,
+                y,
+                width: side,
+                height: side,
+            },
+            c.to_hex(),
+        );
+    }
 }
 
 fn draw_preview_badge(frame: &mut Frame, bounds: Rectangle, rect: Rectangle, label: String) {
@@ -1701,6 +1842,8 @@ mod tests {
             shift_held: false,
             cancel_seq: 0,
             style: ToolStyle::default(),
+            eyedropper: false,
+            loupe: None,
             cache: std::rc::Rc::new(canvas::Cache::default()),
         }
     }
@@ -2306,6 +2449,119 @@ mod tests {
                 Cursor::Available(Point::new(296.0, 224.0))
             ),
             iced::mouse::Interaction::default()
+        );
+    }
+
+    #[test]
+    fn eyedropper_press_picks_in_base_coordinates_without_drawing() {
+        let canvas = EditorCanvas {
+            eyedropper: true,
+            image_offset: (10.0, 20.0),
+            ..test_canvas()
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let mut state = DrawState::Idle;
+        let action = canvas
+            .update(
+                &mut state,
+                &Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)),
+                bounds,
+                Cursor::Available(Point::new(300.0, 280.0)),
+            )
+            .expect("pick");
+        let (message, _, _) = action.into_inner();
+        // (300, 280) → displayed (100, 80) at 2× → (50, 40) + offset (10, 20).
+        assert_eq!(
+            message,
+            Some(CanvasMessage::EyedropperPick(PointLike::new(60.0, 60.0)))
+        );
+        assert_eq!(state, DrawState::Idle);
+    }
+
+    #[test]
+    fn eyedropper_hover_publishes_the_cursor_in_base_coordinates() {
+        let canvas = EditorCanvas {
+            eyedropper: true,
+            ..test_canvas()
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let mut state = DrawState::Idle;
+        let action = canvas
+            .update(
+                &mut state,
+                &Event::Mouse(iced::mouse::Event::CursorMoved {
+                    position: Point::new(300.0, 280.0),
+                }),
+                bounds,
+                Cursor::Available(Point::new(300.0, 280.0)),
+            )
+            .expect("hover");
+        let (message, _, _) = action.into_inner();
+        assert_eq!(
+            message,
+            Some(CanvasMessage::EyedropperHover(PointLike::new(50.0, 40.0)))
+        );
+    }
+
+    #[test]
+    fn eyedropper_ignores_the_letterbox() {
+        let canvas = EditorCanvas {
+            eyedropper: true,
+            ..test_canvas()
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let outside = Point::new(50.0, 50.0);
+        let mut state = DrawState::Idle;
+        for event in [
+            Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)),
+            Event::Mouse(iced::mouse::Event::CursorMoved { position: outside }),
+        ] {
+            assert!(canvas
+                .update(&mut state, &event, bounds, Cursor::Available(outside))
+                .is_none());
+        }
+        assert_eq!(state, DrawState::Idle);
+        assert!(!canvas.loupe_visible(bounds, Cursor::Available(outside)));
+        assert!(canvas.loupe_visible(bounds, Cursor::Available(Point::new(300.0, 280.0))));
+        let off = EditorCanvas { ..test_canvas() };
+        assert!(!off.loupe_visible(bounds, Cursor::Available(Point::new(300.0, 280.0))));
+    }
+
+    #[test]
+    fn eyedropper_uses_the_crosshair_cursor_even_with_select() {
+        let canvas = EditorCanvas {
+            eyedropper: true,
+            active_tool: ToolState::Select,
+            ..test_canvas()
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        assert_eq!(
+            canvas.mouse_interaction(
+                &DrawState::Idle,
+                bounds,
+                Cursor::Available(Point::new(400.0, 300.0))
+            ),
+            iced::mouse::Interaction::Crosshair
         );
     }
 }

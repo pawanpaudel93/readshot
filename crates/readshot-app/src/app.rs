@@ -580,6 +580,9 @@ pub enum Message {
     EditorHexChanged(String),
     /// Enter in the hex field: apply the color if it parses.
     EditorHexSubmitted,
+    /// Turn the eyedropper on or off (I, or the button in the color
+    /// popover). While on, a click on the image picks its color.
+    EditorEyedropperToggled,
     /// Background capture-and-save task finished. Carries the final
     /// PNG path or a stringified error.
     CaptureSaved(Result<PathBuf, String>),

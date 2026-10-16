@@ -120,8 +120,9 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   copy image / copy text / save / pin, and the arrow keys nudge it (`⇧` ×10).
 - **Editor tools:** `V` select, `R` rectangle, `O` ellipse, `L` line,
   `A` arrow, `P` pen, `H` highlighter, `T` text, `B` blur, `X` pixelate,
-  `S` spotlight, `N` numbered pin, `E` stamp, `C` crop. Arrow keys nudge the
-  selection (hold `⇧` for larger steps), `⌫` removes it, `esc` deselects.
+  `S` spotlight, `N` numbered pin, `E` stamp, `C` crop. `I` picks a color
+  from the image (eyedropper). Arrow keys nudge the selection (hold `⇧` for
+  larger steps), `⌫` removes it, `esc` deselects.
 - **Editor actions:** `⌘C` copy image, `⇧⌘C` copy text, `⌘S` save,
   `⌘P` pin, `⌘Z` / `⇧⌘Z` undo and redo. `⌘W` closes; with unsaved
   edits the first press only warns; press again to discard, or click

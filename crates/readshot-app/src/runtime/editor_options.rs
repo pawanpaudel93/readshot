@@ -358,12 +358,36 @@ pub(crate) fn color_popover<'a>(
     p: &'static Palette,
 ) -> Element<'a, Message> {
     use readshot_ui::editor::toolbar::PALETTE;
-    let _ = p; // used by the eyedropper button (Task 9)
-               // 7 columns: 7 presets, then 5 presets plus one free cell, where the
-               // mockup puts the eyedropper (added in Task 9).
+    // 7 columns: 7 presets, then 5 presets plus one free cell, where the
+    // mockup puts the eyedropper.
+    let rows: Vec<&[Rgba]> = PALETTE.chunks(SWATCH_COLUMNS).collect();
     let mut grid = column![].spacing(8);
-    for chunk in PALETTE.chunks(SWATCH_COLUMNS) {
-        grid = grid.push(swatch_row(chunk.iter().copied(), current, busy));
+    for (i, chunk) in rows.iter().enumerate() {
+        let mut r = swatch_row(chunk.iter().copied(), current, busy);
+        if i + 1 == rows.len() {
+            r = r.push(
+                container(icon_button(
+                    AppIcon::Dropper,
+                    if busy {
+                        Color {
+                            a: p.t2.a * 0.45,
+                            ..p.t2
+                        }
+                    } else {
+                        p.t2
+                    },
+                    "Eyedropper",
+                    Some("I"),
+                    (!busy).then_some(Message::EditorEyedropperToggled),
+                    false,
+                    22.0,
+                    Position::Bottom,
+                ))
+                .width(Length::Fixed(22.0))
+                .height(Length::Fixed(22.0)),
+            );
+        }
+        grid = grid.push(r);
     }
     let mut body = column![popover_heading("Color"), grid].spacing(8);
     // A hand-edited preferences file may hold duplicates or too many.

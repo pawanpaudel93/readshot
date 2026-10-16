@@ -2132,6 +2132,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             shift_held: editor_shift_held,
             cancel_seq: drag_cancel_seq,
             style: ed.model.tool_style(),
+            eyedropper: ed.eyedropper.is_some(),
+            loupe: ed.eyedropper.as_ref().and_then(|e| e.loupe.clone()),
             cache: ed.canvas_cache.clone(),
         };
         let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
@@ -2349,33 +2351,50 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         .align_y(Alignment::Start);
 
     // --- Options bar under the tool bar (falls back to the hint line) ---
-    let options_layer: Element<'_, Message> = match editor_options_bar(ed, p) {
-        Some(bar) => container(bar)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(iced::Padding {
-                top: EDITOR_OPTIONS_TOP,
-                ..iced::Padding::ZERO
-            })
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Start)
-            .into(),
-        None => {
-            let hint_str = if let Some(kind) = ed.model.selected_kind_label() {
-                editor_selected_hint(kind, ed.model.selected_text_edit().is_some())
-            } else {
-                editor_compact_hint(active_tool).to_string()
-            };
-            container(text(hint_str).size(TYPE_CAPTION).style(text_t3))
+    let options_layer: Element<'_, Message> = if ed.eyedropper.is_some() {
+        container(
+            text("Click the image to pick a color · esc cancels")
+                .size(TYPE_CAPTION)
+                .style(text_t3),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(iced::Padding {
+            top: EDITOR_HINT_TOP,
+            ..iced::Padding::ZERO
+        })
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Start)
+        .into()
+    } else {
+        match editor_options_bar(ed, p) {
+            Some(bar) => container(bar)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .padding(iced::Padding {
-                    top: EDITOR_HINT_TOP,
+                    top: EDITOR_OPTIONS_TOP,
                     ..iced::Padding::ZERO
                 })
                 .align_x(Alignment::Center)
                 .align_y(Alignment::Start)
-                .into()
+                .into(),
+            None => {
+                let hint_str = if let Some(kind) = ed.model.selected_kind_label() {
+                    editor_selected_hint(kind, ed.model.selected_text_edit().is_some())
+                } else {
+                    editor_compact_hint(active_tool).to_string()
+                };
+                container(text(hint_str).size(TYPE_CAPTION).style(text_t3))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .padding(iced::Padding {
+                        top: EDITOR_HINT_TOP,
+                        ..iced::Padding::ZERO
+                    })
+                    .align_x(Alignment::Center)
+                    .align_y(Alignment::Start)
+                    .into()
+            }
         }
     };
 
@@ -3320,7 +3339,8 @@ pub(crate) fn editor_key_message(
         // The annotation canvas captures every Escape (publishing
         // `Cancelled` for any live drag), so this is a real Esc press.
         // EditorTextCancel is its single cancel action: it closes an open
-        // popover, else cancels the text draft, else clears the selection.
+        // popover, else exits the eyedropper, else cancels the text draft,
+        // else clears the selection.
         (Key::Named(Named::Escape), _, _) => return Some(Message::EditorTextCancel),
         _ => {}
     }
@@ -3352,6 +3372,9 @@ pub(crate) fn editor_key_message(
             return Some(Message::EditorNudgeSelected(0.0, nudge_step));
         }
         if let Key::Character(c) = &key {
+            if c.eq_ignore_ascii_case("i") {
+                return Some(Message::EditorEyedropperToggled);
+            }
             if let Some(t) = tool_for_key(c.as_str()) {
                 return Some(Message::EditorToolbar(
                     readshot_ui::ToolbarMessage::SelectTool(t),

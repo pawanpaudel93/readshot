@@ -66,6 +66,12 @@ pub enum EditorPopover {
 
 /// One open editor window, plus the iced-side state that doesn't
 /// belong inside the pure model.
+/// Eyedropper mode state. The loupe updates as the cursor moves.
+#[derive(Clone, Debug, Default)]
+pub struct EyedropperState {
+    pub loupe: Option<readshot_ui::editor::Loupe>,
+}
+
 pub struct EditorSession {
     pub model: Model,
     pub status: Option<String>,
@@ -136,6 +142,8 @@ pub struct EditorSession {
     pub popover: Option<EditorPopover>,
     /// Draft text of the color popover's hex field.
     pub hex_draft: String,
+    /// Some while the eyedropper is active (spec §3.5).
+    pub eyedropper: Option<EyedropperState>,
     /// True while a shape/freehand drag is in progress on the canvas
     /// (between `DragStarted` and its `Cancelled`/`CommitAnnotation`).
     /// Escape uses this to decide whether to cancel the drag or fall
@@ -379,6 +387,7 @@ impl EditorSession {
             discard_pending_at: None,
             popover: None,
             hex_draft: String::new(),
+            eyedropper: None,
             status_set_at: None,
             move_drag: None,
             width_drag_baseline: None,
@@ -423,6 +432,7 @@ impl EditorSession {
             discard_pending_at: None,
             popover: None,
             hex_draft: String::new(),
+            eyedropper: None,
             status_set_at: None,
             move_drag: None,
             width_drag_baseline: None,
