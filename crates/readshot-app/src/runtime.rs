@@ -57,6 +57,8 @@ mod platform;
 pub(crate) use platform::*;
 mod editor_ops;
 pub(crate) use editor_ops::*;
+mod editor_options;
+pub(crate) use editor_options::*;
 mod history_ops;
 mod settings_ops;
 
@@ -1682,6 +1684,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorToolbar(..)
         | Message::EditorLineWidthPreview(..)
         | Message::EditorLineWidthCommit
+        | Message::EditorStyle(..)
+        | Message::EditorStylePreview(..)
+        | Message::EditorStyleCommit
         | Message::EditorCanvas(..)
         | Message::EditorEditSelectedText
         | Message::EditorDeleteSelected
@@ -2906,6 +2911,8 @@ mod tests {
         const TOAST_HEIGHT: f32 = 34.0;
         const { assert!(EDITOR_HINT_TOP + HINT_LINE <= EDITOR_STAGE_PAD_TOP) };
         const { assert!(EDITOR_TOAST_BOTTOM + TOAST_HEIGHT <= EDITOR_STAGE_PAD_BOTTOM) };
+        const { assert!(EDITOR_OPTIONS_TOP + EDITOR_OPTIONS_HEIGHT <= EDITOR_STAGE_PAD_TOP) };
+        const { assert!(EDITOR_OPTIONS_TOP + EDITOR_OPTIONS_HEIGHT <= EDITOR_POPOVER_TOP) };
         assert_eq!(EDITOR_STAGE_PAD_TOP, 138.0);
     }
 
@@ -7351,5 +7358,156 @@ mod tests {
             },
         );
         assert_eq!(app.settings_pane, SettingsPane::Files);
+    }
+
+    #[test]
+    fn style_message_restyles_the_selected_rectangle_as_one_undo_step() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        let depth = ed.model.undo_depth();
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorStyle(readshot_ui::editor::StyleMessage::Fill(
+                readshot_core::FillMode::Filled,
+            )),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+        assert!(matches!(
+            &ed.model.annotations()[0],
+            Annotation::Rectangle { style, .. } if style.fill == readshot_core::FillMode::Filled
+        ));
+        assert_eq!(ed.model.tool_style().fill, readshot_core::FillMode::Filled);
+    }
+
+    #[test]
+    fn style_slider_preview_commits_once_and_esc_cancels_it() {
+        use readshot_ui::editor::StyleMessage;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 40.0, 40.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        let depth = ed.model.undo_depth();
+        app.editor = Some(ed);
+        for r in [4.0, 8.0, 12.0] {
+            let _ = update(
+                &mut app,
+                Message::EditorStylePreview(StyleMessage::CornerRadius(r)),
+            );
+        }
+        let _ = update(&mut app, Message::EditorStyleCommit);
+        assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth + 1);
+
+        let _ = update(
+            &mut app,
+            Message::EditorStylePreview(StyleMessage::CornerRadius(20.0)),
+        );
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.style_drag_baseline.is_none());
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+        assert!(matches!(
+            &ed.model.annotations()[0],
+            Annotation::Rectangle { style, .. } if style.corner_radius == 12.0
+        ));
+    }
+
+    #[test]
+    fn cancelled_slider_restores_the_tool_style_without_a_selection() {
+        use readshot_ui::editor::StyleMessage;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(
+            &mut app,
+            Message::EditorStylePreview(StyleMessage::CornerRadius(20.0)),
+        );
+        assert_eq!(
+            app.editor
+                .as_ref()
+                .unwrap()
+                .model
+                .tool_style()
+                .corner_radius,
+            20.0
+        );
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.tool_style().corner_radius, 0.0);
+        assert!(ed.style_drag_baseline.is_none());
+        // A released slider keeps its value.
+        let _ = update(
+            &mut app,
+            Message::EditorStylePreview(StyleMessage::CornerRadius(8.0)),
+        );
+        let _ = update(&mut app, Message::EditorStyleCommit);
+        assert_eq!(
+            app.editor
+                .as_ref()
+                .unwrap()
+                .model
+                .tool_style()
+                .corner_radius,
+            8.0
+        );
+    }
+
+    #[test]
+    fn bracket_keys_step_selected_text_through_sizes() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(200, 200));
+        ed.model.commit_annotation(Annotation::Text {
+            content: "hi".into(),
+            origin: PointLike::new(20.0, 60.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 24.0,
+            style: Default::default(),
+        });
+        app.editor = Some(ed);
+        let size = |app: &App| match &app.editor.as_ref().unwrap().model.annotations()[0] {
+            Annotation::Text { size, .. } => *size,
+            other => panic!("{other:?}"),
+        };
+        let _ = update(&mut app, Message::EditorWidthBump(1.0));
+        assert_eq!(size(&app), 36.0);
+        let _ = update(&mut app, Message::EditorWidthBump(-1.0));
+        let _ = update(&mut app, Message::EditorWidthBump(-1.0));
+        assert_eq!(size(&app), 16.0);
+    }
+
+    #[test]
+    fn new_text_uses_the_text_style() {
+        use readshot_ui::editor::{StyleMessage, TextSize};
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(200, 200)));
+        let _ = update(
+            &mut app,
+            Message::EditorStyle(StyleMessage::TextSize(TextSize::L)),
+        );
+        let _ = update(&mut app, Message::EditorStyle(StyleMessage::TextPill(true)));
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::RequestText(PointLike::new(
+                20.0, 60.0,
+            ))),
+        );
+        let _ = update(&mut app, Message::EditorTextChanged("Hi".into()));
+        let _ = update(&mut app, Message::EditorTextCommit);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(matches!(
+            ed.model.annotations().last(),
+            Some(Annotation::Text { size, style, .. }) if *size == 36.0 && style.pill && !style.bold
+        ));
     }
 }

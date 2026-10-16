@@ -567,6 +567,15 @@ pub enum Message {
     EditorLineWidthPreview(f32),
     /// Commit the toolbar slider's selected-annotation width preview.
     EditorLineWidthCommit,
+    /// An options-bar change (fill, dashes, curve, heads, text size…).
+    /// Applies to the next annotation and, when it fits, to the selected
+    /// one as one undo step.
+    EditorStyle(readshot_ui::editor::StyleMessage),
+    /// Slider preview of an options-bar change on the selection (no
+    /// history until `EditorStyleCommit`).
+    EditorStylePreview(readshot_ui::editor::StyleMessage),
+    /// Commit the options-bar slider preview as one undo step.
+    EditorStyleCommit,
     /// Background capture-and-save task finished. Carries the final
     /// PNG path or a stringified error.
     CaptureSaved(Result<PathBuf, String>),

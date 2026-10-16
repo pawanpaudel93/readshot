@@ -126,6 +126,8 @@ pub struct EditorSession {
     /// annotation sizing. Release commits the preview as one undoable
     /// edit.
     pub width_drag_baseline: Option<Vec<Annotation>>,
+    /// Baseline for an options-bar slider drag; see [`StyleDrag`].
+    pub style_drag_baseline: Option<StyleDrag>,
     /// Optional presentation frame applied to image outputs from this
     /// editor window. `No Frame` keeps Save / Copy / Pin pixel-exact.
     pub frame_style: EditorFrameStyle,
@@ -325,6 +327,16 @@ pub struct PendingText {
     pub edit_index: Option<usize>,
 }
 
+/// Saved state while an options-bar slider (corner radius, dim) is
+/// dragged. Release keeps the new values. Esc restores both the
+/// selection (`annotations`, `None` when nothing was selected) and the
+/// tool style.
+#[derive(Clone, Debug)]
+pub struct StyleDrag {
+    pub annotations: Option<Vec<Annotation>>,
+    pub tool_style: readshot_ui::editor::ToolStyle,
+}
+
 #[derive(Clone, Debug)]
 pub struct MoveDrag {
     pub baseline: Vec<Annotation>,
@@ -367,6 +379,7 @@ impl EditorSession {
             status_set_at: None,
             move_drag: None,
             width_drag_baseline: None,
+            style_drag_baseline: None,
             frame_style: EditorFrameStyle::None,
             canvas_drag_active: false,
             drag_cancel_seq: 0,
@@ -409,6 +422,7 @@ impl EditorSession {
             status_set_at: None,
             move_drag: None,
             width_drag_baseline: None,
+            style_drag_baseline: None,
             frame_style: EditorFrameStyle::None,
             canvas_drag_active: false,
             drag_cancel_seq: 0,

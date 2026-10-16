@@ -39,6 +39,12 @@ pub enum AppIcon {
     Gear,
     Chevron,
     Frame,
+    SolidLine,
+    Dashed,
+    LineStraight,
+    LineCurved,
+    LineSketch,
+    ArrowBoth,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -568,13 +574,48 @@ fn shapes(icon: AppIcon) -> &'static [Shape] {
             Rect(2.0, 2.0, 20.0, 20.0, 3.0),
             Rect(6.0, 6.0, 12.0, 12.0, 1.0),
         ],
+        AppIcon::SolidLine => &[Line(4.0, 12.0, 20.0, 12.0)],
+        AppIcon::Dashed => &[
+            Line(3.0, 12.0, 7.0, 12.0),
+            Line(10.0, 12.0, 14.0, 12.0),
+            Line(17.0, 12.0, 21.0, 12.0),
+        ],
+        AppIcon::LineStraight => &[Line(5.0, 19.0, 19.0, 5.0)],
+        AppIcon::LineCurved => &[Poly(
+            &[
+                (4.0, 19.0),
+                (6.0, 14.0),
+                (9.0, 10.0),
+                (13.0, 7.5),
+                (17.0, 6.0),
+                (20.0, 5.5),
+            ],
+            false,
+        )],
+        AppIcon::LineSketch => &[Poly(
+            &[
+                (4.0, 18.0),
+                (7.0, 15.0),
+                (9.0, 16.0),
+                (12.0, 12.0),
+                (14.0, 13.0),
+                (17.0, 8.0),
+                (20.0, 6.0),
+            ],
+            false,
+        )],
+        AppIcon::ArrowBoth => &[
+            Line(5.0, 12.0, 19.0, 12.0),
+            Poly(&[(8.0, 8.0), (4.0, 12.0), (8.0, 16.0)], false),
+            Poly(&[(16.0, 8.0), (20.0, 12.0), (16.0, 16.0)], false),
+        ],
         AppIcon::Tool(_) | AppIcon::Undo | AppIcon::Redo => &[],
     }
 }
 
 impl AppIcon {
     #[cfg(test)]
-    pub const SHAPED: [AppIcon; 25] = [
+    pub const SHAPED: [AppIcon; 31] = [
         AppIcon::Edit,
         AppIcon::Copy,
         AppIcon::ScanText,
@@ -600,6 +641,12 @@ impl AppIcon {
         AppIcon::Gear,
         AppIcon::Chevron,
         AppIcon::Frame,
+        AppIcon::SolidLine,
+        AppIcon::Dashed,
+        AppIcon::LineStraight,
+        AppIcon::LineCurved,
+        AppIcon::LineSketch,
+        AppIcon::ArrowBoth,
     ];
 }
 

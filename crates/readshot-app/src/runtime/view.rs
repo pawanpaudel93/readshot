@@ -2043,90 +2043,6 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             ));
         }
     }
-    let swatch_fill = swatch_color(active_color);
-    let color_dot = container(
-        container(
-            IcedSpace::new()
-                .width(Length::Fixed(18.0))
-                .height(Length::Fixed(18.0)),
-        )
-        .style(move |theme: &Theme| container::Style {
-            background: Some(fade(swatch_fill, if busy { 0.45 } else { 1.0 }).into()),
-            border: iced::Border {
-                radius: 9.0.into(),
-                width: 2.0,
-                color: palette_for(theme).float,
-            },
-            ..Default::default()
-        }),
-    )
-    .padding(1.5)
-    .style(|theme: &Theme| container::Style {
-        background: Some(palette_for(theme).t3.into()),
-        border: iced::Border {
-            radius: 10.5.into(),
-            ..Default::default()
-        },
-        ..Default::default()
-    });
-    let color_open = popover == Some(EditorPopover::Color);
-    let mut color_btn = button(
-        container(color_dot)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill),
-    )
-    .width(Length::Fixed(ICON_BTN))
-    .height(Length::Fixed(ICON_BTN))
-    .padding(0)
-    .style(move |t, s| icon_button_style(t, s, color_open));
-    if !busy {
-        color_btn = color_btn.on_press(Message::EditorPopoverToggled(EditorPopover::Color));
-    }
-    let width_open = popover == Some(EditorPopover::Width);
-    let width_btn = bar_button(
-        row![
-            container(
-                IcedSpace::new()
-                    .width(Length::Fixed(16.0))
-                    .height(Length::Fixed(3.0))
-            )
-            .style(|theme: &Theme| container::Style {
-                background: Some(palette_for(theme).t1.into()),
-                border: iced::Border {
-                    radius: 2.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
-            text(format!("{} px", line_width_label(line_width)))
-                .font(mono)
-                .size(TYPE_CAPTION),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into(),
-        if width_open {
-            ButtonKind::Secondary
-        } else {
-            ButtonKind::Ghost
-        },
-        ButtonSize::Sm,
-        (!busy).then_some(Message::EditorPopoverToggled(EditorPopover::Width)),
-    );
-    let tool_bar = tool_bar
-        .push(vsep())
-        .push(tooltip_with_key(
-            color_btn,
-            "Color",
-            Some(", ."),
-            Position::Bottom,
-        ))
-        .push(tooltip_with_key(
-            width_btn,
-            "Line width",
-            Some("[ ]"),
-            Position::Bottom,
-        ));
     let tool_layer = container(container(tool_bar).padding(4).style(floating_bar_style))
         .width(Length::Fill)
         .height(Length::Fill)
@@ -2440,21 +2356,36 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         .height(Length::Fill)
         .align_y(Alignment::Start);
 
-    // --- Hint under the tool bar ---
-    let hint_str = if let Some(kind) = ed.model.selected_kind_label() {
-        editor_selected_hint(kind, ed.model.selected_text_edit().is_some())
-    } else {
-        editor_compact_hint(active_tool).to_string()
+    // --- Options bar under the tool bar (falls back to the hint line) ---
+    let options_layer: Element<'_, Message> = match editor_options_bar(ed, p) {
+        Some(bar) => container(bar)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(iced::Padding {
+                top: EDITOR_OPTIONS_TOP,
+                ..iced::Padding::ZERO
+            })
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Start)
+            .into(),
+        None => {
+            let hint_str = if let Some(kind) = ed.model.selected_kind_label() {
+                editor_selected_hint(kind, ed.model.selected_text_edit().is_some())
+            } else {
+                editor_compact_hint(active_tool).to_string()
+            };
+            container(text(hint_str).size(TYPE_CAPTION).style(text_t3))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(iced::Padding {
+                    top: EDITOR_HINT_TOP,
+                    ..iced::Padding::ZERO
+                })
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Start)
+                .into()
+        }
     };
-    let hint_layer = container(text(hint_str).size(TYPE_CAPTION).style(text_t3))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(iced::Padding {
-            top: EDITOR_HINT_TOP,
-            ..iced::Padding::ZERO
-        })
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Start);
 
     // --- Status toast above the action bar ---
     // Auto-dismiss old success / info status text so the chrome
@@ -2654,7 +2585,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         stage.into(),
         title_layer.into(),
         tool_layer.into(),
-        hint_layer.into(),
+        options_layer,
     ];
     if let Some(toast_layer) = toast_layer {
         layers.push(toast_layer.into());
@@ -2670,7 +2601,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .into(),
         );
         let body = match which {
-            EditorPopover::Color => color_popover(active_color, busy),
+            EditorPopover::Color => color_popover(ed.model.effective_color(), busy),
             EditorPopover::Width => width_popover(line_width, active_color, busy, mono),
             EditorPopover::Frame => frame_popover(frame_style, busy, p),
         };
@@ -2678,7 +2609,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         // scrim underneath (which would close it).
         let card = opaque(container(body).padding(10).style(popover_style));
         let placed = match which {
-            // Color and width open from the tool bar: under it.
+            // Color and width open from the options bar: under it.
             EditorPopover::Color | EditorPopover::Width => container(card)
                 .padding(iced::Padding {
                     top: EDITOR_POPOVER_TOP,
@@ -2717,8 +2648,8 @@ pub(crate) const EDITOR_STAGE_PAD_BOTTOM: f32 = 104.0;
 pub(crate) const EDITOR_STAGE_PAD_SIDE: f32 = 46.0;
 /// Tool hint sits under the tool bar.
 pub(crate) const EDITOR_HINT_TOP: f32 = 104.0;
-/// Color / width popovers open just under the tool bar.
-pub(crate) const EDITOR_POPOVER_TOP: f32 = 100.0;
+/// Color / width popovers open just under the options bar.
+pub(crate) const EDITOR_POPOVER_TOP: f32 = 140.0;
 /// Action bar distance from the window's bottom edge.
 pub(crate) const EDITOR_ACTION_BAR_BOTTOM: f32 = 20.0;
 /// Toasts and the frame popover sit just above the action bar.
@@ -2841,7 +2772,7 @@ fn editor_zoom_segment(
     .into()
 }
 
-fn swatch_color(c: readshot_core::Rgba) -> Color {
+pub(crate) fn swatch_color(c: readshot_core::Rgba) -> Color {
     Color::from_rgba(c.r, c.g, c.b, c.a)
 }
 
@@ -2857,7 +2788,7 @@ pub(crate) fn line_width_label(width: f32) -> String {
 
 /// Text (or icon + text) button in the shared kit's style and height.
 /// `msg: None` renders it disabled.
-fn bar_button<'a>(
+pub(crate) fn bar_button<'a>(
     content: Element<'a, Message>,
     kind: ButtonKind,
     size: ButtonSize,
@@ -2873,7 +2804,7 @@ fn bar_button<'a>(
     b
 }
 
-fn popover_heading<'a>(label: &'a str) -> iced::widget::Text<'a> {
+pub(crate) fn popover_heading<'a>(label: &'a str) -> iced::widget::Text<'a> {
     text(label)
         .size(TYPE_CAPTION)
         .style(text_t2)

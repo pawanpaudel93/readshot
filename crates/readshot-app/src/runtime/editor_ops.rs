@@ -4,14 +4,6 @@ use super::*;
 
 use crate::coordinator::CaptureCoordinator;
 
-/// Map an editor line-width to a text point-size. The Text tool
-/// shares the line-width slider so the user has one knob — small
-/// width = small text, big width = headline. The clamp keeps text
-/// readable on either end.
-pub(crate) fn text_size_from_line_width(line_width: f32) -> f32 {
-    (line_width * 4.0 + 8.0).clamp(12.0, 96.0)
-}
-
 /// Apply a committed annotation to the editor session. Crop is
 /// stored as a regular `Annotation` rather than baked into the base
 /// image, so undo / redo work uniformly: the renderer translates
@@ -100,6 +92,47 @@ pub(crate) fn preview_editor_line_width(ed: &mut crate::editor::EditorSession, w
     ed.refresh_image();
 }
 
+pub(crate) fn apply_editor_style(
+    ed: &mut crate::editor::EditorSession,
+    coord: &CaptureCoordinator,
+    msg: readshot_ui::editor::StyleMessage,
+) {
+    cancel_editor_previews(ed);
+    ed.model.set_style(msg);
+    if ed.model.apply_style_to_selected(msg) {
+        ed.refresh_image();
+        ed.set_status("Updated selected annotation. ⌘Z to undo.");
+        sync_editor_history(ed, coord);
+    }
+}
+
+pub(crate) fn preview_editor_style(
+    ed: &mut crate::editor::EditorSession,
+    msg: readshot_ui::editor::StyleMessage,
+) {
+    // Snapshot once per slider drag: the tool style always, and the
+    // annotations when something is selected.
+    if ed.style_drag_baseline.is_none() {
+        ed.style_drag_baseline = Some(crate::editor::StyleDrag {
+            annotations: ed
+                .model
+                .selected_annotation()
+                .map(|_| ed.model.annotations().to_vec()),
+            tool_style: ed.model.tool_style(),
+        });
+    }
+    ed.model.set_style(msg);
+    let baseline = ed
+        .style_drag_baseline
+        .as_ref()
+        .and_then(|drag| drag.annotations.clone());
+    if let Some(baseline) = baseline {
+        ed.clear_discard_confirmation();
+        ed.model.preview_style_selected_from(&baseline, msg);
+        ed.refresh_image();
+    }
+}
+
 pub(crate) fn commit_pending_editor_text(
     ed: &mut crate::editor::EditorSession,
     coord: &CaptureCoordinator,
@@ -124,15 +157,14 @@ pub(crate) fn commit_pending_editor_text(
         return false;
     }
 
+    let style = ed.model.tool_style();
     let annotation = readshot_core::Annotation::Text {
         content: trimmed.to_string(),
         origin: pending.origin,
         color: ed.model.current_color(),
         font_family: "system-ui".to_string(),
-        // Tie text size to the line-width slider so it's discoverable
-        // without a separate control.
-        size: text_size_from_line_width(ed.model.current_line_width()),
-        style: Default::default(),
+        size: style.text_size.px(),
+        style: style.text_style(),
     };
     ed.model.commit_annotation(annotation);
     ed.refresh_image();
@@ -178,6 +210,13 @@ pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
     if let Some(baseline) = ed.width_drag_baseline.take() {
         ed.model.cancel_preview_from_baseline(baseline);
         refresh = true;
+    }
+    if let Some(drag) = ed.style_drag_baseline.take() {
+        ed.model.set_tool_style(drag.tool_style);
+        if let Some(baseline) = drag.annotations {
+            ed.model.cancel_preview_from_baseline(baseline);
+            refresh = true;
+        }
     }
     if refresh {
         ed.refresh_image();
@@ -629,6 +668,47 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             Task::none()
         }
 
+        Message::EditorStyle(msg) => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            if ed.busy {
+                return Task::none();
+            }
+            apply_editor_style(ed, &state.coordinator, msg);
+            Task::none()
+        }
+        Message::EditorStylePreview(msg) => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            if ed.busy {
+                return Task::none();
+            }
+            preview_editor_style(ed, msg);
+            Task::none()
+        }
+        Message::EditorStyleCommit => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            if ed.busy {
+                return Task::none();
+            }
+            // Release keeps the new tool style; only the selection needs
+            // turning into one undo step.
+            if let Some(baseline) = ed.style_drag_baseline.take().and_then(|d| d.annotations) {
+                if ed.model.commit_preview_from_baseline(baseline) {
+                    ed.refresh_image();
+                    ed.set_status("Updated selected annotation. ⌘Z to undo.");
+                    sync_editor_history(ed, &state.coordinator);
+                } else {
+                    ed.refresh_image();
+                }
+            }
+            Task::none()
+        }
+
         // Canvas events — mostly drag previews (which don't need
         // their own state mutation in this cut; the canvas's internal
         // DrawState already drives the live painting) and one-shot
@@ -908,8 +988,22 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if ed.busy {
                     return Task::none();
                 }
-                let next = ed.model.current_line_width() + delta;
-                apply_editor_line_width(ed, &state.coordinator, next);
+                let selected_text = ed
+                    .model
+                    .selected_annotation()
+                    .and_then(|i| ed.model.annotations().get(i))
+                    .is_some_and(|a| matches!(a, readshot_core::Annotation::Text { .. }));
+                if selected_text {
+                    let next = ed.model.effective_style().text_size.step(delta > 0.0);
+                    apply_editor_style(
+                        ed,
+                        &state.coordinator,
+                        readshot_ui::editor::StyleMessage::TextSize(next),
+                    );
+                } else {
+                    let next = ed.model.current_line_width() + delta;
+                    apply_editor_line_width(ed, &state.coordinator, next);
+                }
             }
             Task::none()
         }
