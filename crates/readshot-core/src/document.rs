@@ -20,15 +20,17 @@ pub const ORIGINAL_PART: PartId = 0;
 /// tiny-skia's pixmap limit; larger documents can't render.
 pub const MAX_DOC_SIDE: u32 = 32_767;
 pub const MAX_GAP: u32 = 40;
-/// Pixel budget of a document (and of its pre-transform layout), about
-/// 512 MB of RGBA. Guards allocation against hand-edited or corrupt
-/// sidecars.
-pub const MAX_DOC_PIXELS: u64 = 128_000_000;
+/// Pixel budget of a transformed or combined document, about 1 GB of
+/// RGBA. An out-of-memory guard against hand-edited or corrupt sidecars;
+/// an untransformed single original part is exempt.
+pub const MAX_DOC_PIXELS: u64 = 256_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum GeometryError {
     #[error("the image would be {width} × {height} px, larger than Readshot can render")]
     TooLarge { width: u32, height: u32 },
+    #[error("the image would be {pixels} px, over the {max} px limit")]
+    TooManyPixels { pixels: u64, max: u64 },
     #[error("the document has no parts")]
     Empty,
 }
@@ -353,8 +355,21 @@ fn clamp_u32(v: i64) -> u32 {
     u32::try_from(v.max(0)).unwrap_or(u32::MAX)
 }
 
-fn within_limits(w: u32, h: u32) -> bool {
-    w <= MAX_DOC_SIDE && h <= MAX_DOC_SIDE && u64::from(w) * u64::from(h) <= MAX_DOC_PIXELS
+fn check_size(w: u32, h: u32) -> Result<(), GeometryError> {
+    if w > MAX_DOC_SIDE || h > MAX_DOC_SIDE {
+        return Err(GeometryError::TooLarge {
+            width: w,
+            height: h,
+        });
+    }
+    let pixels = u64::from(w) * u64::from(h);
+    if pixels > MAX_DOC_PIXELS {
+        return Err(GeometryError::TooManyPixels {
+            pixels,
+            max: MAX_DOC_PIXELS,
+        });
+    }
+    Ok(())
 }
 
 fn align_offset(start: i64, span: i64, len: i64, align: Align) -> i64 {
@@ -461,18 +476,27 @@ impl DocGeometry {
             .map(|(id, _)| *id)
     }
 
-    /// The document image. The original geometry hands out the part's
-    /// own `Arc` (no copy).
+    /// The document image. Callers must `validate()` first: an invalid
+    /// geometry trips a debug assertion and, in release, composes to one
+    /// transparent pixel (never an unbounded allocation). The original
+    /// geometry hands out the part's own `Arc` (no copy).
     pub fn compose(&self) -> Arc<RgbaImage> {
+        match self.try_compose() {
+            Ok(img) => img,
+            Err(e) => {
+                debug_assert!(false, "compose on an invalid geometry: {e}");
+                Arc::new(RgbaImage::new(1, 1))
+            }
+        }
+    }
+
+    /// [`Self::compose`] that reports an invalid geometry instead.
+    pub fn try_compose(&self) -> Result<Arc<RgbaImage>, GeometryError> {
         if self.parts.len() == 1 && self.transform.is_identity() {
-            return Arc::clone(&self.parts[0].image);
+            return Ok(Arc::clone(&self.parts[0].image));
         }
-        // Never allocate past the limits (a sidecar can carry any scale):
-        // an invalid document composes to one transparent pixel.
+        self.validate()?;
         let l = self.layout();
-        if self.parts.is_empty() || !within_limits(l.width, l.height) || self.validate().is_err() {
-            return Arc::new(RgbaImage::new(1, 1));
-        }
         let mut img = RgbaImage::new(l.width.max(1), l.height.max(1));
         for pl in &l.placements {
             if let Some(part) = self.parts.iter().find(|p| p.id == pl.id) {
@@ -496,25 +520,30 @@ impl DocGeometry {
         if (ow, oh) != img.dimensions() {
             img = imageops::resize(&img, ow, oh, FilterType::Triangle);
         }
-        Arc::new(img)
+        Ok(Arc::new(img))
     }
 
+    /// Whether the document can be rendered. The output size is what is
+    /// limited (a combine that a downscale makes fit is fine); the
+    /// pre-scale layout only has a coarse memory guard. An untransformed
+    /// single original part is exempt: it is the capture as taken.
     pub fn validate(&self) -> Result<(), GeometryError> {
         if self.parts.is_empty() {
             return Err(GeometryError::Empty);
         }
+        if self.is_original() {
+            return Ok(());
+        }
         let l = self.layout();
-        if !within_limits(l.width, l.height) {
-            return Err(GeometryError::TooLarge {
-                width: l.width,
-                height: l.height,
+        let layout_px = u64::from(l.width) * u64::from(l.height);
+        if layout_px > MAX_DOC_PIXELS.saturating_mul(4) {
+            return Err(GeometryError::TooManyPixels {
+                pixels: layout_px,
+                max: MAX_DOC_PIXELS.saturating_mul(4),
             });
         }
         let (width, height) = self.size();
-        if !within_limits(width, height) {
-            return Err(GeometryError::TooLarge { width, height });
-        }
-        Ok(())
+        check_size(width, height)
     }
 
     /// `None` for the original frame; otherwise a stable id of this frame.
@@ -564,17 +593,31 @@ impl DocGeometry {
 
     /// One part holding the current document pixels, no transform. Used
     /// before a part is added to a transformed document (decision D4).
-    pub fn baked(&self, id: PartId) -> Self {
-        Self {
+    /// Fails when the document is invalid. `id` must be fresh: asking for
+    /// [`ORIGINAL_PART`] gets the next unused id instead, so cached OCR of
+    /// the untouched capture is never matched to baked pixels.
+    pub fn baked(&self, id: PartId) -> Result<Self, GeometryError> {
+        self.validate()?;
+        let id = if id == ORIGINAL_PART {
+            self.parts
+                .iter()
+                .map(|p| p.id)
+                .max()
+                .map_or(1, |m| m.saturating_add(1))
+                .max(1)
+        } else {
+            id
+        };
+        Ok(Self {
             parts: vec![Part {
                 id,
-                image: self.compose(),
+                image: self.try_compose()?,
                 join: Join::Below,
             }],
             gap: self.gap,
             align: self.align,
             transform: Transform::default(),
-        }
+        })
     }
 }
 
@@ -724,28 +767,81 @@ pub fn map_annotation(a: &Annotation, m: &Affine) -> Annotation {
     out
 }
 
+fn redaction_rect(a: &Annotation) -> Option<RectLike> {
+    match a {
+        Annotation::Rectangle { rect, .. }
+        | Annotation::Blur { rect, .. }
+        | Annotation::Pixelate { rect, .. } => Some(*rect),
+        _ => None,
+    }
+}
+
+fn with_redaction_rect(a: &Annotation, r: RectLike) -> Annotation {
+    let mut out = a.clone();
+    if let Annotation::Rectangle { rect, .. }
+    | Annotation::Blur { rect, .. }
+    | Annotation::Pixelate { rect, .. } = &mut out
+    {
+        *rect = r;
+    }
+    out
+}
+
+fn intersect(a: RectLike, b: RectLike) -> Option<RectLike> {
+    let (x0, y0) = (a.x.max(b.x), a.y.max(b.y));
+    let x1 = (a.x + a.width).min(b.x + b.width);
+    let y1 = (a.y + a.height).min(b.y + b.height);
+    (x1 > x0 && y1 > y0).then(|| RectLike::new(x0, y0, x1 - x0, y1 - y0))
+}
+
+/// Old document px to new document px for the pixels of part `id`.
+fn part_map(old: &DocGeometry, new: &DocGeometry, id: PartId) -> Option<Affine> {
+    Some(old.part_affine(id)?.inverse()?.then(&new.part_affine(id)?))
+}
+
 /// `anns` (document px of `old`) in document px of `new`. Each annotation
 /// moves with the part under its anchor; parts missing from either side
-/// leave it where it is.
+/// leave it where it is. A redaction (see `scrub::is_redaction`) that
+/// overlaps two or more parts is split along the parts, and each piece
+/// moves with its own part and snaps outward, so no covered pixel is lost
+/// when the parts move apart.
 pub fn remap_annotations(
     old: &DocGeometry,
     new: &DocGeometry,
     anns: &[Annotation],
 ) -> Vec<Annotation> {
-    anns.iter()
-        .map(|a| {
-            let m = old
-                .part_at(annotation_anchor(a))
-                .and_then(|id| Some((old.part_affine(id)?, new.part_affine(id)?)))
-                .and_then(|(o, n)| Some(o.inverse()?.then(&n)))
-                .unwrap_or(Affine::IDENTITY);
-            if m == Affine::IDENTITY {
-                a.clone()
-            } else {
-                map_annotation(a, &m)
+    let mut out = Vec::with_capacity(anns.len());
+    for a in anns {
+        if crate::scrub::is_redaction(a) {
+            if let Some(r) = redaction_rect(a) {
+                let pieces: Vec<(PartId, RectLike)> = old
+                    .parts
+                    .iter()
+                    .filter_map(|p| Some((p.id, intersect(r, old.part_rect(p.id)?)?)))
+                    .collect();
+                if pieces.len() >= 2 {
+                    for (id, piece) in pieces {
+                        let moved = with_redaction_rect(a, piece);
+                        out.push(match part_map(old, new, id) {
+                            Some(m) if m != Affine::IDENTITY => map_annotation(&moved, &m),
+                            _ => moved,
+                        });
+                    }
+                    continue;
+                }
             }
-        })
-        .collect()
+        }
+        let m = old
+            .part_at(annotation_anchor(a))
+            .and_then(|id| part_map(old, new, id))
+            .unwrap_or(Affine::IDENTITY);
+        out.push(if m == Affine::IDENTITY {
+            a.clone()
+        } else {
+            map_annotation(a, &m)
+        });
+    }
+    out
 }
 
 /// `doc`'s boxes moved by `m` (lines and words stay in order).
@@ -1028,7 +1124,7 @@ mod tests {
         let f = g.with_transform(g.transform.flipped(FlipAxis::Horizontal));
         assert!(r.fingerprint().is_some());
         assert_ne!(r.fingerprint(), f.fingerprint());
-        let baked = r.baked(7);
+        let baked = r.baked(7).unwrap();
         assert_eq!(baked.parts.len(), 1);
         assert!(baked.transform.is_identity());
         assert!(!baked.is_original());
@@ -1084,6 +1180,96 @@ mod tests {
     }
 
     #[test]
+    fn pixel_budget_applies_to_the_output_and_exempts_the_untouched_original() {
+        // A huge untouched capture opens.
+        let huge = Arc::new(RgbaImage::new(12_000, 12_000));
+        assert_eq!(DocGeometry::original(huge).validate(), Ok(()));
+        // Seven 6016x3384 captures joined Below are 6016x23688 and valid.
+        let part = |id| Part {
+            id,
+            image: Arc::new(RgbaImage::new(6016, 3384)),
+            join: Join::Below,
+        };
+        let seven = DocGeometry {
+            parts: (0..7).map(part).collect(),
+            ..DocGeometry::default()
+        };
+        assert_eq!(seven.size(), (6016, 23688));
+        assert_eq!(seven.validate(), Ok(()));
+        // A downscale makes an over-budget layout fit.
+        let half = seven.with_transform(seven.transform.scaled(0.5, 0.5));
+        assert_eq!(half.validate(), Ok(()));
+        // Over the pixel budget gets its own error; over a side keeps TooLarge.
+        let g = DocGeometry::original(grid(3, 2));
+        let dense = g.with_transform(g.transform.scaled(10_000.0, 10_000.0));
+        assert_eq!(
+            dense.validate(),
+            Err(GeometryError::TooManyPixels {
+                pixels: 30_000 * 20_000,
+                max: MAX_DOC_PIXELS
+            })
+        );
+    }
+
+    #[test]
+    fn baking_an_invalid_document_fails_and_never_reuses_the_original_id() {
+        let g = DocGeometry::original(grid(3, 2));
+        let bad = g.with_transform(g.transform.scaled(20_000.0, 1.0));
+        assert!(matches!(bad.baked(1), Err(GeometryError::TooLarge { .. })));
+        assert!(matches!(
+            DocGeometry::default().baked(1),
+            Err(GeometryError::Empty)
+        ));
+        let r = g.with_transform(g.transform.rotated_cw());
+        let baked = r.baked(ORIGINAL_PART).unwrap();
+        assert_ne!(baked.parts[0].id, ORIGINAL_PART);
+        assert!(!baked.is_original());
+        assert!(baked.fingerprint().is_some());
+        assert_eq!(*baked.compose(), *r.compose());
+    }
+
+    #[test]
+    fn a_redaction_across_parts_is_split_and_keeps_every_covered_pixel() {
+        let a = Part {
+            id: ORIGINAL_PART,
+            image: grid(10, 10),
+            join: Join::Below,
+        };
+        let b = Part {
+            id: 1,
+            image: grid(10, 10),
+            join: Join::Below,
+        };
+        let g = DocGeometry {
+            parts: vec![a, b],
+            gap: 0,
+            ..DocGeometry::default()
+        };
+        let wide = g.with_layout(40, Align::Start);
+        let blocks = remap_annotations(
+            &g,
+            &wide,
+            &[solid_block(RectLike::new(0.0, 8.0, 10.0, 4.0))],
+        );
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(rect_of(&blocks[0]), RectLike::new(0.0, 8.0, 10.0, 2.0));
+        assert_eq!(rect_of(&blocks[1]), RectLike::new(0.0, 50.0, 10.0, 2.0));
+        // Blur and pixelate redactions split too; a non-redaction keeps the center rule.
+        let blur = Annotation::Blur {
+            rect: RectLike::new(0.0, 8.0, 10.0, 4.0),
+            radius: 5.0,
+        };
+        assert_eq!(remap_annotations(&g, &wide, &[blur]).len(), 2);
+        let stroke = rect_ann(RectLike::new(0.0, 8.0, 10.0, 4.0));
+        assert_eq!(remap_annotations(&g, &wide, &[stroke]).len(), 1);
+        // A redaction inside one part stays one piece.
+        let inside = solid_block(RectLike::new(1.0, 11.0, 2.0, 2.0));
+        let m = remap_annotations(&g, &wide, &[inside]);
+        assert_eq!(m.len(), 1);
+        assert_eq!(rect_of(&m[0]), RectLike::new(1.0, 51.0, 2.0, 2.0));
+    }
+
+    #[test]
     fn hostile_transforms_and_gaps_never_panic_or_over_allocate() {
         let img = grid(3, 2);
         let base = DocGeometry::original(Arc::clone(&img));
@@ -1104,8 +1290,9 @@ mod tests {
             let _ = g.layout();
             let _ = g.fingerprint();
             let _ = g.part_rect(ORIGINAL_PART);
-            let out = g.compose();
-            assert!(u64::from(out.width()) * u64::from(out.height()) <= MAX_DOC_PIXELS);
+            if let Ok(out) = g.try_compose() {
+                assert!(u64::from(out.width()) * u64::from(out.height()) <= MAX_DOC_PIXELS);
+            }
         }
         let t = Transform {
             quarter_turns: 255,
@@ -1124,7 +1311,7 @@ mod tests {
             big.validate(),
             Err(GeometryError::TooLarge { .. })
         ));
-        assert_eq!(big.compose().dimensions(), (1, 1));
+        assert!(big.try_compose().is_err());
         // The gap is clamped wherever it came from.
         let a = Part {
             id: 0,
