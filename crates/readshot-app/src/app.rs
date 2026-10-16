@@ -576,6 +576,10 @@ pub enum Message {
     EditorStylePreview(readshot_ui::editor::StyleMessage),
     /// Commit the options-bar slider preview as one undo step.
     EditorStyleCommit,
+    /// The color popover's hex field changed.
+    EditorHexChanged(String),
+    /// Enter in the hex field: apply the color if it parses.
+    EditorHexSubmitted,
     /// Background capture-and-save task finished. Carries the final
     /// PNG path or a stringified error.
     CaptureSaved(Result<PathBuf, String>),
@@ -1179,6 +1183,16 @@ impl App {
         }
         self.persist_preferences_if_configured();
         true
+    }
+
+    /// Add a non-preset color to the editor's Recent row and persist.
+    pub(crate) fn remember_custom_color(&mut self, color: readshot_core::Rgba) {
+        if readshot_ui::editor::toolbar::is_preset(color) {
+            return;
+        }
+        if self.preferences.push_recent_color(&color.to_hex()) {
+            self.persist_preferences_if_configured();
+        }
     }
 
     pub fn mark_onboarding_completed(&mut self) -> bool {

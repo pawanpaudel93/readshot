@@ -383,6 +383,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 } else {
                     close_editor_popover(ed);
                     ed.popover = Some(which);
+                    if which == crate::editor::EditorPopover::Color {
+                        ed.hex_draft = ed.model.effective_color().to_hex();
+                    }
                 }
             }
             Task::none()
@@ -616,6 +619,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 readshot_ui::ToolbarMessage::SelectTool(t) => Some(t),
                 _ => None,
             };
+            let picked_color = match msg {
+                readshot_ui::ToolbarMessage::SelectColor(c) => Some(c),
+                _ => None,
+            };
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
@@ -663,6 +670,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }
             if let Some(t) = selected_tool {
                 state.mark_editor_tool_seen(t.id());
+            }
+            if let Some(color) = picked_color {
+                // Presets are ignored; a custom (Recent) color moves to the front.
+                state.remember_custom_color(color);
             }
             Task::none()
         }
@@ -715,6 +726,32 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 return Task::none();
             }
             preview_editor_style(ed, msg);
+            Task::none()
+        }
+        Message::EditorHexChanged(raw) => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.hex_draft = raw
+                    .chars()
+                    .filter(|c| *c == '#' || c.is_ascii_hexdigit())
+                    .take(7)
+                    .collect();
+            }
+            Task::none()
+        }
+        Message::EditorHexSubmitted => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            if ed.busy {
+                return Task::none();
+            }
+            let Some(color) = readshot_core::Rgba::from_hex(&ed.hex_draft) else {
+                ed.set_status("Couldn't read that color. Use a hex value like #4F46E5.");
+                return Task::none();
+            };
+            apply_editor_color(ed, &state.coordinator, color);
+            close_editor_popover(ed);
+            state.remember_custom_color(color);
             Task::none()
         }
         Message::EditorStyleCommit => {

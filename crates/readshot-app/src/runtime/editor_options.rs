@@ -8,7 +8,7 @@ use super::*;
 use std::ops::RangeInclusive;
 
 use iced::widget::tooltip::Position;
-use iced::widget::{button, container, row, text, Space};
+use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Color, Element, Length, Theme};
 
 use readshot_core::{ArrowHeads, FillMode, Rgba};
@@ -346,6 +346,112 @@ pub(crate) fn labeled_slider<'a>(
             .style(text_t2),
     )
     .into()
+}
+
+/// Color popover (spec §3.5): 12 presets, the Recent row (last 6
+/// custom colors), and a hex field.
+pub(crate) fn color_popover<'a>(
+    current: Rgba,
+    recent: &'a [String],
+    hex_draft: &'a str,
+    busy: bool,
+    p: &'static Palette,
+) -> Element<'a, Message> {
+    use readshot_ui::editor::toolbar::PALETTE;
+    let _ = p; // used by the eyedropper button (Task 9)
+               // 7 columns: 7 presets, then 5 presets plus one free cell, where the
+               // mockup puts the eyedropper (added in Task 9).
+    let mut grid = column![].spacing(8);
+    for chunk in PALETTE.chunks(SWATCH_COLUMNS) {
+        grid = grid.push(swatch_row(chunk.iter().copied(), current, busy));
+    }
+    let mut body = column![popover_heading("Color"), grid].spacing(8);
+    let recent: Vec<Rgba> = recent.iter().filter_map(|h| Rgba::from_hex(h)).collect();
+    if !recent.is_empty() {
+        body = body.push(text("Recent").size(TYPE_MICRO).style(text_t3));
+        body = body.push(swatch_row(recent.into_iter(), current, busy));
+    }
+    let preview = swatch_color(current);
+    let mut field = iced::widget::text_input("#RRGGBB", hex_draft)
+        .font(mono_font())
+        .size(TYPE_CAPTION)
+        .padding([4, 8])
+        .width(Length::Fill)
+        .style(text_input_style);
+    if !busy {
+        field = field
+            .on_input(Message::EditorHexChanged)
+            .on_submit(Message::EditorHexSubmitted);
+    }
+    let hex_row = row![
+        container(
+            Space::new()
+                .width(Length::Fixed(14.0))
+                .height(Length::Fixed(14.0))
+        )
+        .style(move |theme: &Theme| container::Style {
+            background: Some(preview.into()),
+            border: iced::Border {
+                radius: 7.0.into(),
+                width: 1.0,
+                color: palette_for(theme).border,
+            },
+            ..Default::default()
+        }),
+        field,
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .width(Length::Fixed(SWATCH_GRID_WIDTH));
+    body.push(hex_row).into()
+}
+
+/// Swatch grid columns and width (7 × 22 px swatches, 8 px gaps).
+const SWATCH_COLUMNS: usize = 7;
+const SWATCH_GRID_WIDTH: f32 = 7.0 * 22.0 + 6.0 * 8.0;
+
+fn swatch_row<'a>(
+    colors: impl Iterator<Item = Rgba>,
+    current: Rgba,
+    busy: bool,
+) -> iced::widget::Row<'a, Message> {
+    let mut r = row![].spacing(8);
+    for swatch in colors {
+        let is_current = swatch_eq(swatch, current);
+        let fill = swatch_color(swatch);
+        let mut b = button(
+            Space::new()
+                .width(Length::Fixed(22.0))
+                .height(Length::Fixed(22.0)),
+        )
+        .padding(0)
+        .style(move |theme: &Theme, status| {
+            let p = palette_for(theme);
+            let (width, color) = if is_current {
+                (2.0, p.t1)
+            } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                (1.5, p.t2)
+            } else {
+                (1.0, p.border)
+            };
+            button::Style {
+                background: Some(fade(fill, if busy { 0.45 } else { 1.0 }).into()),
+                border: iced::Border {
+                    radius: 11.0.into(),
+                    width,
+                    color,
+                },
+                ..Default::default()
+            }
+        });
+        if !busy {
+            b = b.on_press(Message::EditorToolbar(
+                readshot_ui::ToolbarMessage::SelectColor(swatch),
+            ));
+        }
+        r = r.push(b);
+    }
+    r
 }
 
 fn color_button<'a>(color: Rgba, open: bool, busy: bool) -> Element<'a, Message> {

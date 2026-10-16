@@ -1687,6 +1687,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorStyle(..)
         | Message::EditorStylePreview(..)
         | Message::EditorStyleCommit
+        | Message::EditorHexChanged(..)
+        | Message::EditorHexSubmitted
         | Message::EditorCanvas(..)
         | Message::EditorEditSelectedText
         | Message::EditorDeleteSelected
@@ -2690,6 +2692,155 @@ mod tests {
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.popover, None);
         assert!(ed.discard_pending_at.is_none());
+    }
+
+    #[test]
+    fn opening_the_color_popover_seeds_the_hex_field() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.hex_draft, ed.model.effective_color().to_hex());
+    }
+
+    #[test]
+    fn hex_submit_applies_the_color_and_remembers_it() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        let _ = update(&mut app, Message::EditorHexChanged("#4f46e5".into()));
+        let _ = update(&mut app, Message::EditorHexSubmitted);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.current_color().to_hex(), "#4F46E5");
+        assert_eq!(ed.popover, None);
+        assert_eq!(
+            app.preferences.editor_recent_colors,
+            vec!["#4F46E5".to_string()]
+        );
+    }
+
+    #[test]
+    fn invalid_hex_keeps_the_popover_open_with_an_error() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+        let before = app.editor.as_ref().unwrap().model.current_color();
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        let _ = update(&mut app, Message::EditorHexChanged("#12".into()));
+        let _ = update(&mut app, Message::EditorHexSubmitted);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.popover, Some(crate::editor::EditorPopover::Color));
+        assert_eq!(ed.model.current_color(), before);
+        assert!(ed.status_is_error());
+    }
+
+    #[test]
+    fn preset_colors_are_not_added_to_recent() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+        let _ = update(
+            &mut app,
+            Message::EditorHexChanged(readshot_ui::editor::toolbar::PALETTE[4].to_hex()),
+        );
+        let _ = update(&mut app, Message::EditorHexSubmitted);
+        assert!(app.preferences.editor_recent_colors.is_empty());
+    }
+
+    #[test]
+    fn clicking_a_recent_swatch_moves_it_to_the_front() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+        app.remember_custom_color(readshot_core::Rgba::from_hex("#111111").unwrap());
+        app.remember_custom_color(readshot_core::Rgba::from_hex("#222222").unwrap());
+        assert_eq!(
+            app.preferences.editor_recent_colors,
+            vec!["#222222".to_string(), "#111111".to_string()]
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectColor(
+                readshot_core::Rgba::from_hex("#111111").unwrap(),
+            )),
+        );
+        assert_eq!(
+            app.preferences.editor_recent_colors,
+            vec!["#111111".to_string(), "#222222".to_string()]
+        );
+    }
+
+    #[test]
+    fn hex_field_filters_to_hex_characters() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+        let _ = update(&mut app, Message::EditorHexChanged("#4z f46e5xx99".into()));
+        assert_eq!(app.editor.as_ref().unwrap().hex_draft, "#4f46e5");
+    }
+
+    #[test]
+    fn esc_while_typing_in_the_hex_field_closes_the_popover() {
+        // The focused text input captures Esc, so it arrives with
+        // status_ignored == false and maps to EditorTextCancel.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(32, 32));
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorKeyPressed {
+                window: id,
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                modifiers: iced::keyboard::Modifiers::empty(),
+                status_ignored: false,
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.popover, None);
+        assert!(ed.discard_pending_at.is_none());
+    }
+
+    #[test]
+    fn tool_letters_and_brackets_are_ignored_while_typing_in_the_hex_field() {
+        // The focused text input captures printable keys, so they arrive
+        // with status_ignored == false and must not switch tools or widths.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(32, 32));
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        let tool = app.editor.as_ref().unwrap().model.active_tool();
+        let width = app.editor.as_ref().unwrap().model.current_line_width();
+        for ch in ["i", "s", "e", "t", "1", "[", "]"] {
+            let _ = update(
+                &mut app,
+                Message::EditorKeyPressed {
+                    window: id,
+                    key: iced::keyboard::Key::Character(ch.into()),
+                    modifiers: iced::keyboard::Modifiers::empty(),
+                    status_ignored: false,
+                },
+            );
+        }
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.active_tool(), tool);
+        assert_eq!(ed.model.current_line_width(), width);
+        assert_eq!(ed.popover, Some(crate::editor::EditorPopover::Color));
     }
 
     #[test]

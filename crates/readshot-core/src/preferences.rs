@@ -116,6 +116,9 @@ impl fmt::Display for UpdateChannel {
     }
 }
 
+/// How many custom colors the editor's Recent row keeps.
+pub const RECENT_COLORS_MAX: usize = 6;
+
 /// Top-level user preferences, persisted as `preferences.toml`.
 ///
 /// All fields are `#[serde(default)]` so a partially-written file (or one
@@ -171,6 +174,10 @@ pub struct Preferences {
     /// New editor tools the user has opened at least once (stable ids
     /// from `ToolState::id`). Drives the "new" dot on the tool bar.
     pub editor_tools_seen: Vec<String>,
+
+    /// Last custom annotation colors (`#RRGGBB`), most recent first, at
+    /// most `RECENT_COLORS_MAX`. Presets are never stored here.
+    pub editor_recent_colors: Vec<String>,
 }
 
 impl Default for Preferences {
@@ -189,6 +196,7 @@ impl Default for Preferences {
             debug_logging: false,
             onboarding_completed: false,
             editor_tools_seen: Vec::new(),
+            editor_recent_colors: Vec::new(),
         }
     }
 }
@@ -238,6 +246,19 @@ impl Preferences {
         true
     }
 
+    /// Move `hex` to the front of the Recent row. Returns whether the
+    /// list changed (the caller persists).
+    pub fn push_recent_color(&mut self, hex: &str) -> bool {
+        let hex = hex.trim().to_ascii_uppercase();
+        if self.editor_recent_colors.first() == Some(&hex) {
+            return false;
+        }
+        self.editor_recent_colors.retain(|h| *h != hex);
+        self.editor_recent_colors.insert(0, hex);
+        self.editor_recent_colors.truncate(RECENT_COLORS_MAX);
+        true
+    }
+
     /// Apply schema migrations in place.
     fn migrate(&mut self) {
         let original_version = self.schema_version;
@@ -282,6 +303,24 @@ mod tests {
         p.save(&path).unwrap();
         let back = Preferences::load(&path).unwrap();
         assert_eq!(back.editor_tools_seen, vec!["spotlight".to_string()]);
+    }
+
+    #[test]
+    fn recent_colors_are_mru_deduped_uppercase_and_capped() {
+        let mut p = Preferences::default();
+        for hex in [
+            "#111111", "#222222", "#333333", "#444444", "#555555", "#666666", "#777777",
+        ] {
+            assert!(p.push_recent_color(hex));
+        }
+        assert_eq!(p.editor_recent_colors.len(), RECENT_COLORS_MAX);
+        assert_eq!(p.editor_recent_colors[0], "#777777");
+        assert!(p.push_recent_color("#333333"));
+        assert_eq!(p.editor_recent_colors[0], "#333333");
+        assert_eq!(p.editor_recent_colors.len(), RECENT_COLORS_MAX);
+        assert!(!p.push_recent_color("#333333"), "already most recent");
+        assert!(p.push_recent_color("#abcdef"));
+        assert_eq!(p.editor_recent_colors[0], "#ABCDEF");
     }
 
     #[test]

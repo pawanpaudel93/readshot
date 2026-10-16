@@ -2593,7 +2593,13 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .into(),
         );
         let body = match which {
-            EditorPopover::Color => color_popover(ed.model.effective_color(), busy),
+            EditorPopover::Color => color_popover(
+                ed.model.effective_color(),
+                &state.preferences.editor_recent_colors,
+                &ed.hex_draft,
+                busy,
+                p,
+            ),
             EditorPopover::Width => width_popover(
                 ed.model.effective_line_width(),
                 ed.model.effective_color(),
@@ -2809,51 +2815,6 @@ pub(crate) fn popover_heading<'a>(label: &'a str) -> iced::widget::Text<'a> {
             weight: iced::font::Weight::Semibold,
             ..iced::Font::DEFAULT
         })
-}
-
-fn color_popover<'a>(current: readshot_core::Rgba, busy: bool) -> Element<'a, Message> {
-    use readshot_ui::editor::toolbar::PALETTE;
-    let mut grid = column![].spacing(8);
-    for chunk in PALETTE.chunks(6) {
-        let mut r = row![].spacing(8);
-        for &swatch in chunk {
-            let is_current = swatch_eq(swatch, current);
-            let fill = swatch_color(swatch);
-            let mut b = button(
-                Space::new()
-                    .width(Length::Fixed(22.0))
-                    .height(Length::Fixed(22.0)),
-            )
-            .padding(0)
-            .style(move |theme: &Theme, status| {
-                let p = palette_for(theme);
-                let (width, color) = if is_current {
-                    (2.0, p.t1)
-                } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
-                    (1.5, p.t2)
-                } else {
-                    (1.0, p.border)
-                };
-                button::Style {
-                    background: Some(fade(fill, if busy { 0.45 } else { 1.0 }).into()),
-                    border: iced::Border {
-                        radius: 11.0.into(),
-                        width,
-                        color,
-                    },
-                    ..Default::default()
-                }
-            });
-            if !busy {
-                b = b.on_press(Message::EditorToolbar(
-                    readshot_ui::ToolbarMessage::SelectColor(swatch),
-                ));
-            }
-            r = r.push(b);
-        }
-        grid = grid.push(r);
-    }
-    column![popover_heading("Color"), grid].spacing(8).into()
 }
 
 fn width_popover<'a>(

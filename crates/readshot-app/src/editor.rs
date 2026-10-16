@@ -134,6 +134,8 @@ pub struct EditorSession {
     /// Open color / line-width / frame popover, if any. Esc and a
     /// click outside close it before any other Esc behaviour runs.
     pub popover: Option<EditorPopover>,
+    /// Draft text of the color popover's hex field.
+    pub hex_draft: String,
     /// True while a shape/freehand drag is in progress on the canvas
     /// (between `DragStarted` and its `Cancelled`/`CommitAnnotation`).
     /// Escape uses this to decide whether to cancel the drag or fall
@@ -376,6 +378,7 @@ impl EditorSession {
             source_display_bounds: None,
             discard_pending_at: None,
             popover: None,
+            hex_draft: String::new(),
             status_set_at: None,
             move_drag: None,
             width_drag_baseline: None,
@@ -419,6 +422,7 @@ impl EditorSession {
             source_display_bounds: None,
             discard_pending_at: None,
             popover: None,
+            hex_draft: String::new(),
             status_set_at: None,
             move_drag: None,
             width_drag_baseline: None,

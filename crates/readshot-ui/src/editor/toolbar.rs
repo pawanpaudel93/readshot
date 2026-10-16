@@ -97,9 +97,25 @@ pub fn clamp_line_width(raw: f32) -> f32 {
     raw.clamp(MIN_LINE_WIDTH, MAX_LINE_WIDTH)
 }
 
+/// True when `color` is one of the 12 presets (within 8-bit rounding).
+pub fn is_preset(color: Rgba) -> bool {
+    const EPS: f32 = 2.0 / 255.0;
+    PALETTE.iter().any(|p| {
+        (p.r - color.r).abs() < EPS && (p.g - color.g).abs() < EPS && (p.b - color.b).abs() < EPS
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presets_survive_a_hex_round_trip() {
+        for c in PALETTE {
+            assert!(is_preset(Rgba::from_hex(&c.to_hex()).unwrap()), "{c:?}");
+        }
+        assert!(!is_preset(Rgba::from_hex("#4F46E5").unwrap()));
+    }
 
     #[test]
     fn palette_has_twelve_swatches_with_full_alpha() {
