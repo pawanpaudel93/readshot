@@ -33,7 +33,7 @@ pub(crate) fn visible_option_controls(ed: &EditorSession) -> Vec<OptionControl> 
         .model
         .selected_annotation()
         .and_then(|idx| ed.model.annotations().get(idx));
-    options_for(ed.model.active_tool(), selected)
+    let mut controls: Vec<OptionControl> = options_for(ed.model.active_tool(), selected)
         .iter()
         .copied()
         .filter(|c| {
@@ -41,7 +41,11 @@ pub(crate) fn visible_option_controls(ed: &EditorSession) -> Vec<OptionControl> 
                 || (ed.text_panel.positioned_document().is_some()
                     && !ed.model.geometry().transform.is_sideways())
         })
-        .collect()
+        .collect();
+    if ed.crop_draft.is_some() && ed.model.active_tool() == readshot_ui::editor::ToolState::Crop {
+        controls.push(OptionControl::CropApply);
+    }
+    controls
 }
 
 pub(crate) fn editor_options_bar<'a>(
@@ -199,6 +203,39 @@ fn option_control<'a>(
             style.snap_to_text,
             |v| send(StyleMessage::SnapToText(v)),
         ),
+        O::CropAspect => text_segment(
+            &readshot_ui::editor::style::CropAspect::ALL.map(|a| (a.label(), a)),
+            style.crop_aspect,
+            |a| send(StyleMessage::CropAspect(a)),
+        ),
+        O::CropApply => row![
+            bar_button(
+                row![
+                    text("Cancel").size(ButtonSize::Xs.text_size()),
+                    key_chip("esc")
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .into(),
+                ButtonKind::Ghost,
+                ButtonSize::Xs,
+                (!busy).then_some(Message::EditorCropCancel),
+            ),
+            bar_button(
+                row![
+                    text("Apply").size(ButtonSize::Xs.text_size()),
+                    key_chip("↵")
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .into(),
+                ButtonKind::Secondary,
+                ButtonSize::Xs,
+                (!busy).then_some(Message::EditorCropApply),
+            ),
+        ]
+        .spacing(SP1)
+        .into(),
         O::StampPicker => {
             let mut r = row![].spacing(1).align_y(Alignment::Center);
             for kind in readshot_core::StampKind::ALL {

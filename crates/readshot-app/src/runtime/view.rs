@@ -2142,6 +2142,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             loupe: ed.eyedropper.as_ref().and_then(|e| e.loupe.clone()),
             text_hover,
             text_selected: text_selected.clone(),
+            crop_draft: ed.crop_draft,
             cache: ed.canvas_cache.clone(),
         };
         let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
@@ -3429,7 +3430,7 @@ pub(crate) fn editor_key_message(
         // The annotation canvas captures every Escape (publishing
         // `Cancelled` for any live drag), so this is a real Esc press.
         // EditorTextCancel is its single cancel action: it closes an open
-        // popover, else exits the eyedropper, else cancels the text draft,
+        // popover, else exits the eyedropper, else drops the crop draft, else cancels the text draft,
         // else clears the selection.
         (Key::Named(Named::Escape), _, _) => return Some(Message::EditorTextCancel),
         _ => {}

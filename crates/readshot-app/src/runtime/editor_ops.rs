@@ -989,6 +989,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 readshot_ui::ToolbarMessage::SelectTool(t) => {
                     cancel_editor_previews(ed);
                     ed.eyedropper = None;
+                    if t != readshot_ui::editor::ToolState::Crop {
+                        ed.crop_draft = None;
+                    }
                     if t != readshot_ui::editor::ToolState::Text {
                         commit_pending_editor_text(ed, &state.coordinator);
                     }
@@ -1015,6 +1018,14 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     apply_editor_line_width(ed, &state.coordinator, w);
                 }
                 readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
+                    if ed.crop_draft.is_some() =>
+                {
+                    // One step per press: an open crop draft is dropped and
+                    // history stays put, so Undo never lands beneath it.
+                    ed.crop_draft = None;
+                    ed.set_status("Cancelled the crop.");
+                }
+                readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
                     if ed.snapshot_drag_baseline.is_some() || ed.style_drag_baseline.is_some() =>
                 {
                     // One step per press: an open slider drag ends (back to
@@ -1024,6 +1035,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     ed.set_status("Cancelled the slider change.");
                 }
                 readshot_ui::ToolbarMessage::Undo => {
+                    ed.crop_draft = None;
                     cancel_editor_previews(ed);
                     commit_pending_editor_text(ed, &state.coordinator);
                     if ed.model.undo() {
@@ -1033,6 +1045,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     }
                 }
                 readshot_ui::ToolbarMessage::Redo => {
+                    ed.crop_draft = None;
                     cancel_editor_previews(ed);
                     commit_pending_editor_text(ed, &state.coordinator);
                     if ed.model.redo() {
@@ -1099,6 +1112,18 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 return Task::none();
             };
             if ed.busy {
+                return Task::none();
+            }
+            if let (readshot_ui::editor::style::StyleMessage::CropAspect(a), Some(d)) =
+                (msg, ed.crop_draft)
+            {
+                // The draft owns the aspect while it is open: refit it
+                // (centred) and leave any selected committed crop alone.
+                cancel_editor_previews(ed);
+                ed.model.set_style(msg);
+                if let Some(r) = a.ratio() {
+                    ed.crop_draft = Some(readshot_ui::editor::style::fit_aspect(d, r));
+                }
                 return Task::none();
             }
             apply_editor_style(ed, &state.coordinator, msg);
@@ -1365,6 +1390,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 readshot_ui::CanvasMessage::CommitAnnotation(annotation) => {
                     ed.canvas_drag_active = false;
                     cancel_editor_previews(ed);
+                    if let readshot_core::Annotation::Crop { rect } = annotation {
+                        // Crop is a draft until Apply ↵ (spec §3.10).
+                        ed.crop_draft = Some(rect);
+                        ed.set_status("Press ↵ to crop, esc to cancel.");
+                        return Task::none();
+                    }
                     let annotation = super::text_panel::snap_highlight_annotation(ed, annotation);
                     handle_commit_annotation(ed, annotation);
                     sync_editor_history(ed, &state.coordinator);
@@ -1377,6 +1408,21 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         }
 
         Message::EditorEditSelectedText => {
+            // ↵ applies an open crop draft, unless a text field has focus
+            // or a text draft is being typed (those own Enter).
+            if state.editor.as_ref().is_some_and(|ed| {
+                ed.crop_draft.is_some()
+                    && ed.pending_text.is_none()
+                    && !matches!(
+                        ed.popover,
+                        Some(
+                            crate::editor::EditorPopover::Color
+                                | crate::editor::EditorPopover::Resize
+                        )
+                    )
+            }) {
+                return handle_editor_message(state, Message::EditorCropApply);
+            }
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
@@ -1498,6 +1544,33 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             commit_pending_editor_text(ed, &state.coordinator);
             Task::none()
         }
+        Message::EditorCropApply => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            if ed.busy {
+                return Task::none();
+            }
+            // Same order as `image_menu::prepare`: end slider/drag
+            // previews, then commit any pending text, then the crop.
+            cancel_editor_previews(ed);
+            commit_pending_editor_text(ed, &state.coordinator);
+            if let Some(rect) = ed.crop_draft.take() {
+                ed.model
+                    .commit_annotation(readshot_core::Annotation::Crop { rect });
+                ed.refresh_image();
+                let (w, h) = ed.effective_image_size();
+                ed.set_status(format!("Cropped to {w} × {h} px. ⌘Z to undo."));
+                sync_editor_history(ed, &state.coordinator);
+            }
+            Task::none()
+        }
+        Message::EditorCropCancel => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.crop_draft = None;
+            }
+            Task::none()
+        }
         Message::EditorTextCancel => {
             if let Some(ed) = state.editor.as_mut() {
                 if close_editor_popover(ed) {
@@ -1506,9 +1579,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if super::text_panel::close_panel_overlay(ed) {
                     return Task::none();
                 }
-                // Esc chain: popover, then the overlay panel, then the eyedropper, then the text
-                // draft / selection below, then the Text panel's line selection.
+                // Esc chain: popover → overlay panel → eyedropper → crop draft → slider →
+                // text draft → selection → panel lines.
                 if ed.eyedropper.take().is_some() {
+                    return Task::none();
+                }
+                if ed.crop_draft.take().is_some() {
                     return Task::none();
                 }
                 if ed.busy {

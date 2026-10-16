@@ -1813,6 +1813,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorCanvas(..)
         | Message::EditorEditSelectedText
         | Message::EditorDeleteSelected
+        | Message::EditorCropApply
+        | Message::EditorCropCancel
         | Message::EditorNudgeSelected(..)
         | Message::EditorTextChanged(..)
         | Message::EditorTextAction(..)
@@ -11233,5 +11235,158 @@ mod tests {
         let _ = update(&mut app, Message::EditorResizeApply);
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.effective_image_size(), (999, 762));
+    }
+
+    #[test]
+    fn crop_drag_makes_a_draft_enter_applies_and_esc_cancels() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(100, 80)));
+        let crop = |r| {
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                Annotation::Crop { rect: r },
+            ))
+        };
+        let _ = update(&mut app, crop(RectLike::new(10.0, 10.0, 40.0, 30.0)));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.crop_draft, Some(RectLike::new(10.0, 10.0, 40.0, 30.0)));
+        assert_eq!(ed.model.undo_depth(), 0, "a draft is not an edit");
+        assert_eq!(ed.effective_image_size(), (100, 80));
+        // esc cancels only the draft.
+        let _ = update(&mut app, Message::EditorTextCancel);
+        assert_eq!(app.editor.as_ref().unwrap().crop_draft, None);
+        let _ = update(&mut app, crop(RectLike::new(0.0, 0.0, 50.0, 40.0)));
+        // ↵ arrives as EditorEditSelectedText (status_ignored Enter).
+        let _ = update(&mut app, Message::EditorEditSelectedText);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.crop_draft, None);
+        assert_eq!(ed.effective_image_size(), (50, 40));
+        assert_eq!(ed.model.undo_depth(), 1);
+    }
+
+    #[test]
+    fn choosing_an_aspect_refits_the_draft_and_switching_tools_drops_it() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(100, 80)));
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+                readshot_ui::editor::ToolState::Crop,
+            )),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                Annotation::Crop {
+                    rect: RectLike::new(0.0, 0.0, 80.0, 40.0),
+                },
+            )),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorStyle(readshot_ui::editor::style::StyleMessage::CropAspect(
+                readshot_ui::editor::style::CropAspect::Square,
+            )),
+        );
+        assert_eq!(
+            app.editor.as_ref().unwrap().crop_draft,
+            Some(RectLike::new(20.0, 0.0, 40.0, 40.0))
+        );
+        assert!(visible_option_controls(app.editor.as_ref().unwrap())
+            .contains(&readshot_ui::editor::style::OptionControl::CropApply));
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+                readshot_ui::editor::ToolState::Select,
+            )),
+        );
+        assert_eq!(app.editor.as_ref().unwrap().crop_draft, None);
+    }
+
+    fn crop_app_with_rect_selected() -> App {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(100, 80));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        ed.crop_draft = Some(RectLike::new(10.0, 10.0, 40.0, 30.0));
+        app.editor = Some(ed);
+        app
+    }
+
+    #[test]
+    fn esc_drops_the_crop_draft_before_the_selection() {
+        let mut app = crop_app_with_rect_selected();
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.crop_draft, None);
+        assert_eq!(ed.model.selected_annotation(), Some(0), "one esc, one step");
+        let _ = update(&mut app, Message::EditorTextCancel);
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.selected_annotation(),
+            None
+        );
+    }
+
+    #[test]
+    fn esc_exits_the_eyedropper_before_the_crop_draft() {
+        let mut app = crop_app_with_rect_selected();
+        app.editor.as_mut().unwrap().eyedropper = Some(crate::editor::EyedropperState {
+            loupe: None,
+            target: Default::default(),
+        });
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.eyedropper.is_none());
+        assert!(ed.crop_draft.is_some());
+    }
+
+    #[test]
+    fn undo_and_redo_only_cancel_an_open_crop_draft() {
+        for redo in [false, true] {
+            let mut app = crop_app_with_rect_selected();
+            let msg = if redo {
+                readshot_ui::ToolbarMessage::Redo
+            } else {
+                readshot_ui::ToolbarMessage::Undo
+            };
+            let _ = update(&mut app, Message::EditorToolbar(msg));
+            let ed = app.editor.as_ref().unwrap();
+            assert_eq!(ed.crop_draft, None);
+            assert_eq!(ed.model.undo_depth(), 1, "history must not move");
+        }
+    }
+
+    #[test]
+    fn enter_does_not_apply_a_crop_while_a_text_draft_is_open() {
+        let mut app = crop_app_with_rect_selected();
+        app.editor.as_mut().unwrap().pending_text = Some(crate::editor::PendingText {
+            origin: PointLike::new(1.0, 1.0),
+            content: "typing".into(),
+            edit_index: None,
+        });
+        let _ = update(&mut app, Message::EditorEditSelectedText);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.crop_draft.is_some());
+        assert_eq!(ed.effective_image_size(), (100, 80));
+    }
+
+    #[test]
+    fn applying_a_crop_is_one_undo_step() {
+        let mut app = crop_app_with_rect_selected();
+        let _ = update(&mut app, Message::EditorCropApply);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.undo_depth(), 2);
+        assert_eq!(ed.effective_image_size(), (40, 30));
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.effective_image_size(), (100, 80));
+        assert_eq!(ed.model.undo_depth(), 1);
     }
 }

@@ -209,6 +209,8 @@ pub struct EditorCanvas {
     pub text_hover: Option<RectLike>,
     /// Text-panel selected lines (base coordinates): tinted.
     pub text_selected: Vec<RectLike>,
+    /// Pending crop (document px): shaded outside, framed, thirds guides.
+    pub crop_draft: Option<RectLike>,
     /// Shared tessellated-geometry cache, owned by the editor session.
     /// `draw` reuses the stored geometry unless the canvas size changed
     /// or the session explicitly cleared it (on editor messages). This
@@ -476,8 +478,13 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                     }
                     if let Some(point) = cursor.position_in(bounds) {
                         *cur = point;
-                        let constrained =
-                            constrain_drag(*tool_at_press, *anchor, point, self.shift_held);
+                        let constrained = constrain_drag(
+                            *tool_at_press,
+                            *anchor,
+                            point,
+                            self.shift_held,
+                            self.style.crop_aspect.ratio(),
+                        );
                         let preview_rect = rect_from_points(*anchor, constrained);
                         return Some(
                             canvas::Action::publish(CanvasMessage::DragMoved(preview_rect))
@@ -557,7 +564,13 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                         // Apply the Shift constraint (square / 45°) to the
                         // release point so the committed shape matches the
                         // constrained preview the user saw.
-                        let cur = constrain_drag(tool_at_press, anchor, cur, self.shift_held);
+                        let cur = constrain_drag(
+                            tool_at_press,
+                            anchor,
+                            cur,
+                            self.shift_held,
+                            self.style.crop_aspect.ratio(),
+                        );
                         let dx = anchor.x - cur.x;
                         let dy = anchor.y - cur.y;
                         let len_sq = dx * dx + dy * dy;
@@ -726,7 +739,13 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 } => {
                     // Draw the preview at the Shift-constrained cursor so the
                     // hint matches the shape that will be committed.
-                    let cur = &constrain_drag(*tool_at_press, *anchor, *raw_cur, self.shift_held);
+                    let cur = &constrain_drag(
+                        *tool_at_press,
+                        *anchor,
+                        *raw_cur,
+                        self.shift_held,
+                        self.style.crop_aspect.ratio(),
+                    );
                     let rect = rect_from_points(*anchor, *cur);
                     if rect.width.abs() < 0.5 || rect.height.abs() < 0.5 {
                         // Don't draw anything for sub-pixel drags; iced's
@@ -741,6 +760,15 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                                 );
                                 shade_crop_outside(frame, bounds, rect);
                                 frame.stroke(&path, preview_stroke);
+                                draw_thirds(
+                                    frame,
+                                    Rectangle {
+                                        x: rect.x,
+                                        y: rect.y,
+                                        width: rect.width,
+                                        height: rect.height,
+                                    },
+                                );
                             }
                             ToolState::Rectangle
                             | ToolState::Ellipse
@@ -848,6 +876,26 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                         };
                         frame.stroke(&path, stroke);
                     }
+                }
+            }
+
+            if let Some(r) = self.crop_draft {
+                if let Some(rect) = base_rect_to_canvas(
+                    r,
+                    bounds,
+                    self.image_size,
+                    self.image_offset,
+                    self.display_scale,
+                ) {
+                    shade_crop_outside(frame, bounds, rect);
+                    frame.stroke(
+                        &Path::rectangle(
+                            Point::new(rect.x, rect.y),
+                            iced::Size::new(rect.width, rect.height),
+                        ),
+                        Stroke::default().with_color(SELECTION_TEAL).with_width(1.5),
+                    );
+                    draw_thirds(frame, rect);
                 }
             }
 
@@ -1868,7 +1916,19 @@ pub fn annotation_for_drag(
 /// keeping the drawn length. All other tools pass through unchanged. iced
 /// 0.14 doesn't deliver keyboard events to canvas widgets, so `shift` is
 /// threaded in from the runtime's global modifier watcher.
-fn constrain_drag(tool: ToolState, anchor: Point, cursor: Point, shift: bool) -> Point {
+fn constrain_drag(
+    tool: ToolState,
+    anchor: Point,
+    cursor: Point,
+    shift: bool,
+    aspect: Option<f32>,
+) -> Point {
+    if tool == ToolState::Crop {
+        return match aspect {
+            Some(r) => aspect_target(anchor, cursor, r),
+            None => cursor,
+        };
+    }
     if !shift {
         return cursor;
     }
@@ -1878,6 +1938,43 @@ fn constrain_drag(tool: ToolState, anchor: Point, cursor: Point, shift: bool) ->
         }
         ToolState::Line | ToolState::Arrow => snap_to_45(anchor, cursor),
         _ => cursor,
+    }
+}
+
+/// Far corner of the largest `ratio` rect inside the drag, on the same
+/// side of the anchor as the cursor. Screen and image px share one
+/// scale, so the ratio holds in image px too.
+fn aspect_target(anchor: Point, cursor: Point, ratio: f32) -> Point {
+    let (dx, dy) = (cursor.x - anchor.x, cursor.y - anchor.y);
+    let (mut w, mut h) = (dx.abs(), dy.abs());
+    if w / h.max(f32::EPSILON) > ratio {
+        w = h * ratio;
+    } else {
+        h = w / ratio;
+    }
+    Point::new(anchor.x + w.copysign(dx), anchor.y + h.copysign(dy))
+}
+
+/// Rule-of-thirds lines inside a crop frame.
+fn draw_thirds(frame: &mut Frame, rect: Rectangle) {
+    let stroke = Stroke::default()
+        .with_color(Color {
+            a: 0.55,
+            ..Color::WHITE
+        })
+        .with_width(1.0);
+    for i in 1..=2 {
+        let t = i as f32 / 3.0;
+        let x = rect.x + rect.width * t;
+        let y = rect.y + rect.height * t;
+        frame.stroke(
+            &Path::line(Point::new(x, rect.y), Point::new(x, rect.y + rect.height)),
+            stroke,
+        );
+        frame.stroke(
+            &Path::line(Point::new(rect.x, y), Point::new(rect.x + rect.width, y)),
+            stroke,
+        );
     }
 }
 
@@ -1959,8 +2056,37 @@ mod tests {
             loupe: None,
             text_hover: None,
             text_selected: Vec::new(),
+            crop_draft: None,
             cache: std::rc::Rc::new(canvas::Cache::default()),
         }
+    }
+
+    #[test]
+    fn crop_drags_follow_the_aspect_and_keep_their_direction() {
+        let t = constrain_drag(
+            ToolState::Crop,
+            pt(0.0, 0.0),
+            pt(160.0, 40.0),
+            false,
+            Some(16.0 / 9.0),
+        );
+        assert!(
+            (t.x - 71.111).abs() < 1e-3 && (t.y - 40.0).abs() < 1e-3,
+            "{t:?}"
+        );
+        let t = constrain_drag(
+            ToolState::Crop,
+            pt(100.0, 100.0),
+            pt(40.0, 0.0),
+            false,
+            Some(1.0),
+        );
+        assert_eq!(t, pt(40.0, 40.0));
+        // Free crop ignores Shift, as before.
+        assert_eq!(
+            constrain_drag(ToolState::Crop, pt(0.0, 0.0), pt(10.0, 3.0), true, None),
+            pt(10.0, 3.0)
+        );
     }
 
     #[test]
@@ -2502,15 +2628,33 @@ mod tests {
     #[test]
     fn shift_constrains_rectangle_drag_to_a_square() {
         // Wider-than-tall drag: the longer (x) axis sets the side length.
-        let target = constrain_drag(ToolState::Rectangle, pt(0.0, 0.0), pt(100.0, 40.0), true);
+        let target = constrain_drag(
+            ToolState::Rectangle,
+            pt(0.0, 0.0),
+            pt(100.0, 40.0),
+            true,
+            None,
+        );
         assert_eq!(target, pt(100.0, 100.0));
         // Sign is preserved per-axis so the square follows the cursor's
         // quadrant (here up-and-left).
-        let target = constrain_drag(ToolState::Ellipse, pt(50.0, 50.0), pt(10.0, 20.0), true);
+        let target = constrain_drag(
+            ToolState::Ellipse,
+            pt(50.0, 50.0),
+            pt(10.0, 20.0),
+            true,
+            None,
+        );
         assert_eq!(target, pt(10.0, 10.0));
         // Without Shift the cursor passes straight through.
         assert_eq!(
-            constrain_drag(ToolState::Rectangle, pt(0.0, 0.0), pt(100.0, 40.0), false),
+            constrain_drag(
+                ToolState::Rectangle,
+                pt(0.0, 0.0),
+                pt(100.0, 40.0),
+                false,
+                None
+            ),
             pt(100.0, 40.0)
         );
     }
@@ -2518,12 +2662,12 @@ mod tests {
     #[test]
     fn shift_snaps_line_drag_to_45_degree_increments() {
         // A near-horizontal drag snaps to exactly horizontal, length kept.
-        let target = constrain_drag(ToolState::Line, pt(0.0, 0.0), pt(100.0, 10.0), true);
+        let target = constrain_drag(ToolState::Line, pt(0.0, 0.0), pt(100.0, 10.0), true, None);
         assert!((target.x - 100.4987).abs() < 0.01, "x = {}", target.x);
         assert!(target.y.abs() < 0.01, "y = {}", target.y);
 
         // A ~45° drag snaps onto the diagonal.
-        let target = constrain_drag(ToolState::Arrow, pt(0.0, 0.0), pt(50.0, 40.0), true);
+        let target = constrain_drag(ToolState::Arrow, pt(0.0, 0.0), pt(50.0, 40.0), true, None);
         let len = (50.0_f32).hypot(40.0);
         let expected = len / std::f32::consts::SQRT_2;
         assert!((target.x - expected).abs() < 0.01, "x = {}", target.x);
@@ -2531,7 +2675,7 @@ mod tests {
 
         // Non-shape tools ignore Shift.
         assert_eq!(
-            constrain_drag(ToolState::Blur, pt(0.0, 0.0), pt(100.0, 10.0), true),
+            constrain_drag(ToolState::Blur, pt(0.0, 0.0), pt(100.0, 10.0), true, None),
             pt(100.0, 10.0)
         );
     }

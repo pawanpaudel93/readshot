@@ -357,6 +357,8 @@ pub struct EditorSession {
     pub hex_draft: String,
     /// Some while the eyedropper is active (spec §3.5).
     pub eyedropper: Option<EyedropperState>,
+    /// Crop tool: the dragged rect waiting for Apply ↵ (spec §3.10).
+    pub crop_draft: Option<readshot_core::RectLike>,
     /// True while a shape/freehand drag is in progress on the canvas
     /// (between `DragStarted` and its `Cancelled`/`CommitAnnotation`).
     /// Escape uses this to decide whether to cancel the drag or fall
@@ -626,6 +628,7 @@ impl EditorSession {
             resize_draft: None,
             hex_draft: String::new(),
             eyedropper: None,
+            crop_draft: None,
             status_set_at: None,
             move_drag: None,
             width_drag_baseline: None,
@@ -685,6 +688,7 @@ impl EditorSession {
             resize_draft: None,
             hex_draft: String::new(),
             eyedropper: None,
+            crop_draft: None,
             status_set_at: None,
             move_drag: None,
             width_drag_baseline: None,

@@ -7,8 +7,8 @@
 
 use readshot_core::line_geom::{seed_for, DEFAULT_BEND};
 use readshot_core::{
-    Annotation, ArrowHeads, FillMode, LinePath, LineStyle, PointLike, ShapeStyle, SpotlightShape,
-    StampKind, TextStyle,
+    Annotation, ArrowHeads, FillMode, LinePath, LineStyle, PointLike, RectLike, ShapeStyle,
+    SpotlightShape, StampKind, TextStyle,
 };
 
 use super::tool_state::ToolState;
@@ -103,6 +103,52 @@ impl TextSize {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CropAspect {
+    #[default]
+    Free,
+    Wide,
+    Standard,
+    Square,
+}
+
+impl CropAspect {
+    pub const ALL: [Self; 4] = [Self::Free, Self::Wide, Self::Standard, Self::Square];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Free => "Free",
+            Self::Wide => "16:9",
+            Self::Standard => "4:3",
+            Self::Square => "1:1",
+        }
+    }
+
+    pub fn ratio(self) -> Option<f32> {
+        match self {
+            Self::Free => None,
+            Self::Wide => Some(16.0 / 9.0),
+            Self::Standard => Some(4.0 / 3.0),
+            Self::Square => Some(1.0),
+        }
+    }
+}
+
+/// The largest `ratio` (w / h) rect centred inside `rect`.
+pub fn fit_aspect(rect: RectLike, ratio: f32) -> RectLike {
+    let (w, h) = if rect.width / rect.height.max(f32::EPSILON) > ratio {
+        (rect.height * ratio, rect.height)
+    } else {
+        (rect.width, rect.width / ratio)
+    };
+    RectLike::new(
+        rect.x + (rect.width - w) * 0.5,
+        rect.y + (rect.height - h) * 0.5,
+        w,
+        h,
+    )
+}
+
 /// Options applied to the next annotation drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToolStyle {
@@ -119,6 +165,8 @@ pub struct ToolStyle {
     pub stamp: StampKind,
     /// Highlighter: snap strokes to recognized text lines (spec §3.6).
     pub snap_to_text: bool,
+    /// Crop tool: the aspect preset the drag and draft follow.
+    pub crop_aspect: CropAspect,
 }
 
 impl Default for ToolStyle {
@@ -136,6 +184,7 @@ impl Default for ToolStyle {
             dim: readshot_core::annotation::DEFAULT_SPOTLIGHT_DIM,
             stamp: StampKind::default(),
             snap_to_text: false,
+            crop_aspect: CropAspect::default(),
         }
     }
 }
@@ -155,6 +204,7 @@ pub enum StyleMessage {
     Dim(f32),
     Stamp(StampKind),
     SnapToText(bool),
+    CropAspect(CropAspect),
 }
 
 /// Controls the options bar can show, in display order.
@@ -174,6 +224,8 @@ pub enum OptionControl {
     SpotlightShape,
     StampPicker,
     SnapToText,
+    CropAspect,
+    CropApply,
 }
 
 /// The tool that draws `annotation` — the options-bar target for a selection.
@@ -198,7 +250,8 @@ pub fn tool_for_annotation(annotation: &Annotation) -> ToolState {
 pub fn options_for(active: ToolState, selected: Option<&Annotation>) -> &'static [OptionControl] {
     use OptionControl::*;
     match selected.map(tool_for_annotation).unwrap_or(active) {
-        ToolState::Select | ToolState::Crop => &[],
+        ToolState::Select => &[],
+        ToolState::Crop => &[CropAspect],
         ToolState::Rectangle => &[Color, Width, Fill, Dash, CornerRadius],
         ToolState::Ellipse => &[Color, Width, Fill, Dash],
         ToolState::Line => &[Color, Width, LinePath, Dash],
@@ -231,6 +284,7 @@ impl ToolStyle {
             StyleMessage::Dim(d) => self.dim = d.clamp(MIN_DIM, MAX_DIM),
             StyleMessage::Stamp(k) => self.stamp = k,
             StyleMessage::SnapToText(v) => self.snap_to_text = v,
+            StyleMessage::CropAspect(a) => self.crop_aspect = a,
         }
     }
 
@@ -328,6 +382,11 @@ pub fn apply_style_to_annotation(annotation: &mut Annotation, msg: StyleMessage)
             *dim = d.clamp(MIN_DIM, MAX_DIM)
         }
         (Annotation::Stamp { stamp, .. }, StyleMessage::Stamp(k)) => *stamp = k,
+        (Annotation::Crop { rect }, StyleMessage::CropAspect(a)) => {
+            if let Some(r) = a.ratio() {
+                *rect = fit_aspect(*rect, r);
+            }
+        }
         _ => return false,
     }
     *annotation != before
@@ -375,7 +434,6 @@ mod tests {
     #[test]
     fn options_bar_is_hidden_for_select_without_selection() {
         assert!(options_for(ToolState::Select, None).is_empty());
-        assert!(options_for(ToolState::Crop, None).is_empty());
     }
 
     #[test]
@@ -509,5 +567,32 @@ mod tests {
             &mut h2,
             StyleMessage::SnapToText(true)
         ));
+    }
+
+    #[test]
+    fn fit_aspect_centres_the_largest_rect_of_the_ratio() {
+        let r = RectLike::new(0.0, 0.0, 200.0, 100.0);
+        assert_eq!(fit_aspect(r, 1.0), RectLike::new(50.0, 0.0, 100.0, 100.0));
+        let tall = RectLike::new(10.0, 10.0, 90.0, 160.0);
+        assert_eq!(
+            fit_aspect(tall, 16.0 / 9.0),
+            RectLike::new(10.0, 64.6875, 90.0, 50.625)
+        );
+        assert_eq!(CropAspect::Free.ratio(), None);
+        assert_eq!(
+            options_for(ToolState::Crop, None),
+            &[OptionControl::CropAspect]
+        );
+        let mut crop = Annotation::Crop { rect: r };
+        assert!(apply_style_to_annotation(
+            &mut crop,
+            StyleMessage::CropAspect(CropAspect::Square)
+        ));
+        assert_eq!(
+            crop,
+            Annotation::Crop {
+                rect: RectLike::new(50.0, 0.0, 100.0, 100.0)
+            }
+        );
     }
 }

@@ -629,6 +629,10 @@ pub enum Message {
     /// User pressed Escape / clicked Cancel on the text input. Drops
     /// the pending state without committing.
     EditorTextCancel,
+    /// Commit the pending crop (Apply ↵).
+    EditorCropApply,
+    /// Drop the pending crop (Cancel / esc).
+    EditorCropCancel,
     /// Delete the currently selected editor annotation, if any.
     EditorDeleteSelected,
     /// Nudge the selected annotation by `(dx, dy)` base-image pixels via

@@ -29,6 +29,7 @@ fn prepare(ed: &mut EditorSession, coord: &crate::coordinator::CaptureCoordinato
     cancel_editor_previews(ed);
     commit_pending_editor_text(ed, coord);
     close_editor_popover(ed);
+    ed.crop_draft = None;
 }
 
 fn changed(ed: &mut EditorSession, coord: &crate::coordinator::CaptureCoordinator, status: String) {
