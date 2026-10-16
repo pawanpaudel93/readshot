@@ -15,7 +15,6 @@ use std::sync::Arc;
 
 use image::RgbaImage;
 use readshot_core::line_geom::{bend_after_drag, curve_apex, path_points};
-use readshot_core::render::text_pill_rect;
 use readshot_core::{render, Annotation, LinePath, PointLike, RectLike, Rgba};
 
 use super::style::{apply_style_to_annotation, StyleMessage, TextSize, ToolStyle};
@@ -890,31 +889,7 @@ pub(crate) fn annotation_bounds(annotation: &Annotation) -> Option<RectLike> {
             size,
             style,
             ..
-        } => {
-            if style.pill {
-                // The exact rect render fills, so selection matches export.
-                return text_pill_rect(content, *size, *origin);
-            }
-            // Multi-line text: width is the widest line, height grows
-            // one line per `\n`. `origin` is the first line's baseline,
-            // so the box starts `size` above it (cap height) and each
-            // line adds `size * 1.35` (matches the render line height).
-            let line_height = *size * 1.35;
-            let mut line_count = 0usize;
-            let mut max_chars = 0usize;
-            for line in content.split('\n') {
-                line_count += 1;
-                max_chars = max_chars.max(line.chars().count());
-            }
-            let line_count = line_count.max(1) as f32;
-            let width = (max_chars as f32 * *size * 0.6).max(*size);
-            Some(RectLike::new(
-                origin.x,
-                origin.y - *size,
-                width,
-                line_height * line_count,
-            ))
-        }
+        } => readshot_core::render::text_bounds(content, *size, *origin, *style),
         Annotation::NumberedPin { origin, .. } | Annotation::Stamp { origin, .. } => {
             Some(RectLike::new(origin.x - 16.0, origin.y - 16.0, 32.0, 32.0))
         }
@@ -1173,6 +1148,7 @@ fn distance_to_segment(point: PointLike, a: PointLike, b: PointLike) -> f32 {
 mod tests {
     use super::*;
     use image::Rgba as ImgRgba;
+    use readshot_core::render::text_pill_rect;
     use readshot_core::{PointLike, RectLike};
 
     #[test]

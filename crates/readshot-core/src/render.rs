@@ -738,6 +738,35 @@ pub fn text_pill_rect(content: &str, size: f32, origin: PointLike) -> Option<Rec
     ))
 }
 
+/// Bounds of a text annotation: the pill's exact rect, or the estimate
+/// selection has always used (widest line x 0.6 em, 1.35 em per line,
+/// `origin` on the first baseline).
+pub fn text_bounds(
+    content: &str,
+    size: f32,
+    origin: PointLike,
+    style: TextStyle,
+) -> Option<RectLike> {
+    if style.pill {
+        return text_pill_rect(content, size, origin);
+    }
+    let line_height = size * 1.35;
+    let mut line_count = 0usize;
+    let mut max_chars = 0usize;
+    for line in content.split('\n') {
+        line_count += 1;
+        max_chars = max_chars.max(line.chars().count());
+    }
+    let line_count = line_count.max(1) as f32;
+    let width = (max_chars as f32 * size * 0.6).max(size);
+    Some(RectLike::new(
+        origin.x,
+        origin.y - size,
+        width,
+        line_height * line_count,
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_text(
     pixmap: &mut Pixmap,

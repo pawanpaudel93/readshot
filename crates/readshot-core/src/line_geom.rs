@@ -80,6 +80,16 @@ pub fn curve_control(a: PointLike, b: PointLike, bend: f32) -> PointLike {
     }
 }
 
+/// The `bend` whose control point is `c` (inverse of [`curve_control`]).
+/// Used when an affine map moves a curve's endpoints and control point.
+pub fn bend_for_control(a: PointLike, b: PointLike, c: PointLike) -> f32 {
+    let mid = lerp(a, b, 0.5);
+    match normal_and_len(a, b) {
+        Some((nx, ny, len)) => ((c.x - mid.x) * nx + (c.y - mid.y) * ny) / len,
+        None => 0.0,
+    }
+}
+
 /// Point of the curve at t = 0.5 — where the Bend handle sits.
 pub fn curve_apex(a: PointLike, b: PointLike, bend: f32) -> PointLike {
     quad_point(a, curve_control(a, b, bend), b, 0.5)
