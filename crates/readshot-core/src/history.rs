@@ -25,6 +25,7 @@ use crate::annotation::Annotation;
 use crate::error::HistoryError;
 use crate::fs_atomic::write_atomic;
 use crate::preferences::HistoryRetention;
+use crate::text_lines::TextDocument;
 
 pub const HISTORY_SCHEMA_VERSION: u32 = 1;
 pub const HISTORY_INDEX_FILENAME: &str = "history.index.json";
@@ -70,6 +71,17 @@ pub struct CaptureRecord {
     /// while false, so unredacted records keep the original schema.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub redacted: bool,
+    /// The redactions (base-image px) of the scrub that produced a
+    /// `redacted` record, kept so text recognized later can be masked the
+    /// same way ([`HistoryStore::record_recognized_text`]). Not edited and
+    /// not shown: reopening ignores them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redactions: Vec<Annotation>,
+    /// A scrub has started but its image hasn't landed: the unredacted
+    /// PNG and thumbnail were already removed, so the record is text-only
+    /// (no image on disk) until the redacted image is written.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scrub_pending: bool,
 }
 
 impl CaptureRecord {
@@ -90,6 +102,8 @@ impl CaptureRecord {
             ocr_text: None,
             annotation_model: Vec::new(),
             redacted: false,
+            redactions: Vec::new(),
+            scrub_pending: false,
         }
     }
 }
@@ -150,19 +164,48 @@ pub trait HistoryStore: Send + Sync {
     /// after a redaction and to restore it when the redactions are
     /// undone.
     ///
-    /// A scrub (`record.redacted`) fails closed: the new image is staged
-    /// next to the old one, then the masked sidecar is written, then the
-    /// staged image is renamed into place. A failure before the sidecar
-    /// changes nothing; once the sidecar is masked, the unredacted image
-    /// is never left in place — a failed rename removes it and its
-    /// thumbnail, and a scrub interrupted by a crash is finished by the
-    /// next `list`. A restore (`redacted: false`) writes the image first,
-    /// then the sidecar. Every error is returned so the caller can tell
-    /// the user and retry. Best-effort like `update`: a record that's
-    /// been pruned is not recreated.
-    fn rewrite(&self, record: &CaptureRecord, png: &[u8]) -> Result<(), HistoryError> {
+    /// A scrub (`record.redacted`) fails closed: it first does
+    /// [`Self::begin_scrub`] (masked sidecar, unredacted image removed),
+    /// then writes the new image and thumbnail, then clears
+    /// `scrub_pending`. A failure at any point leaves at worst a
+    /// text-only record with masked text, never the unredacted image or
+    /// text. A restore (`redacted: false`) writes the image first, then
+    /// the sidecar.
+    ///
+    /// `Ok(false)` when the record doesn't exist (not saved yet, or
+    /// pruned): nothing is written and the caller must keep the request.
+    fn rewrite(&self, record: &CaptureRecord, png: &[u8]) -> Result<bool, HistoryError> {
         let _ = (record, png);
+        Ok(false)
+    }
+    /// Phase one of a scrub, cheap (no image encode): write `record`'s
+    /// sidecar (masked text, `redacted`) with `scrub_pending` set, then
+    /// remove the unredacted PNG and thumbnail. From then on History and
+    /// MCP serve no unredacted content for this record. `Ok(false)` when
+    /// the record doesn't exist.
+    fn begin_scrub(&self, record: &CaptureRecord) -> Result<bool, HistoryError> {
+        let _ = record;
+        Ok(false)
+    }
+    /// Store recognized text for `record`. A scrubbed record gets `doc`
+    /// masked with its stored redactions (only when `doc` has positions or
+    /// no text is stored yet, and never without stored redactions — the
+    /// text stays as is rather than risk leaking). An unredacted record
+    /// gets `doc.layout_text` only when `fill_unredacted`. Annotations and
+    /// everything else stored are kept. No-op for a missing record.
+    fn record_recognized_text(
+        &self,
+        record: &CaptureRecord,
+        doc: &TextDocument,
+        fill_unredacted: bool,
+    ) -> Result<(), HistoryError> {
+        let _ = (record, doc, fill_unredacted);
         Ok(())
+    }
+    /// Whether `record` exists (its sidecar is on disk).
+    fn contains(&self, record: &CaptureRecord) -> bool {
+        let _ = record;
+        false
     }
     /// Hard-delete a single record by id (PNG + sidecar JSON + index
     /// entry). Best-effort: deleting a record that's already gone is
@@ -332,64 +375,70 @@ impl FsHistoryStore {
             .join(format!("{}.thumb.png", record.id))
     }
 
-    /// Where a scrub stages the redacted image before the sidecar is
-    /// masked (see [`HistoryStore::rewrite`]).
-    pub fn scrub_staging_path(record: &CaptureRecord) -> PathBuf {
-        let year = record.captured_at.year();
-        let month = record.captured_at.month();
-        PathBuf::from(format!("{year:04}"))
-            .join(format!("{month:02}"))
-            .join(format!("{}.scrub.png", record.id))
-    }
-
-    /// Put a staged scrub image in place of the record's PNG and
-    /// regenerate the thumbnail. Caller holds the index lock and has
-    /// already written the masked sidecar, so on failure the unredacted
-    /// image and thumbnail are removed rather than kept (fail closed);
-    /// the staged image stays for the next attempt.
-    fn finish_scrub(&self, record: &CaptureRecord) -> Result<(), HistoryError> {
-        let staging = self.root.join(Self::scrub_staging_path(record));
-        let abs_png = self.root.join(Self::png_path(record));
-        if let Err(e) = fs::rename(&staging, &abs_png) {
-            let _ = fs::remove_file(&abs_png);
-            let _ = fs::remove_file(self.root.join(Self::thumbnail_path(record)));
-            return Err(e.into());
-        }
-        crate::fs_atomic::sync_parent_dir(&abs_png);
-        match fs::read(&abs_png) {
-            Ok(png) => self.replace_thumbnail(record, &png),
-            Err(_) => {
-                let _ = fs::remove_file(self.root.join(Self::thumbnail_path(record)));
-            }
-        }
+    fn write_record_files(
+        &self,
+        record: &CaptureRecord,
+        abs_png: &Path,
+        abs_json: &Path,
+        png: &[u8],
+    ) -> Result<(), HistoryError> {
+        // Write the PNG atomically (temp file + rename + parent fsync), the
+        // same way the JSON sidecar and index are written. A plain
+        // create+write could leave a torn PNG that `list()` cannot detect
+        // (the JSON sidecar would still be intact and the record would load
+        // pointing at a corrupt image).
+        write_atomic(abs_png, png)?;
+        self.write_thumbnail_from_bytes(record, png);
+        let json_content = serde_json::to_string_pretty(record)?;
+        write_atomic(abs_json, json_content.as_bytes())?;
         Ok(())
     }
 
-    /// `list` found a staged scrub image: a scrub was interrupted. Under
-    /// the index lock (so it can't race a running `rewrite`), finish it
-    /// when the sidecar was already masked, or drop the staged image
-    /// when the sidecar never was (the scrub failed before changing
-    /// anything; the editor retries it).
-    fn recover_staged_scrub(&self, record: &CaptureRecord) -> Option<CaptureRecord> {
-        let _index_guard = self.lock_index().ok()?;
-        let staging = self.root.join(Self::scrub_staging_path(record));
-        if !staging.exists() {
-            return None;
-        }
-        let current = fs::read_to_string(self.root.join(Self::json_path(record)))
+    fn read_sidecar(&self, record: &CaptureRecord) -> Option<CaptureRecord> {
+        fs::read_to_string(self.root.join(Self::json_path(record)))
             .ok()
-            .and_then(|s| serde_json::from_str::<CaptureRecord>(&s).ok())?;
-        if current.redacted {
-            if let Err(e) = self.finish_scrub(&current) {
-                tracing::warn!(
-                    target: crate::log::cat::HISTORY,
-                    "couldn't finish an interrupted history scrub: {e}"
-                );
-            }
-        } else {
-            let _ = fs::remove_file(&staging);
+            .and_then(|s| serde_json::from_str::<CaptureRecord>(&s).ok())
+    }
+
+    fn write_sidecar(&self, record: &CaptureRecord) -> Result<(), HistoryError> {
+        let json_content = serde_json::to_string_pretty(record)?;
+        write_atomic(
+            &self.root.join(Self::json_path(record)),
+            json_content.as_bytes(),
+        )?;
+        Ok(())
+    }
+
+    /// The text a scrub of `record` stores. `ocr_text: None` on a scrub
+    /// means "not known yet" (the precise text lands later through
+    /// `record_recognized_text`): keep text already stored for a scrub
+    /// with the same redactions, since it is masked exactly as needed.
+    /// Anything else — no stored scrub, other redactions — is dropped.
+    fn scrub_text(&self, record: &CaptureRecord) -> Option<String> {
+        if record.ocr_text.is_some() {
+            return record.ocr_text.clone();
         }
-        Some(current)
+        self.read_sidecar(record)
+            .filter(|stored| stored.redacted && stored.redactions == record.redactions)
+            .and_then(|stored| stored.ocr_text)
+    }
+
+    /// [`HistoryStore::begin_scrub`] with the index lock held.
+    fn begin_scrub_locked(&self, record: &CaptureRecord) -> Result<bool, HistoryError> {
+        if !self.root.join(Self::json_path(record)).exists() {
+            return Ok(false);
+        }
+        let mut pending = record.clone();
+        pending.redacted = true;
+        pending.scrub_pending = true;
+        pending.ocr_text = self.scrub_text(record);
+        self.write_sidecar(&pending)?;
+        // Try both even if one fails, so a stuck PNG can't keep the
+        // unredacted thumbnail alive (or the reverse).
+        let thumb = remove_if_exists(&self.root.join(Self::thumbnail_path(record)));
+        let png = remove_if_exists(&self.root.join(Self::png_path(record)));
+        thumb.and(png)?;
+        Ok(true)
     }
 
     /// Absolute path of a record's PNG under `root`. Shared by the
@@ -502,17 +551,15 @@ impl HistoryStore for FsHistoryStore {
         if let Some(parent) = abs_png.parent() {
             fs::create_dir_all(parent)?;
         }
-
-        // Write the PNG atomically (temp file + rename + parent fsync), the
-        // same way the JSON sidecar and index are written below. A plain
-        // create+write could leave a torn PNG that `list()` cannot detect
-        // (the JSON sidecar would still be intact and the record would load
-        // pointing at a corrupt image).
-        write_atomic(&abs_png, png)?;
-        self.write_thumbnail_from_bytes(record, png);
-
-        let json_content = serde_json::to_string_pretty(record)?;
-        write_atomic(&abs_json, json_content.as_bytes())?;
+        // Never put unredacted content back over a scrubbed record: an
+        // unredacted save onto one only (re)registers the index entry.
+        let keep_scrubbed = !record.redacted
+            && self
+                .read_sidecar(record)
+                .is_some_and(|stored| stored.redacted);
+        if !keep_scrubbed {
+            self.write_record_files(record, &abs_png, &abs_json, png)?;
+        }
 
         let mut index = self.read_index()?;
         index.records.retain(|entry| entry.id != record.id);
@@ -559,12 +606,9 @@ impl HistoryStore for FsHistoryStore {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            if let Ok(mut record) = serde_json::from_str::<CaptureRecord>(&content) {
-                if self.root.join(Self::scrub_staging_path(&record)).exists() {
-                    if let Some(current) = self.recover_staged_scrub(&record) {
-                        record = current;
-                    }
-                }
+            if let Ok(record) = serde_json::from_str::<CaptureRecord>(&content) {
+                // A record whose scrub is pending has no image on disk
+                // (text-only until it lands); there is nothing to backfill.
                 self.backfill_thumbnail_from_png_path(&record, &png_abs);
                 out.push(record);
             }
@@ -619,9 +663,10 @@ impl HistoryStore for FsHistoryStore {
                     ocr_text: None,
                     annotation_model: Vec::new(),
                     redacted: false,
+                    redactions: Vec::new(),
+                    scrub_pending: false,
                 };
                 let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&record_for_path)));
-                let _ = fs::remove_file(self.root.join(Self::scrub_staging_path(&record_for_path)));
             }
         }
 
@@ -686,29 +731,59 @@ impl HistoryStore for FsHistoryStore {
         Ok(())
     }
 
-    fn rewrite(&self, record: &CaptureRecord, png: &[u8]) -> Result<(), HistoryError> {
+    fn rewrite(&self, record: &CaptureRecord, png: &[u8]) -> Result<bool, HistoryError> {
         let _index_guard = self.lock_index()?;
-        let (rel_png, rel_json) = Self::record_paths(record);
-        let abs_json = self.root.join(&rel_json);
-        if !abs_json.exists() {
+        let mut done = record.clone();
+        done.scrub_pending = false;
+        if record.redacted {
+            done.ocr_text = self.scrub_text(record);
+            // Fail closed: no unredacted content survives past here,
+            // whatever happens to the image write below.
+            if !self.begin_scrub_locked(record)? {
+                return Ok(false);
+            }
+        } else if !self.root.join(Self::json_path(record)).exists() {
+            return Ok(false);
+        }
+        write_atomic(&self.root.join(Self::png_path(record)), png)?;
+        self.replace_thumbnail(record, png);
+        self.write_sidecar(&done)?;
+        Ok(true)
+    }
+
+    fn begin_scrub(&self, record: &CaptureRecord) -> Result<bool, HistoryError> {
+        let _index_guard = self.lock_index()?;
+        self.begin_scrub_locked(record)
+    }
+
+    fn record_recognized_text(
+        &self,
+        record: &CaptureRecord,
+        doc: &TextDocument,
+        fill_unredacted: bool,
+    ) -> Result<(), HistoryError> {
+        use crate::scrub::{has_redaction, hidden_spans, masked_layout_text};
+        let _index_guard = self.lock_index()?;
+        let Some(mut stored) = self.read_sidecar(record) else {
+            return Ok(());
+        };
+        if stored.redacted {
+            let precise = doc.positioned || stored.ocr_text.is_none();
+            if !precise || !has_redaction(&stored.redactions) {
+                return Ok(());
+            }
+            let spans = hidden_spans(doc, &stored.redactions);
+            stored.ocr_text = Some(masked_layout_text(doc, &spans));
+        } else if fill_unredacted {
+            stored.ocr_text = Some(doc.layout_text.clone());
+        } else {
             return Ok(());
         }
-        let json_content = serde_json::to_string_pretty(record)?;
-        if !record.redacted {
-            write_atomic(&self.root.join(&rel_png), png)?;
-            self.replace_thumbnail(record, png);
-            write_atomic(&abs_json, json_content.as_bytes())?;
-            return Ok(());
-        }
-        // Scrub: stage the image, mask the sidecar, then swap the image
-        // in. See the trait docs for why this order fails closed.
-        let staging = self.root.join(Self::scrub_staging_path(record));
-        write_atomic(&staging, png)?;
-        if let Err(e) = write_atomic(&abs_json, json_content.as_bytes()) {
-            let _ = fs::remove_file(&staging);
-            return Err(e.into());
-        }
-        self.finish_scrub(record)
+        self.write_sidecar(&stored)
+    }
+
+    fn contains(&self, record: &CaptureRecord) -> bool {
+        self.root.join(Self::json_path(record)).exists()
     }
 
     fn delete(&self, id: Uuid) -> Result<(), HistoryError> {
@@ -730,12 +805,21 @@ impl HistoryStore for FsHistoryStore {
             ocr_text: None,
             annotation_model: Vec::new(),
             redacted: false,
+            redactions: Vec::new(),
+            scrub_pending: false,
         };
         let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&record_for_path)));
-        let _ = fs::remove_file(self.root.join(Self::scrub_staging_path(&record_for_path)));
         index.updated_at = Some(Utc::now());
         self.write_index(&index)?;
         Ok(())
+    }
+}
+
+fn remove_if_exists(path: &Path) -> Result<(), HistoryError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -1270,95 +1354,195 @@ mod tests {
         (img, png)
     }
 
-    #[test]
-    fn a_scrub_whose_image_cannot_be_staged_changes_nothing() {
-        let (_dir, s) = store();
-        let mut r = record_at(Utc::now());
-        r.ocr_text = Some("original".into());
-        let original = valid_png(4, 4);
-        s.save(&r, &original).unwrap();
-        // The staging rename target is a directory: the first step fails.
-        fs::create_dir(s.root().join(FsHistoryStore::scrub_staging_path(&r))).unwrap();
-        assert!(s.rewrite(&scrubbed_of(&r), &black_png(4, 4).1).is_err());
-        let listed = s.list().unwrap();
-        assert_eq!(listed[0].ocr_text.as_deref(), Some("original"));
-        assert!(!listed[0].redacted);
-        let png = fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap();
-        assert_eq!(png, original);
+    fn with_redaction(mut r: CaptureRecord) -> CaptureRecord {
+        // Over "4821" in `positioned_doc`.
+        r.redactions = vec![Annotation::Blur {
+            rect: crate::RectLike::new(4.0, 0.0, 4.0, 2.0),
+            radius: 2.0,
+        }];
+        r
     }
 
     #[test]
-    fn a_scrub_that_cannot_replace_the_image_still_masks_the_text_and_drops_the_thumbnail() {
+    fn begin_scrub_masks_the_text_and_removes_the_unredacted_image() {
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        r.ocr_text = Some("secret".into());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let png = s.root().join(FsHistoryStore::png_path(&r));
+        let thumb = s.root().join(FsHistoryStore::thumbnail_path(&r));
+        assert!(png.exists() && thumb.exists());
+        assert!(s.begin_scrub(&scrubbed_of(&r)).unwrap());
+        let listed = s.list().unwrap();
+        assert_eq!(listed[0].ocr_text.as_deref(), Some("masked"));
+        assert!(listed[0].redacted && listed[0].scrub_pending);
+        assert!(!png.exists() && !thumb.exists(), "text-only until it lands");
+    }
+
+    #[test]
+    fn begin_scrub_and_rewrite_report_a_missing_record() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        assert!(!s.begin_scrub(&scrubbed_of(&r)).unwrap());
+        assert!(!s.rewrite(&scrubbed_of(&r), &black_png(4, 4).1).unwrap());
+        assert!(!s.contains(&r));
+        assert!(s.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_scrub_whose_image_write_fails_leaves_a_masked_text_only_record() {
         let (_dir, s) = store();
         let mut r = record_at(Utc::now());
         r.ocr_text = Some("secret".into());
         s.save(&r, &valid_png(4, 4)).unwrap();
         let thumb = s.root().join(FsHistoryStore::thumbnail_path(&r));
-        assert!(thumb.exists());
-        // The final PNG can't be replaced (its path is a directory).
+        // The PNG can't be removed or replaced (its path is a directory).
         let png = s.root().join(FsHistoryStore::png_path(&r));
         fs::remove_file(&png).unwrap();
         fs::create_dir(&png).unwrap();
         assert!(s.rewrite(&scrubbed_of(&r), &black_png(4, 4).1).is_err());
-        // Fails closed: the text is already masked and the unredacted
-        // thumbnail is gone.
-        let json = fs::read_to_string(s.root().join(FsHistoryStore::json_path(&r))).unwrap();
-        let stored: CaptureRecord = serde_json::from_str(&json).unwrap();
+        let stored = s.read_sidecar(&r).unwrap();
         assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
-        assert!(stored.redacted);
+        assert!(stored.redacted && stored.scrub_pending);
         assert!(!thumb.exists());
     }
 
     #[test]
-    fn an_interrupted_scrub_rolls_forward_on_the_next_list() {
+    fn a_later_rewrite_completes_a_pending_scrub() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let scrubbed = scrubbed_of(&r);
+        s.begin_scrub(&scrubbed).unwrap();
+        let (img, png) = black_png(4, 4);
+        assert!(s.rewrite(&scrubbed, &png).unwrap());
+        let listed = &s.list().unwrap()[0];
+        assert!(!listed.scrub_pending);
+        let on_disk = fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap();
+        assert_eq!(decode(&on_disk), img);
+    }
+
+    #[test]
+    fn an_unredacted_save_never_overwrites_a_scrubbed_record() {
         let (_dir, s) = store();
         let mut r = record_at(Utc::now());
         r.ocr_text = Some("secret".into());
-        s.save(&r, &valid_png(4, 4)).unwrap();
-        // As if the process died after the sidecar, before the image
-        // was put in place.
         let (img, png) = black_png(4, 4);
-        let staging = s.root().join(FsHistoryStore::scrub_staging_path(&r));
-        fs::write(&staging, &png).unwrap();
+        s.save(&r, &valid_png(4, 4)).unwrap();
         let scrubbed = scrubbed_of(&r);
-        fs::write(
-            s.root().join(FsHistoryStore::json_path(&r)),
-            serde_json::to_string(&scrubbed).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(s.list().unwrap()[0], scrubbed);
-        assert!(!staging.exists());
+        s.rewrite(&scrubbed, &png).unwrap();
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let listed = s.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0], scrubbed);
         let on_disk = fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap();
         assert_eq!(decode(&on_disk), img);
-        let thumb = fs::read(s.root().join(FsHistoryStore::thumbnail_path(&r))).unwrap();
-        assert!(decode(&thumb)
-            .pixels()
-            .all(|p| *p == image::Rgba([0, 0, 0, 255])));
+        // A scrubbed save (the parked scrub applied at save time) writes.
+        let r2 = scrubbed_of(&record_at(Utc::now()));
+        s.save(&r2, &png).unwrap();
+        assert!(s.contains(&r2));
+    }
+
+    fn positioned_doc() -> TextDocument {
+        use crate::text_lines::{TextLine, WordRect};
+        TextDocument {
+            lines: vec![TextLine {
+                text: "pin 4821 ok".into(),
+                rect: Some(crate::RectLike::new(0.0, 0.0, 11.0, 2.0)),
+                words: vec![WordRect {
+                    start: 4,
+                    end: 8,
+                    rect: crate::RectLike::new(4.0, 0.0, 4.0, 2.0),
+                }],
+            }],
+            positioned: true,
+            layout_text: "pin 4821 ok".into(),
+        }
     }
 
     #[test]
-    fn a_staged_image_without_a_scrubbed_sidecar_is_dropped() {
-        let (_dir, s) = store();
-        let r = record_at(Utc::now());
-        let original = valid_png(4, 4);
-        s.save(&r, &original).unwrap();
-        let staging = s.root().join(FsHistoryStore::scrub_staging_path(&r));
-        fs::write(&staging, black_png(4, 4).1).unwrap();
-        s.list().unwrap();
-        assert!(!staging.exists());
-        let png = fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap();
-        assert_eq!(png, original);
-    }
-
-    #[test]
-    fn delete_removes_a_staged_scrub_image_too() {
+    fn recognized_text_is_masked_with_the_stored_redactions() {
         let (_dir, s) = store();
         let r = record_at(Utc::now());
         s.save(&r, &valid_png(4, 4)).unwrap();
-        let staging = s.root().join(FsHistoryStore::scrub_staging_path(&r));
-        fs::write(&staging, black_png(4, 4).1).unwrap();
-        s.delete(r.id).unwrap();
-        assert!(!staging.exists());
+        let mut scrubbed = with_redaction(scrubbed_of(&r));
+        scrubbed.ocr_text = None;
+        s.rewrite(&scrubbed, &valid_png(4, 4)).unwrap();
+        s.record_recognized_text(&r, &positioned_doc(), true)
+            .unwrap();
+        assert_eq!(
+            s.list().unwrap()[0].ocr_text.as_deref(),
+            Some("pin ████ ok")
+        );
+    }
+
+    #[test]
+    fn recognized_text_never_lands_unmasked_on_a_scrubbed_record() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        // No stored redactions to mask with: keep what's there.
+        let mut scrubbed = scrubbed_of(&r);
+        scrubbed.ocr_text = None;
+        s.rewrite(&scrubbed, &valid_png(4, 4)).unwrap();
+        s.record_recognized_text(&r, &positioned_doc(), true)
+            .unwrap();
+        assert_eq!(s.list().unwrap()[0].ocr_text, None);
+        // Text without positions doesn't replace text already stored.
+        let mut scrubbed = with_redaction(scrubbed_of(&r));
+        scrubbed.ocr_text = Some("pin ████ ok".into());
+        s.rewrite(&scrubbed, &valid_png(4, 4)).unwrap();
+        let plain = TextDocument::from_plain("pin 4821 ok");
+        s.record_recognized_text(&r, &plain, true).unwrap();
+        assert_eq!(
+            s.list().unwrap()[0].ocr_text.as_deref(),
+            Some("pin ████ ok")
+        );
+    }
+
+    #[test]
+    fn a_scrub_with_unknown_text_keeps_text_masked_for_the_same_redactions() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let mut scrubbed = with_redaction(scrubbed_of(&r));
+        scrubbed.ocr_text = None;
+        s.rewrite(&scrubbed, &valid_png(4, 4)).unwrap();
+        s.record_recognized_text(&r, &positioned_doc(), true)
+            .unwrap();
+        // A rewrite queued before the text landed, same redactions.
+        s.rewrite(&scrubbed, &valid_png(4, 4)).unwrap();
+        assert_eq!(
+            s.list().unwrap()[0].ocr_text.as_deref(),
+            Some("pin ████ ok")
+        );
+        // Different redactions: the old masking may not cover them.
+        let mut more = scrubbed.clone();
+        more.redactions.push(Annotation::Blur {
+            rect: crate::RectLike::new(0.0, 0.0, 3.0, 2.0),
+            radius: 2.0,
+        });
+        s.begin_scrub(&more).unwrap();
+        assert_eq!(s.list().unwrap()[0].ocr_text, None);
+    }
+
+    #[test]
+    fn recognized_text_fills_an_unredacted_record_only_when_asked() {
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        r.annotation_model = vec![Annotation::Blur {
+            rect: crate::RectLike::new(0.0, 0.0, 2.0, 2.0),
+            radius: 2.0,
+        }];
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        s.record_recognized_text(&r, &positioned_doc(), false)
+            .unwrap();
+        assert_eq!(s.list().unwrap()[0].ocr_text, None);
+        s.record_recognized_text(&r, &positioned_doc(), true)
+            .unwrap();
+        let listed = &s.list().unwrap()[0];
+        assert_eq!(listed.ocr_text.as_deref(), Some("pin 4821 ok"));
+        assert_eq!(listed.annotation_model, r.annotation_model);
     }
 
     #[test]

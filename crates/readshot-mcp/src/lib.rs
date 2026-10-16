@@ -791,7 +791,12 @@ fn parse_limit(args: &Value, default: usize) -> Result<usize, RpcErr> {
 use readshot_core::history::record_matches_query as record_matches;
 
 fn record_to_json(record: &CaptureRecord, history_root: Option<&Path>) -> Value {
-    let image_path = history_root.map(|root| history_png_path(root, record));
+    // No path while the image isn't on disk: a record whose scrub after
+    // a redaction is still pending is text-only (its unredacted image was
+    // removed and the redacted one hasn't landed).
+    let image_path = history_root
+        .map(|root| history_png_path(root, record))
+        .filter(|p| !record.scrub_pending && p.exists());
     json!({
         "id": record.id.to_string(),
         "captured_at": record.captured_at.to_rfc3339(),
@@ -1254,6 +1259,38 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("needle capture"));
+    }
+
+    #[tokio::test]
+    async fn a_record_whose_scrub_is_pending_is_served_text_only() {
+        use readshot_core::HistoryStore;
+        let root = unique_history_root();
+        let store = FsHistoryStore::new(&root);
+        let mut r = record(
+            "00000000-0000-0000-0000-000000000009",
+            "2026-02-01T00:00:00Z",
+            4,
+            4,
+            "d",
+            Some("masked ████"),
+        );
+        store.save(&r, b"png").unwrap();
+        r.redacted = true;
+        assert!(store.begin_scrub(&r).unwrap());
+        let s = McpServer::with_history_root(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_text("hello mcp")),
+            Arc::new(store),
+            root,
+        );
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"recent_captures","arguments":{"limit":1}}}"#,
+        )
+        .await;
+        let capture = &resp["result"]["structuredContent"]["captures"][0];
+        assert_eq!(capture["ocr_text"], "masked ████");
+        assert!(capture["image_path"].is_null(), "{capture}");
     }
 
     #[tokio::test]

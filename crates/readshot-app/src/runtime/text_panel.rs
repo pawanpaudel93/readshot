@@ -49,6 +49,7 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
     // takes ownership of (~80 MB on a 5K capture) is made in the task,
     // off the UI thread.
     let base = ed.model.shared_base();
+    let history_record = ed.source_record.clone();
     let languages = state.preferences.ocr_languages.clone();
     let coord = state.coordinator.clone();
     Task::perform(
@@ -58,13 +59,43 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
                 languages,
                 use_language_correction: true,
             };
-            coord.recognise_document(req).await
+            let result = coord
+                .recognise_document(req)
+                .await
+                .map_err(|e| e.to_string());
+            match &history_record {
+                Some(record) => store_recognized_text(&coord, record, result).await,
+                None => result,
+            }
         },
-        move |r| Message::EditorTextRecognized {
-            session,
-            result: r.map_err(|e| e.to_string()),
-        },
+        move |result| Message::EditorTextRecognized { session, result },
     )
+}
+
+/// After the editor's recognition of a History capture: if the record
+/// was scrubbed, store the text masked with its redactions. Runs in the
+/// recognition task, not the editor, so it lands even when the editor
+/// closed meanwhile. An unredacted record is left alone. Passes `result`
+/// through.
+pub(crate) async fn store_recognized_text(
+    coord: &crate::coordinator::CaptureCoordinator,
+    record: &readshot_core::CaptureRecord,
+    result: Result<TextDocument, String>,
+) -> Result<TextDocument, String> {
+    if let Ok(doc) = &result {
+        let (coord, record, doc) = (coord.clone(), record.clone(), doc.clone());
+        let written =
+            tokio::task::spawn_blocking(move || coord.record_recognized_text(&record, &doc, false))
+                .await;
+        match written {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(target: "readshot::history", "scrubbed text update failed: {e}")
+            }
+            Err(e) => tracing::warn!(target: "readshot::history", "scrubbed text worker: {e}"),
+        }
+    }
+    result
 }
 
 /// History reopen: an engine without line positions could only

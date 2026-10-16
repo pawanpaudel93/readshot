@@ -59,6 +59,8 @@ pub struct CaptureCoordinator {
     /// annotations). The thread exits when the last coordinator clone
     /// drops its sender.
     history_update_tx: Option<std::sync::mpsc::Sender<HistoryUpdate>>,
+    /// See [`ScrubBook`].
+    scrubs: Arc<std::sync::Mutex<ScrubBook>>,
 }
 
 /// Message for the background history writer thread.
@@ -77,21 +79,74 @@ enum HistoryUpdate {
 /// newer one for the same record never runs; its receiver is cancelled.
 pub type HistoryRewriteResult = Result<(), String>;
 
-/// A full record replacement for the background writer. The PNG is
-/// `bake` rendered onto `base` (or `base` itself when `bake` is empty),
-/// rendered and encoded on the writer thread, never the UI thread.
-struct HistoryRewrite {
+/// One full record replacement: the PNG is `bake` rendered onto `base`
+/// (or `base` itself when `bake` is empty).
+#[derive(Clone)]
+struct RewriteJob {
+    /// Request order per record; only the newest may land.
+    seq: u64,
     record: CaptureRecord,
     base: Arc<RgbaImage>,
     bake: Vec<readshot_core::Annotation>,
+}
+
+/// A queued rewrite. Rendering and encoding run on the writer thread,
+/// never the UI thread; a failed write is retried with backoff.
+struct HistoryRewrite {
+    job: RewriteJob,
     done: Option<iced::futures::channel::oneshot::Sender<HistoryRewriteResult>>,
+    /// Failed attempts so far (drives the retry backoff).
+    attempt: u32,
+}
+
+/// Coordinator-owned History scrub state, shared with the writer
+/// thread, so a scrub never depends on the editor staying open. Its
+/// mutex also makes "is this rewrite still the newest" and the store
+/// write one step, so a stale restore can't land after a newer scrub's
+/// phase one.
+#[derive(Default)]
+struct ScrubBook {
+    /// Newest rewrite request per record.
+    latest: std::collections::HashMap<readshot_core::Uuid, u64>,
+    /// Scrubs of records not on disk yet (the capture's save hasn't
+    /// landed). `record_history` saves these in place of the raw
+    /// capture, so unredacted content never reaches disk.
+    parked: std::collections::HashMap<readshot_core::Uuid, RewriteJob>,
+    /// Redactions whose phase one (masked sidecar, unredacted image
+    /// removed) is on disk, per record.
+    secured: std::collections::HashMap<readshot_core::Uuid, Vec<readshot_core::Annotation>>,
+    /// Scrubs whose phase one hasn't succeeded yet; retried by every
+    /// rewrite attempt and by [`CaptureCoordinator::flush_history_updates`].
+    unsecured: std::collections::HashMap<readshot_core::Uuid, CaptureRecord>,
+}
+
+fn next_rewrite_seq() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Backoff before retry `attempt` (1-based) of a failed rewrite.
+fn retry_delay(attempt: u32) -> std::time::Duration {
+    let base = if cfg!(test) {
+        std::time::Duration::from_millis(10)
+    } else {
+        std::time::Duration::from_secs(1)
+    };
+    let max = std::time::Duration::from_secs(60);
+    base.saturating_mul(1u32 << attempt.saturating_sub(1).min(16))
+        .min(max)
+}
+
+fn lock_book(book: &std::sync::Mutex<ScrubBook>) -> std::sync::MutexGuard<'_, ScrubBook> {
+    book.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl HistoryUpdate {
     fn record_id(&self) -> Option<readshot_core::Uuid> {
         match self {
             Self::Write(r) => Some(r.id),
-            Self::Rewrite(rw) => Some(rw.record.id),
+            Self::Rewrite(rw) => Some(rw.job.record.id),
             Self::Flush(_) => None,
         }
     }
@@ -124,31 +179,121 @@ fn coalesce(batch: Vec<HistoryUpdate>) -> Vec<HistoryUpdate> {
     kept
 }
 
-/// Run one rewrite: render, encode, write, report. Called on the
-/// writer thread (or the fallback path).
-fn run_rewrite(store: &dyn HistoryStore, rewrite: HistoryRewrite) {
-    let HistoryRewrite {
-        mut record,
-        base,
-        bake,
-        done,
-    } = rewrite;
-    let baked = (!bake.is_empty()).then(|| readshot_core::render(&base, &bake));
-    let img = baked.as_ref().unwrap_or(&base);
+/// The record and PNG bytes a job writes. Pure CPU (render + encode).
+fn render_job(job: &RewriteJob) -> Result<(CaptureRecord, Vec<u8>), String> {
+    let baked = (!job.bake.is_empty()).then(|| readshot_core::render(&job.base, &job.bake));
+    let img = baked.as_ref().unwrap_or(&job.base);
+    let mut record = job.record.clone();
     record.width_px = img.width();
     record.height_px = img.height();
-    let result = readshot_core::encode_png(img)
-        .map_err(|e| e.to_string())
-        .and_then(|png| store.rewrite(&record, &png).map_err(|e| e.to_string()));
-    if let Err(e) = &result {
-        tracing::warn!(target: "readshot::history", "history rewrite failed: {e}");
+    let png = readshot_core::encode_png_fast(img).map_err(|e| e.to_string())?;
+    Ok((record, png))
+}
+
+enum Outcome {
+    Done,
+    /// The record isn't on disk; a scrub was parked for its save.
+    Missing,
+    /// A newer request for the record exists; nothing was written.
+    Stale,
+    Failed(String),
+}
+
+/// Write one rendered job, if it is still the newest request for its
+/// record, and keep the scrub book in step. Holds the book lock across
+/// the store write (see [`ScrubBook`]).
+fn apply_rewrite(
+    store: &dyn HistoryStore,
+    book: &std::sync::Mutex<ScrubBook>,
+    job: &RewriteJob,
+    record: &CaptureRecord,
+    png: &[u8],
+) -> Outcome {
+    let id = record.id;
+    let mut b = lock_book(book);
+    if b.latest.get(&id).is_some_and(|&latest| latest > job.seq) {
+        return Outcome::Stale;
     }
-    if let Some(done) = done {
-        let _ = done.send(result);
+    match store.rewrite(record, png) {
+        Ok(true) => {
+            if record.redacted {
+                b.secured.insert(id, record.redactions.clone());
+            }
+            b.unsecured.remove(&id);
+            Outcome::Done
+        }
+        Ok(false) => {
+            if record.redacted {
+                b.parked.insert(id, job.clone());
+            }
+            Outcome::Missing
+        }
+        Err(e) => {
+            if record.redacted {
+                // On-disk state unknown: phase one is redone next time.
+                b.secured.remove(&id);
+                b.unsecured.insert(id, record.clone());
+            }
+            Outcome::Failed(e.to_string())
+        }
     }
 }
 
-fn run_update(store: &dyn HistoryStore, msg: HistoryUpdate) {
+/// Run one rewrite: render, encode, write, report. Returns the retry to
+/// schedule when the write failed. Called on the writer thread (or the
+/// fallback path).
+fn run_rewrite(
+    store: &dyn HistoryStore,
+    book: &std::sync::Mutex<ScrubBook>,
+    mut rewrite: Box<HistoryRewrite>,
+) -> Option<(std::time::Instant, Box<HistoryRewrite>)> {
+    let id = rewrite.job.record.id;
+    if lock_book(book)
+        .latest
+        .get(&id)
+        .is_some_and(|&latest| latest > rewrite.job.seq)
+    {
+        return None;
+    }
+    let outcome = match render_job(&rewrite.job) {
+        Ok((record, png)) => apply_rewrite(store, book, &rewrite.job, &record, &png),
+        Err(e) => {
+            if rewrite.job.record.redacted {
+                // No image to write, but the unredacted content must
+                // still go: do phase one.
+                let mut b = lock_book(book);
+                if store.begin_scrub(&rewrite.job.record).is_err() {
+                    b.unsecured.insert(id, rewrite.job.record.clone());
+                }
+            }
+            Outcome::Failed(e)
+        }
+    };
+    match outcome {
+        Outcome::Done => {
+            if let Some(done) = rewrite.done.take() {
+                let _ = done.send(Ok(()));
+            }
+            None
+        }
+        Outcome::Missing | Outcome::Stale => None,
+        Outcome::Failed(e) => {
+            tracing::warn!(target: "readshot::history", "history rewrite failed: {e}");
+            if let Some(done) = rewrite.done.take() {
+                let _ = done.send(Err(e));
+            }
+            rewrite.attempt += 1;
+            let due = std::time::Instant::now() + retry_delay(rewrite.attempt);
+            Some((due, rewrite))
+        }
+    }
+}
+
+fn run_update(
+    store: &dyn HistoryStore,
+    book: &std::sync::Mutex<ScrubBook>,
+    msg: HistoryUpdate,
+) -> Option<(std::time::Instant, Box<HistoryRewrite>)> {
     match msg {
         HistoryUpdate::Write(record) => {
             if let Err(e) = store.update(&record) {
@@ -157,10 +302,62 @@ fn run_update(store: &dyn HistoryStore, msg: HistoryUpdate) {
                     "background history update failed: {e}"
                 );
             }
+            None
         }
-        HistoryUpdate::Rewrite(rewrite) => run_rewrite(store, *rewrite),
+        HistoryUpdate::Rewrite(rewrite) => run_rewrite(store, book, rewrite),
         HistoryUpdate::Flush(ack) => {
             let _ = ack.send(());
+            None
+        }
+    }
+}
+
+/// The writer thread: drain what queued up while the last write ran,
+/// coalesce it (only the newest rewrite of a record pays for a render +
+/// PNG encode), run it, and retry failed rewrites with backoff until
+/// they land or a newer request for the record replaces them.
+fn writer_loop(
+    store: &dyn HistoryStore,
+    book: &std::sync::Mutex<ScrubBook>,
+    rx: &std::sync::mpsc::Receiver<HistoryUpdate>,
+) {
+    use std::sync::mpsc::RecvTimeoutError;
+    let mut retries: Vec<(std::time::Instant, Box<HistoryRewrite>)> = Vec::new();
+    loop {
+        let next_due = retries.iter().map(|(due, _)| *due).min();
+        let first = match next_due {
+            None => match rx.recv() {
+                Ok(msg) => Some(msg),
+                Err(_) => return,
+            },
+            Some(due) => {
+                match rx.recv_timeout(due.saturating_duration_since(std::time::Instant::now())) {
+                    Ok(msg) => Some(msg),
+                    Err(RecvTimeoutError::Timeout) => None,
+                    Err(RecvTimeoutError::Disconnected) => return,
+                }
+            }
+        };
+        let now = std::time::Instant::now();
+        let (due, waiting): (Vec<_>, Vec<_>) = retries.into_iter().partition(|(t, _)| *t <= now);
+        retries = waiting;
+        // Due retries are older than anything just received, so a newer
+        // request for the same record supersedes them in `coalesce`.
+        let mut batch: Vec<HistoryUpdate> = due
+            .into_iter()
+            .map(|(_, rw)| HistoryUpdate::Rewrite(rw))
+            .collect();
+        if let Some(msg) = first {
+            batch.push(msg);
+            batch.extend(rx.try_iter());
+        }
+        let fresh: std::collections::HashSet<_> =
+            batch.iter().filter_map(HistoryUpdate::record_id).collect();
+        retries.retain(|(_, rw)| !fresh.contains(&rw.job.record.id));
+        for msg in coalesce(batch) {
+            if let Some(retry) = run_update(store, book, msg) {
+                retries.push(retry);
+            }
         }
     }
 }
@@ -172,23 +369,14 @@ impl CaptureCoordinator {
         permissions: Arc<dyn PermissionsProvider>,
         history: Option<Arc<dyn HistoryStore>>,
     ) -> Self {
+        let scrubs = Arc::new(std::sync::Mutex::new(ScrubBook::default()));
         let history_update_tx = history.as_ref().and_then(|store| {
             let store = Arc::clone(store);
+            let book = Arc::clone(&scrubs);
             let (tx, rx) = std::sync::mpsc::channel::<HistoryUpdate>();
             std::thread::Builder::new()
                 .name("history-sync".into())
-                .spawn(move || {
-                    // Drain whatever queued up while the last write ran
-                    // and coalesce it: only the newest rewrite of a
-                    // record pays for a render + PNG encode.
-                    while let Ok(first) = rx.recv() {
-                        let mut batch = vec![first];
-                        batch.extend(rx.try_iter());
-                        for msg in coalesce(batch) {
-                            run_update(store.as_ref(), msg);
-                        }
-                    }
-                })
+                .spawn(move || writer_loop(store.as_ref(), &book, &rx))
                 .ok()
                 .map(|_| tx)
         });
@@ -198,6 +386,7 @@ impl CaptureCoordinator {
             permissions,
             history,
             history_update_tx,
+            scrubs,
         }
     }
 
@@ -296,17 +485,29 @@ impl CaptureCoordinator {
         }
     }
 
-    /// Queue a full replacement of `record` on the ordered background
-    /// writer: its PNG becomes `bake` rendered onto `base` (`base` as is
-    /// when `bake` is empty), its thumbnail is regenerated and its
-    /// sidecar written exactly as given (`ocr_text: None` clears the
-    /// text). Rendering and encoding run on the writer thread, and a
-    /// newer rewrite of the same record queued meanwhile supersedes this
-    /// one (its receiver is then cancelled). The receiver resolves with
-    /// the outcome; no history store → cancelled.
+    /// Replace `record` in History: its PNG becomes `bake` rendered onto
+    /// `base` (`base` as is when `bake` is empty), its thumbnail is
+    /// regenerated and its sidecar written as given (`ocr_text: None`
+    /// clears the text, except a scrub keeps text already masked for the
+    /// same redactions). The receiver resolves with the outcome; it is
+    /// cancelled when a newer request supersedes this one, when the
+    /// record isn't saved yet, or with no history store.
+    ///
+    /// A scrub (`record.redacted`) is fail-closed and owned here, not by
+    /// the editor:
+    /// - **Phase one** runs right now, unless these same redactions are
+    ///   already secured: masked sidecar, unredacted PNG and thumbnail
+    ///   removed. It's a small sidecar write, no image encode, so from
+    ///   this call on History and MCP serve nothing unredacted.
+    /// - **Phase two** (render, encode, write the redacted image) runs on
+    ///   the writer thread and is retried with backoff until it lands.
+    /// - A record not saved yet is parked; [`Self::record_history`] saves
+    ///   the scrubbed version in place of the raw capture.
+    ///
+    /// A restore (`redacted: false`) cancels any parked or pending scrub.
     pub fn rewrite_history_async(
         &self,
-        record: CaptureRecord,
+        mut record: CaptureRecord,
         base: Arc<RgbaImage>,
         bake: Vec<readshot_core::Annotation>,
     ) -> iced::futures::channel::oneshot::Receiver<HistoryRewriteResult> {
@@ -314,11 +515,55 @@ impl CaptureCoordinator {
         let Some(store) = &self.history else {
             return rx;
         };
+        let id = record.id;
+        if record.redacted {
+            record.redactions = bake
+                .iter()
+                .filter(|a| readshot_core::scrub::is_redaction(a))
+                .cloned()
+                .collect();
+        }
+        let job = {
+            let mut b = lock_book(&self.scrubs);
+            let seq = next_rewrite_seq();
+            b.latest.insert(id, seq);
+            let job = RewriteJob {
+                seq,
+                record: record.clone(),
+                base,
+                bake,
+            };
+            if record.redacted {
+                if b.secured.get(&id) != Some(&record.redactions) {
+                    match store.begin_scrub(&record) {
+                        Ok(true) => {
+                            b.secured.insert(id, record.redactions.clone());
+                            b.unsecured.remove(&id);
+                        }
+                        Ok(false) => {
+                            b.parked.insert(id, job);
+                            return rx;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                target: "readshot::history",
+                                "history scrub (phase one) failed: {e}"
+                            );
+                            b.unsecured.insert(id, record);
+                        }
+                    }
+                }
+            } else {
+                b.parked.remove(&id);
+                b.secured.remove(&id);
+                b.unsecured.remove(&id);
+            }
+            job
+        };
         let msg = HistoryUpdate::Rewrite(Box::new(HistoryRewrite {
-            record,
-            base,
-            bake,
+            job,
             done: Some(tx),
+            attempt: 0,
         }));
         let msg = match &self.history_update_tx {
             Some(sender) => match sender.send(msg) {
@@ -327,9 +572,25 @@ impl CaptureCoordinator {
             },
             None => msg,
         };
-        // No writer thread: write inline rather than drop the scrub.
-        run_update(store.as_ref(), msg);
+        // No writer thread: write inline (no retry) rather than drop it.
+        let _ = run_update(store.as_ref(), &self.scrubs, msg);
         rx
+    }
+
+    /// Store recognized text for `record` (see
+    /// [`HistoryStore::record_recognized_text`]): masked with the stored
+    /// redactions when the record is scrubbed; for an unredacted record
+    /// only when `fill_unredacted`. No-op without a history store.
+    pub fn record_recognized_text(
+        &self,
+        record: &CaptureRecord,
+        doc: &readshot_core::text_lines::TextDocument,
+        fill_unredacted: bool,
+    ) -> Result<(), readshot_core::HistoryError> {
+        match &self.history {
+            Some(h) => h.record_recognized_text(record, doc, fill_unredacted),
+            None => Ok(()),
+        }
     }
 
     /// Block until every history update queued before this call has
@@ -337,13 +598,39 @@ impl CaptureCoordinator {
     /// caller. Used on shutdown so a quit straight after an annotation
     /// edit can't lose the trailing write; tests use it to make the
     /// async writer deterministic.
+    ///
+    /// Then, whether or not the wait timed out (a slow encode on quit),
+    /// phase one is retried for every scrub that doesn't have it yet, so
+    /// no redacted record is left serving unredacted content.
     pub fn flush_history_updates(&self) {
-        let Some(tx) = &self.history_update_tx else {
+        if let Some(tx) = &self.history_update_tx {
+            let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
+            if tx.send(HistoryUpdate::Flush(ack_tx)).is_ok() {
+                let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(5));
+            }
+        }
+        self.secure_pending_scrubs();
+    }
+
+    fn secure_pending_scrubs(&self) {
+        let Some(store) = &self.history else {
             return;
         };
-        let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
-        if tx.send(HistoryUpdate::Flush(ack_tx)).is_ok() {
-            let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(5));
+        let mut b = lock_book(&self.scrubs);
+        let pending: Vec<CaptureRecord> = b.unsecured.values().cloned().collect();
+        for record in pending {
+            match store.begin_scrub(&record) {
+                Ok(found) => {
+                    b.unsecured.remove(&record.id);
+                    if found {
+                        b.secured.insert(record.id, record.redactions.clone());
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    target: "readshot::history",
+                    "history scrub (phase one) failed again: {e}"
+                ),
+            }
         }
     }
 
@@ -386,8 +673,9 @@ impl CaptureCoordinator {
         // thumbnail, and fsyncs — synchronous fs/CPU work that would
         // otherwise stall a tokio worker for the duration.
         let history = Arc::clone(history);
+        let book = Arc::clone(&self.scrubs);
         let join = tokio::task::spawn_blocking(move || {
-            if let Err(e) = history.save(&record, &png_bytes) {
+            if let Err(e) = save_capture(history.as_ref(), &book, &record, &png_bytes) {
                 tracing::warn!(target: readshot_core::log::cat::HISTORY, "history save failed: {e}");
                 return;
             }
@@ -399,6 +687,54 @@ impl CaptureCoordinator {
         if let Err(e) = join {
             tracing::warn!(target: readshot_core::log::cat::HISTORY, "history save worker failed: {e}");
         }
+    }
+}
+
+/// Save a fresh capture, or — when the editor already scrubbed it while
+/// the save was in flight (a parked scrub) — its scrubbed version
+/// instead, so the raw capture never reaches disk. The parked job is
+/// rendered outside the book lock, then saved under it if it is still
+/// the parked one (else rendered again).
+fn save_capture(
+    history: &dyn HistoryStore,
+    book: &std::sync::Mutex<ScrubBook>,
+    record: &CaptureRecord,
+    png: &[u8],
+) -> Result<(), readshot_core::HistoryError> {
+    loop {
+        let parked = lock_book(book).parked.get(&record.id).cloned();
+        let rendered = parked.as_ref().map(render_job);
+        let mut b = lock_book(book);
+        if b.parked.get(&record.id).map(|j| j.seq) != parked.as_ref().map(|j| j.seq) {
+            continue;
+        }
+        let Some(job) = parked else {
+            return history.save(record, png);
+        };
+        b.parked.remove(&record.id);
+        return match rendered {
+            Some(Ok((scrubbed, bytes))) => {
+                let saved = history.save(&scrubbed, &bytes);
+                match &saved {
+                    Ok(()) => {
+                        b.secured.insert(record.id, scrubbed.redactions.clone());
+                    }
+                    Err(_) => {
+                        b.parked.insert(record.id, job);
+                    }
+                }
+                saved
+            }
+            // Can't encode the scrubbed image: save the capture, then
+            // run phase one on it right away (still under the lock).
+            _ => {
+                history.save(record, png)?;
+                if history.begin_scrub(&job.record).is_err() {
+                    b.unsecured.insert(record.id, job.record.clone());
+                }
+                Ok(())
+            }
+        };
     }
 }
 
@@ -534,10 +870,14 @@ mod tests {
 
     fn rewrite(id: readshot_core::Uuid, tag: &str) -> HistoryUpdate {
         HistoryUpdate::Rewrite(Box::new(HistoryRewrite {
-            record: tagged(id, tag),
-            base: Arc::new(image::RgbaImage::new(1, 1)),
-            bake: Vec::new(),
+            job: RewriteJob {
+                seq: 0,
+                record: tagged(id, tag),
+                base: Arc::new(image::RgbaImage::new(1, 1)),
+                bake: Vec::new(),
+            },
             done: None,
+            attempt: 0,
         }))
     }
 
@@ -547,7 +887,7 @@ mod tests {
             .map(|m| match m {
                 HistoryUpdate::Write(r) => format!("W:{}", r.ocr_text.as_deref().unwrap()),
                 HistoryUpdate::Rewrite(rw) => {
-                    format!("R:{}", rw.record.ocr_text.as_deref().unwrap())
+                    format!("R:{}", rw.job.record.ocr_text.as_deref().unwrap())
                 }
                 HistoryUpdate::Flush(_) => "F".to_string(),
             })
@@ -625,5 +965,258 @@ mod tests {
         .unwrap();
         let on_disk = image::load_from_memory(&png).unwrap().to_rgba8();
         assert_eq!(on_disk, readshot_core::render(&base, &bake));
+    }
+
+    /// Delegates to an `FsHistoryStore`, failing the first
+    /// `fail_rewrites` rewrites and `fail_begins` phase-one calls.
+    struct FlakyStore {
+        inner: readshot_core::FsHistoryStore,
+        fail_rewrites: std::sync::atomic::AtomicUsize,
+        fail_begins: std::sync::atomic::AtomicUsize,
+    }
+
+    fn take_failure(n: &std::sync::atomic::AtomicUsize) -> bool {
+        n.fetch_update(
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+            |v| v.checked_sub(1),
+        )
+        .is_ok()
+    }
+
+    impl HistoryStore for FlakyStore {
+        fn save(&self, r: &CaptureRecord, png: &[u8]) -> Result<(), readshot_core::HistoryError> {
+            self.inner.save(r, png)
+        }
+        fn list(&self) -> Result<Vec<CaptureRecord>, readshot_core::HistoryError> {
+            self.inner.list()
+        }
+        fn apply_retention(
+            &self,
+            p: HistoryRetention,
+            now: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), readshot_core::HistoryError> {
+            self.inner.apply_retention(p, now)
+        }
+        fn clear_all(&self) -> Result<(), readshot_core::HistoryError> {
+            self.inner.clear_all()
+        }
+        fn update(&self, r: &CaptureRecord) -> Result<(), readshot_core::HistoryError> {
+            self.inner.update(r)
+        }
+        fn rewrite(
+            &self,
+            r: &CaptureRecord,
+            png: &[u8],
+        ) -> Result<bool, readshot_core::HistoryError> {
+            if take_failure(&self.fail_rewrites) {
+                return Err(readshot_core::HistoryError::Io("disk full".into()));
+            }
+            self.inner.rewrite(r, png)
+        }
+        fn begin_scrub(&self, r: &CaptureRecord) -> Result<bool, readshot_core::HistoryError> {
+            if take_failure(&self.fail_begins) {
+                return Err(readshot_core::HistoryError::Io("disk full".into()));
+            }
+            self.inner.begin_scrub(r)
+        }
+    }
+
+    fn history_coord(store: Arc<dyn HistoryStore>) -> CaptureCoordinator {
+        CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_text("hello")),
+            Arc::new(FakePermissions::granted()),
+            Some(store),
+        )
+    }
+
+    fn white(w: u32, h: u32) -> image::RgbaImage {
+        let mut img = image::RgbaImage::new(w, h);
+        for px in img.pixels_mut() {
+            *px = image::Rgba([255, 255, 255, 255]);
+        }
+        img
+    }
+
+    fn pixelate() -> Vec<readshot_core::Annotation> {
+        vec![readshot_core::Annotation::Rectangle {
+            rect: readshot_core::RectLike::new(0.0, 0.0, 4.0, 4.0),
+            color: readshot_core::Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: readshot_core::ShapeStyle {
+                fill: readshot_core::FillMode::Filled,
+                ..readshot_core::ShapeStyle::default()
+            },
+        }]
+    }
+
+    fn scrubbed(r: &CaptureRecord) -> CaptureRecord {
+        let mut s = r.clone();
+        s.ocr_text = Some("masked".into());
+        s.redacted = true;
+        s
+    }
+
+    fn png_on_disk(
+        store: &readshot_core::FsHistoryStore,
+        r: &CaptureRecord,
+    ) -> Option<image::RgbaImage> {
+        let bytes =
+            std::fs::read(readshot_core::FsHistoryStore::abs_png_path(store.root(), r)).ok()?;
+        Some(image::load_from_memory(&bytes).unwrap().to_rgba8())
+    }
+
+    fn sidecar(store: &readshot_core::FsHistoryStore, r: &CaptureRecord) -> CaptureRecord {
+        store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == r.id)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_scrub_of_a_record_not_saved_yet_is_applied_when_the_save_lands() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let coord = history_coord(store.clone());
+        let base = Arc::new(white(8, 8));
+        let mut record = CaptureRecord::new(chrono::Utc::now(), 8, 8, "d");
+        record.ocr_text = Some("secret".into());
+        // The editor redacts and then goes away before the save lands.
+        drop(coord.rewrite_history_async(scrubbed(&record), Arc::clone(&base), pixelate()));
+        coord.flush_history_updates();
+        assert!(store.list().unwrap().is_empty());
+        let raw = readshot_core::encode_png(&base).unwrap();
+        coord
+            .record_history(
+                record.clone(),
+                raw,
+                HistoryRetention::Unlimited,
+                chrono::Utc::now(),
+            )
+            .await;
+        let stored = sidecar(&store, &record);
+        assert!(stored.redacted);
+        assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
+        assert_eq!(
+            png_on_disk(&store, &record).unwrap(),
+            readshot_core::render(&base, &pixelate())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_restore_cancels_a_parked_scrub() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let coord = history_coord(store.clone());
+        let base = Arc::new(white(8, 8));
+        let mut record = CaptureRecord::new(chrono::Utc::now(), 8, 8, "d");
+        record.ocr_text = Some("original".into());
+        drop(coord.rewrite_history_async(scrubbed(&record), Arc::clone(&base), pixelate()));
+        drop(coord.rewrite_history_async(record.clone(), Arc::clone(&base), Vec::new()));
+        coord.flush_history_updates();
+        let raw = readshot_core::encode_png(&base).unwrap();
+        coord
+            .record_history(
+                record.clone(),
+                raw,
+                HistoryRetention::Unlimited,
+                chrono::Utc::now(),
+            )
+            .await;
+        let stored = sidecar(&store, &record);
+        assert!(!stored.redacted);
+        assert_eq!(stored.ocr_text.as_deref(), Some("original"));
+        assert_eq!(png_on_disk(&store, &record).unwrap(), *base);
+    }
+
+    #[test]
+    fn phase_one_hides_the_unredacted_content_before_the_image_is_encoded() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let fs_store = readshot_core::FsHistoryStore::new(dir.path().join("h"));
+        let mut record = CaptureRecord::new(chrono::Utc::now(), 8, 8, "d");
+        record.ocr_text = Some("secret".into());
+        fs_store
+            .save(&record, &readshot_core::encode_png(&white(8, 8)).unwrap())
+            .unwrap();
+        let store = Arc::new(FlakyStore {
+            inner: readshot_core::FsHistoryStore::new(dir.path().join("h")),
+            // The image write keeps failing for a while.
+            fail_rewrites: std::sync::atomic::AtomicUsize::new(2),
+            fail_begins: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let coord = history_coord(store.clone());
+        let base = Arc::new(white(8, 8));
+        let rx = coord.rewrite_history_async(scrubbed(&record), Arc::clone(&base), pixelate());
+        // Synchronous phase one: masked text, no unredacted image.
+        let stored = sidecar(&fs_store, &record);
+        assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
+        assert!(stored.scrub_pending);
+        assert!(png_on_disk(&fs_store, &record).is_none());
+        // The first write fails and is reported…
+        assert!(matches!(iced::futures::executor::block_on(rx), Ok(Err(_))));
+        // …and retried by the coordinator, no editor involved.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while sidecar(&fs_store, &record).scrub_pending {
+            assert!(std::time::Instant::now() < deadline, "never retried");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            png_on_disk(&fs_store, &record).unwrap(),
+            readshot_core::render(&base, &pixelate())
+        );
+    }
+
+    #[test]
+    fn flushing_secures_a_scrub_whose_phase_one_failed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let fs_store = readshot_core::FsHistoryStore::new(dir.path().join("h"));
+        let mut record = CaptureRecord::new(chrono::Utc::now(), 8, 8, "d");
+        record.ocr_text = Some("secret".into());
+        fs_store
+            .save(&record, &readshot_core::encode_png(&white(8, 8)).unwrap())
+            .unwrap();
+        let store = Arc::new(FlakyStore {
+            inner: readshot_core::FsHistoryStore::new(dir.path().join("h")),
+            fail_rewrites: std::sync::atomic::AtomicUsize::new(usize::MAX),
+            fail_begins: std::sync::atomic::AtomicUsize::new(1),
+        });
+        let coord = history_coord(store);
+        drop(coord.rewrite_history_async(scrubbed(&record), Arc::new(white(8, 8)), pixelate()));
+        assert_eq!(
+            sidecar(&fs_store, &record).ocr_text.as_deref(),
+            Some("secret"),
+            "phase one failed"
+        );
+        // Quit: the flush secures what's still unsecured.
+        coord.flush_history_updates();
+        let stored = sidecar(&fs_store, &record);
+        assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
+        assert!(png_on_disk(&fs_store, &record).is_none());
+    }
+
+    #[test]
+    fn a_stale_rewrite_never_lands_after_a_newer_request() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = readshot_core::FsHistoryStore::new(dir.path().join("h"));
+        let record = CaptureRecord::new(chrono::Utc::now(), 8, 8, "d");
+        store
+            .save(&record, &readshot_core::encode_png(&white(8, 8)).unwrap())
+            .unwrap();
+        let book = std::sync::Mutex::new(ScrubBook::default());
+        book.lock().unwrap().latest.insert(record.id, 2);
+        let mut stale = record.clone();
+        stale.ocr_text = Some("stale".into());
+        let job = RewriteJob {
+            seq: 1,
+            record: stale.clone(),
+            base: Arc::new(white(8, 8)),
+            bake: Vec::new(),
+        };
+        let outcome = apply_rewrite(&store, &book, &job, &stale, b"x");
+        assert!(matches!(outcome, Outcome::Stale));
+        assert_eq!(sidecar(&store, &record).ocr_text, None);
     }
 }

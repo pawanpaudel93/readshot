@@ -2347,7 +2347,7 @@ async fn persist_history(
     if matches!(policy, readshot_core::HistoryRetention::Off) {
         return;
     }
-    let Some(mut record) = record else {
+    let Some(record) = record else {
         return;
     };
     let now = record.captured_at;
@@ -2400,20 +2400,25 @@ async fn persist_history(
     }
     let persisted = match doc {
         Ok(doc) => {
-            let list_coord = coord.clone();
-            let listed = tokio::task::spawn_blocking(move || list_coord.history_list()).await;
-            if let Ok(Ok(records)) = listed {
-                if let Some(latest) = records.into_iter().find(|r| r.id == record.id) {
-                    record.annotation_model = latest.annotation_model;
+            // The same string `recognise` returned before, stored next to
+            // whatever annotations the editor synced meanwhile. If the
+            // editor scrubbed the record, the text is masked with its
+            // redactions instead (never stored raw).
+            let write_coord = coord.clone();
+            let written = tokio::task::spawn_blocking(move || {
+                write_coord.record_recognized_text(&record, &doc, true)
+            })
+            .await;
+            match written {
+                Ok(Ok(())) => true,
+                Ok(Err(e)) => {
+                    tracing::warn!(target: "readshot::history", "ocr update failed: {e}");
+                    false
                 }
-            }
-            // The same string `recognise` returned before.
-            record.ocr_text = Some(doc.layout_text);
-            if let Err(e) = coord.update_history(&record) {
-                tracing::warn!(target: "readshot::history", "ocr update failed: {e}");
-                false
-            } else {
-                true
+                Err(e) => {
+                    tracing::warn!(target: "readshot::history", "ocr update worker: {e}");
+                    false
+                }
             }
         }
         Err(e) => {
@@ -9819,23 +9824,125 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_capture_saved_after_the_redaction_is_scrubbed_when_it_lands() {
+    #[tokio::test]
+    async fn a_capture_saved_after_the_editor_closed_is_still_scrubbed() {
         let (_dir, store, mut app) = scrub_app(false);
         let _ = update(&mut app, Message::EditorRedactAll);
-        app.coordinator.flush_history_updates();
-        assert!(store.list().unwrap().is_empty(), "nothing to scrub yet");
-        // The capture's history save lands with the raw image and text.
+        let expected = app.editor.as_mut().unwrap().model.flatten();
         let record = app.editor.as_ref().unwrap().source_record.clone().unwrap();
+        // The editor goes away before the capture's save lands.
+        app.editor = None;
+        app.coordinator.flush_history_updates();
+        assert!(store.list().unwrap().is_empty(), "nothing on disk yet");
+        let raw = readshot_core::encode_png(&solid(64, 64)).unwrap();
+        app.coordinator
+            .record_history(
+                record.clone(),
+                raw,
+                readshot_core::HistoryRetention::Unlimited,
+                chrono::Utc::now(),
+            )
+            .await;
+        // The late OCR pass can't put the raw text back either.
+        app.coordinator
+            .record_recognized_text(&record, &sample_doc(), true)
+            .unwrap();
+        let (stored, png) = stored(&store);
+        let text = stored.ocr_text.clone().unwrap();
+        assert!(stored.redacted);
+        assert!(!text.contains(EMAIL) && !text.contains(PHONE), "{text}");
+        assert_eq!(png, expected);
+    }
+
+    /// An editor on a History record whose stored text is `text`, with a
+    /// positional engine and no recognized document yet.
+    fn positional_scrub_app(text: &str) -> (tempfile::TempDir, Arc<FsHistoryStore>, App) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(FsHistoryStore::new(dir.path().join("history")));
+        let perms = Arc::new(FakePermissions::granted());
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_lines(Vec::new())),
+            perms.clone(),
+            Some(store.clone() as Arc<dyn HistoryStore>),
+        );
+        let mut app = App::new(coord, perms, Preferences::default());
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 64, 64, "d");
+        record.ocr_text = Some(text.to_string());
         store
             .save(&record, &readshot_core::encode_png(&solid(64, 64)).unwrap())
             .unwrap();
-        let _ = update(&mut app, Message::HistoryRecordSaved);
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            solid(64, 64),
+            record,
+        ));
+        (dir, store, app)
+    }
+
+    fn draw_solid_block(app: &mut App) {
+        let _ = update(
+            app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                readshot_core::redact::redaction_annotation(
+                    RectLike::new(6.0, 6.0, 40.0, 8.0),
+                    readshot_core::redact::RedactStyle::Solid,
+                ),
+            )),
+        );
+    }
+
+    #[test]
+    fn with_positions_but_no_word_boxes_yet_the_scrub_stores_no_text() {
+        // A name no detector matches, hidden by hand.
+        let (_dir, store, mut app) = positional_scrub_app("Name Priya");
+        draw_solid_block(&mut app);
         app.coordinator.flush_history_updates();
-        let (record, png) = stored(&store);
+        let (record, _) = stored(&store);
         assert!(record.redacted);
-        assert!(!record.ocr_text.unwrap().contains(EMAIL));
-        assert_eq!(png, app.editor.as_mut().unwrap().model.flatten());
+        assert_eq!(record.ocr_text, None, "fail closed until positions land");
+        // …and recognition starts so the precise text can land.
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
+    }
+
+    #[test]
+    fn a_failed_recognition_is_retried_on_the_next_scrub() {
+        let (_dir, _store, mut app) = positional_scrub_app("Name Priya");
+        app.editor.as_mut().unwrap().text_panel.recognition =
+            crate::editor::TextRecognition::Failed("busy".into());
+        draw_solid_block(&mut app);
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn recognized_text_reaches_history_even_after_the_editor_closed() {
+        let (_dir, store, mut app) = positional_scrub_app("Name Priya");
+        // Redact the email line by hand.
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                readshot_core::redact::redaction_annotation(
+                    RectLike::new(20.0, 18.0, 40.0, 9.0),
+                    readshot_core::redact::RedactStyle::Solid,
+                ),
+            )),
+        );
+        let record = app.editor.as_ref().unwrap().source_record.clone().unwrap();
+        app.editor = None;
+        app.coordinator.flush_history_updates();
+        // The recognition task's History write, run with the editor gone.
+        let _ =
+            super::text_panel::store_recognized_text(&app.coordinator, &record, Ok(sample_doc()))
+                .await;
+        let (stored, _) = stored(&store);
+        let text = stored.ocr_text.unwrap();
+        assert!(!text.contains(EMAIL), "{text}");
+        assert!(text.contains("Name Priya"), "{text}");
     }
 
     #[test]

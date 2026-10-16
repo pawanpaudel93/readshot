@@ -303,7 +303,7 @@ pub(crate) fn write_editor_history(
     let annotations = ed.model.annotations();
     if readshot_core::scrub::has_redaction(annotations) {
         let mut scrubbed = record;
-        scrubbed.ocr_text = scrubbed_history_text(ed);
+        scrubbed.ocr_text = scrubbed_history_text(ed, coord.engine_reports_positions());
         scrubbed.annotation_model = Vec::new();
         scrubbed.redacted = true;
         let bake = annotations.to_vec();
@@ -332,16 +332,33 @@ fn original_history_text(ed: &crate::editor::EditorSession) -> Option<String> {
 }
 
 /// The text History keeps while redactions are present: the recognized
-/// text with every hidden word masked. Uses the Text panel's document
-/// (word boxes) when there is one, else the stored text without
-/// positions (detected items masked). `None` when no text is known yet;
-/// the record's text is then cleared (fail closed) until recognition
-/// lands and the record is scrubbed again.
-fn scrubbed_history_text(ed: &crate::editor::EditorSession) -> Option<String> {
+/// text with every hidden word masked, using the Text panel's document
+/// (word boxes) when it has positions.
+///
+/// Without a positioned document:
+/// - an engine that reports positions (Apple Vision) will produce one, so
+///   store **no** text for now (fail closed) — masking only the detected
+///   items would keep a hand-redacted name readable. The precise text is
+///   stored when recognition lands, editor open or not
+///   (`text_panel::store_recognized_text`);
+/// - an engine without positions never will, so mask every detected item
+///   in the known text (the documented fallback).
+///
+/// `None` also when no text is known at all.
+fn scrubbed_history_text(
+    ed: &crate::editor::EditorSession,
+    engine_reports_positions: bool,
+) -> Option<String> {
     use readshot_core::scrub::{hidden_spans, masked_layout_text};
     use readshot_core::text_lines::TextDocument;
     let annotations = ed.model.annotations();
     let mask = |doc: &TextDocument| masked_layout_text(doc, &hidden_spans(doc, annotations));
+    if let Some(doc) = ed.text_panel.positioned_document() {
+        return Some(mask(doc));
+    }
+    if engine_reports_positions {
+        return None;
+    }
     match ed.text_panel.document() {
         Some(doc) => Some(mask(doc)),
         None => original_history_text(ed).map(|t| mask(&TextDocument::from_plain(&t))),
@@ -350,15 +367,17 @@ fn scrubbed_history_text(ed: &crate::editor::EditorSession) -> Option<String> {
 
 /// Follow-ups after a message that may have written History: await the
 /// newest rewrite's outcome, and when a redaction exists but the panel
-/// never recognized the image (and the engine reports positions), start
-/// recognition so the stored text gets word-precise masking instead of
-/// the detected-items fallback.
+/// has no recognition (never ran, or failed) and the engine reports
+/// positions, start recognition. Its result is stored in History by the
+/// task itself, so the precise masked text lands even if the editor
+/// closes first.
 pub(crate) fn history_write_followups(state: &mut App) -> Task<Message> {
     let positions = state.coordinator.engine_reports_positions();
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
     };
     let mut tasks = Vec::new();
+    let wrote = ed.history_write.is_some();
     if let Some(rx) = ed.history_write.take() {
         let session = ed.session_id;
         tasks.push(Task::perform(rx, move |r| Message::EditorHistoryWritten {
@@ -366,12 +385,17 @@ pub(crate) fn history_write_followups(state: &mut App) -> Task<Message> {
             result: r.ok(),
         }));
     }
+    // Idle: never recognized. Failed: retried whenever a scrub is
+    // written, so a transient failure can't leave the text unmasked-or-
+    // missing for good.
+    let recognition_due = match ed.text_panel.recognition {
+        crate::editor::TextRecognition::Idle => true,
+        crate::editor::TextRecognition::Failed(_) => wrote,
+        _ => false,
+    };
     let needs_text = positions
         && ed.source_record.is_some()
-        && matches!(
-            ed.text_panel.recognition,
-            crate::editor::TextRecognition::Idle
-        )
+        && recognition_due
         && readshot_core::scrub::has_redaction(ed.model.annotations());
     if needs_text {
         tasks.push(super::text_panel::request_text_recognition(state));
