@@ -64,9 +64,105 @@ pub struct CaptureCoordinator {
 /// Message for the background history writer thread.
 enum HistoryUpdate {
     Write(CaptureRecord),
+    /// Replace a record's image and sidecar (the editor's History scrub
+    /// and its restore). See [`HistoryRewrite`].
+    Rewrite(Box<HistoryRewrite>),
     /// Rendezvous: acknowledged once everything queued before it has
     /// been written. Lets shutdown (and tests) wait for durability.
     Flush(std::sync::mpsc::SyncSender<()>),
+}
+
+/// Outcome of a queued [`CaptureCoordinator::rewrite_history_async`]:
+/// `Err` carries a user-presentable reason. A rewrite superseded by a
+/// newer one for the same record never runs; its receiver is cancelled.
+pub type HistoryRewriteResult = Result<(), String>;
+
+/// A full record replacement for the background writer. The PNG is
+/// `bake` rendered onto `base` (or `base` itself when `bake` is empty),
+/// rendered and encoded on the writer thread, never the UI thread.
+struct HistoryRewrite {
+    record: CaptureRecord,
+    base: Arc<RgbaImage>,
+    bake: Vec<readshot_core::Annotation>,
+    done: Option<iced::futures::channel::oneshot::Sender<HistoryRewriteResult>>,
+}
+
+impl HistoryUpdate {
+    fn record_id(&self) -> Option<readshot_core::Uuid> {
+        match self {
+            Self::Write(r) => Some(r.id),
+            Self::Rewrite(rw) => Some(rw.record.id),
+            Self::Flush(_) => None,
+        }
+    }
+}
+
+/// Drop the queued updates a later one makes pointless, keeping order.
+/// Per record: a rewrite supersedes every earlier write and rewrite (it
+/// carries the whole state, image included), and a plain write
+/// supersedes earlier plain writes queued after the last rewrite. So a
+/// burst of edits costs one render + encode, not one per edit. Flushes
+/// always stay.
+fn coalesce(batch: Vec<HistoryUpdate>) -> Vec<HistoryUpdate> {
+    use std::collections::HashSet;
+    let mut seen_rewrite: HashSet<readshot_core::Uuid> = HashSet::new();
+    let mut seen_write: HashSet<readshot_core::Uuid> = HashSet::new();
+    let mut kept: Vec<HistoryUpdate> = Vec::with_capacity(batch.len());
+    for msg in batch.into_iter().rev() {
+        let keep = match (&msg, msg.record_id()) {
+            (HistoryUpdate::Rewrite(_), Some(id)) => seen_rewrite.insert(id),
+            (HistoryUpdate::Write(_), Some(id)) => {
+                !seen_rewrite.contains(&id) && seen_write.insert(id)
+            }
+            _ => true,
+        };
+        if keep {
+            kept.push(msg);
+        }
+    }
+    kept.reverse();
+    kept
+}
+
+/// Run one rewrite: render, encode, write, report. Called on the
+/// writer thread (or the fallback path).
+fn run_rewrite(store: &dyn HistoryStore, rewrite: HistoryRewrite) {
+    let HistoryRewrite {
+        mut record,
+        base,
+        bake,
+        done,
+    } = rewrite;
+    let baked = (!bake.is_empty()).then(|| readshot_core::render(&base, &bake));
+    let img = baked.as_ref().unwrap_or(&base);
+    record.width_px = img.width();
+    record.height_px = img.height();
+    let result = readshot_core::encode_png(img)
+        .map_err(|e| e.to_string())
+        .and_then(|png| store.rewrite(&record, &png).map_err(|e| e.to_string()));
+    if let Err(e) = &result {
+        tracing::warn!(target: "readshot::history", "history rewrite failed: {e}");
+    }
+    if let Some(done) = done {
+        let _ = done.send(result);
+    }
+}
+
+fn run_update(store: &dyn HistoryStore, msg: HistoryUpdate) {
+    match msg {
+        HistoryUpdate::Write(record) => {
+            if let Err(e) = store.update(&record) {
+                tracing::warn!(
+                    target: "readshot::history",
+                    "background history update failed: {e}"
+                );
+            }
+        }
+        HistoryUpdate::Rewrite(rewrite) => run_rewrite(store, *rewrite),
+        HistoryUpdate::Flush(ack) => {
+            let _ = ack.send(());
+        }
+    }
 }
 
 impl CaptureCoordinator {
@@ -82,19 +178,14 @@ impl CaptureCoordinator {
             std::thread::Builder::new()
                 .name("history-sync".into())
                 .spawn(move || {
-                    while let Ok(msg) = rx.recv() {
-                        match msg {
-                            HistoryUpdate::Write(record) => {
-                                if let Err(e) = store.update(&record) {
-                                    tracing::warn!(
-                                        target: "readshot::history",
-                                        "background history update failed: {e}"
-                                    );
-                                }
-                            }
-                            HistoryUpdate::Flush(ack) => {
-                                let _ = ack.send(());
-                            }
+                    // Drain whatever queued up while the last write ran
+                    // and coalesce it: only the newest rewrite of a
+                    // record pays for a render + PNG encode.
+                    while let Ok(first) = rx.recv() {
+                        let mut batch = vec![first];
+                        batch.extend(rx.try_iter());
+                        for msg in coalesce(batch) {
+                            run_update(store.as_ref(), msg);
                         }
                     }
                 })
@@ -195,7 +286,7 @@ impl CaptureCoordinator {
                 Ok(()) => return,
                 Err(std::sync::mpsc::SendError(msg)) => match msg {
                     HistoryUpdate::Write(record) => record,
-                    HistoryUpdate::Flush(_) => return,
+                    HistoryUpdate::Rewrite(_) | HistoryUpdate::Flush(_) => return,
                 },
             },
             None => record,
@@ -203,6 +294,42 @@ impl CaptureCoordinator {
         if let Err(e) = self.update_history(&record) {
             tracing::warn!(target: "readshot::history", "history update failed: {e}");
         }
+    }
+
+    /// Queue a full replacement of `record` on the ordered background
+    /// writer: its PNG becomes `bake` rendered onto `base` (`base` as is
+    /// when `bake` is empty), its thumbnail is regenerated and its
+    /// sidecar written exactly as given (`ocr_text: None` clears the
+    /// text). Rendering and encoding run on the writer thread, and a
+    /// newer rewrite of the same record queued meanwhile supersedes this
+    /// one (its receiver is then cancelled). The receiver resolves with
+    /// the outcome; no history store → cancelled.
+    pub fn rewrite_history_async(
+        &self,
+        record: CaptureRecord,
+        base: Arc<RgbaImage>,
+        bake: Vec<readshot_core::Annotation>,
+    ) -> iced::futures::channel::oneshot::Receiver<HistoryRewriteResult> {
+        let (tx, rx) = iced::futures::channel::oneshot::channel();
+        let Some(store) = &self.history else {
+            return rx;
+        };
+        let msg = HistoryUpdate::Rewrite(Box::new(HistoryRewrite {
+            record,
+            base,
+            bake,
+            done: Some(tx),
+        }));
+        let msg = match &self.history_update_tx {
+            Some(sender) => match sender.send(msg) {
+                Ok(()) => return rx,
+                Err(std::sync::mpsc::SendError(msg)) => msg,
+            },
+            None => msg,
+        };
+        // No writer thread: write inline rather than drop the scrub.
+        run_update(store.as_ref(), msg);
+        rx
     }
 
     /// Block until every history update queued before this call has
@@ -396,5 +523,107 @@ mod tests {
         let texts: Vec<&str> = doc.lines.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(texts, ["one", "two"]);
         assert_eq!(doc.layout_text, "one\n\ntwo");
+    }
+
+    fn tagged(id: readshot_core::Uuid, tag: &str) -> CaptureRecord {
+        let mut r = CaptureRecord::new(chrono::Utc::now(), 4, 4, "d");
+        r.id = id;
+        r.ocr_text = Some(tag.to_string());
+        r
+    }
+
+    fn rewrite(id: readshot_core::Uuid, tag: &str) -> HistoryUpdate {
+        HistoryUpdate::Rewrite(Box::new(HistoryRewrite {
+            record: tagged(id, tag),
+            base: Arc::new(image::RgbaImage::new(1, 1)),
+            bake: Vec::new(),
+            done: None,
+        }))
+    }
+
+    fn tags(batch: &[HistoryUpdate]) -> Vec<String> {
+        batch
+            .iter()
+            .map(|m| match m {
+                HistoryUpdate::Write(r) => format!("W:{}", r.ocr_text.as_deref().unwrap()),
+                HistoryUpdate::Rewrite(rw) => {
+                    format!("R:{}", rw.record.ocr_text.as_deref().unwrap())
+                }
+                HistoryUpdate::Flush(_) => "F".to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rapid_rewrites_of_one_record_coalesce_to_the_latest() {
+        let id = readshot_core::Uuid::new_v4();
+        let batch = vec![rewrite(id, "1"), rewrite(id, "2"), rewrite(id, "3")];
+        assert_eq!(tags(&coalesce(batch)), ["R:3"]);
+    }
+
+    #[test]
+    fn coalescing_keeps_order_flushes_and_other_records() {
+        let a = readshot_core::Uuid::new_v4();
+        let b = readshot_core::Uuid::new_v4();
+        let (ack, _rx) = std::sync::mpsc::sync_channel(1);
+        let batch = vec![
+            HistoryUpdate::Write(tagged(a, "w1")),
+            rewrite(a, "r1"),
+            HistoryUpdate::Write(tagged(b, "b1")),
+            HistoryUpdate::Write(tagged(a, "w2")),
+            HistoryUpdate::Write(tagged(a, "w3")),
+            HistoryUpdate::Flush(ack),
+            HistoryUpdate::Write(tagged(b, "b2")),
+        ];
+        // A rewrite supersedes every earlier write of its record; a
+        // plain write only earlier plain writes after the last rewrite
+        // (the rewrite carries the image a later write doesn't).
+        assert_eq!(tags(&coalesce(batch)), ["R:r1", "W:w3", "F", "W:b2"]);
+    }
+
+    #[test]
+    fn rewrite_history_async_bakes_annotations_off_thread_and_reports_success() {
+        use readshot_core::{Annotation, RectLike};
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_text("hello")),
+            Arc::new(FakePermissions::granted()),
+            Some(store.clone() as Arc<dyn HistoryStore>),
+        );
+        let mut base = image::RgbaImage::new(8, 8);
+        for px in base.pixels_mut() {
+            *px = image::Rgba([255, 255, 255, 255]);
+        }
+        let mut record = CaptureRecord::new(chrono::Utc::now(), 8, 8, "d");
+        record.ocr_text = Some("original".into());
+        store
+            .save(&record, &readshot_core::encode_png(&base).unwrap())
+            .unwrap();
+        let bake = vec![Annotation::Pixelate {
+            rect: RectLike::new(0.0, 0.0, 4.0, 4.0),
+            block_size: 2.0,
+        }];
+        let mut scrubbed = record.clone();
+        scrubbed.ocr_text = Some("masked".into());
+        scrubbed.redacted = true;
+        let base = Arc::new(base);
+        let rx = coord.rewrite_history_async(scrubbed, Arc::clone(&base), bake.clone());
+        coord.flush_history_updates();
+        assert_eq!(
+            iced::futures::executor::block_on(rx).unwrap(),
+            Ok(()),
+            "the write reports success"
+        );
+        let listed = store.list().unwrap();
+        assert_eq!(listed[0].ocr_text.as_deref(), Some("masked"));
+        let png = std::fs::read(readshot_core::FsHistoryStore::abs_png_path(
+            store.root(),
+            &listed[0],
+        ))
+        .unwrap();
+        let on_disk = image::load_from_memory(&png).unwrap().to_rgba8();
+        assert_eq!(on_disk, readshot_core::render(&base, &bake));
     }
 }
