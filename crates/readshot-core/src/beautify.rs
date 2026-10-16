@@ -12,6 +12,9 @@ pub const MAX_PADDING: u32 = 200;
 pub const MAX_CORNER_RADIUS: u32 = 32;
 pub const MAX_SHADOW_LEVEL: u8 = 4;
 pub const SOCIAL_SIZE: (u32, u32) = (1200, 675);
+/// Bounds for deserialised shadows (the strongest slider stop is 8 layers, 18 px).
+pub const MAX_SHADOW_LAYERS: u32 = 16;
+pub const MAX_SHADOW_OFFSET: i64 = 200;
 pub const MAX_SAVED_PRESETS: usize = 12;
 /// Picking a background while padding is 0 would show nothing; pad first.
 pub const PADDING_WHEN_BACKGROUND_PICKED: u32 = 48;
@@ -354,6 +357,20 @@ impl BeautifySettings {
             .unwrap_or(1)
     }
 
+    /// Settings with every field forced into the range the UI can produce,
+    /// so deserialised (hand-edited / corrupt) values can't panic or exhaust
+    /// memory in `render`. A no-op for anything the UI or presets make.
+    pub fn clamped(&self) -> Self {
+        let mut s = *self;
+        s.padding = s.padding.min(MAX_PADDING);
+        s.corner_radius = s.corner_radius.min(MAX_CORNER_RADIUS);
+        if let Some(sh) = s.shadow.as_mut() {
+            sh.layers = sh.layers.min(MAX_SHADOW_LAYERS);
+            sh.offset = sh.offset.clamp(-MAX_SHADOW_OFFSET, MAX_SHADOW_OFFSET);
+        }
+        s
+    }
+
     /// The built-in preset these settings equal, if any (chip highlight).
     pub fn matching_builtin(&self) -> Option<BuiltinPreset> {
         BuiltinPreset::ALL
@@ -375,6 +392,7 @@ pub struct OutputGeometry {
 /// Output canvas and image placement for a `w × h` image. `None` only on
 /// arithmetic overflow (the caller then outputs the image unchanged).
 pub fn output_geometry(w: u32, h: u32, s: &BeautifySettings) -> Option<OutputGeometry> {
+    let s = &s.clamped();
     if s.is_identity() {
         return Some(OutputGeometry {
             width: w,
@@ -435,6 +453,7 @@ pub fn output_geometry(w: u32, h: u32, s: &BeautifySettings) -> Option<OutputGeo
 
 /// The beautified output of `img`.
 pub fn render(img: &RgbaImage, s: &BeautifySettings) -> RgbaImage {
+    let s = &s.clamped();
     if s.is_identity() {
         return img.clone();
     }
@@ -454,7 +473,7 @@ pub fn render(img: &RgbaImage, s: &BeautifySettings) -> RgbaImage {
     if let Some(shadow) = s.shadow {
         for layer in (1..=shadow.layers).rev() {
             let spread = layer * 3;
-            let alpha = (shadow.alpha / layer as u8).max(3);
+            let alpha = ((u32::from(shadow.alpha) / layer).max(3)) as u8;
             draw_rounded_rect(
                 &mut out,
                 x + shadow.offset - spread as i64,
@@ -473,7 +492,7 @@ pub fn render(img: &RgbaImage, s: &BeautifySettings) -> RgbaImage {
             y - 1,
             src.width().saturating_add(2),
             src.height().saturating_add(2),
-            s.corner_radius + 1,
+            s.corner_radius.saturating_add(1),
             mat,
         );
     }
@@ -485,7 +504,7 @@ pub fn render(img: &RgbaImage, s: &BeautifySettings) -> RgbaImage {
             y - 1,
             src.width().saturating_add(2),
             src.height().saturating_add(2),
-            s.corner_radius + 1,
+            s.corner_radius.saturating_add(1),
             border,
         );
     }
@@ -753,23 +772,53 @@ mod tests {
 
     #[test]
     fn settings_round_trip_through_toml_and_json() {
-        let p = SavedBeautifyPreset {
-            name: "Mine".into(),
-            settings: BuiltinPreset::Dark.settings(),
-        };
-        let json = serde_json::to_string(&p).unwrap();
-        assert_eq!(
-            serde_json::from_str::<SavedBeautifyPreset>(&json).unwrap(),
-            p
-        );
         #[derive(Serialize, Deserialize, PartialEq, Debug)]
         struct W {
             p: Vec<SavedBeautifyPreset>,
         }
-        let w = W { p: vec![p] };
-        assert_eq!(
-            toml::from_str::<W>(&toml::to_string(&w).unwrap()).unwrap(),
-            w
-        );
+        for b in BuiltinPreset::ALL {
+            let p = SavedBeautifyPreset {
+                name: "Mine".into(),
+                settings: b.settings(),
+            };
+            let json = serde_json::to_string(&p).unwrap();
+            assert_eq!(
+                serde_json::from_str::<SavedBeautifyPreset>(&json).unwrap(),
+                p
+            );
+            let w = W { p: vec![p] };
+            assert_eq!(
+                toml::from_str::<W>(&toml::to_string(&w).unwrap()).unwrap(),
+                w
+            );
+        }
+    }
+
+    #[test]
+    fn out_of_range_deserialised_values_render_without_panicking() {
+        let mut s = BuiltinPreset::Soft.settings();
+        s.padding = 100_000;
+        s.corner_radius = u32::MAX;
+        s.shadow = Some(Shadow {
+            color: [0, 0, 0],
+            offset: i64::MAX,
+            layers: u32::MAX,
+            alpha: 255,
+        });
+        let json = serde_json::to_string(&s).unwrap();
+        let s: BeautifySettings = serde_json::from_str(&json).unwrap();
+        let out = render(&img(8, 8), &s);
+        assert_eq!(out.width(), 8 + 2 * MAX_PADDING);
+        for layers in [255, 256, 257, 512] {
+            let mut s = BuiltinPreset::Soft.settings();
+            s.shadow = Some(Shadow {
+                color: [0, 0, 0],
+                offset: 18,
+                layers,
+                alpha: 42,
+            });
+            let _ = render(&img(8, 8), &s);
+        }
+        assert!(output_geometry(8, 8, &s).is_some());
     }
 }
