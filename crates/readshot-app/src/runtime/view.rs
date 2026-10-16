@@ -2142,7 +2142,12 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             loupe: ed.eyedropper.as_ref().and_then(|e| e.loupe.clone()),
             text_hover,
             text_selected: text_selected.clone(),
-            crop_draft: ed.crop_draft,
+            // The old draft hides while a new drag replaces it.
+            crop_draft: if ed.canvas_drag_active {
+                None
+            } else {
+                ed.crop_draft
+            },
             cache: ed.canvas_cache.clone(),
         };
         let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)

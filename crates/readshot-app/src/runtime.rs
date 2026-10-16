@@ -11241,6 +11241,11 @@ mod tests {
     fn crop_drag_makes_a_draft_enter_applies_and_esc_cancels() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         app.editor = Some(crate::editor::EditorSession::new(solid(100, 80)));
+        app.editor
+            .as_mut()
+            .unwrap()
+            .model
+            .set_tool(readshot_ui::editor::ToolState::Crop);
         let crop = |r| {
             Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
                 Annotation::Crop { rect: r },
@@ -11388,5 +11393,103 @@ mod tests {
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.effective_image_size(), (100, 80));
         assert_eq!(ed.model.undo_depth(), 1);
+    }
+
+    #[test]
+    fn a_crop_released_after_switching_tools_leaves_no_draft() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(100, 80)));
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+                readshot_ui::editor::ToolState::Rectangle,
+            )),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                Annotation::Crop {
+                    rect: RectLike::new(0.0, 0.0, 50.0, 40.0),
+                },
+            )),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.crop_draft, None);
+        assert_eq!(ed.model.undo_depth(), 0);
+    }
+
+    #[test]
+    fn copy_and_save_apply_an_open_crop_draft_first() {
+        for save in [false, true] {
+            let mut app = build_app(Arc::new(FakePermissions::granted()));
+            let mut ed = crate::editor::EditorSession::new(solid(100, 80));
+            ed.crop_draft = Some(RectLike::new(0.0, 0.0, 50.0, 40.0));
+            app.editor = Some(ed);
+            let _ = update(
+                &mut app,
+                if save {
+                    Message::EditorSaveRequested
+                } else {
+                    Message::EditorCopyImageRequested
+                },
+            );
+            let ed = app.editor.as_ref().unwrap();
+            assert_eq!(ed.crop_draft, None);
+            assert_eq!(ed.effective_image_size(), (50, 40), "save={save}");
+            assert_eq!(ed.model.undo_depth(), 1, "save={save}");
+        }
+    }
+
+    #[test]
+    fn an_image_menu_action_drops_the_crop_draft() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(100, 80));
+        ed.crop_draft = Some(RectLike::new(0.0, 0.0, 50.0, 40.0));
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        assert_eq!(app.editor.as_ref().unwrap().crop_draft, None);
+    }
+
+    #[test]
+    fn an_aspect_change_with_a_draft_leaves_a_selected_committed_crop_alone() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(100, 80));
+        let committed = RectLike::new(0.0, 0.0, 80.0, 40.0);
+        ed.model
+            .commit_annotation(Annotation::Crop { rect: committed });
+        assert!(ed.model.selected_annotation().is_some());
+        ed.crop_draft = Some(RectLike::new(0.0, 0.0, 60.0, 30.0));
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorStyle(readshot_ui::editor::style::StyleMessage::CropAspect(
+                readshot_ui::editor::style::CropAspect::Square,
+            )),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.crop_draft, Some(RectLike::new(15.0, 0.0, 30.0, 30.0)));
+        assert_eq!(ed.model.undo_depth(), 1);
+        assert_eq!(
+            ed.model.annotations().first(),
+            Some(&Annotation::Crop { rect: committed })
+        );
+    }
+
+    #[test]
+    fn enter_does_not_apply_a_crop_while_a_field_popover_is_open() {
+        for popover in [
+            crate::editor::EditorPopover::Color,
+            crate::editor::EditorPopover::Resize,
+        ] {
+            let mut app = build_app(Arc::new(FakePermissions::granted()));
+            let mut ed = crate::editor::EditorSession::new(solid(100, 80));
+            ed.crop_draft = Some(RectLike::new(0.0, 0.0, 50.0, 40.0));
+            ed.popover = Some(popover);
+            app.editor = Some(ed);
+            let _ = update(&mut app, Message::EditorEditSelectedText);
+            let ed = app.editor.as_ref().unwrap();
+            assert!(ed.crop_draft.is_some(), "{popover:?}");
+            assert_eq!(ed.effective_image_size(), (100, 80));
+        }
     }
 }

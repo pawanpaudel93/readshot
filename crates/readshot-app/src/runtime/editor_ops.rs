@@ -156,6 +156,23 @@ pub(crate) fn preview_editor_style(
     }
 }
 
+/// Commit an open crop draft as one undo step. Returns whether one was open.
+pub(crate) fn apply_crop_draft(
+    ed: &mut crate::editor::EditorSession,
+    coord: &CaptureCoordinator,
+) -> bool {
+    let Some(rect) = ed.crop_draft.take() else {
+        return false;
+    };
+    ed.model
+        .commit_annotation(readshot_core::Annotation::Crop { rect });
+    ed.refresh_image();
+    let (w, h) = ed.effective_image_size();
+    ed.set_status(format!("Cropped to {w} × {h} px. ⌘Z to undo."));
+    sync_editor_history(ed, coord);
+    true
+}
+
 pub(crate) fn commit_pending_editor_text(
     ed: &mut crate::editor::EditorSession,
     coord: &CaptureCoordinator,
@@ -729,6 +746,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             commit_snapshot_drag(ed, &state.coordinator);
             commit_pending_editor_text(ed, &state.coordinator);
             cancel_editor_previews(ed);
+            // The output must match what is on screen: apply an open crop.
+            apply_crop_draft(ed, &state.coordinator);
             ed.busy = true;
             ed.set_status("Choose a save location…");
             let img = editor_output_image(ed);
@@ -781,6 +800,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             commit_snapshot_drag(ed, &state.coordinator);
             commit_pending_editor_text(ed, &state.coordinator);
             cancel_editor_previews(ed);
+            // The output must match what is on screen: apply an open crop.
+            apply_crop_draft(ed, &state.coordinator);
             ed.busy = true;
             ed.set_status(if ed.model.beautify().is_identity() {
                 "Copying…".to_string()
@@ -1391,9 +1412,14 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     ed.canvas_drag_active = false;
                     cancel_editor_previews(ed);
                     if let readshot_core::Annotation::Crop { rect } = annotation {
-                        // Crop is a draft until Apply ↵ (spec §3.10).
-                        ed.crop_draft = Some(rect);
-                        ed.set_status("Press ↵ to crop, esc to cancel.");
+                        // Crop is a draft until Apply ↵ (spec §3.10). A tool
+                        // switched mid-drag must not leave a draft behind.
+                        if ed.model.active_tool() == readshot_ui::editor::ToolState::Crop {
+                            ed.crop_draft = Some(rect);
+                            ed.set_status("Press ↵ to crop, esc to cancel.");
+                        } else {
+                            ed.crop_draft = None;
+                        }
                         return Task::none();
                     }
                     let annotation = super::text_panel::snap_highlight_annotation(ed, annotation);
@@ -1555,14 +1581,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // previews, then commit any pending text, then the crop.
             cancel_editor_previews(ed);
             commit_pending_editor_text(ed, &state.coordinator);
-            if let Some(rect) = ed.crop_draft.take() {
-                ed.model
-                    .commit_annotation(readshot_core::Annotation::Crop { rect });
-                ed.refresh_image();
-                let (w, h) = ed.effective_image_size();
-                ed.set_status(format!("Cropped to {w} × {h} px. ⌘Z to undo."));
-                sync_editor_history(ed, &state.coordinator);
-            }
+            apply_crop_draft(ed, &state.coordinator);
             Task::none()
         }
         Message::EditorCropCancel => {
@@ -1720,6 +1739,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             commit_snapshot_drag(ed, &state.coordinator);
             commit_pending_editor_text(ed, &state.coordinator);
             cancel_editor_previews(ed);
+            apply_crop_draft(ed, &state.coordinator);
             let img = editor_output_image(ed);
             let size = (img.width(), img.height());
             let handle = rgba_handle(img);

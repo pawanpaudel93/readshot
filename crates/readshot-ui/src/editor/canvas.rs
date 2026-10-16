@@ -759,7 +759,10 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                                     iced::Size::new(rect.width, rect.height),
                                 );
                                 shade_crop_outside(frame, bounds, rect);
-                                frame.stroke(&path, preview_stroke);
+                                frame.stroke(
+                                    &path,
+                                    Stroke::default().with_color(SELECTION_TEAL).with_width(1.5),
+                                );
                                 draw_thirds(
                                     frame,
                                     Rectangle {
@@ -1957,7 +1960,14 @@ fn aspect_target(anchor: Point, cursor: Point, ratio: f32) -> Point {
 
 /// Rule-of-thirds lines inside a crop frame.
 fn draw_thirds(frame: &mut Frame, rect: Rectangle) {
-    let stroke = Stroke::default()
+    // A dark under-stroke keeps the guides readable on light captures.
+    let under = Stroke::default()
+        .with_color(Color {
+            a: 0.35,
+            ..Color::BLACK
+        })
+        .with_width(1.0);
+    let over = Stroke::default()
         .with_color(Color {
             a: 0.55,
             ..Color::WHITE
@@ -1967,14 +1977,21 @@ fn draw_thirds(frame: &mut Frame, rect: Rectangle) {
         let t = i as f32 / 3.0;
         let x = rect.x + rect.width * t;
         let y = rect.y + rect.height * t;
-        frame.stroke(
-            &Path::line(Point::new(x, rect.y), Point::new(x, rect.y + rect.height)),
-            stroke,
+        let v = Path::line(Point::new(x, rect.y), Point::new(x, rect.y + rect.height));
+        let h = Path::line(Point::new(rect.x, y), Point::new(rect.x + rect.width, y));
+        // Offset the dark line by 1 px so both stay visible side by side.
+        let v_under = Path::line(
+            Point::new(x + 1.0, rect.y),
+            Point::new(x + 1.0, rect.y + rect.height),
         );
-        frame.stroke(
-            &Path::line(Point::new(rect.x, y), Point::new(rect.x + rect.width, y)),
-            stroke,
+        let h_under = Path::line(
+            Point::new(rect.x, y + 1.0),
+            Point::new(rect.x + rect.width, y + 1.0),
         );
+        frame.stroke(&v_under, under);
+        frame.stroke(&h_under, under);
+        frame.stroke(&v, over);
+        frame.stroke(&h, over);
     }
 }
 
