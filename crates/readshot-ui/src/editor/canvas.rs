@@ -25,11 +25,17 @@ use iced::widget::canvas::{
 };
 use iced::{mouse::Cursor, Color, Point, Rectangle, Renderer, Theme};
 
-use readshot_core::{Annotation, PointLike, RectLike, Rgba as CoreRgba};
+use readshot_core::render::{contrast_ink, BOTH_FILL_ALPHA, FONT_FAMILY};
+use readshot_core::{
+    line_geom, Annotation, ArrowHeads, FillMode, LineStyle, PointLike, RectLike, Rgba as CoreRgba,
+    ShapeStyle,
+};
 
 use super::state::{
-    annotation_hit_test, hit_tolerance_base, ResizeHandle, HANDLE_HIT_RADIUS_SCREEN,
+    annotation_bounds, annotation_hit_test, hit_tolerance_base, ResizeHandle,
+    HANDLE_HIT_RADIUS_SCREEN,
 };
+use super::style::ToolStyle;
 use super::tool_state::ToolState;
 
 /// Selection / crop chrome hue. Mirrors the app's accent teal
@@ -175,6 +181,8 @@ pub struct EditorCanvas {
     /// itself and publishes `Cancelled`; this threaded-in sequence is the
     /// path for an Escape the runtime sees uncaptured.
     pub cancel_seq: u64,
+    /// Options the next annotation gets (fill, dashes, curve, text…).
+    pub style: ToolStyle,
     /// Shared tessellated-geometry cache, owned by the editor session.
     /// `draw` reuses the stored geometry unless the canvas size changed
     /// or the session explicitly cleared it (on editor messages). This
@@ -364,6 +372,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                         self.color,
                         self.line_width,
                         self.next_pin_number,
+                        &self.style,
                     ) {
                         return Some(
                             canvas::Action::publish(CanvasMessage::CommitAnnotation(annotation))
@@ -521,6 +530,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                             cur_img,
                             self.color,
                             self.line_width,
+                            &self.style,
                         );
                         match annotation {
                             Some(a) => Some(
@@ -662,40 +672,51 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                         // the first cursor-moved tick anyway.
                     } else {
                         match tool_at_press {
-                            ToolState::Rectangle | ToolState::Crop => {
+                            ToolState::Crop => {
                                 let path = Path::rectangle(
                                     Point::new(rect.x, rect.y),
                                     iced::Size::new(rect.width, rect.height),
                                 );
-                                if *tool_at_press == ToolState::Crop {
-                                    shade_crop_outside(frame, bounds, rect);
-                                }
+                                shade_crop_outside(frame, bounds, rect);
                                 frame.stroke(&path, preview_stroke);
                             }
-                            ToolState::Ellipse => {
-                                let center = Point::new(
-                                    rect.x + rect.width * 0.5,
-                                    rect.y + rect.height * 0.5,
+                            ToolState::Rectangle
+                            | ToolState::Ellipse
+                            | ToolState::Line
+                            | ToolState::Arrow => {
+                                let anchor_base = canvas_to_base(
+                                    *anchor,
+                                    bounds,
+                                    self.image_size,
+                                    self.image_offset,
+                                    self.display_scale,
                                 );
-                                let radii = (rect.width * 0.5, rect.height * 0.5);
-                                let path = Path::new(|builder| {
-                                    ellipse_path(builder, center, radii);
-                                });
-                                frame.stroke(&path, preview_stroke);
-                            }
-                            ToolState::Line => {
-                                let path = Path::line(*anchor, *cur);
-                                frame.stroke(&path, preview_stroke);
-                            }
-                            ToolState::Arrow => {
-                                // Shaft + simple arrowhead. The committed
-                                // annotation gets a polished arrowhead via
-                                // readshot-core::arrowhead; the preview is
-                                // a hint, not the final stroke.
-                                let path = Path::line(*anchor, *cur);
-                                frame.stroke(&path, preview_stroke);
-                                let head = arrowhead_path(*anchor, *cur, preview_width.max(2.0));
-                                frame.stroke(&head, preview_stroke);
+                                let cur_base = canvas_to_base_clamped(
+                                    *cur,
+                                    bounds,
+                                    self.image_size,
+                                    self.image_offset,
+                                    self.display_scale,
+                                );
+                                if let (Some(a0), Some(c0)) = (anchor_base, cur_base) {
+                                    if let Some(preview) = annotation_for_drag(
+                                        *tool_at_press,
+                                        a0,
+                                        c0,
+                                        self.color,
+                                        self.line_width,
+                                        &self.style,
+                                    ) {
+                                        draw_annotation_preview(
+                                            frame,
+                                            &preview,
+                                            bounds,
+                                            self.image_size,
+                                            self.image_offset,
+                                            self.display_scale,
+                                        );
+                                    }
+                                }
                             }
                             ToolState::Blur | ToolState::Pixelate => {
                                 // Visualise the area that will be blurred /
@@ -886,11 +907,14 @@ impl EditorCanvas {
     /// of screen pixels at any zoom.
     fn selected_handle_at(&self, point: PointLike, scale: f32) -> Option<ResizeHandle> {
         let radius = hit_tolerance_base(HANDLE_HIT_RADIUS_SCREEN, scale);
-        self.selected_handles.iter().find_map(|(handle, center)| {
-            let dx = point.x - center.x;
-            let dy = point.y - center.y;
-            (dx.hypot(dy) <= radius).then_some(*handle)
-        })
+        // Nearest handle wins, so Bend stays grabbable on short curved
+        // lines where Start/End also fall inside the radius.
+        self.selected_handles
+            .iter()
+            .map(|(handle, center)| (*handle, (point.x - center.x).hypot(point.y - center.y)))
+            .filter(|(_, d)| *d <= radius)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(handle, _)| handle)
     }
 }
 
@@ -1044,7 +1068,7 @@ fn draw_preview_badge(frame: &mut Frame, bounds: Rectangle, rect: Rectangle, lab
         position: Point::new(x + 7.0, y + 3.0),
         color: Color::WHITE,
         size: iced::Pixels(CANVAS_BADGE_TEXT),
-        font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
+        font: iced::Font::with_name(FONT_FAMILY),
         ..Default::default()
     });
 }
@@ -1065,44 +1089,31 @@ fn draw_annotation_preview(
             rect,
             color,
             line_width,
-            ..
+            style,
         } => {
-            if let Some(rect) =
+            if let Some(r) =
                 base_rect_to_canvas(*rect, bounds, image_size, image_offset, display_scale)
             {
-                let path = Path::rectangle(
-                    Point::new(rect.x, rect.y),
-                    iced::Size::new(rect.width, rect.height),
+                let path = Path::rounded_rectangle(
+                    Point::new(r.x, r.y),
+                    iced::Size::new(r.width, r.height),
+                    (style.corner_radius * scale).into(),
                 );
-                frame.stroke(
-                    &path,
-                    Stroke::default()
-                        .with_color(core_rgba_to_color(*color))
-                        .with_width((*line_width * scale).max(1.0))
-                        .with_line_join(LineJoin::Round),
-                );
+                paint_shape_preview(frame, &path, *color, *line_width, scale, *style);
             }
         }
         Annotation::Ellipse {
             rect,
             color,
             line_width,
-            ..
+            style,
         } => {
-            if let Some(rect) =
+            if let Some(r) =
                 base_rect_to_canvas(*rect, bounds, image_size, image_offset, display_scale)
             {
-                let center = Point::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
-                let path = Path::new(|builder| {
-                    ellipse_path(builder, center, (rect.width * 0.5, rect.height * 0.5));
-                });
-                frame.stroke(
-                    &path,
-                    Stroke::default()
-                        .with_color(core_rgba_to_color(*color))
-                        .with_width((*line_width * scale).max(1.0))
-                        .with_line_join(LineJoin::Round),
-                );
+                let center = Point::new(r.x + r.width * 0.5, r.y + r.height * 0.5);
+                let path = Path::new(|b| ellipse_path(b, center, (r.width * 0.5, r.height * 0.5)));
+                paint_shape_preview(frame, &path, *color, *line_width, scale, *style);
             }
         }
         Annotation::Line {
@@ -1110,26 +1121,16 @@ fn draw_annotation_preview(
             b,
             color,
             line_width,
-            ..
-        } => draw_preview_polyline(
-            frame,
-            &[*a, *b],
-            *color,
-            *line_width,
-            bounds,
-            image_size,
-            image_offset,
-            display_scale,
-            true,
-        ),
-        Annotation::Arrow {
+            style,
+        }
+        | Annotation::Arrow {
             a,
             b,
             color,
             line_width,
-            ..
+            style,
         } => {
-            let points = [*a, *b];
+            let points = line_geom::path_points(*a, *b, style.path, *line_width);
             draw_preview_polyline(
                 frame,
                 &points,
@@ -1140,20 +1141,29 @@ fn draw_annotation_preview(
                 image_offset,
                 display_scale,
                 true,
+                style.dashed,
             );
-            if let (Some(from), Some(to)) = (
-                base_point_to_canvas(*a, bounds, image_size, image_offset, display_scale),
-                base_point_to_canvas(*b, bounds, image_size, image_offset, display_scale),
-            ) {
-                let head = arrowhead_path(from, to, (*line_width * scale).max(2.0));
-                frame.stroke(
-                    &head,
-                    Stroke::default()
-                        .with_color(core_rgba_to_color(*color))
-                        .with_width((*line_width * scale).max(1.0))
-                        .with_line_cap(LineCap::Round)
-                        .with_line_join(LineJoin::Round),
-                );
+            if matches!(annotation, Annotation::Arrow { .. }) {
+                let mut heads = vec![line_geom::end_tangent(*a, *b, style.path)];
+                if style.heads == ArrowHeads::Both {
+                    heads.push(line_geom::start_tangent(*a, *b, style.path));
+                }
+                for (from, to) in heads {
+                    if let (Some(from), Some(to)) = (
+                        base_point_to_canvas(from, bounds, image_size, image_offset, display_scale),
+                        base_point_to_canvas(to, bounds, image_size, image_offset, display_scale),
+                    ) {
+                        let head = arrowhead_path(from, to, (*line_width * scale).max(2.0));
+                        frame.stroke(
+                            &head,
+                            Stroke::default()
+                                .with_color(core_rgba_to_color(*color))
+                                .with_width((*line_width * scale).max(1.0))
+                                .with_line_cap(LineCap::Round)
+                                .with_line_join(LineJoin::Round),
+                        );
+                    }
+                }
             }
         }
         Annotation::Pen {
@@ -1170,6 +1180,7 @@ fn draw_annotation_preview(
             image_offset,
             display_scale,
             true,
+            false,
         ),
         Annotation::Highlighter {
             points,
@@ -1185,23 +1196,49 @@ fn draw_annotation_preview(
             image_offset,
             display_scale,
             false,
+            false,
         ),
         Annotation::Text {
             content,
             origin,
             color,
             size,
+            style,
             ..
         } => {
+            let mut ink = core_rgba_to_color(*color);
+            if style.pill {
+                if let Some(r) = annotation_bounds(annotation).and_then(|rb| {
+                    base_rect_to_canvas(rb, bounds, image_size, image_offset, display_scale)
+                }) {
+                    let radius = (r.height * 0.5).min(*size * 0.8 * scale);
+                    frame.fill(
+                        &Path::rounded_rectangle(
+                            Point::new(r.x, r.y),
+                            iced::Size::new(r.width, r.height),
+                            radius.into(),
+                        ),
+                        ink,
+                    );
+                    ink = core_rgba_to_color(contrast_ink(*color));
+                }
+            }
             if let Some(point) =
                 base_point_to_canvas(*origin, bounds, image_size, image_offset, display_scale)
             {
                 frame.fill_text(CanvasText {
                     content: content.clone(),
                     position: point,
-                    color: core_rgba_to_color(*color),
+                    color: ink,
                     size: iced::Pixels((*size * scale).max(8.0)),
-                    font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
+                    font: iced::Font {
+                        weight: if style.bold {
+                            iced::font::Weight::Bold
+                        } else {
+                            iced::font::Weight::Normal
+                        },
+                        ..iced::Font::with_name(FONT_FAMILY)
+                    },
                     ..Default::default()
                 });
             }
@@ -1254,7 +1291,7 @@ fn draw_annotation_preview(
                     position: Point::new(point.x - radius * 0.32, point.y - radius * 0.48),
                     color: Color::WHITE,
                     size: iced::Pixels((12.0 * scale).max(9.0)),
-                    font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
+                    font: iced::Font::with_name(FONT_FAMILY),
                     ..Default::default()
                 });
             }
@@ -1293,6 +1330,7 @@ fn draw_preview_polyline(
     image_offset: (f32, f32),
     display_scale: Option<f32>,
     round_caps: bool,
+    dashed: bool,
 ) {
     if points.len() < 2 {
         return;
@@ -1320,7 +1358,53 @@ fn draw_preview_polyline(
     if round_caps {
         stroke = stroke.with_line_cap(LineCap::Round);
     }
+    let d = line_geom::dash_pattern(line_width);
+    let dash = [d[0] * scale, d[1] * scale];
+    if dashed {
+        stroke.line_dash = canvas::LineDash {
+            segments: &dash,
+            offset: 0,
+        };
+    }
     frame.stroke(&path, stroke);
+}
+
+fn paint_shape_preview(
+    frame: &mut Frame,
+    path: &Path,
+    color: CoreRgba,
+    line_width: f32,
+    scale: f32,
+    style: ShapeStyle,
+) {
+    let c = core_rgba_to_color(color);
+    match style.fill {
+        FillMode::Outline => {}
+        FillMode::Filled => frame.fill(path, c),
+        FillMode::Both => frame.fill(
+            path,
+            Color {
+                a: c.a * BOTH_FILL_ALPHA,
+                ..c
+            },
+        ),
+    }
+    if style.fill == FillMode::Filled {
+        return;
+    }
+    let d = line_geom::dash_pattern(line_width);
+    let dash = [d[0] * scale, d[1] * scale];
+    let mut stroke = Stroke::default()
+        .with_color(c)
+        .with_width((line_width * scale).max(1.0))
+        .with_line_join(LineJoin::Round);
+    if style.dashed {
+        stroke.line_dash = canvas::LineDash {
+            segments: &dash,
+            offset: 0,
+        };
+    }
+    frame.stroke(path, stroke);
 }
 
 fn core_rgba_to_color(color: CoreRgba) -> Color {
@@ -1370,6 +1454,7 @@ pub fn annotation_for_point(
     color: CoreRgba,
     _line_width: f32,
     next_pin_number: u32,
+    _style: &ToolStyle,
 ) -> Option<Annotation> {
     match tool {
         ToolState::NumberedPin => Some(Annotation::NumberedPin {
@@ -1391,37 +1476,47 @@ pub fn annotation_for_drag(
     cursor: Point,
     color: CoreRgba,
     line_width: f32,
+    style: &ToolStyle,
 ) -> Option<Annotation> {
     let p0 = PointLike::new(anchor.x, anchor.y);
     let p1 = PointLike::new(cursor.x, cursor.y);
     let rect = rect_like_from_points(p0, p1);
 
     match tool {
-        ToolState::Rectangle => Some(Annotation::Rectangle {
-            rect,
-            color,
-            line_width,
-            style: Default::default(),
-        }),
-        ToolState::Ellipse => Some(Annotation::Ellipse {
-            rect,
-            color,
-            line_width,
-            style: Default::default(),
-        }),
+        ToolState::Rectangle | ToolState::Ellipse => {
+            let shape = style.shape_style(tool);
+            Some(if tool == ToolState::Rectangle {
+                Annotation::Rectangle {
+                    rect,
+                    color,
+                    line_width,
+                    style: shape,
+                }
+            } else {
+                Annotation::Ellipse {
+                    rect,
+                    color,
+                    line_width,
+                    style: shape,
+                }
+            })
+        }
         ToolState::Line => Some(Annotation::Line {
             a: p0,
             b: p1,
             color,
             line_width,
-            style: Default::default(),
+            style: LineStyle {
+                heads: ArrowHeads::End,
+                ..style.line_style(p0)
+            },
         }),
         ToolState::Arrow => Some(Annotation::Arrow {
             a: p0,
             b: p1,
             color,
             line_width,
-            style: Default::default(),
+            style: style.line_style(p0),
         }),
         ToolState::Blur => Some(Annotation::Blur {
             rect,
@@ -1509,11 +1604,137 @@ fn rect_like_from_points(a: PointLike, b: PointLike) -> RectLike {
 
 #[cfg(test)]
 mod tests {
+    use super::super::style::ToolStyle;
     use super::*;
     use iced::widget::canvas::Program;
 
     fn pt(x: f32, y: f32) -> Point {
         Point::new(x, y)
+    }
+
+    fn test_canvas() -> EditorCanvas {
+        EditorCanvas {
+            active_tool: ToolState::Rectangle,
+            color: CoreRgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            next_pin_number: 1,
+            image_size: (200, 100),
+            image_offset: (0.0, 0.0),
+            display_scale: Some(2.0),
+            selected_bounds: None,
+            selected_handles: Vec::new(),
+            selected_annotation: None,
+            selected_preview: None,
+            shift_held: false,
+            cancel_seq: 0,
+            style: ToolStyle::default(),
+            cache: std::rc::Rc::new(canvas::Cache::default()),
+        }
+    }
+
+    #[test]
+    fn drag_commits_the_tool_style() {
+        use readshot_core::{FillMode, ShapeStyle};
+        let style = ToolStyle {
+            fill: FillMode::Filled,
+            dashed: true,
+            corner_radius: 8.0,
+            ..ToolStyle::default()
+        };
+        let rect = annotation_for_drag(
+            ToolState::Rectangle,
+            pt(0.0, 0.0),
+            pt(20.0, 20.0),
+            CoreRgba::OPAQUE_BLACK,
+            2.0,
+            &style,
+        )
+        .unwrap();
+        assert!(
+            matches!(rect, Annotation::Rectangle { style: s, .. } if s == ShapeStyle { fill: FillMode::Filled, dashed: true, corner_radius: 8.0 })
+        );
+        let ellipse = annotation_for_drag(
+            ToolState::Ellipse,
+            pt(0.0, 0.0),
+            pt(20.0, 20.0),
+            CoreRgba::OPAQUE_BLACK,
+            2.0,
+            &style,
+        )
+        .unwrap();
+        assert!(
+            matches!(ellipse, Annotation::Ellipse { style: s, .. } if s.corner_radius == 0.0 && s.dashed)
+        );
+    }
+
+    #[test]
+    fn hand_drawn_line_is_seeded_from_its_anchor() {
+        use readshot_core::{line_geom::seed_for, LinePath};
+        let style = ToolStyle {
+            line_path: super::super::style::LinePathKind::HandDrawn,
+            heads: readshot_core::ArrowHeads::Both,
+            ..ToolStyle::default()
+        };
+        let line = annotation_for_drag(
+            ToolState::Line,
+            pt(5.0, 6.0),
+            pt(80.0, 30.0),
+            CoreRgba::OPAQUE_BLACK,
+            2.0,
+            &style,
+        )
+        .unwrap();
+        match line {
+            Annotation::Line { style: s, .. } => {
+                assert_eq!(
+                    s.path,
+                    LinePath::HandDrawn {
+                        seed: seed_for(PointLike::new(5.0, 6.0))
+                    }
+                );
+                // Lines have no heads; only arrows keep `Both`.
+                assert_eq!(s.heads, readshot_core::ArrowHeads::End);
+            }
+            other => panic!("{other:?}"),
+        }
+        let arrow = annotation_for_drag(
+            ToolState::Arrow,
+            pt(5.0, 6.0),
+            pt(80.0, 30.0),
+            CoreRgba::OPAQUE_BLACK,
+            2.0,
+            &style,
+        )
+        .unwrap();
+        assert!(
+            matches!(arrow, Annotation::Arrow { style: s, .. } if s.heads == readshot_core::ArrowHeads::Both)
+        );
+    }
+
+    #[test]
+    fn bend_handle_shows_the_move_cursor() {
+        assert_eq!(
+            resize_handle_cursor(ResizeHandle::Bend),
+            iced::mouse::Interaction::Move
+        );
+    }
+
+    #[test]
+    fn nearest_selected_handle_wins_on_short_curved_lines() {
+        // Start/End/Bend centres all sit within the grab radius of the
+        // cursor; the Bend handle is the closest, so it must win.
+        let canvas = EditorCanvas {
+            selected_handles: vec![
+                (ResizeHandle::Start, PointLike::new(10.0, 10.0)),
+                (ResizeHandle::End, PointLike::new(14.0, 10.0)),
+                (ResizeHandle::Bend, PointLike::new(12.0, 11.0)),
+            ],
+            ..test_canvas()
+        };
+        assert_eq!(
+            canvas.selected_handle_at(PointLike::new(12.0, 11.0), 2.0),
+            Some(ResizeHandle::Bend)
+        );
     }
 
     #[test]
@@ -1524,6 +1745,7 @@ mod tests {
             pt(60.0, 80.0),
             CoreRgba::OPAQUE_BLACK,
             2.0,
+            &ToolStyle::default(),
         )
         .expect("rectangle tool yields an annotation");
         assert!(matches!(a, Annotation::Rectangle { .. }));
@@ -1537,6 +1759,7 @@ mod tests {
             pt(50.0, 30.0),
             CoreRgba::OPAQUE_BLACK,
             3.0,
+            &ToolStyle::default(),
         )
         .expect("arrow tool yields an annotation");
         match a {
@@ -1566,6 +1789,7 @@ mod tests {
                 pt(10.0, 10.0),
                 CoreRgba::OPAQUE_BLACK,
                 1.0,
+                &ToolStyle::default(),
             );
             assert!(
                 r.is_none(),
@@ -1582,6 +1806,7 @@ mod tests {
             pt(20.0, 30.0),
             CoreRgba::OPAQUE_BLACK,
             1.0,
+            &ToolStyle::default(),
         )
         .unwrap();
         match a {
@@ -1722,22 +1947,7 @@ mod tests {
 
     #[test]
     fn drawing_cursor_only_applies_over_displayed_image() {
-        let canvas = EditorCanvas {
-            active_tool: ToolState::Rectangle,
-            color: CoreRgba::OPAQUE_BLACK,
-            line_width: 2.0,
-            next_pin_number: 1,
-            image_size: (200, 100),
-            image_offset: (0.0, 0.0),
-            display_scale: Some(2.0),
-            selected_bounds: None,
-            selected_handles: Vec::new(),
-            selected_annotation: None,
-            selected_preview: None,
-            shift_held: false,
-            cancel_seq: 0,
-            cache: std::rc::Rc::new(canvas::Cache::default()),
-        };
+        let canvas = test_canvas();
         let bounds = Rectangle {
             x: 0.0,
             y: 0.0,
@@ -1766,20 +1976,9 @@ mod tests {
     #[test]
     fn selected_handle_press_routes_to_selection_even_with_drawing_tool_active() {
         let canvas = EditorCanvas {
-            active_tool: ToolState::Rectangle,
-            color: CoreRgba::OPAQUE_BLACK,
-            line_width: 2.0,
-            next_pin_number: 1,
-            image_size: (200, 100),
-            image_offset: (0.0, 0.0),
-            display_scale: Some(2.0),
             selected_bounds: Some(RectLike::new(10.0, 10.0, 40.0, 30.0)),
             selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
-            selected_annotation: None,
-            selected_preview: None,
-            shift_held: false,
-            cancel_seq: 0,
-            cache: std::rc::Rc::new(canvas::Cache::default()),
+            ..test_canvas()
         };
         let bounds = Rectangle {
             x: 0.0,
@@ -1814,20 +2013,9 @@ mod tests {
     #[test]
     fn selected_handle_cursor_overrides_drawing_cursor() {
         let canvas = EditorCanvas {
-            active_tool: ToolState::Rectangle,
-            color: CoreRgba::OPAQUE_BLACK,
-            line_width: 2.0,
-            next_pin_number: 1,
-            image_size: (200, 100),
-            image_offset: (0.0, 0.0),
-            display_scale: Some(2.0),
             selected_bounds: Some(RectLike::new(10.0, 10.0, 40.0, 30.0)),
             selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
-            selected_annotation: None,
-            selected_preview: None,
-            shift_held: false,
-            cancel_seq: 0,
-            cache: std::rc::Rc::new(canvas::Cache::default()),
+            ..test_canvas()
         };
         let bounds = Rectangle {
             x: 0.0,
@@ -1850,12 +2038,6 @@ mod tests {
     fn move_cursor_over_selected_body_with_select_tool() {
         let canvas = EditorCanvas {
             active_tool: ToolState::Select,
-            color: CoreRgba::OPAQUE_BLACK,
-            line_width: 2.0,
-            next_pin_number: 1,
-            image_size: (200, 100),
-            image_offset: (0.0, 0.0),
-            display_scale: Some(2.0),
             selected_bounds: Some(RectLike::new(10.0, 10.0, 40.0, 30.0)),
             selected_handles: vec![(ResizeHandle::SouthEast, PointLike::new(50.0, 40.0))],
             selected_annotation: Some(Annotation::Rectangle {
@@ -1864,10 +2046,7 @@ mod tests {
                 line_width: 2.0,
                 style: Default::default(),
             }),
-            selected_preview: None,
-            shift_held: false,
-            cancel_seq: 0,
-            cache: std::rc::Rc::new(canvas::Cache::default()),
+            ..test_canvas()
         };
         let bounds = Rectangle {
             x: 0.0,
@@ -1940,20 +2119,8 @@ mod tests {
         // A live drag whose cancel_seq no longer matches the program's
         // (Escape was pressed) must publish Cancelled, not commit.
         let canvas = EditorCanvas {
-            active_tool: ToolState::Rectangle,
-            color: CoreRgba::OPAQUE_BLACK,
-            line_width: 2.0,
-            next_pin_number: 1,
-            image_size: (200, 100),
-            image_offset: (0.0, 0.0),
-            display_scale: Some(2.0),
-            selected_bounds: None,
-            selected_handles: Vec::new(),
-            selected_annotation: None,
-            selected_preview: None,
-            shift_held: false,
             cancel_seq: 1,
-            cache: std::rc::Rc::new(canvas::Cache::default()),
+            ..test_canvas()
         };
         let bounds = Rectangle {
             x: 0.0,
@@ -1990,14 +2157,7 @@ mod tests {
         // the bbox, so it doesn't promise a drag the click won't deliver.
         let canvas = EditorCanvas {
             active_tool: ToolState::Select,
-            color: CoreRgba::OPAQUE_BLACK,
-            line_width: 2.0,
-            next_pin_number: 1,
-            image_size: (200, 100),
-            image_offset: (0.0, 0.0),
-            display_scale: Some(2.0),
             selected_bounds: Some(RectLike::new(4.0, 4.0, 52.0, 42.0)),
-            selected_handles: Vec::new(),
             selected_annotation: Some(Annotation::Line {
                 a: PointLike::new(10.0, 10.0),
                 b: PointLike::new(50.0, 40.0),
@@ -2005,10 +2165,7 @@ mod tests {
                 line_width: 2.0,
                 style: Default::default(),
             }),
-            selected_preview: None,
-            shift_held: false,
-            cancel_seq: 0,
-            cache: std::rc::Rc::new(canvas::Cache::default()),
+            ..test_canvas()
         };
         let bounds = Rectangle {
             x: 0.0,

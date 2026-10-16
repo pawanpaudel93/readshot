@@ -2223,6 +2223,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             selected_preview: selected_preview.clone(),
             shift_held: editor_shift_held,
             cancel_seq: drag_cancel_seq,
+            style: ed.model.tool_style(),
             cache: ed.canvas_cache.clone(),
         };
         let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)

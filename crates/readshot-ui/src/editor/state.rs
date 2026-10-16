@@ -828,9 +828,14 @@ fn annotation_resize_handle_at(
     scale: f32,
 ) -> Option<ResizeHandle> {
     let radius = hit_tolerance_base(HANDLE_HIT_RADIUS_SCREEN, scale);
+    // Nearest handle wins, so Bend stays grabbable on short curved lines
+    // where Start/End also fall inside the radius.
     annotation_resize_handles(annotation)
         .into_iter()
-        .find_map(|(handle, p)| (distance(point, p) <= radius).then_some(handle))
+        .map(|(handle, p)| (handle, distance(point, p)))
+        .filter(|(_, d)| *d <= radius)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(handle, _)| handle)
 }
 
 fn annotation_resize_handles(annotation: &Annotation) -> Vec<(ResizeHandle, PointLike)> {
@@ -1798,6 +1803,28 @@ mod tests {
         assert_eq!(s.select_at(PointLike::new(60.0, 70.0)), Some(0));
         s.clear_selection();
         assert_eq!(s.select_at(PointLike::new(60.0, 50.0)), None);
+    }
+
+    #[test]
+    fn bend_handle_is_grabbable_on_a_short_curved_line() {
+        let mut s = EditorState::new(solid_base(200, 140));
+        s.commit_annotation(Annotation::Line {
+            a: PointLike::new(10.0, 50.0),
+            b: PointLike::new(14.0, 50.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: LineStyle {
+                path: LinePath::Curved { bend: 0.4 },
+                ..LineStyle::default()
+            },
+        });
+        let (_, apex) = s
+            .selected_handles()
+            .into_iter()
+            .find(|(h, _)| *h == ResizeHandle::Bend)
+            .expect("bend handle");
+        // Start and End are within reach too, but Bend is nearest.
+        assert_eq!(s.resize_handle_at(apex), Some(ResizeHandle::Bend));
     }
 
     #[test]
