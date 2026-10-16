@@ -71,3 +71,29 @@ async fn supported_languages_can_be_customised() {
         vec!["fr".to_string(), "de".to_string()]
     );
 }
+
+#[tokio::test]
+async fn with_lines_returns_positioned_lines_and_joined_text() {
+    use readshot_core::ocr_layout::{RecognizedLine, WordBox};
+    let line = RecognizedLine {
+        text: "hello world".to_string(),
+        x: 0.1,
+        y: 0.1,
+        w: 0.5,
+        h: 0.05,
+        words: vec![WordBox {
+            start: 0,
+            end: 5,
+            x: 0.1,
+            y: 0.1,
+            w: 0.2,
+            h: 0.05,
+        }],
+    };
+    let engine = FakeOcrEngine::with_lines(vec![line.clone(), line.clone()]);
+    let result = engine.recognise(dummy_request()).await.unwrap();
+    assert_eq!(result.text, "hello world\nhello world");
+    assert_eq!(result.lines, vec![line.clone(), line]);
+    assert!(engine.reports_positions());
+    assert!(!FakeOcrEngine::with_text("hi").reports_positions());
+}

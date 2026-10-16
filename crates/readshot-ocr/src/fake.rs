@@ -4,13 +4,16 @@
 //! request. [`FakeOcrEngine::no_text`] simulates an empty-result run
 //! (the MCP server's "image had no text" path). [`FakeOcrEngine::failing`]
 //! always errors with a typed [`OCRError::Backend`].
+//! [`FakeOcrEngine::with_lines`] returns positioned lines (with optional
+//! word boxes) like Apple Vision, and reports positions.
 //!
-//! All three are `Send + Sync` and synchronous internally; the async
+//! All four are `Send + Sync` and synchronous internally; the async
 //! signature on [`OCREngine::recognise`] is satisfied by an immediately-
 //! resolving future.
 
 use async_trait::async_trait;
 use readshot_core::error::OCRError;
+use readshot_core::ocr_layout::RecognizedLine;
 
 use crate::{OCREngine, OCRRequest, OCRResult};
 
@@ -19,6 +22,7 @@ enum Behaviour {
     Text(String, f32),
     Empty,
     Fail(String),
+    Lines(Vec<RecognizedLine>),
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +60,15 @@ impl FakeOcrEngine {
         }
     }
 
+    /// Positioned output, like Apple Vision: `text` is the line texts
+    /// joined with `\n`, `lines` is returned as given.
+    pub fn with_lines(lines: Vec<RecognizedLine>) -> Self {
+        Self {
+            behaviour: Behaviour::Lines(lines),
+            languages: vec!["en".to_string()],
+        }
+    }
+
     pub fn with_supported_languages(mut self, langs: Vec<String>) -> Self {
         self.languages = langs;
         self
@@ -74,6 +87,10 @@ impl OCREngine for FakeOcrEngine {
         self.languages.clone()
     }
 
+    fn reports_positions(&self) -> bool {
+        matches!(self.behaviour, Behaviour::Lines(_))
+    }
+
     async fn recognise(&self, _req: OCRRequest) -> Result<OCRResult, OCRError> {
         match &self.behaviour {
             Behaviour::Text(text, confidence) => Ok(OCRResult {
@@ -87,6 +104,15 @@ impl OCREngine for FakeOcrEngine {
                 lines: Vec::new(),
             }),
             Behaviour::Fail(msg) => Err(OCRError::Backend(msg.clone())),
+            Behaviour::Lines(lines) => Ok(OCRResult {
+                text: lines
+                    .iter()
+                    .map(|l| l.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                average_confidence: 0.95,
+                lines: lines.clone(),
+            }),
         }
     }
 }

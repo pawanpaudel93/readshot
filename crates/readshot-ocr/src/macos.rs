@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use image::RgbaImage;
 use objc2_vision::{VNRecognizeTextRequest, VNRequestTextRecognitionLevel};
 use readshot_core::error::OCRError;
-use readshot_core::ocr_layout::RecognizedLine;
+use readshot_core::ocr_layout::{RecognizedLine, WordBox};
 use serde::Deserialize;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
@@ -64,6 +64,10 @@ impl OCREngine for AppleVisionEngine {
                 .map(|arr| arr.iter().map(|s| s.to_string()).collect())
                 .unwrap_or_default()
         }
+    }
+
+    fn reports_positions(&self) -> bool {
+        true
     }
 
     async fn recognise(&self, req: OCRRequest) -> Result<OCRResult, OCRError> {
@@ -120,6 +124,19 @@ struct VisionLine {
     y: f32,
     w: f32,
     h: f32,
+    /// Absent in payloads from shims built before word boxes existed.
+    #[serde(default)]
+    words: Vec<VisionWord>,
+}
+
+#[derive(Deserialize)]
+struct VisionWord {
+    start: usize,
+    end: usize,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
 }
 
 impl From<VisionPayload> for OCRResult {
@@ -136,6 +153,18 @@ impl From<VisionPayload> for OCRResult {
                     y: line.y,
                     w: line.w,
                     h: line.h,
+                    words: line
+                        .words
+                        .into_iter()
+                        .map(|w| WordBox {
+                            start: w.start,
+                            end: w.end,
+                            x: w.x,
+                            y: w.y,
+                            w: w.w,
+                            h: w.h,
+                        })
+                        .collect(),
                 })
                 .collect(),
         }
@@ -222,4 +251,28 @@ fn encode_png(img: &RgbaImage) -> Result<Vec<u8>, OCRError> {
     // burn seconds of CPU on large captures for nothing.
     readshot_core::encode_png_fast(img)
         .map_err(|e| OCRError::Backend(format!("PNG encode for Vision: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payload_with_words_maps_to_recognized_lines() {
+        let json = r#"{"text":"Email a@b.co","average_confidence":0.9,"lines":[{"text":"Email a@b.co","x":0.1,"y":0.2,"w":0.5,"h":0.05,"words":[{"start":0,"end":5,"x":0.1,"y":0.2,"w":0.2,"h":0.05},{"start":6,"end":12,"x":0.35,"y":0.2,"w":0.25,"h":0.05}]}]}"#;
+        let payload: VisionPayload = serde_json::from_str(json).unwrap();
+        let result: OCRResult = payload.into();
+        let words = &result.lines[0].words;
+        assert_eq!(words.len(), 2);
+        assert_eq!((words[1].start, words[1].end), (6, 12));
+        assert!((words[1].x - 0.35).abs() < 1e-6);
+    }
+
+    #[test]
+    fn payload_without_words_still_parses() {
+        let json = r#"{"text":"hi","average_confidence":0.9,"lines":[{"text":"hi","x":0.1,"y":0.2,"w":0.5,"h":0.05}]}"#;
+        let payload: VisionPayload = serde_json::from_str(json).unwrap();
+        let result: OCRResult = payload.into();
+        assert!(result.lines[0].words.is_empty());
+    }
 }

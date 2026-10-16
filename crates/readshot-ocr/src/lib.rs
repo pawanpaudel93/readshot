@@ -77,6 +77,13 @@ pub trait OCREngine: Send + Sync {
     fn supported_languages(&self) -> Vec<String>;
 
     async fn recognise(&self, req: OCRRequest) -> Result<OCRResult, OCRError>;
+
+    /// Whether `recognise` fills `OCRResult::lines` with boxes (Apple
+    /// Vision). Callers use it to skip OCR that could only reproduce
+    /// text they already have.
+    fn reports_positions(&self) -> bool {
+        false
+    }
 }
 
 /// Construct the platform-default OCR engine. The Linux variant uses a

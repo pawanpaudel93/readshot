@@ -19,6 +19,20 @@
 //!
 //! Those belong to the parked "structured OCR" feature.
 
+/// One whitespace-separated word inside a [`RecognizedLine`] with its own
+/// box. `start..end` are **char** (Unicode scalar) indices into the
+/// line's `text`; the box uses the same normalised top-left frame as the
+/// line.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WordBox {
+    pub start: usize,
+    pub end: usize,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
 /// One positioned recognised line.
 ///
 /// `x`, `y`, `w`, `h` are normalised to `[0, 1]` with origin at the
@@ -32,6 +46,9 @@ pub struct RecognizedLine {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+    /// Per-word boxes when the engine reports them (Apple Vision's
+    /// `VNRecognizedText.boundingBox(for:)`); empty otherwise.
+    pub words: Vec<WordBox>,
 }
 
 #[derive(Clone, Debug)]
@@ -102,6 +119,38 @@ pub fn reconstruct(lines: &[RecognizedLine]) -> String {
         return fence_code_block(&plain);
     }
     plain
+}
+
+/// Indices of the non-empty `lines` in reading order: visual rows top to
+/// bottom (fragments whose Y centres are within half a median line
+/// height share a row, as in [`reconstruct`]), each row left to right.
+pub fn reading_order(lines: &[RecognizedLine]) -> Vec<usize> {
+    let mut active: Vec<usize> = (0..lines.len())
+        .filter(|&i| !lines[i].text.is_empty())
+        .collect();
+    if active.is_empty() {
+        return Vec::new();
+    }
+    let refs: Vec<&RecognizedLine> = active.iter().map(|&i| &lines[i]).collect();
+    let row_tol = (median_height(&refs) * 0.5).max(0.005);
+    let centre = |i: usize| lines[i].y + lines[i].h / 2.0;
+    active.sort_by(|&a, &b| centre(a).total_cmp(&centre(b)));
+
+    let by_x = |row: &mut Vec<usize>| row.sort_by(|&a, &b| lines[a].x.total_cmp(&lines[b].x));
+    let mut out = Vec::with_capacity(active.len());
+    let mut row: Vec<usize> = Vec::new();
+    let mut ref_y = 0.0_f32;
+    for i in active {
+        if row.is_empty() || (centre(i) - ref_y).abs() > row_tol {
+            by_x(&mut row);
+            out.append(&mut row);
+            ref_y = centre(i);
+        }
+        row.push(i);
+    }
+    by_x(&mut row);
+    out.append(&mut row);
+    out
 }
 
 fn cluster_rows<'a>(active: &[&'a RecognizedLine], row_tol: f32) -> Vec<Row<'a>> {
@@ -395,11 +444,12 @@ mod tests {
 
     fn line(text: &str, x: f32, y: f32, w: f32, h: f32) -> RecognizedLine {
         RecognizedLine {
-            text: text.into(),
+            text: text.to_string(),
             x,
             y,
             w,
             h,
+            words: Vec::new(),
         }
     }
 
@@ -702,5 +752,24 @@ mod tests {
             reconstruct(&lines),
             "Name                          Status\nReadshot shipped today"
         );
+    }
+
+    #[test]
+    fn reading_order_is_rows_top_to_bottom_then_left_to_right() {
+        let lines = vec![
+            line("right", 0.60, 0.10, 0.20, 0.05),
+            line("second row", 0.10, 0.30, 0.30, 0.05),
+            line("left", 0.10, 0.11, 0.20, 0.05),
+            line("", 0.10, 0.50, 0.20, 0.05),
+        ];
+        // "left" and "right" share a row (centres 0.135 / 0.125, tolerance
+        // half a line height); the empty line is dropped.
+        assert_eq!(reading_order(&lines), vec![2, 0, 1]);
+    }
+
+    #[test]
+    fn reading_order_of_nothing_is_empty() {
+        assert!(reading_order(&[]).is_empty());
+        assert!(reading_order(&[line("", 0.0, 0.0, 0.1, 0.1)]).is_empty());
     }
 }

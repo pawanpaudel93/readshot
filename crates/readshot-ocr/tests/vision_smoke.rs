@@ -133,3 +133,29 @@ async fn empty_white_image_returns_empty_text_not_error() {
         result.text
     );
 }
+
+#[tokio::test]
+async fn reports_word_boxes_inside_the_line() {
+    let img = render_test_image("Hello Readshot");
+    let engine = AppleVisionEngine::new();
+    let result = engine
+        .recognise(OCRRequest {
+            image: img,
+            languages: vec!["en-US".to_string()],
+            use_language_correction: true,
+        })
+        .await
+        .expect("Vision recognise should succeed");
+    let line = result.lines.first().expect("one line");
+    assert!(line.words.len() >= 2, "{line:?}");
+    for pair in line.words.windows(2) {
+        assert!(pair[0].end <= pair[1].start, "{line:?}");
+        assert!(pair[0].x < pair[1].x, "{line:?}");
+    }
+    for w in &line.words {
+        assert!(
+            w.x >= line.x - 0.01 && w.x + w.w <= line.x + line.w + 0.01,
+            "{line:?}"
+        );
+    }
+}

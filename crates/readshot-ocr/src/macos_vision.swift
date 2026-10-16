@@ -64,14 +64,14 @@ private func visionPayload(from observations: [VNRecognizedTextObservation]) thr
         }
 
         let box = observation.boundingBox
-        let topY = min(max(1.0 - box.origin.y - box.size.height, 0.0), 1.0)
         textLines.append(candidate.string)
         lineObjects.append([
             "text": candidate.string,
             "x": Float(box.origin.x),
-            "y": Float(topY),
+            "y": topY(box),
             "w": Float(box.size.width),
             "h": Float(box.size.height),
+            "words": wordObjects(for: candidate),
         ])
         totalConfidence += candidate.confidence
         counted += 1
@@ -87,6 +87,36 @@ private func visionPayload(from observations: [VNRecognizedTextObservation]) thr
         throw VisionShimError.invalidUtf8
     }
     return json
+}
+
+/// Vision boxes are normalised with a bottom-left origin; Readshot's are
+/// top-left.
+private func topY(_ box: CGRect) -> Float {
+    Float(min(max(1.0 - box.origin.y - box.size.height, 0.0), 1.0))
+}
+
+/// One box per whitespace-separated word. `start` / `end` count Unicode
+/// scalars, which is what Rust `char` indices count.
+private func wordObjects(for candidate: VNRecognizedText) -> [[String: Any]] {
+    let string = candidate.string
+    let scalars = string.unicodeScalars
+    var words: [[String: Any]] = []
+    for token in string.split(whereSeparator: { $0.isWhitespace }) {
+        let range = token.startIndex..<token.endIndex
+        guard let observation = try? candidate.boundingBox(for: range) else {
+            continue
+        }
+        let box = observation.boundingBox
+        words.append([
+            "start": scalars.distance(from: scalars.startIndex, to: range.lowerBound),
+            "end": scalars.distance(from: scalars.startIndex, to: range.upperBound),
+            "x": Float(box.origin.x),
+            "y": topY(box),
+            "w": Float(box.size.width),
+            "h": Float(box.size.height),
+        ])
+    }
+    return words
 }
 
 private func setCString(
