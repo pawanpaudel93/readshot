@@ -9234,4 +9234,25 @@ mod tests {
         let _ = update(&mut app, Message::EditorTextCancel);
         assert!(app.editor.as_ref().unwrap().text_panel.selected.is_empty());
     }
+
+    #[test]
+    fn text_marks_follow_hover_and_selection_only_with_positions() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorTextLineHovered(1));
+        let _ = update(&mut app, Message::EditorTextLineClicked(0));
+        let ed = app.editor.as_ref().unwrap();
+        let doc = ed.text_panel.document().unwrap();
+        let (hover, selected) = text_marks(ed, true);
+        assert_eq!(hover, doc.lines[1].rect);
+        assert_eq!(selected, vec![doc.lines[0].rect.unwrap()]);
+        assert_eq!(text_marks(ed, false), (None, Vec::new()));
+
+        let mut plain = crate::editor::EditorSession::new(solid(64, 64));
+        plain.text_panel.recognition = crate::editor::TextRecognition::Ready(std::sync::Arc::new(
+            readshot_core::text_lines::TextDocument::from_plain("one\ntwo"),
+        ));
+        plain.text_panel.hovered = Some(0);
+        assert_eq!(text_marks(&plain, true), (None, Vec::new()));
+    }
 }

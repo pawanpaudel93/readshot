@@ -205,6 +205,10 @@ pub struct EditorCanvas {
     pub eyedropper: bool,
     /// Loupe to draw near the cursor while the eyedropper is active.
     pub loupe: Option<Loupe>,
+    /// Text-panel line under the pointer (base coordinates): outlined.
+    pub text_hover: Option<RectLike>,
+    /// Text-panel selected lines (base coordinates): tinted.
+    pub text_selected: Vec<RectLike>,
     /// Shared tessellated-geometry cache, owned by the editor session.
     /// `draw` reuses the stored geometry unless the canvas size changed
     /// or the session explicitly cleared it (on editor messages). This
@@ -888,6 +892,48 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
         // as the cursor leaves the image, which changes the mouse
         // interaction (and so redraws) without any editor message.
         let mut layers = vec![geometry];
+        // Text-panel line marks (spec §3.7) live in their own uncached
+        // layer, like the loupe: hover changes per pointer move and must
+        // not force the cached annotation geometry to re-tessellate.
+        // Selected lines are tinted, the hovered line outlined on top,
+        // all clipped to the visible crop.
+        if self.text_hover.is_some() || !self.text_selected.is_empty() {
+            let visible = RectLike::new(
+                self.image_offset.0,
+                self.image_offset.1,
+                self.image_size.0 as f32,
+                self.image_size.1 as f32,
+            );
+            let marks = self
+                .text_selected
+                .iter()
+                .map(|r| (*r, false))
+                .chain(self.text_hover.map(|r| (r, true)));
+            let mut frame = Frame::new(renderer, bounds.size());
+            for (r, hovered) in marks {
+                let Some(r) = intersect_rect(r, visible) else {
+                    continue;
+                };
+                if let Some(rect) = base_rect_to_canvas(
+                    r,
+                    bounds,
+                    self.image_size,
+                    self.image_offset,
+                    self.display_scale,
+                ) {
+                    let path = Path::rectangle(
+                        Point::new(rect.x, rect.y),
+                        iced::Size::new(rect.width, rect.height),
+                    );
+                    let (fill, stroke) = text_mark_colors(hovered);
+                    frame.fill(&path, fill);
+                    if let Some(color) = stroke {
+                        frame.stroke(&path, Stroke::default().with_color(color).with_width(2.0));
+                    }
+                }
+            }
+            layers.push(frame.into_geometry());
+        }
         if let Some(loupe) = self.loupe.as_ref() {
             if self.loupe_visible(bounds, cursor) {
                 if let Some(anchor) = base_point_to_canvas(
@@ -1628,6 +1674,39 @@ fn core_rgba_to_color(color: CoreRgba) -> Color {
     Color::from_rgba(color.r, color.g, color.b, color.a)
 }
 
+/// Fill and optional outline of a Text-panel mark (mockup `.ocrbox` /
+/// `.ocrsel`): the hovered line gets a 12 % teal fill and a 2 px teal
+/// outline, selected lines a 16 % teal fill. Teal = selection.
+fn text_mark_colors(hovered: bool) -> (Color, Option<Color>) {
+    if hovered {
+        (
+            Color {
+                a: 0.12,
+                ..SELECTION_TEAL
+            },
+            Some(SELECTION_TEAL),
+        )
+    } else {
+        (
+            Color {
+                a: 0.16,
+                ..SELECTION_TEAL
+            },
+            None,
+        )
+    }
+}
+
+/// `a ∩ b` in base coordinates, `None` when they don't overlap. Line
+/// marks are clipped to the visible (cropped) image.
+fn intersect_rect(a: RectLike, b: RectLike) -> Option<RectLike> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.width).min(b.x + b.width);
+    let y1 = (a.y + a.height).min(b.y + b.height);
+    (x1 > x0 && y1 > y0).then(|| RectLike::new(x0, y0, x1 - x0, y1 - y0))
+}
+
 fn draw_selection_bounds(frame: &mut Frame, rect: Rectangle) {
     if rect.width <= 0.0 || rect.height <= 0.0 {
         return;
@@ -1878,6 +1957,8 @@ mod tests {
             style: ToolStyle::default(),
             eyedropper: false,
             loupe: None,
+            text_hover: None,
+            text_selected: Vec::new(),
             cache: std::rc::Rc::new(canvas::Cache::default()),
         }
     }
@@ -2671,5 +2752,30 @@ mod tests {
         assert!(canvas.loupe_visible(bounds, Cursor::Available(Point::new(301.0, 281.0))));
         // (310, 280) → base (55, 40): stale.
         assert!(!canvas.loupe_visible(bounds, Cursor::Available(Point::new(310.0, 280.0))));
+    }
+
+    #[test]
+    fn text_marks_use_selection_teal() {
+        let (fill, stroke) = text_mark_colors(true);
+        assert_eq!(stroke, Some(SELECTION_TEAL));
+        assert!((fill.a - 0.12).abs() < 1e-6);
+        let (fill, stroke) = text_mark_colors(false);
+        assert_eq!(stroke, None);
+        assert!((fill.a - 0.16).abs() < 1e-6);
+        let c = test_canvas();
+        assert!(c.text_hover.is_none() && c.text_selected.is_empty());
+    }
+
+    #[test]
+    fn marks_are_clipped_to_the_visible_crop() {
+        let crop = RectLike::new(10.0, 10.0, 50.0, 30.0);
+        assert_eq!(
+            intersect_rect(RectLike::new(0.0, 20.0, 30.0, 5.0), crop),
+            Some(RectLike::new(10.0, 20.0, 20.0, 5.0))
+        );
+        assert_eq!(
+            intersect_rect(RectLike::new(70.0, 20.0, 5.0, 5.0), crop),
+            None
+        );
     }
 }

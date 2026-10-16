@@ -14,6 +14,7 @@ use iced::{Alignment, Color, Element, Length, Task, Theme};
 use crate::app::{App, Message};
 use crate::editor::{EditorSession, EditorToastAction, TextRecognition};
 use crate::icons::AppIcon;
+use readshot_core::geom::RectLike;
 use readshot_core::text_lines::{TextDocument, TextLine};
 
 /// Start recognizing the editor's base image unless it is already
@@ -565,6 +566,30 @@ fn lines_view<'a>(
     col.push(toggle)
         .push(row![copy_lines, copy_all].spacing(SP2))
         .into()
+}
+
+/// Boxes the canvas marks for the Text panel: the hovered line and the
+/// selected lines. Nothing when the panel is not on screen or the engine
+/// gave no positions (hover-to-locate is macOS-only today).
+pub(crate) fn text_marks(
+    ed: &EditorSession,
+    panel_visible: bool,
+) -> (Option<RectLike>, Vec<RectLike>) {
+    if !panel_visible {
+        return (None, Vec::new());
+    }
+    let Some(doc) = ed.text_panel.positioned_document() else {
+        return (None, Vec::new());
+    };
+    let rect = |i: usize| doc.lines.get(i).and_then(|l| l.rect);
+    (
+        ed.text_panel.hovered.and_then(rect),
+        ed.text_panel
+            .selected
+            .iter()
+            .filter_map(|&i| rect(i))
+            .collect(),
+    )
 }
 
 #[cfg(test)]

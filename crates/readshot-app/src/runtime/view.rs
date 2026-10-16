@@ -2070,6 +2070,12 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     // Interior-mutable handle so the responsive closure can record the
     // scale it renders at; the runtime reads it back to hit-test grabs.
     let render_scale = ed.render_scale.clone();
+    // Marks only while the panel is on screen (docked or overlay).
+    let panel_visible = matches!(
+        editor_panel_mode(state, ed),
+        PanelMode::Docked | PanelMode::Overlay
+    );
+    let (text_hover, text_selected) = text_marks(ed, panel_visible);
     let image_area_content = responsive(move |stage| {
         // The stage is already inset clear of the floating bars.
         let available = stage;
@@ -2134,6 +2140,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             style: ed.model.tool_style(),
             eyedropper: ed.eyedropper.is_some(),
             loupe: ed.eyedropper.as_ref().and_then(|e| e.loupe.clone()),
+            text_hover,
+            text_selected: text_selected.clone(),
             cache: ed.canvas_cache.clone(),
         };
         let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
