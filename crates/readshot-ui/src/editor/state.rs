@@ -80,6 +80,8 @@ pub struct EditorState {
     /// The geometry `base` was composed from.
     base_geometry: Arc<DocGeometry>,
     next_part_id: PartId,
+    /// Present snapshot's baseline while a snapshot preview is open.
+    preview_baseline: Option<Snapshot>,
     history: History,
     active_tool: ToolState,
     current_color: Rgba,
@@ -121,6 +123,7 @@ impl EditorState {
             selected_annotation: None,
             flattened_cache: None,
             next_part_id: ORIGINAL_PART + 1,
+            preview_baseline: None,
         }
     }
 
@@ -296,6 +299,7 @@ impl EditorState {
     }
 
     pub fn undo(&mut self) -> bool {
+        self.close_preview();
         let changed = self.history.undo().is_some();
         if changed {
             self.sync_base();
@@ -306,6 +310,7 @@ impl EditorState {
     }
 
     pub fn redo(&mut self) -> bool {
+        self.close_preview();
         let changed = self.history.redo().is_some();
         if changed {
             self.sync_base();
@@ -319,11 +324,16 @@ impl EditorState {
     /// the one it was built from (undo/redo across a transform).
     fn sync_base(&mut self) {
         let g = &self.history.doc().geometry;
-        if !Arc::ptr_eq(g, &self.base_geometry) {
+        if Arc::ptr_eq(g, &self.base_geometry) {
+            return;
+        }
+        // Equal by value (cheap: `Part::eq` compares pointers) keeps the
+        // composed image; only a real change recomposes.
+        if **g != *self.base_geometry {
             self.base = g.compose();
-            self.base_geometry = Arc::clone(g);
             self.flattened_cache = None;
         }
+        self.base_geometry = Arc::clone(g);
     }
 
     fn alloc_part_id(&mut self) -> PartId {
@@ -360,15 +370,26 @@ impl EditorState {
     }
 
     /// Live preview (slider drags): replaces the present, no undo step.
-    pub fn preview_snapshot(&mut self, snapshot: Snapshot) {
+    /// The snapshot's annotations must already be in its own geometry's
+    /// frame. An invalid geometry is refused and nothing changes.
+    pub fn preview_snapshot(&mut self, snapshot: Snapshot) -> Result<(), GeometryError> {
+        snapshot.doc.geometry.validate()?;
+        if self.preview_baseline.is_none() {
+            self.preview_baseline = Some(self.snapshot());
+        }
         self.history.replace_present_snapshot(snapshot);
         self.sync_base();
         self.clamp_selection();
         self.flattened_cache = None;
+        Ok(())
     }
 
-    /// Keep the previewed state as one undo step over `baseline`.
+    /// Keep the previewed state as one undo step over `baseline`. Does
+    /// nothing when no preview is open.
     pub fn commit_preview_snapshot(&mut self, baseline: Snapshot) -> bool {
+        if self.preview_baseline.take().is_none() {
+            return false;
+        }
         let current = self.snapshot();
         if current == baseline {
             return false;
@@ -381,7 +402,17 @@ impl EditorState {
     }
 
     pub fn cancel_preview_snapshot(&mut self, baseline: Snapshot) {
-        self.preview_snapshot(baseline);
+        // `baseline` came from `snapshot()`, so its geometry is valid.
+        let _ = self.preview_snapshot(baseline);
+        self.preview_baseline = None;
+    }
+
+    /// Close an open snapshot preview, restoring its baseline.
+    fn close_preview(&mut self) {
+        if let Some(b) = self.preview_baseline.take() {
+            self.history.replace_present_snapshot(b);
+            self.sync_base();
+        }
     }
 
     /// Move to `next` as one undo step; annotations follow their parts.
@@ -413,17 +444,22 @@ impl EditorState {
     ) -> Result<(), GeometryError> {
         next.validate()?;
         let annotations = remap_annotations(&baseline.doc.geometry, &next, &baseline.annotations);
+        // Reuse the baseline's Arc when nothing changed: no recompose.
+        let geometry = if *baseline.doc.geometry == next {
+            Arc::clone(&baseline.doc.geometry)
+        } else {
+            Arc::new(next)
+        };
         self.preview_snapshot(Snapshot {
             annotations,
             doc: DocState {
-                geometry: Arc::new(next),
+                geometry,
                 beautify: baseline.doc.beautify,
             },
-        });
-        Ok(())
+        })
     }
 
-    pub fn rotate(&mut self, clockwise: bool) -> bool {
+    pub fn rotate(&mut self, clockwise: bool) -> Result<bool, GeometryError> {
         let g = self.geometry();
         let t = if clockwise {
             g.transform.rotated_cw()
@@ -431,17 +467,21 @@ impl EditorState {
             g.transform.rotated_ccw()
         };
         let next = g.with_transform(t);
-        // A quarter turn never changes the area, so it can't exceed limits.
-        self.apply_geometry(next).unwrap_or(false)
+        // Any transform drops the untouched-original exemption from the
+        // size limits, so this can fail on a huge capture.
+        self.apply_geometry(next)
     }
 
-    pub fn flip(&mut self, axis: FlipAxis) -> bool {
+    pub fn flip(&mut self, axis: FlipAxis) -> Result<bool, GeometryError> {
         let g = self.geometry();
         let next = g.with_transform(g.transform.flipped(axis));
-        self.apply_geometry(next).unwrap_or(false)
+        self.apply_geometry(next)
     }
 
     pub fn scale_by(&mut self, sx: f32, sy: f32) -> Result<bool, GeometryError> {
+        if !(sx.is_finite() && sy.is_finite() && sx > 0.0 && sy > 0.0) {
+            return Ok(false);
+        }
         let g = self.geometry();
         let next = g.with_transform(g.transform.scaled(sx, sy));
         self.apply_geometry(next)
@@ -2304,7 +2344,7 @@ mod tests {
     fn rotate_turns_the_base_and_its_annotations_and_undo_restores_both() {
         let mut s = EditorState::new(px_grid(3, 2));
         s.commit_annotation(block(2.0, 0.0));
-        assert!(s.rotate(true));
+        assert!(s.rotate(true).unwrap());
         assert_eq!(s.base().dimensions(), (2, 3));
         match &s.annotations()[0] {
             Annotation::Rectangle { rect, .. } => assert_eq!((rect.x, rect.y), (1.0, 2.0)),
@@ -2341,7 +2381,7 @@ mod tests {
             let mut next = baseline.clone();
             next.doc.beautify = BuiltinPreset::Minimal.settings();
             next.doc.beautify.apply(BeautifyEdit::Padding(p));
-            s.preview_snapshot(next);
+            s.preview_snapshot(next).unwrap();
         }
         assert_eq!(s.undo_depth(), 0, "previews never push");
         assert!(s.commit_preview_snapshot(baseline.clone()));
@@ -2350,7 +2390,7 @@ mod tests {
         let base2 = s.snapshot();
         let mut next = base2.clone();
         next.doc.beautify.padding = 99;
-        s.preview_snapshot(next);
+        s.preview_snapshot(next).unwrap();
         s.cancel_preview_snapshot(base2);
         assert_eq!(s.beautify().padding, 30);
     }
@@ -2373,7 +2413,7 @@ mod tests {
     fn adding_to_a_rotated_document_bakes_the_rotation_first() {
         let mut s = EditorState::new(px_grid(3, 2));
         s.commit_annotation(block(2.0, 0.0));
-        s.rotate(true);
+        s.rotate(true).unwrap();
         let before = s.annotations().to_vec();
         s.add_part(px_grid(2, 2), readshot_core::document::Join::Below)
             .unwrap();
@@ -2399,5 +2439,58 @@ mod tests {
         ));
         assert!(s.geometry().is_original());
         assert_eq!(s.undo_depth(), 0);
+    }
+
+    #[test]
+    fn noop_geometry_preview_and_cancel_keep_the_same_base() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        s.rotate(true).unwrap();
+        let before = s.shared_base();
+        let baseline = s.snapshot();
+        s.preview_geometry(&baseline, (*baseline.doc.geometry).clone())
+            .unwrap();
+        assert!(Arc::ptr_eq(&before, &s.shared_base()));
+        s.cancel_preview_snapshot(baseline);
+        assert!(Arc::ptr_eq(&before, &s.shared_base()));
+    }
+
+    #[test]
+    fn undo_during_a_preview_does_not_scramble_history() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        s.rotate(true).unwrap();
+        let baseline = s.snapshot();
+        let g = baseline.doc.geometry.with_layout(5, Default::default());
+        s.preview_geometry(&baseline, g).unwrap();
+        assert!(s.undo());
+        assert!(s.geometry().is_original());
+        assert!(!s.commit_preview_snapshot(baseline));
+        assert_eq!(s.undo_depth(), 0);
+        assert!(s.can_redo());
+        assert!(s.redo());
+        assert_eq!(s.base().dimensions(), (2, 3));
+    }
+
+    #[test]
+    fn scale_by_ignores_non_finite_and_non_positive_factors() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        for (x, y) in [
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (f32::NAN, 1.0),
+            (1.0, f32::INFINITY),
+        ] {
+            assert_eq!(s.scale_by(x, y), Ok(false));
+        }
+        assert_eq!(s.scale_by(1.0, 1.0), Ok(false));
+        assert_eq!(s.undo_depth(), 0);
+    }
+
+    #[test]
+    fn invalid_snapshot_preview_is_refused() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        let mut snap = s.snapshot();
+        snap.doc.geometry = Arc::new(DocGeometry::default());
+        assert!(s.preview_snapshot(snap).is_err());
+        assert!(s.geometry().is_original());
     }
 }

@@ -18,6 +18,9 @@ use readshot_core::beautify::BeautifySettings;
 use readshot_core::document::DocGeometry;
 use readshot_core::Annotation;
 
+/// Maximum number of past states held on the undo stack. Once
+/// exceeded the oldest entry is dropped — a hard memory bound for
+/// editors that get heavy use without explicit save.
 pub const MAX_HISTORY: usize = 64;
 
 /// The document an annotation list is drawn on. Images inside the
@@ -61,6 +64,7 @@ impl History {
         }
     }
 
+    /// Snapshot accessor — the slice the renderer should render.
     pub fn current(&self) -> &[Annotation] {
         &self.present.annotations
     }
@@ -73,6 +77,9 @@ impl History {
         &self.present
     }
 
+    /// Replace the current state without touching undo / redo. Used
+    /// for live edit previews that are later committed as one undoable
+    /// action when the drag ends.
     pub(crate) fn replace_present(&mut self, present: Vec<Annotation>) {
         self.present.annotations = present;
     }
@@ -99,6 +106,9 @@ impl History {
         self.future.clear();
     }
 
+    /// Move the current state onto the redo stack and pop the most
+    /// recent past state into the present. Returns the new present
+    /// slice on success or `None` if the undo stack is empty.
     pub fn undo(&mut self) -> Option<&[Annotation]> {
         let prev = self.past.pop()?;
         let current = std::mem::replace(&mut self.present, prev);
@@ -106,6 +116,8 @@ impl History {
         Some(&self.present.annotations)
     }
 
+    /// Inverse of [`History::undo`]. Pops from `future`, pushes the current
+    /// state to `past`.
     pub fn redo(&mut self) -> Option<&[Annotation]> {
         let next = self.future.pop()?;
         let current = std::mem::replace(&mut self.present, next);
@@ -121,10 +133,14 @@ impl History {
         !self.future.is_empty()
     }
 
+    /// Number of states currently available on the undo stack — used
+    /// by the editor toolbar to surface "X actions to undo" in the
+    /// button tooltip.
     pub fn past_len(&self) -> usize {
         self.past.len()
     }
 
+    /// Number of states currently available on the redo stack.
     pub fn future_len(&self) -> usize {
         self.future.len()
     }
