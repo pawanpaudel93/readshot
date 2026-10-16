@@ -8109,6 +8109,104 @@ mod tests {
         ));
     }
 
+    fn two_rects_first_selected() -> App {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        for x in [0.0, 30.0] {
+            ed.model.commit_annotation(Annotation::Rectangle {
+                rect: RectLike::new(x, x, 20.0, 20.0),
+                color: Rgba::OPAQUE_BLACK,
+                line_width: 2.0,
+                style: Default::default(),
+            });
+        }
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        app.editor = Some(ed);
+        app
+    }
+
+    #[test]
+    fn undo_during_a_held_style_drag_cancels_only_the_drag() {
+        use readshot_ui::editor::StyleMessage;
+        let mut app = two_rects_first_selected();
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        let tick = |app: &mut App, r: f32| {
+            let _ = update(
+                app,
+                Message::EditorStylePreview(StyleMessage::CornerRadius(r)),
+            );
+        };
+        tick(&mut app, 6.0);
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        );
+        tick(&mut app, 8.0);
+        let _ = update(&mut app, Message::EditorStyleCommit);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            ed.model.annotations().len(),
+            2,
+            "the second rect is not undone"
+        );
+        assert_eq!(ed.model.undo_depth(), depth, "no history step");
+        assert!(matches!(
+            &ed.model.annotations()[0],
+            Annotation::Rectangle { style, .. } if style.corner_radius == 0.0
+        ));
+        assert!(!ed.style_drag_cancelled);
+        // The next drag works again.
+        tick(&mut app, 10.0);
+        let _ = update(&mut app, Message::EditorStyleCommit);
+        assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth + 1);
+    }
+
+    #[test]
+    fn esc_during_a_held_style_drag_ignores_the_remaining_ticks() {
+        use readshot_ui::editor::StyleMessage;
+        let mut app = two_rects_first_selected();
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        let _ = update(
+            &mut app,
+            Message::EditorStylePreview(StyleMessage::CornerRadius(6.0)),
+        );
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let _ = update(
+            &mut app,
+            Message::EditorStylePreview(StyleMessage::CornerRadius(9.0)),
+        );
+        let _ = update(&mut app, Message::EditorStyleCommit);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.undo_depth(), depth);
+        assert!(matches!(
+            &ed.model.annotations()[0],
+            Annotation::Rectangle { style, .. } if style.corner_radius == 0.0
+        ));
+    }
+
+    #[test]
+    fn a_hex_background_clears_a_stale_cancelled_drag_flag() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(16, 16));
+        ed.snapshot_drag_cancelled = true;
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifyHexChanged("#102030".into()),
+        );
+        let _ = update(&mut app, Message::EditorBeautifyHexSubmitted);
+        assert!(!app.editor.as_ref().unwrap().snapshot_drag_cancelled);
+        app.editor.as_mut().unwrap().snapshot_drag_cancelled = true;
+        let _ = update(&mut app, Message::EditorBeautifyPickBackground);
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
+                2.0, 2.0,
+            ))),
+        );
+        assert!(!app.editor.as_ref().unwrap().snapshot_drag_cancelled);
+    }
+
     #[test]
     fn cancelled_slider_restores_the_tool_style_without_a_selection() {
         use readshot_ui::editor::StyleMessage;
@@ -8131,7 +8229,8 @@ mod tests {
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.model.tool_style().corner_radius, 0.0);
         assert!(ed.style_drag_baseline.is_none());
-        // A released slider keeps its value.
+        // The cancelled drag's release ends it; the next drag keeps its value.
+        let _ = update(&mut app, Message::EditorStyleCommit);
         let _ = update(
             &mut app,
             Message::EditorStylePreview(StyleMessage::CornerRadius(8.0)),

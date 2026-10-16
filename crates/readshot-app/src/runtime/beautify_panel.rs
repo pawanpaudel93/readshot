@@ -87,6 +87,7 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
             match readshot_core::Rgba::from_hex(&ed.beautify_hex_draft) {
                 Some(c) => {
                     cancel_editor_previews(ed);
+                    ed.snapshot_drag_cancelled = false;
                     let mut s = ed.model.beautify();
                     s.apply(BeautifyEdit::Background(Background::Solid {
                         rgba: c.to_rgba8(),

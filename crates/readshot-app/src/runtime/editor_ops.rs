@@ -132,6 +132,9 @@ pub(crate) fn preview_editor_style(
 ) {
     // Snapshot once per slider drag: the tool style always, and the
     // annotations when something is selected.
+    if ed.style_drag_cancelled {
+        return;
+    }
     if ed.style_drag_baseline.is_none() {
         ed.style_drag_baseline = Some(crate::editor::StyleDrag {
             annotations: ed
@@ -232,6 +235,7 @@ pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
         refresh = true;
     }
     if let Some(drag) = ed.style_drag_baseline.take() {
+        ed.style_drag_cancelled = true;
         ed.model.set_tool_style(drag.tool_style);
         if let Some(baseline) = drag.annotations {
             ed.model.cancel_preview_from_baseline(baseline);
@@ -867,10 +871,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     apply_editor_line_width(ed, &state.coordinator, w);
                 }
                 readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
-                    if ed.snapshot_drag_baseline.is_some() =>
+                    if ed.snapshot_drag_baseline.is_some() || ed.style_drag_baseline.is_some() =>
                 {
                     // One step per press: an open slider drag ends (back to
                     // its value before the drag) and history stays put.
+                    // Covers the Beautify and the options-bar style sliders.
                     cancel_editor_previews(ed);
                     ed.set_status("Cancelled the slider change.");
                 }
@@ -1014,6 +1019,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
+            // Release ends the drag: a cancelled one commits nothing.
+            ed.style_drag_cancelled = false;
             if ed.busy {
                 return Task::none();
             }
@@ -1082,6 +1089,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                                 }
                                 crate::editor::EyedropperTarget::BeautifyBackground => {
                                     cancel_editor_previews(ed);
+                                    ed.snapshot_drag_cancelled = false;
                                     let mut s = ed.model.beautify();
                                     s.apply(readshot_core::beautify::BeautifyEdit::Background(
                                         readshot_core::beautify::Background::Solid {

@@ -206,6 +206,10 @@ pub struct EditorSession {
     pub width_drag_baseline: Option<Vec<Annotation>>,
     /// Baseline for an options-bar slider drag; see [`StyleDrag`].
     pub style_drag_baseline: Option<StyleDrag>,
+    /// Like `snapshot_drag_cancelled`, for the options-bar style slider:
+    /// set when Esc, undo or another edit dropped a drag whose slider is
+    /// still held; its ticks are ignored and release clears it.
+    pub style_drag_cancelled: bool,
     /// Baseline while a snapshot slider (Beautify padding/radius/shadow,
     /// combine gap) is dragged. Release commits one undo step; esc
     /// restores it.
@@ -485,6 +489,7 @@ impl EditorSession {
             move_drag: None,
             width_drag_baseline: None,
             style_drag_baseline: None,
+            style_drag_cancelled: false,
             snapshot_drag_baseline: None,
             snapshot_drag_cancelled: false,
             beautify_hex_draft: String::new(),
@@ -538,6 +543,7 @@ impl EditorSession {
             move_drag: None,
             width_drag_baseline: None,
             style_drag_baseline: None,
+            style_drag_cancelled: false,
             snapshot_drag_baseline: None,
             snapshot_drag_cancelled: false,
             beautify_hex_draft: String::new(),
