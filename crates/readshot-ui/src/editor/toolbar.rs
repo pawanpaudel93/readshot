@@ -93,6 +93,38 @@ mod tests {
     }
 
     #[test]
+    fn pill_ink_has_the_higher_wcag_contrast_on_every_swatch() {
+        fn lum(c: Rgba) -> f32 {
+            let lin = |v: f32| {
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+        }
+        fn ratio(a: Rgba, b: Rgba) -> f32 {
+            let (x, y) = (lum(a), lum(b));
+            (x.max(y) + 0.05) / (x.min(y) + 0.05)
+        }
+        for c in PALETTE {
+            let ink = readshot_core::render::contrast_ink(c);
+            let other = if ink == Rgba::OPAQUE_BLACK {
+                Rgba::OPAQUE_WHITE
+            } else {
+                Rgba::OPAQUE_BLACK
+            };
+            assert!(
+                ratio(c, ink) >= ratio(c, other),
+                "{c:?}: chose {ink:?} ({}) over {other:?} ({})",
+                ratio(c, ink),
+                ratio(c, other)
+            );
+        }
+    }
+
+    #[test]
     fn tool_order_covers_every_tool() {
         let count = TOOL_ORDER.len();
         // 12 tools — Select + 11 drawing tools. If a new tool is

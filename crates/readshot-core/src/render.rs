@@ -41,10 +41,22 @@ pub const BOTH_FILL_ALPHA: f32 = 0.2;
 /// editor's text bounds use it so the selection box matches the pill.
 pub const TEXT_PILL_PAD: f32 = 0.35;
 
-/// Black or white ink, whichever reads on `fill`.
+/// Black or white ink, whichever has the higher WCAG contrast on `fill`.
+/// A translucent fill is composited over white first (the usual page
+/// colour), then the sRGB channels are linearised.
 pub fn contrast_ink(fill: Rgba) -> Rgba {
-    let luminance = 0.2126 * fill.r + 0.7152 * fill.g + 0.0722 * fill.b;
-    if luminance > 0.6 {
+    let a = fill.a.clamp(0.0, 1.0);
+    let lin = |c: f32| {
+        let c = c.clamp(0.0, 1.0) * a + (1.0 - a);
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * lin(fill.r) + 0.7152 * lin(fill.g) + 0.0722 * lin(fill.b);
+    // Black wins when (L + 0.05) / 0.05 > 1.05 / (L + 0.05), i.e. L > ~0.179.
+    if luminance > 0.179 {
         Rgba::OPAQUE_BLACK
     } else {
         Rgba::OPAQUE_WHITE
@@ -570,14 +582,18 @@ fn trim_shaft(points: &mut Vec<PointLike>, head: ArrowheadTriangle, at_end: bool
         (head.left.x + head.right.x) * 0.5,
         (head.left.y + head.right.y) * 0.5,
     );
-    let reach = (head.tip.x - base.x).hypot(head.tip.y - base.y);
+    let reach = {
+        let (dx, dy) = (head.tip.x - base.x, head.tip.y - base.y);
+        (dx * dx + dy * dy).sqrt()
+    };
     if !at_end {
         points.reverse();
     }
     points.pop();
     while points.len() > 1 {
         let last = points[points.len() - 1];
-        if (last.x - head.tip.x).hypot(last.y - head.tip.y) < reach {
+        let (dx, dy) = (last.x - head.tip.x, last.y - head.tip.y);
+        if (dx * dx + dy * dy).sqrt() < reach {
             points.pop();
         } else {
             break;

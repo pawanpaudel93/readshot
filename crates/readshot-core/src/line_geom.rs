@@ -55,7 +55,7 @@ impl Jitter {
 /// zero-length chord.
 fn normal_and_len(a: PointLike, b: PointLike) -> Option<(f32, f32, f32)> {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
-    let len = dx.hypot(dy);
+    let len = (dx * dx + dy * dy).sqrt();
     (len > f32::EPSILON).then(|| (-dy / len, dx / len, len))
 }
 
