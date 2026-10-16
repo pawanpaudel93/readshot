@@ -124,7 +124,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   from the image (eyedropper). Arrow keys nudge the selection (hold `⇧` for
   larger steps), `⌫` removes it, `esc` deselects.
 - **Editor actions:** `⌘C` copy image, `⇧⌘C` copy text, `⌘S` save,
-  `⌘P` pin, `⌘Z` / `⇧⌘Z` undo and redo. `⌘W` closes; with unsaved
+  `⌘P` pin, `⌥⌘P` show or hide the side panel, `⌘Z` / `⇧⌘Z` undo and
+  redo. `⌘W` closes; with unsaved
   edits the first press only warns; press again to discard, or click
   Keep Editing.
 - **History window:** `↑` / `↓` move between captures, `Enter` opens the

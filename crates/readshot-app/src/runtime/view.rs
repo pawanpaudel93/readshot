@@ -2311,27 +2311,49 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     // `responsive`, which runs during layout after the stage (the stack's
     // first layer) has recorded its scale.
     let live_scale = ed.render_scale.clone();
+    let mode = editor_panel_mode(state, ed);
+    let panel_hidden = matches!(mode, PanelMode::Hidden | PanelMode::Collapsed);
     let title_content = responsive(move |_size| {
         let shown_scale = zoom.explicit_scale().unwrap_or_else(|| live_scale.get());
-        row![
+        let mut title = row![
             text("Capture").size(TYPE_BODY).style(text_t2),
             text(format!("{img_w} × {img_h} px"))
                 .font(mono)
                 .size(TYPE_CAPTION)
                 .style(text_t3),
             IcedSpace::new().width(Length::Fill),
-            editor_zoom_segment(shown_scale, zoom, display_scale, busy, p, mono),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center)
-        .padding(iced::Padding {
-            left: TITLEBAR_INSET_LEFT,
-            right: 12.0,
-            ..iced::Padding::ZERO
-        })
-        .width(Length::Fill)
-        .height(Length::Fixed(TITLEBAR_HEIGHT))
-        .into()
+        ];
+        if panel_hidden {
+            title = title.push(icon_button(
+                AppIcon::Sidebar,
+                p.t2,
+                "Show panel",
+                Some("⌥⌘P"),
+                Some(Message::EditorPanelToggled),
+                false,
+                ICON_BTN_SM,
+                Position::Bottom,
+            ));
+        }
+        title
+            .push(editor_zoom_segment(
+                shown_scale,
+                zoom,
+                display_scale,
+                busy,
+                p,
+                mono,
+            ))
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .padding(iced::Padding {
+                left: TITLEBAR_INSET_LEFT,
+                right: 12.0,
+                ..iced::Padding::ZERO
+            })
+            .width(Length::Fill)
+            .height(Length::Fixed(TITLEBAR_HEIGHT))
+            .into()
     })
     .width(Length::Fill)
     .height(Length::Fixed(TITLEBAR_HEIGHT));
@@ -2684,10 +2706,48 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         );
     }
 
-    iced::widget::Stack::with_children(layers)
+    // Everything above is the canvas area. The side panel docks beside
+    // it (the stack is narrower, so its centered bars follow the canvas).
+    // In narrow windows it is collapsed (title-row button only), or open
+    // as a temporary overlay that a click outside closes.
+    let canvas_area: Element<'_, Message> = iced::widget::Stack::with_children(layers)
         .width(Length::Fill)
         .height(Length::Fill)
-        .into()
+        .into();
+    let scrim = |msg: Message| {
+        mouse_area(IcedSpace::new().width(Length::Fill).height(Length::Fill))
+            .on_press(msg)
+            .interaction(iced::mouse::Interaction::Idle)
+    };
+    match mode {
+        PanelMode::Hidden | PanelMode::Collapsed => canvas_area,
+        PanelMode::Docked => {
+            let panel = side_panel(state, ed, p, false);
+            // While a popover is open, a click on the panel closes it, as
+            // a click on the canvas does.
+            let panel: Element<'_, Message> = if ed.popover.is_some() {
+                container(stack![panel, scrim(Message::EditorPopoverClosed)])
+                    .width(Length::Fixed(PANEL_WIDTH))
+                    .height(Length::Fill)
+                    .into()
+            } else {
+                panel
+            };
+            row![canvas_area, panel]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        }
+        PanelMode::Overlay => stack![
+            canvas_area,
+            scrim(Message::EditorPanelOverlayDismissed),
+            container(opaque(side_panel(state, ed, p, true)))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::End),
+        ]
+        .into(),
+    }
 }
 
 /// Stage insets. Top: title row, tool bar and the hint line above the
@@ -3347,6 +3407,9 @@ pub(crate) fn editor_key_message(
 
     let cmd = modifiers.command();
     match (&key, cmd, modifiers.shift()) {
+        (Key::Character(c), true, false) if modifiers.alt() && c.eq_ignore_ascii_case("p") => {
+            return Some(Message::EditorPanelToggled);
+        }
         (Key::Character(c), true, false) if c.eq_ignore_ascii_case("z") => {
             return Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
         }

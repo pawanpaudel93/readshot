@@ -318,7 +318,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 )
             {
                 if let Some(ed) = state.editor.as_mut() {
-                    if close_editor_popover(ed) {
+                    if close_editor_popover(ed) || super::text_panel::close_panel_overlay(ed) {
                         return Task::none();
                     }
                 }
@@ -420,7 +420,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if let Some(ed) = &mut state.editor {
                 ed.window_id = Some(id);
             }
-            Task::none()
+            // The OS can open the window smaller than requested on small
+            // screens; the real width decides dock vs collapse.
+            window::size(id).map(move |size| Message::EditorWindowResized(id, size.width))
         }
 
         Message::EditorSaveRequested => {
@@ -1127,7 +1129,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if close_editor_popover(ed) {
                     return Task::none();
                 }
-                // Esc chain: popover, then the eyedropper, then the text
+                if super::text_panel::close_panel_overlay(ed) {
+                    return Task::none();
+                }
+                // Esc chain: popover, then the overlay panel, then the eyedropper, then the text
                 // draft / selection below.
                 if ed.eyedropper.take().is_some() {
                     return Task::none();
@@ -1351,7 +1356,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 None => Task::none(),
             }
         }
-        msg @ (Message::EditorTextRecognize | Message::EditorTextRecognized { .. }) => {
+        msg @ (Message::EditorTextRecognize
+        | Message::EditorTextRecognized { .. }
+        | Message::EditorPanelToggled
+        | Message::EditorPanelTabSelected(..)
+        | Message::EditorPanelOverlayDismissed
+        | Message::EditorOpenTextSettings) => {
             super::text_panel::handle_text_panel_message(state, msg)
         }
         other => unreachable!("non-editor message routed to the editor handler: {other:?}"),

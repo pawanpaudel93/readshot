@@ -293,6 +293,12 @@ pub struct EditorSession {
     pub text_panel: TextPanelState,
     /// Button shown in the status toast. Cleared by every `set_status`.
     pub toast_action: Option<EditorToastAction>,
+    /// Current editor window width (logical px): `window::size` when the
+    /// window is ready, then resize events. Decides dock vs collapse.
+    pub window_width: f32,
+    /// Narrow windows only: the temporary overlay panel is open. Never
+    /// persisted; esc, ⌥⌘P or a click outside closes it.
+    pub panel_overlay_open: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -313,6 +319,9 @@ impl EditorOutputCheckpoint {
 /// How long the "Press Discard again" prompt stays armed
 /// before reverting to a fresh single-click state.
 pub const DISCARD_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Width the editor window opens at (logical px).
+pub const DEFAULT_WINDOW_WIDTH: f32 = 1100.0;
 
 /// Successful status toasts auto-dismiss after this window so they
 /// don't linger forever. Error / in-progress messages stay until
@@ -508,6 +517,8 @@ impl EditorSession {
             session_id: next_session_id(),
             text_panel: TextPanelState::default(),
             toast_action: None,
+            window_width: DEFAULT_WINDOW_WIDTH,
+            panel_overlay_open: false,
         }
     }
 
@@ -556,6 +567,8 @@ impl EditorSession {
             session_id: next_session_id(),
             text_panel: TextPanelState::default(),
             toast_action: None,
+            window_width: DEFAULT_WINDOW_WIDTH,
+            panel_overlay_open: false,
         }
     }
 

@@ -477,6 +477,21 @@ pub enum Message {
         session: u64,
         result: Result<readshot_core::text_lines::TextDocument, String>,
     },
+    /// Show / hide the editor side panel (⌥⌘P, or the panel buttons). In
+    /// narrow windows this opens / closes the temporary overlay instead.
+    EditorPanelToggled,
+    /// A side-panel tab was chosen.
+    EditorPanelTabSelected(crate::editor::PanelTab),
+    /// Click outside the narrow-window overlay panel.
+    EditorPanelOverlayDismissed,
+    /// A window was resized: `(window, logical width)`. Only the editor
+    /// window's width is kept. Handled at top level (no cache clear).
+    EditorWindowResized(iced::window::Id, f32),
+    /// Redraw tick for the recognizing skeleton (not under Reduce Motion).
+    /// Handled at top level (no cache clear).
+    EditorPanelTick,
+    /// "Open Settings" on the Text tab's no-text state.
+    EditorOpenTextSettings,
     /// User clicked Discard. Closes the editor window.
     EditorDiscardRequested,
     /// "Keep Editing" on the armed-discard toast: back out of Discard.
@@ -1194,6 +1209,22 @@ impl App {
         }
         self.persist_preferences_if_configured();
         true
+    }
+
+    /// Show or hide the editor side panel and remember it.
+    pub(crate) fn set_editor_panel_open(&mut self, open: bool) {
+        if self.preferences.editor_panel_open != open {
+            self.preferences.editor_panel_open = open;
+            self.persist_preferences_if_configured();
+        }
+    }
+
+    /// Remember the editor side panel's tab.
+    pub(crate) fn set_editor_panel_tab(&mut self, tab: crate::editor::PanelTab) {
+        if self.preferences.editor_panel_tab != tab.id() {
+            self.preferences.editor_panel_tab = tab.id().to_string();
+            self.persist_preferences_if_configured();
+        }
     }
 
     /// Add a non-preset color to the editor's Recent row and persist.

@@ -5,10 +5,13 @@
 
 use super::*;
 
-use iced::Task;
+use iced::widget::{column, container, scrollable, text, Space};
+use iced::{Color, Element, Length, Task, Theme};
 
 use crate::app::{App, Message};
 use crate::editor::{EditorSession, EditorToastAction, TextRecognition};
+use crate::icons::AppIcon;
+use readshot_core::text_lines::TextDocument;
 
 /// Start recognizing the editor's base image unless it is already
 /// running or done. The base (not the flattened output) is recognized,
@@ -113,6 +116,209 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
             }
             Task::none()
         }
+        Message::EditorPanelToggled => {
+            let Some(narrow) = state
+                .editor
+                .as_ref()
+                .map(|ed| ed.window_width < PANEL_DOCK_MIN_WINDOW)
+            else {
+                return Task::none();
+            };
+            let opening = if narrow {
+                // Narrow windows: a temporary overlay; the remembered
+                // preference is untouched.
+                match state.editor.as_mut() {
+                    Some(ed) => {
+                        ed.panel_overlay_open = !ed.panel_overlay_open;
+                        ed.panel_overlay_open
+                    }
+                    None => false,
+                }
+            } else {
+                // Toggle what is shown: an overlay opened in a narrow
+                // window that was then widened shows docked, so it counts.
+                let shown = state.preferences.editor_panel_open
+                    || state
+                        .editor
+                        .as_ref()
+                        .is_some_and(|ed| ed.panel_overlay_open);
+                let open = !shown;
+                state.set_editor_panel_open(open);
+                if let Some(ed) = state.editor.as_mut() {
+                    ed.panel_overlay_open = false;
+                }
+                open
+            };
+            if let Some(ed) = state.editor.as_mut() {
+                ed.text_panel.hovered = None;
+            }
+            if opening {
+                request_text_recognition(state)
+            } else {
+                Task::none()
+            }
+        }
+        Message::EditorPanelOverlayDismissed => {
+            if let Some(ed) = state.editor.as_mut() {
+                close_panel_overlay(ed);
+            }
+            Task::none()
+        }
+        Message::EditorPanelTabSelected(tab) => {
+            state.set_editor_panel_tab(tab);
+            Task::none()
+        }
+        Message::EditorOpenTextSettings => {
+            let _ = update(
+                state,
+                Message::SettingsPaneSelected(crate::app::SettingsPane::TextRecognition),
+            );
+            update(state, Message::OpenSettingsRequested)
+        }
         other => unreachable!("non-text-panel message routed to the text panel handler: {other:?}"),
+    }
+}
+
+/// Close the narrow-window overlay panel; returns whether it was open.
+pub(crate) fn close_panel_overlay(ed: &mut EditorSession) -> bool {
+    ed.text_panel.hovered = None;
+    std::mem::take(&mut ed.panel_overlay_open)
+}
+
+/// Bar widths of the recognizing skeleton, as fractions of the panel's
+/// inner width (mockup section 5).
+const SKELETON_WIDTHS: [f32; 5] = [0.70, 0.90, 0.55, 0.80, 0.62];
+const SKELETON_PERIOD_MS: u128 = 1200;
+
+/// Opacity of the recognizing skeleton: a 1.2 s triangle-wave pulse
+/// between 0.55 and 1 (no trig), or a constant 1 under Reduce Motion.
+pub(crate) fn skeleton_alpha(elapsed_ms: u128, reduce_motion: bool) -> f32 {
+    if reduce_motion {
+        return 1.0;
+    }
+    let t = (elapsed_ms % SKELETON_PERIOD_MS) as f32 / SKELETON_PERIOD_MS as f32;
+    let tri = if t < 0.5 { t * 2.0 } else { 2.0 - t * 2.0 };
+    0.55 + 0.45 * tri
+}
+
+/// Body of the Text tab for every recognition state (spec §3.7).
+pub(crate) fn text_tab<'a>(
+    state: &'a App,
+    ed: &'a EditorSession,
+    p: &'static Palette,
+) -> Element<'a, Message> {
+    let body: Element<'a, Message> = match &ed.text_panel.recognition {
+        TextRecognition::Idle | TextRecognition::Recognizing { .. } => {
+            recognizing_view(ed, state.reduce_motion)
+        }
+        TextRecognition::Failed(_) => empty_state(
+            AppIcon::Alert,
+            p,
+            "Couldn't read text",
+            "Text recognition didn't finish.",
+            Some(
+                bar_button(
+                    text("Try Again").size(ButtonSize::Sm.text_size()).into(),
+                    ButtonKind::Secondary,
+                    ButtonSize::Sm,
+                    Some(Message::EditorTextRecognize),
+                )
+                .into(),
+            ),
+        ),
+        TextRecognition::Ready(doc) if doc.is_empty() => empty_state(
+            AppIcon::ScanText,
+            p,
+            "No text found",
+            "This capture has no readable text. Recognition languages are in Settings › Text Recognition.",
+            Some(
+                bar_button(
+                    text("Open Settings").size(ButtonSize::Sm.text_size()).into(),
+                    ButtonKind::Secondary,
+                    ButtonSize::Sm,
+                    Some(Message::EditorOpenTextSettings),
+                )
+                .into(),
+            ),
+        ),
+        TextRecognition::Ready(doc) => lines_view(doc),
+    };
+    container(body)
+        .padding(SP3)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+fn recognizing_view<'a>(ed: &EditorSession, reduce_motion: bool) -> Element<'a, Message> {
+    let elapsed = match ed.text_panel.recognition {
+        TextRecognition::Recognizing { since } => since.elapsed().as_millis(),
+        _ => 0,
+    };
+    let alpha = skeleton_alpha(elapsed, reduce_motion);
+    let inner = PANEL_WIDTH - 2.0 * SP3;
+    let mut col = column![text("Recognizing text…").size(TYPE_CAPTION).style(text_t2)].spacing(SP3);
+    for fraction in SKELETON_WIDTHS {
+        col = col.push(
+            container(
+                Space::new()
+                    .width(Length::Fixed(inner * fraction))
+                    .height(Length::Fixed(10.0)),
+            )
+            .style(move |theme: &Theme| {
+                let p = palette_for(theme);
+                container::Style {
+                    background: Some(
+                        Color {
+                            a: p.border.a * alpha,
+                            ..p.border
+                        }
+                        .into(),
+                    ),
+                    border: iced::Border {
+                        radius: R_CHIP.into(),
+                        ..iced::Border::default()
+                    },
+                    ..container::Style::default()
+                }
+            }),
+        );
+    }
+    col.into()
+}
+
+/// Recognized lines. Task 6 replaces this with the interactive list.
+fn lines_view<'a>(doc: &'a TextDocument) -> Element<'a, Message> {
+    let mut list = column![].spacing(1);
+    for line in &doc.lines {
+        list = list.push(
+            container(text(line.text.as_str()).size(TYPE_CAPTION).style(text_t2))
+                .padding([6, 8])
+                .width(Length::Fill),
+        );
+    }
+    scrollable(list).height(Length::Fill).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skeleton_is_static_under_reduce_motion() {
+        for ms in [0, 300, 600, 900, 1199, 5000] {
+            assert_eq!(skeleton_alpha(ms, true), 1.0);
+        }
+    }
+
+    #[test]
+    fn skeleton_pulse_is_a_bounded_triangle_wave() {
+        assert_eq!(skeleton_alpha(0, false), 0.55);
+        assert!((skeleton_alpha(600, false) - 1.0).abs() < 1e-6);
+        assert_eq!(skeleton_alpha(1200, false), 0.55);
+        for ms in (0..2400).step_by(37) {
+            let a = skeleton_alpha(ms, false);
+            assert!((0.55..=1.0).contains(&a), "{ms}: {a}");
+        }
     }
 }

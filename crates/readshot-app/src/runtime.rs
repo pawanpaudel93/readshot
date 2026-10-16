@@ -61,6 +61,8 @@ mod editor_options;
 pub(crate) use editor_options::*;
 mod text_panel;
 pub(crate) use text_panel::*;
+mod side_panel;
+pub(crate) use side_panel::*;
 mod history_ops;
 mod settings_ops;
 
@@ -637,6 +639,21 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             iced::time::every(Duration::from_millis(1000)).map(|_| Message::EditorStatusTick),
         );
     }
+    if !state.reduce_motion
+        && state.editor.as_ref().is_some_and(|e| {
+            matches!(
+                editor_panel_mode(state, e),
+                PanelMode::Docked | PanelMode::Overlay
+            ) && matches!(
+                e.text_panel.recognition,
+                crate::editor::TextRecognition::Recognizing { .. }
+            )
+        })
+    {
+        // Pulses the recognizing skeleton. Never under Reduce Motion,
+        // where the skeleton is static.
+        subs.push(iced::time::every(Duration::from_millis(80)).map(|_| Message::EditorPanelTick));
+    }
     if state.editor.is_some() {
         // Keyboard sub: ⌘Z / Ctrl+Z = Undo, ⇧⌘Z / Ctrl+Shift+Z = Redo,
         // ⌘S / Ctrl+S = Save. Iced 0.14's `event::listen_with` is the
@@ -649,6 +666,9 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             use iced::keyboard::Event as KbEvent;
             if let iced::Event::Window(iced::window::Event::Rescaled(scale)) = event {
                 return Some(Message::WindowRescaled(window, scale));
+            }
+            if let iced::Event::Window(iced::window::Event::Resized(size)) = event {
+                return Some(Message::EditorWindowResized(window, size.width));
             }
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
                 return Some(Message::EditorKeyPressed {
@@ -1688,6 +1708,18 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        // High-frequency editor events: handled here, not in the editor
+        // arm, so they never clear the canvas geometry cache.
+        Message::EditorWindowResized(window, width) => {
+            if let Some(ed) = state.editor.as_mut() {
+                if ed.window_id == Some(window) {
+                    ed.window_width = width;
+                }
+            }
+            Task::none()
+        }
+        // Only redraws the recognizing skeleton.
+        Message::EditorPanelTick => Task::none(),
         Message::WindowDragRequested(id) => window::drag(id),
         msg @ (Message::EditorKeyPressed { .. }
         | Message::EditorStatusTick
@@ -1736,7 +1768,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::PinHovered(..)
         | Message::PinKeyPressed { .. }
         | Message::EditorTextRecognize
-        | Message::EditorTextRecognized { .. }) => editor_ops::handle_editor_message(state, msg),
+        | Message::EditorTextRecognized { .. }
+        | Message::EditorPanelToggled
+        | Message::EditorPanelTabSelected(..)
+        | Message::EditorPanelOverlayDismissed
+        | Message::EditorOpenTextSettings) => editor_ops::handle_editor_message(state, msg),
         Message::OverlayCopyDone(result) => {
             state.last_capture_status = Some(match result {
                 Ok(()) => "Copied image to clipboard.".into(),
@@ -8716,5 +8752,166 @@ mod tests {
             ),
             "{msgs:?}"
         );
+    }
+
+    #[test]
+    fn option_command_p_toggles_the_panel_and_command_p_still_pins() {
+        use iced::keyboard::{Key, Modifiers};
+        let mut alt_cmd = command_modifiers();
+        alt_cmd.insert(Modifiers::ALT);
+        for ignored in [true, false] {
+            assert!(matches!(
+                editor_key_message(Key::Character("p".into()), alt_cmd, ignored),
+                Some(Message::EditorPanelToggled)
+            ));
+        }
+        assert!(matches!(
+            editor_key_message(Key::Character("p".into()), command_modifiers(), true),
+            Some(Message::EditorPinRequested)
+        ));
+    }
+
+    #[test]
+    fn toggling_the_panel_is_remembered_and_starts_recognition() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.preferences.editor_panel_open = false;
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(&mut app, Message::EditorPanelToggled);
+        assert!(app.preferences.editor_panel_open);
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
+        let _ = update(&mut app, Message::EditorPanelToggled);
+        assert!(!app.preferences.editor_panel_open);
+    }
+
+    #[test]
+    fn narrow_window_opens_a_temporary_overlay_that_closes_three_ways() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.window_width = 800.0;
+        app.editor = Some(ed);
+        let overlay = |app: &App| app.editor.as_ref().unwrap().panel_overlay_open;
+        assert_eq!(
+            editor_panel_mode(&app, app.editor.as_ref().unwrap()),
+            PanelMode::Collapsed
+        );
+        let _ = update(&mut app, Message::EditorPanelToggled);
+        assert!(overlay(&app));
+        assert!(
+            app.preferences.editor_panel_open,
+            "the remembered preference is untouched"
+        );
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        ));
+        // esc (popover level of the single Esc chain)
+        let _ = update(&mut app, Message::EditorTextCancel);
+        assert!(!overlay(&app));
+        // click outside
+        let _ = update(&mut app, Message::EditorPanelToggled);
+        let _ = update(&mut app, Message::EditorPanelOverlayDismissed);
+        assert!(!overlay(&app));
+        // ⌥⌘P again
+        let _ = update(&mut app, Message::EditorPanelToggled);
+        let _ = update(&mut app, Message::EditorPanelToggled);
+        assert!(!overlay(&app));
+        assert!(app.preferences.editor_panel_open);
+    }
+
+    #[test]
+    fn editor_window_resize_updates_only_the_editor_width() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        app.editor = Some(ed);
+        assert_eq!(
+            app.editor.as_ref().unwrap().window_width,
+            crate::editor::DEFAULT_WINDOW_WIDTH
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorWindowResized(iced::window::Id::unique(), 800.0),
+        );
+        assert_eq!(
+            app.editor.as_ref().unwrap().window_width,
+            crate::editor::DEFAULT_WINDOW_WIDTH
+        );
+        let _ = update(&mut app, Message::EditorWindowResized(id, 800.0));
+        assert_eq!(app.editor.as_ref().unwrap().window_width, 800.0);
+    }
+
+    #[test]
+    fn panel_tab_is_remembered_and_no_text_links_to_text_recognition_settings() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        app.preferences.editor_panel_tab = "beautify".into();
+        let _ = update(
+            &mut app,
+            Message::EditorPanelTabSelected(crate::editor::PanelTab::Text),
+        );
+        assert_eq!(app.preferences.editor_panel_tab, "text");
+        let _ = update(&mut app, Message::EditorOpenTextSettings);
+        assert_eq!(app.settings_pane, crate::app::SettingsPane::TextRecognition);
+        assert!(app.settings_window_id.is_some());
+    }
+
+    #[test]
+    fn esc_closes_a_popover_then_the_overlay_panel_and_never_arms_discard() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        ed.window_width = 800.0;
+        ed.panel_overlay_open = true;
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        // Captured esc: the popover goes first, the overlay stays.
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.popover, None);
+        assert!(ed.panel_overlay_open);
+        // An esc no widget captured closes the overlay instead of
+        // falling through to Discard.
+        let _ = update(
+            &mut app,
+            Message::EditorKeyPressed {
+                window: id,
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                modifiers: iced::keyboard::Modifiers::empty(),
+                status_ignored: true,
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert!(!ed.panel_overlay_open);
+        assert!(ed.discard_pending_at.is_none());
+    }
+
+    #[test]
+    fn an_overlay_widened_into_the_dock_hides_with_one_toggle() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.preferences.editor_panel_open = false;
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.window_width = 800.0;
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorPanelToggled);
+        app.editor.as_mut().unwrap().window_width = 1200.0;
+        assert_eq!(
+            editor_panel_mode(&app, app.editor.as_ref().unwrap()),
+            PanelMode::Docked
+        );
+        // "Hide panel" on what is shown hides it, not re-opens it.
+        let _ = update(&mut app, Message::EditorPanelToggled);
+        assert_eq!(
+            editor_panel_mode(&app, app.editor.as_ref().unwrap()),
+            PanelMode::Hidden
+        );
+        assert!(!app.preferences.editor_panel_open);
     }
 }

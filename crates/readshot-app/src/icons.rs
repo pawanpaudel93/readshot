@@ -46,6 +46,7 @@ pub enum AppIcon {
     LineSketch,
     ArrowBoth,
     Dropper,
+    Sidebar,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -665,13 +666,14 @@ fn shapes(icon: AppIcon) -> &'static [Shape] {
             Poly(&[(8.0, 8.0), (4.0, 12.0), (8.0, 16.0)], false),
             Poly(&[(16.0, 8.0), (20.0, 12.0), (16.0, 16.0)], false),
         ],
+        AppIcon::Sidebar => &[Rect(3.0, 4.0, 18.0, 16.0, 2.0), Line(14.0, 4.0, 14.0, 20.0)],
         AppIcon::Tool(_) | AppIcon::Undo | AppIcon::Redo => &[],
     }
 }
 
 impl AppIcon {
     #[cfg(test)]
-    pub const SHAPED: [AppIcon; 32] = [
+    pub const SHAPED: [AppIcon; 33] = [
         AppIcon::Edit,
         AppIcon::Copy,
         AppIcon::ScanText,
@@ -704,6 +706,7 @@ impl AppIcon {
         AppIcon::LineSketch,
         AppIcon::ArrowBoth,
         AppIcon::Dropper,
+        AppIcon::Sidebar,
     ];
 }
 

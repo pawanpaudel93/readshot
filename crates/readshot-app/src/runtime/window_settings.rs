@@ -63,7 +63,7 @@ pub(crate) fn welcome_window_settings() -> window::Settings {
 pub(crate) fn editor_window_settings(
     display_bounds: Option<(f32, f32, f32, f32)>,
 ) -> window::Settings {
-    const W: f32 = 1100.0;
+    const W: f32 = crate::editor::DEFAULT_WINDOW_WIDTH;
     const H: f32 = 760.0;
     let size = iced::Size::new(W, H);
     let position = centered_window_position(display_bounds, size)
