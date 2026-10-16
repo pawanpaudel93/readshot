@@ -1,5 +1,7 @@
 //! Image menu (spec §2.5, §3.10): Resize…, Rotate Left/Right, Flip
-//! Horizontal/Vertical; Task 9 adds the combine items. Every action is
+//! Horizontal/Vertical, the combine items (Add Capture Below/Beside, Add
+//! Image from File; `combine.rs`) and, once there are two parts, the
+//! Layout gap and alignment. Every action is
 //! one undo step; annotations, crops and redactions move with the pixels
 //! (`readshot_core::document`).
 //!
@@ -12,9 +14,11 @@
 
 use super::*;
 
-use iced::widget::{column, row, text, text_input, toggler, Space};
+use iced::widget::{column, container, row, text, text_input, toggler, Space};
 use iced::{Alignment, Element, Length, Task};
-use readshot_core::document::{FlipAxis, GeometryError, MAX_DOC_PIXELS, MAX_DOC_SIDE};
+use readshot_core::document::{
+    Align, FlipAxis, GeometryError, Join, MAX_DOC_PIXELS, MAX_DOC_SIDE, MAX_GAP,
+};
 
 use crate::app::{App, Message};
 use crate::editor::{EditorPopover, EditorSession, ResizeDraft, ResizeUnit};
@@ -22,7 +26,7 @@ use crate::icons::AppIcon;
 
 /// Commit the text draft, drop previews and the open popover: what every
 /// document-changing action does first.
-fn prepare(ed: &mut EditorSession, coord: &crate::coordinator::CaptureCoordinator) {
+pub(crate) fn prepare(ed: &mut EditorSession, coord: &crate::coordinator::CaptureCoordinator) {
     // Cancel previews first (as Undo does): a text commit moves the
     // history generation, which would make an open slider preview stale
     // and bake it into history instead of dropping it.
@@ -194,7 +198,7 @@ pub(crate) fn image_popover<'a>(
 ) -> Element<'a, Message> {
     const W: f32 = 260.0;
     let on = |m: Message| (!ed.busy).then_some(m);
-    column![
+    let menu = column![
         image_menu_row(
             AppIcon::Resize,
             "Resize…",
@@ -230,9 +234,82 @@ pub(crate) fn image_popover<'a>(
             on(Message::EditorFlip(FlipAxis::Vertical)),
             p
         ),
+        menu_divider(),
+        image_menu_row(
+            AppIcon::AddBelow,
+            "Add Capture Below…",
+            None,
+            on(Message::EditorCombineCaptureRequested(Join::Below)),
+            p
+        ),
+        image_menu_row(
+            AppIcon::AddBeside,
+            "Add Capture Beside…",
+            None,
+            on(Message::EditorCombineCaptureRequested(Join::Beside)),
+            p
+        ),
+        image_menu_row(
+            AppIcon::Image,
+            "Add Image from File…",
+            None,
+            on(Message::EditorAddImageFromFile),
+            p
+        ),
     ]
     .spacing(2)
-    .width(Length::Fixed(W))
+    .width(Length::Fixed(W));
+    if ed.model.geometry().parts.len() < 2 {
+        return menu.into();
+    }
+    menu.push(menu_divider()).push(layout_section(ed)).into()
+}
+
+fn menu_divider<'a>() -> Element<'a, Message> {
+    container(Space::new().width(Length::Fill).height(Length::Fixed(1.0)))
+        .style(divider_style)
+        .into()
+}
+
+/// Gap (slider: previews while dragged, one undo step on release) and
+/// alignment of a combined document.
+fn layout_section<'a>(ed: &'a EditorSession) -> Element<'a, Message> {
+    let g = ed.model.geometry();
+    // A coalesced tick not previewed yet is still what the slider shows.
+    let gap = ed.layout_gap_pending.unwrap_or(g.gap);
+    column![
+        popover_heading("Layout"),
+        row![
+            text("Gap")
+                .size(TYPE_CAPTION)
+                .style(text_t2)
+                .width(Length::Fixed(52.0)),
+            iced::widget::slider(0.0..=MAX_GAP as f32, gap as f32, |v| {
+                Message::EditorLayoutGapPreview(v.round() as u32)
+            })
+            .step(1.0)
+            .on_release(Message::EditorSnapshotSliderCommit)
+            .width(Length::Fill),
+            text(format!("{gap} px"))
+                .font(mono_font())
+                .size(TYPE_CAPTION)
+                .style(text_t2),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+        row![
+            text("Align")
+                .size(TYPE_CAPTION)
+                .style(text_t2)
+                .width(Length::Fixed(52.0)),
+            text_segment(&Align::ALL.map(|a| (a.label(), a)), g.align, |a| {
+                (!ed.busy).then_some(Message::EditorLayoutAlign(a))
+            }),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(6)
     .into()
 }
 

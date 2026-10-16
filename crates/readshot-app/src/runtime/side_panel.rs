@@ -78,7 +78,7 @@ fn panel_tab_style(theme: &Theme, status: button::Status, selected: bool) -> but
     }
 }
 
-fn divider_style(theme: &Theme) -> container::Style {
+pub(crate) fn divider_style(theme: &Theme) -> container::Style {
     container::Style {
         background: Some(palette_for(theme).border_subtle.into()),
         ..container::Style::default()

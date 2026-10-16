@@ -3919,6 +3919,13 @@ pub(crate) fn overlay_auto_confirm_intent(state: &App) -> Option<crate::app::Cap
         // mouse-up / Enter default kicks straight into a scroll
         // session, no toolbar hunting required.
         Some(crate::app::CaptureIntent::ScrollCapture)
+    } else if matches!(
+        state.pending_intent,
+        Some(crate::app::CaptureIntent::CombineIntoEditor)
+    ) || state.combine_capture.is_some()
+    {
+        // Add Capture: the drag release confirms at once, no toolbar.
+        Some(crate::app::CaptureIntent::CombineIntoEditor)
     } else {
         None
     }

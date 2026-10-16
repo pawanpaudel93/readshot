@@ -259,6 +259,8 @@ pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
             refresh = true;
         }
     }
+    // A coalesced gap tick belongs to the drag being dropped.
+    ed.layout_gap_pending = None;
     if let Some(baseline) = ed.snapshot_drag_baseline.take() {
         ed.model.cancel_preview_snapshot(baseline);
         ed.snapshot_drag_cancelled = true;
@@ -279,6 +281,8 @@ pub(crate) fn commit_snapshot_drag(
     ed: &mut crate::editor::EditorSession,
     coord: &CaptureCoordinator,
 ) {
+    // The gap slider's newest value may still be waiting on its throttle.
+    super::combine::flush_gap_preview(ed);
     if let Some(baseline) = ed.snapshot_drag_baseline.take() {
         if ed.model.commit_preview_snapshot(baseline) {
             ed.clear_discard_confirmation();
@@ -461,12 +465,15 @@ fn history_plain_text(ed: &crate::editor::EditorSession) -> Option<String> {
         ) {
             return Some(masked_text(doc, &hide));
         }
-        return original_history_text(ed);
+        // The stored masked text is the opened image's alone.
+        return only_the_original_part(ed)
+            .then(|| original_history_text(ed))
+            .flatten();
     }
-    if ed.model.geometry().parts.len() > 1 {
-        if let Some(doc) = ed.text_panel.document() {
-            return Some(doc.layout_text.clone());
-        }
+    if !only_the_original_part(ed) {
+        // Combined (or baked): the merged text of every part, or none
+        // while a part has no recognition yet (decision D2).
+        return ed.text_panel.document().map(|doc| doc.layout_text.clone());
     }
     original_history_text(ed)
 }
@@ -1874,6 +1881,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         | Message::EditorResizeUnitChanged(..)
         | Message::EditorResizeLockToggled(..)
         | Message::EditorResizeApply) => super::image_menu::handle_image_message(state, msg),
+        msg @ (Message::EditorCombineCaptureRequested(..)
+        | Message::EditorAddImageFromFile
+        | Message::EditorPartLoaded { .. }
+        | Message::EditorLayoutGapPreview(..)
+        | Message::EditorLayoutGapFlush { .. }
+        | Message::EditorLayoutAlign(..)) => super::combine::handle_combine_message(state, msg),
         other => unreachable!("non-editor message routed to the editor handler: {other:?}"),
     }
 }

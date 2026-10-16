@@ -69,6 +69,8 @@ mod settings_ops;
 mod beautify_panel;
 mod image_menu;
 pub(crate) use image_menu::*;
+mod combine;
+pub(crate) use combine::*;
 mod beautify_preview;
 pub(crate) use beautify_preview::*;
 
@@ -1129,13 +1131,26 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
 
         Message::OpenOverlayRequested => {
+            // An Add Capture whose overlay can't open (another capture
+            // started in between) gives its hidden editor back at once.
+            let overlay_up =
+                state.overlay_opening || state.windows.kinds().any(|k| k == WindowKind::Overlay);
+            let restore =
+                if !overlay_up && (state.capture_in_flight || state.scroll_session.is_some()) {
+                    abort_combine_capture(
+                        state,
+                        Some("Couldn't add the capture — another capture is in progress."),
+                    )
+                } else {
+                    Task::none()
+                };
             if state.welcome.should_show() || state.capture_in_flight || state.overlay_opening {
-                return Task::none();
+                return restore;
             }
             // A scroll capture is running or stitching: starting another
             // would overwrite its session and orphan its windows.
             if state.scroll_session.is_some() {
-                return focus_scroll_hud(state);
+                return Task::batch([restore, focus_scroll_hud(state)]);
             }
             // Don't stack overlays.
             if state.windows.kinds().any(|k| k == WindowKind::Overlay) {
@@ -1159,7 +1174,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             if state.welcome.should_show() {
                 return show_or_focus_welcome(state);
             }
-            if state.capture_in_flight {
+            // An Add Capture is choosing its region: a retake would land
+            // in that editor instead.
+            if state.capture_in_flight || state.combine_capture.is_some() {
                 return Task::none();
             }
             if state.scroll_session.is_some() {
@@ -1203,12 +1220,16 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             clear_pending_capture_state(state);
             tracing::warn!(target: "readshot::capture", "could not list displays: {e}");
             state.last_capture_status = Some(history_ops::friendly_capture_error(&e));
+            let restore = abort_combine_capture(state, Some(&combine_capture_failed_status(&e)));
             if state.cli_interactive_output.is_some() {
-                Task::done(Message::CliInteractiveWritten(Err(format!(
-                    "could not list displays: {e}"
-                ))))
+                Task::batch([
+                    restore,
+                    Task::done(Message::CliInteractiveWritten(Err(format!(
+                        "could not list displays: {e}"
+                    )))),
+                ])
             } else {
-                Task::none()
+                restore
             }
         }
         Message::OverlayDisplaysListed(Ok(displays)) => {
@@ -1218,12 +1239,19 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 tracing::warn!(target: "readshot::capture", "no displays detected");
                 state.last_capture_status =
                     Some("Couldn't capture — no display was detected.".into());
+                let restore = abort_combine_capture(
+                    state,
+                    Some("Couldn't add the capture — no display was detected."),
+                );
                 return if state.cli_interactive_output.is_some() {
-                    Task::done(Message::CliInteractiveWritten(Err(
-                        "no displays detected".into()
-                    )))
+                    Task::batch([
+                        restore,
+                        Task::done(Message::CliInteractiveWritten(Err(
+                            "no displays detected".into()
+                        ))),
+                    ])
                 } else {
-                    Task::none()
+                    restore
                 };
             }
             // Spawn one borderless transparent overlay per display,
@@ -1288,6 +1316,14 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             if let Some(tray) = state.tray.as_ref() {
                 tray.set_retake_last_region_enabled(true);
             }
+            // An Add Capture's overlay always returns to its editor, even
+            // if another flow overwrote the pending intent meanwhile: the
+            // hidden editor must never be stranded.
+            let intent = if state.combine_capture.is_some() {
+                crate::app::CaptureIntent::CombineIntoEditor
+            } else {
+                intent
+            };
             state.pending_intent = Some(intent);
             state.pending_display_id = Some(display_id.clone());
             state.pending_display_scale = Some(display_scale);
@@ -1374,15 +1410,20 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.overlay_selections.clear();
             state.overlay_opening = false;
             clear_pending_capture_state(state);
+            let restore = abort_combine_capture(state, None);
             if state.cli_interactive_output.is_some() {
                 state.cli_interactive_output = None;
                 return Task::batch(
                     close_all_overlays(state)
                         .into_iter()
-                        .chain(std::iter::once(iced::exit())),
+                        .chain([restore, iced::exit()]),
                 );
             }
-            Task::batch(close_all_overlays(state))
+            Task::batch(
+                close_all_overlays(state)
+                    .into_iter()
+                    .chain(std::iter::once(restore)),
+            )
         }
 
         Message::CaptureRegionRequested { display_id, rect } => {
@@ -1423,6 +1464,19 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             let display_scale = state.pending_display_scale.take().unwrap_or(1.0);
             let display_bounds = state.pending_display_bounds.take();
             state.pending_hide_cursor = true;
+            // Add Capture: back to the same editor, no History record.
+            if intent == crate::app::CaptureIntent::CombineIntoEditor
+                || state.combine_capture.is_some()
+            {
+                return match result {
+                    Ok(image) => finish_combine_capture(state, image),
+                    Err(e) => {
+                        tracing::warn!(target: "readshot::capture", "region capture failed: {e}");
+                        let status = combine_capture_failed_status(&e);
+                        abort_combine_capture(state, Some(&status))
+                    }
+                };
+            }
             match result {
                 Ok(image) => {
                     let history_record = history_record_for_capture(
@@ -1527,6 +1581,9 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                             Task::perform(write_cli_interactive_capture(image, output), |r| {
                                 Message::CliInteractiveWritten(r.map_err(|e| e.to_string()))
                             })
+                        }
+                        crate::app::CaptureIntent::CombineIntoEditor => {
+                            unreachable!("handled above")
                         }
                         crate::app::CaptureIntent::ScrollCapture => {
                             // Start a new scrolling-capture session.
@@ -1829,6 +1886,12 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorResizeUnitChanged(..)
         | Message::EditorResizeLockToggled(..)
         | Message::EditorResizeApply
+        | Message::EditorCombineCaptureRequested(..)
+        | Message::EditorAddImageFromFile
+        | Message::EditorPartLoaded { .. }
+        | Message::EditorLayoutGapPreview(..)
+        | Message::EditorLayoutGapFlush { .. }
+        | Message::EditorLayoutAlign(..)
         | Message::EditorColorCycle(..)
         | Message::EditorZoomIn
         | Message::EditorZoomOut
@@ -11491,5 +11554,582 @@ mod tests {
             assert!(ed.crop_draft.is_some(), "{popover:?}");
             assert_eq!(ed.effective_image_size(), (100, 80));
         }
+    }
+
+    // ---- Task 9: combine ----
+
+    #[test]
+    fn add_capture_below_hides_the_editor_and_appends_the_capture() {
+        use readshot_core::document::Join;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
+        let session = app.editor.as_ref().unwrap().session_id;
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        assert!(
+            matches!(app.combine_capture, Some(crate::app::CombineCapture { session: s, join: Join::Below }) if s == session)
+        );
+        assert_eq!(
+            app.pending_intent,
+            Some(crate::app::CaptureIntent::CombineIntoEditor)
+        );
+        assert_eq!(
+            overlay_auto_confirm_intent(&app),
+            Some(crate::app::CaptureIntent::CombineIntoEditor)
+        );
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(32, 16))));
+        let ed = app.editor.as_ref().expect("same editor");
+        assert_eq!(ed.session_id, session, "no new editor opened");
+        assert_eq!(ed.model.part_ids().len(), 2);
+        assert_eq!(ed.image_size(), (64, 48));
+        assert_eq!(
+            ed.status.as_deref(),
+            Some("Added capture below. ⌘Z to undo.")
+        );
+        assert!(app.combine_capture.is_none());
+        assert!(app.pending_intent.is_none());
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        );
+        assert_eq!(app.editor.as_ref().unwrap().model.part_ids().len(), 1);
+    }
+
+    #[test]
+    fn a_failed_or_cancelled_combine_capture_restores_the_editor_unchanged() {
+        use readshot_core::document::Join;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Beside),
+        );
+        let _ = update(
+            &mut app,
+            Message::RegionCaptureCompleted(Err("boom".into())),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.part_ids().len(), 1);
+        assert!(ed
+            .status
+            .as_deref()
+            .unwrap()
+            .starts_with("Couldn't add the capture"));
+        assert!(app.combine_capture.is_none());
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Beside),
+        );
+        let _ = update(&mut app, Message::OverlayCancelled);
+        assert!(app.combine_capture.is_none());
+        assert!(app.pending_intent.is_none());
+    }
+
+    #[test]
+    fn a_file_image_is_added_below_and_a_stale_session_is_ignored() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(10, 10)));
+        let session = app.editor.as_ref().unwrap().session_id;
+        let img = Arc::new(solid(10, 5));
+        let _ = update(
+            &mut app,
+            Message::EditorPartLoaded {
+                session: session + 1000,
+                result: Ok(Some(Arc::clone(&img))),
+            },
+        );
+        assert_eq!(app.editor.as_ref().unwrap().model.part_ids().len(), 1);
+        let _ = update(
+            &mut app,
+            Message::EditorPartLoaded {
+                session,
+                result: Ok(Some(img)),
+            },
+        );
+        assert_eq!(app.editor.as_ref().unwrap().image_size(), (10, 15));
+        let _ = update(
+            &mut app,
+            Message::EditorPartLoaded {
+                session,
+                result: Ok(None),
+            },
+        );
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.part_ids().len(),
+            2,
+            "a cancelled pick changes nothing"
+        );
+    }
+
+    #[test]
+    fn gap_slider_is_one_undo_step_and_alignment_moves_parts() {
+        use readshot_core::document::{Align, Join};
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(40, 10));
+        ed.model.add_part(solid(20, 10), Join::Below).unwrap();
+        app.editor = Some(ed);
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        for g in [4, 8, 12] {
+            let _ = update(&mut app, Message::EditorLayoutGapPreview(g));
+        }
+        let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (40, 32));
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+        let _ = update(&mut app, Message::EditorLayoutAlign(Align::End));
+        let g = app.editor.as_ref().unwrap().model.geometry().clone();
+        assert_eq!(g.layout().placements[1].x, 20);
+    }
+
+    #[test]
+    fn an_oversized_addition_is_refused() {
+        use readshot_core::document::Join;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(image::RgbaImage::new(
+            10, 30_000,
+        )));
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        let _ = update(
+            &mut app,
+            Message::RegionCaptureCompleted(Ok(image::RgbaImage::new(10, 5_000))),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.part_ids().len(), 1);
+        assert!(ed.status.as_deref().unwrap().contains("32767"));
+    }
+
+    fn two_part_editor() -> crate::editor::EditorSession {
+        let mut ed = crate::editor::EditorSession::new(solid(40, 10));
+        ed.model
+            .add_part(solid(20, 10), readshot_core::document::Join::Below)
+            .unwrap();
+        ed
+    }
+
+    #[test]
+    fn gap_ticks_inside_the_throttle_are_coalesced_not_recomposed() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(two_part_editor());
+        let _ = update(&mut app, Message::EditorLayoutGapPreview(4));
+        assert_eq!(app.editor.as_ref().unwrap().image_size(), (40, 24));
+        // Within the throttle interval: kept, not composed.
+        let _ = update(&mut app, Message::EditorLayoutGapPreview(8));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (40, 24));
+        assert_eq!(ed.layout_gap_pending, Some(8));
+        // The trailing flush shows it.
+        let session = ed.session_id;
+        let _ = update(&mut app, Message::EditorLayoutGapFlush { session });
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (40, 28));
+        assert_eq!(ed.layout_gap_pending, None);
+    }
+
+    #[test]
+    fn undo_mid_gap_drag_cancels_only_the_drag_and_held_ticks_are_ignored() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(two_part_editor());
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        let _ = update(&mut app, Message::EditorLayoutGapPreview(4));
+        let _ = update(&mut app, Message::EditorLayoutGapPreview(9));
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (40, 20), "back to the pre-drag gap");
+        assert_eq!(ed.model.part_ids().len(), 2, "the part stays");
+        assert_eq!(ed.model.undo_depth(), depth);
+        assert_eq!(ed.layout_gap_pending, None);
+        // The slider is still held: its ticks and the trailing flush do
+        // nothing until release.
+        let session = ed.session_id;
+        let _ = update(&mut app, Message::EditorLayoutGapFlush { session });
+        let _ = update(&mut app, Message::EditorLayoutGapPreview(12));
+        assert_eq!(app.editor.as_ref().unwrap().image_size(), (40, 20));
+        let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.undo_depth(), depth);
+        assert!(!ed.snapshot_drag_cancelled);
+    }
+
+    #[test]
+    fn copy_keeps_a_coalesced_gap_value_as_one_undo_step() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(two_part_editor());
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        let _ = update(&mut app, Message::EditorLayoutGapPreview(4));
+        let _ = update(&mut app, Message::EditorLayoutGapPreview(12));
+        let _ = update(&mut app, Message::EditorCopyImageRequested);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (40, 32), "the slider's value is output");
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+        assert!(ed.snapshot_drag_baseline.is_none());
+    }
+
+    #[test]
+    fn combining_a_rotated_document_maps_its_text_through_the_bake() {
+        use readshot_core::document::{Join, ORIGINAL_PART};
+        let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(30, 20));
+        ed.text_panel.part_docs.insert(
+            ORIGINAL_PART,
+            Arc::new(positioned_doc("first", RectLike::new(2.0, 4.0, 10.0, 3.0))),
+        );
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(20, 10))));
+        let ed = app.editor.as_ref().unwrap();
+        let ids = ed.model.part_ids();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ORIGINAL_PART, "baked into a fresh part");
+        let baked = ed.text_panel.part_docs.get(&ids[0]).expect("carried over");
+        // The original's box, turned with the pixels (30×20 → 20×30).
+        assert_eq!(
+            baked.lines[0].rect,
+            Some(RectLike::new(13.0, 2.0, 3.0, 10.0))
+        );
+        assert_eq!(
+            ed.text_panel.recognizing_part,
+            Some(ids[1]),
+            "only the new part is recognized; never the turned pixels"
+        );
+    }
+
+    #[test]
+    fn a_bake_before_recognition_recognizes_the_source_part_upright() {
+        use readshot_core::document::{Join, ORIGINAL_PART};
+        let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
+        app.preferences.editor_panel_open = true;
+        app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
+        let session = app.editor.as_ref().unwrap().session_id;
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(20, 10))));
+        let ed = app.editor.as_ref().unwrap();
+        let ids = ed.model.part_ids();
+        assert_eq!(
+            ed.text_panel.recognizing_part,
+            Some(ORIGINAL_PART),
+            "the baked part's source, in its own upright pixels"
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorTextRecognized {
+                session,
+                part: ORIGINAL_PART,
+                result: Ok(positioned_doc("first", RectLike::new(2.0, 4.0, 10.0, 3.0))),
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.text_panel.part_docs.contains_key(&ids[0]));
+        assert_eq!(ed.text_panel.recognizing_part, Some(ids[1]));
+        assert!(
+            ed.text_panel.document().is_none(),
+            "the new part is pending"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_combined_record_stores_no_text_until_every_part_is_recognized() {
+        use readshot_core::document::Join;
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+        let img = solid(8, 4);
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 8, 4, "d");
+        record.ocr_text = Some("original".into());
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        let ed = crate::editor::EditorSession::from_history(img, record.clone());
+        let session = ed.session_id;
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(8, 4))));
+        app.coordinator.flush_history_updates();
+        let stored = store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == record.id)
+            .unwrap();
+        assert_eq!((stored.width_px, stored.height_px), (8, 8));
+        assert_eq!(stored.ocr_text, None, "no text while a part has none");
+        let ids = app.editor.as_ref().unwrap().model.part_ids();
+        for (part, text) in [(ids[0], "first"), (ids[1], "second")] {
+            let _ = update(
+                &mut app,
+                Message::EditorTextRecognized {
+                    session,
+                    part,
+                    result: Ok(readshot_core::text_lines::TextDocument::from_plain(text)),
+                },
+            );
+        }
+        app.coordinator.flush_history_updates();
+        let stored = store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == record.id)
+            .unwrap();
+        let text = stored.ocr_text.expect("every part recognized");
+        assert!(text.contains("first") && text.contains("second"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_combined_scrubbed_record_keeps_no_partial_text() {
+        use readshot_core::document::Join;
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+        let img = solid(8, 4);
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 8, 4, "d");
+        record.ocr_text = Some("██████".into());
+        record.redacted = true;
+        record.redactions = vec![Annotation::Blur {
+            rect: RectLike::new(0.0, 0.0, 4.0, 4.0),
+            radius: 4.0,
+        }];
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            img,
+            record.clone(),
+        ));
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(8, 4))));
+        app.coordinator.flush_history_updates();
+        let stored = store
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == record.id)
+            .unwrap();
+        assert_eq!((stored.width_px, stored.height_px), (8, 8));
+        assert_eq!(
+            stored.ocr_text, None,
+            "the opened image's text alone isn't the combined document's"
+        );
+    }
+
+    #[test]
+    fn a_combine_capture_for_a_replaced_editor_is_dropped() {
+        use readshot_core::document::Join;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        // Another editor took over while the overlay was up.
+        app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
+        let other = app.editor.as_ref().unwrap().session_id;
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(32, 16))));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.session_id, other);
+        assert_eq!(ed.model.part_ids().len(), 1, "nothing leaks into it");
+        assert_eq!(ed.image_size(), (16, 16));
+        assert!(app.combine_capture.is_none());
+    }
+
+    #[test]
+    fn an_overwritten_intent_still_returns_the_capture_to_the_editor() {
+        use readshot_core::document::Join;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        // A tray click meanwhile sets another intent.
+        app.pending_intent = Some(crate::app::CaptureIntent::Editor);
+        assert_eq!(
+            overlay_auto_confirm_intent(&app),
+            Some(crate::app::CaptureIntent::CombineIntoEditor)
+        );
+        let _ = update(
+            &mut app,
+            Message::OverlaySelected {
+                display_id: Default::default(),
+                rect: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 10.0, 10.0).unwrap(),
+                intent: crate::app::CaptureIntent::Editor,
+            },
+        );
+        assert_eq!(
+            app.pending_intent,
+            Some(crate::app::CaptureIntent::CombineIntoEditor)
+        );
+        let session = app.editor.as_ref().unwrap().session_id;
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 16))));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.session_id, session);
+        assert_eq!(ed.model.part_ids().len(), 2);
+    }
+
+    #[test]
+    fn no_display_or_a_retake_never_strands_a_combine_capture() {
+        use readshot_core::document::Join;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
+        app.last_region_display_id = Some("primary".to_string());
+        app.last_regions.insert(
+            "primary".to_string(),
+            crate::app::LastRegion {
+                rect: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 10.0, 10.0).unwrap(),
+                display_scale: 1.0,
+                display_bounds: None,
+            },
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        let _ = update(&mut app, Message::RetakeLastRegionRequested);
+        assert!(!app.capture_in_flight, "no retake while choosing a region");
+        let _ = update(&mut app, Message::OpenOverlayRequested);
+        let _ = update(&mut app, Message::OverlayDisplaysListed(Ok(Vec::new())));
+        assert!(app.combine_capture.is_none());
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            ed.status.as_deref(),
+            Some("Couldn't add the capture — no display was detected.")
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        let _ = update(&mut app, Message::OpenOverlayRequested);
+        let _ = update(
+            &mut app,
+            Message::OverlayDisplaysListed(Err("backend unavailable".into())),
+        );
+        assert!(app.combine_capture.is_none());
+        assert!(app
+            .editor
+            .as_ref()
+            .unwrap()
+            .status
+            .as_deref()
+            .unwrap()
+            .starts_with("Couldn't add the capture"));
+    }
+
+    #[test]
+    fn an_overlay_that_cannot_open_gives_the_editor_back() {
+        use readshot_core::document::Join;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        // Another capture started before the chained overlay request ran.
+        app.capture_in_flight = true;
+        let _ = update(&mut app, Message::OpenOverlayRequested);
+        assert!(app.combine_capture.is_none());
+        assert!(app
+            .editor
+            .as_ref()
+            .unwrap()
+            .status
+            .as_deref()
+            .unwrap()
+            .starts_with("Couldn't add the capture"));
+    }
+
+    fn png_header_only(w: u32, h: u32) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut c = 0xFFFF_FFFFu32;
+            for &b in bytes {
+                c ^= u32::from(b);
+                for _ in 0..8 {
+                    c = if c & 1 != 0 {
+                        0xEDB8_8320 ^ (c >> 1)
+                    } else {
+                        c >> 1
+                    };
+                }
+            }
+            !c
+        }
+        let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let mut chunk = b"IHDR".to_vec();
+        chunk.extend_from_slice(&w.to_be_bytes());
+        chunk.extend_from_slice(&h.to_be_bytes());
+        chunk.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let mut push = |kind: &[u8], data: &[u8]| {
+            let mut chunk = kind.to_vec();
+            chunk.extend_from_slice(data);
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            out.extend_from_slice(&chunk);
+            out.extend_from_slice(&crc32(&chunk).to_be_bytes());
+        };
+        push(b"IHDR", &chunk[4..]);
+        // A few bytes of (bogus) data: the header is all that's read.
+        push(b"IDAT", &[0x78, 0x9C, 0x03, 0x00]);
+        push(b"IEND", &[]);
+        out
+    }
+
+    #[test]
+    fn a_picked_file_is_decoded_as_untrusted_input() {
+        let ok = readshot_core::encode_png(&solid(3, 2)).unwrap();
+        assert_eq!(decode_part_image(&ok).unwrap().dimensions(), (3, 2));
+        let err = decode_part_image(b"not an image at all").unwrap_err();
+        assert!(err.contains("isn't an image"), "{err}");
+        let mut truncated = ok.clone();
+        truncated.truncate(ok.len() / 2);
+        assert!(decode_part_image(&truncated).is_err());
+        // Refused from the header alone, before any pixel is allocated.
+        let err = decode_part_image(&png_header_only(40_000, 1)).unwrap_err();
+        assert!(err.contains("32767"), "{err}");
+        let err = decode_part_image(&png_header_only(20_000, 20_000)).unwrap_err();
+        assert!(err.contains("256000000"), "{err}");
+        let err = decode_part_image(&png_header_only(0, 5)).unwrap_err();
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn a_file_that_fails_to_load_leaves_the_editor_unchanged() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(10, 10));
+        ed.busy = true;
+        let session = ed.session_id;
+        app.editor = Some(ed);
+        let _ = update(
+            &mut app,
+            Message::EditorPartLoaded {
+                session,
+                result: Err("that file isn't an image Readshot can read".into()),
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert!(!ed.busy);
+        assert_eq!(ed.model.part_ids().len(), 1);
+        assert_eq!(
+            ed.status.as_deref(),
+            Some("Couldn't add the image — that file isn't an image Readshot can read.")
+        );
     }
 }

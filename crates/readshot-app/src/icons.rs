@@ -52,6 +52,8 @@ pub enum AppIcon {
     FlipH,
     FlipV,
     Resize,
+    AddBelow,
+    AddBeside,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -705,13 +707,25 @@ fn shapes(icon: AppIcon) -> &'static [Shape] {
             Line(17.0, 7.0, 11.0, 13.0),
             Poly(&[(7.0, 14.0), (7.0, 17.0), (10.0, 17.0)], false),
         ],
+        AppIcon::AddBelow => &[
+            Rect(4.0, 3.0, 16.0, 8.0, 1.5),
+            Rect(4.0, 14.0, 16.0, 7.0, 1.5),
+            Line(12.0, 15.5, 12.0, 19.5),
+            Line(10.0, 17.5, 14.0, 17.5),
+        ],
+        AppIcon::AddBeside => &[
+            Rect(3.0, 4.0, 8.0, 16.0, 1.5),
+            Rect(14.0, 4.0, 7.0, 16.0, 1.5),
+            Line(17.5, 10.0, 17.5, 14.0),
+            Line(15.5, 12.0, 19.5, 12.0),
+        ],
         AppIcon::Tool(_) | AppIcon::Undo | AppIcon::Redo => &[],
     }
 }
 
 impl AppIcon {
     #[cfg(test)]
-    pub const SHAPED: [AppIcon; 38] = [
+    pub const SHAPED: [AppIcon; 40] = [
         AppIcon::Edit,
         AppIcon::Copy,
         AppIcon::ScanText,
@@ -750,6 +764,8 @@ impl AppIcon {
         AppIcon::FlipH,
         AppIcon::FlipV,
         AppIcon::Resize,
+        AppIcon::AddBelow,
+        AppIcon::AddBeside,
     ];
 }
 

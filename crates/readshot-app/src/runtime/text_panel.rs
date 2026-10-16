@@ -29,6 +29,7 @@ use readshot_core::text_lines::{TextDocument, TextLine};
 /// scrub then stores no text rather than text it can't mask.
 pub(crate) fn refresh_text_for_geometry(ed: &mut EditorSession) {
     use readshot_core::document::{map_text_document, merge_text_documents};
+    let _ = resolve_baked_docs(&mut ed.text_panel);
     let g = std::sync::Arc::clone(ed.model.geometry());
     let tp = &mut ed.text_panel;
     tp.built_for = Some(std::sync::Arc::clone(&g));
@@ -62,6 +63,67 @@ pub(crate) fn refresh_text_for_geometry(ed: &mut EditorSession) {
             }
         }
     }
+}
+
+/// Give every baked part (decision D4) whose source parts are all
+/// recognized its text: their recognitions mapped through the geometry
+/// it was baked from, merged. Baked px are that geometry's document px,
+/// so the boxes land exactly; the turned pixels are never recognized
+/// (M-5). Repeats until nothing changes, for a bake of a bake. `true`
+/// when a baked part got its text.
+pub(crate) fn resolve_baked_docs(tp: &mut crate::editor::TextPanelState) -> bool {
+    use readshot_core::document::{map_text_document, merge_text_documents};
+    let mut any = false;
+    loop {
+        let mut resolved = Vec::new();
+        for (baked, src) in &tp.bake_sources {
+            if tp.part_docs.contains_key(baked) {
+                continue;
+            }
+            let docs: Option<Vec<TextDocument>> = src
+                .parts
+                .iter()
+                .map(|p| {
+                    Some(map_text_document(
+                        tp.part_docs.get(&p.id)?,
+                        &src.part_affine(p.id)?,
+                    ))
+                })
+                .collect();
+            if let Some(docs) = docs.filter(|d| !d.is_empty()) {
+                resolved.push((*baked, merge_text_documents(&docs)));
+            }
+        }
+        if resolved.is_empty() {
+            return any;
+        }
+        any = true;
+        for (id, doc) in resolved {
+            tp.part_docs.insert(id, std::sync::Arc::new(doc));
+        }
+    }
+}
+
+/// The next part to recognize, upright in its own pixels: the first of
+/// `parts` with no recognition, or for a baked part, the first of its
+/// source parts that has none.
+fn next_unrecognized_part(
+    tp: &crate::editor::TextPanelState,
+    parts: &[readshot_core::document::Part],
+) -> Option<readshot_core::document::Part> {
+    for p in parts {
+        if tp.part_docs.contains_key(&p.id) {
+            continue;
+        }
+        if let Some(src) = tp.bake_sources.get(&p.id) {
+            // Source ids are older than the baked one: no cycles.
+            if let Some(q) = next_unrecognized_part(tp, &src.parts) {
+                return Some(q);
+            }
+        }
+        return Some(p.clone());
+    }
+    None
 }
 
 /// [`refresh_text_for_geometry`] when the panel's document was built for
@@ -109,14 +171,10 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
     ) {
         return Task::none();
     }
-    let Some(part) = ed
-        .model
-        .geometry()
-        .parts
-        .iter()
-        .find(|p| !ed.text_panel.part_docs.contains_key(&p.id))
-        .cloned()
-    else {
+    if resolve_baked_docs(&mut ed.text_panel) {
+        refresh_text_for_geometry(ed);
+    }
+    let Some(part) = next_unrecognized_part(&ed.text_panel, &ed.model.geometry().parts) else {
         return Task::none(); // every part is recognized
     };
     ed.text_panel.recognition = TextRecognition::Recognizing {

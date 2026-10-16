@@ -226,6 +226,14 @@ pub struct TextPanelState {
     /// one (rotate, combine, undo across either) means its boxes are
     /// stale and must be rebuilt before anything uses them.
     pub built_for: Option<std::sync::Arc<readshot_core::document::DocGeometry>>,
+    /// Parts made by baking a transformed document before a combine
+    /// (decision D4), each with the geometry it was baked from. A baked
+    /// part's text is its source parts' recognitions mapped through that
+    /// geometry, never a recognition of the turned pixels (M-5).
+    pub bake_sources: std::collections::BTreeMap<
+        readshot_core::document::PartId,
+        std::sync::Arc<readshot_core::document::DocGeometry>,
+    >,
 }
 
 impl TextPanelState {
@@ -346,6 +354,13 @@ pub struct EditorSession {
     /// slider is still held: iced keeps sending ticks until release, and
     /// they must not start a new preview. Cleared on release.
     pub snapshot_drag_cancelled: bool,
+    /// The newest combine gap slider value not previewed yet: gap ticks
+    /// are throttled (each preview recomposes the document), and the
+    /// last one is applied on the trailing edge, on release, or before
+    /// any output (`commit_snapshot_drag`).
+    pub layout_gap_pending: Option<u32>,
+    /// When the last gap preview was applied (throttle clock).
+    pub layout_gap_previewed_at: Option<std::time::Instant>,
     /// Draft of the Beautify tab's background hex field.
     pub beautify_hex_draft: String,
     /// Open color / line-width popover, if any. Esc and a
@@ -636,6 +651,8 @@ impl EditorSession {
             style_drag_cancelled: false,
             snapshot_drag_baseline: None,
             snapshot_drag_cancelled: false,
+            layout_gap_pending: None,
+            layout_gap_previewed_at: None,
             beautify_hex_draft: String::new(),
             canvas_drag_active: false,
             drag_cancel_seq: 0,
@@ -696,6 +713,8 @@ impl EditorSession {
             style_drag_cancelled: false,
             snapshot_drag_baseline: None,
             snapshot_drag_cancelled: false,
+            layout_gap_pending: None,
+            layout_gap_previewed_at: None,
             beautify_hex_draft: String::new(),
             canvas_drag_active: false,
             drag_cancel_seq: 0,

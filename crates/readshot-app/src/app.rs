@@ -601,6 +601,23 @@ pub enum Message {
     EditorResizeUnitChanged(crate::editor::ResizeUnit),
     EditorResizeLockToggled(bool),
     EditorResizeApply,
+    /// Image › Add Capture Below… / Beside…
+    EditorCombineCaptureRequested(readshot_core::document::Join),
+    /// Image › Add Image from File…
+    EditorAddImageFromFile,
+    /// A picked file decoded (`Ok(None)` = the picker was cancelled).
+    EditorPartLoaded {
+        session: u64,
+        result: Result<Option<std::sync::Arc<image::RgbaImage>>, String>,
+    },
+    /// Image › Layout gap slider (preview; release commits).
+    EditorLayoutGapPreview(u32),
+    /// A coalesced gap slider value is due (trailing edge of the
+    /// preview throttle).
+    EditorLayoutGapFlush {
+        session: u64,
+    },
+    EditorLayoutAlign(readshot_core::document::Align),
     /// Cycle the editor's active palette colour. `+1` moves to the
     /// next swatch in `PALETTE`, `-1` to the previous; the runtime
     /// wraps via `rem_euclid` so the cycle is endless. Triggered by
@@ -830,6 +847,9 @@ pub struct App {
     /// overlay quick-actions; consumed in `RegionCaptureCompleted`.
     /// `None` falls back to the editor.
     pub pending_intent: Option<CaptureIntent>,
+    /// The editor session an Add Capture Below/Beside returns to, while
+    /// its overlay is up and the editor window hidden.
+    pub combine_capture: Option<CombineCapture>,
     /// Display id for the in-flight capture. Carried alongside
     /// `pending_intent` so the resulting history record can be
     /// stamped with the right monitor.
@@ -1185,6 +1205,17 @@ pub enum CaptureIntent {
     /// Hidden one-shot CLI bridge: write PNG bytes to a temp path
     /// and exit so the parent CLI process can continue.
     CliInteractive,
+    /// Append the capture to the open editor's document (Image › Add
+    /// Capture…); no History record, no new editor.
+    CombineIntoEditor,
+}
+
+/// An Add Capture Below/Beside in flight (spec §3.11): the editor window
+/// is hidden while the overlay is up; the capture lands in this session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CombineCapture {
+    pub session: u64,
+    pub join: readshot_core::document::Join,
 }
 
 impl App {
@@ -1226,6 +1257,7 @@ impl App {
             last_regions: HashMap::new(),
             last_region_display_id: None,
             pending_intent: None,
+            combine_capture: None,
             pending_display_id: None,
             pending_display_scale: None,
             pending_display_bounds: None,
