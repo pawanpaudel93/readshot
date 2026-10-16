@@ -10,6 +10,7 @@
 
 pub mod annotation;
 pub mod arrowhead;
+pub mod beautify;
 pub mod error;
 pub mod eyedropper;
 pub mod filename;
