@@ -659,6 +659,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }
             let id = state.editor.as_ref().and_then(|e| e.window_id);
             state.editor = None;
+            state.release_editor_modifiers();
             if let Some(id) = id {
                 state.windows.forget(id);
                 window::close(id)
@@ -1312,6 +1313,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             let editor_id = ed.window_id;
             let pin_settings = editor_pin_window_settings(ed, size);
             state.editor = None;
+            state.release_editor_modifiers();
             let mut tasks: Vec<Task<Message>> = Vec::new();
             if let Some(id) = editor_id {
                 state.windows.forget(id);

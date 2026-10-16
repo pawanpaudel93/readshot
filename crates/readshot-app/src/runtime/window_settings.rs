@@ -106,6 +106,7 @@ pub(crate) fn open_editor_window_replacing(
     }
     editor.source_display_bounds = display_bounds;
     state.editor = Some(editor);
+    state.release_editor_modifiers();
     // The Text panel recognizes in the background as soon as the editor
     // opens, so the list is ready by the time the user looks at it.
     if state.preferences.editor_panel_open {

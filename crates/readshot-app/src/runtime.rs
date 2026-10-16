@@ -1668,6 +1668,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     commit_pending_editor_text(ed, &state.coordinator);
                 }
                 state.editor = None;
+                state.release_editor_modifiers();
             }
             // A scroll-capture HUD or region window closing out-of-band
             // (OS, crash, future close affordance) must tear the whole
@@ -9133,6 +9134,59 @@ mod tests {
         assert!(app.editor_command_held);
         let _ = update(&mut app, Message::EditorCommandChanged(false));
         assert!(!app.editor_command_held);
+    }
+
+    #[test]
+    fn editor_modifier_flags_reset_when_an_editor_opens_or_closes() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let hold = |app: &mut App| {
+            app.editor_command_held = true;
+            app.editor_shift_held = true;
+        };
+        let released = |app: &App| !app.editor_command_held && !app.editor_shift_held;
+
+        // Opening (the old window's key-up never arrives).
+        hold(&mut app);
+        let _ = open_editor_window_replacing(
+            &mut app,
+            crate::editor::EditorSession::new(solid(16, 16)),
+            None,
+        );
+        assert!(released(&app), "open");
+
+        // Closing via Discard on a clean editor.
+        hold(&mut app);
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+        assert!(app.editor.is_none());
+        assert!(released(&app), "discard");
+
+        // Closing via Pin.
+        let _ = open_editor_window_replacing(
+            &mut app,
+            crate::editor::EditorSession::new(solid(16, 16)),
+            None,
+        );
+        hold(&mut app);
+        let _ = update(&mut app, Message::EditorPinRequested);
+        assert!(app.editor.is_none());
+        assert!(released(&app), "pin");
+
+        // Closing the window from the OS.
+        let _ = open_editor_window_replacing(
+            &mut app,
+            crate::editor::EditorSession::new(solid(16, 16)),
+            None,
+        );
+        let id = app.editor.as_ref().unwrap().window_id;
+        let id = id.unwrap_or_else(|| {
+            let id = iced::window::Id::unique();
+            app.editor.as_mut().unwrap().window_id = Some(id);
+            id
+        });
+        hold(&mut app);
+        let _ = update(&mut app, Message::WindowClosed(id));
+        assert!(app.editor.is_none());
+        assert!(released(&app), "window closed");
     }
 
     #[test]

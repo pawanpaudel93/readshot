@@ -1142,6 +1142,15 @@ pub enum CaptureIntent {
 }
 
 impl App {
+    /// Forget held ⌘/⇧. Called when an editor opens or closes: the
+    /// key-up for a modifier released while no editor window had focus
+    /// never arrives, and a stale flag would turn the next click into a
+    /// ⌘-click or constrain the next drag.
+    pub(crate) fn release_editor_modifiers(&mut self) {
+        self.editor_command_held = false;
+        self.editor_shift_held = false;
+    }
+
     pub fn new(
         coordinator: CaptureCoordinator,
         permissions: Arc<dyn PermissionsProvider>,
