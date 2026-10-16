@@ -265,6 +265,15 @@ pub(crate) fn sync_editor_history(
     coord: &CaptureCoordinator,
 ) {
     ed.clear_discard_confirmation();
+    // Every history change passes here. A redaction's toast Undo is
+    // only valid while that redaction is the newest step: once anything
+    // else changes history, drop it for good (depth alone could match
+    // again after undo + a different edit, and Undo would remove that).
+    if let Some(crate::editor::EditorToastAction::UndoRedaction { undo_depth }) = ed.toast_action {
+        if undo_depth != ed.model.undo_depth() {
+            ed.toast_action = None;
+        }
+    }
     let Some(record) = ed.source_record.as_mut() else {
         return;
     };
@@ -636,6 +645,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         .unwrap_or(false);
                     if !armed {
                         ed.discard_pending_at = Some(now);
+                        // The armed prompt replaces the toast; its old
+                        // button (e.g. a redaction's Undo) must not come
+                        // back under this text once the arm expires.
+                        ed.toast_action = None;
                         ed.status = Some(
                             "Unsaved edits. Press Discard again to close without saving.".into(),
                         );
@@ -1396,7 +1409,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         | Message::EditorTextLineClicked(..)
         | Message::EditorCopyLines
         | Message::EditorCopyLinesDone(..)
-        | Message::EditorRemoveLineBreaksToggled(..)) => {
+        | Message::EditorRemoveLineBreaksToggled(..)
+        | Message::EditorRedactStyleChanged(..)
+        | Message::EditorRedactAll
+        | Message::EditorRedactLine(..)) => {
             super::text_panel::handle_text_panel_message(state, msg)
         }
         other => unreachable!("non-editor message routed to the editor handler: {other:?}"),

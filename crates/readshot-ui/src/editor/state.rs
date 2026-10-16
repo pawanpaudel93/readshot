@@ -259,6 +259,21 @@ impl EditorState {
         self.flattened_cache = None;
     }
 
+    /// Append several annotations as **one** undo step (smart redact's
+    /// Redact All). Clears the selection. Returns how many were added.
+    pub fn commit_annotations(&mut self, annotations: Vec<Annotation>) -> usize {
+        if annotations.is_empty() {
+            return 0;
+        }
+        let n = annotations.len();
+        let mut next = self.history.current().to_vec();
+        next.extend(annotations);
+        self.selected_annotation = None;
+        self.history.push(next);
+        self.flattened_cache = None;
+        n
+    }
+
     pub fn undo(&mut self) -> bool {
         let changed = self.history.undo().is_some();
         if changed {
@@ -2071,5 +2086,21 @@ mod tests {
                 other => panic!("{other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn commit_annotations_is_one_undo_step() {
+        let mut s = EditorState::new(RgbaImage::new(10, 10));
+        let blur = |x: f32| Annotation::Blur {
+            rect: RectLike::new(x, 0.0, 2.0, 2.0),
+            radius: 2.0,
+        };
+        assert_eq!(s.commit_annotations(Vec::new()), 0);
+        assert!(!s.can_undo());
+        assert_eq!(s.commit_annotations(vec![blur(0.0), blur(4.0)]), 2);
+        assert_eq!(s.annotations().len(), 2);
+        assert_eq!(s.selected_annotation(), None);
+        assert!(s.undo());
+        assert!(s.annotations().is_empty());
     }
 }

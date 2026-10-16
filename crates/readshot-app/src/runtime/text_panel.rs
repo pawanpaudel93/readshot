@@ -8,13 +8,18 @@ use super::*;
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use iced::widget::{column, container, mouse_area, row, scrollable, text, toggler, Space};
+use iced::widget::{
+    column, container, mouse_area, pick_list, row, scrollable, text, toggler, Space,
+};
 use iced::{Alignment, Color, Element, Length, Task, Theme};
 
 use crate::app::{App, Message};
 use crate::editor::{EditorSession, EditorToastAction, TextRecognition};
 use crate::icons::AppIcon;
 use readshot_core::geom::RectLike;
+use readshot_core::redact::{
+    is_covered, redaction_annotation, redaction_rect, summary, RedactMatch, RedactStyle,
+};
 use readshot_core::text_lines::{TextDocument, TextLine};
 
 /// Start recognizing the editor's base image unless it is already
@@ -254,8 +259,119 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
             state.set_copy_remove_line_breaks(on);
             Task::none()
         }
+        Message::EditorRedactStyleChanged(style) => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.text_panel.redact_style = style;
+            }
+            Task::none()
+        }
+        Message::EditorRedactAll => redact(state, None),
+        Message::EditorRedactLine(index) => redact(state, Some(index)),
         other => unreachable!("non-text-panel message routed to the text panel handler: {other:?}"),
     }
+}
+
+/// Where each sensitive match's redaction goes: `Some(rect)`
+/// (span-precise, padded, whole-pixel) or `None` when it can't be placed
+/// (line gone, no box, outside the image). Empty without line positions.
+fn placed_matches(ed: &EditorSession) -> Vec<(&RedactMatch, Option<RectLike>)> {
+    let Some(doc) = ed.text_panel.positioned_document() else {
+        return Vec::new();
+    };
+    let (w, h) = ed.image_size();
+    ed.text_panel
+        .matches
+        .iter()
+        .map(|m| {
+            let rect = doc
+                .lines
+                .get(m.line)
+                .and_then(|l| l.span_rect(m.span.clone()))
+                .and_then(|span| redaction_rect(span, w, h));
+            (m, rect)
+        })
+        .collect()
+}
+
+/// Matches not yet covered by a redaction, each with the rect its
+/// redaction gets (span-precise, padded, whole-pixel). Empty without
+/// line positions. Matches that can't be placed are in
+/// [`unlocatable_matches`], never silently dropped.
+pub(crate) fn pending_matches(ed: &EditorSession) -> Vec<(&RedactMatch, RectLike)> {
+    placed_matches(ed)
+        .into_iter()
+        .filter_map(|(m, rect)| {
+            let rect = rect?;
+            (!is_covered(rect, ed.model.annotations())).then_some((m, rect))
+        })
+        .collect()
+}
+
+/// Detected matches that have no place on the image, so smart redact
+/// can't cover them: the user is told to cover them by hand.
+pub(crate) fn unlocatable_matches(ed: &EditorSession) -> Vec<&RedactMatch> {
+    placed_matches(ed)
+        .into_iter()
+        .filter_map(|(m, rect)| rect.is_none().then_some(m))
+        .collect()
+}
+
+fn items(n: usize) -> String {
+    format!("{n} item{}", if n == 1 { "" } else { "s" })
+}
+
+/// Toast text after a redaction of `n` items with `missed` that couldn't
+/// be located.
+pub(crate) fn redact_status(n: usize, missed: usize) -> String {
+    let pronoun = if missed == 1 { "it" } else { "them" };
+    match (n, missed) {
+        (0, 0) => "No sensitive items left to redact.".to_string(),
+        (0, m) => format!(
+            "Couldn't locate {m} sensitive item{}. Cover {pronoun} by hand.",
+            if m == 1 { "" } else { "s" }
+        ),
+        (n, 0) => format!("Redacted {}.", items(n)),
+        (n, m) => format!(
+            "Redacted {}. {m} more couldn't be located; cover {pronoun} by hand.",
+            items(n)
+        ),
+    }
+}
+
+/// Redact the pending items (all, or one line's) as one undo step and
+/// toast "Redacted N items" with Undo. Items that can't be located are
+/// counted in the toast.
+fn redact(state: &mut App, only_line: Option<usize>) -> Task<Message> {
+    let Some(ed) = state.editor.as_mut() else {
+        return Task::none();
+    };
+    if ed.busy || ed.text_panel.positioned_document().is_none() {
+        return Task::none();
+    }
+    cancel_editor_previews(ed);
+    commit_pending_editor_text(ed, &state.coordinator);
+    let in_scope = |m: &RedactMatch| only_line.is_none_or(|line| m.line == line);
+    let style = ed.text_panel.redact_style;
+    let annotations: Vec<readshot_core::Annotation> = pending_matches(ed)
+        .into_iter()
+        .filter(|(m, _)| in_scope(m))
+        .map(|(_, rect)| redaction_annotation(rect, style))
+        .collect();
+    let missed = unlocatable_matches(ed)
+        .into_iter()
+        .filter(|m| in_scope(m))
+        .count();
+    let n = ed.model.commit_annotations(annotations);
+    let status = redact_status(n, missed);
+    if n == 0 {
+        ed.set_status(status);
+        return Task::none();
+    }
+    ed.refresh_image();
+    sync_editor_history(ed, &state.coordinator);
+    let undo_depth = ed.model.undo_depth();
+    ed.set_status_with_action(status, EditorToastAction::UndoRedaction { undo_depth });
+    Task::none()
 }
 
 /// Line selection (spec §3.7): a click selects one line (clicking the
@@ -445,14 +561,138 @@ fn semibold() -> iced::Font {
     }
 }
 
+fn redact_card_style(theme: &Theme) -> container::Style {
+    let p = palette_for(theme);
+    container::Style {
+        background: Some(Color { a: 0.08, ..p.warn }.into()),
+        border: iced::Border {
+            radius: R_GROUP.into(),
+            width: 1.0,
+            color: Color { a: 0.35, ..p.warn },
+        },
+        ..container::Style::default()
+    }
+}
+
+fn chip_style(theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(palette_for(theme).hover.into()),
+        border: iced::Border {
+            radius: R_GROUP.into(),
+            ..iced::Border::default()
+        },
+        ..container::Style::default()
+    }
+}
+
+/// Title of the redact card: pending plus unlocatable items, or "All …
+/// redacted" once nothing is left.
+pub(crate) fn redact_card_title(pending: usize, unlocatable: usize) -> String {
+    match pending + unlocatable {
+        0 => "All sensitive items redacted".to_string(),
+        n => format!("{n} sensitive item{}", if n == 1 { "" } else { "s" }),
+    }
+}
+
+/// "N sensitive items" card at the top of the Text tab (spec §3.8):
+/// style picker, Redact All, and a chip per kind. Hidden without
+/// positions or matches; says "All … redacted" once everything is
+/// covered. Redact All is Secondary: Copy Image is the view's primary.
+/// Items that can't be located are named, never silently left out.
+fn redact_card<'a>(
+    ed: &'a EditorSession,
+    pending: &[(&RedactMatch, RectLike)],
+    p: &'static Palette,
+) -> Option<Element<'a, Message>> {
+    ed.text_panel.positioned_document()?;
+    if ed.text_panel.matches.is_empty() {
+        return None;
+    }
+    let n = pending.len();
+    let unlocatable = unlocatable_matches(ed);
+    let head = row![
+        crate::icons::icon(AppIcon::Shield, p.warn, ICON_SIZE),
+        text(redact_card_title(n, unlocatable.len()))
+            .size(TYPE_BODY)
+            .font(semibold())
+            .style(text_t1),
+    ]
+    .spacing(SP2)
+    .align_y(Alignment::Center);
+    let picker = pick_list(
+        &RedactStyle::ALL[..],
+        Some(ed.text_panel.redact_style),
+        Message::EditorRedactStyleChanged,
+    )
+    .text_size(TYPE_CAPTION)
+    .padding([4, 8])
+    .width(Length::Fill);
+    let redact_all = bar_button(
+        text("Redact All").size(ButtonSize::Sm.text_size()).into(),
+        ButtonKind::Secondary,
+        ButtonSize::Sm,
+        (!ed.busy && n > 0).then_some(Message::EditorRedactAll),
+    );
+    let mut chips = row![].spacing(6);
+    for (kind, count) in summary(pending.iter().map(|(m, _)| *m)) {
+        chips = chips.push(
+            container(text(kind.chip(count)).size(TYPE_MICRO).style(text_t2))
+                .padding([3, 8])
+                .style(chip_style),
+        );
+    }
+    let mut body = column![
+        head,
+        row![picker, redact_all]
+            .spacing(6)
+            .align_y(Alignment::Center),
+    ]
+    .spacing(SP2);
+    if ed.text_panel.redact_style != RedactStyle::Solid {
+        body = body.push(
+            text(
+                "Pixelate and blur are weaker than a solid block: text can sometimes be recovered.",
+            )
+            .size(TYPE_MICRO)
+            .style(text_t3),
+        );
+    }
+    if n > 0 {
+        body = body.push(chips);
+    }
+    if !unlocatable.is_empty() {
+        let m = unlocatable.len();
+        body = body.push(
+            text(format!(
+                "{m} item{} couldn't be located on the image. Cover {} by hand.",
+                if m == 1 { "" } else { "s" },
+                if m == 1 { "it" } else { "them" },
+            ))
+            .size(TYPE_MICRO)
+            .style(text_t2),
+        );
+    }
+    Some(
+        container(body)
+            .padding([10, 12])
+            .width(Length::Fill)
+            .style(redact_card_style)
+            .into(),
+    )
+}
+
 /// One recognized line: hover outlines it on the image, click selects
-/// (⇧ range, ⌘ toggle). `marks` (char ranges) are underlined.
+/// (⇧ range, ⌘ toggle). `marks` (char ranges) are underlined. With
+/// `redact_button` (hovered line with pending matches) a Redact button
+/// sits on the row's trailing edge.
+#[allow(clippy::too_many_arguments)]
 fn line_row<'a>(
     index: usize,
     line: &'a TextLine,
     hovered: bool,
     selected: bool,
     marks: &[Range<usize>],
+    redact_button: bool,
     p: &'static Palette,
 ) -> Element<'a, Message> {
     let ink = if hovered || selected { p.t1 } else { p.t2 };
@@ -488,7 +728,24 @@ fn line_row<'a>(
                 ..container::Style::default()
             }
         });
-    mouse_area(content)
+    let body: Element<'a, Message> = if redact_button {
+        iced::widget::stack![
+            content,
+            container(bar_button(
+                text("Redact").size(ButtonSize::Xs.text_size()).into(),
+                ButtonKind::Secondary,
+                ButtonSize::Xs,
+                Some(Message::EditorRedactLine(index)),
+            ))
+            .width(Length::Fill)
+            .align_x(Alignment::End)
+            .padding([2, 4]),
+        ]
+        .into()
+    } else {
+        content.into()
+    };
+    mouse_area(body)
         .on_enter(Message::EditorTextLineHovered(index))
         .on_exit(Message::EditorTextLineUnhovered(index))
         .on_press(Message::EditorTextLineClicked(index))
@@ -516,18 +773,30 @@ fn lines_view<'a>(
             .style(text_t3),
     ]
     .align_y(Alignment::Center);
+    let pending = pending_matches(ed);
     let mut list = column![].spacing(1);
     for (i, line) in doc.lines.iter().enumerate() {
+        let marks: Vec<Range<usize>> = pending
+            .iter()
+            .filter(|(m, _)| m.line == i)
+            .map(|(m, _)| m.span.clone())
+            .collect();
+        let hovered = tp.hovered == Some(i);
         list = list.push(line_row(
             i,
             line,
-            tp.hovered == Some(i),
+            hovered,
             tp.selected.contains(&i),
-            &[],
+            &marks,
+            hovered && !marks.is_empty() && !ed.busy,
             p,
         ));
     }
-    let mut col = column![header, scrollable(list).height(Length::Fill)].spacing(SP2);
+    let mut col = column![].spacing(SP2);
+    if let Some(card) = redact_card(ed, &pending, p) {
+        col = col.push(card);
+    }
+    col = col.push(header).push(scrollable(list).height(Length::Fill));
     if !doc.positioned {
         col = col.push(
             text("This platform's text recognition doesn't report where lines are, so hover-to-locate and smart redact are off.")
@@ -680,5 +949,28 @@ mod tests {
             ]
         );
         assert!(line_spans("", &[]).is_empty());
+    }
+
+    #[test]
+    fn redact_status_counts_items_and_reports_unlocatable_ones() {
+        assert_eq!(redact_status(0, 0), "No sensitive items left to redact.");
+        assert_eq!(redact_status(1, 0), "Redacted 1 item.");
+        assert_eq!(redact_status(4, 0), "Redacted 4 items.");
+        assert_eq!(
+            redact_status(2, 1),
+            "Redacted 2 items. 1 more couldn't be located; cover it by hand."
+        );
+        assert_eq!(
+            redact_status(0, 3),
+            "Couldn't locate 3 sensitive items. Cover them by hand."
+        );
+    }
+
+    #[test]
+    fn redact_card_title_counts_unlocatable_items_too() {
+        assert_eq!(redact_card_title(0, 0), "All sensitive items redacted");
+        assert_eq!(redact_card_title(1, 0), "1 sensitive item");
+        assert_eq!(redact_card_title(0, 2), "2 sensitive items");
+        assert_eq!(redact_card_title(3, 1), "4 sensitive items");
     }
 }

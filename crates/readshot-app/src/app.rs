@@ -507,6 +507,12 @@ pub enum Message {
     /// Command (⌘ / Ctrl) held state changed while an editor is open.
     /// Handled at top level (no cache clear).
     EditorCommandChanged(bool),
+    /// Smart-redact style (Solid block / Pixelate / Blur).
+    EditorRedactStyleChanged(readshot_core::redact::RedactStyle),
+    /// Redact every pending sensitive item as one undo step.
+    EditorRedactAll,
+    /// Redact the pending sensitive items in Text-panel line `index`.
+    EditorRedactLine(usize),
     /// User clicked Discard. Closes the editor window.
     EditorDiscardRequested,
     /// "Keep Editing" on the armed-discard toast: back out of Discard.

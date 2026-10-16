@@ -1808,9 +1808,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorTextLineClicked(..)
         | Message::EditorCopyLines
         | Message::EditorCopyLinesDone(..)
-        | Message::EditorRemoveLineBreaksToggled(..)) => {
-            editor_ops::handle_editor_message(state, msg)
-        }
+        | Message::EditorRemoveLineBreaksToggled(..)
+        | Message::EditorRedactStyleChanged(..)
+        | Message::EditorRedactAll
+        | Message::EditorRedactLine(..)) => editor_ops::handle_editor_message(state, msg),
         Message::OverlayCopyDone(result) => {
             state.last_capture_status = Some(match result {
                 Ok(()) => "Copied image to clipboard.".into(),
@@ -9254,5 +9255,176 @@ mod tests {
         ));
         plain.text_panel.hovered = Some(0);
         assert_eq!(text_marks(&plain, true), (None, Vec::new()));
+    }
+
+    #[test]
+    fn redact_all_adds_one_block_per_item_as_one_undo_step() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let ed = app.editor.as_ref().unwrap();
+        let anns = ed.model.annotations();
+        assert_eq!(anns.len(), 2);
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+        assert_eq!(ed.status.as_deref(), Some("Redacted 2 items."));
+        assert!(matches!(
+            ed.visible_toast_action(),
+            Some(crate::editor::EditorToastAction::UndoRedaction { .. })
+        ));
+        // Span-precise: the email block starts at the address's word box
+        // (x 22.4, padded and snapped to 21), not at "Email" (x 6.4).
+        match &anns[0] {
+            Annotation::Rectangle {
+                rect, style, color, ..
+            } => {
+                assert_eq!(style.fill, readshot_core::FillMode::Filled);
+                assert_eq!(*color, Rgba::OPAQUE_BLACK);
+                assert_eq!(rect.x, 21.0);
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            ed.model.annotations().len(),
+            2,
+            "covered items are not redacted twice"
+        );
+        assert_eq!(
+            ed.status.as_deref(),
+            Some("No sensitive items left to redact.")
+        );
+
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        );
+        assert!(app.editor.as_ref().unwrap().model.annotations().is_empty());
+    }
+
+    #[test]
+    fn redact_line_uses_the_chosen_style() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(
+            &mut app,
+            Message::EditorRedactStyleChanged(readshot_core::redact::RedactStyle::Pixelate),
+        );
+        let _ = update(&mut app, Message::EditorRedactLine(2));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.annotations().len(), 1);
+        assert!(matches!(
+            ed.model.annotations()[0],
+            Annotation::Pixelate { .. }
+        ));
+        assert_eq!(ed.status.as_deref(), Some("Redacted 1 item."));
+        let _ = update(&mut app, Message::EditorRedactLine(0));
+        assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 1);
+    }
+
+    #[test]
+    fn redaction_needs_line_positions() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(&mut app, Message::EditorTextRecognize);
+        let session = app.editor.as_ref().unwrap().session_id;
+        let _ = update(
+            &mut app,
+            Message::EditorTextRecognized {
+                session,
+                result: Ok(readshot_core::text_lines::TextDocument::from_plain(
+                    "Email priya@example.com",
+                )),
+            },
+        );
+        assert!(app.editor.as_ref().unwrap().text_panel.matches.is_empty());
+        let _ = update(&mut app, Message::EditorRedactAll);
+        assert!(app.editor.as_ref().unwrap().model.annotations().is_empty());
+    }
+
+    #[test]
+    fn unlocatable_items_are_reported_not_dropped() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        // A match whose line no longer exists cannot be placed.
+        app.editor
+            .as_mut()
+            .unwrap()
+            .text_panel
+            .matches
+            .push(readshot_core::redact::RedactMatch {
+                line: 99,
+                span: 0..5,
+                kind: readshot_core::redact::RedactKind::Email,
+            });
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(super::text_panel::pending_matches(ed).len(), 2);
+        assert_eq!(super::text_panel::unlocatable_matches(ed).len(), 1);
+
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.annotations().len(), 2);
+        assert_eq!(
+            ed.status.as_deref(),
+            Some("Redacted 2 items. 1 more couldn't be located; cover it by hand.")
+        );
+        assert!(ed.visible_toast_action().is_some());
+
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            ed.status.as_deref(),
+            Some("Couldn't locate 1 sensitive item. Cover it by hand.")
+        );
+        assert!(ed.status_is_error());
+    }
+
+    #[test]
+    fn redaction_undo_is_dropped_by_any_other_history_change() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        );
+        assert_eq!(app.editor.as_ref().unwrap().toast_action, None);
+        // Redo returns to the redaction's depth; the Undo must not come
+        // back (a different edit could sit at that depth too).
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.annotations().len(), 2);
+        assert_eq!(ed.visible_toast_action(), None);
+
+        // Same for history changes that set no status of their own
+        // (e.g. a move): the history sync itself drops the Undo.
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        );
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let coord = app.coordinator.clone();
+        let ed = app.editor.as_mut().unwrap();
+        assert!(ed.visible_toast_action().is_some());
+        assert!(ed.model.undo());
+        super::editor_ops::sync_editor_history(ed, &coord);
+        assert!(ed.model.redo());
+        assert_eq!(ed.visible_toast_action(), None);
+    }
+
+    #[test]
+    fn arming_discard_drops_the_redaction_undo() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorRedactAll);
+        let _ = update(&mut app, Message::EditorDiscardRequested);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.discard_pending_at.is_some());
+        assert_eq!(ed.toast_action, None);
     }
 }
