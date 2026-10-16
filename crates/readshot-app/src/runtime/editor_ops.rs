@@ -537,6 +537,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         }
 
         Message::EditorCopyTextRequested => {
+            let remove_breaks = state.preferences.editor_copy_remove_line_breaks;
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
@@ -545,12 +546,30 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }
             commit_pending_editor_text(ed, &state.coordinator);
             cancel_editor_previews(ed);
+            // Copy All (spec §3.7, ⇧⌘C, also the action bar's Copy Text):
+            // the panel's recognized text only when it is ready and every
+            // annotation is text-neutral (whitelist). Otherwise recognize
+            // the output, so typed text is never dropped and redacted,
+            // scribbled-over or cropped-away text never reaches the
+            // clipboard. The pending draft was committed just above, so
+            // it counts.
+            let neutral = readshot_core::redact::panel_text_matches_output(ed.model.annotations());
+            let cached = neutral
+                .then(|| ed.text_panel.document())
+                .flatten()
+                .map(|doc| readshot_core::text_lines::copy_all(doc, remove_breaks));
             ed.busy = true;
+            if let Some(text) = cached {
+                ed.set_status("Copying text…");
+                return Task::perform(super::text_panel::copy_cached_text(text), |r| {
+                    Message::EditorCopyTextDone(r.map_err(|e| e.to_string()))
+                });
+            }
             ed.set_status("Recognizing text…");
             let img = ed.model.flatten();
             let coord = state.coordinator.clone();
             let prefs = state.preferences.clone();
-            Task::perform(ocr_then_copy(coord, img, prefs), |r| {
+            Task::perform(ocr_then_copy(coord, img, prefs, remove_breaks), |r| {
                 Message::EditorCopyTextDone(r.map_err(|e| e.to_string()))
             })
         }
@@ -1133,7 +1152,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     return Task::none();
                 }
                 // Esc chain: popover, then the overlay panel, then the eyedropper, then the text
-                // draft / selection below.
+                // draft / selection below, then the Text panel's line selection.
                 if ed.eyedropper.take().is_some() {
                     return Task::none();
                 }
@@ -1144,6 +1163,16 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 // cancelled on its own, keeping the selection (and the bar).
                 if ed.style_drag_baseline.is_some() {
                     cancel_editor_previews(ed);
+                    return Task::none();
+                }
+                // Last step of the chain: a Text-panel line selection,
+                // once the canvas has nothing left to cancel.
+                if ed.pending_text.is_none()
+                    && ed.model.selected_annotation().is_none()
+                    && !ed.text_panel.selected.is_empty()
+                {
+                    ed.text_panel.selected.clear();
+                    ed.text_panel.anchor = None;
                     return Task::none();
                 }
                 let keep_selection = ed
@@ -1361,7 +1390,13 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         | Message::EditorPanelToggled
         | Message::EditorPanelTabSelected(..)
         | Message::EditorPanelOverlayDismissed
-        | Message::EditorOpenTextSettings) => {
+        | Message::EditorOpenTextSettings
+        | Message::EditorTextLineHovered(..)
+        | Message::EditorTextLineUnhovered(..)
+        | Message::EditorTextLineClicked(..)
+        | Message::EditorCopyLines
+        | Message::EditorCopyLinesDone(..)
+        | Message::EditorRemoveLineBreaksToggled(..)) => {
             super::text_panel::handle_text_panel_message(state, msg)
         }
         other => unreachable!("non-editor message routed to the editor handler: {other:?}"),

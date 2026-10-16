@@ -492,6 +492,21 @@ pub enum Message {
     EditorPanelTick,
     /// "Open Settings" on the Text tab's no-text state.
     EditorOpenTextSettings,
+    /// Pointer entered Text-panel line `index`.
+    EditorTextLineHovered(usize),
+    /// Pointer left Text-panel line `index`.
+    EditorTextLineUnhovered(usize),
+    /// Click on Text-panel line `index` (⇧ range, ⌘ toggle).
+    EditorTextLineClicked(usize),
+    /// Copy the selected Text-panel lines.
+    EditorCopyLines,
+    /// Copy N Lines finished: `Ok(n)` lines copied.
+    EditorCopyLinesDone(Result<usize, String>),
+    /// "Remove line breaks when copying" toggled.
+    EditorRemoveLineBreaksToggled(bool),
+    /// Command (⌘ / Ctrl) held state changed while an editor is open.
+    /// Handled at top level (no cache clear).
+    EditorCommandChanged(bool),
     /// User clicked Discard. Closes the editor window.
     EditorDiscardRequested,
     /// "Keep Editing" on the armed-discard toast: back out of Discard.
@@ -809,6 +824,9 @@ pub struct App {
     /// modifier changes into canvas widgets, so the runtime tracks Shift globally and
     /// threads it into the editor canvas to constrain shape drags.
     pub editor_shift_held: bool,
+    /// Command (⌘ / Ctrl) held while an editor is open, for ⌘-click in
+    /// the Text panel (`mouse_area` reports no modifiers).
+    pub editor_command_held: bool,
     /// Last directory the user saved into. The editor's save picker
     /// seeds itself there next time so a burst of related captures
     /// lands in the same place. Reset whenever the user picks a new
@@ -1157,6 +1175,7 @@ impl App {
             hovered_pin: None,
             overlay_shift_held: false,
             editor_shift_held: false,
+            editor_command_held: false,
             last_save_dir: None,
             history_root: None,
             history_records: Vec::new(),
@@ -1215,6 +1234,14 @@ impl App {
     pub(crate) fn set_editor_panel_open(&mut self, open: bool) {
         if self.preferences.editor_panel_open != open {
             self.preferences.editor_panel_open = open;
+            self.persist_preferences_if_configured();
+        }
+    }
+
+    /// Remember "Remove line breaks when copying".
+    pub(crate) fn set_copy_remove_line_breaks(&mut self, on: bool) {
+        if self.preferences.editor_copy_remove_line_breaks != on {
+            self.preferences.editor_copy_remove_line_breaks = on;
             self.persist_preferences_if_configured();
         }
     }

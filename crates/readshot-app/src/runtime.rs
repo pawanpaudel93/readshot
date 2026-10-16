@@ -695,6 +695,18 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                 _ => None,
             }
         }));
+        // Command state for ⌘-click multi-select in the Text panel.
+        subs.push(iced::event::listen_with(|event, _status, _window| {
+            use iced::keyboard::Event as KbEvent;
+            match event {
+                iced::Event::Keyboard(KbEvent::KeyPressed { modifiers, .. })
+                | iced::Event::Keyboard(KbEvent::KeyReleased { modifiers, .. })
+                | iced::Event::Keyboard(KbEvent::ModifiersChanged(modifiers)) => {
+                    Some(Message::EditorCommandChanged(modifiers.command()))
+                }
+                _ => None,
+            }
+        }));
     }
     if state.settings_recording_hotkey {
         subs.push(iced::event::listen_with(|event, _status, _window| {
@@ -1477,7 +1489,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         crate::app::CaptureIntent::CopyTextDirect => {
                             let coord = state.coordinator.clone();
                             let prefs = state.preferences.clone();
-                            Task::perform(ocr_then_copy(coord, image, prefs), |r| {
+                            Task::perform(ocr_then_copy(coord, image, prefs, false), |r| {
                                 Message::OverlayCopyTextDone(r.map_err(|e| e.to_string()))
                             })
                         }
@@ -1710,11 +1722,29 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         }
         // High-frequency editor events: handled here, not in the editor
         // arm, so they never clear the canvas geometry cache.
+        Message::EditorCommandChanged(held) => {
+            // Only the Text panel's ⌘-click reads it; nothing to redraw.
+            if state.editor_command_held != held {
+                state.editor_command_held = held;
+            }
+            Task::none()
+        }
         Message::EditorWindowResized(window, width) => {
+            let mut docked_overlay = false;
             if let Some(ed) = state.editor.as_mut() {
                 if ed.window_id == Some(window) {
                     ed.window_width = width;
+                    // An overlay widened into the dock is now the docked
+                    // panel: fold it into the preference (as ⌥⌘P does)
+                    // so no stale overlay flag is left to eat an Esc.
+                    if width >= PANEL_DOCK_MIN_WINDOW && ed.panel_overlay_open {
+                        ed.panel_overlay_open = false;
+                        docked_overlay = true;
+                    }
                 }
+            }
+            if docked_overlay {
+                state.set_editor_panel_open(true);
             }
             Task::none()
         }
@@ -1772,7 +1802,15 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorPanelToggled
         | Message::EditorPanelTabSelected(..)
         | Message::EditorPanelOverlayDismissed
-        | Message::EditorOpenTextSettings) => editor_ops::handle_editor_message(state, msg),
+        | Message::EditorOpenTextSettings
+        | Message::EditorTextLineHovered(..)
+        | Message::EditorTextLineUnhovered(..)
+        | Message::EditorTextLineClicked(..)
+        | Message::EditorCopyLines
+        | Message::EditorCopyLinesDone(..)
+        | Message::EditorRemoveLineBreaksToggled(..)) => {
+            editor_ops::handle_editor_message(state, msg)
+        }
         Message::OverlayCopyDone(result) => {
             state.last_capture_status = Some(match result {
                 Ok(()) => "Copied image to clipboard.".into(),
@@ -2568,11 +2606,16 @@ async fn ocr_then_copy(
     coord: CaptureCoordinator,
     img: image::RgbaImage,
     preferences: Preferences,
+    remove_breaks: bool,
 ) -> Result<String, OcrCopyError> {
     let result = coord
         .recognise(ocr_request_for_image(img, &preferences))
         .await?;
-    let text = result;
+    let text = if remove_breaks {
+        readshot_core::text_lines::remove_line_breaks(&result)
+    } else {
+        result
+    };
     if !text.is_empty() {
         copy_text_to_clipboard(text.clone()).await?;
     }
@@ -8913,5 +8956,282 @@ mod tests {
             PanelMode::Hidden
         );
         assert!(!app.preferences.editor_panel_open);
+    }
+
+    #[test]
+    fn widening_the_window_folds_an_open_overlay_into_the_docked_preference() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.preferences.editor_panel_open = false;
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        ed.window_width = 800.0;
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorPanelToggled);
+        assert!(app.editor.as_ref().unwrap().panel_overlay_open);
+        let _ = update(&mut app, Message::EditorWindowResized(id, 1200.0));
+        let ed = app.editor.as_ref().unwrap();
+        assert!(!ed.panel_overlay_open, "no stale overlay flag");
+        assert!(app.preferences.editor_panel_open, "what is shown is kept");
+        assert_eq!(editor_panel_mode(&app, ed), PanelMode::Docked);
+        // Narrowing again collapses; nothing reopens as an overlay.
+        let _ = update(&mut app, Message::EditorWindowResized(id, 800.0));
+        assert_eq!(
+            editor_panel_mode(&app, app.editor.as_ref().unwrap()),
+            PanelMode::Collapsed
+        );
+    }
+
+    #[test]
+    fn a_stale_overlay_flag_in_a_wide_window_does_not_eat_esc() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.window_width = 1200.0;
+        ed.panel_overlay_open = true;
+        ed.model.commit_annotation(Annotation::Blur {
+            rect: RectLike::new(0.0, 0.0, 10.0, 10.0),
+            radius: 4.0,
+        });
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorTextCancel);
+        assert!(
+            app.editor
+                .as_ref()
+                .unwrap()
+                .model
+                .selected_annotation()
+                .is_none(),
+            "esc reached the annotation selection"
+        );
+    }
+
+    #[test]
+    fn opening_the_panel_closes_an_open_popover() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.preferences.editor_panel_open = false;
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        assert!(app.editor.as_ref().unwrap().popover.is_some());
+        let _ = update(&mut app, Message::EditorPanelToggled);
+        assert!(app.preferences.editor_panel_open);
+        assert_eq!(app.editor.as_ref().unwrap().popover, None);
+        // Narrow-window overlay too.
+        app.preferences.editor_panel_open = false;
+        app.editor.as_mut().unwrap().window_width = 800.0;
+        let _ = update(
+            &mut app,
+            Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        );
+        let _ = update(&mut app, Message::EditorPanelToggled);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.panel_overlay_open);
+        assert_eq!(ed.popover, None);
+    }
+
+    #[test]
+    fn dismissing_no_overlay_keeps_the_hovered_line() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorTextLineHovered(1));
+        let _ = update(&mut app, Message::EditorPanelOverlayDismissed);
+        assert_eq!(app.editor.as_ref().unwrap().text_panel.hovered, Some(1));
+        // An open overlay that closes does drop the hover.
+        let ed = app.editor.as_mut().unwrap();
+        ed.window_width = 800.0;
+        ed.panel_overlay_open = true;
+        let _ = update(&mut app, Message::EditorPanelOverlayDismissed);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(!ed.panel_overlay_open);
+        assert_eq!(ed.text_panel.hovered, None);
+    }
+
+    #[test]
+    fn command_changes_are_tracked_without_touching_the_editor() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorCommandChanged(true));
+        assert!(app.editor_command_held);
+        let _ = update(&mut app, Message::EditorCommandChanged(false));
+        assert!(!app.editor_command_held);
+    }
+
+    #[test]
+    fn copy_all_uses_the_recognized_text_when_annotations_are_text_neutral() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorCopyTextRequested);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.busy);
+        assert_eq!(ed.status.as_deref(), Some("Copying text…"));
+    }
+
+    #[test]
+    fn copy_all_re_recognizes_the_output_when_annotations_add_or_hide_text() {
+        let typed = Annotation::Text {
+            content: "typed note".into(),
+            origin: PointLike::new(4.0, 4.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 16.0,
+            style: Default::default(),
+        };
+        let scribble = Annotation::Pen {
+            points: vec![PointLike::new(0.0, 20.0), PointLike::new(60.0, 22.0)],
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 6.0,
+        };
+        let blur = Annotation::Blur {
+            rect: RectLike::new(0.0, 0.0, 10.0, 10.0),
+            radius: 4.0,
+        };
+        for a in [typed, scribble, blur] {
+            let mut app = build_app(Arc::new(FakePermissions::granted()));
+            ready_editor(&mut app);
+            app.editor
+                .as_mut()
+                .unwrap()
+                .model
+                .commit_annotation(a.clone());
+            let _ = update(&mut app, Message::EditorCopyTextRequested);
+            assert_eq!(
+                app.editor.as_ref().unwrap().status.as_deref(),
+                Some("Recognizing text…"),
+                "{a:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn copy_all_commits_a_pending_text_draft_before_choosing_the_source() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        app.editor
+            .as_mut()
+            .unwrap()
+            .begin_text_edit(crate::editor::PendingText {
+                origin: PointLike::new(4.0, 4.0),
+                content: "draft".into(),
+                edit_index: None,
+            });
+        let _ = update(&mut app, Message::EditorCopyTextRequested);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.annotations().len(), 1, "draft committed");
+        assert_eq!(ed.status.as_deref(), Some("Recognizing text…"));
+    }
+
+    #[test]
+    fn copy_all_before_recognition_falls_back_to_ocr() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(&mut app, Message::EditorCopyTextRequested);
+        assert_eq!(
+            app.editor.as_ref().unwrap().status.as_deref(),
+            Some("Recognizing text…")
+        );
+    }
+
+    #[test]
+    fn panel_line_clicks_follow_shift_and_command() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let selected = |app: &App| -> Vec<usize> {
+            app.editor
+                .as_ref()
+                .unwrap()
+                .text_panel
+                .selected
+                .iter()
+                .copied()
+                .collect()
+        };
+        let _ = update(&mut app, Message::EditorTextLineClicked(0));
+        assert_eq!(selected(&app), [0]);
+        let _ = update(&mut app, Message::EditorShiftChanged(true));
+        let _ = update(&mut app, Message::EditorTextLineClicked(2));
+        assert_eq!(selected(&app), [0, 1, 2]);
+        let _ = update(&mut app, Message::EditorShiftChanged(false));
+        let _ = update(&mut app, Message::EditorCommandChanged(true));
+        let _ = update(&mut app, Message::EditorTextLineClicked(1));
+        assert_eq!(selected(&app), [0, 2]);
+        let _ = update(&mut app, Message::EditorTextLineClicked(9));
+        assert_eq!(selected(&app), [0, 2], "out-of-range clicks are ignored");
+    }
+
+    #[test]
+    fn hover_tracks_the_line_under_the_pointer() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorTextLineHovered(1));
+        let _ = update(&mut app, Message::EditorTextLineHovered(2));
+        // A late exit from line 1 must not clear line 2's hover.
+        let _ = update(&mut app, Message::EditorTextLineUnhovered(1));
+        assert_eq!(app.editor.as_ref().unwrap().text_panel.hovered, Some(2));
+        let _ = update(&mut app, Message::EditorTextLineUnhovered(2));
+        assert_eq!(app.editor.as_ref().unwrap().text_panel.hovered, None);
+    }
+
+    #[test]
+    fn copy_lines_is_ignored_while_busy() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorTextLineClicked(0));
+        app.editor.as_mut().unwrap().busy = true;
+        let _ = update(&mut app, Message::EditorCopyLines);
+        assert!(app.editor.as_ref().unwrap().status.is_none());
+    }
+
+    #[test]
+    fn copy_lines_needs_a_selection_and_reports_the_count() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorCopyLines);
+        assert!(app.editor.as_ref().unwrap().status.is_none());
+        let _ = update(&mut app, Message::EditorTextLineClicked(0));
+        let _ = update(&mut app, Message::EditorCopyLines);
+        assert_eq!(
+            app.editor.as_ref().unwrap().status.as_deref(),
+            Some("Copying text…")
+        );
+        let _ = update(&mut app, Message::EditorCopyLinesDone(Ok(2)));
+        assert_eq!(
+            app.editor.as_ref().unwrap().status.as_deref(),
+            Some("Copied 2 lines.")
+        );
+    }
+
+    #[test]
+    fn remove_line_breaks_toggle_is_remembered() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorRemoveLineBreaksToggled(true));
+        assert!(app.preferences.editor_copy_remove_line_breaks);
+    }
+
+    #[test]
+    fn esc_clears_the_panel_selection_last() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        ready_editor(&mut app);
+        let _ = update(&mut app, Message::EditorTextLineClicked(1));
+        // commit_annotation selects the new annotation.
+        app.editor
+            .as_mut()
+            .unwrap()
+            .model
+            .commit_annotation(Annotation::Blur {
+                rect: RectLike::new(0.0, 0.0, 10.0, 10.0),
+                radius: 4.0,
+            });
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.model.selected_annotation().is_none());
+        assert!(
+            !ed.text_panel.selected.is_empty(),
+            "first Esc clears the canvas selection"
+        );
+        let _ = update(&mut app, Message::EditorTextCancel);
+        assert!(app.editor.as_ref().unwrap().text_panel.selected.is_empty());
     }
 }
