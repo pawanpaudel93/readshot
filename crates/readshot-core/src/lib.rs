@@ -23,6 +23,7 @@ pub mod ocr_layout;
 pub mod ocr_text;
 pub mod png;
 pub mod preferences;
+pub mod redact;
 pub mod render;
 pub mod scroll_stitch;
 pub mod stamp;
