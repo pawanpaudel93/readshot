@@ -375,6 +375,34 @@ fn bgra_premul_to_rgba(data: &[u8], w: u32, h: u32) -> Option<RgbaImage> {
     Some(out)
 }
 
+/// Downscale a straight-alpha bitmap. Filtering straight alpha averages
+/// in the RGB of fully transparent pixels (usually black), darkening the
+/// edges, so resample premultiplied (in f32 to keep low-alpha precision)
+/// and un-premultiply the result.
+fn scale_straight_alpha(img: &RgbaImage, w: u32, h: u32) -> RgbaImage {
+    let premul = image::Rgba32FImage::from_fn(img.width(), img.height(), |x, y| {
+        let [r, g, b, a] = img.get_pixel(x, y).0;
+        let a = a as f32 / 255.0;
+        image::Rgba([
+            r as f32 / 255.0 * a,
+            g as f32 / 255.0 * a,
+            b as f32 / 255.0 * a,
+            a,
+        ])
+    });
+    let scaled = image::imageops::resize(&premul, w, h, image::imageops::FilterType::Triangle);
+    RgbaImage::from_fn(w, h, |x, y| {
+        let [r, g, b, a] = scaled.get_pixel(x, y).0;
+        let a = a.clamp(0.0, 1.0);
+        let a8 = (a * 255.0).round() as u8;
+        if a8 == 0 {
+            return image::Rgba([0, 0, 0, 0]);
+        }
+        let un = |c: f32| ((c / a).clamp(0.0, 1.0) * 255.0).round() as u8;
+        image::Rgba([un(r), un(g), un(b), a8])
+    })
+}
+
 fn draw_emoji(
     pixmap: &mut Pixmap,
     c: PointLike,
@@ -398,8 +426,7 @@ fn draw_emoji(
         (iw * k).round().max(1.0) as u32,
         (ih * k).round().max(1.0) as u32,
     );
-    let scaled =
-        image::imageops::resize(&bitmap.image, tw, th, image::imageops::FilterType::Triangle);
+    let scaled = scale_straight_alpha(&bitmap.image, tw, th);
     let x0 = (c.x - tw as f32 * 0.5).round() as i32;
     let y0 = (c.y - th as f32 * 0.5).round() as i32;
     let (pw, ph) = (pixmap.width() as i32, pixmap.height() as i32);
@@ -469,6 +496,29 @@ mod tests {
             assert!((x as f64 - r * angle.cos()).abs() < 1e-4, "x{i}");
             assert!((y as f64 - r * angle.sin()).abs() < 1e-4, "y{i}");
         }
+    }
+
+    #[test]
+    fn downscaling_keeps_edges_from_darkening() {
+        // Opaque white centre, transparent *black* surround: a straight-
+        // alpha resize bleeds the surround's RGB 0 into the edge pixels.
+        let mut img = RgbaImage::from_pixel(160, 160, image::Rgba([0, 0, 0, 0]));
+        for y in 40..120 {
+            for x in 40..120 {
+                img.put_pixel(x, y, image::Rgba([255, 255, 255, 255]));
+            }
+        }
+        let out = scale_straight_alpha(&img, 28, 28);
+        let mut edges = 0;
+        for p in out.pixels() {
+            if p[3] > 0 {
+                if p[3] < 255 {
+                    edges += 1;
+                }
+                assert!(p[0] >= 250 && p[1] >= 250 && p[2] >= 250, "{p:?}");
+            }
+        }
+        assert!(edges > 0, "the test needs partially covered edge pixels");
     }
 
     #[test]
