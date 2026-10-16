@@ -59,8 +59,8 @@ pub struct CaptureCoordinator {
     /// annotations). The thread exits when the last coordinator clone
     /// drops its sender.
     history_update_tx: Option<std::sync::mpsc::Sender<HistoryUpdate>>,
-    /// See [`ScrubBook`].
-    scrubs: Arc<std::sync::Mutex<ScrubBook>>,
+    /// See [`Scrubs`].
+    scrubs: Arc<Scrubs>,
 }
 
 /// Message for the background history writer thread.
@@ -100,24 +100,41 @@ struct HistoryRewrite {
 }
 
 /// Coordinator-owned History scrub state, shared with the writer
-/// thread, so a scrub never depends on the editor staying open. Its
-/// mutex also makes "is this rewrite still the newest" and the store
-/// write one step, so a stale restore can't land after a newer scrub's
-/// phase one.
+/// thread, so a scrub never depends on the editor staying open.
+///
+/// Two locks, always taken in this order, neither ever held across an
+/// image render, encode or big write (those are staged first):
+/// - `book` is the commit gate. Held for "is this rewrite still the
+///   newest?" plus the short commit (renames + sidecar), so a stale
+///   restore can't land after a newer scrub's phase one, and for the
+///   parked-save hand-off.
+/// - `state` is request bookkeeping, held only for map updates. The UI
+///   thread takes just this one on an edit whose redactions are already
+///   secured.
+#[derive(Default)]
+struct Scrubs {
+    book: std::sync::Mutex<ScrubBook>,
+    state: std::sync::Mutex<ScrubState>,
+}
+
 #[derive(Default)]
 struct ScrubBook {
-    /// Newest rewrite request per record.
-    latest: std::collections::HashMap<readshot_core::Uuid, u64>,
     /// Scrubs of records not on disk yet (the capture's save hasn't
     /// landed). `record_history` saves these in place of the raw
     /// capture, so unredacted content never reaches disk.
     parked: std::collections::HashMap<readshot_core::Uuid, RewriteJob>,
-    /// Redactions whose phase one (masked sidecar, unredacted image
-    /// removed) is on disk, per record.
-    secured: std::collections::HashMap<readshot_core::Uuid, Vec<readshot_core::Annotation>>,
     /// Scrubs whose phase one hasn't succeeded yet; retried by every
     /// rewrite attempt and by [`CaptureCoordinator::flush_history_updates`].
     unsecured: std::collections::HashMap<readshot_core::Uuid, CaptureRecord>,
+}
+
+#[derive(Default)]
+struct ScrubState {
+    /// Newest rewrite request per record.
+    latest: std::collections::HashMap<readshot_core::Uuid, u64>,
+    /// Redactions whose phase one (masked sidecar, unredacted image
+    /// removed) is on disk, per record.
+    secured: std::collections::HashMap<readshot_core::Uuid, Vec<readshot_core::Annotation>>,
 }
 
 fn next_rewrite_seq() -> u64 {
@@ -137,9 +154,18 @@ fn retry_delay(attempt: u32) -> std::time::Duration {
         .min(max)
 }
 
-fn lock_book(book: &std::sync::Mutex<ScrubBook>) -> std::sync::MutexGuard<'_, ScrubBook> {
-    book.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl Scrubs {
+    /// A newer request than `seq` exists for record `id`.
+    fn is_stale(&self, id: readshot_core::Uuid, seq: u64) -> bool {
+        lock(&self.state)
+            .latest
+            .get(&id)
+            .is_some_and(|&latest| latest > seq)
+    }
 }
 
 impl HistoryUpdate {
@@ -179,15 +205,20 @@ fn coalesce(batch: Vec<HistoryUpdate>) -> Vec<HistoryUpdate> {
     kept
 }
 
-/// The record and PNG bytes a job writes. Pure CPU (render + encode).
-fn render_job(job: &RewriteJob) -> Result<(CaptureRecord, Vec<u8>), String> {
+/// The record, PNG and thumbnail bytes a job writes. Pure CPU (render,
+/// encode; the thumbnail comes from the in-memory image, not a decode).
+/// What a job writes: the record (dimensions updated), PNG and thumbnail.
+type Rendered = (CaptureRecord, Vec<u8>, Option<Vec<u8>>);
+
+fn render_job(job: &RewriteJob) -> Result<Rendered, String> {
     let baked = (!job.bake.is_empty()).then(|| readshot_core::render(&job.base, &job.bake));
     let img = baked.as_ref().unwrap_or(&job.base);
     let mut record = job.record.clone();
     record.width_px = img.width();
     record.height_px = img.height();
     let png = readshot_core::encode_png_fast(img).map_err(|e| e.to_string())?;
-    Ok((record, png))
+    let thumb = readshot_core::history::thumbnail_png(img);
+    Ok((record, png, thumb))
 }
 
 enum Outcome {
@@ -199,25 +230,35 @@ enum Outcome {
     Failed(String),
 }
 
-/// Write one rendered job, if it is still the newest request for its
-/// record, and keep the scrub book in step. Holds the book lock across
-/// the store write (see [`ScrubBook`]).
+/// Write one rendered job: stage the image (slow; no lock held), then,
+/// under the commit gate, check it is still the newest request and
+/// commit (renames + sidecar). Keeps the scrub bookkeeping in step.
 fn apply_rewrite(
     store: &dyn HistoryStore,
-    book: &std::sync::Mutex<ScrubBook>,
+    scrubs: &Scrubs,
     job: &RewriteJob,
     record: &CaptureRecord,
     png: &[u8],
+    thumb: Option<&[u8]>,
 ) -> Outcome {
     let id = record.id;
-    let mut b = lock_book(book);
-    if b.latest.get(&id).is_some_and(|&latest| latest > job.seq) {
-        return Outcome::Stale;
+    let staged = match store.stage_image(record, png, thumb) {
+        Ok(staged) => staged,
+        Err(e) => {
+            fail_closed(store, scrubs, job);
+            return Outcome::Failed(e.to_string());
+        }
+    };
+    let mut b = lock(&scrubs.book);
+    if scrubs.is_stale(id, job.seq) {
+        return Outcome::Stale; // `staged` drops: its files are removed
     }
-    match store.rewrite(record, png) {
+    match store.commit_rewrite(record, staged) {
         Ok(true) => {
             if record.redacted {
-                b.secured.insert(id, record.redactions.clone());
+                lock(&scrubs.state)
+                    .secured
+                    .insert(id, record.redactions.clone());
             }
             b.unsecured.remove(&id);
             Outcome::Done
@@ -231,7 +272,7 @@ fn apply_rewrite(
         Err(e) => {
             if record.redacted {
                 // On-disk state unknown: phase one is redone next time.
-                b.secured.remove(&id);
+                lock(&scrubs.state).secured.remove(&id);
                 b.unsecured.insert(id, record.clone());
             }
             Outcome::Failed(e.to_string())
@@ -239,33 +280,49 @@ fn apply_rewrite(
     }
 }
 
-/// Run one rewrite: render, encode, write, report. Returns the retry to
-/// schedule when the write failed. Called on the writer thread (or the
-/// fallback path).
+/// A scrub's image couldn't be produced or staged: still make sure the
+/// unredacted content goes (phase one) — but only if the scrub is still
+/// the newest request, so a stale one can't undo a later restore.
+fn fail_closed(store: &dyn HistoryStore, scrubs: &Scrubs, job: &RewriteJob) {
+    if !job.record.redacted {
+        return;
+    }
+    let id = job.record.id;
+    let mut b = lock(&scrubs.book);
+    if scrubs.is_stale(id, job.seq) {
+        return;
+    }
+    match store.begin_scrub(&job.record) {
+        Ok(true) => {
+            b.unsecured.remove(&id);
+        }
+        Ok(false) => {
+            b.parked.insert(id, job.clone());
+        }
+        Err(_) => {
+            lock(&scrubs.state).secured.remove(&id);
+            b.unsecured.insert(id, job.record.clone());
+        }
+    }
+}
+
+/// Run one rewrite: render, encode, stage, commit, report. Returns the
+/// retry to schedule when it failed. Called on the writer thread (or
+/// the fallback path).
 fn run_rewrite(
     store: &dyn HistoryStore,
-    book: &std::sync::Mutex<ScrubBook>,
+    scrubs: &Scrubs,
     mut rewrite: Box<HistoryRewrite>,
 ) -> Option<(std::time::Instant, Box<HistoryRewrite>)> {
-    let id = rewrite.job.record.id;
-    if lock_book(book)
-        .latest
-        .get(&id)
-        .is_some_and(|&latest| latest > rewrite.job.seq)
-    {
+    if scrubs.is_stale(rewrite.job.record.id, rewrite.job.seq) {
         return None;
     }
     let outcome = match render_job(&rewrite.job) {
-        Ok((record, png)) => apply_rewrite(store, book, &rewrite.job, &record, &png),
+        Ok((record, png, thumb)) => {
+            apply_rewrite(store, scrubs, &rewrite.job, &record, &png, thumb.as_deref())
+        }
         Err(e) => {
-            if rewrite.job.record.redacted {
-                // No image to write, but the unredacted content must
-                // still go: do phase one.
-                let mut b = lock_book(book);
-                if store.begin_scrub(&rewrite.job.record).is_err() {
-                    b.unsecured.insert(id, rewrite.job.record.clone());
-                }
-            }
+            fail_closed(store, scrubs, &rewrite.job);
             Outcome::Failed(e)
         }
     };
@@ -291,7 +348,7 @@ fn run_rewrite(
 
 fn run_update(
     store: &dyn HistoryStore,
-    book: &std::sync::Mutex<ScrubBook>,
+    scrubs: &Scrubs,
     msg: HistoryUpdate,
 ) -> Option<(std::time::Instant, Box<HistoryRewrite>)> {
     match msg {
@@ -304,7 +361,7 @@ fn run_update(
             }
             None
         }
-        HistoryUpdate::Rewrite(rewrite) => run_rewrite(store, book, rewrite),
+        HistoryUpdate::Rewrite(rewrite) => run_rewrite(store, scrubs, rewrite),
         HistoryUpdate::Flush(ack) => {
             let _ = ack.send(());
             None
@@ -312,17 +369,34 @@ fn run_update(
     }
 }
 
+type Retry = (std::time::Instant, Box<HistoryRewrite>);
+
+/// A waiting retry is replaced only by a newer **rewrite** of its record
+/// (which carries the whole state). A plain sidecar write doesn't carry
+/// the image, so it must not cancel a pending scrub's retry.
+fn drop_superseded_retries(retries: &mut Vec<Retry>, batch: &[HistoryUpdate]) {
+    let fresh: std::collections::HashSet<_> = batch
+        .iter()
+        .filter_map(|m| match m {
+            HistoryUpdate::Rewrite(rw) => Some(rw.job.record.id),
+            _ => None,
+        })
+        .collect();
+    retries.retain(|(_, rw)| !fresh.contains(&rw.job.record.id));
+}
+
 /// The writer thread: drain what queued up while the last write ran,
 /// coalesce it (only the newest rewrite of a record pays for a render +
 /// PNG encode), run it, and retry failed rewrites with backoff until
-/// they land or a newer request for the record replaces them.
+/// they land or a newer rewrite of the record replaces them.
 fn writer_loop(
     store: &dyn HistoryStore,
-    book: &std::sync::Mutex<ScrubBook>,
+    scrubs: &Scrubs,
     rx: &std::sync::mpsc::Receiver<HistoryUpdate>,
 ) {
     use std::sync::mpsc::RecvTimeoutError;
-    let mut retries: Vec<(std::time::Instant, Box<HistoryRewrite>)> = Vec::new();
+    store.sweep_staging();
+    let mut retries: Vec<Retry> = Vec::new();
     loop {
         let next_due = retries.iter().map(|(due, _)| *due).min();
         let first = match next_due {
@@ -342,7 +416,7 @@ fn writer_loop(
         let (due, waiting): (Vec<_>, Vec<_>) = retries.into_iter().partition(|(t, _)| *t <= now);
         retries = waiting;
         // Due retries are older than anything just received, so a newer
-        // request for the same record supersedes them in `coalesce`.
+        // rewrite of the same record supersedes them in `coalesce`.
         let mut batch: Vec<HistoryUpdate> = due
             .into_iter()
             .map(|(_, rw)| HistoryUpdate::Rewrite(rw))
@@ -351,11 +425,9 @@ fn writer_loop(
             batch.push(msg);
             batch.extend(rx.try_iter());
         }
-        let fresh: std::collections::HashSet<_> =
-            batch.iter().filter_map(HistoryUpdate::record_id).collect();
-        retries.retain(|(_, rw)| !fresh.contains(&rw.job.record.id));
+        drop_superseded_retries(&mut retries, &batch);
         for msg in coalesce(batch) {
-            if let Some(retry) = run_update(store, book, msg) {
+            if let Some(retry) = run_update(store, scrubs, msg) {
                 retries.push(retry);
             }
         }
@@ -369,14 +441,14 @@ impl CaptureCoordinator {
         permissions: Arc<dyn PermissionsProvider>,
         history: Option<Arc<dyn HistoryStore>>,
     ) -> Self {
-        let scrubs = Arc::new(std::sync::Mutex::new(ScrubBook::default()));
+        let scrubs = Arc::new(Scrubs::default());
         let history_update_tx = history.as_ref().and_then(|store| {
             let store = Arc::clone(store);
-            let book = Arc::clone(&scrubs);
+            let scrubs_for_writer = Arc::clone(&scrubs);
             let (tx, rx) = std::sync::mpsc::channel::<HistoryUpdate>();
             std::thread::Builder::new()
                 .name("history-sync".into())
-                .spawn(move || writer_loop(store.as_ref(), &book, &rx))
+                .spawn(move || writer_loop(store.as_ref(), &scrubs_for_writer, &rx))
                 .ok()
                 .map(|_| tx)
         });
@@ -523,43 +595,57 @@ impl CaptureCoordinator {
                 .cloned()
                 .collect();
         }
-        let job = {
-            let mut b = lock_book(&self.scrubs);
+        // Bookkeeping only (no I/O): the UI thread never waits on a
+        // write here unless phase one is actually needed.
+        let (seq, phase_one) = {
+            let mut st = lock(&self.scrubs.state);
             let seq = next_rewrite_seq();
-            b.latest.insert(id, seq);
-            let job = RewriteJob {
-                seq,
-                record: record.clone(),
-                base,
-                bake,
-            };
-            if record.redacted {
-                if b.secured.get(&id) != Some(&record.redactions) {
-                    match store.begin_scrub(&record) {
-                        Ok(true) => {
-                            b.secured.insert(id, record.redactions.clone());
-                            b.unsecured.remove(&id);
-                        }
-                        Ok(false) => {
-                            b.parked.insert(id, job);
-                            return rx;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                target: "readshot::history",
-                                "history scrub (phase one) failed: {e}"
-                            );
-                            b.unsecured.insert(id, record);
-                        }
-                    }
-                }
+            st.latest.insert(id, seq);
+            let phase_one = if record.redacted {
+                st.secured.get(&id) != Some(&record.redactions)
             } else {
-                b.parked.remove(&id);
-                b.secured.remove(&id);
-                b.unsecured.remove(&id);
-            }
-            job
+                st.secured.remove(&id);
+                false
+            };
+            (seq, phase_one)
         };
+        let job = RewriteJob {
+            seq,
+            record: record.clone(),
+            base,
+            bake,
+        };
+        if phase_one {
+            // Phase one: a small sidecar write plus two removals. The
+            // commit gate is only ever held for short commits (images are
+            // staged outside it), so this doesn't wait on an encode or a
+            // big image write.
+            let mut b = lock(&self.scrubs.book);
+            match store.begin_scrub(&record) {
+                Ok(true) => {
+                    lock(&self.scrubs.state)
+                        .secured
+                        .insert(id, record.redactions.clone());
+                    b.unsecured.remove(&id);
+                }
+                Ok(false) => {
+                    b.parked.insert(id, job);
+                    return rx;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "readshot::history",
+                        "history scrub (phase one) failed: {e}"
+                    );
+                    b.unsecured.insert(id, record);
+                }
+            }
+        } else if !record.redacted {
+            // A restore (rare): cancel any parked or unsecured scrub.
+            let mut b = lock(&self.scrubs.book);
+            b.parked.remove(&id);
+            b.unsecured.remove(&id);
+        }
         let msg = HistoryUpdate::Rewrite(Box::new(HistoryRewrite {
             job,
             done: Some(tx),
@@ -616,14 +702,16 @@ impl CaptureCoordinator {
         let Some(store) = &self.history else {
             return;
         };
-        let mut b = lock_book(&self.scrubs);
+        let mut b = lock(&self.scrubs.book);
         let pending: Vec<CaptureRecord> = b.unsecured.values().cloned().collect();
         for record in pending {
             match store.begin_scrub(&record) {
                 Ok(found) => {
                     b.unsecured.remove(&record.id);
                     if found {
-                        b.secured.insert(record.id, record.redactions.clone());
+                        lock(&self.scrubs.state)
+                            .secured
+                            .insert(record.id, record.redactions.clone());
                     }
                 }
                 Err(e) => tracing::warn!(
@@ -673,9 +761,9 @@ impl CaptureCoordinator {
         // thumbnail, and fsyncs — synchronous fs/CPU work that would
         // otherwise stall a tokio worker for the duration.
         let history = Arc::clone(history);
-        let book = Arc::clone(&self.scrubs);
+        let scrubs = Arc::clone(&self.scrubs);
         let join = tokio::task::spawn_blocking(move || {
-            if let Err(e) = save_capture(history.as_ref(), &book, &record, &png_bytes) {
+            if let Err(e) = save_capture(history.as_ref(), &scrubs, &record, &png_bytes) {
                 tracing::warn!(target: readshot_core::log::cat::HISTORY, "history save failed: {e}");
                 return;
             }
@@ -692,49 +780,60 @@ impl CaptureCoordinator {
 
 /// Save a fresh capture, or — when the editor already scrubbed it while
 /// the save was in flight (a parked scrub) — its scrubbed version
-/// instead, so the raw capture never reaches disk. The parked job is
-/// rendered outside the book lock, then saved under it if it is still
-/// the parked one (else rendered again).
+/// instead, so the raw capture never reaches disk. Rendering, encoding
+/// and staging happen without any lock; the commit gate is held only to
+/// re-check that the parked entry didn't change meanwhile (else
+/// prepare again) and for the short commit.
 fn save_capture(
     history: &dyn HistoryStore,
-    book: &std::sync::Mutex<ScrubBook>,
+    scrubs: &Scrubs,
     record: &CaptureRecord,
     png: &[u8],
 ) -> Result<(), readshot_core::HistoryError> {
+    let raw_thumb = readshot_core::history::thumbnail_png_from_bytes(png);
     loop {
-        let parked = lock_book(book).parked.get(&record.id).cloned();
-        let rendered = parked.as_ref().map(render_job);
-        let mut b = lock_book(book);
+        let parked = lock(&scrubs.book).parked.get(&record.id).cloned();
+        let rendered = parked.as_ref().and_then(|job| render_job(job).ok());
+        let staged = match (&parked, &rendered) {
+            (None, _) => Some(history.stage_image(record, png, raw_thumb.as_deref())),
+            (Some(_), Some((scrubbed, bytes, thumb))) => {
+                Some(history.stage_image(scrubbed, bytes, thumb.as_deref()))
+            }
+            (Some(_), None) => None,
+        };
+        let mut b = lock(&scrubs.book);
         if b.parked.get(&record.id).map(|j| j.seq) != parked.as_ref().map(|j| j.seq) {
-            continue;
+            continue; // changed meanwhile; staged files drop
         }
         let Some(job) = parked else {
-            return history.save(record, png);
+            return match staged {
+                Some(Ok(staged)) => history.commit_save(record, staged),
+                Some(Err(e)) => Err(e),
+                None => Ok(()),
+            };
         };
         b.parked.remove(&record.id);
-        return match rendered {
-            Some(Ok((scrubbed, bytes))) => {
-                let saved = history.save(&scrubbed, &bytes);
-                match &saved {
-                    Ok(()) => {
-                        b.secured.insert(record.id, scrubbed.redactions.clone());
-                    }
-                    Err(_) => {
-                        b.parked.insert(record.id, job);
-                    }
+        if let (Some((scrubbed, _, _)), Some(Ok(staged))) = (rendered, staged) {
+            let saved = history.commit_save(&scrubbed, staged);
+            match &saved {
+                Ok(()) => {
+                    lock(&scrubs.state)
+                        .secured
+                        .insert(record.id, scrubbed.redactions.clone());
                 }
-                saved
-            }
-            // Can't encode the scrubbed image: save the capture, then
-            // run phase one on it right away (still under the lock).
-            _ => {
-                history.save(record, png)?;
-                if history.begin_scrub(&job.record).is_err() {
-                    b.unsecured.insert(record.id, job.record.clone());
+                Err(_) => {
+                    b.parked.insert(record.id, job);
                 }
-                Ok(())
             }
-        };
+            return saved;
+        }
+        // Couldn't render or stage the scrubbed image (rare): save the
+        // capture and run phase one on it at once, still under the gate.
+        history.save(record, png)?;
+        if history.begin_scrub(&job.record).is_err() {
+            b.unsecured.insert(record.id, job.record.clone());
+        }
+        return Ok(());
     }
 }
 
@@ -1004,15 +1103,30 @@ mod tests {
         fn update(&self, r: &CaptureRecord) -> Result<(), readshot_core::HistoryError> {
             self.inner.update(r)
         }
-        fn rewrite(
+        fn stage_image(
             &self,
             r: &CaptureRecord,
             png: &[u8],
+            thumb: Option<&[u8]>,
+        ) -> Result<readshot_core::StagedImage, readshot_core::HistoryError> {
+            self.inner.stage_image(r, png, thumb)
+        }
+        fn commit_rewrite(
+            &self,
+            r: &CaptureRecord,
+            staged: readshot_core::StagedImage,
         ) -> Result<bool, readshot_core::HistoryError> {
             if take_failure(&self.fail_rewrites) {
                 return Err(readshot_core::HistoryError::Io("disk full".into()));
             }
-            self.inner.rewrite(r, png)
+            self.inner.commit_rewrite(r, staged)
+        }
+        fn commit_save(
+            &self,
+            r: &CaptureRecord,
+            staged: readshot_core::StagedImage,
+        ) -> Result<(), readshot_core::HistoryError> {
+            self.inner.commit_save(r, staged)
         }
         fn begin_scrub(&self, r: &CaptureRecord) -> Result<bool, readshot_core::HistoryError> {
             if take_failure(&self.fail_begins) {
@@ -1197,16 +1311,23 @@ mod tests {
         assert!(png_on_disk(&fs_store, &record).is_none());
     }
 
+    fn saved_record(dir: &std::path::Path) -> CaptureRecord {
+        let fs_store = readshot_core::FsHistoryStore::new(dir.join("h"));
+        let mut record = CaptureRecord::new(chrono::Utc::now(), 8, 8, "d");
+        record.ocr_text = Some("secret".into());
+        fs_store
+            .save(&record, &readshot_core::encode_png(&white(8, 8)).unwrap())
+            .unwrap();
+        record
+    }
+
     #[test]
     fn a_stale_rewrite_never_lands_after_a_newer_request() {
         let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
         let store = readshot_core::FsHistoryStore::new(dir.path().join("h"));
-        let record = CaptureRecord::new(chrono::Utc::now(), 8, 8, "d");
-        store
-            .save(&record, &readshot_core::encode_png(&white(8, 8)).unwrap())
-            .unwrap();
-        let book = std::sync::Mutex::new(ScrubBook::default());
-        book.lock().unwrap().latest.insert(record.id, 2);
+        let scrubs = Scrubs::default();
+        lock(&scrubs.state).latest.insert(record.id, 2);
         let mut stale = record.clone();
         stale.ocr_text = Some("stale".into());
         let job = RewriteJob {
@@ -1215,8 +1336,202 @@ mod tests {
             base: Arc::new(white(8, 8)),
             bake: Vec::new(),
         };
-        let outcome = apply_rewrite(&store, &book, &job, &stale, b"x");
+        let png = readshot_core::encode_png(&white(8, 8)).unwrap();
+        let outcome = apply_rewrite(&store, &scrubs, &job, &stale, &png, None);
         assert!(matches!(outcome, Outcome::Stale));
-        assert_eq!(sidecar(&store, &record).ocr_text, None);
+        assert_eq!(sidecar(&store, &record).ocr_text.as_deref(), Some("secret"));
+        // The staged files of the stale write were removed.
+        let dir_of = readshot_core::FsHistoryStore::abs_png_path(store.root(), &record);
+        let leftovers = std::fs::read_dir(dir_of.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".stage"))
+            .count();
+        assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn a_stale_scrub_that_fails_to_render_never_removes_a_restored_image() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let store = readshot_core::FsHistoryStore::new(dir.path().join("h"));
+        let scrubs = Scrubs::default();
+        // A restore (seq 2) came after this scrub (seq 1).
+        lock(&scrubs.state).latest.insert(record.id, 2);
+        let job = RewriteJob {
+            seq: 1,
+            record: scrubbed(&record),
+            base: Arc::new(white(8, 8)),
+            bake: pixelate(),
+        };
+        fail_closed(&store, &scrubs, &job);
+        assert!(
+            png_on_disk(&store, &record).is_some(),
+            "restored image kept"
+        );
+        assert_eq!(sidecar(&store, &record).ocr_text.as_deref(), Some("secret"));
+        // The newest scrub does run phase one.
+        lock(&scrubs.state).latest.insert(record.id, 1);
+        fail_closed(&store, &scrubs, &job);
+        assert!(png_on_disk(&store, &record).is_none());
+        assert_eq!(sidecar(&store, &record).ocr_text.as_deref(), Some("masked"));
+    }
+
+    #[test]
+    fn a_plain_write_never_cancels_a_pending_scrub_retry() {
+        let id = readshot_core::Uuid::new_v4();
+        let other = readshot_core::Uuid::new_v4();
+        let retry = |id| {
+            let HistoryUpdate::Rewrite(rw) = rewrite(id, "retry") else {
+                unreachable!()
+            };
+            (std::time::Instant::now(), rw)
+        };
+        let mut retries = vec![retry(id), retry(other)];
+        drop_superseded_retries(&mut retries, &[HistoryUpdate::Write(tagged(id, "w"))]);
+        assert_eq!(retries.len(), 2, "a plain write carries no image");
+        drop_superseded_retries(&mut retries, &[rewrite(id, "newer")]);
+        assert_eq!(retries.len(), 1);
+        assert_eq!(retries[0].1.job.record.id, other);
+    }
+
+    /// Delegates to an `FsHistoryStore`, but `stage_image` and/or
+    /// `commit_rewrite` block until released, signalling when entered.
+    struct BlockingStore {
+        inner: readshot_core::FsHistoryStore,
+        block_stage: std::sync::atomic::AtomicBool,
+        block_commit: std::sync::atomic::AtomicBool,
+        entered: std::sync::Mutex<std::sync::mpsc::Sender<()>>,
+        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl BlockingStore {
+        fn wait_if(&self, flag: &std::sync::atomic::AtomicBool) {
+            if flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                let _ = self.entered.lock().unwrap().send(());
+                let _ = self
+                    .release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(std::time::Duration::from_secs(10));
+            }
+        }
+    }
+
+    impl HistoryStore for BlockingStore {
+        fn save(&self, r: &CaptureRecord, png: &[u8]) -> Result<(), readshot_core::HistoryError> {
+            self.inner.save(r, png)
+        }
+        fn list(&self) -> Result<Vec<CaptureRecord>, readshot_core::HistoryError> {
+            self.inner.list()
+        }
+        fn apply_retention(
+            &self,
+            p: HistoryRetention,
+            now: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), readshot_core::HistoryError> {
+            self.inner.apply_retention(p, now)
+        }
+        fn clear_all(&self) -> Result<(), readshot_core::HistoryError> {
+            self.inner.clear_all()
+        }
+        fn begin_scrub(&self, r: &CaptureRecord) -> Result<bool, readshot_core::HistoryError> {
+            self.inner.begin_scrub(r)
+        }
+        fn stage_image(
+            &self,
+            r: &CaptureRecord,
+            png: &[u8],
+            thumb: Option<&[u8]>,
+        ) -> Result<readshot_core::StagedImage, readshot_core::HistoryError> {
+            self.wait_if(&self.block_stage);
+            self.inner.stage_image(r, png, thumb)
+        }
+        fn commit_rewrite(
+            &self,
+            r: &CaptureRecord,
+            staged: readshot_core::StagedImage,
+        ) -> Result<bool, readshot_core::HistoryError> {
+            self.wait_if(&self.block_commit);
+            self.inner.commit_rewrite(r, staged)
+        }
+    }
+
+    /// Runs `f` on another thread; true if it finished within 2 s.
+    fn finishes_promptly(f: impl FnOnce() + Send + 'static) -> bool {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            f();
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok()
+    }
+
+    type Gate = (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>);
+
+    fn blocking_coord(
+        dir: &std::path::Path,
+        block_stage: bool,
+        block_commit: bool,
+    ) -> (CaptureCoordinator, Gate) {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let store = Arc::new(BlockingStore {
+            inner: readshot_core::FsHistoryStore::new(dir.join("h")),
+            block_stage: std::sync::atomic::AtomicBool::new(block_stage),
+            block_commit: std::sync::atomic::AtomicBool::new(block_commit),
+            entered: std::sync::Mutex::new(entered_tx),
+            release: std::sync::Mutex::new(release_rx),
+        });
+        (history_coord(store), (entered_rx, release_tx))
+    }
+
+    #[test]
+    fn a_new_redaction_does_not_wait_on_an_image_being_written() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let (coord, (entered, release)) = blocking_coord(dir.path(), true, false);
+        let base = Arc::new(white(8, 8));
+        drop(coord.rewrite_history_async(scrubbed(&record), Arc::clone(&base), pixelate()));
+        // The writer is now stuck writing the image.
+        entered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        // A different redaction needs phase one (the commit gate)…
+        let mut more = pixelate();
+        more.push(readshot_core::Annotation::Blur {
+            rect: readshot_core::RectLike::new(4.0, 4.0, 2.0, 2.0),
+            radius: 2.0,
+        });
+        let c = coord.clone();
+        let (r, b) = (scrubbed(&record), Arc::clone(&base));
+        // …and still doesn't wait on the image write.
+        assert!(finishes_promptly(move || drop(
+            c.rewrite_history_async(r, b, more)
+        )));
+        let _ = release.send(());
+        coord.flush_history_updates();
+    }
+
+    #[test]
+    fn an_edit_with_the_same_redactions_does_not_wait_on_a_commit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let (coord, (entered, release)) = blocking_coord(dir.path(), false, true);
+        let base = Arc::new(white(8, 8));
+        drop(coord.rewrite_history_async(scrubbed(&record), Arc::clone(&base), pixelate()));
+        // The writer holds the commit gate.
+        entered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let c = coord.clone();
+        let (r, b) = (scrubbed(&record), Arc::clone(&base));
+        assert!(finishes_promptly(move || drop(c.rewrite_history_async(
+            r,
+            b,
+            pixelate()
+        ))));
+        let _ = release.send(());
+        coord.flush_history_updates();
     }
 }

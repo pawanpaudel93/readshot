@@ -174,10 +174,55 @@ pub trait HistoryStore: Send + Sync {
     ///
     /// `Ok(false)` when the record doesn't exist (not saved yet, or
     /// pruned): nothing is written and the caller must keep the request.
+    ///
+    /// Convenience for [`Self::stage_image`] + [`Self::commit_rewrite`]
+    /// (thumbnail decoded from `png`). Callers that care about lock hold
+    /// times stage first, outside their own locks.
     fn rewrite(&self, record: &CaptureRecord, png: &[u8]) -> Result<bool, HistoryError> {
-        let _ = (record, png);
+        let thumb = thumbnail_png_from_bytes(png);
+        let staged = self.stage_image(record, png, thumb.as_deref())?;
+        self.commit_rewrite(record, staged)
+    }
+    /// Write `png` (and `thumb`, when given) to staging files next to
+    /// `record`'s final files: the slow part of a write (big file,
+    /// fsync), done without the index lock. Nothing is visible to
+    /// readers until a commit renames them into place; an uncommitted
+    /// [`StagedImage`] removes its files when dropped, and
+    /// [`Self::sweep_staging`] removes any a crash left behind.
+    fn stage_image(
+        &self,
+        record: &CaptureRecord,
+        png: &[u8],
+        thumb: Option<&[u8]>,
+    ) -> Result<StagedImage, HistoryError> {
+        let _ = (record, png, thumb);
+        Err(HistoryError::Io(
+            "this history store can't stage images".into(),
+        ))
+    }
+    /// The quick part of [`Self::rewrite`]: under the index lock, rename
+    /// `staged` into place and write the sidecar (see `rewrite` for the
+    /// fail-closed order of a scrub). `Ok(false)` when the record doesn't
+    /// exist; the staged files are then discarded.
+    fn commit_rewrite(
+        &self,
+        record: &CaptureRecord,
+        staged: StagedImage,
+    ) -> Result<bool, HistoryError> {
+        let _ = (record, staged);
         Ok(false)
     }
+    /// The quick part of [`Self::save`]: under the index lock, rename
+    /// `staged` into place and write the sidecar and index entry. An
+    /// unredacted save onto a record stored as redacted only registers
+    /// the index entry.
+    fn commit_save(&self, record: &CaptureRecord, staged: StagedImage) -> Result<(), HistoryError> {
+        let _ = (record, staged);
+        Ok(())
+    }
+    /// Remove staging files a crash left behind (older than a few
+    /// minutes, so another process's in-flight write is left alone).
+    fn sweep_staging(&self) {}
     /// Phase one of a scrub, cheap (no image encode): write `record`'s
     /// sidecar (masked text, `redacted`) with `scrub_pending` set, then
     /// remove the unredacted PNG and thumbnail. From then on History and
@@ -215,6 +260,55 @@ pub trait HistoryStore: Send + Sync {
         Ok(())
     }
 }
+
+/// Image files written by [`HistoryStore::stage_image`], waiting to be
+/// renamed into place by a commit. Removes whatever is still at its
+/// paths when dropped, so a staged file never outlives a failed, stale or
+/// abandoned write (a crash is covered by [`HistoryStore::sweep_staging`]).
+#[derive(Debug)]
+pub struct StagedImage {
+    png: PathBuf,
+    thumb: Option<PathBuf>,
+}
+
+impl Drop for StagedImage {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.png);
+        if let Some(thumb) = &self.thumb {
+            let _ = fs::remove_file(thumb);
+        }
+    }
+}
+
+/// The History thumbnail of `img`, PNG-encoded: scaled down to fit the
+/// thumbnail box (aspect kept), without copying the full image. `None`
+/// if encoding fails.
+pub fn thumbnail_png(img: &image::RgbaImage) -> Option<Vec<u8>> {
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return None;
+    }
+    // Never upscaled: a capture smaller than the box is its own
+    // thumbnail (upscaling also smears alpha to 254 at block edges).
+    let ratio = f64::min(
+        f64::from(THUMBNAIL_MAX_WIDTH) / f64::from(w),
+        f64::from(THUMBNAIL_MAX_HEIGHT) / f64::from(h),
+    )
+    .min(1.0);
+    let tw = ((f64::from(w) * ratio).round() as u32).max(1);
+    let th = ((f64::from(h) * ratio).round() as u32).max(1);
+    let thumb = image::imageops::thumbnail(img, tw, th);
+    crate::encode_png(&thumb).ok()
+}
+
+/// [`thumbnail_png`] of an encoded PNG (decodes it first).
+pub fn thumbnail_png_from_bytes(png: &[u8]) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(png).ok()?.to_rgba8();
+    thumbnail_png(&img)
+}
+
+/// Staging files older than this are leftovers of a crash.
+const STALE_STAGING_AGE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 /// File-system backed history store. All filesystem state is rooted at
 /// `root`.
@@ -375,22 +469,26 @@ impl FsHistoryStore {
             .join(format!("{}.thumb.png", record.id))
     }
 
-    fn write_record_files(
+    /// Rename a staged PNG (and thumbnail) into place. The staged PNG was
+    /// fully written and fsynced by `stage_image`, so the rename can't
+    /// leave a torn image. A missing staged thumbnail removes the old one
+    /// (never left showing a previous image); `list` backfills it.
+    fn place_staged(
         &self,
         record: &CaptureRecord,
-        abs_png: &Path,
-        abs_json: &Path,
-        png: &[u8],
+        staged: &StagedImage,
     ) -> Result<(), HistoryError> {
-        // Write the PNG atomically (temp file + rename + parent fsync), the
-        // same way the JSON sidecar and index are written. A plain
-        // create+write could leave a torn PNG that `list()` cannot detect
-        // (the JSON sidecar would still be intact and the record would load
-        // pointing at a corrupt image).
-        write_atomic(abs_png, png)?;
-        self.write_thumbnail_from_bytes(record, png);
-        let json_content = serde_json::to_string_pretty(record)?;
-        write_atomic(abs_json, json_content.as_bytes())?;
+        let abs_png = self.root.join(Self::png_path(record));
+        fs::rename(&staged.png, &abs_png)?;
+        let abs_thumb = self.root.join(Self::thumbnail_path(record));
+        let thumb_placed = staged
+            .thumb
+            .as_ref()
+            .is_some_and(|t| fs::rename(t, &abs_thumb).is_ok());
+        if !thumb_placed {
+            let _ = fs::remove_file(&abs_thumb);
+        }
+        crate::fs_atomic::sync_parent_dir(&abs_png);
         Ok(())
     }
 
@@ -453,13 +551,6 @@ impl FsHistoryStore {
         root.join(Self::thumbnail_path(record))
     }
 
-    fn write_thumbnail_from_bytes(&self, record: &CaptureRecord, png: &[u8]) {
-        let Ok(img) = image::load_from_memory(png) else {
-            return;
-        };
-        self.write_thumbnail_image(record, img);
-    }
-
     fn backfill_thumbnail_from_png_path(&self, record: &CaptureRecord, png_path: &Path) {
         let thumb_path = self.root.join(Self::thumbnail_path(record));
         if thumb_path.exists() {
@@ -478,21 +569,6 @@ impl FsHistoryStore {
             let _ = fs::create_dir_all(parent);
         }
         let _ = crate::save_png(&thumb.to_rgba8(), &abs_thumb);
-    }
-
-    /// Regenerate a record's thumbnail from `png`, atomically. If that
-    /// fails the old thumbnail is removed rather than left showing the
-    /// previous image; `list` backfills it from the PNG later.
-    fn replace_thumbnail(&self, record: &CaptureRecord, png: &[u8]) {
-        let abs_thumb = self.root.join(Self::thumbnail_path(record));
-        let written = image::load_from_memory(png)
-            .ok()
-            .map(|img| img.thumbnail(THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT))
-            .and_then(|thumb| crate::encode_png(&thumb.to_rgba8()).ok())
-            .is_some_and(|bytes| write_atomic(&abs_thumb, &bytes).is_ok());
-        if !written {
-            let _ = fs::remove_file(&abs_thumb);
-        }
     }
 
     /// Acquire the in-process mutex only. Used by `clear_all`, which
@@ -544,22 +620,52 @@ struct IndexGuard<'a> {
 
 impl HistoryStore for FsHistoryStore {
     fn save(&self, record: &CaptureRecord, png: &[u8]) -> Result<(), HistoryError> {
+        let thumb = thumbnail_png_from_bytes(png);
+        let staged = self.stage_image(record, png, thumb.as_deref())?;
+        self.commit_save(record, staged)
+    }
+
+    fn stage_image(
+        &self,
+        record: &CaptureRecord,
+        png: &[u8],
+        thumb: Option<&[u8]>,
+    ) -> Result<StagedImage, HistoryError> {
+        static STAGE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let abs_png = self.root.join(Self::png_path(record));
+        let dir = abs_png.parent().unwrap_or(&self.root).to_path_buf();
+        fs::create_dir_all(&dir)?;
+        let n = STAGE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let stem = format!("{}.{}-{n}", record.id, std::process::id());
+        let mut staged = StagedImage {
+            png: dir.join(format!("{stem}.stage.png")),
+            thumb: None,
+        };
+        write_atomic(&staged.png, png)?;
+        if let Some(bytes) = thumb {
+            let path = dir.join(format!("{stem}.stage-thumb.png"));
+            if write_atomic(&path, bytes).is_ok() {
+                staged.thumb = Some(path);
+            }
+        }
+        Ok(staged)
+    }
+
+    fn commit_save(&self, record: &CaptureRecord, staged: StagedImage) -> Result<(), HistoryError> {
         let _index_guard = self.lock_index()?;
         let (rel_png, rel_json) = Self::record_paths(record);
-        let abs_png = self.root.join(&rel_png);
-        let abs_json = self.root.join(&rel_json);
-        if let Some(parent) = abs_png.parent() {
-            fs::create_dir_all(parent)?;
-        }
         // Never put unredacted content back over a scrubbed record: an
-        // unredacted save onto one only (re)registers the index entry.
+        // unredacted save onto one only (re)registers the index entry
+        // (the staged files are dropped).
         let keep_scrubbed = !record.redacted
             && self
                 .read_sidecar(record)
                 .is_some_and(|stored| stored.redacted);
         if !keep_scrubbed {
-            self.write_record_files(record, &abs_png, &abs_json, png)?;
+            self.place_staged(record, &staged)?;
+            self.write_sidecar(record)?;
         }
+        drop(staged);
 
         let mut index = self.read_index()?;
         index.records.retain(|entry| entry.id != record.id);
@@ -572,6 +678,39 @@ impl HistoryStore for FsHistoryStore {
         index.updated_at = Some(Utc::now());
         self.write_index(&index)?;
         Ok(())
+    }
+
+    fn sweep_staging(&self) {
+        let cutoff = std::time::SystemTime::now().checked_sub(STALE_STAGING_AGE);
+        let Some(cutoff) = cutoff else {
+            return;
+        };
+        let Ok(years) = fs::read_dir(&self.root) else {
+            return;
+        };
+        for year in years.flatten().filter(|e| e.path().is_dir()) {
+            let Ok(months) = fs::read_dir(year.path()) else {
+                continue;
+            };
+            for month in months.flatten().filter(|e| e.path().is_dir()) {
+                let Ok(files) = fs::read_dir(month.path()) else {
+                    continue;
+                };
+                for file in files.flatten() {
+                    let name = file.file_name();
+                    let name = name.to_string_lossy();
+                    let staging =
+                        name.ends_with(".stage.png") || name.ends_with(".stage-thumb.png");
+                    let stale = file
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .is_ok_and(|t| t < cutoff);
+                    if staging && stale {
+                        let _ = fs::remove_file(file.path());
+                    }
+                }
+            }
+        }
     }
 
     fn list(&self) -> Result<Vec<CaptureRecord>, HistoryError> {
@@ -731,7 +870,11 @@ impl HistoryStore for FsHistoryStore {
         Ok(())
     }
 
-    fn rewrite(&self, record: &CaptureRecord, png: &[u8]) -> Result<bool, HistoryError> {
+    fn commit_rewrite(
+        &self,
+        record: &CaptureRecord,
+        staged: StagedImage,
+    ) -> Result<bool, HistoryError> {
         let _index_guard = self.lock_index()?;
         let mut done = record.clone();
         done.scrub_pending = false;
@@ -745,8 +888,7 @@ impl HistoryStore for FsHistoryStore {
         } else if !self.root.join(Self::json_path(record)).exists() {
             return Ok(false);
         }
-        write_atomic(&self.root.join(Self::png_path(record)), png)?;
-        self.replace_thumbnail(record, png);
+        self.place_staged(record, &staged)?;
         self.write_sidecar(&done)?;
         Ok(true)
     }
@@ -1361,6 +1503,83 @@ mod tests {
             radius: 2.0,
         }];
         r
+    }
+
+    fn staging_files(s: &FsHistoryStore, r: &CaptureRecord) -> Vec<PathBuf> {
+        let dir = s
+            .root()
+            .join(FsHistoryStore::png_path(r))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        fs::read_dir(dir)
+            .map(|it| {
+                it.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.to_string_lossy().contains(".stage"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_staged_image_is_invisible_and_removed_when_not_committed() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let (_, png) = black_png(4, 4);
+        let staged = s.stage_image(&r, &png, Some(&png)).unwrap();
+        assert_eq!(staging_files(&s, &r).len(), 2);
+        // Readers still see the old image.
+        let on_disk = fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap();
+        assert_eq!(on_disk, valid_png(4, 4));
+        drop(staged);
+        assert!(staging_files(&s, &r).is_empty());
+        // Committing consumes the files.
+        let staged = s.stage_image(&r, &png, Some(&png)).unwrap();
+        assert!(s.commit_rewrite(&scrubbed_of(&r), staged).unwrap());
+        assert!(staging_files(&s, &r).is_empty());
+        // A commit for a missing record discards them too.
+        let gone = record_at(Utc::now());
+        let staged = s.stage_image(&gone, &png, None).unwrap();
+        assert!(!s.commit_rewrite(&scrubbed_of(&gone), staged).unwrap());
+        assert!(staging_files(&s, &gone).is_empty());
+    }
+
+    #[test]
+    fn sweep_removes_only_stale_staging_files() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let dir = s
+            .root()
+            .join(FsHistoryStore::png_path(&r))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let old = dir.join(format!("{}.1-0.stage.png", r.id));
+        let fresh = dir.join(format!("{}.1-1.stage-thumb.png", r.id));
+        fs::write(&old, b"x").unwrap();
+        fs::write(&fresh, b"x").unwrap();
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(hour_ago)
+            .unwrap();
+        s.sweep_staging();
+        assert!(!old.exists());
+        assert!(fresh.exists(), "may be another process's in-flight write");
+        assert!(s.root().join(FsHistoryStore::png_path(&r)).exists());
+    }
+
+    #[test]
+    fn thumbnails_from_memory_match_the_decoded_path() {
+        let (img, png) = black_png(640, 100);
+        assert_eq!(thumbnail_png(&img), thumbnail_png_from_bytes(&png));
+        let thumb = image::load_from_memory(&thumbnail_png(&img).unwrap()).unwrap();
+        assert_eq!((thumb.width(), thumb.height()), (320, 50));
     }
 
     #[test]

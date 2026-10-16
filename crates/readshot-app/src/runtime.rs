@@ -9959,6 +9959,13 @@ mod tests {
         let ed = app.editor.as_ref().unwrap();
         assert!(ed.status_is_error(), "{:?}", ed.status);
         assert!(
+            ed.status
+                .as_deref()
+                .is_some_and(|s| s.ends_with("Readshot will keep trying.")),
+            "{:?}",
+            ed.status
+        );
+        assert!(
             ed.history_scrubbed,
             "disk state unknown: next sync rewrites"
         );

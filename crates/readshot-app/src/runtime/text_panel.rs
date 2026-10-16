@@ -322,7 +322,7 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
                             ed.set_status(super::history_ops::friendly_string_error_with(
                                 "update this capture in History",
                                 &e,
-                                Some("Your next edit will try again."),
+                                Some("Readshot will keep trying."),
                             ));
                         }
                     }
