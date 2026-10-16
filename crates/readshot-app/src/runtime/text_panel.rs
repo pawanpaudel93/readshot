@@ -18,7 +18,7 @@ use crate::editor::{EditorSession, EditorToastAction, TextRecognition};
 use crate::icons::AppIcon;
 use readshot_core::geom::RectLike;
 use readshot_core::redact::{
-    is_covered, redaction_annotation, redaction_rect, summary, RedactMatch, RedactStyle,
+    is_covered, locate, redaction_annotation, summary, Located, RedactMatch, RedactStyle,
 };
 use readshot_core::text_lines::{TextDocument, TextLine};
 
@@ -271,28 +271,6 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
     }
 }
 
-/// Where each sensitive match's redaction goes: `Some(rect)`
-/// (span-precise, padded, whole-pixel) or `None` when it can't be placed
-/// (line gone, no box, outside the image). Empty without line positions.
-fn placed_matches(ed: &EditorSession) -> Vec<(&RedactMatch, Option<RectLike>)> {
-    let Some(doc) = ed.text_panel.positioned_document() else {
-        return Vec::new();
-    };
-    let (w, h) = ed.image_size();
-    ed.text_panel
-        .matches
-        .iter()
-        .map(|m| {
-            let rect = doc
-                .lines
-                .get(m.line)
-                .and_then(|l| l.span_rect(m.span.clone()))
-                .and_then(|span| redaction_rect(span, w, h));
-            (m, rect)
-        })
-        .collect()
-}
-
 /// How well existing annotations cover a redaction rect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Coverage {
@@ -324,35 +302,41 @@ pub(crate) fn coverage(rect: RectLike, annotations: &[readshot_core::Annotation]
 /// without line positions; matches that can't be placed are listed in
 /// `unlocatable`, never silently dropped.
 #[derive(Debug, Default)]
-pub(crate) struct RedactState<'a> {
+pub(crate) struct RedactState {
     /// Still to redact with the chosen style, each with the rect its
     /// redaction gets (span-precise, padded, whole-pixel).
-    pub pending: Vec<(&'a RedactMatch, RectLike)>,
+    pub pending: Vec<(RedactMatch, RectLike)>,
     /// Covered only by a Blur/Pixelate (pending too when Solid is chosen).
-    pub weak: Vec<&'a RedactMatch>,
+    pub weak: Vec<RedactMatch>,
     /// Covered by any redaction (solid or weak).
-    pub covered: Vec<&'a RedactMatch>,
+    pub covered: Vec<RedactMatch>,
     /// Detected but can't be placed on the image.
-    pub unlocatable: Vec<&'a RedactMatch>,
+    pub unlocatable: Vec<RedactMatch>,
 }
 
 /// Classify every match. With Solid chosen only a solid block counts as
 /// redacted (a blur can sometimes be reversed); with Blur or Pixelate
 /// chosen any existing redaction counts, so nothing is doubled up.
-pub(crate) fn redact_state(ed: &EditorSession) -> RedactState<'_> {
+pub(crate) fn redact_state(ed: &EditorSession) -> RedactState {
+    let Some(doc) = ed.text_panel.positioned_document() else {
+        return RedactState::default();
+    };
     let solid = ed.text_panel.redact_style == RedactStyle::Solid;
-    let mut out = RedactState::default();
-    for (m, rect) in placed_matches(ed) {
-        let Some(rect) = rect else {
-            out.unlocatable.push(m);
-            continue;
-        };
+    let (w, h) = ed.image_size();
+    // The one reviewed placement path: `redact::locate` (span-precise,
+    // padded, whole-pixel rects; unplaceable matches reported).
+    let Located { rects, unlocatable } = locate(doc, &ed.text_panel.matches, w, h);
+    let mut out = RedactState {
+        unlocatable,
+        ..RedactState::default()
+    };
+    for (m, rect) in rects {
         let cov = coverage(rect, ed.model.annotations());
         if cov != Coverage::None {
-            out.covered.push(m);
+            out.covered.push(m.clone());
         }
         if cov == Coverage::Weak {
-            out.weak.push(m);
+            out.weak.push(m.clone());
         }
         let done = match cov {
             Coverage::Solid => true,
@@ -688,7 +672,7 @@ pub(crate) fn weak_note(weak: usize, style: RedactStyle) -> String {
 /// Items that can't be located are named, never silently left out.
 fn redact_card<'a>(
     ed: &'a EditorSession,
-    rs: &RedactState<'_>,
+    rs: &RedactState,
     p: &'static Palette,
 ) -> Option<Element<'a, Message>> {
     ed.text_panel.positioned_document()?;
@@ -722,7 +706,7 @@ fn redact_card<'a>(
         (!ed.busy && n > 0).then_some(Message::EditorRedactAll),
     );
     let mut chips = row![].spacing(6);
-    for (kind, count) in summary(pending.iter().map(|(m, _)| *m)) {
+    for (kind, count) in summary(pending.iter().map(|(m, _)| m)) {
         chips = chips.push(
             container(text(kind.chip(count)).size(TYPE_MICRO).style(text_t2))
                 .padding([3, 8])
