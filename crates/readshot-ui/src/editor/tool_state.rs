@@ -20,6 +20,7 @@ pub enum ToolState {
     Text,
     Blur,
     Pixelate,
+    Spotlight,
     NumberedPin,
     Crop,
 }
@@ -29,8 +30,32 @@ impl ToolState {
     pub fn is_rect_tool(&self) -> bool {
         matches!(
             self,
-            Self::Rectangle | Self::Ellipse | Self::Blur | Self::Pixelate | Self::Crop
+            Self::Rectangle
+                | Self::Ellipse
+                | Self::Blur
+                | Self::Pixelate
+                | Self::Spotlight
+                | Self::Crop
         )
+    }
+
+    /// Stable id for preferences (the "new tool" dot). Never rename an id.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Select => "select",
+            Self::Rectangle => "rectangle",
+            Self::Ellipse => "ellipse",
+            Self::Line => "line",
+            Self::Arrow => "arrow",
+            Self::Pen => "pen",
+            Self::Highlighter => "highlighter",
+            Self::Text => "text",
+            Self::Blur => "blur",
+            Self::Pixelate => "pixelate",
+            Self::Spotlight => "spotlight",
+            Self::NumberedPin => "numbered_pin",
+            Self::Crop => "crop",
+        }
     }
 
     /// Tools that produce a single-segment annotation (drag from
@@ -76,6 +101,7 @@ mod tests {
             ToolState::Text,
             ToolState::Blur,
             ToolState::Pixelate,
+            ToolState::Spotlight,
             ToolState::NumberedPin,
             ToolState::Crop,
         ];

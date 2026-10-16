@@ -14,11 +14,13 @@
 use ab_glyph::{Font as _, FontRef, PxScale, PxScaleFont, ScaleFont as _};
 use image::{Rgba as ImgRgba, RgbaImage};
 use tiny_skia::{
-    FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Rect as SkRect, Shader, Stroke,
+    FillRule, LineCap, LineJoin, Mask, Paint, PathBuilder, Pixmap, Rect as SkRect, Shader, Stroke,
     StrokeDash, Transform,
 };
 
-use crate::annotation::{Annotation, ArrowHeads, FillMode, LineStyle, Rgba, ShapeStyle, TextStyle};
+use crate::annotation::{
+    Annotation, ArrowHeads, FillMode, LineStyle, Rgba, ShapeStyle, SpotlightShape, TextStyle,
+};
 use crate::arrowhead::ArrowheadTriangle;
 use crate::filters::{blur_rect, pixelate_rect};
 use crate::geom::PointLike;
@@ -79,6 +81,7 @@ pub fn render(base: &RgbaImage, model: &[Annotation]) -> RgbaImage {
     let mut pixmap = Pixmap::new(output_w, output_h)
         .unwrap_or_else(|| Pixmap::new(1, 1).expect("1x1 pixmap is always allocatable"));
     blit_base(&mut pixmap, base, offset);
+    apply_spotlights(&mut pixmap, model, offset);
 
     // Lazy font load — kept inside `render` so callers don't need an init
     // step. `unwrap` is safe: the bundled font is parsed at compile time.
@@ -174,6 +177,8 @@ pub fn render(base: &RgbaImage, model: &[Annotation]) -> RgbaImage {
             Annotation::Pixelate { rect, block_size } => {
                 let (rx, ry, rw, rh) = rect_to_pixels(*rect, offset);
                 pixelate_rect(&mut pixmap, rx, ry, rw, rh, *block_size);
+            }
+            Annotation::Spotlight { .. } => { /* dimmed before the loop — see apply_spotlights */
             }
             Annotation::NumberedPin {
                 origin,
@@ -311,6 +316,56 @@ fn pixmap_to_image(pixmap: &Pixmap) -> RgbaImage {
 // ---------------------------------------------------------------------------
 //  Coordinate helpers
 // ---------------------------------------------------------------------------
+
+/// Dim everything outside the union of all spotlights, once, before any
+/// other annotation draws — so arrows and text on top stay bright. The
+/// union uses the largest `dim`.
+fn apply_spotlights(pixmap: &mut Pixmap, model: &[Annotation], offset: (f32, f32)) {
+    let spots: Vec<(RectLike, SpotlightShape, f32)> = model
+        .iter()
+        .filter_map(|a| match a {
+            Annotation::Spotlight { rect, shape, dim } => Some((*rect, *shape, *dim)),
+            _ => None,
+        })
+        .collect();
+    if spots.is_empty() {
+        return;
+    }
+    let dim = spots
+        .iter()
+        .map(|s| s.2)
+        .fold(0.0_f32, f32::max)
+        .clamp(0.0, 0.95);
+    let Some(mut mask) = Mask::new(pixmap.width(), pixmap.height()) else {
+        return;
+    };
+    for (rect, shape, _) in &spots {
+        let r = shift_rect(*rect, offset);
+        let Some(sk) = SkRect::from_xywh(r.x, r.y, r.width, r.height) else {
+            continue;
+        };
+        let path = match shape {
+            SpotlightShape::Rectangle => PathBuilder::from_rect(sk),
+            SpotlightShape::Ellipse => match PathBuilder::from_oval(sk) {
+                Some(p) => p,
+                None => continue,
+            },
+        };
+        mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
+    }
+    let coverage = mask.data().to_vec();
+    let data = pixmap.data_mut();
+    for (i, cov) in coverage.iter().enumerate() {
+        let keep = 1.0 - dim * (1.0 - *cov as f32 / 255.0);
+        if keep >= 1.0 {
+            continue;
+        }
+        // Premultiplied: scaling RGB at fixed alpha darkens toward black.
+        for c in &mut data[i * 4..i * 4 + 3] {
+            *c = (*c as f32 * keep).round() as u8;
+        }
+    }
+}
 
 fn shift_point(p: PointLike, offset: (f32, f32)) -> PointLike {
     PointLike::new(p.x + offset.0, p.y + offset.1)
@@ -899,7 +954,7 @@ pub(crate) fn composite_premultiplied(dst: &mut [u8], idx: usize, src: [u8; 4], 
 mod tests {
     use super::*;
     use crate::Rgba;
-    use crate::{ArrowHeads, FillMode, LinePath, LineStyle, ShapeStyle, TextStyle};
+    use crate::{ArrowHeads, FillMode, LinePath, LineStyle, ShapeStyle, SpotlightShape, TextStyle};
 
     fn solid_base(w: u32, h: u32, rgb: [u8; 3]) -> RgbaImage {
         let mut img = RgbaImage::new(w, h);
@@ -918,6 +973,56 @@ mod tests {
         assert!(dst[0] <= dst[3]);
         assert!(dst[1] <= dst[3]);
         assert!(dst[2] <= dst[3]);
+    }
+
+    #[test]
+    fn spotlight_dims_outside_and_keeps_inside() {
+        let base = solid_base(64, 64, [200, 200, 200]);
+        let out = render(
+            &base,
+            &[Annotation::Spotlight {
+                rect: RectLike::new(16.0, 16.0, 32.0, 32.0),
+                shape: SpotlightShape::Rectangle,
+                dim: 0.5,
+            }],
+        );
+        assert_eq!(out.get_pixel(32, 32).0, [200, 200, 200, 255]);
+        assert_eq!(out.get_pixel(2, 2).0, [100, 100, 100, 255]);
+    }
+
+    #[test]
+    fn spotlights_union_and_annotations_stay_bright() {
+        let base = solid_base(96, 32, [200, 200, 200]);
+        let out = render(
+            &base,
+            &[
+                Annotation::Spotlight {
+                    rect: RectLike::new(0.0, 0.0, 32.0, 32.0),
+                    shape: SpotlightShape::Rectangle,
+                    dim: 0.5,
+                },
+                Annotation::Spotlight {
+                    rect: RectLike::new(64.0, 0.0, 32.0, 32.0),
+                    shape: SpotlightShape::Rectangle,
+                    dim: 0.3,
+                },
+                Annotation::Rectangle {
+                    rect: RectLike::new(40.0, 8.0, 16.0, 16.0),
+                    color: Rgba::new(1.0, 0.0, 0.0, 1.0),
+                    line_width: 2.0,
+                    style: ShapeStyle {
+                        fill: FillMode::Filled,
+                        ..ShapeStyle::default()
+                    },
+                },
+            ],
+        );
+        // Both spotlights stay lit; the gap between them dims by the larger dim.
+        assert_eq!(out.get_pixel(16, 16).0, [200, 200, 200, 255]);
+        assert_eq!(out.get_pixel(80, 16).0, [200, 200, 200, 255]);
+        assert_eq!(out.get_pixel(60, 2).0, [100, 100, 100, 255]);
+        // Annotations draw after the dim pass.
+        assert_eq!(out.get_pixel(48, 16).0, [255, 0, 0, 255]);
     }
 
     #[test]

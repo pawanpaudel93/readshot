@@ -54,9 +54,26 @@ pub enum ToolbarMessage {
     Redo,
 }
 
-/// Tools to display, in order. Keeps the toolbar layout stable so
-/// muscle memory works across releases.
-pub const TOOL_ORDER: [ToolState; 12] = [
+/// Tool bar groups (spec §2.1): Select | shapes | freehand + text |
+/// effects | marks | crop. Phase C adds `Magnifier` after `NumberedPin`
+/// (and Task 7 adds `Stamp`): extend the group, `TOOL_ORDER`, and the
+/// `slot` match in the test — nothing else needs to know the layout.
+pub const TOOL_GROUPS: [&[ToolState]; 6] = [
+    &[ToolState::Select],
+    &[
+        ToolState::Rectangle,
+        ToolState::Ellipse,
+        ToolState::Line,
+        ToolState::Arrow,
+    ],
+    &[ToolState::Pen, ToolState::Highlighter, ToolState::Text],
+    &[ToolState::Blur, ToolState::Pixelate, ToolState::Spotlight],
+    &[ToolState::NumberedPin],
+    &[ToolState::Crop],
+];
+
+/// Tools in display order (`TOOL_GROUPS` flattened).
+pub const TOOL_ORDER: [ToolState; 13] = [
     ToolState::Select,
     ToolState::Rectangle,
     ToolState::Ellipse,
@@ -67,9 +84,13 @@ pub const TOOL_ORDER: [ToolState; 12] = [
     ToolState::Text,
     ToolState::Blur,
     ToolState::Pixelate,
+    ToolState::Spotlight,
     ToolState::NumberedPin,
     ToolState::Crop,
 ];
+
+/// Tools that show a "new" dot until first selected.
+pub const NEW_TOOLS: &[ToolState] = &[ToolState::Spotlight];
 
 /// Clamp a slider raw value to the published thickness range.
 pub fn clamp_line_width(raw: f32) -> f32 {
@@ -126,11 +147,46 @@ mod tests {
 
     #[test]
     fn tool_order_covers_every_tool() {
-        let count = TOOL_ORDER.len();
-        // 12 tools — Select + 11 drawing tools. If a new tool is
-        // added the toolbar must learn about it; this test forces the
-        // bump to be intentional.
-        assert_eq!(count, 12);
+        // Exhaustive on purpose: a new ToolState variant fails to compile
+        // here until it has a slot in the tool bar.
+        fn slot(t: ToolState) -> usize {
+            match t {
+                ToolState::Select => 0,
+                ToolState::Rectangle => 1,
+                ToolState::Ellipse => 2,
+                ToolState::Line => 3,
+                ToolState::Arrow => 4,
+                ToolState::Pen => 5,
+                ToolState::Highlighter => 6,
+                ToolState::Text => 7,
+                ToolState::Blur => 8,
+                ToolState::Pixelate => 9,
+                ToolState::Spotlight => 10,
+                ToolState::NumberedPin => 11,
+                ToolState::Crop => 12,
+            }
+        }
+        assert_eq!(TOOL_ORDER.len(), 13);
+        for (i, t) in TOOL_ORDER.iter().enumerate() {
+            assert_eq!(slot(*t), i, "{t:?} is out of place");
+        }
+    }
+
+    #[test]
+    fn tool_groups_flatten_to_tool_order() {
+        let flat: Vec<ToolState> = TOOL_GROUPS.iter().flat_map(|g| g.iter().copied()).collect();
+        assert_eq!(flat, TOOL_ORDER.to_vec());
+    }
+
+    #[test]
+    fn new_tools_are_in_the_tool_bar() {
+        assert!(NEW_TOOLS.iter().all(|t| TOOL_ORDER.contains(t)));
+    }
+
+    #[test]
+    fn tool_ids_are_unique() {
+        let ids: std::collections::HashSet<&str> = TOOL_ORDER.iter().map(|t| t.id()).collect();
+        assert_eq!(ids.len(), TOOL_ORDER.len());
     }
 
     #[test]

@@ -652,6 +652,14 @@ pub(crate) fn annotation_hit_test(annotation: &Annotation, point: PointLike, sca
             distance_to_segment(point, pair[0], pair[1]) <= (*line_width * 0.5).max(tolerance)
         }),
         Annotation::NumberedPin { origin, .. } => distance(point, *origin) <= 16.0,
+        // Border only: a spotlight must not block selecting what it contains.
+        Annotation::Spotlight { rect, .. } => {
+            let inside = point.x > rect.x + tolerance
+                && point.x < rect.x + rect.width - tolerance
+                && point.y > rect.y + tolerance
+                && point.y < rect.y + rect.height - tolerance;
+            rect_contains(*rect, point, tolerance) && !inside
+        }
         _ => {
             annotation_bounds(annotation).is_some_and(|rect| rect_contains(rect, point, tolerance))
         }
@@ -669,6 +677,7 @@ fn annotation_kind_label(annotation: &Annotation) -> &'static str {
         Annotation::Text { .. } => "Text",
         Annotation::Blur { .. } => "Blur",
         Annotation::Pixelate { .. } => "Pixelate",
+        Annotation::Spotlight { .. } => "Spotlight",
         Annotation::NumberedPin { .. } => "Pin",
         Annotation::Crop { .. } => "Crop",
     }
@@ -697,7 +706,10 @@ fn set_annotation_color(annotation: &mut Annotation, color: Rgba) -> bool {
             *c = next;
             true
         }
-        Annotation::Blur { .. } | Annotation::Pixelate { .. } | Annotation::Crop { .. } => false,
+        Annotation::Blur { .. }
+        | Annotation::Pixelate { .. }
+        | Annotation::Spotlight { .. }
+        | Annotation::Crop { .. } => false,
     }
 }
 
@@ -711,7 +723,10 @@ fn annotation_color(annotation: &Annotation) -> Option<Rgba> {
         | Annotation::Highlighter { color, .. }
         | Annotation::Text { color, .. }
         | Annotation::NumberedPin { color, .. } => Some(*color),
-        Annotation::Blur { .. } | Annotation::Pixelate { .. } | Annotation::Crop { .. } => None,
+        Annotation::Blur { .. }
+        | Annotation::Pixelate { .. }
+        | Annotation::Spotlight { .. }
+        | Annotation::Crop { .. } => None,
     }
 }
 
@@ -725,7 +740,10 @@ fn annotation_width(annotation: &Annotation) -> Option<f32> {
         | Annotation::Highlighter { line_width, .. } => Some(*line_width),
         Annotation::Blur { radius, .. } => Some(*radius),
         Annotation::Pixelate { block_size, .. } => Some(*block_size),
-        Annotation::Text { .. } | Annotation::NumberedPin { .. } | Annotation::Crop { .. } => None,
+        Annotation::Text { .. }
+        | Annotation::NumberedPin { .. }
+        | Annotation::Spotlight { .. }
+        | Annotation::Crop { .. } => None,
     }
 }
 
@@ -774,7 +792,9 @@ fn set_annotation_width(annotation: &mut Annotation, width: f32) -> bool {
             *block_size = next;
             true
         }
-        Annotation::NumberedPin { .. } | Annotation::Crop { .. } => false,
+        Annotation::NumberedPin { .. } | Annotation::Spotlight { .. } | Annotation::Crop { .. } => {
+            false
+        }
     }
 }
 
@@ -784,6 +804,7 @@ pub(crate) fn annotation_bounds(annotation: &Annotation) -> Option<RectLike> {
         | Annotation::Ellipse { rect, .. }
         | Annotation::Blur { rect, .. }
         | Annotation::Pixelate { rect, .. }
+        | Annotation::Spotlight { rect, .. }
         | Annotation::Crop { rect } => Some(*rect),
         Annotation::Line {
             a,
@@ -867,6 +888,7 @@ fn annotation_resize_handles(annotation: &Annotation) -> Vec<(ResizeHandle, Poin
         | Annotation::Ellipse { rect, .. }
         | Annotation::Blur { rect, .. }
         | Annotation::Pixelate { rect, .. }
+        | Annotation::Spotlight { rect, .. }
         | Annotation::Crop { rect } => rect_resize_handles(*rect),
         Annotation::Line { a, b, style, .. } | Annotation::Arrow { a, b, style, .. } => {
             let mut handles = vec![(ResizeHandle::Start, *a), (ResizeHandle::End, *b)];
@@ -912,6 +934,7 @@ fn translate_annotation(annotation: &mut Annotation, dx: f32, dy: f32) {
         | Annotation::Ellipse { rect, .. }
         | Annotation::Blur { rect, .. }
         | Annotation::Pixelate { rect, .. }
+        | Annotation::Spotlight { rect, .. }
         | Annotation::Crop { rect } => translate_rect(rect, dx, dy),
         Annotation::Line { a, b, .. } | Annotation::Arrow { a, b, .. } => {
             translate_point(a, dx, dy);
@@ -934,6 +957,7 @@ fn resize_annotation(annotation: &mut Annotation, handle: ResizeHandle, dx: f32,
         | Annotation::Ellipse { rect, .. }
         | Annotation::Blur { rect, .. }
         | Annotation::Pixelate { rect, .. }
+        | Annotation::Spotlight { rect, .. }
         | Annotation::Crop { rect } => {
             if matches!(
                 handle,
@@ -1212,6 +1236,19 @@ mod tests {
         s.discard();
         assert!(s.annotations().is_empty());
         assert!(!s.can_undo());
+    }
+
+    #[test]
+    fn spotlight_selects_by_its_border_not_its_inside() {
+        let mut s = EditorState::new(solid_base(200, 200));
+        s.commit_annotation(Annotation::Spotlight {
+            rect: RectLike::new(20.0, 20.0, 100.0, 100.0),
+            shape: readshot_core::SpotlightShape::Rectangle,
+            dim: 0.55,
+        });
+        s.clear_selection();
+        assert_eq!(s.select_at(PointLike::new(70.0, 70.0)), None);
+        assert_eq!(s.select_at(PointLike::new(20.0, 70.0)), Some(0));
     }
 
     #[test]

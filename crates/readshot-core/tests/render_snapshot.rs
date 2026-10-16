@@ -24,7 +24,7 @@ use std::io::Cursor;
 use image::ImageFormat;
 use readshot_core::{
     render, Annotation, ArrowHeads, FillMode, LinePath, LineStyle, PointLike, RectLike, Rgba,
-    ShapeStyle, TextStyle,
+    ShapeStyle, SpotlightShape, TextStyle,
 };
 use readshot_test_fixtures::base_256;
 
@@ -354,6 +354,30 @@ fn text_styles() {
                 pill: false,
                 bold: true,
             },
+        },
+    ]);
+    insta::assert_binary_snapshot!(".png", png);
+}
+
+#[test]
+fn spotlight_union() {
+    let png = render_png(vec![
+        Annotation::Spotlight {
+            rect: RectLike::new(24.0, 24.0, 96.0, 72.0),
+            shape: SpotlightShape::Rectangle,
+            dim: 0.55,
+        },
+        Annotation::Spotlight {
+            rect: RectLike::new(136.0, 120.0, 96.0, 96.0),
+            shape: SpotlightShape::Ellipse,
+            dim: 0.55,
+        },
+        Annotation::Arrow {
+            a: PointLike::new(200.0, 40.0),
+            b: PointLike::new(130.0, 70.0),
+            color: red(),
+            line_width: 4.0,
+            style: Default::default(),
         },
     ]);
     insta::assert_binary_snapshot!(".png", png);

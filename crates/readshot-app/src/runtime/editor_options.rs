@@ -153,7 +153,71 @@ fn option_control<'a>(
             None,
             Position::Bottom,
         ),
+        O::Dim => labeled_slider(
+            "Dim",
+            readshot_ui::editor::style::MIN_DIM..=readshot_ui::editor::style::MAX_DIM,
+            style.dim,
+            0.05,
+            format!("{:.0}%", style.dim * 100.0),
+            busy,
+            StyleMessage::Dim,
+        ),
+        O::SpotlightShape => icon_segment(
+            &[
+                (
+                    AppIcon::Tool(readshot_ui::editor::ToolState::Rectangle),
+                    "Rectangle spotlight",
+                    readshot_core::SpotlightShape::Rectangle,
+                ),
+                (
+                    AppIcon::Tool(readshot_ui::editor::ToolState::Ellipse),
+                    "Ellipse spotlight",
+                    readshot_core::SpotlightShape::Ellipse,
+                ),
+            ],
+            style.spotlight_shape,
+            busy,
+            p,
+            |s| send(StyleMessage::SpotlightShape(s)),
+        ),
     }
+}
+
+/// A tool in `NEW_TOOLS` the user has never selected.
+pub(crate) fn tool_shows_new_dot(
+    prefs: &readshot_core::Preferences,
+    tool: readshot_ui::editor::ToolState,
+) -> bool {
+    readshot_ui::editor::toolbar::NEW_TOOLS.contains(&tool)
+        && !prefs.editor_tools_seen.iter().any(|id| id == tool.id())
+}
+
+/// Small static amber dot at the button's top-right (not teal: it is not
+/// a selection). No animation, so Reduce Motion needs nothing.
+pub(crate) fn with_new_tool_dot<'a>(button: Element<'a, Message>) -> Element<'a, Message> {
+    let dot = container(
+        Space::new()
+            .width(Length::Fixed(6.0))
+            .height(Length::Fixed(6.0)),
+    )
+    .style(|theme: &Theme| container::Style {
+        background: Some(palette_for(theme).warn.into()),
+        border: iced::Border {
+            radius: 3.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    iced::widget::stack![
+        button,
+        container(dot)
+            .width(Length::Fixed(ICON_BTN))
+            .height(Length::Fixed(ICON_BTN))
+            .padding(4)
+            .align_x(Alignment::End)
+            .align_y(Alignment::Start),
+    ]
+    .into()
 }
 
 /// A text (or swatch + text) button in the bar. `selected` uses the same
@@ -343,6 +407,16 @@ mod tests {
     fn options_bar_hides_for_select_with_nothing_selected() {
         let ed = blank_session();
         assert!(editor_options_bar(&ed, &DARK).is_none());
+    }
+
+    #[test]
+    fn new_tools_show_a_dot_until_seen() {
+        use readshot_ui::editor::ToolState;
+        let mut prefs = readshot_core::Preferences::default();
+        assert!(tool_shows_new_dot(&prefs, ToolState::Spotlight));
+        assert!(!tool_shows_new_dot(&prefs, ToolState::Rectangle));
+        prefs.mark_tool_seen("spotlight");
+        assert!(!tool_shows_new_dot(&prefs, ToolState::Spotlight));
     }
 
     #[test]

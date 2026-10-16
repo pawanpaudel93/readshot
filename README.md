@@ -23,9 +23,10 @@ find it later by searching the text inside the screenshot.
 - Scrolling capture — lock a region, scroll the page, get one tall
   stitched image with a live HUD preview.
 - Multi-monitor capture with Retina-quality output.
-- Annotation editor with shapes, arrows, pen, highlighter, multi-line
-  text, blur, pixelate, numbered pins, crop, undo, and redo. Hold Shift
-  for squares, circles, and 45° lines.
+- Annotation editor with shapes (filled, dashed, rounded), curved and
+  hand-drawn arrows, pen, highlighter, multi-line text (sizes, pill,
+  bold), blur, pixelate, spotlight, numbered pins, crop, undo, and redo.
+  Hold Shift for squares, circles, and 45° lines.
 - Offline OCR via Apple Vision with layout-aware copied text and a
   choice of recognition languages.
 - Searchable capture history with open, reveal, copy, pin, and delete
@@ -118,7 +119,7 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   copy image / copy text / save / pin, and the arrow keys nudge it (`⇧` ×10).
 - **Editor tools:** `V` select, `R` rectangle, `O` ellipse, `L` line,
   `A` arrow, `P` pen, `H` highlighter, `T` text, `B` blur, `X` pixelate,
-  `N` numbered pin, `C` crop. Arrow keys nudge the selection (hold
+  `S` spotlight, `N` numbered pin, `C` crop. Arrow keys nudge the selection (hold
   `⇧` for larger steps), `⌫` removes it, `esc` deselects.
 - **Editor actions:** `⌘C` copy image, `⇧⌘C` copy text, `⌘S` save,
   `⌘P` pin, `⌘Z` / `⇧⌘Z` undo and redo. `⌘W` closes; with unsaved

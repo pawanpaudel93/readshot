@@ -6765,23 +6765,7 @@ mod tests {
 
     #[test]
     fn editor_advertised_tool_shortcuts_map_to_their_tools() {
-        use readshot_ui::editor::ToolState as T;
-        let tools = [
-            T::Select,
-            T::Rectangle,
-            T::Ellipse,
-            T::Line,
-            T::Arrow,
-            T::Pen,
-            T::Highlighter,
-            T::Text,
-            T::Blur,
-            T::Pixelate,
-            T::NumberedPin,
-            T::Crop,
-        ];
-
-        for tool in tools {
+        for tool in readshot_ui::editor::toolbar::TOOL_ORDER {
             let (_label, key) = tool_label_and_key(tool);
             assert_eq!(tool_for_key(key), Some(tool), "shortcut drift for {tool:?}");
             let message = editor_key_message(
@@ -6796,6 +6780,41 @@ mod tests {
                 )) if mapped == tool
             ));
         }
+    }
+
+    #[test]
+    fn selecting_a_new_tool_marks_it_seen() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(
+            &mut app,
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+                readshot_ui::editor::ToolState::Spotlight,
+            )),
+        );
+        assert_eq!(
+            app.preferences.editor_tools_seen,
+            vec!["spotlight".to_string()]
+        );
+    }
+
+    #[test]
+    fn spotlight_drag_commits_an_undoable_spotlight() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                Annotation::Spotlight {
+                    rect: RectLike::new(8.0, 8.0, 20.0, 20.0),
+                    shape: readshot_core::SpotlightShape::Rectangle,
+                    dim: 0.55,
+                },
+            )),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.model.can_undo());
+        assert_eq!(ed.model.selected_kind_label(), Some("Spotlight"));
     }
 
     #[test]

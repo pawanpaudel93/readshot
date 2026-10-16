@@ -1957,7 +1957,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     use iced::widget::canvas::Canvas;
     use iced::widget::tooltip::Position;
     use iced::widget::{mouse_area, opaque, stack, Space as IcedSpace};
-    use readshot_ui::editor::{canvas::EditorCanvas, ToolState};
+    use readshot_ui::editor::canvas::EditorCanvas;
 
     let Some(ed) = state.editor.as_ref() else {
         return container(empty_state(
@@ -2001,21 +2001,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let can_redo = ed.model.can_redo();
 
     // --- Tool bar ---
-    let tool_groups: [&[ToolState]; 6] = [
-        &[ToolState::Select],
-        &[
-            ToolState::Rectangle,
-            ToolState::Ellipse,
-            ToolState::Line,
-            ToolState::Arrow,
-        ],
-        &[ToolState::Pen, ToolState::Highlighter, ToolState::Text],
-        &[ToolState::Blur, ToolState::Pixelate],
-        &[ToolState::NumberedPin],
-        &[ToolState::Crop],
-    ];
     let mut tool_bar = row![].spacing(2).align_y(Alignment::Center);
-    for (i, group) in tool_groups.iter().enumerate() {
+    for (i, group) in readshot_ui::editor::toolbar::TOOL_GROUPS.iter().enumerate() {
         if i > 0 {
             tool_bar = tool_bar.push(vsep());
         }
@@ -2029,7 +2016,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             } else {
                 p.t2
             };
-            tool_bar = tool_bar.push(icon_button(
+            let btn = icon_button(
                 AppIcon::Tool(t),
                 color,
                 label,
@@ -2040,7 +2027,12 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 selected,
                 ICON_BTN,
                 Position::Bottom,
-            ));
+            );
+            tool_bar = tool_bar.push(if tool_shows_new_dot(&state.preferences, t) {
+                with_new_tool_dot(btn)
+            } else {
+                btn
+            });
         }
     }
     let tool_layer = container(container(tool_bar).padding(4).style(floating_bar_style))
@@ -3292,6 +3284,7 @@ pub(crate) fn tool_label_and_key(
         T::Text => ("Text", "T"),
         T::Blur => ("Blur", "B"),
         T::Pixelate => ("Pixelate", "X"),
+        T::Spotlight => ("Spotlight", "S"),
         T::NumberedPin => ("Numbered pin", "N"),
         T::Crop => ("Crop", "C"),
     }
@@ -3312,6 +3305,7 @@ pub(crate) fn tool_for_key(c: &str) -> Option<readshot_ui::editor::ToolState> {
         "t" => Some(T::Text),
         "b" => Some(T::Blur),
         "x" => Some(T::Pixelate),
+        "s" => Some(T::Spotlight),
         "n" => Some(T::NumberedPin),
         "c" => Some(T::Crop),
         _ => None,
@@ -3648,6 +3642,7 @@ pub(crate) fn editor_compact_hint(tool: readshot_ui::editor::ToolState) -> &'sta
         T::Text => "Click, type, Enter.",
         T::Blur => "Drag a region to blur.",
         T::Pixelate => "Drag a region to pixelate.",
+        T::Spotlight => "Drag an area to spotlight; the rest dims.",
         T::NumberedPin => "Click to drop a number.",
         T::Crop => "Drag the region to keep.",
     }

@@ -28,7 +28,7 @@ use iced::{mouse::Cursor, Color, Point, Rectangle, Renderer, Theme};
 use readshot_core::render::{contrast_ink, BOTH_FILL_ALPHA, FONT_FAMILY};
 use readshot_core::{
     line_geom, Annotation, ArrowHeads, FillMode, LineStyle, PointLike, RectLike, Rgba as CoreRgba,
-    ShapeStyle,
+    ShapeStyle, SpotlightShape,
 };
 
 use super::state::{
@@ -683,7 +683,8 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                             ToolState::Rectangle
                             | ToolState::Ellipse
                             | ToolState::Line
-                            | ToolState::Arrow => {
+                            | ToolState::Arrow
+                            | ToolState::Spotlight => {
                                 let anchor_base = canvas_to_base(
                                     *anchor,
                                     bounds,
@@ -1031,6 +1032,7 @@ fn preview_drag_label(
         ToolState::Crop => "Crop ",
         ToolState::Blur => "Blur ",
         ToolState::Pixelate => "Pixelate ",
+        ToolState::Spotlight => "Spotlight ",
         ToolState::Rectangle | ToolState::Ellipse | ToolState::Line | ToolState::Arrow => "",
         _ => return None,
     };
@@ -1266,6 +1268,32 @@ fn draw_annotation_preview(
                             ..SELECTION_TEAL
                         })
                         .with_width(1.5),
+                );
+            }
+        }
+        Annotation::Spotlight { rect, shape, dim } => {
+            if let Some(r) =
+                base_rect_to_canvas(*rect, bounds, image_size, image_offset, display_scale)
+            {
+                let hole = Path::new(|b| {
+                    b.rectangle(Point::ORIGIN, bounds.size());
+                    match shape {
+                        SpotlightShape::Rectangle => {
+                            b.rectangle(Point::new(r.x, r.y), iced::Size::new(r.width, r.height))
+                        }
+                        SpotlightShape::Ellipse => ellipse_path(
+                            b,
+                            Point::new(r.x + r.width * 0.5, r.y + r.height * 0.5),
+                            (r.width * 0.5, r.height * 0.5),
+                        ),
+                    }
+                });
+                frame.fill(
+                    &hole,
+                    canvas::Fill {
+                        style: canvas::Style::Solid(Color::from_rgba(0.0, 0.0, 0.0, *dim)),
+                        rule: canvas::fill::Rule::EvenOdd,
+                    },
                 );
             }
         }
@@ -1526,6 +1554,11 @@ pub fn annotation_for_drag(
             rect,
             block_size: line_width.max(4.0),
         }),
+        ToolState::Spotlight => Some(Annotation::Spotlight {
+            rect,
+            shape: style.spotlight_shape,
+            dim: style.dim,
+        }),
         ToolState::Crop => Some(Annotation::Crop { rect }),
         // Polyline + point + select tools need a richer event model than
         // a two-point drag; deferred to a follow-up.
@@ -1548,7 +1581,9 @@ fn constrain_drag(tool: ToolState, anchor: Point, cursor: Point, shift: bool) ->
         return cursor;
     }
     match tool {
-        ToolState::Rectangle | ToolState::Ellipse => square_target(anchor, cursor),
+        ToolState::Rectangle | ToolState::Ellipse | ToolState::Spotlight => {
+            square_target(anchor, cursor)
+        }
         ToolState::Line | ToolState::Arrow => snap_to_45(anchor, cursor),
         _ => cursor,
     }
@@ -1818,6 +1853,27 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn spotlight_drag_commits_shape_and_dim_from_the_style() {
+        let style = ToolStyle {
+            spotlight_shape: readshot_core::SpotlightShape::Ellipse,
+            dim: 0.7,
+            ..ToolStyle::default()
+        };
+        let a = annotation_for_drag(
+            ToolState::Spotlight,
+            pt(0.0, 0.0),
+            pt(40.0, 30.0),
+            CoreRgba::OPAQUE_BLACK,
+            2.0,
+            &style,
+        )
+        .unwrap();
+        assert!(
+            matches!(a, Annotation::Spotlight { shape: readshot_core::SpotlightShape::Ellipse, dim, .. } if dim == 0.7)
+        );
     }
 
     #[test]

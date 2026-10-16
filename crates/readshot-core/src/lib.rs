@@ -26,7 +26,8 @@ pub mod render;
 pub mod scroll_stitch;
 
 pub use annotation::{
-    Annotation, ArrowHeads, FillMode, LinePath, LineStyle, Rgba, ShapeStyle, TextStyle,
+    Annotation, ArrowHeads, FillMode, LinePath, LineStyle, Rgba, ShapeStyle, SpotlightShape,
+    TextStyle,
 };
 pub use error::{CaptureError, CoreError, ExportError, HistoryError, OCRError, PreferencesError};
 pub use filename::expand as expand_filename_template;

@@ -167,6 +167,10 @@ pub struct Preferences {
     /// making the first post-permission relaunch visibly confirm that
     /// Readshot came back.
     pub onboarding_completed: bool,
+
+    /// New editor tools the user has opened at least once (stable ids
+    /// from `ToolState::id`). Drives the "new" dot on the tool bar.
+    pub editor_tools_seen: Vec<String>,
 }
 
 impl Default for Preferences {
@@ -184,6 +188,7 @@ impl Default for Preferences {
             update_channel: UpdateChannel::Stable,
             debug_logging: false,
             onboarding_completed: false,
+            editor_tools_seen: Vec::new(),
         }
     }
 }
@@ -223,6 +228,16 @@ impl Preferences {
         Ok(())
     }
 
+    /// Record that the editor tool `id` has been used. Returns `true`
+    /// when this is the first time (the caller persists).
+    pub fn mark_tool_seen(&mut self, id: &str) -> bool {
+        if self.editor_tools_seen.iter().any(|s| s == id) {
+            return false;
+        }
+        self.editor_tools_seen.push(id.to_string());
+        true
+    }
+
     /// Apply schema migrations in place.
     fn migrate(&mut self) {
         let original_version = self.schema_version;
@@ -255,6 +270,18 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let path = dir.path().join("preferences.toml");
         (dir, path)
+    }
+
+    #[test]
+    fn mark_tool_seen_is_idempotent_and_round_trips() {
+        let (_dir, path) = temp_path();
+        let mut p = Preferences::default();
+        assert!(p.editor_tools_seen.is_empty());
+        assert!(p.mark_tool_seen("spotlight"));
+        assert!(!p.mark_tool_seen("spotlight"));
+        p.save(&path).unwrap();
+        let back = Preferences::load(&path).unwrap();
+        assert_eq!(back.editor_tools_seen, vec!["spotlight".to_string()]);
     }
 
     #[test]

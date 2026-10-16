@@ -612,6 +612,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         // and undo/redo. Tool/colour/width changes don't need a
         // re-render (annotations haven't changed), but undo/redo do.
         Message::EditorToolbar(msg) => {
+            let selected_tool = match msg {
+                readshot_ui::ToolbarMessage::SelectTool(t) => Some(t),
+                _ => None,
+            };
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
@@ -651,6 +655,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         sync_editor_history(ed, &state.coordinator);
                     }
                 }
+            }
+            if let Some(t) = selected_tool {
+                state.mark_editor_tool_seen(t.id());
             }
             Task::none()
         }

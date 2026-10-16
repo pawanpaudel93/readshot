@@ -99,6 +99,18 @@ impl ShapeStyle {
     }
 }
 
+/// Spotlight hole shape (spec §3.1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpotlightShape {
+    #[default]
+    Rectangle,
+    Ellipse,
+}
+
+/// Default dim outside a spotlight (spec §3.1: 55 %).
+pub const DEFAULT_SPOTLIGHT_DIM: f32 = 0.55;
+
 /// Path a line or arrow follows between its endpoints.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -216,6 +228,13 @@ pub enum Annotation {
         rect: RectLike,
         block_size: f32,
     },
+    /// Everything outside `rect` dims by `dim` (0–1). Multiple spotlights
+    /// union: see `render::apply_spotlights`.
+    Spotlight {
+        rect: RectLike,
+        shape: SpotlightShape,
+        dim: f32,
+    },
     NumberedPin {
         origin: PointLike,
         number: u32,
@@ -300,6 +319,11 @@ mod tests {
                 rect: rect(0.0, 0.0, 80.0, 60.0),
                 block_size: 8.0,
             },
+            Annotation::Spotlight {
+                rect: rect(10.0, 10.0, 60.0, 40.0),
+                shape: SpotlightShape::Ellipse,
+                dim: 0.55,
+            },
             Annotation::NumberedPin {
                 origin: pt(150.0, 150.0),
                 number: 3,
@@ -312,7 +336,7 @@ mod tests {
 
         // Sanity: the fixture set covers every variant. If a new variant is
         // added without extending this list, this assertion fails.
-        const VARIANT_COUNT: usize = 11;
+        const VARIANT_COUNT: usize = 12;
         assert_eq!(
             fixtures.len(),
             VARIANT_COUNT,

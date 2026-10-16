@@ -1171,6 +1171,16 @@ impl App {
         }
     }
 
+    /// Remember that editor tool `id` was used (clears its "new" dot).
+    /// Persists only on the first use.
+    pub(crate) fn mark_editor_tool_seen(&mut self, id: &str) -> bool {
+        if !self.preferences.mark_tool_seen(id) {
+            return false;
+        }
+        self.persist_preferences_if_configured();
+        true
+    }
+
     pub fn mark_onboarding_completed(&mut self) -> bool {
         if self.preferences.onboarding_completed {
             return false;

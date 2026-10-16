@@ -7,12 +7,15 @@
 
 use readshot_core::line_geom::{seed_for, DEFAULT_BEND};
 use readshot_core::{
-    Annotation, ArrowHeads, FillMode, LinePath, LineStyle, PointLike, ShapeStyle, TextStyle,
+    Annotation, ArrowHeads, FillMode, LinePath, LineStyle, PointLike, ShapeStyle, SpotlightShape,
+    TextStyle,
 };
 
 use super::tool_state::ToolState;
 
 pub const MAX_CORNER_RADIUS: f32 = 32.0;
+pub const MIN_DIM: f32 = 0.2;
+pub const MAX_DIM: f32 = 0.9;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LinePathKind {
@@ -112,7 +115,7 @@ impl TextSize {
 }
 
 /// Options applied to the next annotation drawn.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToolStyle {
     pub fill: FillMode,
     pub dashed: bool,
@@ -122,6 +125,25 @@ pub struct ToolStyle {
     pub text_size: TextSize,
     pub text_pill: bool,
     pub text_bold: bool,
+    pub spotlight_shape: SpotlightShape,
+    pub dim: f32,
+}
+
+impl Default for ToolStyle {
+    fn default() -> Self {
+        Self {
+            fill: FillMode::default(),
+            dashed: false,
+            corner_radius: 0.0,
+            line_path: LinePathKind::default(),
+            heads: ArrowHeads::default(),
+            text_size: TextSize::default(),
+            text_pill: false,
+            text_bold: false,
+            spotlight_shape: SpotlightShape::default(),
+            dim: readshot_core::annotation::DEFAULT_SPOTLIGHT_DIM,
+        }
+    }
 }
 
 /// One options-bar change.
@@ -135,6 +157,8 @@ pub enum StyleMessage {
     TextSize(TextSize),
     TextPill(bool),
     TextBold(bool),
+    SpotlightShape(SpotlightShape),
+    Dim(f32),
 }
 
 /// Controls the options bar can show, in display order.
@@ -150,6 +174,8 @@ pub enum OptionControl {
     TextSize,
     TextPill,
     TextBold,
+    Dim,
+    SpotlightShape,
 }
 
 /// The tool that draws `annotation` — the options-bar target for a selection.
@@ -164,6 +190,7 @@ pub fn tool_for_annotation(annotation: &Annotation) -> ToolState {
         Annotation::Text { .. } => ToolState::Text,
         Annotation::Blur { .. } => ToolState::Blur,
         Annotation::Pixelate { .. } => ToolState::Pixelate,
+        Annotation::Spotlight { .. } => ToolState::Spotlight,
         Annotation::NumberedPin { .. } => ToolState::NumberedPin,
         Annotation::Crop { .. } => ToolState::Crop,
     }
@@ -180,6 +207,7 @@ pub fn options_for(active: ToolState, selected: Option<&Annotation>) -> &'static
         ToolState::Pen | ToolState::Highlighter => &[Color, Width],
         ToolState::Text => &[Color, TextSize, TextPill, TextBold],
         ToolState::Blur | ToolState::Pixelate => &[Width],
+        ToolState::Spotlight => &[Dim, SpotlightShape],
         ToolState::NumberedPin => &[Color],
     }
 }
@@ -195,6 +223,8 @@ impl ToolStyle {
             StyleMessage::TextSize(s) => self.text_size = s,
             StyleMessage::TextPill(p) => self.text_pill = p,
             StyleMessage::TextBold(b) => self.text_bold = b,
+            StyleMessage::SpotlightShape(s) => self.spotlight_shape = s,
+            StyleMessage::Dim(d) => self.dim = d.clamp(MIN_DIM, MAX_DIM),
         }
     }
 
@@ -248,6 +278,10 @@ impl ToolStyle {
                 self.text_pill = style.pill;
                 self.text_bold = style.bold;
             }
+            Annotation::Spotlight { shape, dim, .. } => {
+                self.spotlight_shape = *shape;
+                self.dim = *dim;
+            }
             _ => {}
         }
         self
@@ -282,6 +316,10 @@ pub fn apply_style_to_annotation(annotation: &mut Annotation, msg: StyleMessage)
         (Annotation::Text { size, .. }, StyleMessage::TextSize(s)) => *size = s.px(),
         (Annotation::Text { style, .. }, StyleMessage::TextPill(p)) => style.pill = p,
         (Annotation::Text { style, .. }, StyleMessage::TextBold(b)) => style.bold = b,
+        (Annotation::Spotlight { shape, .. }, StyleMessage::SpotlightShape(s)) => *shape = s,
+        (Annotation::Spotlight { dim, .. }, StyleMessage::Dim(d)) => {
+            *dim = d.clamp(MIN_DIM, MAX_DIM)
+        }
         _ => return false,
     }
     *annotation != before
@@ -361,6 +399,18 @@ mod tests {
             &[Color, TextSize, TextPill, TextBold]
         );
         assert_eq!(options_for(ToolState::Blur, None), &[Width]);
+    }
+
+    #[test]
+    fn spotlight_shows_dim_and_shape_and_defaults_to_55_percent() {
+        assert_eq!(
+            options_for(ToolState::Spotlight, None),
+            &[OptionControl::Dim, OptionControl::SpotlightShape]
+        );
+        assert_eq!(ToolStyle::default().dim, 0.55);
+        let mut s = ToolStyle::default();
+        s.apply(StyleMessage::Dim(2.0));
+        assert_eq!(s.dim, MAX_DIM);
     }
 
     #[test]

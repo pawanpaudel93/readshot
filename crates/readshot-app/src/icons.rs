@@ -98,6 +98,7 @@ fn draw_editor_icon(frame: &mut Frame, icon: AppIcon, color: Color) {
         AppIcon::Tool(T::Text) => draw_text_icon(frame, color),
         AppIcon::Tool(T::Blur) => draw_blur_icon(frame, color),
         AppIcon::Tool(T::Pixelate) => draw_pixelate_icon(frame, color),
+        AppIcon::Tool(T::Spotlight) => draw_spotlight_icon(frame, color),
         AppIcon::Tool(T::NumberedPin) => draw_numbered_pin_icon(frame, color),
         AppIcon::Tool(T::Crop) => draw_crop_icon(frame, color),
         // Undo is the counter-clockwise ↺ (arrowhead at top-left),
@@ -259,6 +260,28 @@ fn draw_blur_icon(frame: &mut Frame, color: Color) {
     for x in [7.6, 11.0, 14.4] {
         frame.fill(&Path::circle(Point::new(x, 14.8), 1.0), color);
     }
+}
+
+fn draw_spotlight_icon(frame: &mut Frame, color: Color) {
+    let outer = Path::rectangle(Point::new(3.0, 4.0), iced::Size::new(16.0, 14.0));
+    stroke_path(
+        frame,
+        &outer,
+        Color {
+            a: color.a * 0.45,
+            ..color
+        },
+        1.5,
+    );
+    let lens = Path::circle(Point::new(11.0, 11.0), 4.5);
+    frame.fill(
+        &lens,
+        Color {
+            a: color.a * 0.25,
+            ..color
+        },
+    );
+    stroke_path(frame, &lens, color, 2.0);
 }
 
 fn draw_pixelate_icon(frame: &mut Frame, color: Color) {
