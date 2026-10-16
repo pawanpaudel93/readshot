@@ -335,7 +335,11 @@ fn apply_spotlights(pixmap: &mut Pixmap, model: &[Annotation], offset: (f32, f32
     let spots: Vec<(RectLike, SpotlightShape, f32)> = model
         .iter()
         .filter_map(|a| match a {
-            Annotation::Spotlight { rect, shape, dim } => Some((*rect, *shape, *dim)),
+            // Skip degenerate rects (old sidecars): an empty hole would
+            // dim the whole image.
+            Annotation::Spotlight { rect, shape, dim } if rect.width > 0.0 && rect.height > 0.0 => {
+                Some((*rect, *shape, *dim))
+            }
             _ => None,
         })
         .collect();
@@ -1016,6 +1020,28 @@ mod tests {
         );
         assert_eq!(out.get_pixel(32, 32).0, [200, 200, 200, 255]);
         assert_eq!(out.get_pixel(2, 2).0, [100, 100, 100, 255]);
+    }
+
+    #[test]
+    fn zero_area_spotlight_is_skipped() {
+        // Old sidecars may hold a degenerate spotlight; it must not dim the
+        // whole image.
+        let base = solid_base(32, 32, [200, 200, 200]);
+        for rect in [
+            RectLike::new(8.0, 8.0, 0.0, 10.0),
+            RectLike::new(8.0, 8.0, 10.0, 0.0),
+            RectLike::new(8.0, 8.0, -4.0, 10.0),
+        ] {
+            let out = render(
+                &base,
+                &[Annotation::Spotlight {
+                    rect,
+                    shape: SpotlightShape::Rectangle,
+                    dim: 0.5,
+                }],
+            );
+            assert_eq!(base.as_raw(), out.as_raw(), "{rect:?}");
+        }
     }
 
     #[test]

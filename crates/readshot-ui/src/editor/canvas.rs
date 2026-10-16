@@ -1688,6 +1688,9 @@ pub fn annotation_for_point(
     }
 }
 
+/// Smallest side, in base-image px, a rect-tool drag must span to commit.
+const MIN_RECT_SIDE: f32 = 2.0;
+
 /// Translate a finished drag into the annotation the active tool
 /// produces. Returns `None` for tools that don't produce an annotation
 /// from a simple two-point drag (Pen, Highlighter, Text, NumberedPin,
@@ -1703,6 +1706,21 @@ pub fn annotation_for_drag(
     let p0 = PointLike::new(anchor.x, anchor.y);
     let p1 = PointLike::new(cursor.x, cursor.y);
     let rect = rect_like_from_points(p0, p1);
+    // Rect tools need a real area: a sliver commits an invisible shape, and
+    // a sliver Spotlight dims almost the whole image.
+    let sliver = (p0.x - p1.x).abs() < MIN_RECT_SIDE || (p0.y - p1.y).abs() < MIN_RECT_SIDE;
+    if sliver
+        && matches!(
+            tool,
+            ToolState::Rectangle
+                | ToolState::Ellipse
+                | ToolState::Blur
+                | ToolState::Pixelate
+                | ToolState::Spotlight
+        )
+    {
+        return None;
+    }
 
     match tool {
         ToolState::Rectangle | ToolState::Ellipse => {
@@ -2091,6 +2109,56 @@ mod tests {
         assert!(
             matches!(a, Annotation::Spotlight { shape: readshot_core::SpotlightShape::Ellipse, dim, .. } if dim == 0.7)
         );
+    }
+
+    #[test]
+    fn rect_tools_reject_slivers_under_two_pixels() {
+        // A 1-px spotlight would dim nearly the whole image; every rect
+        // tool drops a drag whose either side is under 2 base px.
+        for tool in [
+            ToolState::Rectangle,
+            ToolState::Ellipse,
+            ToolState::Blur,
+            ToolState::Pixelate,
+            ToolState::Spotlight,
+        ] {
+            for (a, b) in [
+                (pt(10.0, 10.0), pt(10.0, 60.0)),
+                (pt(10.0, 10.0), pt(11.5, 60.0)),
+                (pt(10.0, 10.0), pt(60.0, 11.0)),
+            ] {
+                let r = annotation_for_drag(
+                    tool,
+                    a,
+                    b,
+                    CoreRgba::OPAQUE_BLACK,
+                    2.0,
+                    &ToolStyle::default(),
+                );
+                assert!(r.is_none(), "{tool:?} {a:?}->{b:?} gave {r:?}");
+            }
+            assert!(annotation_for_drag(
+                tool,
+                pt(10.0, 10.0),
+                pt(12.0, 12.0),
+                CoreRgba::OPAQUE_BLACK,
+                2.0,
+                &ToolStyle::default(),
+            )
+            .is_some());
+        }
+        // Lines and arrows keep their own (length) guard.
+        for tool in [ToolState::Line, ToolState::Arrow] {
+            assert!(annotation_for_drag(
+                tool,
+                pt(10.0, 10.0),
+                pt(10.0, 60.0),
+                CoreRgba::OPAQUE_BLACK,
+                2.0,
+                &ToolStyle::default(),
+            )
+            .is_some());
+        }
     }
 
     #[test]
