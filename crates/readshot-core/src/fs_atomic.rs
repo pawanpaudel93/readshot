@@ -43,7 +43,7 @@ fn write_tmp_file(tmp_path: &Path, contents: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
-fn sync_parent_dir(path: &Path) {
+pub(crate) fn sync_parent_dir(path: &Path) {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     if let Ok(dir) = fs::File::open(parent) {
         let _ = dir.sync_all();

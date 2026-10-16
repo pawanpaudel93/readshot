@@ -128,22 +128,43 @@ fn hidden_in_line(line: &TextLine, redactions: &[RectLike]) -> Vec<Range<usize>>
             .filter(|w| tok.start < w.end && w.start < tok.end)
             .collect();
         if boxed.is_empty() {
-            let nf = n as f32;
-            let x0 = line_rect.x + line_rect.width * tok.start as f32 / nf;
-            let x1 = line_rect.x + line_rect.width * tok.end as f32 / nf;
-            let slice = RectLike::new(x0, line_rect.y, x1 - x0, line_rect.height);
-            if is_hidden(slice, redactions) {
+            if is_hidden(slice(line_rect, n, tok.clone()), redactions) {
                 out.push(tok);
             }
             continue;
         }
-        for w in boxed {
+        for w in &boxed {
             if is_hidden(w.rect, redactions) {
                 out.push(tok.start.max(w.start)..tok.end.min(w.end).min(n));
             }
         }
+        // Chars of the token no word box accounts for (an engine that
+        // boxed only part of a glued token) are tested on their own, by
+        // their slice of the line box — never skipped.
+        let mut i = tok.start;
+        while i < tok.end {
+            if boxed.iter().any(|w| w.start <= i && i < w.end) {
+                i += 1;
+                continue;
+            }
+            let rs = i;
+            while i < tok.end && !boxed.iter().any(|w| w.start <= i && i < w.end) {
+                i += 1;
+            }
+            if is_hidden(slice(line_rect, n, rs..i), redactions) {
+                out.push(rs..i);
+            }
+        }
     }
     out
+}
+
+/// Proportional slice of `line` for chars `r` of an `n`-char line.
+fn slice(line: RectLike, n: usize, r: Range<usize>) -> RectLike {
+    let nf = n as f32;
+    let x0 = line.x + line.width * r.start as f32 / nf;
+    let x1 = line.x + line.width * r.end as f32 / nf;
+    RectLike::new(x0, line.y, x1 - x0, line.height)
 }
 
 /// Every hidden span of `doc` under `annotations` (see the module docs
@@ -224,22 +245,50 @@ fn find_from(hay: &[char], needle: &[char], from: usize) -> Option<usize> {
     (from..=hay.len() - needle.len()).find(|&p| hay[p..p + needle.len()] == *needle)
 }
 
-fn mark_all(hay: &[char], needle: &[char], mask: &mut [bool]) {
+fn mark_all(hay: &[char], needle: &[char], mask: &mut [bool]) -> usize {
     let mut from = 0;
+    let mut hits = 0;
     while let Some(p) = find_from(hay, needle, from) {
         mask[p..p + needle.len()].iter_mut().for_each(|m| *m = true);
+        hits += 1;
         from = p + 1;
     }
+    hits
+}
+
+/// Hidden words this long or longer are masked wherever they occur in
+/// the layout text, not only at their line's position: a secret is long,
+/// and the layout may repeat it where no line accounts for it. Shorter
+/// hidden words ("a", "to") are masked in place only, so they don't
+/// blank every match inside other words.
+const GLOBAL_MASK_MIN_CHARS: usize = 4;
+
+/// Masks `word` everywhere in `hay` (and its Markdown-table `\|` escaped
+/// form). Returns the number of occurrences masked.
+fn mark_word_everywhere(hay: &[char], word: &[char], mask: &mut [bool]) -> usize {
+    let mut hits = mark_all(hay, word, mask);
+    if word.contains(&'|') {
+        let escaped: Vec<char> = word
+            .iter()
+            .flat_map(|&c| if c == '|' { vec!['\\', '|'] } else { vec![c] })
+            .collect();
+        hits += mark_all(hay, &escaped, mask);
+    }
+    hits
 }
 
 /// `doc.layout_text` with every hidden word masked.
 ///
 /// The layout text is rebuilt from the lines (indents, table pipes, code
 /// fences), so each line is found in it in reading order and its hidden
-/// spans are masked in place. A line that can't be found after the
-/// previous one (a multi-column or table layout reorders or normalises
-/// it) falls back to masking **every** occurrence of each of its hidden
-/// words — over-masking a repeated word is preferred to leaking it.
+/// spans are masked in place. Fails closed:
+/// - hidden words of [`GLOBAL_MASK_MIN_CHARS`]+ chars, and every hidden
+///   word of a line that can't be found after the previous one (a
+///   multi-column or table layout reorders or normalises it), are masked
+///   at **every** occurrence — over-masking beats leaking;
+/// - if a hidden word still can't be found anywhere in the layout text,
+///   the layout can't be trusted to be masked, so the result is the
+///   masked lines joined by newlines instead.
 pub fn masked_layout_text(doc: &TextDocument, spans: &[HiddenSpan]) -> String {
     if spans.is_empty() {
         return doc.layout_text.clone();
@@ -248,6 +297,7 @@ pub fn masked_layout_text(doc: &TextDocument, spans: &[HiddenSpan]) -> String {
     let layout: Vec<char> = doc.layout_text.chars().collect();
     let mut mask = vec![false; layout.len()];
     let mut cursor = 0;
+    let mut unlocated = false;
     for (i, line) in doc.lines.iter().enumerate() {
         let needle: Vec<char> = line.text.trim_end().chars().collect();
         let found = find_from(&layout, &needle, cursor);
@@ -257,39 +307,47 @@ pub fn masked_layout_text(doc: &TextDocument, spans: &[HiddenSpan]) -> String {
         let Some(ranges) = map.get(&i) else {
             continue;
         };
-        match found {
-            Some(p) => {
-                for r in ranges {
-                    for k in r.clone().filter(|&k| k < needle.len()) {
-                        mask[p + k] = true;
-                    }
-                }
+        let chars: Vec<char> = line.text.chars().collect();
+        for r in ranges {
+            let end = r.end.min(chars.len());
+            if r.start >= end || chars[r.start..end].iter().all(|c| c.is_whitespace()) {
+                continue;
             }
-            None => {
-                let chars: Vec<char> = line.text.chars().collect();
-                for r in ranges {
-                    let end = r.end.min(chars.len());
-                    if r.start >= end {
-                        continue;
-                    }
-                    let word: Vec<char> = chars[r.start..end].to_vec();
-                    mark_all(&layout, &word, &mut mask);
-                    // Markdown table cells escape `|`.
-                    if word.contains(&'|') {
-                        let escaped: Vec<char> = word
-                            .iter()
-                            .flat_map(|&c| if c == '|' { vec!['\\', '|'] } else { vec![c] })
-                            .collect();
-                        mark_all(&layout, &escaped, &mut mask);
-                    }
+            let word = &chars[r.start..end];
+            let mut located = false;
+            if let Some(p) = found {
+                for k in r.start..end.min(needle.len()) {
+                    mask[p + k] = true;
                 }
+                located = true;
             }
+            if found.is_none() || word.len() >= GLOBAL_MASK_MIN_CHARS {
+                located |= mark_word_everywhere(&layout, word, &mut mask) > 0;
+            }
+            unlocated |= !located;
         }
+    }
+    if unlocated {
+        return mask_document_lines(doc, &map).join("\n");
     }
     layout
         .iter()
         .zip(mask)
         .map(|(&c, m)| if m && !c.is_whitespace() { MASK } else { c })
+        .collect()
+}
+
+fn mask_document_lines(
+    doc: &TextDocument,
+    map: &BTreeMap<usize, Vec<Range<usize>>>,
+) -> Vec<String> {
+    doc.lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| match map.get(&i) {
+            Some(ranges) => mask_text(&l.text, ranges),
+            None => l.text.clone(),
+        })
         .collect()
 }
 
@@ -489,5 +547,48 @@ mod tests {
         let d = doc();
         assert_eq!(masked_layout_text(&d, &[]), d.layout_text);
         assert_eq!(mask_document(&d, &[]), d);
+    }
+
+    #[test]
+    fn chars_of_a_token_outside_every_word_box_are_tested_on_their_own() {
+        let mut d = doc();
+        // Only "key:" has a box; "Zx9Qw7" and "next" have none, and the
+        // engine boxed the first half of a glued token "key:Zx9Qw7".
+        d.lines[1].text = "key:Zx9Qw7 next".into();
+        d.lines[1].rect = Some(RectLike::new(0.0, 10.0, 150.0, 10.0));
+        d.lines[1].words = vec![word(0, 4, 0.0, 10.0, 40.0)];
+        d.layout_text = "intro line\nkey:Zx9Qw7 next".into();
+        // Cover x 40..100 — the unboxed "Zx9Qw7" only.
+        let anns = [solid(RectLike::new(40.0, 10.0, 60.0, 10.0))];
+        let spans = hidden_spans(&d, &anns);
+        assert_eq!(spans, vec![(1, 4..10)]);
+        assert_eq!(
+            masked_layout_text(&d, &spans),
+            "intro line\nkey:██████ next"
+        );
+    }
+
+    #[test]
+    fn long_hidden_words_are_masked_wherever_they_appear_in_the_layout() {
+        let mut d = doc();
+        // The line is found, but the same secret also sits in a part of
+        // the layout no line accounts for (e.g. a code fence header).
+        d.layout_text = "Zx9Qw7\nintro line\n  key: Zx9Qw7 next".into();
+        let anns = [solid(RectLike::new(50.0, 10.0, 60.0, 10.0))];
+        let spans = hidden_spans(&d, &anns);
+        let masked = masked_layout_text(&d, &spans);
+        assert!(!masked.contains("Zx9Qw7"), "{masked}");
+    }
+
+    #[test]
+    fn a_hidden_word_missing_from_the_layout_falls_back_to_the_masked_lines() {
+        let mut d = doc();
+        // The layout spells the line differently (normalised), so
+        // neither the line nor the word can be found in it.
+        d.layout_text = "intro line\nkey: Zx9 Qw7 next".into();
+        let anns = [solid(RectLike::new(50.0, 10.0, 60.0, 10.0))];
+        let spans = hidden_spans(&d, &anns);
+        let masked = masked_layout_text(&d, &spans);
+        assert_eq!(masked, "intro line\nkey: ██████ next");
     }
 }
