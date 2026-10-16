@@ -26,6 +26,7 @@ pub mod preferences;
 pub mod render;
 pub mod scroll_stitch;
 pub mod stamp;
+pub mod text_lines;
 
 pub use annotation::{
     Annotation, ArrowHeads, FillMode, LinePath, LineStyle, Rgba, ShapeStyle, SpotlightShape,
