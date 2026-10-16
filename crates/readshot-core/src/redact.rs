@@ -110,10 +110,20 @@ pub fn summary<'a>(matches: impl IntoIterator<Item = &'a RedactMatch>) -> Vec<(R
 }
 
 /// Sensitive spans in one line: char ranges, sorted, non-overlapping.
-/// Overlaps keep the higher priority: Card > Email > API key > Phone.
+/// Overlaps keep the higher priority: Card > Email > API key > Phone;
+/// overlapping phone candidates merge.
 pub fn detect_line(text: &str) -> Vec<(Range<usize>, RedactKind)> {
     let cs: Vec<char> = text.chars().collect();
-    let candidates = find_cards(&cs)
+    let mut accepted: BTreeMap<usize, (usize, RedactKind)> = BTreeMap::new();
+    // Accepted spans are disjoint, so of those starting before `r.end`
+    // only the last one can reach past `r.start`: O(log n) per candidate.
+    let free = |accepted: &BTreeMap<usize, (usize, RedactKind)>, r: &Range<usize>| {
+        accepted
+            .range(..r.end)
+            .next_back()
+            .is_none_or(|(_, &(end, _))| end <= r.start)
+    };
+    let strong = find_cards(&cs)
         .into_iter()
         .map(|r| (r, RedactKind::Card))
         .chain(find_emails(&cs).into_iter().map(|r| (r, RedactKind::Email)))
@@ -121,19 +131,32 @@ pub fn detect_line(text: &str) -> Vec<(Range<usize>, RedactKind)> {
             find_api_keys(&cs)
                 .into_iter()
                 .map(|r| (r, RedactKind::ApiKey)),
-        )
-        .chain(find_phones(&cs).into_iter().map(|r| (r, RedactKind::Phone)));
-    // Accepted spans are disjoint, so of those starting before `r.end`
-    // only the last one can reach past `r.start`: O(log n) per candidate.
-    let mut accepted: BTreeMap<usize, (usize, RedactKind)> = BTreeMap::new();
-    for (r, k) in candidates {
-        let overlaps = accepted
-            .range(..r.end)
-            .next_back()
-            .is_some_and(|(_, &(end, _))| end > r.start);
-        if !overlaps {
+        );
+    for (r, k) in strong {
+        if free(&accepted, &r) {
             accepted.insert(r.start, (r.end, k));
         }
+    }
+    // Phone candidates overlap each other ("0042 415-555" vs
+    // "415-555-0100"). Picking one could leave part of the real number
+    // visible, so overlapping candidates merge into their union: over-cover,
+    // never under-cover. Candidates that hit a stronger match are dropped
+    // first; the union of overlapping free spans is contiguous and so
+    // stays free.
+    let mut phones: Vec<Range<usize>> = find_phones(&cs)
+        .into_iter()
+        .filter(|r| free(&accepted, r))
+        .collect();
+    phones.sort_by_key(|r| r.start);
+    let mut merged: Vec<Range<usize>> = Vec::new();
+    for r in phones {
+        match merged.last_mut() {
+            Some(last) if r.start < last.end => last.end = last.end.max(r.end),
+            _ => merged.push(r),
+        }
+    }
+    for r in merged {
+        accepted.insert(r.start, (r.end, RedactKind::Phone));
     }
     accepted
         .into_iter()
@@ -265,8 +288,7 @@ fn find_cards(cs: &[char]) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < cs.len() {
-        // A `+` prefix makes it a phone number, never a card.
-        if !cs[i].is_ascii_digit() || (i > 0 && (cs[i - 1].is_alphanumeric() || cs[i - 1] == '+')) {
+        if !cs[i].is_ascii_digit() || (i > 0 && cs[i - 1].is_alphanumeric()) {
             i += 1;
             continue;
         }
@@ -294,9 +316,11 @@ fn find_cards(cs: &[char]) -> Vec<Range<usize>> {
         let hit = (0..groups.len()).rev().find_map(|g| {
             let (_, end, n) = groups[g];
             let bounded = end >= cs.len() || !cs[end].is_alphanumeric();
-            // Real cards print groups of 4+ (4-4-4-4, 4-6-5, 4-6-4); only
-            // the last group may be shorter.
-            let shaped = groups[..g].iter().all(|&(gs, ge, _)| ge - gs >= 4);
+            // Short (12–15 digit) numbers overlap phone numbers, so they
+            // must be printed the way cards are (4-6-5, 4-6-4, 4-4-4):
+            // groups of 4+, only the last shorter. 16–19 digits pass on
+            // network + Luhn alone, so OCR-split groups still count.
+            let shaped = n >= 16 || groups[..g].iter().all(|&(gs, ge, _)| ge - gs >= 4);
             (bounded
                 && shaped
                 && CARD_DIGITS.contains(&n)
@@ -480,10 +504,7 @@ fn class(c: char) -> u8 {
 /// random-looking segment when split on `.` and `-` (file names,
 /// versions and kebab-case identifiers split into short segments).
 pub fn looks_like_secret(token: &str) -> bool {
-    if KEY_PREFIXES
-        .iter()
-        .any(|(p, body)| token.starts_with(p) && token.chars().count() >= p.chars().count() + body)
-    {
+    if has_key_prefix(token) {
         return true;
     }
     if !token.chars().all(is_key_char) {
@@ -494,10 +515,11 @@ pub fn looks_like_secret(token: &str) -> bool {
 
 /// ≥ 20 chars with upper, lower and digits, ≥ 12 distinct alphanumerics,
 /// and random-looking: the alphanumerics change class (upper / lower /
-/// digit) on at least 35 % of steps, and lowercase runs average at most
-/// 3 chars. Random base62/base64 changes class ~62 % of the time with
-/// lowercase runs of ~1.7; CamelCase and paths have lowercase runs of
-/// whole words (`SomeJavaClassNameFactoryBean2`: 3.7). Integer-only.
+/// digit) on at least 30 % of steps, and under 75 % of them sit in
+/// CamelCase words (a capital then 2+ lowercase). Random base62/base64
+/// changes class ~62 % of the time and has few such words; identifiers
+/// like `SomeJavaClassNameFactoryBean2` are ≥ 90 % words, and
+/// lowercase paths change class rarely. Integer-only.
 fn random_segment(seg: &str) -> bool {
     if seg.chars().count() < MIN_SECRET_LEN {
         return false;
@@ -512,13 +534,64 @@ fn random_segment(seg: &str) -> bool {
         .windows(2)
         .filter(|w| class(w[0]) != class(w[1]))
         .count();
-    let lower = alnum.iter().filter(|c| c.is_ascii_lowercase()).count();
-    let lower_runs = alnum
+    // CamelCase: chars inside "words" (a capital then 2+ lowercase).
+    let mut word_chars = 0;
+    let mut k = 0;
+    while k < alnum.len() {
+        let mut e = k + 1;
+        if alnum[k].is_ascii_uppercase() {
+            while e < alnum.len() && alnum[e].is_ascii_lowercase() {
+                e += 1;
+            }
+            if e - k >= 3 {
+                word_chars += e - k;
+            }
+        }
+        k = e;
+    }
+    distinct >= 12 && changes * 10 >= alnum.len() * 3 && word_chars * 4 < alnum.len() * 3
+}
+
+fn has_key_prefix(token: &str) -> bool {
+    KEY_PREFIXES
         .iter()
-        .enumerate()
-        .filter(|&(k, c)| c.is_ascii_lowercase() && (k == 0 || !alnum[k - 1].is_ascii_lowercase()))
-        .count();
-    distinct >= 12 && changes * 20 >= alnum.len() * 7 && lower <= lower_runs * 3
+        .any(|(p, body)| token.starts_with(p) && token.chars().count() >= p.chars().count() + body)
+}
+
+fn is_data_header_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-' | '/' | ';' | '=')
+}
+
+/// Whether `cs[..s]` ends in a well-formed data-URI header:
+/// `data:<type>/<subtype>` (chars `[A-Za-z0-9.+-]`), optional `;k=v`
+/// parameters, then `;base64,`. A bare `base64,` is not enough.
+fn after_data_uri_header(cs: &[char], s: usize) -> bool {
+    const MARK: &str = ";base64,";
+    const MAX_HEADER: usize = 128;
+    let m = MARK.len();
+    if s < m || !cs[s - m..s].iter().copied().eq(MARK.chars()) {
+        return false;
+    }
+    let end = s - m;
+    let mut b = end;
+    while b > 0 && end - b < MAX_HEADER && is_data_header_char(cs[b - 1]) {
+        b -= 1;
+    }
+    if b < 5 || !cs[b - 5..b].iter().copied().eq("data:".chars()) {
+        return false;
+    }
+    let header: String = cs[b..end].iter().collect();
+    let word = |x: &str| {
+        !x.is_empty()
+            && x.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
+    };
+    let mut parts = header.split(';');
+    let mime_ok = parts
+        .next()
+        .and_then(|mime| mime.split_once('/'))
+        .is_some_and(|(t, st)| word(t) && word(st));
+    mime_ok && parts.all(|p| p.split_once('=').is_some_and(|(k, v)| word(k) && word(v)))
 }
 
 fn find_api_keys(cs: &[char]) -> Vec<Range<usize>> {
@@ -542,9 +615,10 @@ fn find_api_keys(cs: &[char]) -> Vec<Range<usize>> {
             e -= 1;
         }
         let token: String = cs[s..e].iter().collect();
-        // The payload of a `data:…;base64,` URI is content, not a secret.
-        let data_uri = s >= 7 && cs[s - 7..s].iter().copied().eq("base64,".chars());
-        if !data_uri && looks_like_secret(&token) {
+        // The payload of a real `data:<mime>;base64,` URI is content, not
+        // a secret — unless it carries a known key prefix.
+        let content = !has_key_prefix(&token) && after_data_uri_header(cs, s);
+        if !content && looks_like_secret(&token) {
             out.push(s..e);
         }
         i = next;
@@ -1052,8 +1126,10 @@ mod tests {
         for (line, want) in [
             ("2026-10-16 415-555-0100", vec!["415-555-0100"]),
             (
+                // "0100 415-555" is a plausible trunk-0 number overlapping
+                // both, so the three merge (over-cover, never under-cover).
                 "415-555-0100 415-555-0101",
-                vec!["415-555-0100", "415-555-0101"],
+                vec!["415-555-0100 415-555-0101"],
             ),
             ("12:30 415 555 0100", vec!["415 555 0100"]),
             ("1. 415-555-0100", vec!["415-555-0100"]),
@@ -1216,5 +1292,127 @@ mod tests {
         let base64 = flagged_share(&b64, 32, 2_000, 0xD1B5_4A32_D192_ED03);
         assert!(base62 >= 0.95, "base62/24 flagged {base62}");
         assert!(base64 >= 0.90, "base64/32 flagged {base64}");
+    }
+
+    // --- Review fix round 2 -------------------------------------------
+
+    /// Whether some detection of `kind` covers every char of `needle`
+    /// (its last occurrence in `line`).
+    fn covered(line: &str, needle: &str, kind: RedactKind) -> bool {
+        let b = line.rfind(needle).expect("needle in line");
+        let start = line[..b].chars().count();
+        let end = start + needle.chars().count();
+        detect_line(line)
+            .iter()
+            .any(|(r, k)| *k == kind && r.start <= start && r.end >= end)
+    }
+
+    #[test]
+    fn junk_phone_prefix_never_leaves_part_of_a_number_visible() {
+        for (line, number) in [
+            ("Ticket 0042 415-555-0100", "415-555-0100"),
+            ("0800 415 555 0100", "415 555 0100"),
+            ("Ref 0100 415 555 0100", "415 555 0100"),
+            ("0042 (415) 555-0100", "(415) 555-0100"),
+            ("ID 012 3456 415 555 0100", "415 555 0100"),
+            ("PIN 0000 020 7946 0958", "020 7946 0958"),
+        ] {
+            assert!(
+                covered(line, number, RedactKind::Phone),
+                "{line}: {:?}",
+                found(line)
+            );
+        }
+        // Merging never swallows a card next to a phone.
+        assert_eq!(
+            found("4242 4242 4242 4242 415 555 0100"),
+            [
+                ("4242 4242 4242 4242".to_string(), RedactKind::Card),
+                ("415 555 0100".to_string(), RedactKind::Phone),
+            ]
+        );
+    }
+
+    #[test]
+    fn base64_marker_without_a_data_uri_does_not_hide_secrets() {
+        let tok = fake_random_token();
+        let ghp = ["gh", "p_", "EXAMPLEexample0123456789abcdefAB"].concat();
+        for (line, secret) in [
+            (format!("Authorization: Basic base64,{tok}"), tok.clone()),
+            (format!("key=base64,{tok}"), tok.clone()),
+            (format!("data:;base64,{tok}"), tok.clone()),
+            (format!("base64,{}", fake_stripe_key()), fake_stripe_key()),
+            (
+                format!("data:image/png;base64,{}", fake_stripe_key()),
+                fake_stripe_key(),
+            ),
+            (format!("data:text/plain;base64,{ghp}"), ghp.clone()),
+            (
+                format!("data:image/png;base64,iVBORw0KGgo= key={tok}"),
+                tok.clone(),
+            ),
+        ] {
+            assert!(
+                covered(&line, &secret, RedactKind::ApiKey),
+                "{line}: {:?}",
+                found(&line)
+            );
+        }
+        // A real data URI payload (with a parameter) is still content.
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+        for line in [
+            format!("data:image/png;base64,{png}"),
+            format!("data:image/svg+xml;charset=utf-8;base64,{png}"),
+        ] {
+            assert!(found(&line).is_empty(), "{line}");
+        }
+    }
+
+    #[test]
+    fn plus_prefixed_and_ocr_split_cards_are_still_cards() {
+        assert!(covered(
+            "+4111 1111 1111 1111",
+            "4111 1111 1111 1111",
+            RedactKind::Card
+        ));
+        assert!(covered(
+            "+4242424242424242",
+            "4242424242424242",
+            RedactKind::Card
+        ));
+        for s in [
+            "4242 4242 4242 42 42",
+            "4242 424 2 4242 4242",
+            "42 42 4242 4242 4242",
+        ] {
+            assert_eq!(found(s), [(s.to_string(), RedactKind::Card)], "{s}");
+        }
+        assert_eq!(
+            found("+61 2 9374 4000"),
+            [("+61 2 9374 4000".to_string(), RedactKind::Phone)]
+        );
+    }
+
+    #[test]
+    fn lowercase_heavy_tokens_with_a_few_capitals_are_flagged() {
+        let lower_digits: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789".chars().collect();
+        let upper: Vec<char> = ('A'..='Z').collect();
+        let mut x = 0x2545_F491_4F6C_DD1D_u64;
+        let trials = 2_000;
+        let hits = (0..trials)
+            .filter(|_| {
+                let mut t: Vec<char> = (0..24)
+                    .map(|_| lower_digits[(xorshift(&mut x) % 36) as usize])
+                    .collect();
+                for _ in 0..3 {
+                    let at = (xorshift(&mut x) % 24) as usize;
+                    t[at] = upper[(xorshift(&mut x) % 26) as usize];
+                }
+                let t: String = t.into_iter().collect();
+                !detect_line(&format!("key {t}")).is_empty()
+            })
+            .count();
+        let share = hits as f64 / trials as f64;
+        assert!(share >= 0.95, "lowercase+digits+3 caps flagged {share}");
     }
 }
