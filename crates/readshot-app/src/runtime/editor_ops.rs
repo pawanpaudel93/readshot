@@ -656,10 +656,18 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         commit_pending_editor_text(ed, &state.coordinator);
                     }
                     ed.model.set_tool(t);
-                    // Build the emoji cache off the UI thread the first
-                    // time Stamp is chosen (the OnceLock makes repeats free).
-                    if t == readshot_ui::editor::ToolState::Stamp {
-                        std::thread::spawn(readshot_core::stamp::prewarm_emoji);
+                    // macOS prewarms the emoji cache at startup (main).
+                    // Elsewhere the cache reads a large font file, so it is
+                    // built off the UI thread the first time Stamp is
+                    // chosen: one thread per process, not per selection.
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        static PREWARM: std::sync::Once = std::sync::Once::new();
+                        if t == readshot_ui::editor::ToolState::Stamp {
+                            PREWARM.call_once(|| {
+                                std::thread::spawn(readshot_core::stamp::prewarm_emoji);
+                            });
+                        }
                     }
                 }
                 readshot_ui::ToolbarMessage::SelectColor(c) => {
