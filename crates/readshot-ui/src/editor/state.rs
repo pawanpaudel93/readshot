@@ -655,6 +655,11 @@ pub(crate) fn annotation_hit_test(annotation: &Annotation, point: PointLike, sca
             distance(point, *origin) <= 16.0
         }
         // Border only: a spotlight must not block selecting what it contains.
+        Annotation::Spotlight {
+            rect,
+            shape: readshot_core::SpotlightShape::Ellipse,
+            ..
+        } => distance_to_ellipse_rim(*rect, point) <= tolerance,
         Annotation::Spotlight { rect, .. } => {
             let inside = point.x > rect.x + tolerance
                 && point.x < rect.x + rect.width - tolerance
@@ -666,6 +671,22 @@ pub(crate) fn annotation_hit_test(annotation: &Annotation, point: PointLike, sca
             annotation_bounds(annotation).is_some_and(|rect| rect_contains(rect, point, tolerance))
         }
     }
+}
+
+/// Distance from `point` to the outline of the ellipse inscribed in
+/// `rect`, measured along the ray from the centre. Exact for circles and
+/// close enough for grabbing an elongated rim.
+fn distance_to_ellipse_rim(rect: RectLike, point: PointLike) -> f32 {
+    let (rx, ry) = (rect.width * 0.5, rect.height * 0.5);
+    if rx <= f32::EPSILON || ry <= f32::EPSILON {
+        return f32::INFINITY;
+    }
+    let (dx, dy) = (point.x - (rect.x + rx), point.y - (rect.y + ry));
+    let k = ((dx / rx).powi(2) + (dy / ry).powi(2)).sqrt();
+    if k <= f32::EPSILON {
+        return rx.min(ry);
+    }
+    (dx * dx + dy * dy).sqrt() * (1.0 - 1.0 / k).abs()
 }
 
 fn annotation_kind_label(annotation: &Annotation) -> &'static str {
@@ -1258,6 +1279,30 @@ mod tests {
         s.clear_selection();
         assert_eq!(s.select_at(PointLike::new(70.0, 70.0)), None);
         assert_eq!(s.select_at(PointLike::new(20.0, 70.0)), Some(0));
+    }
+
+    #[test]
+    fn ellipse_spotlight_selects_by_its_rim_not_its_bbox() {
+        let mut s = EditorState::new(solid_base(200, 200));
+        // Centre (100, 60), radii 80 × 40.
+        s.commit_annotation(Annotation::Spotlight {
+            rect: RectLike::new(20.0, 20.0, 160.0, 80.0),
+            shape: readshot_core::SpotlightShape::Ellipse,
+            dim: 0.55,
+        });
+        s.clear_selection();
+        let (c, a, b) = ((100.0_f32, 60.0_f32), 80.0_f32, 40.0_f32);
+        let t = std::f32::consts::FRAC_PI_4;
+        let rim = PointLike::new(c.0 + a * t.cos(), c.1 + b * t.sin());
+        assert_eq!(s.select_at(rim), Some(0), "rim at 45°");
+        s.clear_selection();
+        // The bbox corner and border midpoint far from the rim miss,
+        // and so does the inside.
+        assert_eq!(s.select_at(PointLike::new(21.0, 21.0)), None);
+        assert_eq!(s.select_at(PointLike::new(178.0, 98.0)), None);
+        assert_eq!(s.select_at(PointLike::new(100.0, 60.0)), None);
+        // Rim points on the axes still hit.
+        assert_eq!(s.select_at(PointLike::new(20.0, 60.0)), Some(0));
     }
 
     #[test]
