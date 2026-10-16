@@ -745,9 +745,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 // Presets are ignored; a custom (Recent) color moves to the front.
                 state.remember_custom_color(color);
             }
-            if selected_tool == Some(readshot_ui::editor::ToolState::Highlighter) {
+            if selected_tool == Some(readshot_ui::editor::ToolState::Highlighter)
+                && state.coordinator.engine_reports_positions()
+            {
                 // Snap to text needs line positions; recognize now if the
-                // panel hasn't already.
+                // panel hasn't already. Engines without positions can't
+                // snap, so they skip the whole-image OCR.
                 return super::text_panel::request_text_recognition(state);
             }
             Task::none()

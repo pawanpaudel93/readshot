@@ -11,6 +11,8 @@
 //! a windowing system. Task 16's composition root holds an
 //! `EditorState` and feeds it iced messages.
 
+use std::sync::Arc;
+
 use image::RgbaImage;
 use readshot_core::line_geom::{bend_after_drag, curve_apex, path_points};
 use readshot_core::render::text_pill_rect;
@@ -68,7 +70,9 @@ pub struct TextEdit {
 
 #[derive(Clone, Debug)]
 pub struct EditorState {
-    base: RgbaImage,
+    /// Shared so background work (OCR) can take the image without a
+    /// deep copy on the UI thread.
+    base: Arc<RgbaImage>,
     history: History,
     active_tool: ToolState,
     current_color: Rgba,
@@ -88,7 +92,7 @@ pub struct EditorState {
 impl EditorState {
     pub fn new(base: RgbaImage) -> Self {
         Self {
-            base,
+            base: Arc::new(base),
             history: History::new(),
             active_tool: ToolState::default(),
             current_color: Rgba::new(1.0, 0.0, 0.0, 1.0),
@@ -101,7 +105,7 @@ impl EditorState {
 
     pub fn with_annotations(base: RgbaImage, annotations: Vec<Annotation>) -> Self {
         Self {
-            base,
+            base: Arc::new(base),
             history: History::from_present(annotations),
             active_tool: ToolState::default(),
             current_color: Rgba::new(1.0, 0.0, 0.0, 1.0),
@@ -114,6 +118,11 @@ impl EditorState {
 
     pub fn base(&self) -> &RgbaImage {
         &self.base
+    }
+
+    /// The base image as a cheap shared handle (no pixel copy).
+    pub fn shared_base(&self) -> Arc<RgbaImage> {
+        Arc::clone(&self.base)
     }
 
     pub fn active_tool(&self) -> ToolState {
@@ -133,7 +142,10 @@ impl EditorState {
     }
 
     pub fn render_snapshot(&self) -> (RgbaImage, Vec<Annotation>) {
-        (self.base.clone(), self.history.current().to_vec())
+        (
+            RgbaImage::clone(&self.base),
+            self.history.current().to_vec(),
+        )
     }
 
     pub fn can_undo(&self) -> bool {
@@ -1162,6 +1174,15 @@ mod tests {
     use super::*;
     use image::Rgba as ImgRgba;
     use readshot_core::{PointLike, RectLike};
+
+    #[test]
+    fn shared_base_hands_out_the_same_image_without_copying() {
+        let state = EditorState::new(solid_base(8, 8));
+        let a = state.shared_base();
+        let b = state.clone().shared_base();
+        assert!(std::sync::Arc::ptr_eq(&a, &b));
+        assert_eq!(*a, *state.base());
+    }
 
     fn solid_base(w: u32, h: u32) -> RgbaImage {
         let mut img = RgbaImage::new(w, h);

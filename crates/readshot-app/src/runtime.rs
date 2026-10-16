@@ -8547,20 +8547,48 @@ mod tests {
         );
     }
 
-    #[test]
-    fn choosing_the_highlighter_starts_recognition() {
-        let mut app = build_app(Arc::new(FakePermissions::granted()));
-        app.preferences.editor_panel_open = false;
-        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+    fn build_app_with_positions(perms: Arc<FakePermissions>) -> App {
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_lines(Vec::new())),
+            perms.clone(),
+            None,
+        );
+        App::new(coord, perms, Preferences::default())
+    }
+
+    fn select_highlighter(app: &mut App) {
         let _ = update(
-            &mut app,
+            app,
             Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
                 readshot_ui::editor::ToolState::Highlighter,
             )),
         );
+    }
+
+    #[test]
+    fn choosing_the_highlighter_starts_recognition() {
+        let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
+        app.preferences.editor_panel_open = false;
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        select_highlighter(&mut app);
         assert!(matches!(
             app.editor.as_ref().unwrap().text_panel.recognition,
             crate::editor::TextRecognition::Recognizing { .. }
+        ));
+    }
+
+    #[test]
+    fn choosing_the_highlighter_without_line_positions_does_not_recognize() {
+        // Snap to text needs line boxes; an engine without them would
+        // copy and OCR the whole image for nothing.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.preferences.editor_panel_open = false;
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        select_highlighter(&mut app);
+        assert!(matches!(
+            app.editor.as_ref().unwrap().text_panel.recognition,
+            crate::editor::TextRecognition::Idle
         ));
     }
 

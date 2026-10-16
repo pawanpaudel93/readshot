@@ -45,10 +45,21 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
         ed.toast_action = None;
     }
     let session = ed.session_id;
-    let req = ocr_request_for_image(ed.model.base().clone(), &state.preferences);
+    // Only a shared handle here: the full-size pixel copy the engine
+    // takes ownership of (~80 MB on a 5K capture) is made in the task,
+    // off the UI thread.
+    let base = ed.model.shared_base();
+    let languages = state.preferences.ocr_languages.clone();
     let coord = state.coordinator.clone();
     Task::perform(
-        async move { coord.recognise_document(req).await },
+        async move {
+            let req = readshot_ocr::OCRRequest {
+                image: image::RgbaImage::clone(&base),
+                languages,
+                use_language_correction: true,
+            };
+            coord.recognise_document(req).await
+        },
         move |r| Message::EditorTextRecognized {
             session,
             result: r.map_err(|e| e.to_string()),
