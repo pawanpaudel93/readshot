@@ -46,7 +46,7 @@ pub(crate) fn editor_selected_hint(kind: &str, text_editable: bool) -> String {
         }
         (_, true) => {
             format!(
-                "Selected {kind} — edit inline · color/size apply here · arrows nudge · Delete removes"
+                "Selected {kind} — edit inline · color/size apply here · arrows nudge · ⌫ removes"
             )
         }
         _ => {

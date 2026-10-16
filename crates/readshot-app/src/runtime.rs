@@ -701,72 +701,11 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     if state.history_window_id.is_some() {
         subs.push(iced::event::listen_with(|event, status, window| {
             use iced::event::Status;
-            use iced::keyboard::{key::Named, Event as KbEvent, Key};
+            use iced::keyboard::Event as KbEvent;
             let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event else {
                 return None;
             };
-            // ⌘F focuses the search field, wherever focus is.
-            if modifiers.command()
-                && !modifiers.shift()
-                && !modifiers.alt()
-                && !modifiers.control()
-                && matches!(&key, Key::Character(c) if c.eq_ignore_ascii_case("f"))
-            {
-                return Some(Message::HistoryKeyboardShortcut(
-                    window,
-                    HistoryKeyboardAction::FocusSearch,
-                ));
-            }
-            // ⌘C / ⇧⌘C only fire when no widget has captured the
-            // event — search-input text selection takes precedence.
-            if status == Status::Ignored
-                && modifiers.command()
-                && !modifiers.alt()
-                && !modifiers.control()
-            {
-                if let Key::Character(c) = &key {
-                    if c.eq_ignore_ascii_case("c") {
-                        return Some(Message::HistoryKeyboardShortcut(
-                            window,
-                            if modifiers.shift() {
-                                HistoryKeyboardAction::CopyImage
-                            } else {
-                                HistoryKeyboardAction::CopyText
-                            },
-                        ));
-                    }
-                }
-            }
-            if modifiers.command() || modifiers.alt() || modifiers.control() || modifiers.shift() {
-                return None;
-            }
-            // Arrow / Enter ALWAYS navigate the list — the search
-            // input is single-line so arrow keys for cursor movement
-            // don't conflict (text_input ignores Up/Down anyway).
-            // Delete still requires `Status::Ignored` so it doesn't
-            // hijack character-deletion in the search field;
-            // Backspace is intentionally NOT bound (avoid the macOS
-            // convention violation flagged in the audit — use
-            // Forward-Delete to remove a capture).
-            match key {
-                Key::Named(Named::ArrowUp) => Some(Message::HistoryKeyboardShortcut(
-                    window,
-                    HistoryKeyboardAction::Previous,
-                )),
-                Key::Named(Named::ArrowDown) => Some(Message::HistoryKeyboardShortcut(
-                    window,
-                    HistoryKeyboardAction::Next,
-                )),
-                Key::Named(Named::Enter) => Some(Message::HistoryKeyboardShortcut(
-                    window,
-                    HistoryKeyboardAction::Open,
-                )),
-                Key::Named(Named::Delete) if status == Status::Ignored => Some(
-                    Message::HistoryKeyboardShortcut(window, HistoryKeyboardAction::Delete),
-                ),
-                Key::Named(Named::Escape) => Some(Message::HistorySearchChanged(String::new())),
-                _ => None,
-            }
+            history_key_message(window, &key, modifiers, status == Status::Ignored)
         }));
     }
     if state.settings_window_id.is_some() && !state.settings_recording_hotkey {
@@ -831,6 +770,65 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     // ignores them.
     subs.push(window::close_requests().map(Message::WindowCloseRequested));
     Subscription::batch(subs)
+}
+
+/// Map a key press in the History window to a message. `status_ignored`
+/// is false when a widget (the search field) already handled the event;
+/// the copy / delete chords then stay with the field.
+pub(crate) fn history_key_message(
+    window: iced::window::Id,
+    key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+    status_ignored: bool,
+) -> Option<Message> {
+    use iced::keyboard::{key::Named, Key};
+    let action = |a| Some(Message::HistoryKeyboardShortcut(window, a));
+    // ⌘F focuses the search field, wherever focus is.
+    if modifiers.command()
+        && !modifiers.shift()
+        && !modifiers.alt()
+        && !modifiers.control()
+        && matches!(key, Key::Character(c) if c.eq_ignore_ascii_case("f"))
+    {
+        return action(HistoryKeyboardAction::FocusSearch);
+    }
+    // ⌘C / ⇧⌘C only fire when no widget has captured the event, so
+    // search-input text selection takes precedence.
+    if status_ignored && modifiers.command() && !modifiers.alt() && !modifiers.control() {
+        if let Key::Character(c) = key {
+            if c.eq_ignore_ascii_case("c") {
+                return action(if modifiers.shift() {
+                    HistoryKeyboardAction::CopyText
+                } else {
+                    HistoryKeyboardAction::CopyImage
+                });
+            }
+        }
+    }
+    // Delete: ⌦ or ⌘⌫ (Move to Trash). Both need an uncaptured event so
+    // they never hijack character deletion in the search field; plain ⌫
+    // is never bound.
+    if status_ignored && !modifiers.alt() && !modifiers.control() && !modifiers.shift() {
+        match key {
+            Key::Named(Named::Delete) => return action(HistoryKeyboardAction::Delete),
+            Key::Named(Named::Backspace) if modifiers.command() => {
+                return action(HistoryKeyboardAction::Delete)
+            }
+            _ => {}
+        }
+    }
+    if modifiers.command() || modifiers.alt() || modifiers.control() || modifiers.shift() {
+        return None;
+    }
+    // Arrow / Enter always navigate the list; the search input is
+    // single-line so they don't conflict.
+    match key {
+        Key::Named(Named::ArrowUp) => action(HistoryKeyboardAction::Previous),
+        Key::Named(Named::ArrowDown) => action(HistoryKeyboardAction::Next),
+        Key::Named(Named::Enter) => action(HistoryKeyboardAction::Open),
+        Key::Named(Named::Escape) => Some(Message::HistorySearchChanged(String::new())),
+        _ => None,
+    }
 }
 
 fn app_window_shortcut_message(
@@ -3990,7 +3988,7 @@ mod tests {
         );
         assert_eq!(
             editor_selected_hint("Text", true),
-            "Selected Text — edit inline · color/size apply here · arrows nudge · Delete removes"
+            "Selected Text — edit inline · color/size apply here · arrows nudge · ⌫ removes"
         );
         assert_eq!(
             editor_selected_hint("Rectangle", false),
@@ -6870,6 +6868,82 @@ mod tests {
     }
 
     #[test]
+    fn editor_backspace_and_forward_delete_both_remove_selection() {
+        use iced::keyboard::{key::Named, Key, Modifiers};
+        for named in [Named::Backspace, Named::Delete] {
+            let m = editor_key_message(Key::Named(named), Modifiers::empty(), true);
+            assert!(
+                matches!(m, Some(Message::EditorDeleteSelected)),
+                "{named:?}"
+            );
+            // While a text field is editing (event captured) neither fires.
+            assert!(editor_key_message(Key::Named(named), Modifiers::empty(), false).is_none());
+        }
+    }
+
+    #[test]
+    fn history_copy_keys_match_overlay_and_editor() {
+        use iced::keyboard::{key::Named, Key, Modifiers};
+        let w = iced::window::Id::unique();
+        let c = Key::Character("c".into());
+        let cmd_shift = command_modifiers() | Modifiers::SHIFT;
+        assert!(matches!(
+            history_key_message(w, &c, command_modifiers(), true),
+            Some(Message::HistoryKeyboardShortcut(
+                _,
+                HistoryKeyboardAction::CopyImage
+            ))
+        ));
+        assert!(matches!(
+            history_key_message(w, &c, cmd_shift, true),
+            Some(Message::HistoryKeyboardShortcut(
+                _,
+                HistoryKeyboardAction::CopyText
+            ))
+        ));
+        // A focused search field keeps its own copy.
+        assert!(history_key_message(w, &c, command_modifiers(), false).is_none());
+        assert!(history_key_message(w, &c, cmd_shift, false).is_none());
+        let _ = Named::Enter;
+    }
+
+    #[test]
+    fn history_delete_keys() {
+        use iced::keyboard::{key::Named, Key, Modifiers};
+        let w = iced::window::Id::unique();
+        let is_delete = |m: Option<Message>| {
+            matches!(
+                m,
+                Some(Message::HistoryKeyboardShortcut(
+                    _,
+                    HistoryKeyboardAction::Delete
+                ))
+            )
+        };
+        let bs = Key::Named(Named::Backspace);
+        let del = Key::Named(Named::Delete);
+        // ⌘⌫ and ⌦ delete.
+        assert!(is_delete(history_key_message(
+            w,
+            &bs,
+            command_modifiers(),
+            true
+        )));
+        assert!(is_delete(history_key_message(
+            w,
+            &del,
+            Modifiers::empty(),
+            true
+        )));
+        // Plain ⌫ never deletes a capture.
+        assert!(history_key_message(w, &bs, Modifiers::empty(), true).is_none());
+        assert!(history_key_message(w, &bs, Modifiers::empty(), false).is_none());
+        // A focused search field keeps ⌘⌫ / ⌦ for text editing.
+        assert!(history_key_message(w, &bs, command_modifiers(), false).is_none());
+        assert!(history_key_message(w, &del, Modifiers::empty(), false).is_none());
+    }
+
+    #[test]
     fn pin_keys_map_to_actions() {
         use iced::keyboard::{key::Named, Key, Modifiers};
         assert_eq!(
@@ -6892,14 +6966,15 @@ mod tests {
             pin_key_action(&Key::Character("-".into()), Modifiers::empty()),
             Some(PinKeyAction::OpacityDown)
         );
-        // Arrows move the window: 10 px, Shift → 1 px fine step.
+        // Arrows move the window: 1 px, Shift → 10 px (same as the
+        // overlay and editor nudges).
         assert_eq!(
             pin_key_action(&Key::Named(Named::ArrowLeft), Modifiers::empty()),
-            Some(PinKeyAction::Nudge(-10.0, 0.0))
+            Some(PinKeyAction::Nudge(-1.0, 0.0))
         );
         assert_eq!(
             pin_key_action(&Key::Named(Named::ArrowDown), Modifiers::SHIFT),
-            Some(PinKeyAction::Nudge(0.0, 1.0))
+            Some(PinKeyAction::Nudge(0.0, 10.0))
         );
         // An unmapped plain key is ignored.
         assert_eq!(

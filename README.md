@@ -119,13 +119,13 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
 - **Editor tools:** `V` select, `R` rectangle, `O` ellipse, `L` line,
   `A` arrow, `P` pen, `H` highlighter, `T` text, `B` blur, `X` pixelate,
   `N` numbered pin, `C` crop. Arrow keys nudge the selection (hold
-  `⇧` for larger steps), `Delete` removes it, `esc` deselects.
+  `⇧` for larger steps), `⌫` removes it, `esc` deselects.
 - **Editor actions:** `⌘C` copy image, `⇧⌘C` copy text, `⌘S` save,
   `⌘P` pin, `⌘Z` / `⇧⌘Z` undo and redo. `⌘W` closes; with unsaved
   edits the first press only warns; press again to discard, or click
   Keep Editing.
 - **History window:** `↑` / `↓` move between captures, `Enter` opens the
-  selected one, `⌘C` copies its text and `⇧⌘C` its image, `⌦` deletes it,
+  selected one, `⌘C` copies its image and `⇧⌘C` its text, `⌘⌫` deletes it,
   `⌘F` focuses the search, `esc` clears the search.
 - **Settings window:** `⌘1`–`⌘7` switch panes; `esc` / `⌘W` close; `⌘L`
   toggles launch-at-login and `⌘D` toggles debug logging; `⌘R`, `⌘E`, `⌘F`
@@ -136,7 +136,7 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   `⇧esc` or `⌘.` discards it (press twice to confirm, or click Keep Going
   to carry on capturing).
 - **Pinned windows:** `esc` / `⌘W` close, `L` lock, `-` / `+` adjust opacity,
-  arrow keys move the window (hold `⇧` for 1-pixel steps).
+  arrow keys move the window by 1 pixel (hold `⇧` for 10).
 - **Welcome screen:** `Enter` triggers the primary action (Allow / Open System
   Settings / Capture).
 

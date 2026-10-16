@@ -919,11 +919,12 @@ const HISTORY_REVEAL_LABEL: &str = "Reveal in Finder";
 const HISTORY_REVEAL_LABEL: &str = "Show in Folder";
 
 // Key labels for History's own bindings (see the History keyboard
-// subscription in runtime.rs). Delete is Forward-Delete, not Backspace;
-// ⌘C copies text and ⇧⌘C the image.
-const HISTORY_KEY_DELETE: &str = "⌦";
-const HISTORY_KEY_COPY_TEXT: &str = "⌘C";
-const HISTORY_KEY_COPY_IMAGE: &str = "⇧⌘C";
+// subscription in `history_key_message`, runtime.rs). Delete is ⌘⌫ (Move
+// to Trash; ⌦ also works, plain ⌫ edits the search field); ⌘C copies the
+// image and ⇧⌘C the text, as in the overlay and editor.
+const HISTORY_KEY_DELETE: &str = "⌘⌫";
+const HISTORY_KEY_COPY_TEXT: &str = "⇧⌘C";
+const HISTORY_KEY_COPY_IMAGE: &str = "⌘C";
 
 /// Widget id of the History search field, focused when the window opens.
 pub(crate) const HISTORY_SEARCH_ID: &str = "history-search";
@@ -3514,7 +3515,8 @@ pub(crate) enum PinKeyAction {
 
 /// Map a key press in a focused pin window to a [`PinKeyAction`].
 /// Esc / ⌘W close, `L` toggles lock, `-`/`+`/`=` step opacity, and the
-/// arrow keys nudge the window (10 px, Shift = 1 px fine step).
+/// arrow keys nudge the window (1 px, Shift = 10 px, as in the overlay
+/// and editor).
 pub(crate) fn pin_key_action(
     key: &iced::keyboard::Key,
     modifiers: iced::keyboard::Modifiers,
@@ -3536,7 +3538,7 @@ pub(crate) fn pin_key_action(
         return None;
     }
     // Arrow keys move the borderless pin (which otherwise only drags).
-    let step = if modifiers.shift() { 1.0 } else { 10.0 };
+    let step = if modifiers.shift() { 10.0 } else { 1.0 };
     match key {
         Key::Named(Named::ArrowLeft) => return Some(PinKeyAction::Nudge(-step, 0.0)),
         Key::Named(Named::ArrowRight) => return Some(PinKeyAction::Nudge(step, 0.0)),
@@ -3699,7 +3701,7 @@ pub(crate) fn scroll_key_message(
 pub(crate) fn editor_compact_hint(tool: readshot_ui::editor::ToolState) -> &'static str {
     use readshot_ui::editor::ToolState as T;
     match tool {
-        T::Select => "Click to select · drag to move · Delete removes",
+        T::Select => "Click to select · drag to move · ⌫ removes",
         T::Rectangle => "Drag to draw a rectangle.",
         T::Ellipse => "Drag to draw an ellipse.",
         T::Line => "Drag start to end.",
