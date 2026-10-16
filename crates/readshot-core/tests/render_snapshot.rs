@@ -22,7 +22,10 @@
 use std::io::Cursor;
 
 use image::ImageFormat;
-use readshot_core::{render, Annotation, PointLike, RectLike, Rgba};
+use readshot_core::{
+    render, Annotation, ArrowHeads, FillMode, LinePath, LineStyle, PointLike, RectLike, Rgba,
+    ShapeStyle, TextStyle,
+};
 use readshot_test_fixtures::base_256;
 
 fn red() -> Rgba {
@@ -235,6 +238,122 @@ fn composite_pen_highlight_pin() {
             origin: PointLike::new(180.0, 200.0),
             number: 2,
             color: red(),
+        },
+    ]);
+    insta::assert_binary_snapshot!(".png", png);
+}
+
+#[test]
+fn shape_styles() {
+    let png = render_png(vec![
+        Annotation::Rectangle {
+            rect: RectLike::new(16.0, 16.0, 100.0, 70.0),
+            color: red(),
+            line_width: 4.0,
+            style: ShapeStyle {
+                fill: FillMode::Filled,
+                dashed: false,
+                corner_radius: 12.0,
+            },
+        },
+        Annotation::Rectangle {
+            rect: RectLike::new(140.0, 16.0, 100.0, 70.0),
+            color: blue(),
+            line_width: 3.0,
+            style: ShapeStyle {
+                fill: FillMode::Both,
+                dashed: true,
+                corner_radius: 0.0,
+            },
+        },
+        Annotation::Ellipse {
+            rect: RectLike::new(16.0, 120.0, 100.0, 70.0),
+            color: green(),
+            line_width: 3.0,
+            style: ShapeStyle {
+                fill: FillMode::Outline,
+                dashed: true,
+                corner_radius: 0.0,
+            },
+        },
+        Annotation::Ellipse {
+            rect: RectLike::new(140.0, 120.0, 100.0, 70.0),
+            color: red(),
+            line_width: 3.0,
+            style: ShapeStyle {
+                fill: FillMode::Both,
+                dashed: false,
+                corner_radius: 0.0,
+            },
+        },
+    ]);
+    insta::assert_binary_snapshot!(".png", png);
+}
+
+#[test]
+fn line_styles() {
+    let png = render_png(vec![
+        Annotation::Arrow {
+            a: PointLike::new(24.0, 60.0),
+            b: PointLike::new(232.0, 60.0),
+            color: red(),
+            line_width: 4.0,
+            style: LineStyle {
+                path: LinePath::Curved { bend: -0.3 },
+                dashed: false,
+                heads: ArrowHeads::Both,
+            },
+        },
+        Annotation::Arrow {
+            a: PointLike::new(24.0, 140.0),
+            b: PointLike::new(232.0, 120.0),
+            color: blue(),
+            line_width: 3.0,
+            style: LineStyle {
+                path: LinePath::HandDrawn { seed: 2024 },
+                dashed: false,
+                heads: ArrowHeads::End,
+            },
+        },
+        Annotation::Line {
+            a: PointLike::new(24.0, 210.0),
+            b: PointLike::new(232.0, 210.0),
+            color: green(),
+            line_width: 3.0,
+            style: LineStyle {
+                path: LinePath::Straight,
+                dashed: true,
+                heads: ArrowHeads::End,
+            },
+        },
+    ]);
+    insta::assert_binary_snapshot!(".png", png);
+}
+
+#[test]
+fn text_styles() {
+    let png = render_png(vec![
+        Annotation::Text {
+            content: "Click here".into(),
+            origin: PointLike::new(24.0, 70.0),
+            color: Rgba::OPAQUE_BLACK,
+            font_family: "system-ui".into(),
+            size: 24.0,
+            style: TextStyle {
+                pill: true,
+                bold: false,
+            },
+        },
+        Annotation::Text {
+            content: "NEW".into(),
+            origin: PointLike::new(24.0, 170.0),
+            color: red(),
+            font_family: "system-ui".into(),
+            size: 36.0,
+            style: TextStyle {
+                pill: false,
+                bold: true,
+            },
         },
     ]);
     insta::assert_binary_snapshot!(".png", png);

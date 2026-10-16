@@ -16,6 +16,7 @@ pub mod filters;
 pub(crate) mod fs_atomic;
 pub mod geom;
 pub mod history;
+pub mod line_geom;
 pub mod log;
 pub mod ocr_layout;
 pub mod ocr_text;
