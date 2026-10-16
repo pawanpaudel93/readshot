@@ -125,7 +125,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   larger steps), `⌫` removes it, `esc` deselects.
 - **Editor actions:** `⌘C` copy image, `⇧⌘C` copy all text (the side panel's Text tab also copies selected lines), `⌘S` save,
   `⌘P` pin, `⌥⌘P` show or hide the side panel, `⌘Z` / `⇧⌘Z` undo and
-  redo. `⌘W` closes; with unsaved
+  redo, `⌘[` / `⌘]` rotate left / right, `⌥⌘I` resize (the title bar's
+  Image menu also flips). `⌘W` closes; with unsaved
   edits the first press only warns; press again to discard, or click
   Keep Editing.
 - **History window:** `↑` / `↓` move between captures, `Enter` opens the

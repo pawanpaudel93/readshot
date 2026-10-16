@@ -285,6 +285,9 @@ pub(crate) fn close_editor_popover(ed: &mut crate::editor::EditorSession) -> boo
             ed.refresh_image();
         }
     }
+    if was == crate::editor::EditorPopover::Resize {
+        ed.resize_draft = None;
+    }
     true
 }
 
@@ -1756,6 +1759,14 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         | Message::EditorBeautifyPickBackground) => {
             super::beautify_panel::handle_beautify_message(state, msg)
         }
+        msg @ (Message::EditorRotate { .. }
+        | Message::EditorFlip(..)
+        | Message::EditorResizeOpen
+        | Message::EditorResizeWidthChanged(..)
+        | Message::EditorResizeHeightChanged(..)
+        | Message::EditorResizeUnitChanged(..)
+        | Message::EditorResizeLockToggled(..)
+        | Message::EditorResizeApply) => super::image_menu::handle_image_message(state, msg),
         other => unreachable!("non-editor message routed to the editor handler: {other:?}"),
     }
 }

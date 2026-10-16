@@ -22,6 +22,111 @@ use readshot_ui::editor::EditorState as Model;
 pub enum EditorPopover {
     Color,
     Width,
+    /// The title bar's Image menu (resize, rotate, flip).
+    Image,
+    /// The Resize dialog (opened from the Image menu or ⌥⌘I).
+    Resize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ResizeUnit {
+    #[default]
+    Pixels,
+    Percent,
+}
+
+/// The Resize dialog's fields (spec §3.10). `base` is the size it opened
+/// at (the displayed, cropped image), which percentages refer to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResizeDraft {
+    pub base: (u32, u32),
+    pub width: String,
+    pub height: String,
+    pub unit: ResizeUnit,
+    pub lock: bool,
+}
+
+impl ResizeDraft {
+    pub fn new(base: (u32, u32)) -> Self {
+        Self {
+            base,
+            width: base.0.to_string(),
+            height: base.1.to_string(),
+            unit: ResizeUnit::Pixels,
+            lock: true,
+        }
+    }
+
+    fn parse(s: &str) -> Option<f64> {
+        s.trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite() && *v > 0.0)
+    }
+
+    fn fmt(v: f64) -> String {
+        format!("{}", v.round() as u64)
+    }
+
+    pub fn set_width(&mut self, raw: &str) {
+        self.width = raw.to_string();
+        if self.lock {
+            if let Some(w) = Self::parse(raw) {
+                self.height = match self.unit {
+                    ResizeUnit::Percent => Self::fmt(w),
+                    ResizeUnit::Pixels => {
+                        Self::fmt(w * self.base.1 as f64 / self.base.0.max(1) as f64)
+                    }
+                };
+            }
+        }
+    }
+
+    pub fn set_height(&mut self, raw: &str) {
+        self.height = raw.to_string();
+        if self.lock {
+            if let Some(h) = Self::parse(raw) {
+                self.width = match self.unit {
+                    ResizeUnit::Percent => Self::fmt(h),
+                    ResizeUnit::Pixels => {
+                        Self::fmt(h * self.base.0 as f64 / self.base.1.max(1) as f64)
+                    }
+                };
+            }
+        }
+    }
+
+    /// Switch units, converting the current values.
+    pub fn set_unit(&mut self, unit: ResizeUnit) {
+        if unit == self.unit {
+            return;
+        }
+        if let Some((w, h)) = self.target() {
+            (self.width, self.height) = match unit {
+                ResizeUnit::Percent => (
+                    Self::fmt(w as f64 * 100.0 / self.base.0.max(1) as f64),
+                    Self::fmt(h as f64 * 100.0 / self.base.1.max(1) as f64),
+                ),
+                ResizeUnit::Pixels => (w.to_string(), h.to_string()),
+            };
+        }
+        self.unit = unit;
+    }
+
+    /// Target size in px (≥ 1), or `None` while a field isn't a number.
+    pub fn target(&self) -> Option<(u32, u32)> {
+        let (w, h) = (Self::parse(&self.width)?, Self::parse(&self.height)?);
+        let (w, h) = match self.unit {
+            ResizeUnit::Pixels => (w, h),
+            ResizeUnit::Percent => (
+                w * self.base.0 as f64 / 100.0,
+                h * self.base.1 as f64 / 100.0,
+            ),
+        };
+        let (w, h) = (w.round(), h.round());
+        (w >= 1.0 && h >= 1.0 && w <= u32::MAX as f64 && h <= u32::MAX as f64)
+            .then_some((w as u32, h as u32))
+    }
 }
 
 /// What an eyedropper pick sets.
@@ -246,6 +351,8 @@ pub struct EditorSession {
     /// Open color / line-width popover, if any. Esc and a
     /// click outside close it before any other Esc behaviour runs.
     pub popover: Option<EditorPopover>,
+    /// The Resize dialog's fields while it is open.
+    pub resize_draft: Option<ResizeDraft>,
     /// Draft text of the color popover's hex field.
     pub hex_draft: String,
     /// Some while the eyedropper is active (spec §3.5).
@@ -516,6 +623,7 @@ impl EditorSession {
             source_display_bounds: None,
             discard_pending_at: None,
             popover: None,
+            resize_draft: None,
             hex_draft: String::new(),
             eyedropper: None,
             status_set_at: None,
@@ -574,6 +682,7 @@ impl EditorSession {
             source_display_bounds: None,
             discard_pending_at: None,
             popover: None,
+            resize_draft: None,
             hex_draft: String::new(),
             eyedropper: None,
             status_set_at: None,

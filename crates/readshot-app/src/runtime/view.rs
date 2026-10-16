@@ -2313,6 +2313,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let live_scale = ed.render_scale.clone();
     let mode = editor_panel_mode(state, ed);
     let panel_hidden = matches!(mode, PanelMode::Hidden | PanelMode::Collapsed);
+    let image_menu_open = matches!(popover, Some(EditorPopover::Image | EditorPopover::Resize));
     let title_content = responsive(move |_size| {
         let shown_scale = zoom.explicit_scale().unwrap_or_else(|| live_scale.get());
         let mut title = row![
@@ -2323,6 +2324,28 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .style(text_t3),
             IcedSpace::new().width(Length::Fill),
         ];
+        title = title.push(tooltip_with_key(
+            bar_button(
+                row![
+                    crate::icons::icon(AppIcon::Image, p.t2, 15.0),
+                    text("Image").size(ButtonSize::Sm.text_size()),
+                    crate::icons::icon(AppIcon::Chevron, p.t3, 13.0),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .into(),
+                if image_menu_open {
+                    ButtonKind::Secondary
+                } else {
+                    ButtonKind::Ghost
+                },
+                ButtonSize::Sm,
+                (!busy).then_some(Message::EditorPopoverToggled(EditorPopover::Image)),
+            ),
+            "Image: resize, rotate, flip",
+            None,
+            Position::Bottom,
+        ));
         if panel_hidden {
             title = title.push(icon_button(
                 AppIcon::Sidebar,
@@ -2651,6 +2674,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 busy,
                 mono,
             ),
+            EditorPopover::Image => image_popover(ed, p),
+            EditorPopover::Resize => resize_popover(ed, p),
         };
         // `opaque` keeps clicks on the card's padding from reaching the
         // scrim underneath (which would close it).
@@ -2662,15 +2687,23 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                     top: EDITOR_POPOVER_TOP,
                     ..iced::Padding::ZERO
                 })
-                .align_y(Alignment::Start),
-        };
-        layers.push(
-            placed
+                .align_y(Alignment::Start)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .into(),
-        );
+                .align_x(Alignment::Center),
+            // Image and Resize open under the title row, at the right.
+            EditorPopover::Image | EditorPopover::Resize => container(card)
+                .padding(iced::Padding {
+                    top: TITLEBAR_HEIGHT + 4.0,
+                    right: 12.0,
+                    ..iced::Padding::ZERO
+                })
+                .align_y(Alignment::Start)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::End),
+        };
+        layers.push(placed.into());
     }
 
     // Everything above is the canvas area. The side panel docks beside
@@ -3365,6 +3398,15 @@ pub(crate) fn editor_key_message(
         }
         (Key::Character(c), true, false) if c.eq_ignore_ascii_case("w") => {
             return Some(Message::EditorDiscardRequested);
+        }
+        (Key::Character(c), true, false) if modifiers.alt() && c.eq_ignore_ascii_case("i") => {
+            return Some(Message::EditorResizeOpen);
+        }
+        (Key::Character(c), true, false) if status_ignored && !modifiers.alt() && c == "[" => {
+            return Some(Message::EditorRotate { clockwise: false });
+        }
+        (Key::Character(c), true, false) if status_ignored && !modifiers.alt() && c == "]" => {
+            return Some(Message::EditorRotate { clockwise: true });
         }
         (Key::Character(c), true, _) if c == "+" || c == "=" => {
             return Some(Message::EditorZoomIn);

@@ -589,6 +589,18 @@ pub enum Message {
     /// shortcuts; the runtime resolves the new width against the
     /// current model state and clamps to the published range.
     EditorWidthBump(f32),
+    /// Rotate the document a quarter turn (⌘] right, ⌘[ left).
+    EditorRotate {
+        clockwise: bool,
+    },
+    EditorFlip(readshot_core::document::FlipAxis),
+    /// Open the Resize dialog (⌥⌘I or Image › Resize…).
+    EditorResizeOpen,
+    EditorResizeWidthChanged(String),
+    EditorResizeHeightChanged(String),
+    EditorResizeUnitChanged(crate::editor::ResizeUnit),
+    EditorResizeLockToggled(bool),
+    EditorResizeApply,
     /// Cycle the editor's active palette colour. `+1` moves to the
     /// next swatch in `PALETTE`, `-1` to the previous; the runtime
     /// wraps via `rem_euclid` so the cycle is endless. Triggered by

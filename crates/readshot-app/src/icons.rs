@@ -46,6 +46,12 @@ pub enum AppIcon {
     ArrowBoth,
     Dropper,
     Sidebar,
+    Chevron,
+    RotateLeft,
+    RotateRight,
+    FlipH,
+    FlipV,
+    Resize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -674,13 +680,38 @@ fn shapes(icon: AppIcon) -> &'static [Shape] {
             Poly(&[(16.0, 8.0), (20.0, 12.0), (16.0, 16.0)], false),
         ],
         AppIcon::Sidebar => &[Rect(3.0, 4.0, 18.0, 16.0, 2.0), Line(14.0, 4.0, 14.0, 20.0)],
+        AppIcon::Chevron => &[Poly(&[(6.0, 9.0), (12.0, 15.0), (18.0, 9.0)], false)],
+        AppIcon::RotateLeft => &[
+            Arc(12.0, 13.0, 7.0, 200.0, 470.0),
+            Poly(&[(3.0, 6.0), (5.0, 11.0), (10.0, 9.0)], false),
+        ],
+        AppIcon::RotateRight => &[
+            Arc(12.0, 13.0, 7.0, -290.0, -20.0),
+            Poly(&[(21.0, 6.0), (19.0, 11.0), (14.0, 9.0)], false),
+        ],
+        AppIcon::FlipH => &[
+            Line(12.0, 3.0, 12.0, 21.0),
+            Poly(&[(9.0, 6.0), (3.0, 18.0), (9.0, 18.0)], true),
+            Poly(&[(15.0, 6.0), (21.0, 18.0), (15.0, 18.0)], false),
+        ],
+        AppIcon::FlipV => &[
+            Line(3.0, 12.0, 21.0, 12.0),
+            Poly(&[(6.0, 9.0), (18.0, 3.0), (18.0, 9.0)], true),
+            Poly(&[(6.0, 15.0), (18.0, 21.0), (18.0, 15.0)], false),
+        ],
+        AppIcon::Resize => &[
+            Rect(3.0, 3.0, 18.0, 18.0, 2.0),
+            Poly(&[(14.0, 7.0), (17.0, 7.0), (17.0, 10.0)], false),
+            Line(17.0, 7.0, 11.0, 13.0),
+            Poly(&[(7.0, 14.0), (7.0, 17.0), (10.0, 17.0)], false),
+        ],
         AppIcon::Tool(_) | AppIcon::Undo | AppIcon::Redo => &[],
     }
 }
 
 impl AppIcon {
     #[cfg(test)]
-    pub const SHAPED: [AppIcon; 32] = [
+    pub const SHAPED: [AppIcon; 38] = [
         AppIcon::Edit,
         AppIcon::Copy,
         AppIcon::ScanText,
@@ -713,6 +744,12 @@ impl AppIcon {
         AppIcon::ArrowBoth,
         AppIcon::Dropper,
         AppIcon::Sidebar,
+        AppIcon::Chevron,
+        AppIcon::RotateLeft,
+        AppIcon::RotateRight,
+        AppIcon::FlipH,
+        AppIcon::FlipV,
+        AppIcon::Resize,
     ];
 }
 
