@@ -94,7 +94,10 @@ impl PartialEq for Part {
 /// Rotate clockwise `quarter_turns` times, then flip, then scale.
 ///
 /// The fields are public and can come from a sidecar, so every consumer
-/// goes through [`Transform::sanitized`] first.
+/// goes through [`Transform::sanitized`] first, and every way of making a
+/// new transform from one ([`Transform::scaled`], the rotations, flips and
+/// [`DocGeometry::with_transform`]) starts from the sanitized value: a
+/// hostile NaN or zero scale reads as 1 everywhere and never persists.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
     pub quarter_turns: u8,
@@ -117,8 +120,10 @@ impl Default for Transform {
 }
 
 impl Transform {
+    /// Judged on the sanitized value, as the fingerprint and the mapping
+    /// are: a NaN scale or four quarter turns is the identity.
     pub fn is_identity(&self) -> bool {
-        *self == Self::default()
+        self.sanitized() == Self::default()
     }
 
     /// In-range copy: turns reduced mod 4, and a scale that is not finite
@@ -140,12 +145,13 @@ impl Transform {
 
     /// One more clockwise turn applied in document space.
     pub fn rotated_cw(self) -> Self {
+        let t = self.sanitized();
         Self {
-            quarter_turns: (self.quarter_turns % 4 + 1) % 4,
-            flip_h: self.flip_v,
-            flip_v: self.flip_h,
-            scale_x: self.scale_y,
-            scale_y: self.scale_x,
+            quarter_turns: (t.quarter_turns + 1) % 4,
+            flip_h: t.flip_v,
+            flip_v: t.flip_h,
+            scale_x: t.scale_y,
+            scale_y: t.scale_x,
         }
     }
 
@@ -154,23 +160,35 @@ impl Transform {
     }
 
     pub fn flipped(self, axis: FlipAxis) -> Self {
+        let t = self.sanitized();
         match axis {
             FlipAxis::Horizontal => Self {
-                flip_h: !self.flip_h,
-                ..self
+                flip_h: !t.flip_h,
+                ..t
             },
             FlipAxis::Vertical => Self {
-                flip_v: !self.flip_v,
-                ..self
+                flip_v: !t.flip_v,
+                ..t
             },
         }
     }
 
+    /// Scale by `(sx, sy)`. A factor that would leave a scale not
+    /// finite or not positive leaves that axis as it was.
     pub fn scaled(self, sx: f32, sy: f32) -> Self {
+        let t = self.sanitized();
+        let mul = |s: f32, f: f32| {
+            let v = s * f;
+            if v.is_finite() && v > 0.0 {
+                v
+            } else {
+                s
+            }
+        };
         Self {
-            scale_x: self.scale_x * sx,
-            scale_y: self.scale_y * sy,
-            ..self
+            scale_x: mul(t.scale_x, sx),
+            scale_y: mul(t.scale_y, sy),
+            ..t
         }
     }
 
@@ -583,7 +601,7 @@ impl DocGeometry {
 
     pub fn with_transform(&self, transform: Transform) -> Self {
         Self {
-            transform,
+            transform: transform.sanitized(),
             ..self.clone()
         }
     }
@@ -989,6 +1007,58 @@ mod tests {
             (*source, *bubble, *radius, *zoom),
             (PointLike::new(1.0, 1.0), PointLike::new(4.0, 3.0), 2.0, 3.0)
         );
+    }
+
+    #[test]
+    fn hostile_transforms_read_alike_everywhere_and_never_keep_a_nan() {
+        let g = DocGeometry::original(grid(3, 2));
+        let a = rect_ann(RectLike::new(1.0, 0.0, 1.0, 1.0));
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -2.0] {
+            let t = Transform {
+                scale_x: bad,
+                scale_y: bad,
+                ..Transform::default()
+            };
+            // The raw value, as a sidecar could hand it over.
+            let raw = DocGeometry {
+                transform: t,
+                ..g.clone()
+            };
+            assert!(t.is_identity(), "{bad}");
+            assert!(raw.is_original(), "{bad}");
+            assert_eq!(raw.fingerprint(), g.fingerprint(), "{bad}");
+            assert_eq!(raw.size(), g.size(), "{bad}");
+            assert_eq!(
+                remap_annotations(&g, &raw, std::slice::from_ref(&a)),
+                vec![a.clone()],
+                "{bad}"
+            );
+            // Nothing made from it keeps the bad value.
+            let made = [
+                g.with_transform(t).transform,
+                t.scaled(0.5, 0.5),
+                t.rotated_cw(),
+                t.rotated_ccw(),
+                t.flipped(FlipAxis::Horizontal),
+            ];
+            for m in made {
+                assert!(m.scale_x.is_finite() && m.scale_x > 0.0, "{bad}: {m:?}");
+                assert!(m.scale_y.is_finite() && m.scale_y > 0.0, "{bad}: {m:?}");
+            }
+            assert_eq!(t.scaled(0.5, 0.5).scale_x, 0.5, "{bad}");
+        }
+        // A bad factor leaves the scale as it was.
+        let half = Transform::default().scaled(0.5, 0.5);
+        for bad in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
+            assert_eq!(half.scaled(bad, bad), half, "{bad}");
+        }
+        // Four quarter turns are no turn.
+        let t = Transform {
+            quarter_turns: 4,
+            ..Transform::default()
+        };
+        assert!(t.is_identity());
+        assert_eq!(t.rotated_cw().quarter_turns, 1);
     }
 
     #[test]
