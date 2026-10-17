@@ -58,7 +58,7 @@
           <a href="#tools">Tools</a>
           <a href="#arguments">Arguments</a>
           <a href="#host-config">Host config</a>
-          <a href="#tool-calls">Tool calls</a>
+          <a href="#tool-calls">Tool call examples</a>
           <a href="#permissions">Permissions</a>
           <a href="#verify">Verify</a>
           <a href="#troubleshooting">Troubleshooting</a>
@@ -152,6 +152,47 @@
               When <code translate="no">display</code> is omitted, the primary display is used.
               When <code translate="no">rect</code> is omitted, the selected display or window is captured in full.
             </p>
+
+            <h3 id="history-results">History results</h3>
+            <p>
+              The history tools read the same local archive as the app. Each result includes
+              metadata, OCR text when available, the absolute PNG path, and
+              <code translate="no">redacted</code>. A redacted capture never serves what its
+              redactions hide.
+            </p>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Field</th>
+                  <th>Meaning</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code translate="no">redacted</code></td>
+                  <td><code translate="no">true</code> when the stored image is a redacted editor output. Its PNG is the redacted image.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">ocr_text</code></td>
+                  <td>
+                    On a redacted capture, each word a redaction covers is masked with
+                    <code translate="no">█</code>. It is <code translate="no">null</code> by design when
+                    Readshot can’t prove the text is safe to serve: the record’s list of redactions
+                    isn’t known to be complete, the record is a legacy one migrated on load, or a
+                    cropped, redacted capture hasn’t had its text recognized with word positions yet.
+                    In the last case the masked text is filled in once it has.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code translate="no">image_path</code></td>
+                  <td>
+                    <code translate="no">null</code> while a redaction is being written to disk. The
+                    unredacted image is already gone, so the record is text-only until the redacted
+                    image lands.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </section>
 
           <section class="doc-section" id="arguments">
@@ -432,8 +473,19 @@ printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' \
                   <td>No capturable surface was available or permission was denied.</td>
                 </tr>
                 <tr>
-                  <td>OCR returns empty text</td>
+                  <td>A capture tool returns empty OCR text</td>
                   <td>The selected region is too small or contains no rendered text.</td>
+                </tr>
+                <tr>
+                  <td>A history result has <code translate="no">ocr_text: null</code></td>
+                  <td>
+                    It’s a redacted capture whose text Readshot can’t prove is safe to serve. This is
+                    by design; see <a href="#history-results">History results</a>.
+                  </td>
+                </tr>
+                <tr>
+                  <td>A history result has <code translate="no">image_path: null</code></td>
+                  <td>A redaction is still being written to disk. Read the capture again once it lands.</td>
                 </tr>
               </tbody>
             </table>
