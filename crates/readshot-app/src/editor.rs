@@ -148,6 +148,16 @@ pub struct EyedropperState {
 
 /// Side-panel tabs (spec §2.3): Text and Beautify. A new tab is a
 /// variant here, its id, and one arm in `runtime::side_panel::side_panel`.
+/// Which message of an Escape that ended a crop re-drag was handled
+/// first ([`EditorSession::escape_ended_crop_drag`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EscapeSeenBy {
+    /// The canvas's `DragEscaped`; the key press is still to come.
+    Canvas,
+    /// The key press; the canvas's `DragEscaped` is still to come.
+    Key,
+}
+
 /// The stored preference is the tab's `id()`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PanelTab {
@@ -435,11 +445,13 @@ pub struct EditorSession {
     /// The window the held press began in (`None`: not held, or not
     /// known).
     pub pointer_window: Option<iced::window::Id>,
-    /// Escape just ended a live crop re-drag (the canvas published
-    /// `DragEscaped`). The key press of that same Escape arrives next
-    /// and must not also drop the draft the drag was hiding: one Esc,
-    /// one step.
-    pub escape_ended_crop_drag: bool,
+    /// One Escape just ended a live crop re-drag, seen by one of its two
+    /// messages (the canvas's `DragEscaped`, the key subscription's
+    /// `EditorKeyPressed`); the other, in whichever order it comes, must
+    /// not also drop the draft the drag was hiding: one Esc, one step.
+    /// Cleared by its counterpart, and by any other key, press or drag
+    /// start, so it can't swallow a later Escape.
+    pub escape_ended_crop_drag: Option<EscapeSeenBy>,
     /// The newest combine gap slider value not previewed yet: gap ticks
     /// are throttled (each preview recomposes the document), and the
     /// last one is applied on the trailing edge, on release, or before
@@ -768,7 +780,7 @@ impl EditorSession {
             snapshot_drag_cancelled: false,
             pointer_held: false,
             pointer_window: None,
-            escape_ended_crop_drag: false,
+            escape_ended_crop_drag: None,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
             compose_job: None,
@@ -840,7 +852,7 @@ impl EditorSession {
             snapshot_drag_cancelled: false,
             pointer_held: false,
             pointer_window: None,
-            escape_ended_crop_drag: false,
+            escape_ended_crop_drag: None,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
             compose_job: None,
@@ -949,6 +961,10 @@ impl EditorSession {
     /// (`None`). Either way a raised cancel flag belongs to a drag that
     /// is over: a press starts a new drag, a release ends the held one.
     pub fn set_pointer_held(&mut self, pressed_in: Option<Option<iced::window::Id>>) {
+        if pressed_in.is_some() {
+            // A new press: an Escape marker still waiting is stale.
+            self.escape_ended_crop_drag = None;
+        }
         self.pointer_held = pressed_in.is_some();
         self.pointer_window = pressed_in.flatten();
         self.style_drag_cancelled = false;

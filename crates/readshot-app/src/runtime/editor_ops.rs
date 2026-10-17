@@ -751,15 +751,26 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if editor_window != Some(window) {
                 return Task::none();
             }
-            // The canvas already spent this Escape ending a crop re-drag.
+            // An Escape during a live crop re-drag ends the re-drag only,
+            // whichever of its two messages comes first.
             if let Some(ed) = state.editor.as_mut() {
-                if std::mem::take(&mut ed.escape_ended_crop_drag)
-                    && matches!(
-                        key,
-                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
-                    )
-                {
-                    return Task::none();
+                let escape = matches!(
+                    key,
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+                );
+                let seen = ed.escape_ended_crop_drag.take();
+                if escape {
+                    if seen == Some(crate::editor::EscapeSeenBy::Canvas) {
+                        return Task::none(); // the canvas already spent it
+                    }
+                    // Captured by the canvas (`!status_ignored`): its
+                    // `DragEscaped` follows and must do nothing more.
+                    if !status_ignored && ed.canvas_drag_active && ed.crop_draft.is_some() {
+                        ed.canvas_drag_active = false;
+                        cancel_editor_previews(ed);
+                        ed.escape_ended_crop_drag = Some(crate::editor::EscapeSeenBy::Key);
+                        return Task::none();
+                    }
                 }
             }
             // An open popover owns Escape. In the running editor the
@@ -1444,7 +1455,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     // A shape/freehand drag is now live; Escape should cancel
                     // it rather than trigger discard.
                     ed.canvas_drag_active = true;
-                    ed.escape_ended_crop_drag = false;
+                    ed.escape_ended_crop_drag = None;
                 }
                 readshot_ui::CanvasMessage::DragMoved(_)
                 | readshot_ui::CanvasMessage::PolylineMoved(_) => {
@@ -1458,12 +1469,20 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 readshot_ui::CanvasMessage::DragEscaped => {
                     // A re-drag over an open crop draft hides the draft;
                     // this Escape ends the re-drag only, and the draft is
-                    // back. The next Esc cancels it.
-                    ed.escape_ended_crop_drag = ed.canvas_drag_active && ed.crop_draft.is_some();
+                    // back. The next Esc cancels it. The key press of the
+                    // same Escape may come before or after this.
+                    if ed.escape_ended_crop_drag.take() == Some(crate::editor::EscapeSeenBy::Key) {
+                        // The key already ended the re-drag.
+                        ed.canvas_drag_active = false;
+                        return Task::none();
+                    }
+                    ed.escape_ended_crop_drag = (ed.canvas_drag_active && ed.crop_draft.is_some())
+                        .then_some(crate::editor::EscapeSeenBy::Canvas);
                     ed.canvas_drag_active = false;
                     cancel_editor_previews(ed);
                 }
                 readshot_ui::CanvasMessage::SelectPressed(p) => {
+                    ed.escape_ended_crop_drag = None;
                     cancel_editor_previews(ed);
                     commit_pending_editor_text(ed, &state.coordinator);
                     let scale = ed.render_scale.get();

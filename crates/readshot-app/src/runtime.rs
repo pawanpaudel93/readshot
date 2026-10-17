@@ -12313,6 +12313,65 @@ mod tests {
     }
 
     #[test]
+    fn esc_during_a_crop_re_drag_is_one_step_whichever_message_comes_first() {
+        let mut app = crop_app_with_rect_selected();
+        let id = iced::window::Id::unique();
+        let ed = app.editor.as_mut().unwrap();
+        ed.window_id = Some(id);
+        ed.model.set_tool(readshot_ui::editor::ToolState::Crop);
+        let draft = ed.crop_draft;
+        let key = |app: &mut App, named| {
+            let _ = update(
+                app,
+                Message::EditorKeyPressed {
+                    window: id,
+                    key: iced::keyboard::Key::Named(named),
+                    modifiers: iced::keyboard::Modifiers::empty(),
+                    status_ignored: false,
+                },
+            );
+        };
+        let canvas = |app: &mut App, m| {
+            let _ = update(app, Message::EditorCanvas(m));
+        };
+        use iced::keyboard::key::Named;
+        use readshot_ui::CanvasMessage;
+        // Key first, then the canvas's message for the same Escape.
+        canvas(&mut app, CanvasMessage::DragStarted);
+        key(&mut app, Named::Escape);
+        canvas(&mut app, CanvasMessage::DragEscaped);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(!ed.canvas_drag_active, "the re-drag is cancelled");
+        assert_eq!(ed.crop_draft, draft, "the previous draft is back");
+        assert_eq!(ed.escape_ended_crop_drag, None, "nothing left to swallow");
+        // A stale marker (its counterpart never came) can't swallow a
+        // later Escape: another key clears it.
+        canvas(&mut app, CanvasMessage::DragStarted);
+        canvas(&mut app, CanvasMessage::DragEscaped);
+        assert!(app
+            .editor
+            .as_ref()
+            .unwrap()
+            .escape_ended_crop_drag
+            .is_some());
+        key(&mut app, Named::Shift);
+        assert_eq!(app.editor.as_ref().unwrap().escape_ended_crop_drag, None);
+        // …and so does a press.
+        canvas(&mut app, CanvasMessage::DragStarted);
+        canvas(&mut app, CanvasMessage::DragEscaped);
+        let _ = update(&mut app, Message::EditorPointerButton(true, None));
+        let _ = update(&mut app, Message::EditorPointerButton(false, None));
+        assert_eq!(app.editor.as_ref().unwrap().escape_ended_crop_drag, None);
+        assert_eq!(app.editor.as_ref().unwrap().crop_draft, draft);
+        // The next Esc (key first again) cancels the draft, and only that.
+        key(&mut app, Named::Escape);
+        canvas(&mut app, CanvasMessage::Cancelled);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.crop_draft, None, "the next Esc cancels the draft");
+        assert_eq!(ed.model.selected_annotation(), Some(0), "and only that");
+    }
+
+    #[test]
     fn esc_exits_the_eyedropper_before_the_crop_draft() {
         let mut app = crop_app_with_rect_selected();
         app.editor.as_mut().unwrap().eyedropper = Some(crate::editor::EyedropperState {
