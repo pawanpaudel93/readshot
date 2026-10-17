@@ -78,6 +78,19 @@ fn panel_tab_style(theme: &Theme, status: button::Status, selected: bool) -> but
     }
 }
 
+/// The current tab is also set semibold, so it is not told apart by
+/// fill and text colour alone (WCAG 1.4.1).
+pub(crate) fn panel_tab_font(selected: bool) -> iced::Font {
+    iced::Font {
+        weight: if selected {
+            iced::font::Weight::Semibold
+        } else {
+            iced::font::Weight::Normal
+        },
+        ..iced::Font::DEFAULT
+    }
+}
+
 pub(crate) fn divider_style(theme: &Theme) -> container::Style {
     container::Style {
         background: Some(palette_for(theme).border_subtle.into()),
@@ -116,7 +129,9 @@ pub(crate) fn side_panel<'a>(
         let selected = tab == current;
         let label = row![
             crate::icons::icon(tab_icon(tab), if selected { p.t1 } else { p.t2 }, ICON_SIZE),
-            text(tab.label()).size(TYPE_BODY),
+            text(tab.label())
+                .size(TYPE_BODY)
+                .font(panel_tab_font(selected)),
         ]
         .spacing(6)
         .align_y(Alignment::Center);
@@ -201,5 +216,11 @@ mod tests {
         );
         assert_eq!(s.background, Some(DARK.hover.into()));
         assert_eq!(s.text_color, DARK.t1);
+    }
+
+    #[test]
+    fn the_current_tab_is_also_marked_by_weight() {
+        assert_eq!(panel_tab_font(true).weight, iced::font::Weight::Semibold);
+        assert_eq!(panel_tab_font(false).weight, iced::font::Weight::Normal);
     }
 }

@@ -61,13 +61,41 @@ struct IconProgram {
     icon: AppIcon,
     color: Color,
     size: f32,
+    /// `(selected, enabled)` when the glyph sits in an icon button: the
+    /// colour is then resolved against the live theme at draw time so it
+    /// follows the button's selected / disabled state.
+    button: Option<(bool, bool)>,
 }
 
 pub fn icon<'a>(icon: AppIcon, color: Color, size: f32) -> Element<'a, Message> {
-    canvas::Canvas::new(IconProgram { icon, color, size })
-        .width(Length::Fixed(size))
-        .height(Length::Fixed(size))
-        .into()
+    canvas::Canvas::new(IconProgram {
+        icon,
+        color,
+        size,
+        button: None,
+    })
+    .width(Length::Fixed(size))
+    .height(Length::Fixed(size))
+    .into()
+}
+
+/// Glyph for an icon button: selected draws in `acc_text`, disabled dims.
+pub fn button_icon<'a>(
+    icon: AppIcon,
+    color: Color,
+    size: f32,
+    selected: bool,
+    enabled: bool,
+) -> Element<'a, Message> {
+    canvas::Canvas::new(IconProgram {
+        icon,
+        color,
+        size,
+        button: Some((selected, enabled)),
+    })
+    .width(Length::Fixed(size))
+    .height(Length::Fixed(size))
+    .into()
 }
 
 impl canvas::Program<Message, Theme, Renderer> for IconProgram {
@@ -77,17 +105,26 @@ impl canvas::Program<Message, Theme, Renderer> for IconProgram {
         &self,
         _state: &Self::State,
         renderer: &Renderer,
-        _theme: &Theme,
+        theme: &Theme,
         bounds: Rectangle,
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
+        let color = match self.button {
+            Some((selected, enabled)) => crate::runtime::icon_button_glyph_color(
+                crate::runtime::palette_for(theme),
+                self.color,
+                selected,
+                enabled,
+            ),
+            None => self.color,
+        };
         match self.icon {
             AppIcon::Tool(_) | AppIcon::Undo | AppIcon::Redo => {
                 frame.scale(self.size / 22.0);
-                draw_editor_icon(&mut frame, self.icon, self.color);
+                draw_editor_icon(&mut frame, self.icon, color);
             }
-            other => draw_shapes(&mut frame, shapes(other), self.color, self.size),
+            other => draw_shapes(&mut frame, shapes(other), color, self.size),
         }
         vec![frame.into_geometry()]
     }

@@ -106,30 +106,72 @@ pub(crate) fn button_style(
     }
 }
 
+/// Width of the `acc_text` outline on a selected icon button or segment:
+/// the non-colour cue (WCAG 1.4.1) next to the teal tint.
+pub(crate) const SELECTED_OUTLINE: f32 = 1.5;
+
+/// Selected keeps its teal tint and outline, and status layers on top:
+/// hover lightens toward t1, pressed deepens the tint, disabled dims.
 pub(crate) fn icon_button_style(
     theme: &Theme,
     status: button::Status,
     selected: bool,
 ) -> button::Style {
     let p = palette_for(theme);
-    let (bg, fg) = if selected {
-        (p.acc_tint, p.acc_text)
-    } else {
+    let (bg, fg, outline) = if selected {
         match status {
+            button::Status::Hovered => (
+                mix(p.acc_tint, p.acc, 0.10),
+                mix(p.acc_text, p.t1, 0.25),
+                p.acc_text,
+            ),
+            button::Status::Pressed => (mix(p.acc_tint, p.acc, 0.25), p.acc_text, p.acc_text),
+            button::Status::Disabled => (
+                dim(p.acc_tint, 0.45),
+                dim(p.acc_text, 0.45),
+                dim(p.acc_text, 0.45),
+            ),
+            button::Status::Active => (p.acc_tint, p.acc_text, p.acc_text),
+        }
+    } else {
+        let (bg, fg) = match status {
             button::Status::Hovered => (p.hover, p.t1),
             button::Status::Pressed => (mix(p.hover, Color::BLACK, 0.2), p.t1),
             button::Status::Disabled => (Color::TRANSPARENT, dim(p.t2, 0.45)),
             button::Status::Active => (Color::TRANSPARENT, p.t2),
-        }
+        };
+        (bg, fg, Color::TRANSPARENT)
     };
     button::Style {
         background: Some(bg.into()),
         text_color: fg,
         border: Border {
             radius: R_BUTTON.into(),
-            ..Border::default()
+            width: if selected { SELECTED_OUTLINE } else { 0.0 },
+            color: outline,
         },
         ..button::Style::default()
+    }
+}
+
+/// Colour of an icon button's canvas glyph. The glyph is a canvas, so
+/// the button's `text_color` never reaches it; this mirrors the style:
+/// selected draws in `acc_text`, disabled at most 45 % alpha (callers
+/// that already dimmed stay as they are).
+pub(crate) fn icon_button_glyph_color(
+    p: &Palette,
+    color: Color,
+    selected: bool,
+    enabled: bool,
+) -> Color {
+    let base = if selected { p.acc_text } else { color };
+    if enabled {
+        base
+    } else {
+        Color {
+            a: base.a.min(0.45),
+            ..base
+        }
     }
 }
 
@@ -332,6 +374,17 @@ pub(crate) enum ToastKind {
     Error,
 }
 
+/// Each kind has its own glyph, so severity is not carried by colour
+/// alone (WCAG 1.4.1): a warning and an error differ in shape too.
+pub(crate) fn toast_glyph(kind: ToastKind) -> &'static str {
+    match kind {
+        ToastKind::Ok => "✓",
+        ToastKind::Info => "•",
+        ToastKind::Warn => "!",
+        ToastKind::Error => "✕",
+    }
+}
+
 pub(crate) fn toast<'a>(
     kind: ToastKind,
     message: String,
@@ -343,13 +396,8 @@ pub(crate) fn toast<'a>(
         ToastKind::Warn => text_warn,
         ToastKind::Error => text_danger,
     };
-    let glyph = match kind {
-        ToastKind::Ok => "✓",
-        ToastKind::Info => "•",
-        ToastKind::Warn | ToastKind::Error => "!",
-    };
     let mut r = row![
-        text(glyph).size(TYPE_BODY).style(dot_style),
+        text(toast_glyph(kind)).size(TYPE_BODY).style(dot_style),
         text(message)
             .size(TYPE_BODY)
             .style(text_t1)
@@ -428,10 +476,13 @@ pub(crate) fn icon_button<'a>(
     size: f32,
     position: tooltip::Position,
 ) -> Element<'a, Message> {
+    let enabled = msg.is_some();
     let mut b = button(
-        container(crate::icons::icon(glyph, color, ICON_SIZE))
-            .center_x(Length::Fill)
-            .center_y(Length::Fill),
+        container(crate::icons::button_icon(
+            glyph, color, ICON_SIZE, selected, enabled,
+        ))
+        .center_x(Length::Fill)
+        .center_y(Length::Fill),
     )
     .width(Length::Fixed(size))
     .height(Length::Fixed(size))
@@ -554,6 +605,63 @@ mod tests {
         let s = icon_button_style(&dark(), Status::Active, true);
         assert_eq!(bg(&s), DARK.acc_tint);
         assert_eq!(s.text_color, DARK.acc_text);
+    }
+
+    #[test]
+    fn selected_is_marked_by_an_outline_not_colour_alone() {
+        for t in [dark(), light()] {
+            let p = palette_for(&t);
+            let s = icon_button_style(&t, Status::Active, true);
+            assert_eq!(s.border.width, SELECTED_OUTLINE);
+            assert_eq!(s.border.color, p.acc_text);
+            let u = icon_button_style(&t, Status::Active, false);
+            assert_eq!(u.border.width, 0.0);
+        }
+    }
+
+    #[test]
+    fn selected_icon_button_shows_hover_pressed_and_disabled() {
+        for t in [dark(), light()] {
+            let active = icon_button_style(&t, Status::Active, true);
+            let hovered = icon_button_style(&t, Status::Hovered, true);
+            let pressed = icon_button_style(&t, Status::Pressed, true);
+            let disabled = icon_button_style(&t, Status::Disabled, true);
+            assert_ne!(bg(&active), bg(&hovered));
+            assert_ne!(bg(&hovered), bg(&pressed));
+            assert_ne!(bg(&active), bg(&pressed));
+            assert!(disabled.text_color.a < 0.5);
+            assert!(disabled.border.color.a < 0.5);
+            assert!(bg(&disabled).a < bg(&active).a);
+        }
+    }
+
+    #[test]
+    fn icon_glyph_follows_the_button_state() {
+        let p = &LIGHT;
+        assert_eq!(icon_button_glyph_color(p, p.t2, false, true), p.t2);
+        assert_eq!(icon_button_glyph_color(p, p.t1, true, true), p.acc_text);
+        let off = icon_button_glyph_color(p, p.t2, false, false);
+        assert!(off.a <= 0.45);
+        // Already-dimmed colours are not dimmed twice.
+        let pre = Color { a: 0.45, ..p.t2 };
+        assert_eq!(icon_button_glyph_color(p, pre, false, false), pre);
+        let sel_off = icon_button_glyph_color(p, p.t2, true, false);
+        assert_eq!((sel_off.r, sel_off.a), (p.acc_text.r, 0.45));
+    }
+
+    #[test]
+    fn every_toast_kind_has_its_own_glyph() {
+        let kinds = [
+            ToastKind::Ok,
+            ToastKind::Info,
+            ToastKind::Warn,
+            ToastKind::Error,
+        ];
+        for (i, a) in kinds.iter().enumerate() {
+            for b in &kinds[i + 1..] {
+                assert_ne!(toast_glyph(*a), toast_glyph(*b), "{a:?} vs {b:?}");
+            }
+        }
     }
 
     #[test]

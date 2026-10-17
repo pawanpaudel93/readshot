@@ -1156,6 +1156,31 @@ fn redact_card<'a>(
     )
 }
 
+/// A selected line has the teal tint plus an `acc_text` outline, so it
+/// differs from a hovered line by more than hue (WCAG 1.4.1).
+pub(crate) fn line_row_style(theme: &Theme, selected: bool, hovered: bool) -> container::Style {
+    let p = palette_for(theme);
+    container::Style {
+        background: if selected {
+            Some(p.acc_tint.into())
+        } else if hovered {
+            Some(p.hover.into())
+        } else {
+            None
+        },
+        border: iced::Border {
+            radius: R_CHIP.into(),
+            width: if selected { SELECTED_OUTLINE } else { 0.0 },
+            color: if selected {
+                p.acc_text
+            } else {
+                Color::TRANSPARENT
+            },
+        },
+        ..container::Style::default()
+    }
+}
+
 /// One recognized line: hover outlines it on the image, click selects
 /// (⇧ range, ⌘ toggle). `marks` (char ranges) are underlined;
 /// `redacted` spans (already covered on the image) are muted and the
@@ -1202,27 +1227,10 @@ fn line_row<'a>(
             iced::widget::tooltip::Position::Top,
         ));
     }
-    let content =
-        container(inner)
-            .padding([6, 8])
-            .width(Length::Fill)
-            .style(move |theme: &Theme| {
-                let p = palette_for(theme);
-                container::Style {
-                    background: if selected {
-                        Some(p.acc_tint.into())
-                    } else if hovered {
-                        Some(p.hover.into())
-                    } else {
-                        None
-                    },
-                    border: iced::Border {
-                        radius: R_CHIP.into(),
-                        ..iced::Border::default()
-                    },
-                    ..container::Style::default()
-                }
-            });
+    let content = container(inner)
+        .padding([6, 8])
+        .width(Length::Fill)
+        .style(move |theme: &Theme| line_row_style(theme, selected, hovered));
     let body: Element<'a, Message> = if redact_button {
         iced::widget::stack![
             content,
@@ -1564,5 +1572,19 @@ mod tests {
             weak_note(2, RedactStyle::Blur),
             "2 items are blurred or pixelated, which is weaker than a solid block."
         );
+    }
+
+    #[test]
+    fn a_selected_line_has_an_outline_a_hovered_one_does_not() {
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            let t = readshot_theme_for(mode);
+            let p = palette_for(&t);
+            let sel = line_row_style(&t, true, false);
+            assert_eq!(sel.border.width, SELECTED_OUTLINE);
+            assert_eq!(sel.border.color, p.acc_text);
+            let hov = line_row_style(&t, false, true);
+            assert_eq!(hov.border.width, 0.0);
+            assert_eq!(hov.background, Some(p.hover.into()));
+        }
     }
 }
