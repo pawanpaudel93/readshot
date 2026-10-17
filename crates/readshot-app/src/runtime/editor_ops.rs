@@ -659,10 +659,12 @@ pub(crate) fn history_hide(
 }
 
 /// `doc` (document px) as History may store it for an image cropped to
-/// `crop`: words hidden by `hide` masked, then cut to the text inside the
-/// crop in the cropped image's px, then masked again with `hide` moved
-/// into those px (a word half cut away still counts as hidden if it was
-/// hidden before the cut). `None` without positions (fail closed).
+/// `crop`: words hidden by `hide` masked, then cut to the words wholly
+/// inside the crop ([`readshot_core::scrub::document_in_crop`]) in the
+/// cropped image's px, then masked again with `hide` moved into those px
+/// (a redaction clipped by the crop still hides what it hid before). The
+/// one path every cropped History text takes. `None` without positions
+/// (fail closed).
 pub(crate) fn cropped_history_document(
     doc: &readshot_core::text_lines::TextDocument,
     hide: &[readshot_core::Annotation],

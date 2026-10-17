@@ -155,15 +155,15 @@ fn secured_key(record: &CaptureRecord) -> SecuredScrub {
 /// Persisted, so hashed with FNV-1a (stable across builds), not std's
 /// `DefaultHasher` (whose output may change with the toolchain, and an
 /// id that stops matching drops the record's text). The version tag
-/// changes when the text a cropped record may keep changes (v2: only
-/// characters wholly inside the crop), so text stored under an older
+/// changes when the text a cropped record may keep changes (v3: only
+/// words whose boxes lie wholly inside the crop), so text stored under an older
 /// rule is never kept by a later scrub (`HistoryStore::begin_scrub`).
 pub(crate) fn cropped_frame_id(
     frame: Option<&str>,
     crop: readshot_core::render::OutputCrop,
 ) -> String {
     let mut h = readshot_core::document::Fnv1a64::new();
-    h.write(b"crop-v2\0");
+    h.write(b"crop-v3\0");
     match frame {
         None => h.write(b"original"),
         Some(f) => {
@@ -1011,10 +1011,10 @@ mod tests {
             height: 20,
         };
         // Persisted ids: these must never change between builds.
-        assert_eq!(cropped_frame_id(None, crop), "crop:b06b1061f32b0e30");
+        assert_eq!(cropped_frame_id(None, crop), "crop:3268992da8e9215b");
         assert_eq!(
             cropped_frame_id(Some("frame-a"), crop),
-            "crop:a269564083de796f"
+            "crop:0289caee4b31ebee"
         );
         assert_ne!(
             cropped_frame_id(Some("frame-a"), crop),
