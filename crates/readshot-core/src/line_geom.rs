@@ -82,6 +82,13 @@ pub fn curve_control(a: PointLike, b: PointLike, bend: f32) -> PointLike {
 
 /// The `bend` whose control point is `c` (inverse of [`curve_control`]).
 /// Used when an affine map moves a curve's endpoints and control point.
+///
+/// Approximate under a non-uniform scale (a resize that changes the
+/// aspect ratio): `bend` can only express a control point on the chord's
+/// perpendicular bisector, but such a map moves the control point off
+/// it. This keeps only the normal component, so the mapped curve's apex
+/// distance is right while its along-chord skew is dropped. Exact for
+/// translations, rotations, flips and uniform scales.
 pub fn bend_for_control(a: PointLike, b: PointLike, c: PointLike) -> f32 {
     let mid = lerp(a, b, 0.5);
     match normal_and_len(a, b) {
