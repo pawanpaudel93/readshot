@@ -211,6 +211,19 @@ pub enum CanvasDragFrame {
     Dropped,
 }
 
+/// The frame change a remapped Select press was mapped through
+/// ([`EditorSession::press_remap`]).
+#[derive(Clone, Debug)]
+pub struct PressRemap {
+    /// The frame the canvas's points are in (the one shown).
+    pub old: std::sync::Arc<readshot_core::document::DocGeometry>,
+    /// The present frame they are mapped into.
+    pub new: std::sync::Arc<readshot_core::document::DocGeometry>,
+    /// `canvas_view_seq` when the press was mapped: once a view is built
+    /// after it, the canvas sends points in the new frame.
+    pub view_seq: u64,
+}
+
 /// Which message of an Escape that ended a canvas drag was handled
 /// first ([`EditorSession::escape_ended_drag`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -899,6 +912,15 @@ pub struct EditorSession {
     /// (a scrollable shown again starts at the top-left). Where a new
     /// magnifier bubble may go depends on what is on screen.
     pub stage_offset: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
+    /// Bumped by each `view()`: the canvas maps its points with the frame
+    /// of the last view built, so canvas messages handled before the next
+    /// one are still in that frame ([`Self::press_remap`]).
+    pub canvas_view_seq: std::rc::Rc<std::cell::Cell<u64>>,
+    /// A Select press that landed a pending step and was mapped into the
+    /// new frame (`compose_jobs::remap_stale_press`): drag points the
+    /// canvas sent before the next view are in the old frame too and are
+    /// mapped the same way, so the move is in one frame throughout.
+    pub press_remap: Option<PressRemap>,
     /// Tessellated-geometry cache for the annotation canvas. Shared
     /// (cheap-clone `Rc`) into the freshly-built `EditorCanvas` program
     /// each `view()`. Background polling subscriptions (hotkey / tray /
@@ -1183,6 +1205,8 @@ impl EditorSession {
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
             stage_offset: std::rc::Rc::new(std::cell::Cell::new((0.0, 0.0))),
+            canvas_view_seq: std::rc::Rc::new(std::cell::Cell::new(0)),
+            press_remap: None,
             canvas_cache: std::rc::Rc::new(iced::widget::canvas::Cache::default()),
             output_checkpoint,
             crop_drag_flat: None,
@@ -1262,6 +1286,8 @@ impl EditorSession {
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
             stage_offset: std::rc::Rc::new(std::cell::Cell::new((0.0, 0.0))),
+            canvas_view_seq: std::rc::Rc::new(std::cell::Cell::new(0)),
+            press_remap: None,
             canvas_cache: std::rc::Rc::new(iced::widget::canvas::Cache::default()),
             output_checkpoint,
             crop_drag_flat: None,

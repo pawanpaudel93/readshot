@@ -972,6 +972,30 @@ fn part_map(old: &DocGeometry, new: &DocGeometry, id: PartId) -> Option<Affine> 
     Some(old.part_affine(id)?.inverse()?.then(&new.part_affine(id)?))
 }
 
+/// The map from document px of `old` to document px of `new` at `p` (a
+/// point of `old`): the affine of the part under `p`. `None` unless the
+/// change is an affine of that frame: `old` and `new` must have the same
+/// parts with the same pixels (a part added, removed or baked is not),
+/// and `p` must be on a part (not in a gutter or outside), so the point
+/// means the same pixel of the same part on both sides.
+pub fn frame_map_at(old: &DocGeometry, new: &DocGeometry, p: PointLike) -> Option<Affine> {
+    if old.parts != new.parts || !(p.x.is_finite() && p.y.is_finite()) {
+        return None;
+    }
+    let id = old.parts.iter().map(|part| part.id).find(|&id| {
+        old.part_rect(id).is_some_and(|r| {
+            p.x >= r.x && p.y >= r.y && p.x <= r.x + r.width && p.y <= r.y + r.height
+        })
+    })?;
+    part_map(old, new, id)
+}
+
+/// `p` (document px of `old`) in document px of `new`; see
+/// [`frame_map_at`].
+pub fn map_point(old: &DocGeometry, new: &DocGeometry, p: PointLike) -> Option<PointLike> {
+    Some(frame_map_at(old, new, p)?.apply(p))
+}
+
 /// `anns` (document px of `old`) in document px of `new`. Each annotation
 /// moves with the part under its anchor; parts missing from either side
 /// leave it where it is. A redaction (see `scrub::is_redaction`) that
@@ -1076,6 +1100,46 @@ mod tests {
     use crate::annotation::{FillMode, LineStyle, ShapeStyle};
     use crate::{RectLike, Rgba};
     use image::Rgba as Px;
+
+    #[test]
+    fn a_point_maps_with_its_part_only_when_the_frame_is_an_affine_of_it() {
+        let g = DocGeometry::original(grid(40, 20));
+        // Resized 2×: (8, 4) is (16, 8).
+        let big = g.with_transform(g.transform.scaled(2.0, 2.0));
+        assert_eq!(
+            map_point(&g, &big, PointLike::new(8.0, 4.0)),
+            Some(PointLike::new(16.0, 8.0))
+        );
+        // Rotated clockwise: the same pixel, turned.
+        let turned = g.with_transform(g.transform.rotated_cw());
+        let q = map_point(&g, &turned, PointLike::new(8.0, 4.0)).unwrap();
+        assert!(
+            (q.x - 16.0).abs() < 1e-4 && (q.y - 8.0).abs() < 1e-4,
+            "{q:?}"
+        );
+        // Outside the image: no part under it.
+        assert_eq!(map_point(&g, &big, PointLike::new(41.0, 4.0)), None);
+        // A part added: not an affine of the shown frame.
+        let combined = g.with_part(Part {
+            id: 7,
+            image: grid(10, 10),
+            join: Join::Below,
+        });
+        assert_eq!(map_point(&g, &combined, PointLike::new(8.0, 4.0)), None);
+        // Two parts moved apart by the gap: each point with its own part,
+        // a gutter point with none.
+        let wide = combined.with_layout(10, combined.align);
+        let lower = combined.part_rect(7).unwrap();
+        let in_lower = PointLike::new(lower.x + 2.0, lower.y + 2.0);
+        let moved = map_point(&combined, &wide, in_lower).unwrap();
+        let lower_after = wide.part_rect(7).unwrap();
+        assert_eq!(
+            moved,
+            PointLike::new(lower_after.x + 2.0, lower_after.y + 2.0)
+        );
+        let gutter = PointLike::new(2.0, 25.0);
+        assert_eq!(map_point(&wide, &combined, gutter), None);
+    }
 
     /// 3×2 image whose every pixel is unique: value = x + 10·y.
     fn grid(w: u32, h: u32) -> Arc<RgbaImage> {

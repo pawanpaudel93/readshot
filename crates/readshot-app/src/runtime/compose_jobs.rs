@@ -831,15 +831,16 @@ fn chains_onto_steps(message: &Message) -> bool {
 /// apply, then wait — and nothing ever lands under, or is lost to, a
 /// later interaction.
 ///
-/// Returns whether settling changed the document frame (a step or gap
-/// value landed): a canvas position in `message` was then computed
-/// against the frame shown before ([`points_into_the_shown_image`]).
-pub(crate) fn settle_before(state: &mut App, message: &Message) -> bool {
+/// Returns the frame shown before when settling changed it (a step or
+/// gap value landed): a canvas position in `message` was then computed
+/// against that frame ([`points_into_the_shown_image`]).
+pub(crate) fn settle_before(
+    state: &mut App,
+    message: &Message,
+) -> Option<Arc<readshot_core::document::DocGeometry>> {
     let (mut steps_may_wait, gap_may_wait) = may_wait(message);
     let coord = state.coordinator.clone();
-    let Some(ed) = state.editor.as_mut() else {
-        return false;
-    };
+    let ed = state.editor.as_mut()?;
     let before = Arc::clone(ed.model.geometry());
     if !gap_may_wait {
         queue_released_gap(ed);
@@ -854,15 +855,16 @@ pub(crate) fn settle_before(state: &mut App, message: &Message) -> bool {
     if !gap_may_wait {
         settle_gap(ed, &coord);
     }
-    !Arc::ptr_eq(&before, ed.model.geometry())
+    (!Arc::ptr_eq(&before, ed.model.geometry())).then_some(before)
 }
 
 /// A canvas press (or a click tool's commit) whose position was mapped
 /// against the image on screen when it happened. If settling just
 /// changed the frame ([`settle_before`]), that point means something
 /// else now — it could select or move another annotation, a redaction
-/// included — so the message is dropped ([`drop_stale_press`]) and the
-/// user presses again on the new image.
+/// included — so it is mapped into the new frame when that is exact
+/// ([`remap_stale_press`]), else the message is dropped
+/// ([`drop_stale_press`]) and the user presses again on the new image.
 pub(crate) fn points_into_the_shown_image(message: &Message) -> bool {
     use readshot_ui::CanvasMessage;
     matches!(
@@ -875,6 +877,78 @@ pub(crate) fn points_into_the_shown_image(message: &Message) -> bool {
                 | CanvasMessage::EyedropperPick(_)
         )
     )
+}
+
+/// A press the frame moved under ([`points_into_the_shown_image`]), from
+/// the frame `old` that was on screen: mapped into the present frame when
+/// the change is an affine of `old` at its point
+/// ([`readshot_core::document::map_point`]), else dropped (`None`).
+///
+/// A Select press, a text click, an eyedropper pick and a click tool's
+/// commit (pin, stamp) carry their point and are mapped. A drawing drag
+/// is always dropped: the canvas keeps its anchor in screen space and
+/// maps it with whatever frame is on screen at release, so its points
+/// could not all be mapped the same way (its commit is refused through
+/// `CanvasDragFrame::Dropped`). A redaction is thus only ever committed
+/// in the frame its points belong to.
+pub(crate) fn remap_stale_press(
+    ed: &mut EditorSession,
+    old: &Arc<readshot_core::document::DocGeometry>,
+    message: Message,
+) -> Option<Message> {
+    use readshot_core::document::{frame_map_at, map_annotation, map_point};
+    use readshot_ui::CanvasMessage;
+    let new = Arc::clone(ed.model.geometry());
+    let remapped = match &message {
+        Message::EditorCanvas(CanvasMessage::SelectPressed(p)) => {
+            map_point(old, &new, *p).map(|q| {
+                ed.press_remap = Some(crate::editor::PressRemap {
+                    old: Arc::clone(old),
+                    new: Arc::clone(&new),
+                    view_seq: ed.canvas_view_seq.get(),
+                });
+                Message::EditorCanvas(CanvasMessage::SelectPressed(q))
+            })
+        }
+        Message::EditorCanvas(CanvasMessage::RequestText(p)) => {
+            map_point(old, &new, *p).map(|q| Message::EditorCanvas(CanvasMessage::RequestText(q)))
+        }
+        Message::EditorCanvas(CanvasMessage::EyedropperPick(p)) => map_point(old, &new, *p)
+            .map(|q| Message::EditorCanvas(CanvasMessage::EyedropperPick(q))),
+        Message::EditorCanvas(CanvasMessage::CommitAnnotation(
+            a @ (readshot_core::Annotation::NumberedPin { .. }
+            | readshot_core::Annotation::Stamp { .. }),
+        )) => frame_map_at(old, &new, readshot_core::document::annotation_anchor(a))
+            .map(|m| Message::EditorCanvas(CanvasMessage::CommitAnnotation(map_annotation(a, &m)))),
+        _ => None,
+    };
+    if remapped.is_none() {
+        drop_stale_press(ed, &message);
+    }
+    remapped
+}
+
+/// A Select drag point the canvas sent before a view was built after a
+/// remapped press ([`EditorSession::press_remap`]) is in the old frame:
+/// mapped like the press, or dropped (`None`) when it can't be (the next
+/// point, or the release, carries on). Once a view is built, points are
+/// in the present frame and pass as they are.
+pub(crate) fn remap_same_batch_drag(ed: &mut EditorSession, message: Message) -> Option<Message> {
+    use readshot_ui::CanvasMessage;
+    let Some(r) = ed.press_remap.as_ref() else {
+        return Some(message);
+    };
+    if r.view_seq != ed.canvas_view_seq.get() || !Arc::ptr_eq(&r.new, ed.model.geometry()) {
+        ed.press_remap = None;
+        return Some(message);
+    }
+    match message {
+        Message::EditorCanvas(CanvasMessage::SelectDragged(p)) => {
+            readshot_core::document::map_point(&r.old, &r.new, p)
+                .map(|q| Message::EditorCanvas(CanvasMessage::SelectDragged(q)))
+        }
+        other => Some(other),
+    }
 }
 
 /// Drop a press the frame moved under ([`points_into_the_shown_image`]).
