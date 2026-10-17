@@ -88,6 +88,10 @@ pub enum GlobalHotkeyAction {
     Capture,
     History,
     Settings,
+    /// esc while a scrolling capture runs: Stop & Stitch, from any app.
+    ScrollStop,
+    /// ⇧esc while a scrolling capture runs: discard (arms, then confirms).
+    ScrollDiscard,
 }
 
 /// Mapping from live `window::Id`s to their kind, so the daemon's
@@ -827,6 +831,9 @@ pub struct App {
     /// Last toast text shown under the capture button. Cleared when
     /// the user kicks off a new capture.
     pub last_capture_status: Option<String>,
+    /// The last capture status raised as a system notification, so a
+    /// status is announced once however many nested updates see it.
+    pub announced_capture_status: Option<String>,
     /// Live `GlobalHotKeyManager` for the registered capture shortcut.
     /// Held here so it isn't dropped (which unregisters the hotkey).
     /// Tests and CLI invocations leave this `None`.
@@ -834,6 +841,10 @@ pub struct App {
     /// Maps global-hotkey ids back to app actions. The upstream
     /// event channel is process-wide and only reports ids.
     pub hotkey_actions: HashMap<u32, GlobalHotkeyAction>,
+    /// esc / ⇧esc registered as global hotkeys for the running scrolling
+    /// capture (`sync_scroll_escape_hotkeys`): the user is scrolling
+    /// another app, where the HUD's in-window key would never arrive.
+    pub scroll_escape_hotkeys: Vec<global_hotkey::hotkey::HotKey>,
     /// Whether the user-configured capture shortcut is currently
     /// registered. The fixed History / Settings shortcuts can still
     /// work when this is false, so this is tracked separately from
@@ -1282,8 +1293,10 @@ impl App {
             windows: Windows::default(),
             capture_in_flight: false,
             last_capture_status: None,
+            announced_capture_status: None,
             hotkey_manager: None,
             hotkey_actions: HashMap::new(),
+            scroll_escape_hotkeys: Vec::new(),
             capture_hotkey_registered: false,
             fixed_hotkey_failures: Vec::new(),
             tray: None,

@@ -355,6 +355,21 @@ pub(crate) fn hint_segments(cli_interactive: bool, too_small: bool) -> Vec<HintS
     }
 }
 
+/// The hint while a selection is up: Edit, move, resize and cancel keys.
+pub(crate) fn selection_hint_segments() -> Vec<HintSeg> {
+    use HintSeg::*;
+    vec![
+        Key("↵"),
+        Text("Edit"),
+        Key("←→↑↓"),
+        Muted("Move"),
+        Key("⌥←→↑↓"),
+        Muted("Resize"),
+        Key("esc"),
+        Muted("Cancel"),
+    ]
+}
+
 const HINT_GAP: f32 = 10.0;
 const HINT_KEY_PAD: f32 = 12.0;
 const HINT_H: f32 = 34.0;
@@ -397,16 +412,8 @@ fn fit_hint_segments(mut segs: Vec<HintSeg>, max_w: f32) -> Vec<HintSeg> {
     segs
 }
 
-fn draw_overlay_hint(
-    frame: &mut Frame<Renderer>,
-    bounds: Rectangle,
-    cli_interactive: bool,
-    too_small: bool,
-) {
-    let segs = fit_hint_segments(
-        hint_segments(cli_interactive, too_small),
-        bounds.width - 48.0,
-    );
+fn draw_overlay_hint(frame: &mut Frame<Renderer>, bounds: Rectangle, segs: Vec<HintSeg>) {
+    let segs = fit_hint_segments(segs, bounds.width - 48.0);
     let box_w = segs_width(&segs);
     let x0 = ((bounds.width - box_w) / 2.0).max(0.0);
     let pill = Path::rounded_rectangle(
@@ -534,11 +541,21 @@ pub(crate) const OVERLAY_TOOLBAR_HEIGHT: f32 = 42.0;
 pub(crate) const OVERLAY_TOOLBAR_GAP: f32 = 10.0;
 pub(crate) const OVERLAY_TOOLBAR_WIDTH: f32 = 312.0;
 
-/// Keyboard shortcuts the overlay handles while a selection exists.
+/// Keyboard shortcuts the overlay handles. Intents need a selection;
+/// with none, an arrow (or ⌥ + arrow) starts a centred one, so a region
+/// can be defined without a pointer (WCAG 2.1.1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OverlayShortcut {
     Intent(CaptureIntent),
-    Nudge { dx: f32, dy: f32 },
+    Nudge {
+        dx: f32,
+        dy: f32,
+    },
+    /// ⌥ + arrow: move the bottom-right edge by `(dw, dh)`.
+    Resize {
+        dw: f32,
+        dh: f32,
+    },
 }
 
 pub(crate) fn overlay_shortcut(key: &Key, m: keyboard::Modifiers) -> Option<OverlayShortcut> {
@@ -550,13 +567,23 @@ pub(crate) fn overlay_shortcut(key: &Key, m: keyboard::Modifiers) -> Option<Over
             ("c", true) => Some(OverlayShortcut::Intent(I::CopyTextDirect)),
             ("s", false) => Some(OverlayShortcut::Intent(I::SaveDirect)),
             ("p", false) => Some(OverlayShortcut::Intent(I::Pin)),
+            ("r", false) => Some(OverlayShortcut::Intent(I::ScrollCapture)),
             _ => None,
         };
     }
-    if m.command() || m.alt() || m.control() {
+    if m.command() || m.control() {
         return None;
     }
     let step = if m.shift() { 10.0 } else { 1.0 };
+    if m.alt() {
+        return match key {
+            Key::Named(Named::ArrowLeft) => Some(OverlayShortcut::Resize { dw: -step, dh: 0.0 }),
+            Key::Named(Named::ArrowRight) => Some(OverlayShortcut::Resize { dw: step, dh: 0.0 }),
+            Key::Named(Named::ArrowUp) => Some(OverlayShortcut::Resize { dw: 0.0, dh: -step }),
+            Key::Named(Named::ArrowDown) => Some(OverlayShortcut::Resize { dw: 0.0, dh: step }),
+            _ => None,
+        };
+    }
     match key {
         Key::Named(Named::ArrowLeft) => Some(OverlayShortcut::Nudge { dx: -step, dy: 0.0 }),
         Key::Named(Named::ArrowRight) => Some(OverlayShortcut::Nudge { dx: step, dy: 0.0 }),
@@ -618,6 +645,35 @@ fn size_badge_origin_clear_of_toolbar(
         (bx, bar.y + bar.height + 6.0)
     } else {
         (bx, selection.y + 6.0)
+    }
+}
+
+/// The selection an arrow key starts when there is none: half the
+/// screen, centred.
+pub(crate) fn keyboard_start_selection(bounds: Rectangle) -> Rectangle {
+    Rectangle {
+        x: bounds.width / 4.0,
+        y: bounds.height / 4.0,
+        width: bounds.width / 2.0,
+        height: bounds.height / 2.0,
+    }
+}
+
+/// `orig` with its bottom-right edge moved by `(dw, dh)`: inside
+/// `bounds`, and never smaller than a drag the overlay accepts.
+pub(crate) fn resize_selection(orig: Rectangle, dw: f32, dh: f32, bounds: Rectangle) -> Rectangle {
+    let min = MIN_DRAG_SIZE * 4.0;
+    Rectangle {
+        x: orig.x,
+        y: orig.y,
+        width: (orig.width + dw).clamp(
+            min.min(bounds.width - orig.x),
+            (bounds.width - orig.x).max(min),
+        ),
+        height: (orig.height + dh).clamp(
+            min.min(bounds.height - orig.y),
+            (bounds.height - orig.y).max(min),
+        ),
     }
 }
 
@@ -710,11 +766,38 @@ impl Program<Message> for OverlayProgram {
                 }
                 _ => {}
             }
-            if let (Some(shortcut), Some(sel)) =
-                (overlay_shortcut(key, *modifiers), state.selection)
+            let shortcut = overlay_shortcut(key, *modifiers);
+            // No selection yet: an arrow starts one from the keyboard.
+            if let (Some(OverlayShortcut::Nudge { .. } | OverlayShortcut::Resize { .. }), None) =
+                (shortcut, state.selection)
             {
                 if state.active.is_none() {
+                    let start = keyboard_start_selection(bounds);
+                    state.selection = Some(start);
+                    state.too_small_hint = false;
+                    return Some(
+                        Action::publish(Message::OverlaySelectionChanged {
+                            display_id: self.display_id.clone(),
+                            rect: rect_to_domain(start),
+                        })
+                        .and_capture(),
+                    );
+                }
+            }
+            if let (Some(shortcut), Some(sel)) = (shortcut, state.selection) {
+                if state.active.is_none() {
                     match shortcut {
+                        OverlayShortcut::Resize { dw, dh } => {
+                            let resized = resize_selection(sel, dw, dh, bounds);
+                            state.selection = Some(resized);
+                            return Some(
+                                Action::publish(Message::OverlaySelectionChanged {
+                                    display_id: self.display_id.clone(),
+                                    rect: rect_to_domain(resized),
+                                })
+                                .and_capture(),
+                            );
+                        }
                         OverlayShortcut::Intent(intent) => {
                             if let Some(domain) = rect_to_domain(sel) {
                                 state.selection = None;
@@ -899,9 +982,15 @@ impl Program<Message> for OverlayProgram {
             draw_overlay_hint(
                 &mut frame,
                 bounds,
-                self.auto_confirm_intent == Some(CaptureIntent::CliInteractive),
-                state.too_small_hint,
+                hint_segments(
+                    self.auto_confirm_intent == Some(CaptureIntent::CliInteractive),
+                    state.too_small_hint,
+                ),
             );
+        } else if state.active.is_none() && state.selection.is_some() {
+            // A committed selection keeps a hint: its keys are otherwise
+            // only in hover tooltips, and the arrows nowhere.
+            draw_overlay_hint(&mut frame, bounds, selection_hint_segments());
         }
 
         let Some(rect) = current_rect else {
@@ -1127,6 +1216,55 @@ mod tests {
             Some(OverlayShortcut::Nudge { dx: 0.0, dy: 10.0 })
         );
         assert_eq!(overlay_shortcut(&ch("c"), Modifiers::empty()), None);
+        // ⌘R starts a scrolling capture of the selection.
+        assert_eq!(
+            overlay_shortcut(&ch("r"), Modifiers::COMMAND),
+            Some(OverlayShortcut::Intent(I::ScrollCapture))
+        );
+        // ⌥ + arrow resizes from the bottom-right edge (⇧ = 10 px).
+        assert_eq!(
+            overlay_shortcut(&Key::Named(Named::ArrowRight), Modifiers::ALT),
+            Some(OverlayShortcut::Resize { dw: 1.0, dh: 0.0 })
+        );
+        assert_eq!(
+            overlay_shortcut(
+                &Key::Named(Named::ArrowUp),
+                Modifiers::ALT | Modifiers::SHIFT
+            ),
+            Some(OverlayShortcut::Resize { dw: 0.0, dh: -10.0 })
+        );
+    }
+
+    #[test]
+    fn a_keyboard_selection_starts_centred_and_resizes_inside_the_screen() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let start = keyboard_start_selection(bounds);
+        assert_eq!(
+            (start.x, start.y, start.width, start.height),
+            (200.0, 150.0, 400.0, 300.0)
+        );
+        let grown = resize_selection(start, 10.0, -5.0, bounds);
+        assert_eq!((grown.x, grown.width, grown.height), (200.0, 410.0, 295.0));
+        let past = resize_selection(start, 10_000.0, 10_000.0, bounds);
+        assert_eq!((past.width, past.height), (600.0, 450.0));
+        let tiny = resize_selection(start, -10_000.0, -10_000.0, bounds);
+        assert!(tiny.width >= MIN_DRAG_SIZE && tiny.height >= MIN_DRAG_SIZE);
+    }
+
+    #[test]
+    fn a_selection_hint_names_its_keys() {
+        let segs = selection_hint_segments();
+        for k in ["↵", "←→↑↓", "⌥←→↑↓", "esc"] {
+            assert!(segs.contains(&HintSeg::Key(k)), "{k}");
+        }
+        // It fits a narrow display by dropping pairs, never esc.
+        let fit = fit_hint_segments(segs, 260.0);
+        assert!(fit.contains(&HintSeg::Key("esc")));
     }
 
     use super::*;

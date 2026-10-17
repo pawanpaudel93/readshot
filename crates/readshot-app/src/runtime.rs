@@ -607,13 +607,32 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // Esc anywhere ends the session (same as the Stop button);
         // Shift+Esc / ⌘. discards it (same as Cancel, which arms then
         // confirms). See `scroll_key_message`.
-        subs.push(iced::event::listen_with(|event, _status, _window| {
-            use iced::keyboard::Event as KbEvent;
-            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                return scroll_key_message(&key, modifiers);
-            }
-            None
-        }));
+        // With esc / ⇧esc registered globally (`scroll_escape_hotkeys`)
+        // the in-window map leaves them to the hotkey, so one press is
+        // never seen twice (a doubled ⇧esc would confirm a discard).
+        if state.scroll_escape_hotkeys.is_empty() {
+            subs.push(iced::event::listen_with(|event, _status, _window| {
+                use iced::keyboard::Event as KbEvent;
+                if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
+                    return scroll_key_message(&key, modifiers);
+                }
+                None
+            }));
+        } else {
+            subs.push(iced::event::listen_with(|event, _status, _window| {
+                use iced::keyboard::Event as KbEvent;
+                if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
+                    if matches!(
+                        key,
+                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+                    ) {
+                        return None;
+                    }
+                    return scroll_key_message(&key, modifiers);
+                }
+                None
+            }));
+        }
     }
     if !state.overlay_displays.is_empty() || state.scroll_session.is_some() {
         // Global Shift watcher — iced 0.14 does not reliably route
@@ -929,7 +948,38 @@ fn app_window_shortcut_message(
 /// ([`compose_jobs::after_update`]).
 pub fn update(state: &mut App, message: Message) -> Task<Message> {
     let task = update_message(state, message);
+    sync_scroll_escape_hotkeys(state);
+    announce_capture_status(state);
     Task::batch([task, compose_jobs::after_update(state)])
+}
+
+/// Whether a capture status reports a problem worth a notification:
+/// an error, or a refusal like "No previous region…". Successes and a
+/// cancel the user chose are not.
+pub(crate) fn capture_status_is_problem(status: &str) -> bool {
+    match status_toast_kind(status) {
+        ToastKind::Error => true,
+        ToastKind::Info => !status.to_lowercase().contains("cancelled"),
+        _ => false,
+    }
+}
+
+/// `last_capture_status` is drawn only in the Welcome window. A capture
+/// started by the hotkey or the tray that fails with no Welcome window
+/// open is raised as a system notification instead, once.
+fn announce_capture_status(state: &mut App) {
+    let Some(status) = state.last_capture_status.as_ref() else {
+        state.announced_capture_status = None;
+        return;
+    };
+    if state.announced_capture_status.as_ref() == Some(status) {
+        return;
+    }
+    state.announced_capture_status = Some(status.clone());
+    let welcome_open = state.windows.kinds().any(|k| k == WindowKind::Welcome);
+    if !welcome_open && capture_status_is_problem(status) {
+        notify_capture_problem(status);
+    }
 }
 
 fn update_message(state: &mut App, message: Message) -> Task<Message> {
@@ -1023,14 +1073,24 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             let mut capture = false;
             let mut history = false;
             let mut settings = false;
+            let mut scroll_stop = false;
+            let mut scroll_discard = false;
             let receiver = GlobalHotKeyEvent::receiver();
             while let Ok(event) = receiver.try_recv() {
                 match global_hotkey_action(&event, &state.hotkey_actions) {
                     Some(GlobalHotkeyAction::Capture) => capture = true,
                     Some(GlobalHotkeyAction::History) => history = true,
                     Some(GlobalHotkeyAction::Settings) => settings = true,
+                    Some(GlobalHotkeyAction::ScrollStop) => scroll_stop = true,
+                    Some(GlobalHotkeyAction::ScrollDiscard) => scroll_discard = true,
                     None => {}
                 }
+            }
+            if scroll_discard {
+                return update(state, Message::ScrollCaptureCancelRequested);
+            }
+            if scroll_stop {
+                return update(state, Message::ScrollCaptureStopRequested);
             }
             if settings {
                 return update(state, Message::OpenSettingsRequested);

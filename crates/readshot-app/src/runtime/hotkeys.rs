@@ -354,12 +354,74 @@ where
     true
 }
 
+/// While a scrolling capture runs (and is not stitching), esc and ⇧esc
+/// are global hotkeys: the user is scrolling another app, so the HUD's
+/// in-window keys would never arrive (WCAG 2.1.1). They are released as
+/// soon as the session ends, whichever way it ends. Called after every
+/// update; a no-op when nothing changed.
+pub(crate) fn sync_scroll_escape_hotkeys(state: &mut App) {
+    let Some(manager) = state.hotkey_manager.take() else {
+        return;
+    };
+    sync_scroll_escape_hotkeys_with(
+        state,
+        |h| manager.register(h).map_err(|e| e.to_string()),
+        |h| {
+            let _ = manager.unregister(h);
+        },
+    );
+    state.hotkey_manager = Some(manager);
+}
+
+/// [`sync_scroll_escape_hotkeys`] with the OS calls passed in (tests).
+pub(crate) fn sync_scroll_escape_hotkeys_with<R, U>(
+    state: &mut App,
+    mut register: R,
+    mut unregister: U,
+) where
+    R: FnMut(HotKey) -> Result<(), String>,
+    U: FnMut(HotKey),
+{
+    let want = state.scroll_session.as_ref().is_some_and(|s| !s.stopping);
+    let have = !state.scroll_escape_hotkeys.is_empty();
+    if want == have {
+        return;
+    }
+    if want {
+        use global_hotkey::hotkey::Modifiers;
+        for (mods, action) in [
+            (None, GlobalHotkeyAction::ScrollStop),
+            (Some(Modifiers::SHIFT), GlobalHotkeyAction::ScrollDiscard),
+        ] {
+            let hotkey = HotKey::new(mods, Code::Escape);
+            match register(hotkey) {
+                Ok(()) => {
+                    state.hotkey_actions.insert(hotkey.id(), action);
+                    state.scroll_escape_hotkeys.push(hotkey);
+                }
+                Err(e) => tracing::warn!(
+                    target: "readshot::hotkey",
+                    "couldn't register the scrolling-capture esc key: {e}"
+                ),
+            }
+        }
+    } else {
+        for hotkey in std::mem::take(&mut state.scroll_escape_hotkeys) {
+            unregister(hotkey);
+            state.hotkey_actions.remove(&hotkey.id());
+        }
+    }
+}
+
 pub(crate) fn refresh_hotkey_registration(state: &mut App) {
     // Drop the old manager first — that releases the OS-level chord.
     // Only then try the new one; if the new chord fails to parse or
     // conflicts with another app, the field stays `None`.
     state.hotkey_manager = None;
     state.hotkey_actions.clear();
+    // Dropping the manager released the scrolling-capture esc keys too;
+    // the next update registers them again if a session is running.
+    state.scroll_escape_hotkeys.clear();
     state.capture_hotkey_registered = false;
     state.fixed_hotkey_failures = Vec::new();
     if let Some(registration) = register_default_hotkey(&state.preferences) {

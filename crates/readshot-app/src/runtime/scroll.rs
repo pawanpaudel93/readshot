@@ -38,9 +38,6 @@ pub(crate) const PREVIEW_STRIP_W: u32 = 340;
 /// Height cap (px) of the preview strip. Only the newest rows are kept,
 /// so a long page doesn't shrink the preview to a sliver.
 pub(crate) const PREVIEW_STRIP_MAX_H: u32 = 4096;
-/// How long a first Cancel click stays armed ("Discard N Frames")
-/// before reverting to a plain Cancel.
-pub(crate) const CANCEL_ARM_WINDOW: std::time::Duration = std::time::Duration::from_millis(2500);
 /// How many recent frame joins the window remembers for its join ticks.
 pub(crate) const RECENT_JOINS_MAX: usize = 64;
 
@@ -86,11 +83,12 @@ fn keep_tail(img: image::RgbaImage) -> image::RgbaImage {
     image::imageops::crop_imm(&img, 0, y, img.width(), PREVIEW_STRIP_MAX_H).to_image()
 }
 
-/// True while a first Cancel click is still inside `CANCEL_ARM_WINDOW`.
+/// True after a first Cancel until it is answered: Discard (a second
+/// press), Keep Going, or a new frame (the user carried on scrolling).
+/// There is no time limit (WCAG 2.2.1): a slow pointer or switch user
+/// can always reach Discard.
 pub(crate) fn cancel_armed(session: &crate::app::ScrollSession) -> bool {
-    session
-        .cancel_armed_at
-        .is_some_and(|t| t.elapsed() < CANCEL_ARM_WINDOW)
+    session.cancel_armed_at.is_some()
 }
 
 /// Process in-order completed captures. Frames needing a motion
@@ -201,6 +199,8 @@ pub(crate) fn accept_scroll_frame(
         .stitched_rows
         .saturating_add(offset.unwrap_or(image.height()));
     session.no_motion_count = 0;
+    // Scrolling on answers an armed Cancel with "keep going".
+    session.cancel_armed_at = None;
     session.frames.push(std::sync::Arc::new(image));
     session.frame_tick = session.frame_tick.wrapping_add(1);
     session.last_frame_at = Some(std::time::Instant::now());
@@ -432,11 +432,9 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             // already accumulated frames is destructive (the captured
             // frames are dropped on the floor), so the first click
             // arms the cancel and the window offers "Discard N Frames"
-            // + "Keep Going". A second click inside `CANCEL_ARM_WINDOW`
-            // actually discards; once the window elapses `cancel_armed`
-            // reads false (the next `ScrollCaptureTick` re-renders the
-            // view — the overlay tick isn't subscribed under Reduce
-            // Motion), and Keep Going disarms it explicitly.
+            // + "Keep Going". A second click actually discards; Keep
+            // Going (or a new frame) disarms it. The prompt has no time
+            // limit (WCAG 2.2.1).
             let Some(session) = state.scroll_session.as_mut() else {
                 return Task::none();
             };

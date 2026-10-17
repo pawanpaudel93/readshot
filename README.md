@@ -121,9 +121,11 @@ See [docs/CLI.md](docs/CLI.md) for the complete command reference.
 
 Inside the GUI, keyboard shortcuts cover the main workflows:
 
-- **Capture overlay:** drag to select a region; `Enter` captures the
-  full display; `esc` cancels. With a selection: `⌘C` / `⇧⌘C` / `⌘S` / `⌘P`
-  copy image / copy text / save / pin, and the arrow keys nudge it (`⇧` ×10).
+- **Capture overlay:** drag to select a region, or press an arrow key to
+  start a centred one; `Enter` captures the full display; `esc` cancels.
+  With a selection: `⌘C` / `⇧⌘C` / `⌘S` / `⌘P` / `⌘R` copy image / copy
+  text / save / pin / start a scrolling capture, the arrow keys nudge it and
+  `⌥` + arrow keys resize it from its bottom-right corner (`⇧` ×10).
 - **Editor tools:** `V` select, `R` rectangle, `O` ellipse, `L` line,
   `A` arrow, `P` pen, `H` highlighter, `T` text, `B` blur, `X` pixelate,
   `S` spotlight, `N` numbered pin, `E` stamp, `M` magnifier (drag over what to enlarge; drag the bubble anywhere), `C` crop (Free / 16:9 / 4:3 / 1:1 in the options bar; `↵` applies,
@@ -165,7 +167,9 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   lives on.
 - **Scrolling-capture window:** `esc` stops and stitches the session;
   `⇧esc` or `⌘.` discards it (press twice to confirm, or click Keep Going
-  to carry on capturing).
+  to carry on capturing; the confirmation waits for your answer). While a
+  session runs, `esc` and `⇧esc` work from any app, so you don't have to
+  click the window first.
 - **Pinned windows:** `esc` / `⌘W` close, `L` lock, `-` / `+` adjust opacity,
   arrow keys move the window by 1 pixel (hold `⇧` for 10).
 - **Welcome screen:** `Enter` triggers the primary action (Allow / Open System

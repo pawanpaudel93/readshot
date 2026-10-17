@@ -317,6 +317,28 @@ pub(crate) fn notify_running_in_menu_bar(hotkey: &str) {
     }
 }
 
+/// Raise a capture problem (a failed capture, save or copy, a retake
+/// with no region) that no open window shows (WCAG 4.1.3-style status:
+/// a hotkey or tray capture that fails must not fail silently).
+pub(crate) fn notify_capture_problem(body: &str) {
+    #[cfg(test)]
+    CAPTURE_NOTICES.with(|n| n.borrow_mut().push(body.to_string()));
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        show_macos_notification("Readshot", body);
+    }
+    #[cfg(not(any(target_os = "macos", test)))]
+    {
+        let _ = body;
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CAPTURE_NOTICES: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 pub(crate) fn notify_update_check_started() {
     #[cfg(target_os = "macos")]
     {

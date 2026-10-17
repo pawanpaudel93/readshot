@@ -196,11 +196,24 @@ pub(crate) fn scroll_discard_label(window_w: f32, frame_count: usize) -> String 
     }
 }
 
+/// The armed Cancel caption. It stays until answered, so it names both
+/// answers and no time limit.
+pub(crate) fn scroll_discard_prompt(frame_count: usize) -> String {
+    let plural = if frame_count == 1 { "" } else { "s" };
+    format!("Press Cancel again to discard {frame_count} frame{plural}, or Keep Going.")
+}
+
 /// Key chip on the Stop & Stitch button. Hidden while Waiting (the
 /// button is disabled and esc cancels there) and in the compact
-/// layout, where the label alone fits.
-pub(crate) fn scroll_stop_key_chip(hud: ScrollHudState, compact: bool) -> Option<&'static str> {
-    (hud == ScrollHudState::Recording && !compact).then_some("esc")
+/// layout, where the label alone fits. Also hidden when esc couldn't be
+/// registered as a global key (`esc_global` false): it would only work
+/// once the HUD has focus, while the user scrolls another app.
+pub(crate) fn scroll_stop_key_chip(
+    hud: ScrollHudState,
+    compact: bool,
+    esc_global: bool,
+) -> Option<&'static str> {
+    (hud == ScrollHudState::Recording && !compact && esc_global).then_some("esc")
 }
 
 /// Distances (stage px, measured up from the bottom of the strip) of the
@@ -672,7 +685,6 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
             ..Default::default()
         });
 
-    let plural = if frame_count == 1 { "" } else { "s" };
     let mut footer = column![
         stats,
         Space::new().height(Length::Fixed(10.0)),
@@ -683,13 +695,10 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
     let buttons: Element<'_, Message> = match hud {
         ScrollHudState::Armed => {
             footer = footer.push(
-                text(format!(
-                    "Press again within {:.1} s to discard {frame_count} frame{plural}.",
-                    CANCEL_ARM_WINDOW.as_secs_f32()
-                ))
-                .size(TYPE_CAPTION)
-                .color(DARK.danger)
-                .wrapping(iced::widget::text::Wrapping::Word),
+                text(scroll_discard_prompt(frame_count))
+                    .size(TYPE_CAPTION)
+                    .color(DARK.danger)
+                    .wrapping(iced::widget::text::Wrapping::Word),
             );
             footer = footer.push(Space::new().height(Length::Fixed(10.0)));
             row![
@@ -736,7 +745,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
                     "Stop & Stitch".to_string(),
                     ButtonKind::Primary,
                     (!waiting).then_some(Message::ScrollCaptureStopRequested),
-                    scroll_stop_key_chip(hud, compact),
+                    scroll_stop_key_chip(hud, compact, !state.scroll_escape_hotkeys.is_empty()),
                     3,
                 ),
             ]
@@ -3317,46 +3326,46 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
                 (opacity + delta).clamp(PIN_OPACITY_MIN, PIN_OPACITY_MAX),
             )
         };
-        let bar: Element<'_, Message> = if locked {
-            // Locked + hovered: only the unlock control.
-            row![lock].align_y(Alignment::Center).into()
-        } else if pin_controls_compact(available.width) {
-            row![lock, close].align_y(Alignment::Center).into()
-        } else {
-            row![
-                lock,
-                vsep(),
-                icon_button(
-                    AppIcon::Minus,
-                    DARK.t1,
-                    "Less opaque",
-                    Some("-"),
-                    Some(step(-PIN_OPACITY_STEP)),
-                    false,
-                    ICON_BTN_SM,
-                    pos,
-                ),
-                text(format!("{:.0}%", opacity * 100.0))
-                    .size(TEXT_CAPTION)
-                    .font(iced::Font::MONOSPACE)
-                    .color(DARK.t2),
-                icon_button(
-                    AppIcon::Plus,
-                    DARK.t1,
-                    "More opaque",
-                    Some("+"),
-                    Some(step(PIN_OPACITY_STEP)),
-                    false,
-                    ICON_BTN_SM,
-                    pos,
-                ),
-                vsep(),
-                close,
-            ]
-            .spacing(2)
-            .align_y(Alignment::Center)
-            .into()
-        };
+        let bar: Element<'_, Message> =
+            if !pin_hover_controls(locked, available.width).contains(&PinControl::Opacity) {
+                // Locked (opacity is locked too) or narrow: Lock and Close.
+                // A locked pin still closes in one click.
+                row![lock, close].align_y(Alignment::Center).into()
+            } else {
+                row![
+                    lock,
+                    vsep(),
+                    icon_button(
+                        AppIcon::Minus,
+                        DARK.t1,
+                        "Less opaque",
+                        Some("-"),
+                        Some(step(-PIN_OPACITY_STEP)),
+                        false,
+                        ICON_BTN_SM,
+                        pos,
+                    ),
+                    text(format!("{:.0}%", opacity * 100.0))
+                        .size(TEXT_CAPTION)
+                        .font(iced::Font::MONOSPACE)
+                        .color(DARK.t2),
+                    icon_button(
+                        AppIcon::Plus,
+                        DARK.t1,
+                        "More opaque",
+                        Some("+"),
+                        Some(step(PIN_OPACITY_STEP)),
+                        false,
+                        ICON_BTN_SM,
+                        pos,
+                    ),
+                    vsep(),
+                    close,
+                ]
+                .spacing(2)
+                .align_y(Alignment::Center)
+                .into()
+            };
         let chrome = container(bar).padding(3).style(|theme| container::Style {
             border: iced::Border {
                 radius: 9.0.into(),
@@ -3391,6 +3400,24 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
 /// keeps only Lock and Close (keyboard -/+ still adjusts opacity).
 pub(crate) fn pin_controls_compact(width: f32) -> bool {
     width < 230.0
+}
+
+/// A control of a pin's hover bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PinControl {
+    Lock,
+    Opacity,
+    Close,
+}
+
+/// What a hovered pin's bar shows. Close is always there: a locked pin
+/// closes in one click, as esc / ⌘W close it from the keyboard.
+pub(crate) fn pin_hover_controls(locked: bool, width: f32) -> &'static [PinControl] {
+    if locked || pin_controls_compact(width) {
+        &[PinControl::Lock, PinControl::Close]
+    } else {
+        &[PinControl::Lock, PinControl::Opacity, PinControl::Close]
+    }
 }
 
 pub(crate) fn passive_line_width_control_sized(
@@ -4233,7 +4260,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             AppIcon::Scroll,
             fg,
             "Scrolling Capture",
-            None,
+            Some(platform_key("\u{2318}R", "Ctrl+R")),
             Some(sel(CaptureIntent::ScrollCapture)),
             false,
             ICON_BTN,

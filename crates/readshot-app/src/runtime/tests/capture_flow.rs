@@ -213,12 +213,57 @@ fn discard_label_drops_the_count_below_340px() {
 
 #[test]
 fn stop_button_shows_esc_chip_only_while_recording_and_roomy() {
-    assert_eq!(scroll_stop_key_chip(ScrollHudState::Waiting, false), None);
-    assert_eq!(scroll_stop_key_chip(ScrollHudState::Recording, true), None);
     assert_eq!(
-        scroll_stop_key_chip(ScrollHudState::Recording, false),
+        scroll_stop_key_chip(ScrollHudState::Waiting, false, true),
+        None
+    );
+    assert_eq!(
+        scroll_stop_key_chip(ScrollHudState::Recording, true, true),
+        None
+    );
+    assert_eq!(
+        scroll_stop_key_chip(ScrollHudState::Recording, false, true),
         Some("esc")
     );
+    // esc not global: no chip promising a key the other app swallows.
+    assert_eq!(
+        scroll_stop_key_chip(ScrollHudState::Recording, false, false),
+        None
+    );
+}
+
+/// esc / ⇧esc are global hotkeys exactly while a session runs (not
+/// while it stitches), and are released however it ends.
+#[test]
+fn scroll_capture_registers_esc_globally_only_while_it_runs() {
+    use std::cell::RefCell;
+    let registered: RefCell<Vec<global_hotkey::hotkey::HotKey>> = RefCell::new(Vec::new());
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let sync = |app: &mut App| {
+        sync_scroll_escape_hotkeys_with(
+            app,
+            |h| {
+                registered.borrow_mut().push(h);
+                Ok(())
+            },
+            |h| registered.borrow_mut().retain(|x| *x != h),
+        )
+    };
+    sync(&mut app);
+    assert!(registered.borrow().is_empty());
+    app.scroll_session = Some(test_session());
+    sync(&mut app);
+    assert_eq!(registered.borrow().len(), 2);
+    let actions: Vec<_> = app.hotkey_actions.values().copied().collect();
+    assert!(actions.contains(&crate::app::GlobalHotkeyAction::ScrollStop));
+    assert!(actions.contains(&crate::app::GlobalHotkeyAction::ScrollDiscard));
+    sync(&mut app);
+    assert_eq!(registered.borrow().len(), 2, "idempotent");
+    app.scroll_session.as_mut().unwrap().stopping = true;
+    sync(&mut app);
+    assert!(registered.borrow().is_empty());
+    assert!(app.hotkey_actions.is_empty());
+    assert!(app.scroll_escape_hotkeys.is_empty());
 }
 
 #[test]
@@ -236,13 +281,39 @@ fn keep_going_disarms_cancel() {
         .is_none());
 }
 
+/// WCAG 2.2.1: the armed Discard prompt has no time limit. It stays
+/// until Discard, Keep Going or a new frame answers it.
 #[test]
-fn cancel_arm_expires_after_the_window() {
+fn cancel_arm_waits_for_an_answer() {
     let mut s = test_session();
-    s.cancel_armed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
+    s.cancel_armed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
+    assert!(cancel_armed(&s), "still armed a minute later");
+    assert_eq!(scroll_hud_state(&s), ScrollHudState::Armed);
+    let prompt = scroll_discard_prompt(3);
+    assert!(!prompt.contains(" s ") && !prompt.contains("within"));
+    assert!(prompt.contains("3 frames"));
+    s.cancel_armed_at = None;
     assert!(!cancel_armed(&s));
-    s.cancel_armed_at = Some(std::time::Instant::now());
-    assert!(cancel_armed(&s));
+}
+
+#[test]
+fn a_new_frame_answers_an_armed_cancel() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let mut session = test_session();
+    session.frames.push(Arc::new(scrolling_texture(80, 120, 0)));
+    session
+        .frames
+        .push(Arc::new(scrolling_texture(80, 120, 10)));
+    app.scroll_session = Some(session);
+    let _ = update(&mut app, Message::ScrollCaptureCancelRequested);
+    assert!(cancel_armed(app.scroll_session.as_ref().unwrap()));
+    accept_scroll_frame(
+        app.scroll_session.as_mut().unwrap(),
+        scrolling_texture(80, 120, 20),
+        None,
+        Some(10),
+    );
+    assert!(!cancel_armed(app.scroll_session.as_ref().unwrap()));
 }
 
 #[test]
@@ -742,4 +813,48 @@ fn pin_opacity_message_updates_pin_state() {
     let _ = update(&mut app, Message::PinOpacityChanged(id, 0.4));
 
     assert_eq!(app.pins.get(&id).unwrap().opacity, 0.4);
+}
+
+#[test]
+fn a_locked_pin_keeps_close_in_its_hover_bar() {
+    assert_eq!(
+        pin_hover_controls(true, 400.0),
+        &[PinControl::Lock, PinControl::Close]
+    );
+    assert!(pin_hover_controls(false, 400.0).contains(&PinControl::Opacity));
+    assert!(pin_hover_controls(false, 100.0).contains(&PinControl::Close));
+}
+
+/// A capture problem only the Welcome window would show is raised as a
+/// system notification when that window is closed, once.
+#[test]
+fn a_capture_problem_with_no_window_to_show_it_is_notified() {
+    let notices = || CAPTURE_NOTICES.with(|n| n.borrow().clone());
+    CAPTURE_NOTICES.with(|n| n.borrow_mut().clear());
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let _ = update(&mut app, Message::RetakeLastRegionRequested);
+    let status = app.last_capture_status.clone().expect("a status");
+    assert_eq!(notices(), vec![status.clone()]);
+    // Another update with the same status doesn't notify again.
+    let _ = update(&mut app, Message::NoOp);
+    assert_eq!(notices().len(), 1);
+    // With the Welcome window open the status is shown there instead.
+    CAPTURE_NOTICES.with(|n| n.borrow_mut().clear());
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.windows
+        .register(iced::window::Id::unique(), WindowKind::Welcome);
+    let _ = update(&mut app, Message::RetakeLastRegionRequested);
+    assert!(notices().is_empty());
+}
+
+#[test]
+fn only_problems_are_notified() {
+    assert!(capture_status_is_problem(
+        "Couldn't capture — no display was detected."
+    ));
+    assert!(capture_status_is_problem(
+        "No previous region to retake. Capture a region first, then use Retake Last Region."
+    ));
+    assert!(!capture_status_is_problem("Scroll capture cancelled."));
+    assert!(!capture_status_is_problem("Copied image to clipboard."));
 }
