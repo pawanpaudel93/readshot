@@ -679,7 +679,7 @@ fn update_settings_hotkey_change_persists_value_when_reregister_fails() {
     assert!(!app.capture_hotkey_registered);
     assert_eq!(
         app.settings_hotkey_error.as_deref(),
-        Some("That shortcut could not be read."),
+        Some("Couldn't read that shortcut. Press Record and try another."),
     );
 }
 
@@ -789,4 +789,38 @@ fn hotkey_problems_are_flagged_as_errors_not_help() {
     app.fixed_hotkey_failures.clear();
     app.settings_hotkey_status = Some("⇧⌘X is ready.".into());
     assert!(!capture_hotkey_hint_is_error(&app));
+}
+
+#[test]
+fn shortcut_hints_name_a_way_back_and_recording_says_it_once() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.settings_recording_hotkey = true;
+    let hint = crate::runtime::view::capture_hotkey_hint(&app);
+    // The recording instruction lives under the control only.
+    assert!(!hint.to_lowercase().contains("esc"), "{hint}");
+    assert!(!hint.to_lowercase().contains("press"), "{hint}");
+    app.settings_recording_hotkey = false;
+    app.preferences.capture_hotkey = "cmd+shift+x".into();
+    app.capture_hotkey_registered = false;
+    let hint = crate::runtime::view::capture_hotkey_hint(&app);
+    assert!(hint.ends_with("Choose a different shortcut."), "{hint}");
+    assert!(
+        !hint.contains("chord") && !hint.contains("hotkey"),
+        "{hint}"
+    );
+    app.preferences.capture_hotkey = "nonsense".into();
+    let hint = crate::runtime::view::capture_hotkey_hint(&app);
+    assert!(!hint.contains('`'), "{hint}");
+    assert!(
+        hint.ends_with("Press Record to choose a new one."),
+        "{hint}"
+    );
+    app.preferences.capture_hotkey = "cmd+shift+x".into();
+    app.capture_hotkey_registered = true;
+    app.fixed_hotkey_failures = vec!["History"];
+    let hint = crate::runtime::view::capture_hotkey_hint(&app);
+    assert!(
+        hint.ends_with("Quit that app, then restart Readshot."),
+        "{hint}"
+    );
 }

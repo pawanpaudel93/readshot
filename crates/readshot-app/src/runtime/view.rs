@@ -1252,7 +1252,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
             crate::icons::AppIcon::Alert,
             p,
             "History unavailable",
-            "Readshot could not resolve the history folder for this session.",
+            "Readshot couldn't find a folder to keep history in. Quit and reopen Readshot to try again.",
             None,
         )
     } else if shown == 0 {
@@ -4734,6 +4734,60 @@ pub(crate) fn capture_hotkey_hint_is_error(state: &App) -> bool {
                 || !state.capture_hotkey_registered))
 }
 
+/// The help line under the capture shortcut: a problem when there is
+/// one, else what the shortcut does. While recording, the instruction
+/// ("Press the new shortcut, or esc to cancel.") is shown once, under the
+/// control, never here as well.
+pub(crate) fn capture_hotkey_hint(state: &App) -> String {
+    let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
+    let mut hotkey_hint = if state.settings_recording_hotkey {
+        // The one recording instruction sits under the control; this
+        // line keeps only a problem, or the plain description.
+        state.settings_hotkey_error.clone().unwrap_or_default()
+    } else if let Some(err) = &state.settings_hotkey_error {
+        // A rejected chord (e.g. a conflict with a reserved hotkey) or a
+        // registration failure. Show it even when recording has ended.
+        err.clone()
+    } else if let Some(status) = &state.settings_hotkey_status {
+        status.clone()
+    } else if readshot_ui::hotkey::parse(&state.preferences.capture_hotkey).is_err() {
+        format!(
+            "Couldn't read the saved shortcut “{}”. Press Record to choose a new one.",
+            state.preferences.capture_hotkey
+        )
+    } else if let Some(reserved) = capture_hotkey_conflict(&state.preferences.capture_hotkey) {
+        format!("{pretty} is reserved for the {reserved} shortcut. Choose a different shortcut.")
+    } else if !state.capture_hotkey_registered {
+        // Parsed-OK but registration failed, e.g. another app already
+        // owns the chord. Tell the user so they pick another one.
+        format!("Another app may be using {pretty}. Choose a different shortcut.")
+    } else {
+        String::new()
+    };
+    // A fixed hotkey (History / Settings) that couldn't be registered is
+    // surfaced here so the failure isn't silent.
+    if !state.fixed_hotkey_failures.is_empty() {
+        let names = state.fixed_hotkey_failures.join(" and ");
+        let plural = if state.fixed_hotkey_failures.len() > 1 {
+            "shortcuts"
+        } else {
+            "shortcut"
+        };
+        let warning = format!(
+            "Another app may be using the {names} {plural}. Quit that app, then restart Readshot."
+        );
+        hotkey_hint = if hotkey_hint.is_empty() {
+            warning
+        } else {
+            format!("{hotkey_hint}  {warning}")
+        };
+    }
+    if hotkey_hint.is_empty() {
+        hotkey_hint = "Opens the capture overlay from any app.".to_string();
+    }
+    hotkey_hint
+}
+
 fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
     use iced::widget::pick_list;
     use iced::widget::tooltip::Position;
@@ -4750,50 +4804,7 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
     ];
 
     let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
-    let mut hotkey_hint = if state.settings_recording_hotkey {
-        state
-            .settings_hotkey_error
-            .clone()
-            .unwrap_or_else(|| "Press a modifier shortcut now. Escape cancels.".to_string())
-    } else if let Some(err) = &state.settings_hotkey_error {
-        // A rejected chord (e.g. a conflict with a reserved hotkey) or a
-        // registration failure. Show it even when recording has ended.
-        err.clone()
-    } else if let Some(status) = &state.settings_hotkey_status {
-        status.clone()
-    } else if readshot_ui::hotkey::parse(&state.preferences.capture_hotkey).is_err() {
-        format!(
-            "Couldn't read `{}` — try `cmd+shift+x` style.",
-            state.preferences.capture_hotkey
-        )
-    } else if let Some(reserved) = capture_hotkey_conflict(&state.preferences.capture_hotkey) {
-        format!("{pretty} is reserved for the {reserved} shortcut. Pick another chord.")
-    } else if !state.capture_hotkey_registered {
-        // Parsed-OK but registration failed, e.g. another app already
-        // owns the chord. Tell the user so they pick another one.
-        format!("{pretty} — couldn't grab globally; try a different chord.")
-    } else {
-        String::new()
-    };
-    // A fixed hotkey (History / Settings) that couldn't be registered is
-    // surfaced here so the failure isn't silent.
-    if !state.fixed_hotkey_failures.is_empty() {
-        let names = state.fixed_hotkey_failures.join(" and ");
-        let plural = if state.fixed_hotkey_failures.len() > 1 {
-            "shortcuts"
-        } else {
-            "shortcut"
-        };
-        let warning = format!("⚠ The {names} {plural} couldn't be registered globally.");
-        hotkey_hint = if hotkey_hint.is_empty() {
-            warning
-        } else {
-            format!("{hotkey_hint}  {warning}")
-        };
-    }
-    if hotkey_hint.is_empty() {
-        hotkey_hint = "Opens the capture overlay from any app.".to_string();
-    }
+    let hotkey_hint = capture_hotkey_hint(state);
     let hotkey_hint_is_error = capture_hotkey_hint_is_error(state);
     let hotkey_label = if state.settings_recording_hotkey {
         "Press shortcut…".to_string()
@@ -4883,7 +4894,7 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
     vec![
         settings_group_heading("Shortcut", text_t3),
         settings_group(vec![settings_block_with(
-            "Capture hotkey",
+            "Capture shortcut",
             hotkey_hint,
             hotkey_hint_is_error.then_some(palette(state.theme_mode).danger),
             hotkey_control,
@@ -5108,7 +5119,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
     let reset_row: Element<'_, Message> = if state.settings_reset_all_pending {
         settings_block(
             "Reset All Settings",
-            "Resets hotkey, save folder, filename template, retention, OCR, and startup options. History records are kept.",
+            "Resets the capture shortcut, save folder, filename template, retention, OCR, and startup options. History records are kept.",
             row![
                 focus_ring(
                     tooltip_with_key(

@@ -1166,11 +1166,15 @@ fn status_toast_kind_separates_notices_from_successes() {
         "No history capture selected.",
         "No OCR text on this capture yet.",
         "No OCR text in the visible captures.",
-        "Scroll capture cancelled.",
+        "Scrolling capture cancelled.",
     ] {
         assert_eq!(status_toast_kind(s), ToastKind::Info, "{s:?}");
     }
-    for s in ["Couldn't read history: denied", "Scroll capture failed: x"] {
+    for s in [
+        "Couldn't read the history — permission denied. Close History and open it again.",
+        "Couldn't stitch the scrolling capture. Start the scrolling capture again.",
+        "Couldn't start the scrolling capture — the selected area was lost. Start the scrolling capture again.",
+    ] {
         assert_eq!(status_toast_kind(s), ToastKind::Error, "{s:?}");
     }
     for s in ["Saved to /tmp/x.png.", "Copied text."] {

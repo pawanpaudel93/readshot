@@ -562,6 +562,21 @@ fn friendly_errors_hide_raw_internals_and_keep_hints() {
     let generic =
         history_ops::friendly_string_error("copy the image to the clipboard", "weird backend");
     assert!(!generic.contains("weird backend"), "{generic}");
+    // Every error names a way back; an unexplained one also names the
+    // log file that has its cause.
+    assert!(
+        generic.contains(". Try again. If it keeps failing, see "),
+        "{generic}"
+    );
+    assert!(generic.ends_with("readshot.log."), "{generic}");
+    let msg = history_ops::friendly_history_error("clear the history", &other);
+    assert!(msg.contains("Try again."), "{msg}");
+    let damaged = HistoryError::Parse("eof".into());
+    let msg = history_ops::friendly_history_error("delete this capture", &damaged);
+    assert_eq!(
+        msg,
+        "Couldn't delete this capture — the history data looks damaged. Quit and reopen Readshot, then try again."
+    );
 
     // A recovery next-step is appended as a second sentence; an
     // unclassified error drops the "See the log" tail in its favour.
@@ -765,4 +780,26 @@ fn the_history_preview_scales_small_captures_up_to_the_pane() {
     );
     // Unknown size: the whole pane.
     assert_eq!(contain_fit((0.0, 0.0), (400.0, 300.0)), (400.0, 300.0));
+}
+
+#[test]
+fn an_update_check_failure_points_to_a_reinstall_not_the_network() {
+    use crate::updater::UpdaterError;
+    let mut errors = vec![UpdaterError::Unsupported];
+    #[cfg(target_os = "macos")]
+    errors.extend([
+        UpdaterError::FrameworkLoad("dlopen".into()),
+        UpdaterError::MissingControllerClass,
+        UpdaterError::NilController,
+        UpdaterError::NotInstalled,
+    ]);
+    for e in errors {
+        let msg = crate::runtime::platform::update_check_failure_message(&e);
+        assert!(msg.starts_with("Couldn't check for updates — "), "{msg}");
+        assert!(
+            msg.ends_with("Reinstall Readshot from readshot.pawanpaudel.com.np to get updates."),
+            "{msg}"
+        );
+        assert!(!msg.to_lowercase().contains("connection"), "{msg}");
+    }
 }

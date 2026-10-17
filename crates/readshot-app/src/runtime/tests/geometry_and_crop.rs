@@ -194,14 +194,19 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
         },
     );
     assert!(s.starts_with("Couldn't rotate"), "{s}");
-    assert!(s.contains("uncropped image would be 40000"), "{s}");
+    assert!(s.contains("uncropped image would be 40,000 × 10 px"), "{s}");
+    assert!(s.contains("32,767 px on a side"), "{s}");
+    assert!(
+        s.ends_with("Resize the image smaller, then try again."),
+        "{s}"
+    );
     let s = geometry_error_status(
         "flip",
         false,
         readshot_core::document::GeometryError::TooManyPixels { pixels: 9, max: 8 },
     );
     assert!(
-        s.starts_with("Couldn't flip") && s.contains("too large"),
+        s.starts_with("Couldn't flip") && s.contains("over the 256,000,000 px limit"),
         "{s}"
     );
     assert!(!s.contains("uncropped"), "{s}");
@@ -213,6 +218,35 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
     );
     assert!(s.starts_with("Couldn't resize"), "{s}");
     assert!(s.contains("the uncropped image would be 9 px"), "{s}");
+    assert!(s.ends_with("Choose a smaller size."), "{s}");
+    let s = geometry_error_status(
+        "add the image",
+        false,
+        readshot_core::document::GeometryError::TooManyPixels {
+            pixels: 268_435_456,
+            max: 8,
+        },
+    );
+    assert_eq!(
+        s,
+        "Couldn't add the image — the image would be 268,435,456 px, over the 256,000,000 px limit. Resize the image smaller first, then add it again."
+    );
+    let s = geometry_error_status(
+        "align",
+        false,
+        readshot_core::document::GeometryError::Empty,
+    );
+    assert!(s.ends_with("Undo the last change, then try again."), "{s}");
+}
+
+#[test]
+fn big_numbers_are_grouped_in_threes() {
+    use crate::runtime::image_menu::group_digits;
+    assert_eq!(group_digits(0), "0");
+    assert_eq!(group_digits(999), "999");
+    assert_eq!(group_digits(1_000), "1,000");
+    assert_eq!(group_digits(32_767), "32,767");
+    assert_eq!(group_digits(256_000_000), "256,000,000");
 }
 
 #[test]

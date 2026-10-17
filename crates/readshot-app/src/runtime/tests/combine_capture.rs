@@ -146,7 +146,7 @@ fn an_oversized_addition_is_refused() {
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.part_ids().len(), 1);
-    assert!(ed.status.as_deref().unwrap().contains("32767"));
+    assert!(ed.status.as_deref().unwrap().contains("32,767"));
 }
 
 #[test]
@@ -517,7 +517,11 @@ fn a_file_that_would_overflow_the_combined_document_is_refused_before_decoding()
         gap: 40,
     };
     let err = decode_part_image(&png_header_only(10, 3_000), tall).unwrap_err();
-    assert!(err.contains("32767"), "{err}");
+    assert!(err.contains("32,767"), "{err}");
+    assert!(
+        err.ends_with("Choose a smaller image, or resize this one first."),
+        "{err}"
+    );
     // The budget follows the document: a rotated one counts as baked.
     let mut ed = crate::editor::EditorSession::new(solid(30, 20));
     ed.model.rotate(true).unwrap();
@@ -537,7 +541,10 @@ fn only_regular_files_are_read() {
     let fake = dir.path().join("x.png");
     std::fs::create_dir(&fake).unwrap();
     let err = load_part_file(&fake, NO_DOC).unwrap_err();
-    assert_eq!(err, "that isn't an image file");
+    assert_eq!(
+        err,
+        "that isn't an image file. Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file."
+    );
     let real = dir.path().join("y.png");
     std::fs::write(&real, readshot_core::encode_png(&solid(3, 2)).unwrap()).unwrap();
     assert_eq!(load_part_file(&real, NO_DOC).unwrap().dimensions(), (3, 2));
@@ -869,14 +876,19 @@ fn a_picked_file_is_decoded_as_untrusted_input() {
     assert_eq!(decode_part_image(&ok, NO_DOC).unwrap().dimensions(), (3, 2));
     let err = decode_part_image(b"not an image at all", NO_DOC).unwrap_err();
     assert!(err.contains("isn't an image"), "{err}");
+    assert!(
+        err.ends_with("Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file."),
+        "{err}"
+    );
     let mut truncated = ok.clone();
     truncated.truncate(ok.len() / 2);
     assert!(decode_part_image(&truncated, NO_DOC).is_err());
     // Refused from the header alone, before any pixel is allocated.
     let err = decode_part_image(&png_header_only(40_000, 1), NO_DOC).unwrap_err();
-    assert!(err.contains("32767"), "{err}");
+    assert!(err.contains("32,767"), "{err}");
+    assert!(err.ends_with("Choose a smaller image."), "{err}");
     let err = decode_part_image(&png_header_only(20_000, 20_000), NO_DOC).unwrap_err();
-    assert!(err.contains("256000000"), "{err}");
+    assert!(err.contains("256,000,000"), "{err}");
     let err = decode_part_image(&png_header_only(0, 5), NO_DOC).unwrap_err();
     assert!(!err.is_empty());
 }
@@ -892,7 +904,10 @@ fn a_file_that_fails_to_load_leaves_the_editor_unchanged() {
         &mut app,
         Message::EditorPartLoaded {
             session,
-            result: Err("that file isn't an image Readshot can read".into()),
+            result: Err(
+                "that file isn't an image Readshot can read. Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file."
+                    .into(),
+            ),
         },
     );
     let ed = app.editor.as_ref().unwrap();
@@ -900,6 +915,6 @@ fn a_file_that_fails_to_load_leaves_the_editor_unchanged() {
     assert_eq!(ed.model.part_ids().len(), 1);
     assert_eq!(
         ed.status.as_deref(),
-        Some("Couldn't add the image — that file isn't an image Readshot can read.")
+        Some("Couldn't add the image — that file isn't an image Readshot can read. Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file.")
     );
 }

@@ -81,7 +81,12 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 Err(e) => {
                     state.history_records.clear();
                     state.history_selected_id = None;
-                    state.history_status = Some(format!("Couldn't read history: {e}"));
+                    tracing::warn!(target: "readshot::history", "history list failed: {e}");
+                    state.history_status = Some(friendly_string_error_with(
+                        "read the history",
+                        &e,
+                        Some(REOPEN_HISTORY_HINT),
+                    ));
                 }
             }
             Task::none()
@@ -528,9 +533,25 @@ fn delete_history_record(state: &mut App, id: readshot_core::Uuid) -> Task<Messa
 /// call site draws from the same small vocabulary.
 pub(crate) const RETRY_HINT: &str = "Try again.";
 pub(crate) const SAVE_HINT: &str = "Pick a different folder in Settings and try again.";
-pub(crate) const CONNECTION_HINT: &str = "Check your connection and try again.";
 pub(crate) const CAPTURE_PERMISSION_HINT: &str =
     "Check Screen Recording permission in System Settings and try again.";
+pub(crate) const REOPEN_HISTORY_HINT: &str = "Close History and open it again.";
+pub(crate) const RESTART_HINT: &str = "Quit and reopen Readshot, then try again.";
+
+/// Where the log file lives, for errors whose cause only the log knows
+/// (mirrors `main.rs`), with the home folder shortened to `~`.
+pub(crate) fn log_file_location() -> String {
+    let Some(path) = directories::ProjectDirs::from("np.com", "pawanpaudel", "Readshot")
+        .map(|d| d.data_local_dir().join("readshot.log"))
+    else {
+        return "readshot.log in the temporary folder".to_string();
+    };
+    let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
+    match home.as_deref().and_then(|h| path.strip_prefix(h).ok()) {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
 
 /// Turn a typed [`HistoryError`] into a short, human-readable status
 /// line. The raw error is logged separately via tracing; the user sees
@@ -543,10 +564,14 @@ pub(crate) fn friendly_history_error(action: &str, e: &readshot_core::HistoryErr
         // Parse/serialise failures mean the on-disk history index is
         // damaged — surface that rather than a raw serde string.
         HistoryError::Parse(_) | HistoryError::Serialize(_) => {
-            Some("the history data looks damaged")
+            return compose_friendly(
+                action,
+                Some("the history data looks damaged"),
+                Some(RESTART_HINT),
+            );
         }
     };
-    compose_friendly(action, reason, None)
+    compose_friendly(action, reason, Some(RETRY_HINT))
 }
 
 /// Map a raw io-error string to a short human reason, when it carries a
@@ -604,18 +629,22 @@ pub(crate) fn friendly_capture_error(raw: &str) -> String {
 
 /// Assemble the final status line. With a recognised reason it reads
 /// "Couldn't {action} — {reason}."; otherwise just "Couldn't {action}.".
-/// A recovery next-step, when present, is appended as a second sentence
-/// — and replaces the "See the log" tail, since the user now has a
-/// concrete action (the full error still goes to the log).
+/// A recovery next-step is always appended as a second sentence ("Try
+/// again." when the caller has none). With neither a reason nor a
+/// caller's step, it also names the log file, the only place the cause
+/// is recorded.
 fn compose_friendly(action: &str, reason: Option<&str>, next_step: Option<&str>) -> String {
     let mut msg = match reason {
         Some(reason) => format!("Couldn't {action} — {reason}."),
-        None if next_step.is_some() => format!("Couldn't {action}."),
-        None => format!("Couldn't {action}. See the log for details."),
+        None => format!("Couldn't {action}."),
     };
-    if let Some(step) = next_step {
-        msg.push(' ');
-        msg.push_str(step);
+    msg.push(' ');
+    msg.push_str(next_step.unwrap_or(RETRY_HINT));
+    if reason.is_none() && next_step.is_none() {
+        msg.push_str(&format!(
+            " If it keeps failing, see {}.",
+            log_file_location()
+        ));
     }
     msg
 }

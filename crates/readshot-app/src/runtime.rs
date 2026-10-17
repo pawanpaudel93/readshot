@@ -1273,7 +1273,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                 notify_update_check_started();
                 if let Err(e) = crate::updater::check_for_updates() {
                     tracing::warn!(target: "readshot::updater", "manual update check failed: {e}");
-                    notify_update_check_failed(&e.to_string());
+                    notify_update_check_failed(&e);
                 }
                 Task::none()
             }
@@ -1767,7 +1767,10 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                             // before this branch ran, so the lookup is safe.
                             let Some(last) = state.last_regions.get(&display_id).copied() else {
                                 state.last_capture_status =
-                                    Some("Scroll capture: missing region".into());
+                                    Some(format!(
+                                        "Couldn't start the scrolling capture — the selected area was lost. {}",
+                                        scroll::SCROLL_RETRY_HINT
+                                    ));
                                 return Task::batch([history_task]);
                             };
                             let mut session = crate::app::ScrollSession::new(
@@ -1952,7 +1955,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                         state.windows.forget(sibling);
                         tasks.push(window::close(sibling));
                     }
-                    state.last_capture_status = Some("Scroll capture cancelled.".into());
+                    state.last_capture_status = Some("Scrolling capture cancelled.".into());
                     tasks.push(restore);
                     return Task::batch(tasks);
                 }

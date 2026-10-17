@@ -16,6 +16,9 @@ use iced::Task;
 /// runaway loop bounded by these caps still produces a sane stitched
 /// output and doesn't gobble gigabytes of RAM. The limits below cover
 /// roughly 30 s of continuous scrolling at the configured tick rate.
+/// The way back from a failed scrolling capture.
+pub(crate) const SCROLL_RETRY_HINT: &str = "Start the scrolling capture again.";
+
 pub(crate) const SCROLL_MAX_FRAMES: usize = 120;
 /// Maximum captures allowed in flight at once. Lets a fast scroll
 /// overlap several SCK round-trips (each ~100 ms on macOS) instead
@@ -453,7 +456,7 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             let Some(session) = state.scroll_session.take() else {
                 return Task::none();
             };
-            state.last_capture_status = Some("Scroll capture cancelled.".into());
+            state.last_capture_status = Some("Scrolling capture cancelled.".into());
             close_scroll_windows(state, &session)
         }
 
@@ -478,7 +481,7 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
                 let Some(session) = state.scroll_session.take() else {
                     return Task::none();
                 };
-                state.last_capture_status = Some("Scroll capture cancelled.".into());
+                state.last_capture_status = Some("Scrolling capture cancelled.".into());
                 return close_scroll_windows(state, &session);
             }
             session.stopping = true;
@@ -522,14 +525,19 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
                     let (w, h) = (image.width(), image.height());
                     let mut ed =
                         crate::editor::EditorSession::new_with_display_scale(image, display_scale);
-                    ed.set_status(format!("Scrolling capture stitched into {w} × {h}px."));
+                    ed.set_status(format!("Scrolling capture stitched into {w} × {h} px."));
                     Task::batch([
                         close_hud,
                         open_editor_window_replacing(state, ed, display_bounds),
                     ])
                 }
                 Err(e) => {
-                    state.last_capture_status = Some(format!("Scroll capture failed: {e}"));
+                    state.last_capture_status =
+                        Some(super::history_ops::friendly_string_error_with(
+                            "stitch the scrolling capture",
+                            &e.to_string(),
+                            Some(SCROLL_RETRY_HINT),
+                        ));
                     tracing::warn!(target: "readshot::scroll", "stitch failed: {e}");
                     close_hud
                 }

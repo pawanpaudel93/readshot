@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 use iced::{window, Task};
 use readshot_core::document::{Join, MAX_DOC_PIXELS, MAX_DOC_SIDE};
 
+use super::image_menu::group_digits;
+
 use crate::app::{App, CaptureIntent, CombineCapture, Message};
 use crate::editor::{ComposeKind, EditorSession};
 
@@ -178,6 +180,19 @@ pub(crate) fn fail_combine_capture(state: &mut App, status: Option<&str>) -> Tas
     show_editor(ed.window_id)
 }
 
+// Add Image errors are "{reason}. {next step}": each names what to do.
+const CHOOSE_FORMAT: &str = "Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file.";
+const CHOOSE_ANOTHER: &str = "Choose another file.";
+const CHOOSE_SMALLER: &str = "Choose a smaller image.";
+const COMBINED_TOO_LARGE: &str = "Choose a smaller image, or resize this one first.";
+
+fn file_too_large() -> String {
+    format!(
+        "the file is over {} MB. Choose a smaller file.",
+        group_digits(MAX_PART_FILE_BYTES / 1_000_000)
+    )
+}
+
 /// Read and decode a picked file as an untrusted input: its size and
 /// the image's dimensions are checked before the pixels are allocated.
 /// Errors are short, user-facing reasons (the raw error is logged).
@@ -188,18 +203,18 @@ pub(crate) fn load_part_file(
     use std::io::Read;
     let io_err = |what: &str, e: std::io::Error| {
         tracing::warn!(target: "readshot::editor", "add image: {what}: {e}");
-        history_ops::io_reason_hint(&e.to_string())
-            .unwrap_or("the file couldn't be read")
-            .to_string()
+        let reason =
+            history_ops::io_reason_hint(&e.to_string()).unwrap_or("the file couldn't be read");
+        format!("{reason}. {CHOOSE_ANOTHER}")
     };
     let meta = std::fs::metadata(path).map_err(|e| io_err("metadata", e))?;
     // A FIFO, device or directory can report any length and block (or
     // fail) on read: only regular files are opened.
     if !meta.is_file() {
-        return Err("that isn't an image file".into());
+        return Err(format!("that isn't an image file. {CHOOSE_FORMAT}"));
     }
     if meta.len() > MAX_PART_FILE_BYTES {
-        return Err("the file is too large".into());
+        return Err(file_too_large());
     }
     // Bounded even if the file grows after the check.
     let mut bytes = Vec::new();
@@ -209,7 +224,7 @@ pub(crate) fn load_part_file(
         .read_to_end(&mut bytes)
         .map_err(|e| io_err("read", e))?;
     if bytes.len() as u64 > MAX_PART_FILE_BYTES {
-        return Err("the file is too large".into());
+        return Err(file_too_large());
     }
     decode_part_image(&bytes, budget)
 }
@@ -247,13 +262,18 @@ impl PartBudget {
         let ch = u64::from(self.doc_height) + u64::from(self.gap) + u64::from(h);
         if u64::from(cw) > u64::from(MAX_DOC_SIDE) || ch > u64::from(MAX_DOC_SIDE) {
             return Err(format!(
-                "the combined image would be {cw} × {ch} px, and the limit is {MAX_DOC_SIDE} px on a side"
+                "the combined image would be {} × {} px, and the limit is {} px on a side. {COMBINED_TOO_LARGE}",
+                group_digits(cw.into()),
+                group_digits(ch),
+                group_digits(MAX_DOC_SIDE.into()),
             ));
         }
         let pixels = u64::from(cw) * ch;
         if pixels > MAX_DOC_PIXELS {
             return Err(format!(
-                "the combined image would be {pixels} px, over the {MAX_DOC_PIXELS} px limit"
+                "the combined image would be {} px, over the {} px limit. {COMBINED_TOO_LARGE}",
+                group_digits(pixels),
+                group_digits(MAX_DOC_PIXELS),
             ));
         }
         Ok(())
@@ -266,31 +286,36 @@ pub(crate) fn decode_part_image(
     bytes: &[u8],
     budget: PartBudget,
 ) -> Result<image::RgbaImage, String> {
-    const NOT_AN_IMAGE: &str = "that file isn't an image Readshot can read";
+    let not_an_image = || format!("that file isn't an image Readshot can read. {CHOOSE_FORMAT}");
     let reader = || {
         image::ImageReader::new(std::io::Cursor::new(bytes))
             .with_guessed_format()
             .map_err(|e| {
                 tracing::warn!(target: "readshot::editor", "add image: format: {e}");
-                NOT_AN_IMAGE.to_string()
+                not_an_image()
             })
     };
     let (w, h) = reader()?.into_dimensions().map_err(|e| {
         tracing::warn!(target: "readshot::editor", "add image: header: {e}");
-        NOT_AN_IMAGE.to_string()
+        not_an_image()
     })?;
     if w == 0 || h == 0 {
-        return Err("the image is empty".into());
+        return Err(format!("the image is empty. {CHOOSE_ANOTHER}"));
     }
     if w > MAX_DOC_SIDE || h > MAX_DOC_SIDE {
         return Err(format!(
-            "the image is {w} × {h} px, and the limit is {MAX_DOC_SIDE} px on a side"
+            "the image is {} × {} px, and the limit is {} px on a side. {CHOOSE_SMALLER}",
+            group_digits(w.into()),
+            group_digits(h.into()),
+            group_digits(MAX_DOC_SIDE.into()),
         ));
     }
     let pixels = u64::from(w) * u64::from(h);
     if pixels > MAX_DOC_PIXELS {
         return Err(format!(
-            "image too large: {pixels} px is over the {MAX_DOC_PIXELS} px limit"
+            "the image is {} px, over the {} px limit. {CHOOSE_SMALLER}",
+            group_digits(pixels),
+            group_digits(MAX_DOC_PIXELS),
         ));
     }
     // The document it joins must still fit: refuse before decoding, not
@@ -305,8 +330,10 @@ pub(crate) fn decode_part_image(
     let img = decoder.decode().map_err(|e| {
         tracing::warn!(target: "readshot::editor", "add image: decode: {e}");
         match e {
-            image::ImageError::Limits(_) => "the image is too large to open".to_string(),
-            _ => NOT_AN_IMAGE.to_string(),
+            image::ImageError::Limits(_) => {
+                format!("the image is too large to open. {CHOOSE_SMALLER}")
+            }
+            _ => not_an_image(),
         }
     })?;
     // A decoder may report other dimensions than its header did.
@@ -314,7 +341,7 @@ pub(crate) fn decode_part_image(
         || img.height() > MAX_DOC_SIDE
         || u64::from(img.width()) * u64::from(img.height()) > MAX_DOC_PIXELS
     {
-        return Err("the image is too large to open".into());
+        return Err(format!("the image is too large to open. {CHOOSE_SMALLER}"));
     }
     Ok(img.into_rgba8())
 }
@@ -542,7 +569,7 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
                     Task::none()
                 }
                 Err(e) => {
-                    ed.set_status(format!("Couldn't add the image — {e}."));
+                    ed.set_status(format!("Couldn't add the image — {e}"));
                     Task::none()
                 }
             }

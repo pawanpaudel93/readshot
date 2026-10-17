@@ -44,27 +44,58 @@ fn changed(ed: &mut EditorSession, coord: &crate::coordinator::CaptureCoordinato
     sync_editor_history(ed, coord);
 }
 
+/// `n` with thousands separators ("268,435,456"), so a pixel limit can
+/// be read at a glance.
+pub(crate) fn group_digits(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// What to do after a refused geometry change: every limit is on the
+/// whole (uncropped) document, so a smaller size is the way back.
+fn geometry_recovery(action: &str) -> &'static str {
+    match action {
+        "resize" => "Choose a smaller size.",
+        "change the gap" => "Choose a smaller gap.",
+        a if a.starts_with("add the") => "Resize the image smaller first, then add it again.",
+        _ => "Resize the image smaller, then try again.",
+    }
+}
+
 /// The status for a refused geometry change; `action` is the verb
-/// ("rotate", "flip", "resize").
+/// ("rotate", "flip", "resize"). It names the limit with grouped digits
+/// and the next step.
 pub(crate) fn geometry_error_status(action: &str, cropped: bool, e: GeometryError) -> String {
     // With a crop active the displayed size is the crop's, but the limit
     // applies to the whole document.
     let what = if cropped {
         "the uncropped image would be"
     } else {
-        "that would be"
+        "the image would be"
     };
+    let next = geometry_recovery(action);
     match e {
         GeometryError::TooLarge { width, height } => format!(
-            "Couldn't {action} — {what} {width} × {height} px, and the limit is {MAX_DOC_SIDE} px on a side."
-        ),
-        GeometryError::TooManyPixels { pixels, .. } if cropped => format!(
-            "Couldn't {action} — the uncropped image would be {pixels} px, over the {MAX_DOC_PIXELS} px limit."
+            "Couldn't {action} — {what} {} × {} px, and the limit is {} px on a side. {next}",
+            group_digits(width.into()),
+            group_digits(height.into()),
+            group_digits(MAX_DOC_SIDE.into()),
         ),
         GeometryError::TooManyPixels { pixels, .. } => format!(
-            "Couldn't {action} — image too large: {pixels} px is over the {MAX_DOC_PIXELS} px limit."
+            "Couldn't {action} — {what} {} px, over the {} px limit. {next}",
+            group_digits(pixels),
+            group_digits(MAX_DOC_PIXELS),
         ),
-        GeometryError::Empty => format!("Couldn't {action} — the image has no content."),
+        GeometryError::Empty => format!(
+            "Couldn't {action} — the image has no content. Undo the last change, then try again."
+        ),
     }
 }
 

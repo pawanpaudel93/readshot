@@ -346,22 +346,36 @@ pub(crate) fn notify_update_check_started() {
     }
 }
 
+/// The notification for a failed manual update check. Every
+/// `UpdaterError` is a fault in this copy of the app (Sparkle missing or
+/// unloadable; network problems are shown by Sparkle itself), so the way
+/// back is a fresh install, never "check your connection".
+pub(crate) fn update_check_failure_message(e: &crate::updater::UpdaterError) -> String {
+    let reason = match e {
+        crate::updater::UpdaterError::Unsupported => {
+            "updates work only in the Readshot app installed from the website"
+        }
+        #[cfg(target_os = "macos")]
+        _ => "the updater in this copy of Readshot is missing or damaged",
+    };
+    format!(
+        "Couldn't check for updates — {reason}. Reinstall Readshot from {UPDATE_SITE} to get updates."
+    )
+}
+
+const UPDATE_SITE: &str = "readshot.pawanpaudel.com.np";
+
 /// Surface manual updater failures to the user. The tray action is a
 /// user-initiated command; silently logging here makes the menu item
 /// look broken when Sparkle is missing or cannot load.
-pub(crate) fn notify_update_check_failed(error: &str) {
+pub(crate) fn notify_update_check_failed(e: &crate::updater::UpdaterError) {
     #[cfg(target_os = "macos")]
     {
-        let body = super::history_ops::friendly_string_error_with(
-            "check for updates",
-            error,
-            Some(super::history_ops::CONNECTION_HINT),
-        );
-        show_macos_notification("Readshot updates", &body);
+        show_macos_notification("Readshot updates", &update_check_failure_message(e));
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = error;
+        let _ = e;
     }
 }
 

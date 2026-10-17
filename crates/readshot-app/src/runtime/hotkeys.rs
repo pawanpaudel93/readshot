@@ -474,15 +474,18 @@ pub(crate) fn set_hotkey_registration_notice(state: &mut App) {
     state.settings_hotkey_error = None;
     state.settings_hotkey_status = None;
     if hotkey::parse(&state.preferences.capture_hotkey).is_err() {
-        state.settings_hotkey_error = Some("That shortcut could not be read.".to_string());
+        state.settings_hotkey_error =
+            Some("Couldn't read that shortcut. Press Record and try another.".to_string());
     } else if let Some(reserved) = capture_hotkey_conflict(&state.preferences.capture_hotkey) {
         state.settings_hotkey_error = Some(format!(
-            "{pretty} is reserved for the {reserved} shortcut. Pick another chord."
+            "{pretty} is reserved for the {reserved} shortcut. Choose a different shortcut."
         ));
     } else if state.capture_hotkey_registered {
         state.settings_hotkey_status = Some(format!("{pretty} is ready."));
     } else {
-        state.settings_hotkey_error = Some(format!("{pretty} could not be registered globally."));
+        state.settings_hotkey_error = Some(format!(
+            "Another app may be using {pretty}. Choose a different shortcut."
+        ));
     }
 }
 

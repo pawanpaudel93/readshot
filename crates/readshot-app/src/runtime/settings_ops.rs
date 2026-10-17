@@ -107,7 +107,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
                 let pretty = pretty_hotkey(&shortcut);
                 state.settings_hotkey_status = None;
                 state.settings_hotkey_error = Some(format!(
-                    "{pretty} is reserved for the {reserved} shortcut. Pick another chord."
+                    "{pretty} is reserved for the {reserved} shortcut. Choose a different shortcut."
                 ));
                 return Task::none();
             }
