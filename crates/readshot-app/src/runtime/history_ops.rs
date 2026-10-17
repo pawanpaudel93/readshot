@@ -399,7 +399,16 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                     )
                 }
                 _ => {
-                    state.history_status = Some("No OCR text on this capture yet.".into());
+                    let hidden = state
+                        .history_records
+                        .iter()
+                        .find(|r| r.id == id)
+                        .is_some_and(history_text_hidden);
+                    state.history_status = Some(if hidden {
+                        HIDDEN_TEXT_NOTE.into()
+                    } else {
+                        "No OCR text on this capture yet.".into()
+                    });
                     Task::none()
                 }
             }
@@ -527,6 +536,20 @@ fn delete_history_record(state: &mut App, id: readshot_core::Uuid) -> Task<Messa
     // Reload the list so the deleted record disappears.
     history_list_task(state.coordinator.clone())
 }
+
+/// A redacted capture whose text was dropped on purpose
+/// ([`readshot_core::history::text_allowed`]): not every redaction is
+/// known, so no text is kept for it, now or later. History says so rather
+/// than "No text yet", which would suggest waiting or retrying.
+pub(crate) fn history_text_hidden(r: &readshot_core::CaptureRecord) -> bool {
+    r.redacted && !readshot_core::history::text_allowed(r)
+}
+
+/// The detail pane's line for a record with no text, and the History
+/// copy refusal.
+pub(crate) const HIDDEN_TEXT_NOTE: &str =
+    "Text hidden: this capture is redacted, so Readshot keeps no text for it.";
+pub(crate) const HIDDEN_TEXT_LIST_LABEL: &str = "Text hidden (redacted)";
 
 /// Short recovery next-steps appended to a friendly error so a failure
 /// never leaves the user at a dead end. Kept as module consts so every

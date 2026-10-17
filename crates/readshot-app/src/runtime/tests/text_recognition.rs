@@ -505,7 +505,7 @@ fn an_overlay_widened_into_the_dock_hides_with_one_toggle() {
         editor_panel_mode(&app, app.editor.as_ref().unwrap()),
         PanelMode::Docked
     );
-    // "Hide panel" on what is shown hides it, not re-opens it.
+    // "Hide Panel" on what is shown hides it, not re-opens it.
     let _ = update(&mut app, Message::EditorPanelToggled);
     assert_eq!(
         editor_panel_mode(&app, app.editor.as_ref().unwrap()),

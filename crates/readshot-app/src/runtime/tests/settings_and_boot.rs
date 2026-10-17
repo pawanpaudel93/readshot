@@ -824,3 +824,21 @@ fn shortcut_hints_name_a_way_back_and_recording_says_it_once() {
         "{hint}"
     );
 }
+
+#[test]
+fn recovery_actions_stack_rather_than_clip_at_the_window_minimums() {
+    use crate::runtime::view::{
+        permission_actions_stack, welcome_footer_stacks, PERMISSION_ACTIONS_ROW_MIN,
+        WELCOME_FOOTER_ROW_MIN,
+    };
+    // Settings at its 520 px minimum: 520 − 200 sidebar − 2 × 22 pane
+    // padding − 2 × 14 group padding ≈ 248 px for the permission row.
+    let settings_min_pane = 520.0 - 200.0 - 44.0 - 28.0;
+    assert!(permission_actions_stack(settings_min_pane));
+    // Three actions ≈ 80 + 135 + 160 + 2 × 8 px.
+    const { assert!(PERMISSION_ACTIONS_ROW_MIN >= 80.0 + 135.0 + 160.0 + 16.0) };
+    assert!(!permission_actions_stack(PERMISSION_ACTIONS_ROW_MIN));
+    // Welcome at its 420 px minimum leaves ≈ 340 px; the footer needs ≈ 414.
+    assert!(welcome_footer_stacks(420.0 - 80.0));
+    const { assert!(WELCOME_FOOTER_ROW_MIN >= 414.0) };
+}

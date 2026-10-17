@@ -144,10 +144,10 @@ fn option_control<'a>(
             &[
                 (
                     AppIcon::Tool(readshot_ui::editor::ToolState::Arrow),
-                    "One head",
+                    "One Head",
                     ArrowHeads::End,
                 ),
-                (AppIcon::ArrowBoth, "Both heads", ArrowHeads::Both),
+                (AppIcon::ArrowBoth, "Both Heads", ArrowHeads::Both),
             ],
             style.heads,
             busy,
@@ -191,12 +191,12 @@ fn option_control<'a>(
             &[
                 (
                     AppIcon::Tool(readshot_ui::editor::ToolState::Rectangle),
-                    "Rectangle spotlight",
+                    "Rectangle Spotlight",
                     readshot_core::SpotlightShape::Rectangle,
                 ),
                 (
                     AppIcon::Tool(readshot_ui::editor::ToolState::Ellipse),
-                    "Ellipse spotlight",
+                    "Ellipse Spotlight",
                     readshot_core::SpotlightShape::Ellipse,
                 ),
             ],
@@ -206,7 +206,7 @@ fn option_control<'a>(
             |s| send(StyleMessage::SpotlightShape(s)),
         ),
         O::SnapToText => text_segment(
-            &[("Freehand", false), ("Snap to text", true)],
+            &[("Freehand", false), ("Snap to Text", true)],
             style.snap_to_text,
             |v| send(StyleMessage::SnapToText(v)),
         ),
@@ -329,7 +329,7 @@ pub(crate) const MAGNIFIER_SHAPE_SEGMENTS: [(AppIcon, &str, readshot_core::Magni
     ),
     (
         AppIcon::BubbleSquare,
-        "Rounded square",
+        "Rounded Square",
         readshot_core::MagnifierShape::RoundedSquare,
     ),
 ];
@@ -645,7 +645,7 @@ fn width_button<'a>(line_width: f32, open: bool, busy: bool) -> Element<'a, Mess
         open,
         (!busy).then_some(Message::EditorPopoverToggled(EditorPopover::Width)),
     );
-    tooltip_with_key(b, "Line width", Some("[ ]"), Position::Bottom)
+    tooltip_with_key(b, "Line Width", Some("[ ]"), Position::Bottom)
 }
 
 #[cfg(test)]

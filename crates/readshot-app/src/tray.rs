@@ -101,7 +101,7 @@ fn menu_items(_hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<
             action: None,
         },
         TrayMenuItem {
-            label: "Quit".to_string(),
+            label: "Quit Readshot".to_string(),
             enabled: true,
             action: Some(TrayAction::Quit),
         },
@@ -166,12 +166,18 @@ pub struct TrayController {
     menu_ids: HashMap<MenuId, TrayAction>,
 }
 
+/// The tray tooltip. On macOS and Windows a left click captures and a
+/// right click opens the menu (`with_menu_on_left_click(false)`); Linux
+/// app indicators only ever open the menu, so it says that instead.
 fn tray_tooltip(hotkey_label: Option<&str>) -> String {
+    let gesture = if cfg!(target_os = "linux") {
+        "open the menu to capture"
+    } else {
+        "click to capture · right-click for menu"
+    };
     match hotkey_label {
-        Some(k) if !k.is_empty() => {
-            format!("Readshot — click to capture · {k} · right-click for menu")
-        }
-        _ => "Readshot — click to capture, right-click for menu".to_string(),
+        Some(k) if !k.is_empty() => format!("Readshot — {gesture} · {k}"),
+        _ => format!("Readshot — {gesture}"),
     }
 }
 
@@ -282,7 +288,7 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
     );
     #[cfg(target_os = "macos")]
     let item_check_updates = MenuItem::new("Check for Updates…", true, None);
-    let item_quit = MenuItem::new("Quit", true, None);
+    let item_quit = MenuItem::new("Quit Readshot", true, None);
 
     let mut menu_ids = HashMap::new();
     menu_ids.insert(item_capture.id().clone(), TrayAction::Capture);
@@ -319,6 +325,9 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
 
     let tray = match TrayIconBuilder::new()
         .with_menu(Box::new(menu))
+        // A left click captures (`tray_click_action`); only a right click
+        // opens the menu, so one click never does both.
+        .with_menu_on_left_click(false)
         .with_tooltip(tray_tooltip(hotkey_label))
         .with_icon(icon)
         .with_icon_as_template(true) // macOS renders the icon monochrome / dark-mode aware.
@@ -456,6 +465,23 @@ enum IconError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_menu_names_the_app_and_the_tooltip_matches_the_click() {
+        let items = super::menu_items(Some("⇧⌘X"), true);
+        assert!(items.iter().any(|i| i.label == "Quit Readshot"));
+        let tip = super::tray_tooltip(Some("⇧⌘X"));
+        assert!(tip.ends_with("· ⇧⌘X"), "{tip}");
+        if cfg!(target_os = "linux") {
+            assert!(tip.contains("open the menu to capture"), "{tip}");
+        } else {
+            assert!(
+                tip.contains("click to capture · right-click for menu"),
+                "{tip}"
+            );
+        }
+        assert!(!super::tray_tooltip(None).ends_with(' '));
+    }
+
     use super::*;
 
     #[test]

@@ -143,6 +143,10 @@ pub(crate) const TYPE_TITLE: f32 = 22.0;
 pub(crate) const TYPE_HEADING: f32 = 15.0;
 pub(crate) const TYPE_BODY: f32 = 13.0;
 pub(crate) const TYPE_CAPTION: f32 = 12.0;
+/// Advance of one glyph of the mono font (JetBrains Mono: 600 units per
+/// 1000-unit em), as a fraction of its size. Readouts set in it can be
+/// given an exact width.
+pub(crate) const MONO_ADVANCE: f32 = 0.6;
 pub(crate) const TYPE_MICRO: f32 = 11.0;
 
 // 4 px spacing grid.

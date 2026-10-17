@@ -187,10 +187,6 @@ fn swatch<'a>(
 /// The shadow slider's readout, one label per level.
 const SHADOW_LABELS: [&str; 5] = ["None", "Subtle", "Soft", "Medium", "Strong"];
 
-/// Advance of one glyph of the mono font (JetBrains Mono: 600 units per
-/// 1000-unit em), as a fraction of its size.
-const MONO_ADVANCE: f32 = 0.6;
-
 /// Width of a slider readout: fits the widest one any slider shows
 /// (shadow names, the padding and corner numbers) at the caption size,
 /// plus a pixel either side so rounding never wraps or clips it.
@@ -281,7 +277,7 @@ pub(crate) fn beautify_tab<'a>(
                     icon_button(
                         AppIcon::Close,
                         p.t3,
-                        "Remove preset",
+                        "Remove Preset",
                         None,
                         (!busy).then_some(Message::EditorBeautifyDeletePreset(i)),
                         false,
@@ -308,7 +304,7 @@ pub(crate) fn beautify_tab<'a>(
     }
     for c in SOLIDS {
         let bg = Background::Solid { rgba: c };
-        bg_row = bg_row.push(swatch(bg, s.background == bg, busy, "Solid color"));
+        bg_row = bg_row.push(swatch(bg, s.background == bg, busy, "Solid Color"));
     }
     let custom = row![
         focus_ring(
@@ -325,7 +321,7 @@ pub(crate) fn beautify_tab<'a>(
             icon_button(
                 AppIcon::Dropper,
                 p.t2,
-                "Pick from image",
+                "Pick from Image",
                 None,
                 (!busy).then_some(Message::EditorBeautifyPickBackground),
                 false,
@@ -345,7 +341,7 @@ pub(crate) fn beautify_tab<'a>(
     );
     let balance = focus_ring(
         toggler(s.balance)
-            .label("Auto Balance (center)")
+            .label("Center automatically")
             .text_size(TYPE_CAPTION)
             .on_toggle_maybe(
                 (!busy).then_some(|v| Message::EditorBeautifyEdit(BeautifyEdit::Balance(v))),

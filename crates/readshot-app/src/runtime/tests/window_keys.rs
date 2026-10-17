@@ -256,10 +256,20 @@ fn settings_cycle_shortcuts_report_the_new_value() {
     let (mut app, id) = settings_app();
     press_settings_key(&mut app, id, "r", false);
     let feedback = app.settings_key_feedback.clone().unwrap();
-    assert_eq!(
-        feedback,
-        format!("History retention: {}", app.preferences.history_retention)
+    assert!(
+        feedback.starts_with(&format!(
+            "History retention: {}",
+            app.preferences.history_retention
+        )),
+        "{feedback}"
     );
+    // A choice that deletes older captures says so.
+    use readshot_core::HistoryRetention as R;
+    for v in [R::Last50, R::Last30Days] {
+        assert!(crate::runtime::settings_ops::retention_feedback(v)
+            .ends_with("Older captures are deleted at the next capture."));
+    }
+    assert!(crate::runtime::view::RETENTION_HELP.contains("permanently delete older captures"));
     press_settings_key(&mut app, id, "f", false);
     assert!(app
         .settings_key_feedback

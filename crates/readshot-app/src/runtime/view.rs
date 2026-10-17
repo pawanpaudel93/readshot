@@ -14,13 +14,6 @@ use crate::app::{App, Message, SettingsPane};
 use crate::permissions::PermissionStatus;
 use crate::welcome::WelcomeState;
 
-// Type scale. One ramp so font sizes read as roles instead of scattered
-// magic numbers (the view used twelve distinct literals). 12 is the
-// floor for readable text (the shared kit's Xs buttons use TYPE_MICRO).
-const TEXT_CAPTION: f32 = TYPE_CAPTION; // captions, hints, tooltips, HUD readouts
-const TEXT_BODY_SM: f32 = TYPE_BODY; // default labels, most buttons, list text
-const TEXT_BODY: f32 = TYPE_BODY; // emphasised body, primary CTAs, HUD title
-
 /// Transparent click-through overlay that draws the captured rect's
 /// border on screen during a scrolling-capture session.
 ///
@@ -737,7 +730,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
                         None,
                         2,
                     ),
-                    "Cancel and discard",
+                    "Cancel and Discard",
                     Some("⇧esc"),
                     Position::Top,
                 ),
@@ -933,12 +926,14 @@ const HISTORY_REVEAL_LABEL: &str = "Reveal in Finder";
 const HISTORY_REVEAL_LABEL: &str = "Show in Folder";
 
 // Key labels for History's own bindings (see the History keyboard
-// subscription in `history_key_message`, runtime.rs). Delete is ⌘⌫ (Move
-// to Trash; ⌦ also works, plain ⌫ edits the search field); ⌘C copies the
-// image and ⇧⌘C the text, as in the overlay and editor.
-const HISTORY_KEY_DELETE: &str = "⌘⌫";
-const HISTORY_KEY_COPY_TEXT: &str = "⇧⌘C";
-const HISTORY_KEY_COPY_IMAGE: &str = "⌘C";
+// subscription in `history_key_message`, runtime.rs), as (macOS, other).
+// Delete is ⌘⌫ (⌦ also works, and is the key elsewhere; plain ⌫ edits
+// the search field). It deletes for good, it does not move to the Trash.
+// ⌘C copies the image and ⇧⌘C the text, as in the overlay and editor.
+const HISTORY_KEY_DELETE: (&str, &str) = ("⌘⌫", "Delete");
+const HISTORY_KEY_COPY_TEXT: (&str, &str) = ("⇧⌘C", "Ctrl+Shift+C");
+const HISTORY_KEY_COPY_IMAGE: (&str, &str) = ("⌘C", "Ctrl+C");
+const HISTORY_KEY_SEARCH: (&str, &str) = ("⌘F", "Ctrl+F");
 const HISTORY_KEY_REVEAL: (&str, &str) = ("⌥⌘R", "Ctrl+Shift+R");
 const HISTORY_KEY_PIN: (&str, &str) = ("⌘P", "Ctrl+P");
 const HISTORY_KEY_COPY_VISIBLE: (&str, &str) = ("⌥⇧⌘C", "Ctrl+Shift+A");
@@ -1007,6 +1002,25 @@ pub(crate) fn history_age_label(
 /// First non-blank OCR line, trimmed — the row title.
 pub(crate) fn history_first_line(text: Option<&str>) -> Option<&str> {
     text?.lines().map(str::trim).find(|l| !l.is_empty())
+}
+
+/// How many characters of a list title fit beside the thumbnail and the
+/// age in a `list_w` list: the list and row padding (2 × 8 each), the
+/// thumbnail, two 12 px gaps and ≈ 64 px of age, at ≈ 7.5 px per 13 px
+/// character.
+pub(crate) fn history_title_budget(list_w: f32) -> usize {
+    let room = list_w - 4.0 * SP2 - HISTORY_THUMB_W - 2.0 * SP3 - 64.0;
+    (room / 7.5).floor().max(4.0) as usize
+}
+
+/// `line` cut to `budget` characters with a trailing "…" when it is
+/// longer, so a cut title shows that it continues.
+pub(crate) fn ellipsize(line: &str, budget: usize) -> std::borrow::Cow<'_, str> {
+    if line.chars().count() <= budget {
+        return std::borrow::Cow::Borrowed(line);
+    }
+    let kept: String = line.chars().take(budget.saturating_sub(1)).collect();
+    std::borrow::Cow::Owned(format!("{}…", kept.trim_end()))
 }
 
 pub(crate) fn history_word_count(text: Option<&str>) -> usize {
@@ -1124,8 +1138,10 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     } else {
         format!("{shown} of {total}")
     };
-    // Room on the right of the input for the overlaid count caption.
-    let caption_room = count_caption.chars().count() as f32 * 7.0 + 14.0;
+    // Room on the right of the input for the overlaid count caption. It is
+    // set in the mono face, so its width is exact: no digit overlaps
+    // typed text.
+    let caption_room = history_count_room(&count_caption);
     let search_input = text_input("Search text", &state.history_search)
         .id(iced::widget::Id::new(HISTORY_SEARCH_ID))
         .on_input(Message::HistorySearchChanged)
@@ -1143,7 +1159,10 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     let search_decor = row![
         crate::icons::icon(crate::icons::AppIcon::Search, p.t3, 14.0),
         Space::new().width(Length::Fill),
-        text(count_caption).size(TYPE_CAPTION).style(text_t3),
+        text(count_caption)
+            .font(mono_font())
+            .size(TYPE_CAPTION)
+            .style(text_t3),
     ]
     .align_y(Alignment::Center)
     .padding([0, 10])
@@ -1162,10 +1181,11 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
             ButtonSize::Sm,
             (visible_text_count > 0).then_some(Message::HistoryCopyVisibleTextRequested),
         ),
-        format!(
-            "Copy text from {visible_text_count} visible capture{}",
-            if visible_text_count == 1 { "" } else { "s" }
-        ),
+        if visible_text_count == 1 {
+            "Copy Text from 1 Visible Capture".to_string()
+        } else {
+            format!("Copy Text from {visible_text_count} Visible Captures")
+        },
         Some(history_key(HISTORY_KEY_COPY_VISIBLE)),
         Position::Bottom,
     );
@@ -1175,14 +1195,14 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
         row![
             tooltip_with_key(
                 bar_button(
-                    text(format!("Confirm Clear ({total})"))
+                    text(history_clear_confirm_label(total))
                         .size(ButtonSize::Sm.text_size())
                         .into(),
                     ButtonKind::DangerSolid,
                     ButtonSize::Sm,
                     Some(Message::HistoryClearAllConfirmed),
                 ),
-                "Confirm Clear All",
+                "Delete All Permanently",
                 Some(history_key(HISTORY_KEY_CLEAR_ALL)),
                 Position::Bottom,
             ),
@@ -1209,29 +1229,34 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                 ButtonSize::Sm,
                 (total > 0).then_some(Message::HistoryClearAllRequested),
             ),
-            "Clear All (press twice)",
+            "Clear All",
             Some(history_key(HISTORY_KEY_CLEAR_ALL)),
             Position::Bottom,
         )
     };
-    let title_content = row![
+    // While Clear All asks, Copy Visible Text steps aside so the search
+    // field keeps its room at the 540 px minimum.
+    let mut title_content = row![
         text("History")
-            .size(TYPE_BODY)
+            .size(TYPE_HEADING)
             .font(semibold())
             .style(text_t1),
         container(search).center_x(Length::Fill),
-        copy_visible,
-        clear_controls,
-    ]
-    .spacing(SP3)
-    .align_y(Alignment::Center)
-    .padding(iced::Padding {
-        left: TITLEBAR_INSET_LEFT,
-        right: 12.0,
-        ..iced::Padding::ZERO
-    })
-    .width(Length::Fill)
-    .height(Length::Fixed(TITLEBAR_HEIGHT));
+    ];
+    if !state.history_clear_all_pending {
+        title_content = title_content.push(copy_visible);
+    }
+    let title_content = title_content
+        .push(clear_controls)
+        .spacing(SP3)
+        .align_y(Alignment::Center)
+        .padding(iced::Padding {
+            left: TITLEBAR_INSET_LEFT,
+            right: 12.0,
+            ..iced::Padding::ZERO
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(TITLEBAR_HEIGHT));
     // The transparent title bar is covered by this row; its empty
     // background is the window's drag handle.
     let mut drag_handle = mouse_area(
@@ -1301,12 +1326,52 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
         _ => body,
     };
 
-    container(column![title_row, hairline(), body])
+    // An armed Clear All states its consequence before the second press.
+    let mut page = column![title_row, hairline()];
+    if state.history_clear_all_pending {
+        page = page.push(
+            container(toast(ToastKind::Warn, history_clear_warning(total), None))
+                .width(Length::Fill)
+                .padding([SP2, SP4]),
+        );
+    }
+    container(page.push(body))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(surface_style)
         .into()
 }
+
+/// The search field's right padding that keeps typed text clear of the
+/// overlaid "N of M" count: the count's exact mono width (0.6 em per
+/// glyph), the decor row's 10 px inset and a 6 px gap.
+pub(crate) fn history_count_room(caption: &str) -> f32 {
+    caption.chars().count() as f32 * TYPE_CAPTION * MONO_ADVANCE + 16.0
+}
+
+/// The armed Clear All button: what it deletes, counted.
+pub(crate) fn history_clear_confirm_label(total: usize) -> String {
+    if total == 1 {
+        "Delete 1 Capture".to_string()
+    } else {
+        format!("Delete {total} Captures")
+    }
+}
+
+/// The line shown while Clear All waits for its second press.
+pub(crate) fn history_clear_warning(total: usize) -> String {
+    let what = if total == 1 {
+        "1 capture".to_string()
+    } else {
+        format!("all {total} captures")
+    };
+    format!(
+        "This deletes {what}, images and text, permanently. Press the button again to confirm, or esc to cancel."
+    )
+}
+
+/// The caption beside an armed single delete.
+pub(crate) const HISTORY_DELETE_WARNING: &str = "This deletes the image and its text permanently.";
 
 /// List | detail split. The list keeps 340 px until the window is too
 /// narrow for a usable detail pane, then shrinks.
@@ -1390,18 +1455,28 @@ fn history_split<'a>(
                 .into()
         };
         let title: Element<'_, Message> = match history_first_line(r.ocr_text.as_deref()) {
-            Some(line) => highlighted_text(line, query, p, p.t1, TYPE_BODY)
-                .font(iced::Font {
-                    weight: iced::font::Weight::Medium,
-                    ..iced::Font::DEFAULT
-                })
-                .wrapping(text::Wrapping::None)
-                .into(),
-            None => text("No text yet")
-                .size(TYPE_BODY)
-                .style(text_t3)
-                .wrapping(text::Wrapping::None)
-                .into(),
+            Some(line) => highlighted_text(
+                &ellipsize(line, history_title_budget(list_w)),
+                query,
+                p,
+                p.t1,
+                TYPE_BODY,
+            )
+            .font(iced::Font {
+                weight: iced::font::Weight::Medium,
+                ..iced::Font::DEFAULT
+            })
+            .wrapping(text::Wrapping::None)
+            .into(),
+            None => text(if super::history_ops::history_text_hidden(r) {
+                super::history_ops::HIDDEN_TEXT_LIST_LABEL
+            } else {
+                "No text yet"
+            })
+            .size(TYPE_BODY)
+            .style(text_t3)
+            .wrapping(text::Wrapping::None)
+            .into(),
         };
         let sub = text(format!("{} × {}", r.width_px, r.height_px))
             .font(mono_font())
@@ -1476,8 +1551,8 @@ fn history_split<'a>(
         row![
             legend_item("↑↓", "Move"),
             legend_item("↵", "Open"),
-            legend_item(HISTORY_KEY_DELETE, "Delete"),
-            legend_item("⌘F", "Search"),
+            legend_item(history_key(HISTORY_KEY_DELETE), "Delete"),
+            legend_item(history_key(HISTORY_KEY_SEARCH), "Search"),
         ]
         .spacing(14)
         .wrap()
@@ -1600,7 +1675,7 @@ pub(crate) fn history_selected_panel<'a>(
         .filter(|t| !t.is_empty());
     let words = history_word_count(ocr);
     let heading = row![
-        text("Recognized Text")
+        text("Recognized text")
             .size(TYPE_BODY)
             .font(semibold())
             .style(text_t1),
@@ -1630,9 +1705,13 @@ pub(crate) fn history_selected_panel<'a>(
         .height(Length::Fill)
         .into(),
         None => container(
-            text("No text recognized.")
-                .size(TYPE_CAPTION)
-                .style(text_t3),
+            text(if super::history_ops::history_text_hidden(record) {
+                super::history_ops::HIDDEN_TEXT_NOTE
+            } else {
+                "No text recognized."
+            })
+            .size(TYPE_CAPTION)
+            .style(text_t2),
         )
         .padding([10, 12])
         .into(),
@@ -1642,40 +1721,48 @@ pub(crate) fn history_selected_panel<'a>(
         .height(Length::FillPortion(4))
         .style(history_selected_panel_style);
 
-    // Two-stage delete, like Clear All: the icon arms; armed shows a
-    // solid "Delete Capture" plus Cancel.
-    let delete_control: Element<'a, Message> = if delete_pending {
-        row![
-            bar_button(
-                text("Delete Capture")
-                    .size(ButtonSize::Sm.text_size())
-                    .into(),
-                ButtonKind::DangerSolid,
-                ButtonSize::Sm,
-                Some(Message::HistoryDeleteConfirmed(id)),
-            ),
-            bar_button(
-                text("Cancel").size(ButtonSize::Sm.text_size()).into(),
-                ButtonKind::Ghost,
-                ButtonSize::Sm,
-                Some(Message::HistoryDeleteCancelled),
-            ),
+    // Two-stage delete, like Clear All: the icon arms; armed shows its
+    // consequence and a solid "Delete Capture" plus Cancel on a row of
+    // their own, so nothing is clipped at the minimum width.
+    let delete_confirm: Option<Element<'a, Message>> = delete_pending.then(|| {
+        column![
+            text(HISTORY_DELETE_WARNING)
+                .size(TYPE_CAPTION)
+                .style(text_danger)
+                .wrapping(text::Wrapping::Word),
+            row![
+                Space::new().width(Length::Fill),
+                bar_button(
+                    text("Delete Capture")
+                        .size(ButtonSize::Sm.text_size())
+                        .into(),
+                    ButtonKind::DangerSolid,
+                    ButtonSize::Sm,
+                    Some(Message::HistoryDeleteConfirmed(id)),
+                ),
+                bar_button(
+                    text("Cancel").size(ButtonSize::Sm.text_size()).into(),
+                    ButtonKind::Ghost,
+                    ButtonSize::Sm,
+                    Some(Message::HistoryDeleteCancelled),
+                ),
+            ]
+            .spacing(SP1)
+            .align_y(Alignment::Center),
         ]
-        .spacing(SP1)
-        .align_y(Alignment::Center)
+        .spacing(SP2)
         .into()
-    } else {
-        icon_button(
-            AppIcon::Trash,
-            p.t2,
-            "Delete Capture",
-            Some(HISTORY_KEY_DELETE),
-            Some(Message::HistoryDelete(id)),
-            false,
-            ICON_BTN,
-            Position::Top,
-        )
-    };
+    });
+    let delete_control: Element<'a, Message> = icon_button(
+        AppIcon::Trash,
+        p.t2,
+        "Delete Capture",
+        Some(history_key(HISTORY_KEY_DELETE)),
+        (!delete_pending).then_some(Message::HistoryDelete(id)),
+        delete_pending,
+        ICON_BTN,
+        Position::Top,
+    );
     let left_actions = row![
         delete_control,
         icon_button(
@@ -1724,7 +1811,7 @@ pub(crate) fn history_selected_panel<'a>(
             has_text.then_some(Message::HistoryCopyText(id)),
         ),
         "Copy Text",
-        Some(HISTORY_KEY_COPY_TEXT),
+        Some(history_key(HISTORY_KEY_COPY_TEXT)),
         Position::Top,
     );
     let copy_image = tooltip_with_key(
@@ -1741,7 +1828,7 @@ pub(crate) fn history_selected_panel<'a>(
             Some(Message::HistoryCopyImage(id)),
         ),
         "Copy Image",
-        Some(HISTORY_KEY_COPY_IMAGE),
+        Some(history_key(HISTORY_KEY_COPY_IMAGE)),
         Position::Top,
     );
     let pin = icon_button(
@@ -1776,7 +1863,12 @@ pub(crate) fn history_selected_panel<'a>(
         .into()
     };
 
-    column![preview, heading, text_box, actions]
+    let mut panel = column![preview, heading, text_box];
+    if let Some(confirm) = delete_confirm {
+        panel = panel.push(confirm);
+    }
+    panel
+        .push(actions)
         .spacing(SP3)
         .padding(SP4)
         .width(Length::Fill)
@@ -2331,7 +2423,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 };
                 container(
                     text(content)
-                        .size(TEXT_BODY)
+                        .size(TYPE_BODY)
                         .style(text_t2)
                         .wrapping(iced::widget::text::Wrapping::Word),
                 )
@@ -2350,7 +2442,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                     .on_action(Message::EditorTextAction)
                     .key_binding(editor_text_key_binding)
                     .padding(8)
-                    .size(TEXT_BODY)
+                    .size(TYPE_BODY)
                     .style(inline_text_editor_style)
                     .into()
             } else {
@@ -2358,7 +2450,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 // open; this fallback only guards a torn state.
                 container(
                     text(pending.content.clone())
-                        .size(TEXT_BODY)
+                        .size(TYPE_BODY)
                         .style(text_t1)
                         .wrapping(iced::widget::text::Wrapping::Word),
                 )
@@ -2367,13 +2459,13 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .into()
             };
             let commit_label = editor_text_commit_label(pending.edit_index.is_some());
-            let mut commit = button(text(commit_label).size(TEXT_CAPTION))
+            let mut commit = button(text(commit_label).size(TYPE_CAPTION))
                 .padding([7, 10])
                 .style(|theme, status| action_button_style(theme, status, ActionKind::Primary));
             if !busy {
                 commit = commit.on_press(Message::EditorTextCommit);
             }
-            let mut cancel = button(text("Cancel").size(TEXT_CAPTION))
+            let mut cancel = button(text("Cancel").size(TYPE_CAPTION))
                 .padding([7, 10])
                 .style(|theme, status| action_button_style(theme, status, ActionKind::Secondary));
             if !busy {
@@ -2514,7 +2606,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 ButtonSize::Sm,
                 (!busy).then_some(Message::EditorPopoverToggled(EditorPopover::Image)),
             ),
-            "Image: resize, rotate, flip",
+            "Image: Resize, Rotate, Flip",
             Some(super::key_focus::key_label(
                 super::key_focus::KEY_IMAGE_MENU,
             )),
@@ -2524,7 +2616,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             title = title.push(icon_button(
                 AppIcon::Sidebar,
                 p.t2,
-                "Show panel",
+                "Show Panel",
                 Some(super::key_focus::key_label(super::key_focus::KEY_PANEL)),
                 Some(Message::EditorPanelToggled),
                 false,
@@ -3040,7 +3132,7 @@ fn editor_zoom_segment(
         icon_button(
             AppIcon::Minus,
             icon_color(can_zoom_out),
-            "Zoom out",
+            "Zoom Out",
             Some("⌘−"),
             can_zoom_out.then_some(Message::EditorZoomOut),
             false,
@@ -3059,7 +3151,7 @@ fn editor_zoom_segment(
         icon_button(
             AppIcon::Plus,
             icon_color(can_zoom_in),
-            "Zoom in",
+            "Zoom In",
             Some("⌘="),
             can_zoom_in.then_some(Message::EditorZoomIn),
             false,
@@ -3074,7 +3166,7 @@ fn editor_zoom_segment(
                 ButtonSize::Xs,
                 (!busy).then_some(Message::EditorZoomActual),
             ),
-            "Actual pixels",
+            "Actual Pixels",
             Some("⌘0"),
             Position::Bottom,
         ),
@@ -3085,7 +3177,7 @@ fn editor_zoom_segment(
                 ButtonSize::Xs,
                 (!busy).then_some(Message::EditorZoomFit),
             ),
-            "Fit to view",
+            "Fit to View",
             None,
             Position::Bottom,
         ),
@@ -3362,7 +3454,7 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
                     icon_button(
                         AppIcon::Minus,
                         DARK.t1,
-                        "Less opaque",
+                        "Less Opaque",
                         Some("-"),
                         Some(step(-PIN_OPACITY_STEP)),
                         false,
@@ -3370,13 +3462,13 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
                         pos,
                     ),
                     text(format!("{:.0}%", opacity * 100.0))
-                        .size(TEXT_CAPTION)
+                        .size(TYPE_CAPTION)
                         .font(iced::Font::MONOSPACE)
                         .color(DARK.t2),
                     icon_button(
                         AppIcon::Plus,
                         DARK.t1,
-                        "More opaque",
+                        "More Opaque",
                         Some("+"),
                         Some(step(PIN_OPACITY_STEP)),
                         false,
@@ -3552,7 +3644,7 @@ pub(crate) fn tool_label_and_key(
         T::Blur => ("Blur", "B"),
         T::Pixelate => ("Pixelate", "X"),
         T::Spotlight => ("Spotlight", "S"),
-        T::NumberedPin => ("Numbered pin", "N"),
+        T::NumberedPin => ("Numbered Pin", "N"),
         T::Stamp => ("Stamp", "E"),
         T::Magnifier => ("Magnifier", "M"),
         T::Crop => ("Crop", "C"),
@@ -3848,7 +3940,7 @@ pub(crate) enum SettingsKeyAction {
     CycleRetention,
     CycleEngine,
     CycleFormat,
-    /// Arm "Reset all settings"; a second press confirms.
+    /// Arm "Reset All Settings"; a second press confirms.
     ResetAll,
     /// Arm "Uninstall Readshot"; a second press confirms.
     Uninstall,
@@ -4640,6 +4732,15 @@ fn settings_lit(state: &App, item: crate::app::SettingsFocus) -> bool {
     state.settings_focus == Some(item)
 }
 
+/// Width the Settings permission actions need on one row: Recheck
+/// (≈ 80 px), Reset Permission (≈ 135 px) and Open System Settings
+/// (≈ 160 px) at 13 px with their padding, plus two 8 px gaps.
+pub(crate) const PERMISSION_ACTIONS_ROW_MIN: f32 = 400.0;
+
+pub(crate) fn permission_actions_stack(width: f32) -> bool {
+    width < PERMISSION_ACTIONS_ROW_MIN
+}
+
 fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
     use crate::app::SettingsFocus as F;
     // Never probe from view(): it runs on every redraw.
@@ -4652,9 +4753,9 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
     let (permission_title, permission_hint) = permission_settings_summary(permission_status);
     let permission_control: Element<'_, Message> = responsive(move |available| {
         let status = column![
-            text(permission_title).size(TEXT_BODY_SM).style(text_t1),
+            text(permission_title).size(TYPE_BODY).style(text_t1),
             text(permission_hint)
-                .size(TEXT_CAPTION)
+                .size(TYPE_CAPTION)
                 .style(text_t3)
                 .wrapping(iced::widget::text::Wrapping::Word),
         ]
@@ -4666,7 +4767,7 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
         }
 
         let open_button = focus_ring(
-            button(text("Open Settings").size(TEXT_BODY_SM))
+            button(text("Open System Settings").size(TYPE_BODY))
                 .padding([6, 12])
                 .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                 .on_press(Message::OpenPermissionSettingsRequested),
@@ -4677,7 +4778,7 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
         // relaunching the app. Drives the existing PermissionPoll
         // handler with the latest probe result.
         let recheck_button = focus_ring(
-            button(text("Recheck").size(TEXT_BODY_SM))
+            button(text("Recheck").size(TYPE_BODY))
                 .padding([6, 12])
                 .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                 .on_press(Message::PermissionTick),
@@ -4686,21 +4787,31 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
         // Clears a grant macOS still holds for an earlier, differently
         // signed version, then asks again.
         let reset_button = focus_ring(
-            button(text("Reset Permission").size(TEXT_BODY_SM))
+            button(text("Reset Permission").size(TYPE_BODY))
                 .padding([6, 12])
                 .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                 .on_press(Message::ResetPermissionRequested),
             lit_reset,
         );
         // Once access is granted there is nothing to recheck or reset.
-        let actions = if matches!(permission_status, PermissionStatus::Granted) {
-            row![open_button]
-        } else {
-            row![recheck_button, reset_button, open_button]
-        }
-        .spacing(8)
-        .align_y(Alignment::Center);
-        if available.width < 460.0 {
+        // Three actions need ≈ 333 px; below that they go one per line
+        // so none is clipped at the 520 px window minimum.
+        let actions: Element<'_, Message> =
+            if matches!(permission_status, PermissionStatus::Granted) {
+                open_button
+            } else if permission_actions_stack(available.width) {
+                column![recheck_button, reset_button, open_button]
+                    .spacing(8)
+                    .into()
+            } else {
+                row![recheck_button, reset_button, open_button]
+                    .spacing(8)
+                    .align_y(Alignment::Center)
+                    .into()
+            };
+        // The status keeps at least ≈ 180 px beside the actions, or goes
+        // above them.
+        if available.width < PERMISSION_ACTIONS_ROW_MIN + 180.0 {
             column![status, actions].spacing(10).into()
         } else {
             row![status, actions]
@@ -4820,18 +4931,18 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
         // user needs an obvious exit that doesn't require pressing a
         // real shortcut.
         let primary_btn: Element<'_, Message> = if settings_recording_hotkey {
-            button(text("Cancel").size(TEXT_BODY_SM))
+            button(text("Cancel").size(TYPE_BODY))
                 .padding([6, 12])
                 .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                 .on_press(Message::SettingsHotkeyRecordingCancelled)
                 .into()
         } else {
             tooltip_with_key(
-                button(text("Record").size(TEXT_BODY_SM))
+                button(text("Record").size(TYPE_BODY))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                     .on_press(Message::SettingsStartHotkeyRecording),
-                "Record a new shortcut",
+                "Record New Shortcut",
                 Some(platform_key("⌘K", "Ctrl+K")),
                 Position::Top,
             )
@@ -4839,7 +4950,7 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
         let actions = row![
             focus_ring(primary_btn, lit_record),
             focus_ring(
-                button(text("Reset").size(TEXT_BODY_SM))
+                button(text("Reset").size(TYPE_BODY))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                     .on_press(Message::Settings(SettingsMessage::SetCaptureHotkey(
@@ -4863,7 +4974,7 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
             column![
                 main,
                 text("Press the new shortcut, or esc to cancel.")
-                    .size(TEXT_CAPTION)
+                    .size(TYPE_CAPTION)
                     .style(text_acc),
             ]
             .spacing(6)
@@ -4882,9 +4993,9 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
                 Some(state.preferences.history_retention),
                 |r| Message::Settings(SettingsMessage::SetHistoryRetention(r)),
             )
-            .text_size(TEXT_BODY_SM)
+            .text_size(TYPE_BODY)
             .padding([7, 10]),
-            "Next retention option",
+            "Next Retention Option",
             Some("⌘R"),
             Position::Top,
         ),
@@ -4902,11 +5013,15 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
         settings_group_heading("History", text_t3),
         settings_group(vec![group_row(
             "History retention",
-            "Searchable archive of captures. Off keeps everything in-memory only.",
+            RETENTION_HELP,
             retention_control,
         )]),
     ]
 }
+
+/// What each retention choice does, including the deletion it causes.
+pub(crate) const RETENTION_HELP: &str = "Off saves no new captures and keeps the ones you have. \
+     Last 50 captures and Last 30 days permanently delete older captures at the next capture.";
 
 fn settings_files_pane(state: &App) -> Vec<Element<'_, Message>> {
     use iced::widget::text_input;
@@ -4922,21 +5037,21 @@ fn settings_files_pane(state: &App) -> Vec<Element<'_, Message>> {
         setting_value_box(save_folder_value, false),
         row![
             focus_ring(
-                button(text("Choose").size(TEXT_BODY_SM))
+                button(text("Choose").size(TYPE_BODY))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                     .on_press(Message::SettingsChooseSaveFolderRequested),
                 settings_lit(state, crate::app::SettingsFocus::FolderChoose)
             ),
             focus_ring(
-                button(text("Open").size(TEXT_BODY_SM))
+                button(text("Open").size(TYPE_BODY))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                     .on_press(Message::SettingsOpenSaveFolderRequested),
                 settings_lit(state, crate::app::SettingsFocus::FolderOpen)
             ),
             focus_ring(
-                button(text("Reset").size(TEXT_BODY_SM))
+                button(text("Reset").size(TYPE_BODY))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                     .on_press(Message::Settings(SettingsMessage::SetSaveFolder(
@@ -4960,13 +5075,13 @@ fn settings_files_pane(state: &App) -> Vec<Element<'_, Message>> {
         text_input("Screenshot {YYYY-MM-DD at HH.mm.ss}", &filename_template)
             .id(iced::widget::Id::new(settings_ops::SETTINGS_FILENAME_ID))
             .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
-            .size(TEXT_BODY_SM)
+            .size(TYPE_BODY)
             .padding([8, 10])
             .style(text_input_style),
         settings_lit(state, crate::app::SettingsFocus::FilenameField),
     );
     let preview_line = text(format!("Saves as: {preview_name}"))
-        .size(TEXT_CAPTION)
+        .size(TYPE_CAPTION)
         .style(text_t3);
     let filename_control: Element<'_, Message> =
         column![filename_input, preview_line].spacing(4).into();
@@ -5005,9 +5120,9 @@ fn settings_ocr_pane(state: &App) -> Vec<Element<'_, Message>> {
                 Some(state.preferences.ocr_engine_choice),
                 |c| Message::Settings(SettingsMessage::SetOcrEngine(c)),
             )
-            .text_size(TEXT_BODY_SM)
+            .text_size(TYPE_BODY)
             .padding([7, 10]),
-            "Next OCR engine",
+            "Next OCR Engine",
             Some("⌘E"),
             Position::Top,
         ),
@@ -5052,9 +5167,9 @@ fn settings_export_pane(state: &App) -> Vec<Element<'_, Message>> {
                 Some(state.preferences.default_format),
                 |f| Message::Settings(SettingsMessage::SetDefaultFormat(f)),
             )
-            .text_size(TEXT_BODY_SM)
+            .text_size(TYPE_BODY)
             .padding([7, 10]),
-            "Next format",
+            "Next Format",
             Some("⌘F"),
             Position::Top,
         ),
@@ -5081,7 +5196,7 @@ fn settings_diagnostics_pane(state: &App) -> Vec<Element<'_, Message>> {
         tooltip_with_key(
             toggler(state.preferences.debug_logging)
                 .on_toggle(|v| Message::Settings(SettingsMessage::SetDebugLogging(v))),
-            "Toggle debug logging",
+            "Toggle Debug Logging",
             Some("⌘D"),
             Position::Top,
         ),
@@ -5106,7 +5221,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
         tooltip_with_key(
             toggler(state.preferences.launch_at_login)
                 .on_toggle(|v| Message::Settings(SettingsMessage::SetLaunchAtLogin(v))),
-            "Toggle open at login",
+            "Toggle Open at Login",
             Some("⌘L"),
             Position::Top,
         ),
@@ -5118,23 +5233,23 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
     // confirm plus Cancel. ⇧⌘R / ⇧⌘U press the same two steps.
     let reset_row: Element<'_, Message> = if state.settings_reset_all_pending {
         settings_block(
-            "Reset All Settings",
+            "Reset all settings",
             "Resets the capture shortcut, save folder, filename template, retention, OCR, and startup options. History records are kept.",
             row![
                 focus_ring(
                     tooltip_with_key(
-                        button(text("Confirm Reset").size(TEXT_BODY_SM))
+                        button(text("Confirm Reset").size(TYPE_BODY))
                             .padding([6, 12])
                             .style(|t, s| action_button_style(t, s, ActionKind::Danger))
                             .on_press(Message::SettingsResetAllConfirmed),
-                        "Confirm reset",
+                        "Confirm Reset",
                         Some("⇧⌘R"),
                         Position::Top,
                     ),
                     settings_lit(state, F::ResetConfirm)
                 ),
                 focus_ring(
-                    button(text("Cancel").size(TEXT_BODY_SM))
+                    button(text("Cancel").size(TYPE_BODY))
                         .padding([6, 12])
                         .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                         .on_press(Message::SettingsResetAllCancelled),
@@ -5152,15 +5267,15 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
             .unwrap_or("Return all preferences to the shipped defaults.")
             .to_string();
         group_row(
-            "Reset All Settings",
+            "Reset all settings",
             reset_status,
             focus_ring(
                 tooltip_with_key(
-                    button(text("Reset…").size(TEXT_BODY_SM))
+                    button(text("Reset…").size(TYPE_BODY))
                         .padding([6, 12])
                         .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
                         .on_press(Message::SettingsResetAllRequested),
-                    "Reset all settings",
+                    "Reset All Settings",
                     Some("⇧⌘R"),
                     Position::Top,
                 ),
@@ -5175,7 +5290,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                 iced::widget::checkbox(state.settings_uninstall_purge)
                     .label("Also delete history and preferences")
                     .size(16)
-                    .text_size(TEXT_BODY_SM)
+                    .text_size(TYPE_BODY)
                     .on_toggle(Message::SettingsUninstallPurgeToggled),
             )
             .padding([2, 4]),
@@ -5184,18 +5299,18 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
         let actions = row![
             focus_ring(
                 tooltip_with_key(
-                    button(text("Uninstall").size(TEXT_BODY_SM))
+                    button(text("Uninstall").size(TYPE_BODY))
                         .padding([6, 12])
                         .style(|t, s| action_button_style(t, s, ActionKind::Danger))
                         .on_press(Message::SettingsUninstallConfirmed),
-                    "Confirm uninstall",
+                    "Confirm Uninstall",
                     Some("⇧⌘U"),
                     Position::Top,
                 ),
                 settings_lit(state, F::UninstallConfirm)
             ),
             focus_ring(
-                button(text("Cancel").size(TEXT_BODY_SM))
+                button(text("Cancel").size(TYPE_BODY))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                     .on_press(Message::SettingsUninstallCancelled),
@@ -5216,7 +5331,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
             "Remove Readshot and its command-line tools from this Mac.",
             focus_ring(
                 tooltip_with_key(
-                    button(text("Uninstall…").size(TEXT_BODY_SM))
+                    button(text("Uninstall…").size(TYPE_BODY))
                         .padding([6, 12])
                         .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
                         .on_press(Message::SettingsUninstallRequested),
@@ -5271,7 +5386,7 @@ pub(crate) fn ocr_language_control(
                 iced::widget::checkbox(checked)
                     .label(display)
                     .size(16)
-                    .text_size(TEXT_BODY_SM)
+                    .text_size(TYPE_BODY)
                     .on_toggle(move |now| {
                         let mut next = selected_now.clone();
                         if now {
@@ -5336,7 +5451,7 @@ pub(crate) fn ocr_language_display_name(code: &str) -> String {
 pub(crate) fn setting_value_box(value: String, active: bool) -> Element<'static, Message> {
     container(
         text(value)
-            .size(TEXT_BODY_SM)
+            .size(TYPE_BODY)
             .style(text_t1)
             .width(Length::Fill),
     )
@@ -5621,12 +5736,23 @@ fn welcome_status_group<'a>(
 pub(crate) const WELCOME_KEY_RESTART: (&str, &str) = ("⌘R", "Ctrl+R");
 pub(crate) const WELCOME_KEY_RESET_PERMISSION: (&str, &str) = ("⇧⌘R", "Ctrl+Shift+R");
 
+/// Width the Welcome reset footer needs on one line: the question
+/// (≈ 300 px at 12 px) plus the Reset Permission button (≈ 116 px) and
+/// the gap. Narrower than this, the button goes under the question so it
+/// is never clipped (Welcome's 420 px minimum leaves ≈ 340 px).
+pub(crate) const WELCOME_FOOTER_ROW_MIN: f32 = 430.0;
+
+pub(crate) fn welcome_footer_stacks(width: f32) -> bool {
+    width < WELCOME_FOOTER_ROW_MIN
+}
+
 fn welcome_reset_footer<'a>() -> Element<'a, Message> {
-    row![
-        text("Already on in System Settings but still blocked?")
+    responsive(|size| {
+        let question = text("Already on in System Settings but still blocked?")
             .size(TYPE_CAPTION)
-            .style(text_t3),
-        tooltip_with_key(
+            .style(text_t3)
+            .align_x(iced::alignment::Horizontal::Center);
+        let reset = tooltip_with_key(
             button(text("Reset Permission").size(TYPE_CAPTION))
                 .padding([2, 6])
                 .style(|t, s| button_style(t, s, ButtonKind::Ghost))
@@ -5634,13 +5760,24 @@ fn welcome_reset_footer<'a>() -> Element<'a, Message> {
             "Reset Permission",
             Some(platform_key(
                 WELCOME_KEY_RESET_PERMISSION.0,
-                WELCOME_KEY_RESET_PERMISSION.1
+                WELCOME_KEY_RESET_PERMISSION.1,
             )),
             iced::widget::tooltip::Position::Top,
-        ),
-    ]
-    .spacing(SP1)
-    .align_y(Alignment::Center)
+        );
+        let footer: Element<'a, Message> = if welcome_footer_stacks(size.width) {
+            column![question, reset]
+                .spacing(SP1)
+                .align_x(Alignment::Center)
+                .into()
+        } else {
+            row![question, reset]
+                .spacing(SP1)
+                .align_y(Alignment::Center)
+                .into()
+        };
+        container(footer).center_x(Length::Fill).into()
+    })
+    .height(Length::Shrink)
     .into()
 }
 
@@ -5878,6 +6015,7 @@ pub(crate) fn stage_viewport_in_document(v: StageViewport) -> Option<readshot_co
 #[cfg(test)]
 mod tests {
     use super::ocr_language_display_name;
+    use super::{ellipsize, history_title_budget, HISTORY_LIST_WIDTH};
     use super::{
         highlight_spans, history_age_label, history_first_line, history_selected_border,
         history_selected_fill, history_word_count,
@@ -6055,6 +6193,22 @@ mod tests {
             .with_ymd_and_hms(2025, 12, 31, 9, 0, 0)
             .unwrap();
         assert_eq!(history_age_label(old, now), "Dec 31, 2025");
+    }
+
+    #[test]
+    fn long_list_titles_end_in_an_ellipsis() {
+        assert_eq!(ellipsize("short", 10), "short");
+        assert_eq!(ellipsize("exactly10!", 10), "exactly10!");
+        assert_eq!(
+            ellipsize("Quarterly overview of revenue", 12),
+            "Quarterly o…"
+        );
+        assert_eq!(ellipsize("Quarterly overview", 12).chars().count(), 12);
+        // A cut never leaves a space before the ellipsis.
+        assert_eq!(ellipsize("Quarterly overview", 11), "Quarterly…");
+        // The narrowest list (200 px) still shows a few words.
+        assert!(history_title_budget(200.0) >= 4);
+        assert!(history_title_budget(HISTORY_LIST_WIDTH) > history_title_budget(200.0));
     }
 
     #[test]

@@ -524,7 +524,7 @@ fn adjust_settings_item(state: &mut App, item: SettingsFocus, step: i32) -> Task
             let v = pick(&RETENTIONS, p.history_retention, step);
             (
                 SettingsMessage::SetHistoryRetention(v),
-                format!("History retention: {v}"),
+                retention_feedback(v),
             )
         }
         F::OcrEngine => {
@@ -558,6 +558,19 @@ fn adjust_settings_item(state: &mut App, item: SettingsFocus, step: i32) -> Task
     let task = update(state, Message::Settings(msg));
     state.settings_key_feedback = Some(feedback);
     task
+}
+
+/// The feedback for a retention change: a choice that prunes says so,
+/// since the next capture deletes older ones for good.
+pub(crate) fn retention_feedback(v: readshot_core::HistoryRetention) -> String {
+    use readshot_core::HistoryRetention as R;
+    match v {
+        R::Last50 | R::Last30Days => {
+            format!("History retention: {v}. Older captures are deleted at the next capture.")
+        }
+        R::Off => format!("History retention: {v}. New captures aren't saved."),
+        R::Unlimited => format!("History retention: {v}"),
+    }
 }
 
 fn on_off(v: bool) -> &'static str {

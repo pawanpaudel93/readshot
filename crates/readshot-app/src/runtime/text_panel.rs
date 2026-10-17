@@ -1258,7 +1258,7 @@ fn line_row<'a>(
                     ButtonSize::Xs,
                     Some(Message::EditorRedactLine(index)),
                 ),
-                "Redact this line",
+                "Redact This Line",
                 Some("R"),
                 iced::widget::tooltip::Position::Top,
             ))

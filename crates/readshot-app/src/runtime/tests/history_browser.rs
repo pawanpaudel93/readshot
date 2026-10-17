@@ -803,3 +803,51 @@ fn an_update_check_failure_points_to_a_reinstall_not_the_network() {
         assert!(!msg.to_lowercase().contains("connection"), "{msg}");
     }
 }
+
+#[test]
+fn a_redacted_capture_says_its_text_is_hidden_not_pending() {
+    let mut hidden = readshot_core::CaptureRecord::new(chrono::Utc::now(), 10, 10, "d");
+    hidden.redacted = true;
+    assert!(history_ops::history_text_hidden(&hidden));
+    // A complete redaction list may hold (masked) text: "no text yet"
+    // stays true for it, and for unredacted records.
+    let mut complete = hidden.clone();
+    complete.redactions_complete = true;
+    assert!(!history_ops::history_text_hidden(&complete));
+    let plain = readshot_core::CaptureRecord::new(chrono::Utc::now(), 10, 10, "d");
+    assert!(!history_ops::history_text_hidden(&plain));
+
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let id = hidden.id;
+    app.history_records = vec![hidden, plain.clone()];
+    let _ = update(&mut app, Message::HistoryCopyText(id));
+    assert_eq!(
+        app.history_status.as_deref(),
+        Some(history_ops::HIDDEN_TEXT_NOTE)
+    );
+    let _ = update(&mut app, Message::HistoryCopyText(plain.id));
+    assert_eq!(
+        app.history_status.as_deref(),
+        Some("No OCR text on this capture yet.")
+    );
+}
+
+#[test]
+fn delete_prompts_say_the_deletion_is_permanent() {
+    use crate::runtime::view::{
+        history_clear_confirm_label, history_clear_warning, history_count_room,
+        HISTORY_DELETE_WARNING,
+    };
+    assert_eq!(history_clear_confirm_label(1), "Delete 1 Capture");
+    assert_eq!(history_clear_confirm_label(12), "Delete 12 Captures");
+    assert!(history_clear_warning(12).contains("all 12 captures, images and text, permanently"));
+    assert!(history_clear_warning(1).contains("1 capture,"));
+    assert!(HISTORY_DELETE_WARNING.contains("permanently"));
+    // The count's room is its exact mono width plus the inset and gap,
+    // so "120 of 1200" never runs under typed text.
+    let caption = "120 of 1200";
+    assert_eq!(
+        history_count_room(caption),
+        caption.chars().count() as f32 * crate::runtime::TYPE_CAPTION * 0.6 + 16.0
+    );
+}
