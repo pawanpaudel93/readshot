@@ -45,6 +45,26 @@ use super::tool_state::ToolState;
 /// selection handles, crop frame, and blur/pixelate guides match.
 const SELECTION_TEAL: Color = Color::from_rgb8(20, 184, 166);
 
+/// Dark halo under every teal selection / crop stroke. Teal alone is
+/// 2.5:1 on white capture pixels (the common case); the halo is 4:1
+/// there, and teal keeps the edge visible on dark captures.
+const SELECTION_HALO: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.5);
+/// How much wider the halo is than its teal stroke (1 px each side).
+const SELECTION_HALO_EXTRA: f32 = 2.0;
+/// Veil outside a crop draft, matching the capture overlay's veil.
+const CROP_SHADE: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.5);
+
+/// A teal selection stroke over its dark halo.
+fn stroke_selection(frame: &mut Frame, path: &Path, color: Color, width: f32) {
+    frame.stroke(
+        path,
+        Stroke::default()
+            .with_color(SELECTION_HALO)
+            .with_width(width + SELECTION_HALO_EXTRA),
+    );
+    frame.stroke(path, Stroke::default().with_color(color).with_width(width));
+}
+
 /// Font size for on-canvas chrome (the live measurement badge). Matches
 /// the app's caption step so the badge agrees with the rest of the UI.
 const CANVAS_BADGE_TEXT: f32 = 12.0;
@@ -846,10 +866,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                                     iced::Size::new(rect.width, rect.height),
                                 );
                                 shade_crop_outside(frame, bounds, rect);
-                                frame.stroke(
-                                    &path,
-                                    Stroke::default().with_color(SELECTION_TEAL).with_width(1.5),
-                                );
+                                stroke_selection(frame, &path, SELECTION_TEAL, 1.5);
                                 draw_thirds(
                                     frame,
                                     Rectangle {
@@ -991,12 +1008,14 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                     self.display_scale,
                 ) {
                     shade_crop_outside(frame, bounds, rect);
-                    frame.stroke(
+                    stroke_selection(
+                        frame,
                         &Path::rectangle(
                             Point::new(rect.x, rect.y),
                             iced::Size::new(rect.width, rect.height),
                         ),
-                        Stroke::default().with_color(SELECTION_TEAL).with_width(1.5),
+                        SELECTION_TEAL,
+                        1.5,
                     );
                     draw_thirds(frame, rect);
                 }
@@ -1308,7 +1327,7 @@ fn arrowhead_path(_from: Point, to: Point, line_width: f32) -> Path {
 }
 
 fn shade_crop_outside(frame: &mut Frame, bounds: Rectangle, rect: Rectangle) {
-    let shade = Color::from_rgba(0.0, 0.0, 0.0, 0.38);
+    let shade = CROP_SHADE;
     for r in [
         Rectangle {
             x: 0.0,
@@ -1916,14 +1935,14 @@ fn draw_annotation_preview(
                     Point::new(rect.x, rect.y),
                     iced::Size::new(rect.width, rect.height),
                 );
-                frame.stroke(
+                stroke_selection(
+                    frame,
                     &path,
-                    Stroke::default()
-                        .with_color(Color {
-                            a: 0.95,
-                            ..SELECTION_TEAL
-                        })
-                        .with_width(1.5),
+                    Color {
+                        a: 0.95,
+                        ..SELECTION_TEAL
+                    },
+                    1.5,
                 );
             }
         }
@@ -2063,20 +2082,27 @@ fn draw_selection_bounds(frame: &mut Frame, rect: Rectangle) {
         Point::new(rect.x, rect.y),
         iced::Size::new(rect.width, rect.height),
     );
-    frame.stroke(
+    stroke_selection(
+        frame,
         &path,
-        Stroke::default()
-            .with_color(Color {
-                a: 0.95,
-                ..SELECTION_TEAL
-            })
-            .with_width(1.5),
+        Color {
+            a: 0.95,
+            ..SELECTION_TEAL
+        },
+        1.5,
     );
 }
 
 fn draw_selection_handle(frame: &mut Frame, point: Point) {
     // Round handles (spec §3.2): white fill, 1.5 px selection-teal ring.
     let handle_path = Path::circle(point, 5.0);
+    // Dark outer ring first: the white fill covers its inner half.
+    frame.stroke(
+        &handle_path,
+        Stroke::default()
+            .with_color(SELECTION_HALO)
+            .with_width(1.5 + 2.0 * SELECTION_HALO_EXTRA),
+    );
     frame.fill(&handle_path, Color::WHITE);
     frame.stroke(
         &handle_path,
@@ -3543,6 +3569,46 @@ mod tests {
         assert!(canvas.loupe_visible(bounds, Cursor::Available(Point::new(301.0, 281.0))));
         // (310, 280) → base (55, 40): stale.
         assert!(!canvas.loupe_visible(bounds, Cursor::Available(Point::new(310.0, 280.0))));
+    }
+
+    fn luminance(c: Color) -> f32 {
+        let ch = |v: f32| {
+            if v <= 0.039_28 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b)
+    }
+
+    fn over(fg: Color, bg: Color) -> Color {
+        let a = fg.a;
+        Color::from_rgb(
+            fg.r * a + bg.r * (1.0 - a),
+            fg.g * a + bg.g * (1.0 - a),
+            fg.b * a + bg.b * (1.0 - a),
+        )
+    }
+
+    fn contrast(fg: Color, bg: Color) -> f32 {
+        let (a, b) = (luminance(over(fg, bg)), luminance(bg));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// Selection and crop edges are UI components (WCAG 1.4.11, 3:1):
+    /// on white captures the halo carries the edge, on black ones teal.
+    #[test]
+    fn selection_edges_read_on_white_and_black_captures() {
+        assert!(contrast(SELECTION_TEAL, Color::WHITE) < 3.0);
+        assert!(contrast(SELECTION_HALO, Color::WHITE) >= 3.0);
+        assert!(contrast(SELECTION_TEAL, Color::BLACK) >= 3.0);
+        assert!(SELECTION_HALO_EXTRA >= 2.0);
+    }
+
+    #[test]
+    fn crop_shade_matches_the_overlay_veil() {
+        assert!((CROP_SHADE.a - 0.5).abs() < 1e-6);
     }
 
     #[test]
