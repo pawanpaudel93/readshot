@@ -1581,3 +1581,10 @@ fn tool_and_selection_hints_reach_the_status_line() {
     );
     assert_eq!(ed.key_guide_live(), Some(true));
 }
+
+#[test]
+fn an_unanswered_focus_query_still_moves_the_selection() {
+    assert!(!tab_field_focused(&[]));
+    assert!(tab_field_focused(&[true]));
+    assert!(!tab_field_focused(&[false]));
+}

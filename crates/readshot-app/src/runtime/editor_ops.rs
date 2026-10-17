@@ -50,6 +50,12 @@ pub(crate) fn editor_selected_hint(kind: &str, text_editable: bool) -> String {
     }
 }
 
+/// The focus query's answer for a canvas Tab: the field's own answer, or
+/// "not focused" when no widget answered.
+pub(crate) fn tab_field_focused(answers: &[bool]) -> bool {
+    answers.first().copied().unwrap_or(false)
+}
+
 /// Whether a how-to notice may take the status line: never over an
 /// error, a warning, an armed Discard, a job in progress, or a live
 /// crop or focus-zone guide.
@@ -2421,12 +2427,16 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // ask iced whether it has the caret (one round trip) before
             // moving the selection.
             if beautify_hex_on_screen(state) {
+                // Collected, so a query no widget answers (the tab closed
+                // before the next frame) still resolves, as "not focused":
+                // a Tab is never dropped.
                 return iced::widget::operation::is_focused(iced::widget::Id::new(
                     super::key_focus::BEAUTIFY_HEX_ID,
                 ))
-                .map(move |field_focused| Message::EditorTabResolved {
+                .collect()
+                .map(move |answers| Message::EditorTabResolved {
                     step,
-                    field_focused,
+                    field_focused: tab_field_focused(&answers),
                 });
             }
             cycle_selection_by_tab(state, step)
