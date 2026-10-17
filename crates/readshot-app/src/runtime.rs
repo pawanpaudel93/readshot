@@ -1420,7 +1420,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         Message::OverlayCancelled => {
             state.overlay_selections.clear();
             state.overlay_opening = false;
-            clear_pending_capture_state(state);
+            // A stray cancel after a combine's selection must leave its
+            // in-flight capture's display scale and cursor choice alone.
+            if !combine_selection_made(state) {
+                clear_pending_capture_state(state);
+            }
             let restore = abort_combine_capture(state, None);
             if state.cli_interactive_output.is_some() {
                 state.cli_interactive_output = None;
@@ -12821,10 +12825,17 @@ mod tests {
             },
         );
         assert!(app.combine_capture.is_some_and(|cc| cc.selected));
-        // A stray cancel clears the shared pending state; the combine's
-        // own flag still says its capture is in flight.
+        app.pending_display_scale = Some(2.0);
+        app.pending_hide_cursor = false;
+        // A stray cancel leaves the in-flight capture's pending state be.
         let _ = update(&mut app, Message::OverlayCancelled);
         assert!(app.combine_capture.is_some(), "cancel after selection");
+        assert_eq!(app.pending_display_scale, Some(2.0));
+        assert!(!app.pending_hide_cursor, "the show-cursor choice survives");
+        assert_eq!(
+            app.pending_intent,
+            Some(crate::app::CaptureIntent::CombineIntoEditor)
+        );
         let _ = update(&mut app, Message::WindowClosed(id));
         assert!(app.combine_capture.is_some(), "OS close after selection");
         app.welcome = crate::welcome::WelcomeState::Pending;
