@@ -753,3 +753,16 @@ fn capture_images_have_a_hairline_outline_in_both_themes() {
         assert_eq!(s.border.color, palette(mode).border);
     }
 }
+
+#[test]
+fn the_history_preview_scales_small_captures_up_to_the_pane() {
+    // Small capture: scaled up, aspect kept (as ContentFit::Contain did).
+    assert_eq!(contain_fit((100.0, 50.0), (400.0, 400.0)), (400.0, 200.0));
+    // Large capture: scaled down.
+    assert_eq!(
+        contain_fit((2000.0, 1000.0), (400.0, 300.0)),
+        (400.0, 200.0)
+    );
+    // Unknown size: the whole pane.
+    assert_eq!(contain_fit((0.0, 0.0), (400.0, 300.0)), (400.0, 300.0));
+}

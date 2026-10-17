@@ -1520,20 +1520,27 @@ pub(crate) fn history_selected_panel<'a>(
         } else {
             thumb_path
         };
-        // Shrink: the image takes its fitted size, so the 1 px outline
-        // hugs the capture instead of the letterboxed pane.
-        container(
+        // Scale the capture to fill the pane (up or down, aspect kept) as
+        // `ContentFit::Contain` did, but size the image box to the fitted
+        // size so the 1 px outline hugs the capture, not the letterbox.
+        let handle = image_widget::Handle::from_path(path);
+        let natural = (record.width_px as f32, record.height_px as f32);
+        container(responsive(move |size| {
+            let (w, h) = contain_fit(natural, (size.width - 2.0, size.height - 2.0));
             container(
-                image_widget(image_widget::Handle::from_path(path))
-                    .width(Length::Shrink)
-                    .height(Length::Shrink)
-                    .content_fit(iced::ContentFit::Contain),
+                container(
+                    image_widget(handle.clone())
+                        .width(Length::Fixed(w))
+                        .height(Length::Fixed(h))
+                        .content_fit(iced::ContentFit::Contain),
+                )
+                .padding(1)
+                .style(|theme| capture_outline_style(theme, 0.0)),
             )
-            .padding(1)
-            .style(|theme| capture_outline_style(theme, 0.0)),
-        )
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into()
+        }))
         .padding(SP2)
         .into()
     } else {
@@ -1747,6 +1754,18 @@ pub(crate) fn history_selected_panel<'a>(
 }
 
 /// Selected list row: accent tint fill with a 35 % accent hairline.
+/// The size `natural` takes when scaled (up or down, aspect kept) to fit
+/// inside `area`; the whole area when either is empty.
+pub(crate) fn contain_fit(natural: (f32, f32), area: (f32, f32)) -> (f32, f32) {
+    let (aw, ah) = (area.0.max(0.0), area.1.max(0.0));
+    let (nw, nh) = natural;
+    if nw <= 0.0 || nh <= 0.0 || aw <= 0.0 || ah <= 0.0 {
+        return (aw, ah);
+    }
+    let k = (aw / nw).min(ah / nh);
+    (nw * k, nh * k)
+}
+
 /// A 1 px `border` outline around a capture image, so a white
 /// screenshot does not dissolve into a white surface in Light mode.
 pub(crate) fn capture_outline_style(theme: &Theme, radius: f32) -> iced::widget::container::Style {
