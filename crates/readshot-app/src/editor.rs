@@ -37,6 +37,12 @@ pub enum ResizeUnit {
 
 /// The Resize dialog's fields (spec §3.10). `base` is the size it opened
 /// at (the displayed, cropped image), which percentages refer to.
+///
+/// The fields show whole numbers, but a value the dialog worked out
+/// itself (a unit switch, the locked side) keeps its exact size in px
+/// while its field still shows it: switching px → % → px gives back the
+/// same px, and the locked side follows the original aspect, never a
+/// rounded field.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResizeDraft {
     pub base: (u32, u32),
@@ -44,6 +50,10 @@ pub struct ResizeDraft {
     pub height: String,
     pub unit: ResizeUnit,
     pub lock: bool,
+    /// The exact px behind the width field while it shows this text.
+    exact_width: Option<(String, f64)>,
+    /// The exact px behind the height field while it shows this text.
+    exact_height: Option<(String, f64)>,
 }
 
 impl ResizeDraft {
@@ -54,6 +64,8 @@ impl ResizeDraft {
             height: base.1.to_string(),
             unit: ResizeUnit::Pixels,
             lock: true,
+            exact_width: None,
+            exact_height: None,
         }
     }
 
@@ -68,61 +80,100 @@ impl ResizeDraft {
         format!("{}", v.round() as u64)
     }
 
+    /// A field's value in px: its exact value while it shows what the
+    /// dialog put there, else what it says in the current unit.
+    fn field_px(&self, shown: &str, exact: &Option<(String, f64)>, base: u32) -> Option<f64> {
+        if let Some((text, px)) = exact {
+            if text == shown {
+                return Some(*px);
+            }
+        }
+        let v = Self::parse(shown)?;
+        Some(match self.unit {
+            ResizeUnit::Pixels => v,
+            ResizeUnit::Percent => v * base as f64 / 100.0,
+        })
+    }
+
+    fn width_px(&self) -> Option<f64> {
+        self.field_px(&self.width, &self.exact_width, self.base.0)
+    }
+
+    fn height_px(&self) -> Option<f64> {
+        self.field_px(&self.height, &self.exact_height, self.base.1)
+    }
+
+    /// `px` (along an axis of `base` px) as the current unit shows it.
+    fn shown(&self, px: f64, base: u32) -> String {
+        match self.unit {
+            ResizeUnit::Pixels => Self::fmt(px),
+            ResizeUnit::Percent => Self::fmt(px * 100.0 / base.max(1) as f64),
+        }
+    }
+
+    /// Set the height from the width at the original aspect.
+    fn sync_height(&mut self) {
+        if let Some(w) = self.width_px() {
+            let h = w * self.base.1 as f64 / self.base.0.max(1) as f64;
+            self.height = self.shown(h, self.base.1);
+            self.exact_height = Some((self.height.clone(), h));
+        }
+    }
+
+    /// Set the width from the height at the original aspect.
+    fn sync_width(&mut self) {
+        if let Some(h) = self.height_px() {
+            let w = h * self.base.0 as f64 / self.base.1.max(1) as f64;
+            self.width = self.shown(w, self.base.0);
+            self.exact_width = Some((self.width.clone(), w));
+        }
+    }
+
     pub fn set_width(&mut self, raw: &str) {
         self.width = raw.to_string();
+        self.exact_width = None;
         if self.lock {
-            if let Some(w) = Self::parse(raw) {
-                self.height = match self.unit {
-                    ResizeUnit::Percent => Self::fmt(w),
-                    ResizeUnit::Pixels => {
-                        Self::fmt(w * self.base.1 as f64 / self.base.0.max(1) as f64)
-                    }
-                };
-            }
+            self.sync_height();
         }
     }
 
     pub fn set_height(&mut self, raw: &str) {
         self.height = raw.to_string();
+        self.exact_height = None;
         if self.lock {
-            if let Some(h) = Self::parse(raw) {
-                self.width = match self.unit {
-                    ResizeUnit::Percent => Self::fmt(h),
-                    ResizeUnit::Pixels => {
-                        Self::fmt(h * self.base.0 as f64 / self.base.1.max(1) as f64)
-                    }
-                };
-            }
+            self.sync_width();
         }
     }
 
-    /// Switch units, converting the current values.
+    /// Lock or unlock the aspect; locking sets the height from the width.
+    pub fn set_lock(&mut self, on: bool) {
+        self.lock = on;
+        if on {
+            self.sync_height();
+        }
+    }
+
+    /// Switch units, converting the current values (exactly: switching
+    /// back shows what was there).
     pub fn set_unit(&mut self, unit: ResizeUnit) {
         if unit == self.unit {
             return;
         }
-        if let Some((w, h)) = self.target() {
-            (self.width, self.height) = match unit {
-                ResizeUnit::Percent => (
-                    Self::fmt(w as f64 * 100.0 / self.base.0.max(1) as f64),
-                    Self::fmt(h as f64 * 100.0 / self.base.1.max(1) as f64),
-                ),
-                ResizeUnit::Pixels => (w.to_string(), h.to_string()),
-            };
-        }
+        let (w, h) = (self.width_px(), self.height_px());
         self.unit = unit;
+        if let Some(w) = w {
+            self.width = self.shown(w, self.base.0);
+            self.exact_width = Some((self.width.clone(), w));
+        }
+        if let Some(h) = h {
+            self.height = self.shown(h, self.base.1);
+            self.exact_height = Some((self.height.clone(), h));
+        }
     }
 
     /// Target size in px (≥ 1), or `None` while a field isn't a number.
     pub fn target(&self) -> Option<(u32, u32)> {
-        let (w, h) = (Self::parse(&self.width)?, Self::parse(&self.height)?);
-        let (w, h) = match self.unit {
-            ResizeUnit::Pixels => (w, h),
-            ResizeUnit::Percent => (
-                w * self.base.0 as f64 / 100.0,
-                h * self.base.1 as f64 / 100.0,
-            ),
-        };
+        let (w, h) = (self.width_px()?, self.height_px()?);
         let (w, h) = (w.round(), h.round());
         (w >= 1.0 && h >= 1.0 && w <= u32::MAX as f64 && h <= u32::MAX as f64)
             .then_some((w as u32, h as u32))

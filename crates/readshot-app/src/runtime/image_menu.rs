@@ -155,7 +155,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
         }
         Message::EditorResizeLockToggled(on) => {
             if let Some(d) = ed.resize_draft.as_mut() {
-                d.lock = on;
+                d.set_lock(on);
             }
         }
         Message::EditorResizeApply => {

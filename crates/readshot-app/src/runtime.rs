@@ -12191,6 +12191,54 @@ mod tests {
     }
 
     #[test]
+    fn resize_draft_unit_switches_round_trip_exactly() {
+        use crate::editor::{ResizeDraft, ResizeUnit};
+        let mut d = ResizeDraft::new((1000, 500));
+        d.lock = false;
+        d.set_width("333");
+        d.set_height("167");
+        d.set_unit(ResizeUnit::Percent);
+        assert_eq!((d.width.as_str(), d.height.as_str()), ("33", "33"));
+        assert_eq!(
+            d.target(),
+            Some((333, 167)),
+            "the shown % stands for the px"
+        );
+        d.set_unit(ResizeUnit::Pixels);
+        // Before, this came back as 330 x 165.
+        assert_eq!((d.width.as_str(), d.height.as_str()), ("333", "167"));
+        // A field typed after a switch means what it says.
+        d.set_unit(ResizeUnit::Percent);
+        d.set_width("50");
+        assert_eq!(d.target(), Some((500, 167)));
+    }
+
+    #[test]
+    fn resize_draft_lock_follows_the_original_aspect() {
+        use crate::editor::{ResizeDraft, ResizeUnit};
+        let mut d = ResizeDraft::new((1000, 501));
+        d.set_unit(ResizeUnit::Percent);
+        d.set_width("33.3");
+        assert_eq!(d.height, "33");
+        // Before, the height was the rounded "33" %: 165 px, off aspect.
+        assert_eq!(d.target(), Some((333, 167)));
+        d.set_unit(ResizeUnit::Pixels);
+        assert_eq!((d.width.as_str(), d.height.as_str()), ("333", "167"));
+        // Locking again re-syncs the height from the width at the
+        // original aspect.
+        let mut d = ResizeDraft::new((1000, 300));
+        d.lock = false;
+        d.set_width("333");
+        d.set_height("10");
+        d.set_lock(true);
+        assert_eq!(d.height, "100");
+        d.set_unit(ResizeUnit::Percent);
+        d.set_unit(ResizeUnit::Pixels);
+        assert_eq!((d.width.as_str(), d.height.as_str()), ("333", "100"));
+        assert_eq!(d.target(), Some((333, 100)));
+    }
+
+    #[test]
     fn resize_apply_scales_the_document_and_refuses_oversize() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         app.editor = Some(crate::editor::EditorSession::new(solid(40, 20)));
