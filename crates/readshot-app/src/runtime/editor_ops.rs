@@ -513,6 +513,17 @@ fn inherited_redactions(
     )
 }
 
+/// The scrub written now stores no text, and nothing in the editor ever
+/// can: the opened image is a scrubbed record whose redactions are
+/// unknown ([`inherited_redactions`] is `None`), so no recognition of it
+/// can be masked for them. Its text is recovered from the stored image
+/// once that lands ([`history_write_followups`]).
+pub(crate) fn scrub_drops_stored_text(ed: &crate::editor::EditorSession) -> bool {
+    source_scrubbed(ed)
+        && readshot_core::scrub::has_redaction(ed.model.annotations())
+        && inherited_redactions(ed).is_none()
+}
+
 /// `doc` with every word hidden by `hide` masked.
 fn masked_text(
     doc: &readshot_core::text_lines::TextDocument,
@@ -688,6 +699,8 @@ fn only_the_original_part(ed: &crate::editor::EditorSession) -> bool {
 /// History keeps no text until then.
 pub(crate) fn history_write_followups(state: &mut App) -> Task<Message> {
     let positions = state.coordinator.engine_reports_positions();
+    let coord = state.coordinator.clone();
+    let languages = state.preferences.ocr_languages.clone();
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
     };
@@ -695,10 +708,39 @@ pub(crate) fn history_write_followups(state: &mut App) -> Task<Message> {
     let wrote = ed.history_write.is_some();
     if let Some(rx) = ed.history_write.take() {
         let session = ed.session_id;
-        tasks.push(Task::perform(rx, move |r| Message::EditorHistoryWritten {
+        let written = Task::perform(rx, move |r| Message::EditorHistoryWritten {
             session,
             result: r.ok(),
-        }));
+        });
+        // A scrub of a reopened scrubbed record whose baked-in redactions
+        // are unknown stores no text (nothing could mask the editor's
+        // recognition of them). Once its image lands, recognize the stored
+        // image instead: History masks that with the redactions it stores.
+        let recover = scrub_drops_stored_text(ed)
+            .then(|| ed.source_record.clone())
+            .flatten();
+        tasks.push(match recover {
+            None => written,
+            Some(record) => written.then(move |msg| {
+                let landed = matches!(
+                    &msg,
+                    Message::EditorHistoryWritten {
+                        result: Some(Ok(())),
+                        ..
+                    }
+                );
+                let follow = if landed {
+                    super::stored_recognition_task(
+                        coord.clone(),
+                        vec![record.clone()],
+                        languages.clone(),
+                    )
+                } else {
+                    Task::none()
+                };
+                Task::batch([Task::done(msg), follow])
+            }),
+        });
     }
     // Idle: never recognized. Failed: retried whenever a scrub is
     // written, so a transient failure can't leave the text unmasked-or-
