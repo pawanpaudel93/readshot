@@ -13099,8 +13099,10 @@ mod tests {
         assert!(app.combine_capture.is_none(), "abort restores");
     }
 
-    #[test]
-    fn a_combine_whose_selection_is_made_is_never_aborted() {
+    /// An Add Capture whose overlay selection is made (its capture in
+    /// flight), with the overlay window still registered. Returns the
+    /// editor session and the overlay id.
+    fn app_with_a_selected_combine() -> (App, u64, window::Id) {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         start_add_capture(&mut app);
         let session = app.editor.as_ref().unwrap().session_id;
@@ -13116,6 +13118,21 @@ mod tests {
             },
         );
         assert!(app.combine_capture.is_some_and(|cc| cc.selected));
+        (app, session, id)
+    }
+
+    /// The in-flight capture still lands in the same editor.
+    fn assert_the_combine_capture_lands(mut app: App, session: u64) {
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 16))));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.session_id, session);
+        assert_eq!(ed.model.part_ids().len(), 2);
+        assert!(app.combine_capture.is_none());
+    }
+
+    #[test]
+    fn a_stray_cancel_after_a_combine_selection_keeps_the_capture() {
+        let (mut app, session, _) = app_with_a_selected_combine();
         app.pending_display_scale = Some(2.0);
         app.pending_hide_cursor = false;
         // A stray cancel leaves the in-flight capture's pending state be.
@@ -13127,19 +13144,37 @@ mod tests {
             app.pending_intent,
             Some(crate::app::CaptureIntent::CombineIntoEditor)
         );
+        assert_the_combine_capture_lands(app, session);
+    }
+
+    #[test]
+    fn an_os_close_after_a_combine_selection_keeps_the_capture() {
+        let (mut app, session, id) = app_with_a_selected_combine();
+        assert!(!app.capture_in_flight, "only the selection guards it");
         let _ = update(&mut app, Message::WindowClosed(id));
         assert!(app.combine_capture.is_some(), "OS close after selection");
+        assert_the_combine_capture_lands(app, session);
+    }
+
+    #[test]
+    fn the_welcome_after_a_combine_selection_keeps_the_capture() {
+        let (mut app, session, id) = app_with_a_selected_combine();
+        // The overlay is gone and the capture not started yet: only the
+        // selection keeps the welcome refusal from restoring the editor.
+        app.windows.forget(id);
+        assert!(!app.capture_in_flight);
         app.welcome = crate::welcome::WelcomeState::Pending;
         let _ = update(&mut app, Message::OpenOverlayRequested);
         assert!(app.combine_capture.is_some(), "welcome after selection");
+        assert_the_combine_capture_lands(app, session);
+    }
+
+    #[test]
+    fn an_abort_after_a_combine_selection_keeps_the_capture() {
+        let (mut app, session, _) = app_with_a_selected_combine();
         let _ = abort_combine_capture(&mut app, None);
         assert!(app.combine_capture.is_some(), "abort after selection");
-        // Its capture still lands in the same editor.
-        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 16))));
-        let ed = app.editor.as_ref().unwrap();
-        assert_eq!(ed.session_id, session);
-        assert_eq!(ed.model.part_ids().len(), 2);
-        assert!(app.combine_capture.is_none());
+        assert_the_combine_capture_lands(app, session);
     }
 
     #[test]
