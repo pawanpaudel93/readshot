@@ -11952,6 +11952,43 @@ mod tests {
     }
 
     #[test]
+    fn esc_during_a_crop_re_drag_cancels_the_drag_then_the_draft() {
+        let mut app = crop_app_with_rect_selected();
+        let id = iced::window::Id::unique();
+        let ed = app.editor.as_mut().unwrap();
+        ed.window_id = Some(id);
+        ed.model.set_tool(readshot_ui::editor::ToolState::Crop);
+        let draft = ed.crop_draft;
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::DragStarted),
+        );
+        let esc = |app: &mut App, canvas: readshot_ui::CanvasMessage| {
+            // The canvas handles Escape first, then the key subscription
+            // sees it captured.
+            let _ = update(app, Message::EditorCanvas(canvas));
+            let _ = update(
+                app,
+                Message::EditorKeyPressed {
+                    window: id,
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                    modifiers: iced::keyboard::Modifiers::empty(),
+                    status_ignored: false,
+                },
+            );
+        };
+        esc(&mut app, readshot_ui::CanvasMessage::DragEscaped);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(!ed.canvas_drag_active, "the re-drag is cancelled");
+        assert_eq!(ed.crop_draft, draft, "the previous draft is back");
+        assert_eq!(ed.model.selected_annotation(), Some(0));
+        esc(&mut app, readshot_ui::CanvasMessage::Cancelled);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.crop_draft, None, "the second Esc cancels the draft");
+        assert_eq!(ed.model.selected_annotation(), Some(0), "and only that");
+    }
+
+    #[test]
     fn esc_exits_the_eyedropper_before_the_crop_draft() {
         let mut app = crop_app_with_rect_selected();
         app.editor.as_mut().unwrap().eyedropper = Some(crate::editor::EyedropperState {

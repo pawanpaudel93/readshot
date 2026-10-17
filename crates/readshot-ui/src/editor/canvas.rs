@@ -134,6 +134,10 @@ pub enum CanvasMessage {
     /// User pressed Escape or released a zero-area drag — drop
     /// in-progress preview without committing anything.
     Cancelled,
+    /// Escape ended a live shape or freehand drag. Like `Cancelled`, and
+    /// tells the editor this Escape is spent: the key press that follows
+    /// must not also cancel what the drag was hiding (a crop draft).
+    DragEscaped,
 }
 
 /// `iced::widget::canvas::Program` impl. Holds the styling parameters
@@ -701,8 +705,17 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
                 ..
             }) => {
+                let drawing = matches!(
+                    state,
+                    DrawState::Dragging { .. } | DrawState::Drawing { .. }
+                );
                 *state = DrawState::Idle;
-                Some(canvas::Action::publish(CanvasMessage::Cancelled).and_capture())
+                let message = if drawing {
+                    CanvasMessage::DragEscaped
+                } else {
+                    CanvasMessage::Cancelled
+                };
+                Some(canvas::Action::publish(message).and_capture())
             }
             _ => None,
         }
@@ -2940,6 +2953,47 @@ mod tests {
             )
             .expect("release should publish a message");
         let (message, _, _) = action.into_inner();
+        assert_eq!(message, Some(CanvasMessage::Cancelled));
+    }
+
+    #[test]
+    fn escape_during_a_live_drag_says_it_ended_the_drag() {
+        let canvas = test_canvas();
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let escape = Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            modified_key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            physical_key: iced::keyboard::key::Physical::Unidentified(
+                iced::keyboard::key::NativeCode::Unidentified,
+            ),
+            location: iced::keyboard::Location::Standard,
+            modifiers: iced::keyboard::Modifiers::empty(),
+            text: None,
+            repeat: false,
+        });
+        let cursor = Cursor::Available(Point::new(300.0, 320.0));
+        let mut state = DrawState::Dragging {
+            anchor: Point::new(100.0, 120.0),
+            cursor: Point::new(300.0, 320.0),
+            tool_at_press: ToolState::Crop,
+            cancel_seq: 0,
+        };
+        let (message, _, _) = canvas
+            .update(&mut state, &escape, bounds, cursor)
+            .expect("escape is handled")
+            .into_inner();
+        assert_eq!(message, Some(CanvasMessage::DragEscaped));
+        assert_eq!(state, DrawState::Idle);
+        // With nothing live it is a plain cancel.
+        let (message, _, _) = canvas
+            .update(&mut state, &escape, bounds, cursor)
+            .expect("escape is handled")
+            .into_inner();
         assert_eq!(message, Some(CanvasMessage::Cancelled));
     }
 

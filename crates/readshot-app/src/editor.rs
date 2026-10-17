@@ -361,6 +361,11 @@ pub struct EditorSession {
     /// a key or Ctrl+wheel preview has no held slider to ignore, and a
     /// flag raised for it would swallow the next real drag.
     pub pointer_held: bool,
+    /// Escape just ended a live crop re-drag (the canvas published
+    /// `DragEscaped`). The key press of that same Escape arrives next
+    /// and must not also drop the draft the drag was hiding: one Esc,
+    /// one step.
+    pub escape_ended_crop_drag: bool,
     /// The newest combine gap slider value not previewed yet: gap ticks
     /// are throttled (each preview recomposes the document), and the
     /// last one is applied on the trailing edge, on release, or before
@@ -659,6 +664,7 @@ impl EditorSession {
             snapshot_drag_baseline: None,
             snapshot_drag_cancelled: false,
             pointer_held: false,
+            escape_ended_crop_drag: false,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
             beautify_hex_draft: String::new(),
@@ -722,6 +728,7 @@ impl EditorSession {
             snapshot_drag_baseline: None,
             snapshot_drag_cancelled: false,
             pointer_held: false,
+            escape_ended_crop_drag: false,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
             beautify_hex_draft: String::new(),

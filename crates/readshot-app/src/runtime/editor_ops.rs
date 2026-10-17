@@ -663,6 +663,17 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if editor_window != Some(window) {
                 return Task::none();
             }
+            // The canvas already spent this Escape ending a crop re-drag.
+            if let Some(ed) = state.editor.as_mut() {
+                if std::mem::take(&mut ed.escape_ended_crop_drag)
+                    && matches!(
+                        key,
+                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+                    )
+                {
+                    return Task::none();
+                }
+            }
             // An open popover owns Escape. In the running editor the
             // annotation canvas captures every Escape, so it arrives with
             // `!status_ignored` and `editor_key_message` maps it to
@@ -1342,6 +1353,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     // A shape/freehand drag is now live; Escape should cancel
                     // it rather than trigger discard.
                     ed.canvas_drag_active = true;
+                    ed.escape_ended_crop_drag = false;
                 }
                 readshot_ui::CanvasMessage::DragMoved(_)
                 | readshot_ui::CanvasMessage::PolylineMoved(_) => {
@@ -1349,6 +1361,14 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     // the drag points; a redraw is automatic.
                 }
                 readshot_ui::CanvasMessage::Cancelled => {
+                    ed.canvas_drag_active = false;
+                    cancel_editor_previews(ed);
+                }
+                readshot_ui::CanvasMessage::DragEscaped => {
+                    // A re-drag over an open crop draft hides the draft;
+                    // this Escape ends the re-drag only, and the draft is
+                    // back. The next Esc cancels it.
+                    ed.escape_ended_crop_drag = ed.canvas_drag_active && ed.crop_draft.is_some();
                     ed.canvas_drag_active = false;
                     cancel_editor_previews(ed);
                 }
