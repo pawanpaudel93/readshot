@@ -403,11 +403,18 @@ pub(crate) fn focus_ring<'a>(
     content: impl Into<Element<'a, Message>>,
     on: bool,
 ) -> Element<'a, Message> {
+    let content = content.into();
+    // The stack takes the control's own sizing, so a Fill button in a row
+    // still shares the row as before.
+    let size = content.as_widget().size();
     let ring = container(Space::new().width(Length::Fill).height(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |theme| focus_ring_style(theme, on));
-    iced::widget::stack![content.into(), ring].into()
+    iced::widget::Stack::with_children([content, ring.into()])
+        .width(size.width)
+        .height(size.height)
+        .into()
 }
 
 pub(crate) fn focus_ring_style(theme: &Theme, on: bool) -> container::Style {
@@ -834,6 +841,34 @@ mod focus_ring_tests {
             let off = focus_ring_style(&theme, false);
             assert_eq!(off.border.width, 0.0);
         }
+    }
+
+    /// Wrapping a control in the ring never changes how it is laid out:
+    /// a Fill button still fills, a fixed one keeps its size.
+    #[test]
+    fn the_focus_ring_keeps_the_controls_sizing() {
+        let fill = focus_ring(
+            bar_button(
+                text("Copy").into(),
+                ButtonKind::Secondary,
+                ButtonSize::Sm,
+                None,
+            )
+            .width(Length::Fill),
+            true,
+        );
+        assert_eq!(fill.as_widget().size().width, Length::Fill);
+        let fixed = focus_ring(
+            container(Space::new())
+                .width(Length::Fixed(84.0))
+                .height(Length::Fixed(24.0)),
+            false,
+        );
+        let size = fixed.as_widget().size();
+        assert_eq!(
+            (size.width, size.height),
+            (Length::Fixed(84.0), Length::Fixed(24.0))
+        );
     }
 
     #[test]
