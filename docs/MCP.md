@@ -108,8 +108,27 @@ relative to that window's top-left, not to the full display. Set
 the platform backend supports native shadow control.
 
 The history tools read the same local archive as the GUI. Each capture
-result includes metadata, OCR text when available, and the absolute
-PNG path.
+result includes metadata, OCR text when available, the absolute PNG
+path, and `redacted`: `true` when the stored image is a redacted editor
+output.
+
+A redacted capture never serves what its redactions hide. Its PNG is
+the redacted image, and its `ocr_text` is masked with `█` wherever a
+redaction covers a word. `ocr_text` is `null` by design when Readshot
+can't prove the text is safe to serve:
+
+- the record's list of redactions isn't known to be complete (a
+  capture redacted again by an older version, or one written before the
+  list was tracked);
+- a legacy record migrated on load (an older crop rule, or redactions
+  stored in another frame's pixels);
+- a cropped, redacted capture whose text hasn't been recognized with
+  word positions yet (only positioned text can be masked); it is filled
+  in, masked, once it has.
+
+`image_path` is `null` while a redaction is being written to disk (the
+unredacted image is already gone); the record is text-only until the
+redacted image lands.
 
 For agents that only need text, use `capture_text`: it captures the
 requested region, runs OCR, and returns text without an image payload.

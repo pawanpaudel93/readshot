@@ -803,7 +803,10 @@ fn record_to_json(record: &CaptureRecord, history_root: Option<&Path>) -> Value 
         "width_px": record.width_px,
         "height_px": record.height_px,
         "display_id": record.display_id,
+        // A redacted capture's text is masked with `█` where the
+        // redactions hide it, or null by design (see docs/MCP.md).
         "ocr_text": record.ocr_text,
+        "redacted": record.redacted,
         "image_path": image_path.map(|p| p.to_string_lossy().to_string()),
     })
 }
@@ -1181,6 +1184,7 @@ mod tests {
         assert_eq!(captures[0]["width_px"], 300);
         assert_eq!(captures[0]["height_px"], 200);
         assert_eq!(captures[0]["display_id"], "display-b");
+        assert_eq!(captures[0]["redacted"], false);
         assert!(captures[0]["image_path"]
             .as_str()
             .unwrap()
@@ -1292,6 +1296,35 @@ mod tests {
         let capture = &resp["result"]["structuredContent"]["captures"][0];
         assert_eq!(capture["ocr_text"], "masked ████");
         assert!(capture["image_path"].is_null(), "{capture}");
+    }
+
+    #[test]
+    fn a_record_says_whether_it_is_redacted() {
+        let mut r = record(
+            "00000000-0000-0000-0000-000000000011",
+            "2026-02-01T00:00:00Z",
+            4,
+            4,
+            "d",
+            Some("plain"),
+        );
+        assert_eq!(record_to_json(&r, None)["redacted"], false);
+        r.redacted = true;
+        r.redactions_complete = true;
+        r.ocr_text = Some("masked ████".into());
+        let json = record_to_json(&r, None);
+        assert_eq!(json["redacted"], true);
+        assert_eq!(json["ocr_text"], "masked ████");
+        // Unknown redaction list: no text, by design, and still flagged.
+        r.redactions_complete = false;
+        r.ocr_text = None;
+        let json = record_to_json(&r, None);
+        assert_eq!(json["redacted"], true);
+        assert!(json["ocr_text"].is_null());
+        assert!(
+            json.get("redactions_complete").is_none(),
+            "internal: never served"
+        );
     }
 
     #[tokio::test]
