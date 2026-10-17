@@ -4375,17 +4375,23 @@ pub(crate) fn overlay_toolbar_layer<'a>(
     };
     let fg = DARK.t2;
     let edit = tooltip_with_key(
+        // The button is a fixed size, so centre its content both ways:
+        // a button lays its content out from the top-left.
         button(
-            row![
-                crate::icons::icon(AppIcon::Edit, DARK.pri_fg, 15.0),
-                text("Edit").size(TYPE_BODY)
-            ]
-            .spacing(7)
-            .align_y(Alignment::Center),
+            container(
+                row![
+                    crate::icons::icon(AppIcon::Edit, DARK.pri_fg, 15.0),
+                    text("Edit").size(TYPE_BODY)
+                ]
+                .spacing(7)
+                .align_y(Alignment::Center),
+            )
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
         )
         .height(Length::Fixed(BTN_MD))
         .width(Length::Fixed(crate::overlay::OVERLAY_EDIT_W))
-        .padding([0, 12])
+        .padding(0)
         .style(|t, s| button_style(t, s, ButtonKind::Primary))
         .on_press(sel(CaptureIntent::Editor)),
         "Open in Editor",
