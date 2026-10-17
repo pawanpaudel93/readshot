@@ -1276,6 +1276,7 @@ mod tests {
         );
         store.save(&r, b"png").unwrap();
         r.redacted = true;
+        r.redactions_complete = true;
         assert!(store.begin_scrub(&r).unwrap());
         let s = McpServer::with_history_root(
             Arc::new(FakeCapturer::new()),

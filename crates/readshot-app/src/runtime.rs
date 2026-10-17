@@ -11565,6 +11565,7 @@ mod tests {
         let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 30, 20, "d");
         record.redacted = true;
         record.redactions = vec![word_blur(RectLike::new(2.0, 4.0, 10.0, 3.0))];
+        record.redactions_complete = true;
         store
             .save(&record, &readshot_core::encode_png(&img).unwrap())
             .unwrap();
@@ -11690,40 +11691,109 @@ mod tests {
         app.coordinator.flush_history_updates();
         let text = stored_record(&store, record.id).ocr_text;
         assert_eq!(text, None, "fail closed");
+        // The new redaction is stored, but the list is never complete.
+        let stored = stored_record(&store, record.id);
+        assert_eq!(stored.redactions.len(), 1);
+        assert!(!stored.redactions_complete);
+        // Reopen that record and recognize again: its stored list must not
+        // be trusted, in the original frame or another.
+        let png = image::open(readshot_core::FsHistoryStore::abs_png_path(
+            store.root(),
+            &stored,
+        ))
+        .unwrap()
+        .to_rgba8();
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            png,
+            stored.clone(),
+        ));
+        let ed = app.editor.as_ref().unwrap();
+        let (target, _) = super::text_panel::recognition_history_target(ed);
+        assert!(target.is_none(), "{target:?}");
+        // Even handed the record directly, History stores nothing.
+        let doc = positioned_doc(&hidden_word(), RectLike::new(2.0, 4.0, 10.0, 3.0));
+        app.coordinator
+            .record_recognized_text(&stored, &doc, true)
+            .unwrap();
+        assert_eq!(stored_record(&store, record.id).ocr_text, None);
+        // The editor-side write of another frame: no text either.
+        recognized(&mut app, readshot_core::document::ORIGINAL_PART, doc);
+        let ed = app.editor.as_mut().unwrap();
+        ed.model.rotate(true).unwrap();
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let stored = stored_record(&store, record.id);
+        assert!(stored.geometry_id.is_some());
+        assert_eq!(stored.ocr_text, None);
+        assert!(!stored.redactions_complete);
     }
 
     #[tokio::test]
-    async fn known_complete_redactions_still_mask_recognized_text() {
-        // A reopened scrub whose stored redactions are known: the editor's
-        // recognition is stored, masked with all of them.
+    async fn a_complete_chain_of_scrubs_still_masks_recognized_text() {
+        // A fresh capture scrubbed, then reopened and scrubbed again: every
+        // redaction in the image is known, so recognition is stored masked.
         let dir = tempfile::TempDir::new().unwrap();
         let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
         let mut app = build_app_with_positions_and_history(store.clone());
-        let (img, record) = reopened_scrubbed(&store);
+        let img = solid(30, 20);
+        let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 30, 20, "d");
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
         app.editor = Some(crate::editor::EditorSession::from_history(
             img,
             record.clone(),
         ));
+        let first = RectLike::new(2.0, 4.0, 10.0, 3.0);
         let ed = app.editor.as_mut().unwrap();
-        ed.model
-            .commit_annotation(word_blur(RectLike::new(20.0, 10.0, 5.0, 5.0)));
+        ed.model.commit_annotation(word_blur(first));
         sync_editor_history(ed, &app.coordinator);
         app.coordinator.flush_history_updates();
+        let stored = stored_record(&store, record.id);
+        assert!(stored.redacted && stored.redactions_complete);
+        // Reopen, add a second redaction.
+        let png = image::open(readshot_core::FsHistoryStore::abs_png_path(
+            store.root(),
+            &stored,
+        ))
+        .unwrap()
+        .to_rgba8();
+        app.editor = Some(crate::editor::EditorSession::from_history(png, stored));
+        let second = RectLike::new(16.0, 12.0, 10.0, 3.0);
+        let ed = app.editor.as_mut().unwrap();
+        ed.model.commit_annotation(word_blur(second));
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let stored = stored_record(&store, record.id);
+        assert!(stored.redactions_complete);
+        assert_eq!(stored.redactions.len(), 2);
         let ed = app.editor.as_ref().unwrap();
         let (target, cut) = super::text_panel::recognition_history_target(ed);
-        let target = target.expect("redactions known: text may be stored");
+        let target = target.expect("a complete list: text may be stored");
+        use readshot_core::text_lines::{TextDocument, TextLine, WordRect};
+        let line = |text: &str, rect: RectLike| TextLine {
+            text: text.into(),
+            rect: Some(rect),
+            words: vec![WordRect {
+                start: 0,
+                end: text.chars().count(),
+                rect,
+            }],
+        };
+        let doc = TextDocument {
+            lines: vec![line(&hidden_word(), first), line("abcdef", second)],
+            positioned: true,
+            layout_text: format!("{}\nabcdef", hidden_word()),
+        };
         let _ = super::text_panel::store_recognized_text(
             &app.coordinator,
             &target,
             cut.as_ref(),
-            Ok(positioned_doc(
-                &hidden_word(),
-                RectLike::new(2.0, 4.0, 10.0, 3.0),
-            )),
+            Ok(doc),
         )
         .await;
         let text = stored_record(&store, record.id).ocr_text.unwrap();
-        assert_eq!(text, "█".repeat(6));
+        assert_eq!(text, format!("{}\n{}", "█".repeat(6), "█".repeat(6)));
     }
 
     #[test]
@@ -14311,6 +14381,7 @@ mod tests {
             rect: RectLike::new(0.0, 0.0, 4.0, 2.0),
             radius: 4.0,
         }];
+        record.redactions_complete = true;
         store
             .save(&record, &readshot_core::encode_png(&img).unwrap())
             .unwrap();

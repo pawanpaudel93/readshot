@@ -94,6 +94,22 @@ pub fn redactions_in_crop(
         .collect()
 }
 
+/// `redactions` clipped to a `width × height` image, dropping any left
+/// with no area: what a scrub that bakes no Crop stores, so a stored
+/// redaction never lies outside the stored image. Only redactions
+/// ([`is_redaction`]) are kept.
+pub fn redactions_in_image(redactions: &[Annotation], width: u32, height: u32) -> Vec<Annotation> {
+    redactions_in_crop(
+        redactions,
+        crate::render::OutputCrop {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        },
+    )
+}
+
 /// `r` (base px) moved into the pixels of an output cropped to `crop`
 /// and clipped to it; `None` when nothing of it is inside.
 fn rect_in_crop(r: RectLike, crop: crate::render::OutputCrop) -> Option<RectLike> {

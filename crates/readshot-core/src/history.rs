@@ -114,9 +114,19 @@ pub fn is_crop_frame_id(id: &str) -> bool {
 ///   (text then stays absent: fail closed). A record whose redactions all
 ///   touch its image can't be told apart from an uncropped scrub — no
 ///   stored field keeps the uncropped size or the crop's origin, and the
-///   sidecar size is the PNG's — so it is left as is.
+///   sidecar size is the PNG's — so it is left as is. Only checked for
+///   records of that era (no current crop id, list not known complete):
+///   current writers clip redactions to the stored image.
+/// - **A redacted record whose redaction list isn't known complete**
+///   ([`CaptureRecord::redactions_complete`]; every record written before
+///   the flag): its text is dropped ([`text_allowed`]).
 pub fn migrate_legacy_record(record: &mut CaptureRecord) -> bool {
     let mut changed = false;
+    // Written before crop ids named their rule and before redaction
+    // lists were known complete: the era a crop could leave redactions
+    // in another frame's px. Current writers clip them to the image.
+    let legacy_era =
+        !record.redactions_complete && !record.geometry_id.as_deref().is_some_and(is_crop_frame_id);
     let legacy_crop = record
         .geometry_id
         .as_deref()
@@ -128,7 +138,8 @@ pub fn migrate_legacy_record(record: &mut CaptureRecord) -> bool {
         changed = true;
     }
     let (w, h) = (record.width_px as f32, record.height_px as f32);
-    let misplaced = record.redacted
+    let misplaced = legacy_era
+        && record.redacted
         && record.redactions.iter().any(|a| match a {
             Annotation::Rectangle { rect, .. }
             | Annotation::Blur { rect, .. }
@@ -151,7 +162,24 @@ pub fn migrate_legacy_record(record: &mut CaptureRecord) -> bool {
         record.ocr_text = None;
         changed = true;
     }
+    changed |= drop_unknown_text(record);
     changed
+}
+
+/// Whether `record` may hold text: unredacted, or redacted with a
+/// complete redaction list ([`CaptureRecord::redactions_complete`]).
+pub fn text_allowed(record: &CaptureRecord) -> bool {
+    !record.redacted || record.redactions_complete
+}
+
+/// Drop the text of a record that may not hold any ([`text_allowed`]).
+/// `true` when something was dropped.
+fn drop_unknown_text(record: &mut CaptureRecord) -> bool {
+    if text_allowed(record) || record.ocr_text.is_none() {
+        return false;
+    }
+    record.ocr_text = None;
+    true
 }
 
 /// One captured screenshot with metadata. The PNG bytes themselves live
@@ -179,6 +207,17 @@ pub struct CaptureRecord {
     /// not shown: reopening ignores them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub redactions: Vec<Annotation>,
+    /// `redactions` provably lists every redaction baked into the stored
+    /// image, in its px: set only by a scrub of a never-scrubbed image, or
+    /// of one whose own list was complete (plus the redactions baked now).
+    /// Only then may text be masked with them. A `redacted` record without
+    /// it is **unknown**: an unrecorded weak blur may hide a word that
+    /// recognition can still read and nothing can mask, so it never holds
+    /// text ([`text_allowed`]: dropped on load and on every write) and no
+    /// recognized text is stored for it. Absent — unknown — in records
+    /// written before it existed; never written while false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redactions_complete: bool,
     /// A scrub has started but its image hasn't landed: the unredacted
     /// PNG and thumbnail were already removed, so the record is text-only
     /// (no image on disk) until the redacted image is written.
@@ -221,6 +260,7 @@ impl CaptureRecord {
             annotation_model: Vec::new(),
             redacted: false,
             redactions: Vec::new(),
+            redactions_complete: false,
             scrub_pending: false,
             geometry_id: None,
         }
@@ -642,10 +682,14 @@ impl FsHistoryStore {
             .and_then(|s| serde_json::from_str::<CaptureRecord>(&s).ok())
     }
 
+    /// Write `record`'s sidecar — without text when it may hold none
+    /// ([`text_allowed`]).
     fn write_sidecar(&self, record: &CaptureRecord) -> Result<(), HistoryError> {
-        let json_content = serde_json::to_string_pretty(record)?;
+        let mut record = record.clone();
+        drop_unknown_text(&mut record);
+        let json_content = serde_json::to_string_pretty(&record)?;
         write_atomic(
-            &self.root.join(Self::json_path(record)),
+            &self.root.join(Self::json_path(&record)),
             json_content.as_bytes(),
         )?;
         Ok(())
@@ -664,6 +708,8 @@ impl FsHistoryStore {
         self.read_sidecar(record)
             .filter(|stored| {
                 stored.redacted
+                    && stored.redactions_complete
+                    && record.redactions_complete
                     && stored.redactions == record.redactions
                     && stored.geometry_id == record.geometry_id
             })
@@ -986,6 +1032,7 @@ impl HistoryStore for FsHistoryStore {
                     annotation_model: Vec::new(),
                     redacted: false,
                     redactions: Vec::new(),
+                    redactions_complete: false,
                     scrub_pending: false,
                     geometry_id: None,
                 };
@@ -1055,8 +1102,7 @@ impl HistoryStore for FsHistoryStore {
                 merged.ocr_text = prev.ocr_text;
             }
         }
-        let json_content = serde_json::to_string_pretty(&merged)?;
-        write_atomic(&abs_json, json_content.as_bytes())?;
+        self.write_sidecar(&merged)?;
         // The index is deliberately not touched: `update` changes only
         // the sidecar, nothing reads the index's `updated_at`, and the
         // editor calls this on every annotation edit — a full index
@@ -1109,6 +1155,10 @@ impl HistoryStore for FsHistoryStore {
             return Ok(());
         }
         if stored.redacted {
+            // Unknown redactions: nothing recognized may be stored.
+            if !stored.redactions_complete {
+                return Ok(());
+            }
             let precise = doc.positioned || stored.ocr_text.is_none();
             if !precise || !has_redaction(&stored.redactions) {
                 return Ok(());
@@ -1147,6 +1197,7 @@ impl HistoryStore for FsHistoryStore {
             annotation_model: Vec::new(),
             redacted: false,
             redactions: Vec::new(),
+            redactions_complete: false,
             scrub_pending: false,
             geometry_id: None,
         };
@@ -1646,6 +1697,7 @@ mod tests {
         scrubbed.ocr_text = Some("token ██████ here".into());
         scrubbed.annotation_model = Vec::new();
         scrubbed.redacted = true;
+        scrubbed.redactions_complete = true;
         s.rewrite(&scrubbed, &png_of(&scrubbed_img)).unwrap();
 
         let listed = s.list().unwrap();
@@ -1685,6 +1737,7 @@ mod tests {
         let mut scrubbed = r.clone();
         scrubbed.ocr_text = Some("masked".into());
         scrubbed.redacted = true;
+        scrubbed.redactions_complete = true;
         scrubbed
     }
 
@@ -2007,6 +2060,7 @@ mod tests {
         let mut scrubbed = r.clone();
         scrubbed.ocr_text = Some("██████".into());
         scrubbed.redacted = true;
+        scrubbed.redactions_complete = true;
         s.rewrite(&scrubbed, &valid_png(4, 4)).unwrap();
         // A late OCR pass writes the raw text with stale annotations.
         r.ocr_text = Some("secret".into());
@@ -2170,15 +2224,17 @@ mod tests {
             // Persisted: the old text is gone from disk too.
             let on_disk = sidecar_text(&s, &r);
             assert!(!on_disk.contains("outside-word"), "{era}: {on_disk}");
-            // Everything else is kept.
+            // Everything else is kept; the list isn't known complete, so
+            // the record stays without text: recognized text is refused.
             assert!(listed.redacted && listed.redactions.len() == 1, "{era}");
-            // Idempotent: text recognized afterwards is never dropped again.
+            assert!(!listed.redactions_complete && !text_allowed(&listed));
             let doc = TextDocument::from_plain("fresh");
             s.record_recognized_text(&listed, &doc, false).unwrap();
+            // Idempotent: nothing changes on the next load.
+            let before = sidecar_text(&s, &r);
             let again = s.list().unwrap().remove(0);
-            assert_eq!(again.ocr_text.as_deref(), Some("fresh"), "{era}");
-            assert_eq!(again.geometry_id, listed.geometry_id, "{era}");
-            assert_eq!(s.list().unwrap().remove(0), again, "{era}");
+            assert_eq!(again, listed, "{era}");
+            assert_eq!(sidecar_text(&s, &r), before, "{era}: not rewritten");
         }
     }
 
@@ -2194,6 +2250,8 @@ mod tests {
                 if let Some(id) = id {
                     j["geometry_id"] = id.into();
                 }
+                // Written by a current build: a complete list.
+                j["redactions_complete"] = true.into();
                 j["ocr_text"] = "kept ████".into();
             });
             let before = sidecar_text(&s, &r);
@@ -2222,11 +2280,67 @@ mod tests {
         let listed = s.list().unwrap().remove(0);
         assert_eq!(listed.ocr_text, None);
         assert!(listed.redactions.is_empty(), "never mask with them");
+        assert!(!listed.redactions_complete, "unknown");
         assert!(listed.redacted, "still a scrub");
         assert!(!sidecar_text(&s, &r).contains("left-of-crop"));
         // Text recognized later can't be masked: it is never stored.
         s.record_recognized_text(&listed, &TextDocument::from_plain("x"), true)
             .unwrap();
         assert_eq!(s.list().unwrap().remove(0).ocr_text, None);
+    }
+
+    #[test]
+    fn an_old_scrubbed_sidecar_without_the_flag_reads_as_unknown_and_serves_no_text() {
+        let (_dir, s) = store();
+        let r = legacy_sidecar(&s, |j| {
+            j["ocr_text"] = "████ visible".into();
+        });
+        let listed = s.list().unwrap().remove(0);
+        assert!(listed.redacted && !listed.redactions_complete);
+        assert_eq!(listed.ocr_text, None);
+        assert!(!sidecar_text(&s, &r).contains("visible"), "dropped on disk");
+        // No write can put text on it.
+        let mut with_text = listed.clone();
+        with_text.ocr_text = Some("████ visible".into());
+        s.update(&with_text).unwrap();
+        s.rewrite(&with_text, &valid_png(20, 20)).unwrap();
+        s.record_recognized_text(&listed, &TextDocument::from_plain("x"), true)
+            .unwrap();
+        assert_eq!(s.list().unwrap()[0].ocr_text, None);
+        // The same record with a complete list keeps its text.
+        with_text.redactions_complete = true;
+        s.rewrite(&with_text, &valid_png(20, 20)).unwrap();
+        assert_eq!(
+            s.list().unwrap()[0].ocr_text.as_deref(),
+            Some("████ visible")
+        );
+    }
+
+    #[test]
+    fn the_misplaced_redaction_check_only_touches_legacy_records() {
+        let outside = serde_json::to_value(vec![Annotation::Pixelate {
+            rect: crate::RectLike::new(30.0, 2.0, 6.0, 4.0),
+            block_size: 4.0,
+        }])
+        .unwrap();
+        for (era, edit) in [
+            (
+                "complete list",
+                (|j: &mut serde_json::Value| j["redactions_complete"] = true.into())
+                    as fn(&mut serde_json::Value),
+            ),
+            ("current crop id", |j| j["geometry_id"] = "crop3:00".into()),
+        ] {
+            let (_dir, s) = store();
+            let o = outside.clone();
+            let r = legacy_sidecar(&s, move |j| {
+                j["redactions"] = o;
+                edit(j);
+            });
+            let before = sidecar_text(&s, &r);
+            let listed = s.list().unwrap().remove(0);
+            assert_eq!(listed.redactions.len(), 1, "{era}: kept");
+            assert_eq!(sidecar_text(&s, &r), before, "{era}: not rewritten");
+        }
     }
 }

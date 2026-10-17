@@ -448,7 +448,15 @@ pub(crate) fn write_editor_history(
     // into this frame, so text recognized later is still masked with
     // them (none when they can't be placed: the text then stays as
     // masked as it is, or absent).
-    record.redactions = inherited_redactions(ed).unwrap_or_default();
+    // Complete only when every redaction already in the image is known:
+    // the opened image was never scrubbed, or its own list was complete.
+    // Unknown (`None`): the new redactions are stored, but never as a
+    // complete list, so no text is ever masked with them.
+    let inherited = inherited_redactions(ed);
+    let complete = inherited.is_some();
+    record.redactions = inherited.unwrap_or_default();
+    // A restore of a never-scrubbed image is a clean, unredacted record.
+    record.redactions_complete = record.redacted && complete;
     let annotations = ed.model.annotations();
     let known = crate::editor::HistoryFrame::Known(frame);
     if readshot_core::scrub::has_redaction(annotations) {
@@ -456,6 +464,7 @@ pub(crate) fn write_editor_history(
         scrubbed.ocr_text = scrubbed_history_text(ed, coord.engine_reports_positions());
         scrubbed.annotation_model = Vec::new();
         scrubbed.redacted = true;
+        scrubbed.redactions_complete = complete;
         // Redactions as drawn (whole pixels, a resize's fringe included):
         // the stored image hides those, and so the stored redactions say.
         let bake = ed.model.drawn_annotations();
@@ -492,7 +501,7 @@ fn source_scrubbed(ed: &crate::editor::EditorSession) -> bool {
 /// The redactions baked into the opened image (a scrubbed record's
 /// stored ones, in its own px = the original part's), mapped into the
 /// present document frame. Empty when the record isn't scrubbed; `None`
-/// when they can't be placed (no stored redactions, or the original part
+/// when they can't be placed (no stored redactions, a list not known complete, or the original part
 /// isn't in the document): callers then fail closed.
 fn inherited_redactions(
     ed: &crate::editor::EditorSession,
@@ -500,7 +509,8 @@ fn inherited_redactions(
     let Some(record) = ed.source_record.as_ref().filter(|r| r.redacted) else {
         return Some(Vec::new());
     };
-    if !readshot_core::scrub::has_redaction(&record.redactions) {
+    // Only a list known to hold every baked-in redaction can be used.
+    if !record.redactions_complete || !readshot_core::scrub::has_redaction(&record.redactions) {
         return None;
     }
     // Through any bake (Add Capture on a transformed document): the

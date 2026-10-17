@@ -686,6 +686,14 @@ impl CaptureCoordinator {
             None => {
                 record.width_px = base.width();
                 record.height_px = base.height();
+                if record.redacted {
+                    // Never a stored redaction outside the stored image.
+                    record.redactions = readshot_core::scrub::redactions_in_image(
+                        &record.redactions,
+                        base.width(),
+                        base.height(),
+                    );
+                }
             }
         }
         if !record.redacted {
@@ -1011,6 +1019,37 @@ mod tests {
     }
 
     #[test]
+    fn a_scrub_stores_its_redactions_clipped_to_the_stored_image() {
+        use readshot_core::{Annotation, RectLike};
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let fs_store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let coord = history_coord(fs_store.clone());
+        let blur = |rect| Annotation::Blur { rect, radius: 2.0 };
+        let mut s = scrubbed(&record);
+        s.ocr_text = None;
+        drop(coord.rewrite_history_async(
+            s,
+            Arc::new(white(8, 8)),
+            vec![
+                // Straddles the right edge: clipped.
+                blur(RectLike::new(6.0, 1.0, 5.0, 2.0)),
+                // Wholly outside: dropped.
+                blur(RectLike::new(20.0, 20.0, 4.0, 4.0)),
+            ],
+        ));
+        coord.flush_history_updates();
+        let stored = sidecar(&fs_store, &record);
+        assert_eq!(
+            stored.redactions,
+            vec![blur(RectLike::new(6.0, 1.0, 2.0, 2.0))]
+        );
+        // So the legacy misplaced-redaction check never fires on it.
+        let mut again = stored.clone();
+        assert!(!readshot_core::history::migrate_legacy_record(&mut again));
+    }
+
+    #[test]
     fn cropped_frame_ids_are_stable_known_values() {
         let crop = readshot_core::render::OutputCrop {
             x: 20.0,
@@ -1199,6 +1238,7 @@ mod tests {
             block_size: 2.0,
         }];
         let mut scrubbed = record.clone();
+        scrubbed.redactions_complete = true;
         scrubbed.ocr_text = Some("masked".into());
         scrubbed.redacted = true;
         let base = Arc::new(base);
@@ -1319,8 +1359,11 @@ mod tests {
         }]
     }
 
+    /// `r` scrubbed by the editor from a never-scrubbed capture: its
+    /// redaction list is complete, so it holds masked text.
     fn scrubbed(r: &CaptureRecord) -> CaptureRecord {
         let mut s = r.clone();
+        s.redactions_complete = true;
         s.ocr_text = Some("masked".into());
         s.redacted = true;
         s
