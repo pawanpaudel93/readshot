@@ -256,6 +256,18 @@ impl EditorState {
         self.history.current()
     }
 
+    /// The present annotations as drawn over the composed document:
+    /// redactions widened to the whole pixels they must hide
+    /// ([`DocGeometry::cover_redactions`]). What renders, History bakes
+    /// and text masking use; [`Self::annotations`] keeps the exact rects.
+    pub fn drawn_annotations(&self) -> Vec<Annotation> {
+        self.geometry().cover_redactions(self.history.current())
+    }
+
+    fn render_present(&self) -> RgbaImage {
+        render(&self.base, &self.drawn_annotations())
+    }
+
     pub fn render_snapshot(&self) -> (RgbaImage, Vec<Annotation>) {
         (
             RgbaImage::clone(&self.base),
@@ -522,7 +534,7 @@ impl EditorState {
     /// the cached pixels, rendered here when there is none.
     pub fn flattened_handle(&mut self) -> iced::widget::image::Handle {
         if self.flattened_cache.is_none() {
-            let img = render(&self.base, self.history.current());
+            let img = self.render_present();
             self.flattened_cache = Some(Flattened::new(img));
         }
         self.flattened_cache
@@ -835,7 +847,11 @@ impl EditorState {
                 Some(image) => old.baked_from_image(baked_id, image)?,
                 None => old.baked(baked_id)?,
             };
-            let annotations = remap_annotations(&old, &baked, &from.annotations);
+            // The bake keeps the composed pixels, a resize's fringe
+            // around each redaction included: the redactions become what
+            // they cover there (exact rects would leave the fringe out).
+            let covered = old.cover_redactions(&from.annotations);
+            let annotations = remap_annotations(&old, &baked, &covered);
             (baked, annotations)
         };
         let id = self.alloc_part_id();
@@ -1384,7 +1400,7 @@ impl EditorState {
         if let Some(img) = &self.flattened_cache {
             return img.to_image();
         }
-        let img = render(&self.base, self.history.current());
+        let img = self.render_present();
         self.flattened_cache = Some(Flattened::new(img.clone()));
         img
     }

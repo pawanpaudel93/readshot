@@ -13612,13 +13612,16 @@ mod tests {
             ed.model.annotations(),
             [Annotation::Blur { rect, .. }] if *rect == new_frame
         ));
-        // History holds the resized image with the new-frame redaction.
+        // History holds the resized image with the new-frame redaction, as
+        // drawn: widened over the resize's fringe.
+        let drawn = ed.model.geometry().redaction_cover(new_frame);
+        assert!(drawn.x < new_frame.x && drawn.width > new_frame.width);
         let stored = compose_stored_record(&store, &app);
         assert_eq!((stored.width_px, stored.height_px), (80, 40));
         assert!(stored.redacted);
         assert!(matches!(
             stored.redactions.as_slice(),
-            [Annotation::Blur { rect, .. }] if *rect == new_frame
+            [Annotation::Blur { rect, .. }] if *rect == drawn
         ));
     }
 

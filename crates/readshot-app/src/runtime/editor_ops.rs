@@ -456,7 +456,9 @@ pub(crate) fn write_editor_history(
         scrubbed.ocr_text = scrubbed_history_text(ed, coord.engine_reports_positions());
         scrubbed.annotation_model = Vec::new();
         scrubbed.redacted = true;
-        let bake = annotations.to_vec();
+        // Redactions as drawn (whole pixels, a resize's fringe included):
+        // the stored image hides those, and so the stored redactions say.
+        let bake = ed.model.drawn_annotations();
         ed.history_scrubbed = true;
         ed.history_frame_written = known;
         ed.history_write =
@@ -504,13 +506,13 @@ fn inherited_redactions(
     // Through any bake (Add Capture on a transformed document): the
     // original part then lives inside the baked one.
     let m = super::text_panel::original_part_affine(&ed.text_panel, ed.model.geometry())?;
-    Some(
-        record
-            .redactions
-            .iter()
-            .map(|a| readshot_core::document::map_annotation(a, &m))
-            .collect(),
-    )
+    let mapped: Vec<_> = record
+        .redactions
+        .iter()
+        .map(|a| readshot_core::document::map_annotation(a, &m))
+        .collect();
+    // Mapping is exact; mask with the whole pixels they cover.
+    Some(ed.model.geometry().cover_redactions(&mapped))
 }
 
 /// The scrub written now stores no text, and nothing in the editor ever
@@ -607,7 +609,7 @@ pub(crate) fn scrubbed_history_text(
     // ones baked into its image (recognition may still read words under a
     // weak blur).
     let inherited = inherited_redactions(ed);
-    let mut hide = ed.model.annotations().to_vec();
+    let mut hide = ed.model.drawn_annotations();
     hide.extend(inherited.iter().flatten().cloned());
     let mask = |doc: &TextDocument| masked_text(doc, &hide);
     if let Some(crop) = history_crop(ed) {
@@ -658,7 +660,7 @@ pub(crate) fn history_crop(
 pub(crate) fn history_hide(
     ed: &crate::editor::EditorSession,
 ) -> Option<Vec<readshot_core::Annotation>> {
-    let mut hide = ed.model.annotations().to_vec();
+    let mut hide = ed.model.drawn_annotations();
     hide.extend(inherited_redactions(ed)?);
     Some(hide)
 }

@@ -84,7 +84,8 @@ pub(crate) fn compose_with(next: Snapshot, base: Option<Arc<image::RgbaImage>>) 
         COMPOSES.with(|c| c.set(c.get() + 1));
         next.doc.geometry.compose()
     });
-    let flattened = readshot_core::render(&base, &next.annotations);
+    let drawn = next.doc.geometry.cover_redactions(&next.annotations);
+    let flattened = readshot_core::render(&base, &drawn);
     ComposedDoc {
         next,
         base,
@@ -691,7 +692,7 @@ fn render_display_now(ed: &mut EditorSession) {
     let handle = if wanted == ed.model.annotations() {
         ed.model.flattened_handle()
     } else {
-        let flat = readshot_core::render(&base, &wanted);
+        let flat = readshot_core::render(&base, &ed.model.geometry().cover_redactions(&wanted));
         iced::widget::image::Handle::from_rgba(flat.width(), flat.height(), flat.into_raw())
     };
     ed.set_display(handle, ShownImage::of(base, wanted));

@@ -1480,7 +1480,7 @@ impl EditorSession {
             }
             return;
         }
-        let flat = readshot_core::render(&base, &without);
+        let flat = readshot_core::render(&base, &self.model.geometry().cover_redactions(&without));
         let handle =
             iced::widget::image::Handle::from_rgba(flat.width(), flat.height(), flat.into_raw());
         self.image_handle = handle;
@@ -1575,7 +1575,8 @@ impl EditorSession {
                 .filter(|a| !matches!(a, readshot_core::Annotation::Crop { .. }))
                 .cloned()
                 .collect();
-            self.crop_drag_flat = Some(readshot_core::render(self.model.base(), &uncropped));
+            let drawn = self.model.geometry().cover_redactions(&uncropped);
+            self.crop_drag_flat = Some(readshot_core::render(self.model.base(), &drawn));
         }
         let flat = self.crop_drag_flat.as_ref().expect("cache filled above");
         // Mirror `render`'s crop clamping so the preview matches the

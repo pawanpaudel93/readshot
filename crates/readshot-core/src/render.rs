@@ -43,6 +43,44 @@ pub const BOTH_FILL_ALPHA: f32 = 0.2;
 /// editor's text bounds use it so the selection box matches the pill.
 pub const TEXT_PILL_PAD: f32 = 0.35;
 
+/// Float noise tolerated when snapping a redaction to whole pixels: a
+/// thousandth of a pixel plus a millionth of the coordinate (what a few
+/// f32 operations on a coordinate that size can be off by). An edge that
+/// mapping left a hair past a pixel boundary snaps to that boundary, so a
+/// redaction mapped there and back covers exactly the pixels it did.
+fn snap_slack(v: f32) -> f32 {
+    1e-3 + v.abs() * 1e-6
+}
+
+/// The whole pixels a redaction rect (`crate::scrub::is_redaction`)
+/// hides: its edges snapped **outward** (a partly covered pixel is
+/// hidden whole, never anti-aliased), within [`snap_slack`] of float
+/// noise. Redaction annotations keep their exact rect, so mapping them
+/// through a resize and back neither grows nor shrinks them; this is
+/// where they become pixels (render, History bake, text masking).
+/// Normalises a negative size. Non-finite input is returned as is.
+pub fn redaction_pixels(r: RectLike) -> RectLike {
+    if ![r.x, r.y, r.width, r.height].iter().all(|v| v.is_finite()) {
+        return r;
+    }
+    let (x0, x1) = (r.x.min(r.x + r.width), r.x.max(r.x + r.width));
+    let (y0, y1) = (r.y.min(r.y + r.height), r.y.max(r.y + r.height));
+    let lo = |v: f32| (v + snap_slack(v)).floor();
+    let hi = |v: f32| (v - snap_slack(v)).ceil();
+    let (x0, y0) = (lo(x0), lo(y0));
+    let (x1, y1) = (hi(x1).max(x0), hi(y1).max(y0));
+    RectLike::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+/// [`redaction_pixels`] of `rect` moved into the output by `offset` the
+/// way the base is ([`blit_base`] truncates it), so the hidden pixels are
+/// exactly the base pixels under the redaction.
+fn redaction_output_rect(rect: RectLike, offset: (f32, f32)) -> RectLike {
+    let r = redaction_pixels(rect);
+    let (ox, oy) = (offset.0 as i32 as f32, offset.1 as i32 as f32);
+    RectLike::new(r.x + ox, r.y + oy, r.width, r.height)
+}
+
 /// Black or white ink, whichever has the higher WCAG contrast on `fill`.
 /// A translucent fill is composited over white first (the usual page
 /// colour), then the sRGB channels are linearised.
@@ -97,7 +135,14 @@ pub fn render(base: &RgbaImage, model: &[Annotation]) -> RgbaImage {
                 color,
                 line_width,
                 style,
-            } => draw_rectangle(&mut pixmap, *rect, *color, *line_width, *style, offset),
+            } => {
+                if crate::scrub::is_redaction(ann) {
+                    let r = redaction_output_rect(*rect, offset);
+                    draw_rectangle(&mut pixmap, r, *color, *line_width, *style, (0.0, 0.0));
+                } else {
+                    draw_rectangle(&mut pixmap, *rect, *color, *line_width, *style, offset);
+                }
+            }
             Annotation::Ellipse {
                 rect,
                 color,
@@ -171,11 +216,11 @@ pub fn render(base: &RgbaImage, model: &[Annotation]) -> RgbaImage {
                 &font,
             ),
             Annotation::Blur { rect, radius } => {
-                let (rx, ry, rw, rh) = rect_to_pixels(*rect, offset);
+                let (rx, ry, rw, rh) = rect_to_pixels(redaction_output_rect(*rect, offset));
                 blur_rect(&mut pixmap, rx, ry, rw, rh, *radius);
             }
             Annotation::Pixelate { rect, block_size } => {
-                let (rx, ry, rw, rh) = rect_to_pixels(*rect, offset);
+                let (rx, ry, rw, rh) = rect_to_pixels(redaction_output_rect(*rect, offset));
                 pixelate_rect(&mut pixmap, rx, ry, rw, rh, *block_size);
             }
             Annotation::Spotlight { .. } => { /* dimmed before the loop — see apply_spotlights */
@@ -605,8 +650,8 @@ fn shift_rect(r: RectLike, offset: (f32, f32)) -> RectLike {
     RectLike::new(r.x + offset.0, r.y + offset.1, r.width, r.height)
 }
 
-fn rect_to_pixels(rect: RectLike, offset: (f32, f32)) -> (i32, i32, i32, i32) {
-    let r = shift_rect(rect, offset);
+/// A whole-pixel rect (from [`redaction_output_rect`]) as integers.
+fn rect_to_pixels(r: RectLike) -> (i32, i32, i32, i32) {
     (
         r.x.round() as i32,
         r.y.round() as i32,

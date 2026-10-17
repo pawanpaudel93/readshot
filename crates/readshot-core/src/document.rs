@@ -574,6 +574,57 @@ impl DocGeometry {
         check_size(width, height)
     }
 
+    /// The pre-resize size (the laid-out, rotated parts) and the document
+    /// size, when composing resamples ([`Self::try_compose`]'s resize);
+    /// `None` when it doesn't.
+    fn resample_dims(&self) -> Option<((u32, u32), (u32, u32))> {
+        let l = self.layout();
+        let t = self.transform.sanitized();
+        let (w, h) = (l.width.max(1), l.height.max(1));
+        let (cw, ch) = if t.is_sideways() { (h, w) } else { (w, h) };
+        let (ow, oh) = t.scaled_size(cw, ch);
+        ((ow, oh) != (cw, ch)).then_some(((cw, ch), (ow, oh)))
+    }
+
+    /// The document pixels a redaction over `r` (document px, exact) must
+    /// hide: `r` snapped outward to whole pixels
+    /// ([`crate::render::redaction_pixels`]) and, when composing resamples
+    /// the document (a resize), widened to every pixel the resize computed
+    /// from a source pixel under it. The resize's Triangle filter spreads a
+    /// source pixel up to about half the scale (or about a pixel when
+    /// shrinking) past the rect's edge; left there, that fringe would carry
+    /// the hidden content's colours outside the redaction.
+    pub fn redaction_cover(&self, r: RectLike) -> RectLike {
+        let px = crate::render::redaction_pixels(r);
+        let finite = [px.x, px.y, px.width, px.height]
+            .iter()
+            .all(|v| v.is_finite());
+        let Some(((cw, ch), (ow, oh))) = self.resample_dims().filter(|_| finite) else {
+            return px;
+        };
+        let (rx0, rx1) = (r.x.min(r.x + r.width), r.x.max(r.x + r.width));
+        let (ry0, ry1) = (r.y.min(r.y + r.height), r.y.max(r.y + r.height));
+        let (x0, x1) = cover_axis((px.x, px.x + px.width), (rx0, rx1), cw, ow);
+        let (y0, y1) = cover_axis((px.y, px.y + px.height), (ry0, ry1), ch, oh);
+        RectLike::new(x0, y0, x1 - x0, y1 - y0)
+    }
+
+    /// `anns` as they are drawn over this document's composed image: every
+    /// redaction ([`crate::scrub::is_redaction`]) widened to
+    /// [`Self::redaction_cover`], everything else as is. What every
+    /// render of the document, its History bake and its text masking use;
+    /// the editor keeps the exact rects (so mapping never accumulates).
+    pub fn cover_redactions(&self, anns: &[Annotation]) -> Vec<Annotation> {
+        anns.iter()
+            .map(|a| match redaction_rect(a) {
+                Some(r) if crate::scrub::is_redaction(a) => {
+                    with_redaction_rect(a, self.redaction_cover(r))
+                }
+                _ => a.clone(),
+            })
+            .collect()
+    }
+
     /// `None` for the original frame; otherwise a stable id of this frame.
     pub fn fingerprint(&self) -> Option<String> {
         if self.is_original() {
@@ -728,12 +779,25 @@ fn dist2(a: PointLike, b: PointLike) -> f32 {
     (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)
 }
 
-/// Outward to whole pixels, so an anti-aliased edge never lets a partly
-/// covered pixel through (same rule as `redact::redaction_rect`).
-fn snap_out(r: RectLike) -> RectLike {
-    let (x0, y0) = (r.x.floor(), r.y.floor());
-    let (x1, y1) = ((r.x + r.width).ceil(), (r.y + r.height).ceil());
-    RectLike::new(x0, y0, x1 - x0, y1 - y0)
+/// Whole document pixels `(lo, hi)` (the snapped `exact` span) widened,
+/// on one axis resampled from `src` to `dst` px by `image`'s Triangle
+/// resize, to every output pixel that read a source pixel under `exact`. That resize computes output pixel
+/// `x` from source pixels `i` with `|i + 0.5 − (x + 0.5)·ratio| < max(ratio, 1)`
+/// (`ratio = src / dst`); the bounds are rounded outward with a little
+/// slack for its f32 arithmetic.
+fn cover_axis((lo, hi): (f32, f32), exact: (f32, f32), src: u32, dst: u32) -> (f32, f32) {
+    if src == dst || src == 0 || dst == 0 || hi <= lo {
+        return (lo, hi);
+    }
+    let ratio = src as f32 / dst as f32;
+    let support = ratio.max(1.0);
+    // Source pixels holding anything under the exact span.
+    let first_src = (exact.0 * ratio).floor();
+    let end_src = (exact.1 * ratio).ceil();
+    const SLACK: f32 = 1e-3;
+    let first = ((first_src + 0.5 - support) / ratio - 0.5 - SLACK).floor();
+    let end = ((end_src - 0.5 + support) / ratio - 0.5 + SLACK).ceil();
+    (lo.min(first), hi.max(end))
 }
 
 /// The point that decides which part an annotation belongs to.
@@ -761,7 +825,10 @@ pub fn annotation_anchor(a: &Annotation) -> PointLike {
 
 /// `a` moved by `m`. Lengths (stroke widths, radii, text size) scale by
 /// `m.length_scale()`; pins and stamps keep their fixed size; text stays
-/// upright, centred where its box went. Redactions snap outward.
+/// upright, centred where its box went. A redaction's rect is mapped
+/// exactly (never snapped here: snapping after every mapping grew it on
+/// each resize round trip); it becomes whole pixels where it is drawn
+/// ([`crate::render::redaction_pixels`], [`DocGeometry::cover_redactions`]).
 pub fn map_annotation(a: &Annotation, m: &Affine) -> Annotation {
     let mut out = a.clone();
     let finite = [m.a, m.b, m.c, m.d, m.tx, m.ty]
@@ -848,11 +915,11 @@ pub fn map_annotation(a: &Annotation, m: &Affine) -> Annotation {
             *size = new_size;
         }
         Annotation::Blur { rect, radius } => {
-            *rect = snap_out(m.map_rect(*rect));
+            *rect = m.map_rect(*rect);
             *radius = (*radius * ls).max(2.0);
         }
         Annotation::Pixelate { rect, block_size } => {
-            *rect = snap_out(m.map_rect(*rect));
+            *rect = m.map_rect(*rect);
             *block_size = (*block_size * ls).max(4.0);
         }
         Annotation::Spotlight { rect, .. } | Annotation::Crop { rect } => *rect = m.map_rect(*rect),
@@ -868,11 +935,6 @@ pub fn map_annotation(a: &Annotation, m: &Affine) -> Annotation {
             *source = m.apply(*source);
             *bubble = m.apply(*bubble);
             *radius = (*radius * ls).max(1.0);
-        }
-    }
-    if crate::scrub::is_redaction(&out) {
-        if let Annotation::Rectangle { rect, .. } = &mut out {
-            *rect = snap_out(*rect);
         }
     }
     out
@@ -915,8 +977,9 @@ fn part_map(old: &DocGeometry, new: &DocGeometry, id: PartId) -> Option<Affine> 
 /// leave it where it is. A redaction (see `scrub::is_redaction`) that
 /// overlaps a part moves with that part; one that overlaps two or more is split
 /// along the parts, and each piece
-/// moves with its own part and snaps outward, so no covered pixel is lost
-/// when the parts move apart.
+/// moves with its own part (exactly; each piece covers its whole pixels
+/// where it is drawn), so no covered pixel is lost when the parts move
+/// apart.
 pub fn remap_annotations(
     old: &DocGeometry,
     new: &DocGeometry,
@@ -1201,7 +1264,7 @@ mod tests {
     }
 
     #[test]
-    fn resize_scales_geometry_widths_and_snaps_redactions_outward() {
+    fn resize_scales_geometry_widths_and_maps_redactions_exactly() {
         let g = DocGeometry::original(grid(10, 10));
         let half = g.with_transform(g.transform.scaled(0.5, 0.5));
         assert_eq!(half.size(), (5, 5));
@@ -1217,8 +1280,255 @@ mod tests {
             &small,
             &[solid_block(RectLike::new(1.0, 1.0, 3.0, 3.0))],
         );
-        // 0.3..1.2 → snapped out to 0..2.
-        assert_eq!(rect_of(&block[0]), RectLike::new(0.0, 0.0, 2.0, 2.0));
+        // Mapped exactly (0.3..1.2); its pixels snap out to 0..2, and the
+        // resize's fringe widens what it covers.
+        let r = rect_of(&block[0]);
+        assert!(
+            (r.x - 0.3).abs() < 1e-5 && (r.width - 0.9).abs() < 1e-5,
+            "{r:?}"
+        );
+        let px = crate::render::redaction_pixels(r);
+        assert_eq!(px, RectLike::new(0.0, 0.0, 2.0, 2.0));
+        assert!(contains(small.redaction_cover(r), px));
+    }
+
+    fn contains(outer: RectLike, inner: RectLike) -> bool {
+        outer.x <= inner.x
+            && outer.y <= inner.y
+            && outer.x + outer.width >= inner.x + inner.width
+            && outer.y + outer.height >= inner.y + inner.height
+    }
+
+    /// `r`'s pixels with no slack at all: every pixel it touches.
+    fn touched(r: RectLike) -> RectLike {
+        let (x0, y0) = (r.x.floor(), r.y.floor());
+        let (x1, y1) = ((r.x + r.width).ceil(), (r.y + r.height).ceil());
+        RectLike::new(x0, y0, x1 - x0, y1 - y0)
+    }
+
+    fn scaled(g: &DocGeometry, sx: f32, sy: f32) -> DocGeometry {
+        g.with_transform(g.transform.scaled(sx, sy))
+    }
+
+    fn redactions_at(r: RectLike) -> Vec<Annotation> {
+        vec![
+            solid_block(r),
+            Annotation::Blur {
+                rect: r,
+                radius: 3.0,
+            },
+            Annotation::Pixelate {
+                rect: r,
+                block_size: 4.0,
+            },
+        ]
+    }
+
+    fn redaction_rect_of(a: &Annotation) -> RectLike {
+        redaction_rect(a).expect("a redaction")
+    }
+
+    #[test]
+    fn resize_round_trips_give_back_the_original_redaction_pixels() {
+        for (w, h) in [(10, 10), (101, 57), (333, 1000), (1920, 1080)] {
+            let g = DocGeometry::original(grid(w, h));
+            let original = RectLike::new(3.0, 5.0, 7.0, 4.0);
+            for (s, back) in [
+                (0.5, 2.0),
+                (2.0, 0.5),
+                (0.37, 1.0 / 0.37),
+                (3.0, 1.0 / 3.0),
+                (0.9, 1.0 / 0.9),
+            ] {
+                let mut anns = redactions_at(original);
+                let mut at = g.clone();
+                // Five round trips: nothing accumulates.
+                for _ in 0..5 {
+                    let mid = scaled(&at, s, s);
+                    let there = remap_annotations(&at, &mid, &anns);
+                    // Never smaller than the original pixels, there.
+                    let m = mid.part_affine(ORIGINAL_PART).unwrap();
+                    for a in &there {
+                        let cover = mid.redaction_cover(redaction_rect_of(a));
+                        assert!(
+                            contains(cover, touched(m.map_rect(original))),
+                            "{w}x{h} ×{s}: {cover:?}"
+                        );
+                    }
+                    let home = scaled(&mid, back, back);
+                    anns = remap_annotations(&mid, &home, &there);
+                    at = home;
+                }
+                assert_eq!(at.size(), (w, h), "×{s}");
+                for a in &anns {
+                    let r = redaction_rect_of(a);
+                    assert_eq!(
+                        crate::render::redaction_pixels(r),
+                        original,
+                        "{w}x{h} ×{s} then ×{back}: {r:?}"
+                    );
+                    assert_eq!(at.redaction_cover(r), original, "{w}x{h} ×{s}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rotation_and_flip_round_trips_give_back_the_original_redaction() {
+        let g = DocGeometry::original(grid(30, 20));
+        let original = RectLike::new(3.0, 5.0, 7.0, 4.0);
+        let turn = |g: &DocGeometry, cw: bool| {
+            g.with_transform(if cw {
+                g.transform.rotated_cw()
+            } else {
+                g.transform.rotated_ccw()
+            })
+        };
+        let flip = |g: &DocGeometry, axis| g.with_transform(g.transform.flipped(axis));
+        type Step = Box<dyn Fn(&DocGeometry) -> DocGeometry>;
+        let steps: Vec<Step> = vec![
+            Box::new(move |g| turn(g, true)),
+            Box::new(move |g| turn(g, true)),
+            Box::new(move |g| flip(g, FlipAxis::Horizontal)),
+            Box::new(move |g| scaled(g, 0.5, 0.5)),
+            Box::new(move |g| flip(g, FlipAxis::Horizontal)),
+            Box::new(move |g| scaled(g, 2.0, 2.0)),
+            Box::new(move |g| turn(g, false)),
+            Box::new(move |g| turn(g, false)),
+        ];
+        let mut at = g.clone();
+        let mut anns = redactions_at(original);
+        for step in &steps {
+            let next = step(&at);
+            anns = remap_annotations(&at, &next, &anns);
+            at = next;
+        }
+        assert!(at.is_original(), "{:?}", at.transform);
+        for a in &anns {
+            assert_eq!(at.redaction_cover(redaction_rect_of(a)), original);
+        }
+    }
+
+    #[test]
+    fn redactions_split_at_a_seam_round_trip_without_growing() {
+        let a = Part {
+            id: ORIGINAL_PART,
+            image: grid(10, 10),
+            join: Join::Below,
+        };
+        let b = Part {
+            id: 1,
+            image: grid(10, 10),
+            join: Join::Below,
+        };
+        let g = DocGeometry {
+            parts: vec![a, b],
+            ..DocGeometry::default()
+        };
+        let original = RectLike::new(1.0, 7.0, 6.0, 5.0);
+        // Gap 40 splits the redaction at the seam; then a resize there and
+        // back, then the gap closes again.
+        let wide = g.with_layout(40, Align::Start);
+        let pieces = remap_annotations(&g, &wide, &[solid_block(original)]);
+        assert_eq!(pieces.len(), 2);
+        let half = scaled(&wide, 0.5, 0.5);
+        let there = remap_annotations(&wide, &half, &pieces);
+        // Each piece still covers its part's original pixels there.
+        for (piece, id) in there.iter().zip([ORIGINAL_PART, 1]) {
+            let want = half.part_affine(id).unwrap().map_rect(
+                wide.part_affine(id)
+                    .unwrap()
+                    .inverse()
+                    .unwrap()
+                    .map_rect(rect_of(&pieces[if id == ORIGINAL_PART { 0 } else { 1 }])),
+            );
+            assert!(contains(
+                half.redaction_cover(rect_of(piece)),
+                touched(want)
+            ));
+        }
+        let back = scaled(&half, 2.0, 2.0);
+        let home = remap_annotations(&half, &back, &there);
+        let closed = back.with_layout(0, Align::Start);
+        let home = remap_annotations(&back, &closed, &home);
+        let px: Vec<RectLike> = home
+            .iter()
+            .map(|a| closed.redaction_cover(rect_of(a)))
+            .collect();
+        assert_eq!(
+            px,
+            vec![
+                RectLike::new(1.0, 7.0, 6.0, 3.0),
+                RectLike::new(1.0, 10.0, 6.0, 2.0)
+            ],
+            "the two pieces are exactly the original's pixels"
+        );
+    }
+
+    /// A 40 × 30 gradient with a high-contrast checkerboard (the secret)
+    /// at x 12–22, y 10–18 — or, `secret: false`, the gradient there too.
+    fn secret_image(secret: bool) -> Arc<RgbaImage> {
+        Arc::new(RgbaImage::from_fn(40, 30, |x, y| {
+            let inside = (12..22).contains(&x) && (10..18).contains(&y);
+            if secret && inside {
+                let on = (x + y) % 2 == 0;
+                let v = if on { 255 } else { 0 };
+                Px([v, 255 - v, v, 255])
+            } else {
+                Px([(x * 6) as u8, (y * 8) as u8, 100, 255])
+            }
+        }))
+    }
+
+    #[test]
+    fn no_pixel_outside_a_resized_redaction_carries_what_it_hides() {
+        let secret_rect = RectLike::new(12.0, 10.0, 10.0, 8.0);
+        for (sx, sy) in [(3.0, 3.0), (0.4, 0.4), (2.5, 0.6), (0.5, 1.7), (1.3, 1.3)] {
+            for redaction in redactions_at(secret_rect) {
+                let render = |secret: bool, cover: bool| {
+                    let g = DocGeometry::original(secret_image(secret));
+                    let s = scaled(&g, sx, sy);
+                    let anns = remap_annotations(&g, &s, std::slice::from_ref(&redaction));
+                    let drawn = if cover {
+                        s.cover_redactions(&anns)
+                    } else {
+                        anns.clone()
+                    };
+                    (crate::render::render(&s.compose(), &drawn), s, anns)
+                };
+                let (with, s, anns) = render(true, true);
+                let (without, _, _) = render(false, true);
+                let exact = redaction_rect_of(&anns[0]);
+                let cover = s.redaction_cover(exact);
+                // The cover stays within the resize's reach of the rect.
+                let reach_x = 0.5 * sx.max(1.0) + 3.0;
+                let reach_y = 0.5 * sy.max(1.0) + 3.0;
+                assert!(cover.x >= exact.x - reach_x && cover.y >= exact.y - reach_y);
+                assert!(cover.x + cover.width <= exact.x + exact.width + reach_x);
+                assert!(cover.y + cover.height <= exact.y + exact.height + reach_y);
+                for (x, y, px) in with.enumerate_pixels() {
+                    let (fx, fy) = (x as f32, y as f32);
+                    let inside = fx >= cover.x
+                        && fy >= cover.y
+                        && fx < cover.x + cover.width
+                        && fy < cover.y + cover.height;
+                    if !inside || matches!(redaction, Annotation::Rectangle { .. }) {
+                        assert_eq!(
+                            px,
+                            without.get_pixel(x, y),
+                            "×({sx}, {sy}) {redaction:?} at ({x}, {y})"
+                        );
+                    }
+                }
+                // Drawn at the exact rect only (no fringe cover), the
+                // resize's fringe shows: what this guards against.
+                if sx > 1.0 && matches!(redaction, Annotation::Rectangle { .. }) {
+                    let (bare_with, _, _) = render(true, false);
+                    let (bare_without, _, _) = render(false, false);
+                    assert_ne!(bare_with, bare_without, "×({sx}, {sy})");
+                }
+            }
+        }
     }
 
     #[test]
