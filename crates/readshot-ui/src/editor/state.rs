@@ -601,24 +601,27 @@ impl EditorState {
     /// Select the topmost annotation under `point`, using the current
     /// display `scale` to keep the hit tolerance constant on screen.
     ///
-    /// "Topmost" follows paint order: render draws every magnifier after
-    /// all other annotations, so magnifiers are tried first (newest
-    /// first), then everything else newest first. A press in a bubble
-    /// must never select a shape the bubble hides.
+    /// "Topmost" follows paint order: render draws every magnifier
+    /// bubble after all other annotations, so a press inside a bubble
+    /// picks that magnifier first (newest first) and never a shape the
+    /// bubble hides. Elsewhere (including a magnifier's source disc,
+    /// which only paints a thin ring) everything is tried newest first.
     pub fn select_at_scaled(&mut self, point: PointLike, scale: f32) -> Option<usize> {
         let annotations = self.history.current();
-        let is_magnifier = |a: &Annotation| matches!(a, Annotation::Magnifier { .. });
-        let hit_in = |magnifiers: bool| {
+        let in_bubble = annotations
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(idx, a)| magnifier_bubble_grab(a, point).map(|_| idx));
+        let hit = in_bubble.or_else(|| {
             annotations
                 .iter()
                 .enumerate()
                 .rev()
-                .filter(|(_, a)| is_magnifier(a) == magnifiers)
                 .find_map(|(idx, annotation)| {
                     annotation_hit_test(annotation, point, scale).then_some(idx)
                 })
-        };
-        let hit = hit_in(true).or_else(|| hit_in(false));
+        });
         self.selected_annotation = hit;
         hit
     }
@@ -1601,6 +1604,30 @@ mod tests {
         let mut s3 =
             EditorState::with_annotations(RgbaImage::new(200, 100), vec![magnifier(), magnifier()]);
         assert_eq!(s3.select_at(PointLike::new(80.0, 20.0)), Some(1));
+    }
+
+    #[test]
+    fn a_newer_shape_inside_a_source_disc_stays_selectable() {
+        let mut s = EditorState::with_annotations(
+            RgbaImage::new(300, 200),
+            vec![
+                Annotation::Magnifier {
+                    source: PointLike::new(100.0, 100.0),
+                    radius: 30.0,
+                    bubble: PointLike::new(220.0, 100.0),
+                    zoom: 2.0,
+                    shape: readshot_core::MagnifierShape::Circle,
+                    color: Rgba::OPAQUE_BLACK,
+                },
+                Annotation::Blur {
+                    rect: RectLike::new(90.0, 90.0, 20.0, 20.0),
+                    radius: 8.0,
+                },
+            ],
+        );
+        assert_eq!(s.select_at(PointLike::new(100.0, 100.0)), Some(1));
+        // The disc outside the blur still selects the magnifier.
+        assert_eq!(s.select_at(PointLike::new(80.0, 100.0)), Some(0));
     }
 
     #[test]

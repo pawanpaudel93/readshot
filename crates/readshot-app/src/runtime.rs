@@ -6173,6 +6173,44 @@ mod tests {
     }
 
     #[test]
+    fn dragging_inside_an_unselected_bubble_moves_only_the_bubble() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(200, 100));
+        ed.model.commit_annotation(Annotation::Magnifier {
+            source: PointLike::new(20.0, 20.0),
+            radius: 10.0,
+            bubble: PointLike::new(80.0, 40.0),
+            zoom: 4.0,
+            shape: readshot_core::MagnifierShape::Circle,
+            color: Rgba::OPAQUE_BLACK,
+        });
+        ed.model.clear_selection();
+        app.editor = Some(ed);
+
+        // 30 px from the bubble centre: inside the bubble, off its handle.
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
+                110.0, 40.0,
+            ))),
+        );
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::SelectDragged(PointLike::new(
+                100.0, 50.0,
+            ))),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        match &ed.model.annotations()[0] {
+            Annotation::Magnifier { source, bubble, .. } => {
+                assert_eq!(*source, PointLike::new(20.0, 20.0));
+                assert_eq!(*bubble, PointLike::new(70.0, 50.0));
+            }
+            other => panic!("expected magnifier, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn editor_select_drag_cancel_restores_baseline_without_undo_step() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let mut ed = crate::editor::EditorSession::new(solid(64, 64));

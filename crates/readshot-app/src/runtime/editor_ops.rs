@@ -1338,12 +1338,25 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                             kind: crate::editor::MoveDragKind::Resize(handle),
                         });
                     } else if let Some(selected_index) = ed.model.select_at_scaled(p, scale) {
+                        // A press inside an unselected magnifier's bubble
+                        // grabs the bubble on this first drag too, not
+                        // the whole magnifier.
+                        let kind = if ed.model.selected_kind_label() == Some("Magnifier")
+                            && ed.model.resize_handle_at_scaled(p, scale)
+                                == Some(readshot_ui::editor::ResizeHandle::End)
+                        {
+                            crate::editor::MoveDragKind::Resize(
+                                readshot_ui::editor::ResizeHandle::End,
+                            )
+                        } else {
+                            crate::editor::MoveDragKind::Move
+                        };
                         ed.move_drag = Some(crate::editor::MoveDrag {
                             baseline: ed.model.annotations().to_vec(),
                             selected_index,
                             start: p,
                             moved: false,
-                            kind: crate::editor::MoveDragKind::Move,
+                            kind,
                         });
                     } else {
                         ed.move_drag = None;
