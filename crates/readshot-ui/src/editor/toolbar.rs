@@ -55,8 +55,9 @@ pub enum ToolbarMessage {
 }
 
 /// Tool bar groups (spec §2.1): Select | shapes | freehand + text |
-/// effects | marks | crop. Phase C adds `Magnifier` after `Stamp`: extend the group, `TOOL_ORDER`, and the
-/// `slot` match in the test — nothing else needs to know the layout.
+/// effects | marks (pin, stamp, magnifier) | crop. A new tool extends its
+/// group, `TOOL_ORDER`, and the `slot` match in the test — nothing else
+/// needs to know the layout.
 pub const TOOL_GROUPS: [&[ToolState]; 6] = [
     &[ToolState::Select],
     &[
@@ -67,12 +68,16 @@ pub const TOOL_GROUPS: [&[ToolState]; 6] = [
     ],
     &[ToolState::Pen, ToolState::Highlighter, ToolState::Text],
     &[ToolState::Blur, ToolState::Pixelate, ToolState::Spotlight],
-    &[ToolState::NumberedPin, ToolState::Stamp],
+    &[
+        ToolState::NumberedPin,
+        ToolState::Stamp,
+        ToolState::Magnifier,
+    ],
     &[ToolState::Crop],
 ];
 
 /// Tools in display order (`TOOL_GROUPS` flattened).
-pub const TOOL_ORDER: [ToolState; 14] = [
+pub const TOOL_ORDER: [ToolState; 15] = [
     ToolState::Select,
     ToolState::Rectangle,
     ToolState::Ellipse,
@@ -86,11 +91,12 @@ pub const TOOL_ORDER: [ToolState; 14] = [
     ToolState::Spotlight,
     ToolState::NumberedPin,
     ToolState::Stamp,
+    ToolState::Magnifier,
     ToolState::Crop,
 ];
 
 /// Tools that show a "new" dot until first selected.
-pub const NEW_TOOLS: &[ToolState] = &[ToolState::Spotlight, ToolState::Stamp];
+pub const NEW_TOOLS: &[ToolState] = &[ToolState::Spotlight, ToolState::Stamp, ToolState::Magnifier];
 
 /// Clamp a slider raw value to the published thickness range.
 pub fn clamp_line_width(raw: f32) -> f32 {
@@ -180,10 +186,11 @@ mod tests {
                 ToolState::Spotlight => 10,
                 ToolState::NumberedPin => 11,
                 ToolState::Stamp => 12,
-                ToolState::Crop => 13,
+                ToolState::Magnifier => 13,
+                ToolState::Crop => 14,
             }
         }
-        assert_eq!(TOOL_ORDER.len(), 14);
+        assert_eq!(TOOL_ORDER.len(), 15);
         for (i, t) in TOOL_ORDER.iter().enumerate() {
             assert_eq!(slot(*t), i, "{t:?} is out of place");
         }

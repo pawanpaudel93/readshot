@@ -7,8 +7,8 @@
 
 use readshot_core::line_geom::{seed_for, DEFAULT_BEND};
 use readshot_core::{
-    Annotation, ArrowHeads, FillMode, LinePath, LineStyle, PointLike, RectLike, ShapeStyle,
-    SpotlightShape, StampKind, TextStyle,
+    Annotation, ArrowHeads, FillMode, LinePath, LineStyle, MagnifierShape, PointLike, RectLike,
+    ShapeStyle, SpotlightShape, StampKind, TextStyle,
 };
 
 use super::tool_state::ToolState;
@@ -167,6 +167,10 @@ pub struct ToolStyle {
     pub snap_to_text: bool,
     /// Crop tool: the aspect preset the drag and draft follow.
     pub crop_aspect: CropAspect,
+    /// Magnifier: how much the bubble enlarges its source.
+    pub magnifier_zoom: f32,
+    /// Magnifier: bubble outline.
+    pub magnifier_shape: MagnifierShape,
 }
 
 impl Default for ToolStyle {
@@ -185,6 +189,8 @@ impl Default for ToolStyle {
             stamp: StampKind::default(),
             snap_to_text: false,
             crop_aspect: CropAspect::default(),
+            magnifier_zoom: readshot_core::magnifier::DEFAULT_ZOOM,
+            magnifier_shape: MagnifierShape::default(),
         }
     }
 }
@@ -243,6 +249,7 @@ pub fn tool_for_annotation(annotation: &Annotation) -> ToolState {
         Annotation::Spotlight { .. } => ToolState::Spotlight,
         Annotation::NumberedPin { .. } => ToolState::NumberedPin,
         Annotation::Stamp { .. } => ToolState::Stamp,
+        Annotation::Magnifier { .. } => ToolState::Magnifier,
         Annotation::Crop { .. } => ToolState::Crop,
     }
 }
@@ -266,6 +273,7 @@ pub fn options_for(active: ToolState, selected: Option<&Annotation>) -> &'static
         ToolState::Spotlight => &[Dim, SpotlightShape],
         ToolState::NumberedPin => &[Color],
         ToolState::Stamp => &[Color, StampPicker],
+        ToolState::Magnifier => &[Color],
     }
 }
 
@@ -343,6 +351,10 @@ impl ToolStyle {
                 self.dim = *dim;
             }
             Annotation::Stamp { stamp, .. } => self.stamp = *stamp,
+            Annotation::Magnifier { zoom, shape, .. } => {
+                self.magnifier_zoom = *zoom;
+                self.magnifier_shape = *shape;
+            }
             _ => {}
         }
         self

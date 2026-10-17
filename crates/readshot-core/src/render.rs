@@ -196,10 +196,121 @@ pub fn render(base: &RgbaImage, model: &[Annotation]) -> RgbaImage {
                 *color,
                 &font,
             ),
+            Annotation::Magnifier { .. } => { /* final pass below */ }
+        }
+    }
+
+    // Magnifiers last: a bubble copies what is already composed, so it
+    // shows every redaction, blur and pixelate (spec §3.2, plan D-6).
+    for ann in model {
+        if let Annotation::Magnifier {
+            source,
+            radius,
+            bubble,
+            zoom,
+            shape,
+            color,
+        } = ann
+        {
+            draw_magnifier(
+                &mut pixmap,
+                *source,
+                *radius,
+                *bubble,
+                *zoom,
+                *shape,
+                *color,
+                offset,
+            );
         }
     }
 
     pixmap_to_image(&pixmap)
+}
+
+/// One magnifier callout: a nearest-neighbour copy of the composed
+/// pixels around `source`, enlarged `zoom`× into the bubble, then the
+/// bubble border, the source ring and the dashed leader.
+#[allow(clippy::too_many_arguments)]
+fn draw_magnifier(
+    pixmap: &mut Pixmap,
+    source: PointLike,
+    radius: f32,
+    bubble: PointLike,
+    zoom: f32,
+    shape: crate::MagnifierShape,
+    color: Rgba,
+    offset: (f32, f32),
+) {
+    use crate::magnifier::{bubble_radius, corner_radius, in_bubble, leader_endpoints};
+    let src = shift_point(source, offset);
+    let bub = shift_point(bubble, offset);
+    let zoom = zoom.max(1.0);
+    let br = bubble_radius(radius, zoom);
+    let snapshot = pixmap.clone();
+    let (w, h) = (pixmap.width() as i64, pixmap.height() as i64);
+    let x0 = ((bub.x - br).floor() as i64).max(0);
+    let y0 = ((bub.y - br).floor() as i64).max(0);
+    let x1 = ((bub.x + br).ceil() as i64).min(w);
+    let y1 = ((bub.y + br).ceil() as i64).min(h);
+    for py in y0..y1 {
+        for px in x0..x1 {
+            let (dx, dy) = (px as f32 + 0.5 - bub.x, py as f32 + 0.5 - bub.y);
+            if !in_bubble(shape, dx, dy, br) {
+                continue;
+            }
+            let sx = (src.x + dx / zoom).floor() as i64;
+            let sy = (src.y + dy / zoom).floor() as i64;
+            let sample = if (0..w).contains(&sx) && (0..h).contains(&sy) {
+                snapshot
+                    .pixel(sx as u32, sy as u32)
+                    .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT)
+            } else {
+                tiny_skia::PremultipliedColorU8::TRANSPARENT
+            };
+            pixmap.pixels_mut()[(py * w + px) as usize] = sample;
+        }
+    }
+    let paint = stroke_paint(color);
+    let outline = match shape {
+        crate::MagnifierShape::Circle => PathBuilder::from_circle(bub.x, bub.y, br),
+        crate::MagnifierShape::RoundedSquare => {
+            SkRect::from_xywh(bub.x - br, bub.y - br, br * 2.0, br * 2.0)
+                .and_then(|r| rounded_rect_path(r, corner_radius(br)))
+        }
+    };
+    if let Some(path) = outline {
+        pixmap.stroke_path(
+            &path,
+            &paint,
+            &make_stroke(3.0, true),
+            Transform::identity(),
+            None,
+        );
+    }
+    if let Some(ring) = PathBuilder::from_circle(src.x, src.y, radius) {
+        pixmap.stroke_path(
+            &ring,
+            &paint,
+            &make_stroke(2.0, true),
+            Transform::identity(),
+            None,
+        );
+    }
+    if let Some((a, b)) = leader_endpoints(src, radius, bub, br) {
+        let mut pb = PathBuilder::new();
+        pb.move_to(a.x, a.y);
+        pb.line_to(b.x, b.y);
+        if let Some(line) = pb.finish() {
+            pixmap.stroke_path(
+                &line,
+                &paint,
+                &dashed_stroke(2.0, true, true),
+                Transform::identity(),
+                None,
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,6 +1127,119 @@ mod tests {
     use crate::{
         ArrowHeads, FillMode, LinePath, LineStyle, ShapeStyle, SpotlightShape, StampKind, TextStyle,
     };
+
+    fn magnifier(source: PointLike, bubble: PointLike) -> Annotation {
+        Annotation::Magnifier {
+            source,
+            radius: 4.0,
+            bubble,
+            zoom: 2.0,
+            shape: crate::MagnifierShape::Circle,
+            color: Rgba::OPAQUE_WHITE,
+        }
+    }
+
+    #[test]
+    fn the_bubble_shows_the_magnified_source() {
+        let mut base = RgbaImage::from_pixel(60, 30, image::Rgba([0, 0, 255, 255]));
+        for y in 8..12 {
+            for x in 8..12 {
+                base.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+            }
+        }
+        let out = render(
+            &base,
+            &[magnifier(
+                PointLike::new(10.0, 10.0),
+                PointLike::new(40.0, 15.0),
+            )],
+        );
+        // Bubble radius 8: its centre maps back to the red square.
+        assert_eq!(out.get_pixel(40, 15).0, [255, 0, 0, 255]);
+        // 3 px in from the rim along +x maps to x ≈ 12.5: blue.
+        assert_eq!(out.get_pixel(44, 15).0, [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn a_redaction_listed_after_the_magnifier_still_shows_in_the_bubble() {
+        let base = RgbaImage::from_pixel(60, 30, image::Rgba([200, 200, 200, 255]));
+        let block = Annotation::Rectangle {
+            rect: crate::RectLike::new(4.0, 4.0, 12.0, 12.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+            style: crate::ShapeStyle {
+                fill: crate::FillMode::Filled,
+                ..Default::default()
+            },
+        };
+        let out = render(
+            &base,
+            &[
+                magnifier(PointLike::new(10.0, 10.0), PointLike::new(40.0, 15.0)),
+                block,
+            ],
+        );
+        assert_eq!(
+            out.get_pixel(40, 15).0,
+            [0, 0, 0, 255],
+            "the bubble never shows un-redacted pixels"
+        );
+    }
+
+    #[test]
+    fn a_pixelated_source_stays_pixelated_in_the_bubble() {
+        // A per-pixel gradient: any un-pixelated sample would differ from
+        // the pixelated block's averaged colour.
+        let base = RgbaImage::from_fn(60, 30, |x, y| {
+            image::Rgba([(x * 4) as u8, (y * 8) as u8, ((x + y) * 3) as u8, 255])
+        });
+        let pix = Annotation::Pixelate {
+            rect: crate::RectLike::new(0.0, 0.0, 20.0, 20.0),
+            block_size: 8.0,
+        };
+        let redacted = render(&base, std::slice::from_ref(&pix));
+        let out = render(
+            &base,
+            &[
+                pix,
+                magnifier(PointLike::new(10.0, 10.0), PointLike::new(40.0, 15.0)),
+            ],
+        );
+        // The bubble centre (40, 15) samples source pixel (10, 10).
+        assert_eq!(out.get_pixel(40, 15), redacted.get_pixel(10, 10));
+        assert_ne!(out.get_pixel(40, 15), base.get_pixel(10, 10));
+    }
+
+    #[test]
+    fn a_bubble_never_shows_pixels_cropped_away() {
+        // Red outside the crop, blue inside. The source sits outside the
+        // crop, so the bubble samples nothing rather than the red.
+        let mut base = RgbaImage::from_pixel(80, 40, image::Rgba([255, 0, 0, 255]));
+        for y in 0..40 {
+            for x in 20..80 {
+                base.put_pixel(x, y, image::Rgba([0, 0, 255, 255]));
+            }
+        }
+        let out = render(
+            &base,
+            &[
+                magnifier(PointLike::new(5.0, 10.0), PointLike::new(50.0, 20.0)),
+                Annotation::Crop {
+                    rect: crate::RectLike::new(20.0, 0.0, 60.0, 40.0),
+                },
+            ],
+        );
+        // Bubble centre (50, 20) in base px is (30, 20) in the output.
+        let px = out.get_pixel(30, 20).0;
+        assert_ne!(px, [255, 0, 0, 255], "cropped-away pixels leaked");
+        assert_eq!(px[3], 0, "{px:?}");
+    }
+
+    #[test]
+    fn without_a_magnifier_the_final_pass_changes_nothing() {
+        let base = solid_base(20, 20, [10, 20, 30]);
+        assert_eq!(render(&base, &[]), base);
+    }
 
     fn solid_base(w: u32, h: u32, rgb: [u8; 3]) -> RgbaImage {
         let mut img = RgbaImage::new(w, h);

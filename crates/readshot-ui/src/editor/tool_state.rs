@@ -23,6 +23,7 @@ pub enum ToolState {
     Spotlight,
     NumberedPin,
     Stamp,
+    Magnifier,
     Crop,
 }
 
@@ -56,6 +57,7 @@ impl ToolState {
             Self::Spotlight => "spotlight",
             Self::NumberedPin => "numbered_pin",
             Self::Stamp => "stamp",
+            Self::Magnifier => "magnifier",
             Self::Crop => "crop",
         }
     }
@@ -106,6 +108,7 @@ mod tests {
             ToolState::Spotlight,
             ToolState::NumberedPin,
             ToolState::Stamp,
+            ToolState::Magnifier,
             ToolState::Crop,
         ];
         for t in tools {

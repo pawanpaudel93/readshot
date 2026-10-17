@@ -114,6 +114,15 @@ pub enum SpotlightShape {
     Ellipse,
 }
 
+/// Magnifier bubble shape (spec §3.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MagnifierShape {
+    #[default]
+    Circle,
+    RoundedSquare,
+}
+
 /// Default dim outside a spotlight (spec §3.1: 55 %).
 pub const DEFAULT_SPOTLIGHT_DIM: f32 = 0.55;
 
@@ -337,6 +346,18 @@ pub enum Annotation {
         stamp: StampKind,
         color: Rgba,
     },
+    /// A callout that shows the circle around `source` enlarged `zoom`×
+    /// in a bubble at `bubble` with a dashed leader (spec §3.2). Drawn in
+    /// a final pass so the bubble always shows redactions.
+    Magnifier {
+        source: PointLike,
+        radius: f32,
+        bubble: PointLike,
+        zoom: f32,
+        #[serde(default)]
+        shape: MagnifierShape,
+        color: Rgba,
+    },
     Crop {
         rect: RectLike,
     },
@@ -431,6 +452,14 @@ mod tests {
                 stamp: StampKind::Fire,
                 color: red(),
             },
+            Annotation::Magnifier {
+                source: pt(30.0, 30.0),
+                radius: 10.0,
+                bubble: pt(90.0, 10.0),
+                zoom: 3.0,
+                shape: MagnifierShape::RoundedSquare,
+                color: red(),
+            },
             Annotation::Crop {
                 rect: rect(0.0, 0.0, 256.0, 256.0),
             },
@@ -438,7 +467,7 @@ mod tests {
 
         // Sanity: the fixture set covers every variant. If a new variant is
         // added without extending this list, this assertion fails.
-        const VARIANT_COUNT: usize = 13;
+        const VARIANT_COUNT: usize = 14;
         assert_eq!(
             fixtures.len(),
             VARIANT_COUNT,

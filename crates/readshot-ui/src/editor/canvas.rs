@@ -599,14 +599,24 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                             self.display_scale,
                         )
                         .unwrap_or(cur);
-                        let annotation = annotation_for_drag(
-                            tool_at_press,
-                            anchor_img,
-                            cur_img,
-                            self.color,
-                            self.line_width,
-                            &self.style,
-                        );
+                        let annotation = if tool_at_press == ToolState::Magnifier {
+                            magnifier_for_drag(
+                                PointLike::new(anchor_img.x, anchor_img.y),
+                                PointLike::new(cur_img.x, cur_img.y),
+                                self.color,
+                                &self.style,
+                                self.visible_rect(),
+                            )
+                        } else {
+                            annotation_for_drag(
+                                tool_at_press,
+                                anchor_img,
+                                cur_img,
+                                self.color,
+                                self.line_width,
+                                &self.style,
+                            )
+                        };
                         match annotation {
                             Some(a) => Some(
                                 canvas::Action::publish(CanvasMessage::CommitAnnotation(a))
@@ -747,7 +757,14 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                         self.style.crop_aspect.ratio(),
                     );
                     let rect = rect_from_points(*anchor, *cur);
-                    if rect.width.abs() < 0.5 || rect.height.abs() < 0.5 {
+                    // A magnifier drag is a radius, so a straight
+                    // horizontal or vertical drag still previews.
+                    let degenerate = if *tool_at_press == ToolState::Magnifier {
+                        (cur.x - anchor.x).hypot(cur.y - anchor.y) < 0.5
+                    } else {
+                        rect.width.abs() < 0.5 || rect.height.abs() < 0.5
+                    };
+                    if degenerate {
                         // Don't draw anything for sub-pixel drags; iced's
                         // canvas can't represent them and they'd flash on
                         // the first cursor-moved tick anyway.
@@ -777,7 +794,8 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                             | ToolState::Ellipse
                             | ToolState::Line
                             | ToolState::Arrow
-                            | ToolState::Spotlight => {
+                            | ToolState::Spotlight
+                            | ToolState::Magnifier => {
                                 let anchor_base = canvas_to_base(
                                     *anchor,
                                     bounds,
@@ -793,14 +811,25 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                                     self.display_scale,
                                 );
                                 if let (Some(a0), Some(c0)) = (anchor_base, cur_base) {
-                                    if let Some(preview) = annotation_for_drag(
-                                        *tool_at_press,
-                                        a0,
-                                        c0,
-                                        self.color,
-                                        self.line_width,
-                                        &self.style,
-                                    ) {
+                                    let preview = if *tool_at_press == ToolState::Magnifier {
+                                        magnifier_for_drag(
+                                            PointLike::new(a0.x, a0.y),
+                                            PointLike::new(c0.x, c0.y),
+                                            self.color,
+                                            &self.style,
+                                            self.visible_rect(),
+                                        )
+                                    } else {
+                                        annotation_for_drag(
+                                            *tool_at_press,
+                                            a0,
+                                            c0,
+                                            self.color,
+                                            self.line_width,
+                                            &self.style,
+                                        )
+                                    };
+                                    if let Some(preview) = preview {
                                         draw_annotation_preview(
                                             frame,
                                             &preview,
@@ -1080,6 +1109,17 @@ fn resize_handle_cursor(handle: ResizeHandle) -> iced::mouse::Interaction {
 }
 
 impl EditorCanvas {
+    /// The displayed image in base-image px: where a new magnifier
+    /// bubble must fit.
+    fn visible_rect(&self) -> RectLike {
+        RectLike::new(
+            self.image_offset.0,
+            self.image_offset.1,
+            self.image_size.0 as f32,
+            self.image_size.1 as f32,
+        )
+    }
+
     /// Hit-test the selected annotation's handles. `scale` is the
     /// canvas→base display scale so the grab radius is a constant number
     /// of screen pixels at any zoom.
@@ -1610,6 +1650,52 @@ fn draw_annotation_preview(
                 });
             }
         }
+        // Outline only: the bubble's pixels come from the final render.
+        Annotation::Magnifier {
+            source,
+            radius,
+            bubble,
+            zoom,
+            shape,
+            color,
+        } => {
+            let stroke = Stroke::default()
+                .with_color(core_rgba_to_color(*color))
+                .with_width(2.0);
+            let to = |p: PointLike| {
+                base_point_to_canvas(p, bounds, image_size, image_offset, display_scale)
+            };
+            if let (Some(s), Some(b)) = (to(*source), to(*bubble)) {
+                let r = radius * scale;
+                let br = readshot_core::magnifier::bubble_radius(*radius, *zoom) * scale;
+                frame.stroke(&Path::circle(s, r), stroke);
+                let outline = match shape {
+                    readshot_core::MagnifierShape::Circle => Path::circle(b, br),
+                    readshot_core::MagnifierShape::RoundedSquare => Path::rounded_rectangle(
+                        Point::new(b.x - br, b.y - br),
+                        iced::Size::new(br * 2.0, br * 2.0),
+                        readshot_core::magnifier::corner_radius(br).into(),
+                    ),
+                };
+                frame.stroke(&outline, stroke);
+                if let Some((a, e)) = readshot_core::magnifier::leader_endpoints(
+                    PointLike::new(s.x, s.y),
+                    r,
+                    PointLike::new(b.x, b.y),
+                    br,
+                ) {
+                    let mut dashed = stroke;
+                    dashed.line_dash = canvas::LineDash {
+                        segments: &[6.0, 4.0],
+                        offset: 0,
+                    };
+                    frame.stroke(
+                        &Path::line(Point::new(a.x, a.y), Point::new(e.x, e.y)),
+                        dashed,
+                    );
+                }
+            }
+        }
         Annotation::Crop { rect } => {
             if let Some(rect) =
                 base_rect_to_canvas(*rect, bounds, image_size, image_offset, display_scale)
@@ -1910,7 +1996,33 @@ pub fn annotation_for_drag(
         | ToolState::NumberedPin
         | ToolState::Stamp
         | ToolState::Select => None,
+        // Built by `magnifier_for_drag`, which needs the visible bounds.
+        ToolState::Magnifier => None,
     }
+}
+
+/// Magnifier drag: anchor = source centre, distance = radius (at least
+/// `MIN_SOURCE_RADIUS`); the bubble goes where `default_bubble` puts it
+/// inside the visible image (`visible`, document px).
+pub fn magnifier_for_drag(
+    p0: PointLike,
+    p1: PointLike,
+    color: CoreRgba,
+    style: &ToolStyle,
+    visible: RectLike,
+) -> Option<Annotation> {
+    use readshot_core::magnifier::{default_bubble, MIN_SOURCE_RADIUS};
+    let (dx, dy) = (p1.x - p0.x, p1.y - p0.y);
+    let radius = (dx * dx + dy * dy).sqrt().max(MIN_SOURCE_RADIUS);
+    let zoom = style.magnifier_zoom;
+    Some(Annotation::Magnifier {
+        source: p0,
+        radius,
+        bubble: default_bubble(p0, radius, zoom, visible),
+        zoom,
+        shape: style.magnifier_shape,
+        color,
+    })
 }
 
 /// Apply the "hold Shift to constrain" rule to a shape drag's far point.
@@ -2383,6 +2495,43 @@ mod tests {
             )
             .is_some());
         }
+    }
+
+    #[test]
+    fn a_magnifier_drag_sets_the_source_and_places_the_bubble_inside() {
+        let style = ToolStyle::default();
+        let a = magnifier_for_drag(
+            PointLike::new(100.0, 100.0),
+            PointLike::new(106.0, 108.0),
+            CoreRgba::OPAQUE_BLACK,
+            &style,
+            RectLike::new(0.0, 0.0, 200.0, 200.0),
+        )
+        .unwrap();
+        let Annotation::Magnifier {
+            source,
+            radius,
+            bubble,
+            zoom,
+            ..
+        } = a
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            (source, radius, zoom),
+            (PointLike::new(100.0, 100.0), 10.0, 2.0)
+        );
+        // Up-right (138.2, 61.8) fits inside 200 × 200 with its 20 px radius.
+        assert!(bubble.x > 100.0 && bubble.y < 100.0, "{bubble:?}");
+        assert!(magnifier_for_drag(
+            PointLike::new(0.0, 0.0),
+            PointLike::new(1.0, 1.0),
+            CoreRgba::OPAQUE_BLACK,
+            &style,
+            RectLike::new(0.0, 0.0, 10.0, 10.0)
+        )
+        .is_some_and(|a| matches!(a, Annotation::Magnifier { radius, .. } if radius == readshot_core::magnifier::MIN_SOURCE_RADIUS)));
     }
 
     #[test]

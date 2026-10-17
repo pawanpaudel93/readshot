@@ -21,6 +21,7 @@ pub mod geom;
 pub mod history;
 pub mod line_geom;
 pub mod log;
+pub mod magnifier;
 pub mod ocr_layout;
 pub mod ocr_text;
 pub mod png;
@@ -33,8 +34,8 @@ pub mod stamp;
 pub mod text_lines;
 
 pub use annotation::{
-    Annotation, ArrowHeads, FillMode, LinePath, LineStyle, Rgba, ShapeStyle, SpotlightShape,
-    StampKind, TextStyle,
+    Annotation, ArrowHeads, FillMode, LinePath, LineStyle, MagnifierShape, Rgba, ShapeStyle,
+    SpotlightShape, StampKind, TextStyle,
 };
 pub use error::{CaptureError, CoreError, ExportError, HistoryError, OCRError, PreferencesError};
 pub use filename::expand as expand_filename_template;

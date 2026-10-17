@@ -3351,6 +3351,7 @@ pub(crate) fn tool_label_and_key(
         T::Spotlight => ("Spotlight", "S"),
         T::NumberedPin => ("Numbered pin", "N"),
         T::Stamp => ("Stamp", "E"),
+        T::Magnifier => ("Magnifier", "M"),
         T::Crop => ("Crop", "C"),
     }
 }
@@ -3373,6 +3374,7 @@ pub(crate) fn tool_for_key(c: &str) -> Option<readshot_ui::editor::ToolState> {
         "s" => Some(T::Spotlight),
         "n" => Some(T::NumberedPin),
         "e" => Some(T::Stamp),
+        "m" => Some(T::Magnifier),
         "c" => Some(T::Crop),
         _ => None,
     }
@@ -3727,6 +3729,7 @@ pub(crate) fn editor_compact_hint(tool: readshot_ui::editor::ToolState) -> &'sta
         T::Spotlight => "Drag an area to spotlight; the rest dims.",
         T::NumberedPin => "Click to drop a number.",
         T::Stamp => "Click to place a stamp.",
+        T::Magnifier => "Drag out the area to magnify.",
         T::Crop => "Drag the region to keep.",
     }
 }

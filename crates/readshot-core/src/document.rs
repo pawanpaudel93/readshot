@@ -667,6 +667,8 @@ pub fn annotation_anchor(a: &Annotation) -> PointLike {
         Annotation::Text { origin, .. }
         | Annotation::NumberedPin { origin, .. }
         | Annotation::Stamp { origin, .. } => *origin,
+        // The source decides the part: that is what is magnified.
+        Annotation::Magnifier { source, .. } => *source,
     }
 }
 
@@ -769,6 +771,16 @@ pub fn map_annotation(a: &Annotation, m: &Affine) -> Annotation {
         Annotation::Spotlight { rect, .. } | Annotation::Crop { rect } => *rect = m.map_rect(*rect),
         Annotation::NumberedPin { origin, .. } | Annotation::Stamp { origin, .. } => {
             *origin = m.apply(*origin)
+        }
+        Annotation::Magnifier {
+            source,
+            radius,
+            bubble,
+            ..
+        } => {
+            *source = m.apply(*source);
+            *bubble = m.apply(*bubble);
+            *radius = (*radius * ls).max(1.0);
         }
     }
     if crate::scrub::is_redaction(&out) {
@@ -948,6 +960,35 @@ mod tests {
             Annotation::Rectangle { rect, .. } => *rect,
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn magnifiers_move_and_scale_with_the_document() {
+        let g = DocGeometry::original(grid(10, 10));
+        let half = g.with_transform(g.transform.scaled(0.5, 0.5));
+        let m = Annotation::Magnifier {
+            source: PointLike::new(2.0, 2.0),
+            radius: 4.0,
+            bubble: PointLike::new(8.0, 6.0),
+            zoom: 3.0,
+            shape: crate::MagnifierShape::RoundedSquare,
+            color: Rgba::OPAQUE_BLACK,
+        };
+        let out = remap_annotations(&g, &half, &[m]);
+        let Annotation::Magnifier {
+            source,
+            radius,
+            bubble,
+            zoom,
+            ..
+        } = &out[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            (*source, *bubble, *radius, *zoom),
+            (PointLike::new(1.0, 1.0), PointLike::new(4.0, 3.0), 2.0, 3.0)
+        );
     }
 
     #[test]

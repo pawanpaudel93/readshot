@@ -941,6 +941,18 @@ pub(crate) fn annotation_hit_test(annotation: &Annotation, point: PointLike, sca
                 && point.y < rect.y + rect.height - tolerance;
             rect_contains(*rect, point, tolerance) && !inside
         }
+        // The source disc and the bubble, not the empty box between them.
+        Annotation::Magnifier {
+            source,
+            radius,
+            bubble,
+            zoom,
+            shape,
+            ..
+        } => readshot_core::magnifier::hit(
+            *source, *radius, *bubble, *zoom, *shape, point, tolerance,
+        )
+        .is_some(),
         _ => {
             annotation_bounds(annotation).is_some_and(|rect| rect_contains(rect, point, tolerance))
         }
@@ -977,6 +989,7 @@ fn annotation_kind_label(annotation: &Annotation) -> &'static str {
         Annotation::Spotlight { .. } => "Spotlight",
         Annotation::NumberedPin { .. } => "Pin",
         Annotation::Stamp { .. } => "Stamp",
+        Annotation::Magnifier { .. } => "Magnifier",
         Annotation::Crop { .. } => "Crop",
     }
 }
@@ -990,7 +1003,8 @@ fn set_annotation_color(annotation: &mut Annotation, color: Rgba) -> bool {
         | Annotation::Pen { color: c, .. }
         | Annotation::Text { color: c, .. }
         | Annotation::NumberedPin { color: c, .. }
-        | Annotation::Stamp { color: c, .. } => {
+        | Annotation::Stamp { color: c, .. }
+        | Annotation::Magnifier { color: c, .. } => {
             if *c == color {
                 return false;
             }
@@ -1022,7 +1036,8 @@ fn annotation_color(annotation: &Annotation) -> Option<Rgba> {
         | Annotation::Highlighter { color, .. }
         | Annotation::Text { color, .. }
         | Annotation::NumberedPin { color, .. }
-        | Annotation::Stamp { color, .. } => Some(*color),
+        | Annotation::Stamp { color, .. }
+        | Annotation::Magnifier { color, .. } => Some(*color),
         Annotation::Blur { .. }
         | Annotation::Pixelate { .. }
         | Annotation::Spotlight { .. }
@@ -1043,6 +1058,7 @@ fn annotation_width(annotation: &Annotation) -> Option<f32> {
         Annotation::Text { .. }
         | Annotation::NumberedPin { .. }
         | Annotation::Stamp { .. }
+        | Annotation::Magnifier { .. }
         | Annotation::Spotlight { .. }
         | Annotation::Crop { .. } => None,
     }
@@ -1095,6 +1111,7 @@ fn set_annotation_width(annotation: &mut Annotation, width: f32) -> bool {
         }
         Annotation::NumberedPin { .. }
         | Annotation::Stamp { .. }
+        | Annotation::Magnifier { .. }
         | Annotation::Spotlight { .. }
         | Annotation::Crop { .. } => false,
     }
@@ -1141,6 +1158,15 @@ pub(crate) fn annotation_bounds(annotation: &Annotation) -> Option<RectLike> {
         Annotation::NumberedPin { origin, .. } | Annotation::Stamp { origin, .. } => {
             Some(RectLike::new(origin.x - 16.0, origin.y - 16.0, 32.0, 32.0))
         }
+        Annotation::Magnifier {
+            source,
+            radius,
+            bubble,
+            zoom,
+            ..
+        } => Some(readshot_core::magnifier::bounds(
+            *source, *radius, *bubble, *zoom,
+        )),
     }
 }
 
@@ -1227,6 +1253,10 @@ fn translate_annotation(annotation: &mut Annotation, dx: f32, dy: f32) {
         | Annotation::NumberedPin { origin, .. }
         | Annotation::Stamp { origin, .. } => {
             translate_point(origin, dx, dy);
+        }
+        Annotation::Magnifier { source, bubble, .. } => {
+            translate_point(source, dx, dy);
+            translate_point(bubble, dx, dy);
         }
     }
 }
@@ -1398,6 +1428,34 @@ mod tests {
     use image::Rgba as ImgRgba;
     use readshot_core::render::text_pill_rect;
     use readshot_core::{PointLike, RectLike};
+
+    #[test]
+    fn a_magnifier_is_grabbed_by_its_source_and_bubble_and_moves_whole() {
+        let mut m = Annotation::Magnifier {
+            source: PointLike::new(20.0, 20.0),
+            radius: 5.0,
+            bubble: PointLike::new(60.0, 20.0),
+            zoom: 2.0,
+            shape: readshot_core::MagnifierShape::Circle,
+            color: Rgba::OPAQUE_BLACK,
+        };
+        assert!(annotation_hit_test(&m, PointLike::new(20.0, 20.0), 1.0));
+        assert!(annotation_hit_test(&m, PointLike::new(62.0, 22.0), 1.0));
+        // The empty gap between them stays clickable for what is below.
+        assert!(!annotation_hit_test(&m, PointLike::new(40.0, 5.0), 1.0));
+        assert_eq!(
+            annotation_bounds(&m),
+            Some(RectLike::new(15.0, 10.0, 55.0, 20.0))
+        );
+        translate_annotation(&mut m, 3.0, -2.0);
+        let Annotation::Magnifier { source, bubble, .. } = m else {
+            unreachable!()
+        };
+        assert_eq!(
+            (source, bubble),
+            (PointLike::new(23.0, 18.0), PointLike::new(63.0, 18.0))
+        );
+    }
 
     #[test]
     fn shared_base_hands_out_the_same_image_without_copying() {
