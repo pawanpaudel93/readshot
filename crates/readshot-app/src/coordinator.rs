@@ -810,13 +810,22 @@ impl CaptureCoordinator {
     /// it but can ([`readshot_core::history::needs_stored_recognition`]):
     /// a cropped record migrated on load (its old text was dropped), or a
     /// scrub whose text had to be dropped because the redactions already
-    /// in its image were unknown. The stored image is the redacted (and
-    /// cropped) output, and History masks the text with the stored
-    /// redactions, in the stored image's frame
-    /// ([`HistoryStore::record_recognized_text`], as for a History record
-    /// reopened in the editor). Each stored state (frame and redactions)
-    /// is tried once per run. `Ok(true)` when recognition ran and its text
-    /// was handed to History.
+    /// in its image were unknown.
+    ///
+    /// Fails closed at every step:
+    /// - only the stored, already redacted (and cropped) PNG is recognized,
+    ///   and only while the sidecar read before and after reading it is
+    ///   the same, settled version (no scrub pending), so the pixels are
+    ///   that version's;
+    /// - only a recognition with positions is stored, masked with the
+    ///   redactions stored in that version, in the stored image's px;
+    /// - the text lands only if, under the commit gate, no rewrite of the
+    ///   record was requested since it started (a newer scrub or restore
+    ///   always wins) and the sidecar is still exactly that version
+    ///   ([`HistoryStore::record_recovered_text`]).
+    ///
+    /// Each stored state (frame and redactions) is tried once per run.
+    /// `Ok(true)` when text was stored.
     pub async fn recognize_stored_history(
         &self,
         record: &CaptureRecord,
@@ -826,20 +835,25 @@ impl CaptureCoordinator {
         let Some(store) = self.history.clone() else {
             return Ok(false);
         };
-        let probe = record.clone();
-        let st = Arc::clone(&store);
-        let stored = tokio::task::spawn_blocking(move || st.stored_record(&probe))
-            .await
-            .map_err(|e| e.to_string())?;
-        let Some(stored) = stored.filter(needs_stored_recognition) else {
+        // The newest rewrite request when this started: any later one
+        // makes this recognition stale.
+        let seq = lock(&self.scrubs.state).latest.get(&record.id).copied();
+        let (st, probe) = (Arc::clone(&store), record.clone());
+        let read = tokio::task::spawn_blocking(move || {
+            let before = st.stored_record(&probe).filter(needs_stored_recognition)?;
+            let png = st.read_png(&before).ok()?;
+            let after = st.stored_record(&probe)?;
+            (after == before).then_some((before, png))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        let Some((stored, png)) = read else {
             return Ok(false);
         };
         if !self.claim_stored_recognition(&stored) {
             return Ok(false);
         }
-        let (st, at) = (Arc::clone(&store), stored.clone());
-        let image = tokio::task::spawn_blocking(move || -> Result<RgbaImage, String> {
-            let png = st.read_png(&at).map_err(|e| e.to_string())?;
+        let image = tokio::task::spawn_blocking(move || {
             image::load_from_memory(&png)
                 .map(|img| img.to_rgba8())
                 .map_err(|e| e.to_string())
@@ -854,13 +868,25 @@ impl CaptureCoordinator {
             })
             .await
             .map_err(|e| e.to_string())?;
-        // Masked with the redactions stored *now*, and dropped if the
-        // record moved to another frame meanwhile.
-        tokio::task::spawn_blocking(move || store.record_recognized_text(&stored, &doc, false))
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())?;
-        Ok(true)
+        if !doc.positioned {
+            return Ok(false);
+        }
+        let scrubs = Arc::clone(&self.scrubs);
+        tokio::task::spawn_blocking(move || {
+            // Commit gate, then state (the documented order).
+            let b = lock(&scrubs.book);
+            let id = stored.id;
+            let moved = lock(&scrubs.state).latest.get(&id).copied() != seq
+                || b.parked.contains_key(&id)
+                || b.unsecured.contains_key(&id);
+            if moved {
+                return Ok(false);
+            }
+            store.record_recovered_text(&stored, &doc)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
     }
 
     /// `true` the first time `stored`'s state is claimed for

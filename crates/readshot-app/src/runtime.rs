@@ -11738,6 +11738,85 @@ mod tests {
             .unwrap());
     }
 
+    /// [`FakeOcrEngine`] that runs `hook` once, while recognizing.
+    struct HookedOcr {
+        inner: FakeOcrEngine,
+        hook: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl readshot_ocr::OCREngine for HookedOcr {
+        fn supported_languages(&self) -> Vec<String> {
+            self.inner.supported_languages()
+        }
+        fn reports_positions(&self) -> bool {
+            self.inner.reports_positions()
+        }
+        async fn recognise(
+            &self,
+            req: readshot_ocr::OCRRequest,
+        ) -> Result<readshot_ocr::OCRResult, readshot_core::error::OCRError> {
+            if let Some(hook) = self.hook.lock().unwrap().take() {
+                hook();
+            }
+            self.inner.recognise(req).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_newer_scrub_requested_during_recovery_always_wins() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let ocr = Arc::new(HookedOcr {
+            inner: FakeOcrEngine::with_lines(vec![ocr_line("visible", 0.0, 0.1, 0.3, 0.2)]),
+            hook: std::sync::Mutex::new(None),
+        });
+        let perms = Arc::new(FakePermissions::granted());
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            ocr.clone(),
+            perms,
+            Some(store.clone()),
+        );
+        // A settled scrub that needs its text recovered.
+        let img = solid(30, 20);
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 30, 20, "d");
+        record.redacted = true;
+        record.redactions = vec![word_blur(RectLike::new(18.0, 12.0, 6.0, 4.0))];
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        // While the stored image is being recognized, the editor asks for
+        // a newer scrub of the record, same frame, other redactions.
+        let newer = {
+            let mut r = record.clone();
+            r.redactions.clear();
+            r
+        };
+        let (c2, n2) = (coord.clone(), newer.clone());
+        *ocr.hook.lock().unwrap() = Some(Box::new(move || {
+            drop(c2.rewrite_history_async(
+                n2,
+                Arc::new(solid(30, 20)),
+                vec![word_blur(RectLike::new(1.0, 1.0, 4.0, 4.0))],
+            ));
+        }));
+        assert!(!coord
+            .recognize_stored_history(&record, Vec::new())
+            .await
+            .unwrap());
+        coord.flush_history_updates();
+        let stored = stored_record(&store, record.id);
+        assert_eq!(
+            stored.redactions,
+            vec![word_blur(RectLike::new(1.0, 1.0, 4.0, 4.0))]
+        );
+        assert_eq!(
+            stored.ocr_text, None,
+            "the older version's text never lands"
+        );
+    }
+
     #[test]
     fn only_a_scrub_over_unknown_baked_in_redactions_recovers_text_from_the_stored_image() {
         let dir = tempfile::TempDir::new().unwrap();

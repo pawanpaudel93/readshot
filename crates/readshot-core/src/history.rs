@@ -388,6 +388,23 @@ pub trait HistoryStore: Send + Sync {
         let _ = record;
         None
     }
+    /// Store text recognized from the stored image of `expected` — only
+    /// if the stored sidecar is still exactly `expected` (no write of any
+    /// kind landed since it was read, so the image recognized is the one
+    /// this sidecar describes), it still
+    /// [`needs_stored_recognition`], and `doc` has positions (without them
+    /// a word hidden by hand can't be masked). The text is `doc` masked
+    /// with the stored redactions, in the stored image's px. Checked and
+    /// written under the index lock. `Ok(true)` when stored; anything
+    /// else stores nothing (fail closed).
+    fn record_recovered_text(
+        &self,
+        expected: &CaptureRecord,
+        doc: &TextDocument,
+    ) -> Result<bool, HistoryError> {
+        let _ = (expected, doc);
+        Ok(false)
+    }
     /// The stored PNG bytes of `record`.
     fn read_png(&self, record: &CaptureRecord) -> Result<Vec<u8>, HistoryError> {
         let _ = record;
@@ -1163,6 +1180,25 @@ impl HistoryStore for FsHistoryStore {
 
     fn read_png(&self, record: &CaptureRecord) -> Result<Vec<u8>, HistoryError> {
         Ok(fs::read(self.root.join(Self::png_path(record)))?)
+    }
+
+    fn record_recovered_text(
+        &self,
+        expected: &CaptureRecord,
+        doc: &TextDocument,
+    ) -> Result<bool, HistoryError> {
+        use crate::scrub::{hidden_spans, masked_layout_text};
+        let _index_guard = self.lock_index()?;
+        let Some(mut stored) = self.read_sidecar(expected) else {
+            return Ok(false);
+        };
+        if stored != *expected || !needs_stored_recognition(&stored) || !doc.positioned {
+            return Ok(false);
+        }
+        let spans = hidden_spans(doc, &stored.redactions);
+        stored.ocr_text = Some(masked_layout_text(doc, &spans));
+        self.write_sidecar(&stored)?;
+        Ok(true)
     }
 
     fn delete(&self, id: Uuid) -> Result<(), HistoryError> {
@@ -2286,5 +2322,64 @@ mod tests {
         assert!(stored.geometry_id.as_deref().is_some_and(is_crop_frame_id));
         assert!(!sidecar_text(&s, &r).contains("\"old\""));
         assert_eq!(s.read_png(&r).unwrap(), valid_png(20, 20));
+    }
+
+    fn positioned(text: &str, rect: crate::RectLike) -> TextDocument {
+        use crate::text_lines::{TextLine, WordRect};
+        TextDocument {
+            lines: vec![TextLine {
+                text: text.into(),
+                rect: Some(rect),
+                words: vec![WordRect {
+                    start: 0,
+                    end: text.chars().count(),
+                    rect,
+                }],
+            }],
+            positioned: true,
+            layout_text: text.into(),
+        }
+    }
+
+    #[test]
+    fn recovered_text_lands_only_on_the_exact_version_read_and_masked() {
+        let (_dir, s) = store();
+        let r = legacy_sidecar(&s, |_| {});
+        let v = s.stored_record(&r).unwrap();
+        assert!(needs_stored_recognition(&v));
+        // Under the stored redaction (x 10–16, y 2–6): masked.
+        let hidden = positioned("Zx9Qw7", crate::RectLike::new(10.0, 2.0, 6.0, 4.0));
+        // Without positions: never stored.
+        assert!(!s
+            .record_recovered_text(&v, &TextDocument::from_plain("Zx9Qw7"))
+            .unwrap());
+        // Any write since the read (here, a newer scrub's redactions):
+        // never stored.
+        let mut newer = v.clone();
+        newer.redactions.push(Annotation::Blur {
+            rect: crate::RectLike::new(0.0, 0.0, 2.0, 2.0),
+            radius: 2.0,
+        });
+        s.update(&newer).unwrap();
+        assert!(!s.record_recovered_text(&v, &hidden).unwrap());
+        assert_eq!(s.list().unwrap()[0].ocr_text, None);
+        // The exact version: stored masked.
+        let v = s.stored_record(&r).unwrap();
+        assert!(s.record_recovered_text(&v, &hidden).unwrap());
+        assert_eq!(s.list().unwrap()[0].ocr_text.as_deref(), Some("██████"));
+        // Never over text that is there now.
+        assert!(!s.record_recovered_text(&v, &hidden).unwrap());
+        // A pending scrub (no image) or no stored redactions: never.
+        for edit in [
+            (|j: &mut serde_json::Value| j["scrub_pending"] = true.into())
+                as fn(&mut serde_json::Value),
+            |j| j["redactions"] = serde_json::json!([]),
+        ] {
+            let (_dir, s) = store();
+            let r = legacy_sidecar(&s, edit);
+            let v = s.stored_record(&r).unwrap();
+            assert!(!s.record_recovered_text(&v, &hidden).unwrap());
+            assert_eq!(s.list().unwrap()[0].ocr_text, None);
+        }
     }
 }
