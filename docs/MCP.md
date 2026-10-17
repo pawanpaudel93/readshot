@@ -118,8 +118,8 @@ redaction covers a word. `ocr_text` is `null` by design when Readshot
 can't prove the text is safe to serve:
 
 - the record's list of redactions isn't known to be complete (a
-  capture redacted again by an older version, or one written before the
-  list was tracked);
+  capture redacted again by an older version, one written before the
+  list was tracked, or one redacted again on top of such a record);
 - a legacy record migrated on load (an older crop rule, or redactions
   stored in another frame's pixels);
 - a cropped, redacted capture whose text hasn't been recognized with
