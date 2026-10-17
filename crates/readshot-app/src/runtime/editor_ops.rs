@@ -296,6 +296,42 @@ pub(crate) fn commit_snapshot_drag(
     }
 }
 
+/// Keep an open style preview (an options-bar slider, which arrow keys
+/// drive without ever sending a release) as one undo step, as its
+/// release would. Returns whether the selection changed.
+pub(crate) fn commit_style_drag(
+    ed: &mut crate::editor::EditorSession,
+    coord: &CaptureCoordinator,
+) -> bool {
+    let Some(baseline) = ed.style_drag_baseline.take().and_then(|d| d.annotations) else {
+        return false;
+    };
+    let changed = ed.model.commit_preview_from_baseline(baseline);
+    ed.refresh_image();
+    if changed {
+        ed.clear_discard_confirmation();
+        sync_editor_history(ed, coord);
+    }
+    changed
+}
+
+/// Settle the editor before Save, Copy or Pin, so the output matches the
+/// screen: slider previews are kept (snapshot, then style), any other
+/// preview is dropped, and only then is the text draft committed — a
+/// preview restored after it would put back annotations without the
+/// text (the [`super::image_menu::prepare`] order). An open crop draft is
+/// applied last.
+pub(crate) fn settle_editor_for_output(
+    ed: &mut crate::editor::EditorSession,
+    coord: &CaptureCoordinator,
+) {
+    commit_snapshot_drag(ed, coord);
+    commit_style_drag(ed, coord);
+    cancel_editor_previews(ed);
+    commit_pending_editor_text(ed, coord);
+    apply_crop_draft(ed, coord);
+}
+
 /// Close the open popover, if any; returns whether one was open. A
 /// line-width slider preview still live in the Width popover is
 /// cancelled (Esc semantics), so its baseline can't linger and revert
@@ -756,13 +792,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if ed.busy {
                 return Task::none();
             }
-            // Settle an open slider preview first: a text commit moves the
-            // history generation and would make the preview stale.
-            commit_snapshot_drag(ed, &state.coordinator);
-            commit_pending_editor_text(ed, &state.coordinator);
-            cancel_editor_previews(ed);
-            // The output must match what is on screen: apply an open crop.
-            apply_crop_draft(ed, &state.coordinator);
+            // The output must match what is on screen.
+            settle_editor_for_output(ed, &state.coordinator);
             ed.busy = true;
             ed.set_status("Choose a save location…");
             let img = editor_output_image(ed);
@@ -810,13 +841,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if ed.busy {
                 return Task::none();
             }
-            // Settle an open slider preview first: a text commit moves the
-            // history generation and would make the preview stale.
-            commit_snapshot_drag(ed, &state.coordinator);
-            commit_pending_editor_text(ed, &state.coordinator);
-            cancel_editor_previews(ed);
-            // The output must match what is on screen: apply an open crop.
-            apply_crop_draft(ed, &state.coordinator);
+            // The output must match what is on screen.
+            settle_editor_for_output(ed, &state.coordinator);
             ed.busy = true;
             ed.set_status(if ed.model.beautify().is_identity() {
                 "Copying…".to_string()
@@ -888,8 +914,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if ed.busy {
                 return Task::none();
             }
-            commit_pending_editor_text(ed, &state.coordinator);
+            // Previews first: one restored after the text commit would
+            // drop the text (the `image_menu::prepare` order).
             cancel_editor_previews(ed);
+            commit_pending_editor_text(ed, &state.coordinator);
             // Copy All (spec §3.7, ⇧⌘C, also the action bar's Copy Text):
             // the panel's recognized text only when it is ready and every
             // annotation is text-neutral (whitelist). Otherwise recognize
@@ -1231,14 +1259,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }
             // Release keeps the new tool style; only the selection needs
             // turning into one undo step.
-            if let Some(baseline) = ed.style_drag_baseline.take().and_then(|d| d.annotations) {
-                if ed.model.commit_preview_from_baseline(baseline) {
-                    ed.refresh_image();
-                    ed.set_status("Updated selected annotation. ⌘Z to undo.");
-                    sync_editor_history(ed, &state.coordinator);
-                } else {
-                    ed.refresh_image();
-                }
+            if commit_style_drag(ed, &state.coordinator) {
+                ed.set_status("Updated selected annotation. ⌘Z to undo.");
             }
             Task::none()
         }
@@ -1762,12 +1784,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if ed.busy {
                 return Task::none();
             }
-            // Settle an open slider preview first: a text commit moves the
-            // history generation and would make the preview stale.
-            commit_snapshot_drag(ed, &state.coordinator);
-            commit_pending_editor_text(ed, &state.coordinator);
-            cancel_editor_previews(ed);
-            apply_crop_draft(ed, &state.coordinator);
+            // The output must match what is on screen.
+            settle_editor_for_output(ed, &state.coordinator);
             let img = editor_output_image(ed);
             let size = (img.width(), img.height());
             let handle = rgba_handle(img);

@@ -82,6 +82,11 @@ pub struct EditorState {
     next_part_id: PartId,
     /// Present snapshot's baseline while a snapshot preview is open.
     preview_baseline: Option<(Snapshot, u64)>,
+    /// The baseline of the open annotation preview (move, resize, width,
+    /// style) and the history generation it opened at: a cancel or commit
+    /// after the history moved (a text commit, say) is stale and would
+    /// clobber the newer edit.
+    annotation_preview: Option<(Vec<Annotation>, u64)>,
     history: History,
     active_tool: ToolState,
     current_color: Rgba,
@@ -124,6 +129,7 @@ impl EditorState {
             flattened_cache: None,
             next_part_id: ORIGINAL_PART + 1,
             preview_baseline: None,
+            annotation_preview: None,
         }
     }
 
@@ -264,6 +270,7 @@ impl EditorState {
             self.selected_annotation = None;
             return false;
         }
+        self.note_annotation_preview(baseline);
         let mut next = baseline.to_vec();
         let changed = apply_style_to_annotation(&mut next[idx], msg);
         self.history.replace_present(next);
@@ -751,6 +758,7 @@ impl EditorState {
             self.selected_annotation = None;
             return false;
         }
+        self.note_annotation_preview(baseline);
         let mut next = baseline.to_vec();
         translate_annotation(&mut next[idx], dx, dy);
         self.clamp_crop_annotation_to_base(&mut next[idx], CropClampMode::Move);
@@ -773,6 +781,7 @@ impl EditorState {
             self.selected_annotation = None;
             return false;
         }
+        self.note_annotation_preview(baseline);
         let mut next = baseline.to_vec();
         if !resize_annotation(&mut next[idx], handle, dx, dy) {
             return false;
@@ -795,6 +804,7 @@ impl EditorState {
             self.selected_annotation = None;
             return false;
         }
+        self.note_annotation_preview(baseline);
         let mut next = baseline.to_vec();
         if !set_annotation_width(&mut next[idx], width.clamp(0.5, 64.0)) {
             self.history.replace_present(next);
@@ -806,7 +816,32 @@ impl EditorState {
         true
     }
 
+    /// Remember the generation an annotation preview from `baseline`
+    /// opened at (the first preview call from it).
+    fn note_annotation_preview(&mut self, baseline: &[Annotation]) {
+        let open = self
+            .annotation_preview
+            .as_ref()
+            .is_some_and(|(b, _)| b.as_slice() == baseline);
+        if !open {
+            self.annotation_preview = Some((baseline.to_vec(), self.history.generation()));
+        }
+    }
+
+    /// Whether `baseline`'s preview opened before the history last moved:
+    /// the present then holds newer edits made on top of the preview, and
+    /// restoring `baseline` would drop them. Ends the preview.
+    fn annotation_preview_is_stale(&mut self, baseline: &[Annotation]) -> bool {
+        self.annotation_preview
+            .take()
+            .is_some_and(|(b, g)| b.as_slice() == baseline && g != self.history.generation())
+    }
+
     pub fn commit_preview_from_baseline(&mut self, baseline: Vec<Annotation>) -> bool {
+        if self.annotation_preview_is_stale(&baseline) {
+            // The preview is already part of the newer history.
+            return false;
+        }
         let final_state = self.history.current().to_vec();
         if final_state == baseline {
             self.history.replace_present(baseline);
@@ -819,7 +854,12 @@ impl EditorState {
         true
     }
 
+    /// Restore `baseline`, unless the history moved since its preview
+    /// opened (a stale baseline would clobber the newer edits).
     pub fn cancel_preview_from_baseline(&mut self, baseline: Vec<Annotation>) {
+        if self.annotation_preview_is_stale(&baseline) {
+            return;
+        }
         self.history.replace_present(baseline);
         self.sync_base();
         self.clamp_selection();
@@ -2117,6 +2157,36 @@ mod tests {
             }
             other => panic!("expected line, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_preview_baseline_older_than_a_commit_never_drops_the_commit() {
+        for cancel in [true, false] {
+            let mut s = EditorState::new(solid_base(64, 64));
+            s.commit_annotation(rect(0.0));
+            assert_eq!(s.select_at(PointLike::new(2.0, 2.0)), Some(0));
+            let baseline = s.annotations().to_vec();
+            assert!(s.preview_line_width_selected_from(&baseline, 8.0));
+            // A text draft is committed while the width preview lingers.
+            s.commit_annotation(rect(30.0));
+            let committed = s.annotations().to_vec();
+            let depth = s.undo_depth();
+            if cancel {
+                s.cancel_preview_from_baseline(baseline);
+            } else {
+                assert!(!s.commit_preview_from_baseline(baseline));
+            }
+            assert_eq!(s.annotations(), committed.as_slice());
+            assert_eq!(s.undo_depth(), depth);
+        }
+        // A fresh preview still cancels back to its baseline.
+        let mut s = EditorState::new(solid_base(64, 64));
+        s.commit_annotation(rect(0.0));
+        assert_eq!(s.select_at(PointLike::new(2.0, 2.0)), Some(0));
+        let baseline = s.annotations().to_vec();
+        assert!(s.preview_line_width_selected_from(&baseline, 12.0));
+        s.cancel_preview_from_baseline(baseline.clone());
+        assert_eq!(s.annotations(), baseline.as_slice());
     }
 
     #[test]

@@ -8242,6 +8242,75 @@ mod tests {
         assert_eq!(ed.model.tool_style().fill, readshot_core::FillMode::Filled);
     }
 
+    fn editor_with_selected_rect() -> crate::editor::EditorSession {
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 40.0, 40.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
+        ed
+    }
+
+    #[test]
+    fn output_commits_the_text_draft_after_dropping_a_lingering_width_preview() {
+        for request in [
+            Message::EditorCopyImageRequested,
+            Message::EditorSaveRequested,
+            Message::EditorCopyTextRequested,
+        ] {
+            let mut app = build_app(Arc::new(FakePermissions::granted()));
+            app.editor = Some(editor_with_selected_rect());
+            let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
+            app.editor.as_mut().unwrap().pending_text = Some(crate::editor::PendingText {
+                origin: PointLike::new(50.0, 50.0),
+                content: "typed".into(),
+                edit_index: None,
+            });
+            let _ = update(&mut app, request.clone());
+            let ed = app.editor.as_ref().unwrap();
+            assert!(
+                ed.model
+                    .annotations()
+                    .iter()
+                    .any(|a| matches!(a, Annotation::Text { content, .. } if content == "typed")),
+                "{request:?} dropped the committed text"
+            );
+            assert!(ed.width_drag_baseline.is_none());
+        }
+    }
+
+    #[test]
+    fn output_keeps_a_lingering_style_preview_as_one_undo_step() {
+        use readshot_ui::editor::StyleMessage;
+        for request in [
+            Message::EditorCopyImageRequested,
+            Message::EditorSaveRequested,
+        ] {
+            let mut app = build_app(Arc::new(FakePermissions::granted()));
+            app.editor = Some(editor_with_selected_rect());
+            let depth = app.editor.as_ref().unwrap().model.undo_depth();
+            // Arrow keys on the slider: previews, never a release.
+            let _ = update(
+                &mut app,
+                Message::EditorStylePreview(StyleMessage::CornerRadius(12.0)),
+            );
+            let _ = update(&mut app, request.clone());
+            let ed = app.editor.as_ref().unwrap();
+            assert!(ed.style_drag_baseline.is_none());
+            assert_eq!(ed.model.undo_depth(), depth + 1, "{request:?}");
+            assert!(
+                matches!(
+                    &ed.model.annotations()[0],
+                    Annotation::Rectangle { style, .. } if style.corner_radius == 12.0
+                ),
+                "{request:?}: the output must match the preview"
+            );
+        }
+    }
+
     #[test]
     fn style_slider_preview_commits_once_and_esc_cancels_it() {
         use readshot_ui::editor::StyleMessage;
