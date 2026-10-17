@@ -406,7 +406,8 @@ machine.
 | Captures return `code = -32001 capture: permission denied` | Host process lacks Screen Recording grant. |
 | Empty `displays` array                          | Wayland portal denied or no monitors.     |
 | `tools/list` shows no tools                     | Agent connected to a different binary.    |
-| OCR returns empty text                          | Region too small or no text rendered.     |
+| A capture tool returns empty OCR text           | Region too small or no text rendered.     |
+| A history result has `ocr_text: null`           | A redacted capture whose text Readshot can't prove is safe to serve — by design (see above). |
 
 When in doubt, run the smoke test above first — if that returns the
 tool list, the binary is fine and the issue is in the agent host's
