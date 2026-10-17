@@ -735,51 +735,71 @@ fn shapes(icon: AppIcon) -> &'static [Shape] {
     }
 }
 
-impl AppIcon {
-    #[cfg(test)]
-    pub const SHAPED: [AppIcon; 40] = [
-        AppIcon::Edit,
-        AppIcon::Copy,
-        AppIcon::ScanText,
-        AppIcon::Save,
-        AppIcon::Pin,
-        AppIcon::Scroll,
-        AppIcon::Close,
-        AppIcon::Search,
-        AppIcon::Folder,
-        AppIcon::Open,
-        AppIcon::Trash,
-        AppIcon::Lock,
-        AppIcon::Minus,
-        AppIcon::Plus,
-        AppIcon::CheckCircle,
-        AppIcon::Alert,
-        AppIcon::Shield,
-        AppIcon::Crosshair,
-        AppIcon::Image,
-        AppIcon::Terminal,
-        AppIcon::Power,
-        AppIcon::History,
-        AppIcon::Gear,
-        AppIcon::Sparkle,
-        AppIcon::SolidLine,
-        AppIcon::Dashed,
-        AppIcon::LineStraight,
-        AppIcon::LineCurved,
-        AppIcon::LineSketch,
-        AppIcon::ArrowBoth,
-        AppIcon::Dropper,
-        AppIcon::Sidebar,
-        AppIcon::Chevron,
-        AppIcon::RotateLeft,
-        AppIcon::RotateRight,
-        AppIcon::FlipH,
-        AppIcon::FlipV,
-        AppIcon::Resize,
-        AppIcon::AddBelow,
-        AppIcon::AddBeside,
-    ];
+/// `AppIcon::SHAPED`: every icon drawn from [`shapes`], for the grid
+/// test. The list also generates an exhaustive `match` (no wildcard), so
+/// a new `AppIcon` variant fails to compile here until it is classified:
+/// listed, or added to the not-shape-drawn arm. The grid test can then
+/// never silently skip a shape-drawn icon.
+macro_rules! shaped_icons {
+    ($($icon:ident),* $(,)?) => {
+        #[cfg(test)]
+        impl AppIcon {
+            pub const SHAPED: &'static [AppIcon] = &[$(AppIcon::$icon),*];
+
+            /// Whether `self` is in [`Self::SHAPED`]; exhaustive by
+            /// construction.
+            fn is_shape_drawn(self) -> bool {
+                match self {
+                    $(AppIcon::$icon)|* => true,
+                    AppIcon::Tool(_) | AppIcon::Undo | AppIcon::Redo => false,
+                }
+            }
+        }
+    };
 }
+
+shaped_icons![
+    Edit,
+    Copy,
+    ScanText,
+    Save,
+    Pin,
+    Scroll,
+    Close,
+    Search,
+    Folder,
+    Open,
+    Trash,
+    Lock,
+    Minus,
+    Plus,
+    CheckCircle,
+    Alert,
+    Shield,
+    Crosshair,
+    Image,
+    Terminal,
+    Power,
+    History,
+    Gear,
+    Sparkle,
+    SolidLine,
+    Dashed,
+    LineStraight,
+    LineCurved,
+    LineSketch,
+    ArrowBoth,
+    Dropper,
+    Sidebar,
+    Chevron,
+    RotateLeft,
+    RotateRight,
+    FlipH,
+    FlipV,
+    Resize,
+    AddBelow,
+    AddBeside,
+];
 
 fn draw_shapes(frame: &mut Frame, list: &[Shape], color: Color, size: f32) {
     let k = size / 24.0;
@@ -823,8 +843,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn icons_outside_the_shaped_list_draw_no_shapes() {
+        let others = [
+            AppIcon::Tool(readshot_ui::editor::ToolState::default()),
+            AppIcon::Undo,
+            AppIcon::Redo,
+        ];
+        for icon in others {
+            assert!(!icon.is_shape_drawn(), "{icon:?}");
+            assert!(shapes(icon).is_empty(), "{icon:?} draws shapes: list it");
+        }
+    }
+
+    #[test]
     fn every_shape_icon_stays_on_the_24_grid() {
-        for icon in AppIcon::SHAPED {
+        for &icon in AppIcon::SHAPED {
+            assert!(icon.is_shape_drawn());
             let shapes = shapes(icon);
             assert!(!shapes.is_empty(), "{icon:?} has no shapes");
             for s in shapes {
