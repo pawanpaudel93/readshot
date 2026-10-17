@@ -797,13 +797,14 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // settings handler, which validates the window id. The filename
         // text_input keeps plain typing because every shortcut is
         // ⌘-prefixed (Esc aside). See `settings_key_action`.
-        subs.push(iced::event::listen_with(|event, _status, window| {
+        subs.push(iced::event::listen_with(|event, status, window| {
             use iced::keyboard::Event as KbEvent;
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
                 return Some(Message::SettingsKeyPressed {
                     window,
                     key,
                     modifiers,
+                    captured: status == iced::event::Status::Captured,
                 });
             }
             None
@@ -886,6 +887,34 @@ pub(crate) fn history_key_message(
     {
         return action(HistoryKeyboardAction::FocusSearch);
     }
+    // ⌥⌘R reveals, ⌘P pins, ⌥⇧⌘C copies every visible capture's text,
+    // ⇧⌘⌫ arms (then confirms) Clear All. Pointer-only before (WCAG
+    // 2.1.1). A focused search field keeps none of these but ⇧⌘⌫.
+    if modifiers.command() && !extra_command_modifier(modifiers) {
+        match key {
+            Key::Character(c)
+                if modifiers.alt() && !modifiers.shift() && c.eq_ignore_ascii_case("r") =>
+            {
+                return action(HistoryKeyboardAction::Reveal);
+            }
+            Key::Character(c)
+                if !modifiers.alt() && !modifiers.shift() && c.eq_ignore_ascii_case("p") =>
+            {
+                return action(HistoryKeyboardAction::Pin);
+            }
+            Key::Character(c)
+                if modifiers.alt() && modifiers.shift() && c.eq_ignore_ascii_case("c") =>
+            {
+                return action(HistoryKeyboardAction::CopyVisibleText);
+            }
+            Key::Named(Named::Backspace | Named::Delete)
+                if modifiers.shift() && !modifiers.alt() =>
+            {
+                return chord(HistoryKeyboardAction::ClearAll);
+            }
+            _ => {}
+        }
+    }
     // ⌘C copies the image, ⇧⌘C the text.
     if modifiers.command() && !modifiers.alt() && !modifiers.control() {
         if let Key::Character(c) = key {
@@ -917,7 +946,7 @@ pub(crate) fn history_key_message(
         Key::Named(Named::ArrowUp) => action(HistoryKeyboardAction::Previous),
         Key::Named(Named::ArrowDown) => action(HistoryKeyboardAction::Next),
         Key::Named(Named::Enter) => action(HistoryKeyboardAction::Open),
-        Key::Named(Named::Escape) => Some(Message::HistorySearchChanged(String::new())),
+        Key::Named(Named::Escape) => action(HistoryKeyboardAction::Escape),
         _ => None,
     }
 }

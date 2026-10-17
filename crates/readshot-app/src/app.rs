@@ -81,6 +81,16 @@ pub enum HistoryKeyboardAction {
     CopyImage,
     /// ⌘F: focus the search field (shown in the History key legend).
     FocusSearch,
+    /// ⌥⌘R: reveal the selected capture in Finder / its folder.
+    Reveal,
+    /// ⌘P: pin the selected capture.
+    Pin,
+    /// ⌥⇧⌘C: copy the text of every visible capture.
+    CopyVisibleText,
+    /// ⇧⌘⌫: arm Clear All; pressed again while armed, confirm it.
+    ClearAll,
+    /// esc: cancel an armed Clear All or delete, else clear the search.
+    Escape,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,6 +137,36 @@ impl Windows {
     pub fn kinds(&self) -> impl Iterator<Item = WindowKind> + '_ {
         self.by_id.values().copied()
     }
+}
+
+/// A Settings control the keyboard focus ring is on (WCAG 2.1.1: iced
+/// 0.14 buttons, togglers, checkboxes and pick-lists can't take focus).
+/// Tab / ⇧Tab walk the current pane's controls, Space / ↵ press, ← / →
+/// change a picker; see `settings_focus_items`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsFocus {
+    PermissionRecheck,
+    PermissionReset,
+    PermissionOpen,
+    HotkeyRecord,
+    HotkeyReset,
+    Retention,
+    FolderChoose,
+    FolderOpen,
+    FolderReset,
+    FilenameField,
+    OcrEngine,
+    OcrLanguage(usize),
+    Format,
+    DebugLogging,
+    LaunchAtLogin,
+    ResetAll,
+    ResetConfirm,
+    ResetCancel,
+    UninstallPurge,
+    Uninstall,
+    UninstallConfirm,
+    UninstallCancel,
 }
 
 /// One page of the Settings window's sidebar. ⌘1–⌘7 select them in
@@ -797,6 +837,9 @@ pub enum Message {
         window: iced::window::Id,
         key: iced::keyboard::Key,
         modifiers: iced::keyboard::Modifiers,
+        /// A text field (the filename template) took the key; its Esc
+        /// only leaves the field.
+        captured: bool,
     },
     /// User asked for the command-line setup instructions window.
     OpenCliToolsRequested,
@@ -1016,6 +1059,11 @@ pub struct App {
     /// Settings sidebar page on screen. Kept across window reopenings
     /// (not persisted across launches).
     pub settings_pane: SettingsPane,
+    /// The Settings control the keyboard focus ring is on, if any.
+    pub settings_focus: Option<SettingsFocus>,
+    /// What the last Settings shortcut changed ("Default format: JPEG"),
+    /// shown by the pane title so a ⌘-key change is never silent.
+    pub settings_key_feedback: Option<String>,
     /// True after the user clicks "Clear All" in the history browser
     /// and before they confirm or cancel. Drives the two-stage
     /// destructive prompt that guards against accidentally nuking
@@ -1339,6 +1387,8 @@ impl App {
             settings_uninstall_pending: false,
             settings_uninstall_purge: false,
             settings_pane: SettingsPane::default(),
+            settings_focus: None,
+            settings_key_feedback: None,
             history_clear_all_pending: false,
             cli_tools_window_id: None,
             cli_tools_status: None,

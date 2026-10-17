@@ -260,6 +260,7 @@ fn press_settings_key(app: &mut App, id: iced::window::Id, key: &str, shift: boo
             window: id,
             key: iced::keyboard::Key::Character(key.into()),
             modifiers,
+            captured: false,
         },
     );
 }
@@ -1128,3 +1129,5 @@ mod settings_and_boot;
 mod styles_and_eyedropper;
 /// Text panel: recognition, copy, redact lines.
 mod text_recognition;
+/// History, Settings and Welcome keyboard paths and the Settings focus ring.
+mod window_keys;

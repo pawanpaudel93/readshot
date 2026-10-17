@@ -448,6 +448,7 @@ fn command_digit_in_settings_window_switches_pane() {
             window: id,
             key: iced::keyboard::Key::Character("3".into()),
             modifiers: command_modifiers(),
+            captured: false,
         },
     );
     assert_eq!(app.settings_pane, SettingsPane::Files);
@@ -458,6 +459,7 @@ fn command_digit_in_settings_window_switches_pane() {
             window: iced::window::Id::unique(),
             key: iced::keyboard::Key::Character("7".into()),
             modifiers: command_modifiers(),
+            captured: false,
         },
     );
     assert_eq!(app.settings_pane, SettingsPane::Files);

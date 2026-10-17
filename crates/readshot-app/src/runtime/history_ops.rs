@@ -146,6 +146,18 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 state.history_selected_id,
                 1,
             );
+            // ↓ past the last rendered row shows the next page, so Show
+            // More has a keyboard path and the selection stays on screen.
+            if let Some(id) = state.history_selected_id {
+                let at = visible_history_ids(&state.history_records, &state.history_search)
+                    .iter()
+                    .position(|v| *v == id);
+                if at.is_some_and(|i| i >= state.history_page_limit.max(1)) {
+                    state.history_page_limit = state
+                        .history_page_limit
+                        .saturating_add(crate::app::HISTORY_PAGE_SIZE);
+                }
+            }
             Task::none()
         }
         Message::HistoryOpenSelected => match state.history_selected_id {
@@ -204,6 +216,43 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                     }
                 },
                 HistoryKeyboardAction::FocusSearch => focus_history_search(),
+                HistoryKeyboardAction::Reveal => match state.history_selected_id {
+                    Some(id) => update(state, Message::HistoryReveal(id)),
+                    None => {
+                        state.history_status = Some("No history capture selected.".into());
+                        Task::none()
+                    }
+                },
+                HistoryKeyboardAction::Pin => match state.history_selected_id {
+                    Some(id) => update(state, Message::HistoryPin(id)),
+                    None => {
+                        state.history_status = Some("No history capture selected.".into());
+                        Task::none()
+                    }
+                },
+                HistoryKeyboardAction::CopyVisibleText => {
+                    update(state, Message::HistoryCopyVisibleTextRequested)
+                }
+                HistoryKeyboardAction::ClearAll => {
+                    if state.history_records.is_empty() {
+                        Task::none()
+                    } else if state.history_clear_all_pending {
+                        update(state, Message::HistoryClearAllConfirmed)
+                    } else {
+                        update(state, Message::HistoryClearAllRequested)
+                    }
+                }
+                // One esc, one step back: an armed prompt first, then the
+                // search.
+                HistoryKeyboardAction::Escape => {
+                    if state.history_clear_all_pending {
+                        update(state, Message::HistoryClearAllCancelled)
+                    } else if state.history_delete_pending.is_some() {
+                        update(state, Message::HistoryDeleteCancelled)
+                    } else {
+                        update(state, Message::HistorySearchChanged(String::new()))
+                    }
+                }
             }
         }
         Message::HistoryClearAllRequested => {

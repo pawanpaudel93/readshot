@@ -3,7 +3,8 @@
 //! the moved arms compile unchanged.
 
 use super::*;
-use crate::app::SettingsPane;
+use crate::app::{SettingsFocus, SettingsPane};
+use crate::permissions::PermissionStatus;
 
 /// Every settings message arm, extracted from `runtime::update` so the
 /// top-level dispatcher stays navigable. Settings
@@ -225,6 +226,10 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             if pane != SettingsPane::Capture && state.settings_recording_hotkey {
                 let _ = update(state, Message::SettingsHotkeyRecordingCancelled);
             }
+            if state.settings_pane != pane {
+                state.settings_focus = None;
+                state.settings_key_feedback = None;
+            }
             state.settings_pane = pane;
             Task::none()
         }
@@ -232,11 +237,33 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             window,
             key,
             modifiers,
+            captured,
         } => {
             // The keyboard subscription is global to the daemon; only
             // act when the focused window is the settings window.
             if state.settings_window_id != Some(window) {
                 return Task::none();
+            }
+            // Esc steps back one level: out of the filename field (which
+            // has already let go of the caret), then off the focus ring,
+            // and only then closes the window.
+            let bare = !modifiers.command() && !modifiers.alt() && !modifiers.control();
+            if bare
+                && matches!(
+                    key,
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+                )
+            {
+                if captured {
+                    state.settings_focus = None;
+                    return Task::none();
+                }
+                if state.settings_focus.take().is_some() {
+                    return Task::none();
+                }
+            }
+            if let Some(task) = settings_focus_key(state, &key, modifiers, captured) {
+                return task;
             }
             let Some(action) = settings_key_action(&key, modifiers) else {
                 return Task::none();
@@ -255,40 +282,26 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
                     state.windows.forget(window);
                     window::close(window)
                 }
-                SettingsKeyAction::ToggleLaunchAtLogin => {
-                    let next = !state.preferences.launch_at_login;
-                    update(
-                        state,
-                        Message::Settings(SettingsMessage::SetLaunchAtLogin(next)),
-                    )
+                SettingsKeyAction::ToggleLaunchAtLogin
+                | SettingsKeyAction::ToggleDebugLogging
+                | SettingsKeyAction::CycleRetention
+                | SettingsKeyAction::CycleEngine
+                | SettingsKeyAction::CycleFormat => {
+                    let item = match action {
+                        SettingsKeyAction::ToggleLaunchAtLogin => SettingsFocus::LaunchAtLogin,
+                        SettingsKeyAction::ToggleDebugLogging => SettingsFocus::DebugLogging,
+                        SettingsKeyAction::CycleRetention => SettingsFocus::Retention,
+                        SettingsKeyAction::CycleEngine => SettingsFocus::OcrEngine,
+                        _ => SettingsFocus::Format,
+                    };
+                    adjust_settings_item(state, item, 1)
                 }
-                SettingsKeyAction::ToggleDebugLogging => {
-                    let next = !state.preferences.debug_logging;
-                    update(
-                        state,
-                        Message::Settings(SettingsMessage::SetDebugLogging(next)),
-                    )
-                }
-                SettingsKeyAction::CycleRetention => {
-                    let next = cycle_retention(state.preferences.history_retention);
-                    update(
-                        state,
-                        Message::Settings(SettingsMessage::SetHistoryRetention(next)),
-                    )
-                }
-                SettingsKeyAction::CycleEngine => {
-                    let next = cycle_ocr_engine(state.preferences.ocr_engine_choice);
-                    update(
-                        state,
-                        Message::Settings(SettingsMessage::SetOcrEngine(next)),
-                    )
-                }
-                SettingsKeyAction::CycleFormat => {
-                    let next = cycle_export_format(state.preferences.default_format);
-                    update(
-                        state,
-                        Message::Settings(SettingsMessage::SetDefaultFormat(next)),
-                    )
+                SettingsKeyAction::RecordShortcut => {
+                    if state.settings_recording_hotkey {
+                        Task::none()
+                    } else {
+                        update(state, Message::SettingsStartHotkeyRecording)
+                    }
                 }
                 // Destructive: the key arms the two-stage prompt, and a
                 // second press confirms. A single keypress can never wipe.
@@ -358,29 +371,267 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
     }
 }
 
-/// Cycle to the next option in a fixed list, wrapping at the end. Used
-/// by the settings keyboard map (⌘R / ⌘E / ⌘F) so a pick-list can be
-/// changed without the pointer.
-fn cycle_in<T: Copy + PartialEq>(options: &[T], current: T) -> T {
-    match options.iter().position(|o| *o == current) {
-        Some(i) => options[(i + 1) % options.len()],
-        None => options.first().copied().unwrap_or(current),
+// The option orders below mirror `settings_view`'s pick-list arrays so
+// keyboard cycling steps through the same sequence the list shows.
+const RETENTIONS: [readshot_core::HistoryRetention; 4] = [
+    readshot_core::HistoryRetention::Off,
+    readshot_core::HistoryRetention::Last50,
+    readshot_core::HistoryRetention::Last30Days,
+    readshot_core::HistoryRetention::Unlimited,
+];
+const ENGINES: [readshot_core::OcrEngineChoice; 2] = [
+    readshot_core::OcrEngineChoice::Native,
+    readshot_core::OcrEngineChoice::Tesseract,
+];
+const FORMATS: [readshot_core::ExportFormat; 3] = [
+    readshot_core::ExportFormat::Png,
+    readshot_core::ExportFormat::Jpeg,
+    readshot_core::ExportFormat::Webp,
+];
+
+/// Widget id of the filename template field (Tab hands it the caret).
+pub(crate) const SETTINGS_FILENAME_ID: &str = "settings-filename";
+
+/// The current pane's keyboard-focusable controls, in the order they are
+/// drawn (WCAG 2.4.3).
+pub(crate) fn settings_focus_items(state: &App) -> Vec<SettingsFocus> {
+    use SettingsFocus as F;
+    match state.settings_pane {
+        SettingsPane::Permissions => match state.permission_status {
+            PermissionStatus::NotApplicable => Vec::new(),
+            PermissionStatus::Granted => vec![F::PermissionOpen],
+            PermissionStatus::Denied => {
+                vec![F::PermissionRecheck, F::PermissionReset, F::PermissionOpen]
+            }
+        },
+        SettingsPane::Capture => vec![F::HotkeyRecord, F::HotkeyReset, F::Retention],
+        SettingsPane::Files => vec![
+            F::FolderChoose,
+            F::FolderOpen,
+            F::FolderReset,
+            F::FilenameField,
+        ],
+        SettingsPane::TextRecognition => {
+            let n = state.coordinator.supported_languages().len();
+            let mut v = vec![F::OcrEngine];
+            v.extend((0..n).map(F::OcrLanguage));
+            v
+        }
+        SettingsPane::Export => vec![F::Format],
+        SettingsPane::Diagnostics => vec![F::DebugLogging],
+        SettingsPane::App => {
+            let mut v = vec![F::LaunchAtLogin];
+            if state.settings_reset_all_pending {
+                v.extend([F::ResetConfirm, F::ResetCancel]);
+            } else {
+                v.push(F::ResetAll);
+            }
+            if state.settings_uninstall_pending {
+                v.extend([F::UninstallPurge, F::UninstallConfirm, F::UninstallCancel]);
+            } else {
+                v.push(F::Uninstall);
+            }
+            v
+        }
     }
 }
 
-// The option orders below mirror `settings_view`'s pick-list arrays so
-// keyboard cycling steps through the same sequence the list shows.
-fn cycle_retention(current: readshot_core::HistoryRetention) -> readshot_core::HistoryRetention {
-    use readshot_core::HistoryRetention as R;
-    cycle_in(&[R::Off, R::Last50, R::Last30Days, R::Unlimited], current)
+/// Map a Settings key to a focus-ring command (the same keys as the
+/// editor's zones): Tab / ⇧Tab or ↓ / ↑ move, ← / → change, Space / ↵
+/// press. `captured`: the filename field has the caret and keeps every
+/// key but Tab.
+pub(crate) fn settings_focus_command(
+    focused: bool,
+    key: &iced::keyboard::Key,
+    m: iced::keyboard::Modifiers,
+    captured: bool,
+) -> Option<FocusKey> {
+    use iced::keyboard::{key::Named, Key};
+    if m.command() || m.alt() || m.control() {
+        return None;
+    }
+    if matches!(key, Key::Named(Named::Tab)) {
+        return Some(if m.shift() {
+            FocusKey::Prev
+        } else {
+            FocusKey::Next
+        });
+    }
+    if captured || !focused {
+        return None;
+    }
+    match key {
+        Key::Named(Named::ArrowDown) => Some(FocusKey::Next),
+        Key::Named(Named::ArrowUp) => Some(FocusKey::Prev),
+        Key::Named(Named::ArrowRight) => Some(FocusKey::Adjust(1)),
+        Key::Named(Named::ArrowLeft) => Some(FocusKey::Adjust(-1)),
+        Key::Named(Named::Enter | Named::Space) => Some(FocusKey::Activate),
+        _ => None,
+    }
 }
 
-fn cycle_ocr_engine(current: readshot_core::OcrEngineChoice) -> readshot_core::OcrEngineChoice {
-    use readshot_core::OcrEngineChoice as E;
-    cycle_in(&[E::Native, E::Tesseract], current)
+fn settings_caret(item: Option<SettingsFocus>) -> Task<Message> {
+    if item == Some(SettingsFocus::FilenameField) {
+        iced::widget::operation::focus(iced::widget::Id::new(SETTINGS_FILENAME_ID))
+    } else {
+        unfocus_text_fields()
+    }
 }
 
-fn cycle_export_format(current: readshot_core::ExportFormat) -> readshot_core::ExportFormat {
-    use readshot_core::ExportFormat as F;
-    cycle_in(&[F::Png, F::Jpeg, F::Webp], current)
+fn settings_focus_key(
+    state: &mut App,
+    key: &iced::keyboard::Key,
+    m: iced::keyboard::Modifiers,
+    captured: bool,
+) -> Option<Task<Message>> {
+    let items = settings_focus_items(state);
+    if items.is_empty() {
+        return None;
+    }
+    let current = state
+        .settings_focus
+        .and_then(|f| items.iter().position(|i| *i == f));
+    let cmd = settings_focus_command(current.is_some(), key, m, captured)?;
+    let n = items.len();
+    Some(match cmd {
+        FocusKey::Next | FocusKey::Prev => {
+            let next = match (current, cmd == FocusKey::Next) {
+                (None, true) => 0,
+                (None, false) => n - 1,
+                (Some(i), true) => (i + 1) % n,
+                (Some(i), false) => (i + n - 1) % n,
+            };
+            state.settings_focus = Some(items[next]);
+            settings_caret(state.settings_focus)
+        }
+        FocusKey::Adjust(step) => adjust_settings_item(state, items[current?], step),
+        FocusKey::Activate => activate_settings_item(state, items[current?]),
+        _ => return None,
+    })
+}
+
+fn pick<T: Copy + PartialEq>(all: &[T], current: T, step: i32) -> T {
+    super::key_focus::cycle(all, current, step)
+}
+
+/// Change a value-like control (← / →, or its ⌘ shortcut) and say what
+/// it is now, so the change is never silent (WCAG 3.2.2).
+fn adjust_settings_item(state: &mut App, item: SettingsFocus, step: i32) -> Task<Message> {
+    use SettingsFocus as F;
+    let p = &state.preferences;
+    let (msg, feedback) = match item {
+        F::Retention => {
+            let v = pick(&RETENTIONS, p.history_retention, step);
+            (
+                SettingsMessage::SetHistoryRetention(v),
+                format!("History retention: {v}"),
+            )
+        }
+        F::OcrEngine => {
+            let v = pick(&ENGINES, p.ocr_engine_choice, step);
+            (SettingsMessage::SetOcrEngine(v), format!("OCR engine: {v}"))
+        }
+        F::Format => {
+            let v = pick(&FORMATS, p.default_format, step);
+            (
+                SettingsMessage::SetDefaultFormat(v),
+                format!("Default format: {v}"),
+            )
+        }
+        F::LaunchAtLogin => {
+            let v = !p.launch_at_login;
+            (
+                SettingsMessage::SetLaunchAtLogin(v),
+                format!("Open at login: {}", on_off(v)),
+            )
+        }
+        F::DebugLogging => {
+            let v = !p.debug_logging;
+            (
+                SettingsMessage::SetDebugLogging(v),
+                format!("Debug logging: {}", on_off(v)),
+            )
+        }
+        F::OcrLanguage(_) | F::UninstallPurge => return activate_settings_item(state, item),
+        _ => return Task::none(),
+    };
+    let task = update(state, Message::Settings(msg));
+    state.settings_key_feedback = Some(feedback);
+    task
+}
+
+fn on_off(v: bool) -> &'static str {
+    if v {
+        "On"
+    } else {
+        "Off"
+    }
+}
+
+/// Press the focused control.
+fn activate_settings_item(state: &mut App, item: SettingsFocus) -> Task<Message> {
+    use SettingsFocus as F;
+    let msg = match item {
+        F::PermissionRecheck => Message::PermissionTick,
+        F::PermissionReset => Message::ResetPermissionRequested,
+        F::PermissionOpen => Message::OpenPermissionSettingsRequested,
+        F::HotkeyRecord if state.settings_recording_hotkey => {
+            Message::SettingsHotkeyRecordingCancelled
+        }
+        F::HotkeyRecord => Message::SettingsStartHotkeyRecording,
+        F::HotkeyReset => Message::Settings(SettingsMessage::SetCaptureHotkey(
+            default_capture_hotkey().into(),
+        )),
+        F::FolderChoose => Message::SettingsChooseSaveFolderRequested,
+        F::FolderOpen => Message::SettingsOpenSaveFolderRequested,
+        F::FolderReset => Message::Settings(SettingsMessage::SetSaveFolder(PathBuf::new())),
+        F::FilenameField => return settings_caret(Some(item)),
+        F::OcrLanguage(i) => {
+            let supported = state.coordinator.supported_languages();
+            let Some(lang) = supported.get(i) else {
+                return Task::none();
+            };
+            let mut next = state.preferences.ocr_languages.clone();
+            let on = !next.iter().any(|l| l == lang);
+            if on {
+                next.push(lang.clone());
+            } else {
+                next.retain(|l| l != lang);
+            }
+            let name = ocr_language_display_name(lang);
+            let task = update(
+                state,
+                Message::Settings(SettingsMessage::SetOcrLanguages(next)),
+            );
+            state.settings_key_feedback = Some(format!("{name}: {}", on_off(on)));
+            return task;
+        }
+        F::ResetAll => Message::SettingsResetAllRequested,
+        F::ResetConfirm => Message::SettingsResetAllConfirmed,
+        F::ResetCancel => Message::SettingsResetAllCancelled,
+        F::Uninstall => Message::SettingsUninstallRequested,
+        F::UninstallPurge => {
+            Message::SettingsUninstallPurgeToggled(!state.settings_uninstall_purge)
+        }
+        F::UninstallConfirm => Message::SettingsUninstallConfirmed,
+        F::UninstallCancel => Message::SettingsUninstallCancelled,
+        F::Retention | F::OcrEngine | F::Format | F::LaunchAtLogin | F::DebugLogging => {
+            return adjust_settings_item(state, item, 1)
+        }
+    };
+    let task = update(state, msg);
+    // An armed prompt swaps its buttons: keep the focus on the step
+    // that replaced the one pressed.
+    let items = settings_focus_items(state);
+    if !items.contains(&item) {
+        state.settings_focus = match item {
+            F::ResetAll => Some(F::ResetConfirm),
+            F::ResetConfirm | F::ResetCancel => Some(F::ResetAll),
+            F::Uninstall => Some(F::UninstallConfirm),
+            F::UninstallConfirm | F::UninstallCancel => Some(F::Uninstall),
+            _ => items.first().copied(),
+        }
+        .filter(|f| items.contains(f));
+    }
+    task
 }

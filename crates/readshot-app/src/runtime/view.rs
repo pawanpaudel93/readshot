@@ -939,6 +939,14 @@ const HISTORY_REVEAL_LABEL: &str = "Show in Folder";
 const HISTORY_KEY_DELETE: &str = "⌘⌫";
 const HISTORY_KEY_COPY_TEXT: &str = "⇧⌘C";
 const HISTORY_KEY_COPY_IMAGE: &str = "⌘C";
+const HISTORY_KEY_REVEAL: (&str, &str) = ("⌥⌘R", "Ctrl+Alt+R");
+const HISTORY_KEY_PIN: (&str, &str) = ("⌘P", "Ctrl+P");
+const HISTORY_KEY_COPY_VISIBLE: (&str, &str) = ("⌥⇧⌘C", "Ctrl+Alt+Shift+C");
+const HISTORY_KEY_CLEAR_ALL: (&str, &str) = ("⇧⌘⌫", "Ctrl+Shift+Backspace");
+
+fn history_key(k: (&'static str, &'static str)) -> &'static str {
+    platform_key(k.0, k.1)
+}
 
 /// Widget id of the History search field, focused when the window opens.
 pub(crate) const HISTORY_SEARCH_ID: &str = "history-search";
@@ -1158,39 +1166,53 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
             "Copy text from {visible_text_count} visible capture{}",
             if visible_text_count == 1 { "" } else { "s" }
         ),
-        None,
+        Some(history_key(HISTORY_KEY_COPY_VISIBLE)),
         Position::Bottom,
     );
     // Two-stage Clear All: the idle (outlined danger) button arms; armed
     // shows a solid danger confirm plus Cancel.
     let clear_controls: Element<'_, Message> = if state.history_clear_all_pending {
         row![
-            bar_button(
-                text(format!("Confirm Clear ({total})"))
-                    .size(ButtonSize::Sm.text_size())
-                    .into(),
-                ButtonKind::DangerSolid,
-                ButtonSize::Sm,
-                Some(Message::HistoryClearAllConfirmed),
+            tooltip_with_key(
+                bar_button(
+                    text(format!("Confirm Clear ({total})"))
+                        .size(ButtonSize::Sm.text_size())
+                        .into(),
+                    ButtonKind::DangerSolid,
+                    ButtonSize::Sm,
+                    Some(Message::HistoryClearAllConfirmed),
+                ),
+                "Confirm Clear All",
+                Some(history_key(HISTORY_KEY_CLEAR_ALL)),
+                Position::Bottom,
             ),
-            bar_button(
-                text("Cancel").size(ButtonSize::Sm.text_size()).into(),
-                ButtonKind::Ghost,
-                ButtonSize::Sm,
-                Some(Message::HistoryClearAllCancelled),
+            tooltip_with_key(
+                bar_button(
+                    text("Cancel").size(ButtonSize::Sm.text_size()).into(),
+                    ButtonKind::Ghost,
+                    ButtonSize::Sm,
+                    Some(Message::HistoryClearAllCancelled),
+                ),
+                "Cancel",
+                Some("esc"),
+                Position::Bottom,
             ),
         ]
         .spacing(SP1)
         .align_y(Alignment::Center)
         .into()
     } else {
-        bar_button(
-            text("Clear All").size(ButtonSize::Sm.text_size()).into(),
-            HISTORY_CLEAR_ALL_KIND,
-            ButtonSize::Sm,
-            (total > 0).then_some(Message::HistoryClearAllRequested),
+        tooltip_with_key(
+            bar_button(
+                text("Clear All").size(ButtonSize::Sm.text_size()).into(),
+                HISTORY_CLEAR_ALL_KIND,
+                ButtonSize::Sm,
+                (total > 0).then_some(Message::HistoryClearAllRequested),
+            ),
+            "Clear All (press twice)",
+            Some(history_key(HISTORY_KEY_CLEAR_ALL)),
+            Position::Bottom,
         )
-        .into()
     };
     let title_content = row![
         text("History")
@@ -1660,7 +1682,7 @@ pub(crate) fn history_selected_panel<'a>(
             AppIcon::Folder,
             p.t2,
             HISTORY_REVEAL_LABEL,
-            None,
+            Some(history_key(HISTORY_KEY_REVEAL)),
             Some(Message::HistoryReveal(id)),
             false,
             ICON_BTN,
@@ -1726,7 +1748,7 @@ pub(crate) fn history_selected_panel<'a>(
         AppIcon::Pin,
         p.t2,
         "Pin",
-        None,
+        Some(history_key(HISTORY_KEY_PIN)),
         Some(Message::HistoryPin(id)),
         false,
         ICON_BTN,
@@ -3818,6 +3840,8 @@ pub(crate) enum SettingsKeyAction {
     Uninstall,
     /// ⌘1–⌘7: show that sidebar page.
     SelectPane(SettingsPane),
+    /// ⌘K: record a new capture shortcut.
+    RecordShortcut,
 }
 
 impl SettingsKeyAction {
@@ -3827,7 +3851,7 @@ impl SettingsKeyAction {
         match self {
             Self::ToggleLaunchAtLogin | Self::ResetAll | Self::Uninstall => Some(SettingsPane::App),
             Self::ToggleDebugLogging => Some(SettingsPane::Diagnostics),
-            Self::CycleRetention => Some(SettingsPane::Capture),
+            Self::CycleRetention | Self::RecordShortcut => Some(SettingsPane::Capture),
             Self::CycleEngine => Some(SettingsPane::TextRecognition),
             Self::CycleFormat => Some(SettingsPane::Export),
             Self::Close | Self::SelectPane(_) => None,
@@ -3874,6 +3898,7 @@ pub(crate) fn settings_key_action(
         "r" => Some(SettingsKeyAction::CycleRetention),
         "e" => Some(SettingsKeyAction::CycleEngine),
         "f" => Some(SettingsKeyAction::CycleFormat),
+        "k" => Some(SettingsKeyAction::RecordShortcut),
         d if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {
             SettingsPane::from_digit(d.as_bytes()[0] - b'0').map(SettingsKeyAction::SelectPane)
         }
@@ -3899,8 +3924,9 @@ pub(crate) fn welcome_primary_message(
 }
 
 /// Map a key press in the welcome window: Enter activates the card's
-/// primary action. Reset Permission is deliberately *not* bound to a
-/// bare key (it is mildly destructive).
+/// primary action; ⌘R restarts Readshot and ⇧⌘R resets the permission
+/// while those buttons are shown. Reset Permission is deliberately *not*
+/// bound to a bare key (it is mildly destructive).
 pub(crate) fn welcome_key_message(
     welcome: WelcomeState,
     capture_in_flight: bool,
@@ -3908,6 +3934,21 @@ pub(crate) fn welcome_key_message(
     modifiers: iced::keyboard::Modifiers,
 ) -> Option<Message> {
     use iced::keyboard::{key::Named, Key};
+    if modifiers.command() && !modifiers.alt() && !extra_command_modifier(modifiers) {
+        let Key::Character(c) = key else {
+            return None;
+        };
+        if !c.eq_ignore_ascii_case("r") {
+            return None;
+        }
+        let blocked = matches!(welcome, WelcomeState::AwaitingGrant | WelcomeState::Denied);
+        return if modifiers.shift() {
+            (blocked || welcome == WelcomeState::Pending)
+                .then_some(Message::ResetPermissionRequested)
+        } else {
+            blocked.then_some(Message::RestartRequested)
+        };
+    }
     if modifiers.command() || modifiers.alt() || modifiers.control() || modifiers.shift() {
         return None;
     }
@@ -4383,6 +4424,14 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     }
     let footer = column![
         row![
+            key_chip("Tab"),
+            text("Move between controls")
+                .size(TYPE_CAPTION)
+                .style(text_t3)
+        ]
+        .spacing(SP2)
+        .align_y(Alignment::Center),
+        row![
             key_chip("esc"),
             text("/").size(TYPE_CAPTION).style(text_t3),
             key_chip("⌘W"),
@@ -4417,16 +4466,26 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         SettingsPane::Diagnostics => settings_diagnostics_pane(state),
         SettingsPane::App => settings_app_pane(state),
     };
-    let title_content = container(
-        text(pane.label())
-            .size(TYPE_HEADING)
-            .font(semibold())
-            .style(text_t1),
-    )
-    .padding([0, 22])
-    .width(Length::Fill)
-    .height(Length::Fixed(TITLEBAR_HEIGHT))
+    let mut title_line = row![text(pane.label())
+        .size(TYPE_HEADING)
+        .font(semibold())
+        .style(text_t1)]
+    .spacing(SP3)
     .align_y(Alignment::Center);
+    if let Some(feedback) = state.settings_key_feedback.as_deref() {
+        // What the last shortcut changed, so ⌘F / ⌘R never act silently.
+        title_line = title_line.push(Space::new().width(Length::Fill)).push(
+            text(feedback.to_string())
+                .size(TYPE_CAPTION)
+                .style(text_t2)
+                .wrapping(iced::widget::text::Wrapping::None),
+        );
+    }
+    let title_content = container(title_line)
+        .padding([0, 22])
+        .width(Length::Fill)
+        .height(Length::Fixed(TITLEBAR_HEIGHT))
+        .align_y(Alignment::Center);
     let title_row = stack![drag_handle(), title_content]
         .width(Length::Fill)
         .height(Length::Fixed(TITLEBAR_HEIGHT));
@@ -4562,9 +4621,20 @@ fn settings_block_with<'a>(
         .into()
 }
 
+/// Whether the Settings focus ring is on `item`.
+fn settings_lit(state: &App, item: crate::app::SettingsFocus) -> bool {
+    state.settings_focus == Some(item)
+}
+
 fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
+    use crate::app::SettingsFocus as F;
     // Never probe from view(): it runs on every redraw.
     let permission_status = state.permission_status;
+    let (lit_open, lit_recheck, lit_reset) = (
+        settings_lit(state, F::PermissionOpen),
+        settings_lit(state, F::PermissionRecheck),
+        settings_lit(state, F::PermissionReset),
+    );
     let (permission_title, permission_hint) = permission_settings_summary(permission_status);
     let permission_control: Element<'_, Message> = responsive(move |available| {
         let status = column![
@@ -4581,24 +4651,33 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
             return status.into();
         }
 
-        let open_button = button(text("Open Settings").size(TEXT_BODY_SM))
-            .padding([6, 12])
-            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-            .on_press(Message::OpenPermissionSettingsRequested);
+        let open_button = focus_ring(
+            button(text("Open Settings").size(TEXT_BODY_SM))
+                .padding([6, 12])
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(Message::OpenPermissionSettingsRequested),
+            lit_open,
+        );
         // Recheck button forces a fresh permission poll so the user
         // can confirm a System Settings change without quitting and
         // relaunching the app. Drives the existing PermissionPoll
         // handler with the latest probe result.
-        let recheck_button = button(text("Recheck").size(TEXT_BODY_SM))
-            .padding([6, 12])
-            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-            .on_press(Message::PermissionTick);
+        let recheck_button = focus_ring(
+            button(text("Recheck").size(TEXT_BODY_SM))
+                .padding([6, 12])
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(Message::PermissionTick),
+            lit_recheck,
+        );
         // Clears a grant macOS still holds for an earlier, differently
         // signed version, then asks again.
-        let reset_button = button(text("Reset Permission").size(TEXT_BODY_SM))
-            .padding([6, 12])
-            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-            .on_press(Message::ResetPermissionRequested);
+        let reset_button = focus_ring(
+            button(text("Reset Permission").size(TEXT_BODY_SM))
+                .padding([6, 12])
+                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                .on_press(Message::ResetPermissionRequested),
+            lit_reset,
+        );
         // Once access is granted there is nothing to recheck or reset.
         let actions = if matches!(permission_status, PermissionStatus::Granted) {
             row![open_button]
@@ -4708,30 +4787,41 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
         pretty
     };
     let settings_recording_hotkey = state.settings_recording_hotkey;
+    let lit_record = settings_lit(state, crate::app::SettingsFocus::HotkeyRecord);
+    let lit_reset = settings_lit(state, crate::app::SettingsFocus::HotkeyReset);
     let hotkey_control: Element<'_, Message> = responsive(move |available| {
         let value = setting_value_box(hotkey_label.clone(), settings_recording_hotkey);
         // Record / Cancel are exclusive: while a recording is armed, the
         // user needs an obvious exit that doesn't require pressing a
         // real shortcut.
-        let primary_btn = if settings_recording_hotkey {
+        let primary_btn: Element<'_, Message> = if settings_recording_hotkey {
             button(text("Cancel").size(TEXT_BODY_SM))
                 .padding([6, 12])
                 .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                 .on_press(Message::SettingsHotkeyRecordingCancelled)
+                .into()
         } else {
-            button(text("Record").size(TEXT_BODY_SM))
-                .padding([6, 12])
-                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::SettingsStartHotkeyRecording)
+            tooltip_with_key(
+                button(text("Record").size(TEXT_BODY_SM))
+                    .padding([6, 12])
+                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                    .on_press(Message::SettingsStartHotkeyRecording),
+                "Record a new shortcut",
+                Some(platform_key("⌘K", "Ctrl+K")),
+                Position::Top,
+            )
         };
         let actions = row![
-            primary_btn,
-            button(text("Reset").size(TEXT_BODY_SM))
-                .padding([6, 12])
-                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::Settings(SettingsMessage::SetCaptureHotkey(
-                    default_capture_hotkey().into()
-                ),)),
+            focus_ring(primary_btn, lit_record),
+            focus_ring(
+                button(text("Reset").size(TEXT_BODY_SM))
+                    .padding([6, 12])
+                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                    .on_press(Message::Settings(SettingsMessage::SetCaptureHotkey(
+                        default_capture_hotkey().into()
+                    ),)),
+                lit_reset
+            ),
         ]
         .spacing(8)
         .align_y(Alignment::Center);
@@ -4760,17 +4850,20 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
     .height(Length::Shrink)
     .into();
 
-    let retention_control = tooltip_with_key(
-        pick_list(
-            &RETENTION_OPTIONS[..],
-            Some(state.preferences.history_retention),
-            |r| Message::Settings(SettingsMessage::SetHistoryRetention(r)),
-        )
-        .text_size(TEXT_BODY_SM)
-        .padding([7, 10]),
-        "Next retention option",
-        Some("⌘R"),
-        Position::Top,
+    let retention_control = focus_ring(
+        tooltip_with_key(
+            pick_list(
+                &RETENTION_OPTIONS[..],
+                Some(state.preferences.history_retention),
+                |r| Message::Settings(SettingsMessage::SetHistoryRetention(r)),
+            )
+            .text_size(TEXT_BODY_SM)
+            .padding([7, 10]),
+            "Next retention option",
+            Some("⌘R"),
+            Position::Top,
+        ),
+        settings_lit(state, crate::app::SettingsFocus::Retention),
     );
 
     vec![
@@ -4803,20 +4896,29 @@ fn settings_files_pane(state: &App) -> Vec<Element<'_, Message>> {
     let save_folder_control: Element<'_, Message> = column![
         setting_value_box(save_folder_value, false),
         row![
-            button(text("Choose").size(TEXT_BODY_SM))
-                .padding([6, 12])
-                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::SettingsChooseSaveFolderRequested),
-            button(text("Open").size(TEXT_BODY_SM))
-                .padding([6, 12])
-                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::SettingsOpenSaveFolderRequested),
-            button(text("Reset").size(TEXT_BODY_SM))
-                .padding([6, 12])
-                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::Settings(SettingsMessage::SetSaveFolder(
-                    PathBuf::new()
-                ))),
+            focus_ring(
+                button(text("Choose").size(TEXT_BODY_SM))
+                    .padding([6, 12])
+                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                    .on_press(Message::SettingsChooseSaveFolderRequested),
+                settings_lit(state, crate::app::SettingsFocus::FolderChoose)
+            ),
+            focus_ring(
+                button(text("Open").size(TEXT_BODY_SM))
+                    .padding([6, 12])
+                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                    .on_press(Message::SettingsOpenSaveFolderRequested),
+                settings_lit(state, crate::app::SettingsFocus::FolderOpen)
+            ),
+            focus_ring(
+                button(text("Reset").size(TEXT_BODY_SM))
+                    .padding([6, 12])
+                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                    .on_press(Message::Settings(SettingsMessage::SetSaveFolder(
+                        PathBuf::new()
+                    ))),
+                settings_lit(state, crate::app::SettingsFocus::FolderReset)
+            ),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
@@ -4829,11 +4931,15 @@ fn settings_files_pane(state: &App) -> Vec<Element<'_, Message>> {
         filename_template.clone()
     };
     let preview_name = default_save_filename(&preview_template, chrono::Utc::now());
-    let filename_input = text_input("Screenshot {YYYY-MM-DD at HH.mm.ss}", &filename_template)
-        .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
-        .size(TEXT_BODY_SM)
-        .padding([8, 10])
-        .style(text_input_style);
+    let filename_input = focus_ring(
+        text_input("Screenshot {YYYY-MM-DD at HH.mm.ss}", &filename_template)
+            .id(iced::widget::Id::new(settings_ops::SETTINGS_FILENAME_ID))
+            .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
+            .size(TEXT_BODY_SM)
+            .padding([8, 10])
+            .style(text_input_style),
+        settings_lit(state, crate::app::SettingsFocus::FilenameField),
+    );
     let preview_line = text(format!("Saves as: {preview_name}"))
         .size(TEXT_CAPTION)
         .style(text_t3);
@@ -4867,17 +4973,20 @@ fn settings_ocr_pane(state: &App) -> Vec<Element<'_, Message>> {
 
     let ocr_supported = state.coordinator.supported_languages();
     let ocr_selected = state.preferences.ocr_languages.clone();
-    let engine_control = tooltip_with_key(
-        pick_list(
-            &ENGINE_OPTIONS[..],
-            Some(state.preferences.ocr_engine_choice),
-            |c| Message::Settings(SettingsMessage::SetOcrEngine(c)),
-        )
-        .text_size(TEXT_BODY_SM)
-        .padding([7, 10]),
-        "Next OCR engine",
-        Some("⌘E"),
-        Position::Top,
+    let engine_control = focus_ring(
+        tooltip_with_key(
+            pick_list(
+                &ENGINE_OPTIONS[..],
+                Some(state.preferences.ocr_engine_choice),
+                |c| Message::Settings(SettingsMessage::SetOcrEngine(c)),
+            )
+            .text_size(TEXT_BODY_SM)
+            .padding([7, 10]),
+            "Next OCR engine",
+            Some("⌘E"),
+            Position::Top,
+        ),
+        settings_lit(state, crate::app::SettingsFocus::OcrEngine),
     );
     vec![
         settings_group_heading("OCR engine and languages", text_t3),
@@ -4890,7 +4999,14 @@ fn settings_ocr_pane(state: &App) -> Vec<Element<'_, Message>> {
             settings_block(
                 "Recognition languages",
                 "Leave all off to let the recognizer choose. Applies to your next capture.",
-                ocr_language_control(&ocr_supported, &ocr_selected),
+                ocr_language_control(
+                    &ocr_supported,
+                    &ocr_selected,
+                    match state.settings_focus {
+                        Some(crate::app::SettingsFocus::OcrLanguage(i)) => Some(i),
+                        _ => None,
+                    },
+                ),
             ),
         ]),
     ]
@@ -4904,17 +5020,20 @@ fn settings_export_pane(state: &App) -> Vec<Element<'_, Message>> {
     const FORMAT_OPTIONS: [ExportFormat; 3] =
         [ExportFormat::Png, ExportFormat::Jpeg, ExportFormat::Webp];
 
-    let format_control = tooltip_with_key(
-        pick_list(
-            &FORMAT_OPTIONS[..],
-            Some(state.preferences.default_format),
-            |f| Message::Settings(SettingsMessage::SetDefaultFormat(f)),
-        )
-        .text_size(TEXT_BODY_SM)
-        .padding([7, 10]),
-        "Next format",
-        Some("⌘F"),
-        Position::Top,
+    let format_control = focus_ring(
+        tooltip_with_key(
+            pick_list(
+                &FORMAT_OPTIONS[..],
+                Some(state.preferences.default_format),
+                |f| Message::Settings(SettingsMessage::SetDefaultFormat(f)),
+            )
+            .text_size(TEXT_BODY_SM)
+            .padding([7, 10]),
+            "Next format",
+            Some("⌘F"),
+            Position::Top,
+        ),
+        settings_lit(state, crate::app::SettingsFocus::Format),
     );
     vec![
         settings_group_heading("Default image format", text_t3),
@@ -4933,12 +5052,15 @@ fn settings_diagnostics_pane(state: &App) -> Vec<Element<'_, Message>> {
     // No update-channel picker: the appcast publishes no channel-tagged
     // items and the Sparkle bridge sets no `allowedChannels`, so a
     // Stable/Beta choice would change nothing.
-    let debug_toggle = tooltip_with_key(
-        toggler(state.preferences.debug_logging)
-            .on_toggle(|v| Message::Settings(SettingsMessage::SetDebugLogging(v))),
-        "Toggle debug logging",
-        Some("⌘D"),
-        Position::Top,
+    let debug_toggle = focus_ring(
+        tooltip_with_key(
+            toggler(state.preferences.debug_logging)
+                .on_toggle(|v| Message::Settings(SettingsMessage::SetDebugLogging(v))),
+            "Toggle debug logging",
+            Some("⌘D"),
+            Position::Top,
+        ),
+        settings_lit(state, crate::app::SettingsFocus::DebugLogging),
     );
     vec![
         settings_group_heading("Logs for troubleshooting", text_t3),
@@ -4954,12 +5076,16 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
     use iced::widget::toggler;
     use iced::widget::tooltip::Position;
 
-    let startup_toggle = tooltip_with_key(
-        toggler(state.preferences.launch_at_login)
-            .on_toggle(|v| Message::Settings(SettingsMessage::SetLaunchAtLogin(v))),
-        "Toggle open at login",
-        Some("⌘L"),
-        Position::Top,
+    use crate::app::SettingsFocus as F;
+    let startup_toggle = focus_ring(
+        tooltip_with_key(
+            toggler(state.preferences.launch_at_login)
+                .on_toggle(|v| Message::Settings(SettingsMessage::SetLaunchAtLogin(v))),
+            "Toggle open at login",
+            Some("⌘L"),
+            Position::Top,
+        ),
+        settings_lit(state, F::LaunchAtLogin),
     );
 
     // Both destructive rows keep the two-step arm/confirm pattern: the
@@ -4970,19 +5096,25 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
             "Reset All Settings",
             "Resets hotkey, save folder, filename template, retention, OCR, and startup options. History records are kept.",
             row![
-                tooltip_with_key(
-                    button(text("Confirm Reset").size(TEXT_BODY_SM))
-                        .padding([6, 12])
-                        .style(|t, s| action_button_style(t, s, ActionKind::Danger))
-                        .on_press(Message::SettingsResetAllConfirmed),
-                    "Confirm reset",
-                    Some("⇧⌘R"),
-                    Position::Top,
+                focus_ring(
+                    tooltip_with_key(
+                        button(text("Confirm Reset").size(TEXT_BODY_SM))
+                            .padding([6, 12])
+                            .style(|t, s| action_button_style(t, s, ActionKind::Danger))
+                            .on_press(Message::SettingsResetAllConfirmed),
+                        "Confirm reset",
+                        Some("⇧⌘R"),
+                        Position::Top,
+                    ),
+                    settings_lit(state, F::ResetConfirm)
                 ),
-                button(text("Cancel").size(TEXT_BODY_SM))
-                    .padding([6, 12])
-                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                    .on_press(Message::SettingsResetAllCancelled),
+                focus_ring(
+                    button(text("Cancel").size(TEXT_BODY_SM))
+                        .padding([6, 12])
+                        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                        .on_press(Message::SettingsResetAllCancelled),
+                    settings_lit(state, F::ResetCancel)
+                ),
             ]
             .spacing(8)
             .align_y(Alignment::Center)
@@ -4997,38 +5129,53 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
         group_row(
             "Reset All Settings",
             reset_status,
-            tooltip_with_key(
-                button(text("Reset…").size(TEXT_BODY_SM))
-                    .padding([6, 12])
-                    .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
-                    .on_press(Message::SettingsResetAllRequested),
-                "Reset all settings",
-                Some("⇧⌘R"),
-                Position::Top,
+            focus_ring(
+                tooltip_with_key(
+                    button(text("Reset…").size(TEXT_BODY_SM))
+                        .padding([6, 12])
+                        .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
+                        .on_press(Message::SettingsResetAllRequested),
+                    "Reset all settings",
+                    Some("⇧⌘R"),
+                    Position::Top,
+                ),
+                settings_lit(state, F::ResetAll),
             ),
         )
     };
 
     let uninstall_row: Element<'_, Message> = if state.settings_uninstall_pending {
-        let purge_checkbox = iced::widget::checkbox(state.settings_uninstall_purge)
-            .label("Also delete history and preferences")
-            .size(16)
-            .text_size(TEXT_BODY_SM)
-            .on_toggle(Message::SettingsUninstallPurgeToggled);
+        let purge_checkbox = focus_ring(
+            container(
+                iced::widget::checkbox(state.settings_uninstall_purge)
+                    .label("Also delete history and preferences")
+                    .size(16)
+                    .text_size(TEXT_BODY_SM)
+                    .on_toggle(Message::SettingsUninstallPurgeToggled),
+            )
+            .padding([2, 4]),
+            settings_lit(state, F::UninstallPurge),
+        );
         let actions = row![
-            tooltip_with_key(
-                button(text("Uninstall").size(TEXT_BODY_SM))
-                    .padding([6, 12])
-                    .style(|t, s| action_button_style(t, s, ActionKind::Danger))
-                    .on_press(Message::SettingsUninstallConfirmed),
-                "Confirm uninstall",
-                Some("⇧⌘U"),
-                Position::Top,
+            focus_ring(
+                tooltip_with_key(
+                    button(text("Uninstall").size(TEXT_BODY_SM))
+                        .padding([6, 12])
+                        .style(|t, s| action_button_style(t, s, ActionKind::Danger))
+                        .on_press(Message::SettingsUninstallConfirmed),
+                    "Confirm uninstall",
+                    Some("⇧⌘U"),
+                    Position::Top,
+                ),
+                settings_lit(state, F::UninstallConfirm)
             ),
-            button(text("Cancel").size(TEXT_BODY_SM))
-                .padding([6, 12])
-                .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::SettingsUninstallCancelled),
+            focus_ring(
+                button(text("Cancel").size(TEXT_BODY_SM))
+                    .padding([6, 12])
+                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                    .on_press(Message::SettingsUninstallCancelled),
+                settings_lit(state, F::UninstallCancel)
+            ),
         ]
         .spacing(8)
         .align_y(Alignment::Center);
@@ -5042,14 +5189,17 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
         group_row(
             "Uninstall Readshot",
             "Remove Readshot and its command-line tools from this Mac.",
-            tooltip_with_key(
-                button(text("Uninstall…").size(TEXT_BODY_SM))
-                    .padding([6, 12])
-                    .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
-                    .on_press(Message::SettingsUninstallRequested),
-                "Uninstall Readshot",
-                Some("⇧⌘U"),
-                Position::Top,
+            focus_ring(
+                tooltip_with_key(
+                    button(text("Uninstall…").size(TEXT_BODY_SM))
+                        .padding([6, 12])
+                        .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
+                        .on_press(Message::SettingsUninstallRequested),
+                    "Uninstall Readshot",
+                    Some("⇧⌘U"),
+                    Position::Top,
+                ),
+                settings_lit(state, F::Uninstall),
             ),
         )
     };
@@ -5074,6 +5224,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
 pub(crate) fn ocr_language_control(
     supported: &[String],
     selected: &[String],
+    focused: Option<usize>,
 ) -> Element<'static, Message> {
     if supported.is_empty() {
         return setting_value_box(
@@ -5082,7 +5233,7 @@ pub(crate) fn ocr_language_control(
         );
     }
     let mut items: Vec<Element<'static, Message>> = Vec::with_capacity(supported.len());
-    for lang in supported {
+    for (i, lang) in supported.iter().enumerate() {
         let lang = lang.clone();
         let checked = selected.iter().any(|l| l == &lang);
         let selected_now = selected.to_vec();
@@ -5090,24 +5241,27 @@ pub(crate) fn ocr_language_control(
         // Show a human-readable name (e.g. "Chinese (Simplified)") but
         // keep storing the raw BCP-47 code that Vision reports.
         let display = ocr_language_display_name(&lang);
-        items.push(
-            iced::widget::checkbox(checked)
-                .label(display)
-                .size(16)
-                .text_size(TEXT_BODY_SM)
-                .on_toggle(move |now| {
-                    let mut next = selected_now.clone();
-                    if now {
-                        if !next.iter().any(|l| l == &toggle_lang) {
-                            next.push(toggle_lang.clone());
+        items.push(focus_ring(
+            container(
+                iced::widget::checkbox(checked)
+                    .label(display)
+                    .size(16)
+                    .text_size(TEXT_BODY_SM)
+                    .on_toggle(move |now| {
+                        let mut next = selected_now.clone();
+                        if now {
+                            if !next.iter().any(|l| l == &toggle_lang) {
+                                next.push(toggle_lang.clone());
+                            }
+                        } else {
+                            next.retain(|l| l != &toggle_lang);
                         }
-                    } else {
-                        next.retain(|l| l != &toggle_lang);
-                    }
-                    Message::Settings(SettingsMessage::SetOcrLanguages(next))
-                })
-                .into(),
-        );
+                        Message::Settings(SettingsMessage::SetOcrLanguages(next))
+                    }),
+            )
+            .padding([2, 4]),
+            focused == Some(i),
+        ));
     }
     iced::widget::Column::with_children(items).spacing(6).into()
 }
@@ -5289,14 +5443,19 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                 p,
                 Some(Message::OpenPermissionSettingsRequested),
             ));
-            actions = actions.push(welcome_button(
-                None,
+            actions = actions.push(tooltip_with_key(
+                welcome_button(
+                    None,
+                    "Restart Readshot",
+                    ButtonKind::Secondary,
+                    ButtonSize::Md,
+                    None,
+                    p,
+                    Some(Message::RestartRequested),
+                ),
                 "Restart Readshot",
-                ButtonKind::Secondary,
-                ButtonSize::Md,
-                None,
-                p,
-                Some(Message::RestartRequested),
+                Some(platform_key(WELCOME_KEY_RESTART.0, WELCOME_KEY_RESTART.1)),
+                iced::widget::tooltip::Position::Top,
             ));
             actions = actions.push(welcome_reset_footer());
         }
@@ -5433,15 +5592,27 @@ fn welcome_status_group<'a>(
 }
 
 /// "Already on in System Settings but still blocked?" + ghost link.
+/// Welcome window keys for Restart and Reset Permission.
+pub(crate) const WELCOME_KEY_RESTART: (&str, &str) = ("⌘R", "Ctrl+R");
+pub(crate) const WELCOME_KEY_RESET_PERMISSION: (&str, &str) = ("⇧⌘R", "Ctrl+Shift+R");
+
 fn welcome_reset_footer<'a>() -> Element<'a, Message> {
     row![
         text("Already on in System Settings but still blocked?")
             .size(TYPE_CAPTION)
             .style(text_t3),
-        button(text("Reset Permission").size(TYPE_CAPTION))
-            .padding([2, 6])
-            .style(|t, s| button_style(t, s, ButtonKind::Ghost))
-            .on_press(Message::ResetPermissionRequested),
+        tooltip_with_key(
+            button(text("Reset Permission").size(TYPE_CAPTION))
+                .padding([2, 6])
+                .style(|t, s| button_style(t, s, ButtonKind::Ghost))
+                .on_press(Message::ResetPermissionRequested),
+            "Reset Permission",
+            Some(platform_key(
+                WELCOME_KEY_RESET_PERMISSION.0,
+                WELCOME_KEY_RESET_PERMISSION.1
+            )),
+            iced::widget::tooltip::Position::Top,
+        ),
     ]
     .spacing(SP1)
     .align_y(Alignment::Center)

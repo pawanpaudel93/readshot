@@ -157,14 +157,22 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   `↑` / `↓` move between lines (`⇧` extends the selection), `Space` selects,
   `↵` or `⌘C` copies and `R` redacts the line. A ring marks the focused
   control. On Windows and Linux, `Ctrl` replaces `⌘` and `Alt` replaces `⌥`.
-- **History window:** `↑` / `↓` move between captures, `Enter` opens the
-  selected one, `⌘C` copies its image and `⇧⌘C` its text, `⌘⌫` deletes it,
-  `⌘F` focuses the search, `esc` clears the search.
+- **History window:** `↑` / `↓` move between captures (moving past the
+  last one shown loads more), `Enter` opens the selected one, `⌘C` copies
+  its image and `⇧⌘C` its text, `⌘P` pins it, `⌥⌘R` reveals it in Finder,
+  `⌘⌫` deletes it, `⌥⇧⌘C` copies the text of every visible capture,
+  `⇧⌘⌫` clears all (press twice to confirm), `⌘F` focuses the search, and
+  `esc` cancels an armed prompt or clears the search.
 - **Settings window:** `⌘1`–`⌘7` switch panes; `esc` / `⌘W` close; `⌘L`
   toggles launch-at-login and `⌘D` toggles debug logging; `⌘R`, `⌘E`, `⌘F`
-  cycle retention, OCR engine, and format; `⇧⌘R` resets and `⇧⌘U` uninstalls
-  (press twice to confirm). Each shortcut also brings up the pane its setting
-  lives on.
+  cycle retention, OCR engine, and format; `⌘K` records a new capture
+  shortcut; `⇧⌘R` resets and `⇧⌘U` uninstalls (press twice to confirm).
+  Each shortcut also brings up the pane its setting lives on, and the pane
+  title says what changed. `Tab` / `⇧Tab` move a focus ring through the
+  pane's controls (buttons, pickers, checkboxes, the filename field), `Space`
+  or `Enter` presses the focused one and `←` / `→` change a picker. `esc`
+  steps back one level: out of the filename field, then off the ring, then
+  closes the window.
 - **Scrolling-capture window:** `esc` stops and stitches the session;
   `⇧esc` or `⌘.` discards it (press twice to confirm, or click Keep Going
   to carry on capturing; the confirmation waits for your answer). While a
@@ -173,7 +181,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
 - **Pinned windows:** `esc` / `⌘W` close, `L` lock, `-` / `+` adjust opacity,
   arrow keys move the window by 1 pixel (hold `⇧` for 10).
 - **Welcome screen:** `Enter` triggers the primary action (Allow / Open System
-  Settings / Capture).
+  Settings / Capture); `⌘R` restarts Readshot and `⇧⌘R` resets the Screen
+  Recording permission when those buttons are shown.
 
 Readshot also respects the system Reduce Motion setting, dropping non-essential
 animation when it is enabled.
