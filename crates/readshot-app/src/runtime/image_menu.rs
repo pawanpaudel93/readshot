@@ -543,7 +543,7 @@ pub(crate) fn resize_popover<'a>(
                     .label("Lock aspect ratio")
                     .text_size(TYPE_CAPTION)
                     .on_toggle(Message::EditorResizeLockToggled),
-                "Lock aspect ratio",
+                "Lock Aspect Ratio",
                 Some(platform_key("⌥L", "Alt+L")),
                 iced::widget::tooltip::Position::Bottom,
             ),

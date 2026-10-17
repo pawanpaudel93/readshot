@@ -1107,6 +1107,8 @@ mod app_shell;
 mod capture_flow;
 /// Combine: adding captures and files, bakes.
 mod combine_capture;
+/// Tooltip and toggle casing over the view sources.
+mod copy_conventions;
 /// Editor text drafts, discard, output and editor keys.
 mod editor_drafts;
 /// Rotate, flip, resize and crop.
