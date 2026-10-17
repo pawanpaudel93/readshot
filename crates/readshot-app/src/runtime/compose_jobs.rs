@@ -247,14 +247,32 @@ fn register(
         ed.compose_job.as_ref().is_none_or(|j| !j.kind.is_step()),
         "a pending step would be lost"
     );
+    register_settling_steps(ed, kind, next, drag_baseline, steps, base);
+}
+
+/// [`register`] without its debug check: should pending steps reach it
+/// anyway (a message that bypassed `settle_before`), they are settled
+/// first, never abandoned, and the new request keeps the tags of the
+/// state it was planned from, so it lands as stale.
+fn register_settling_steps(
+    ed: &mut EditorSession,
+    kind: ComposeKind,
+    next: Snapshot,
+    drag_baseline: Option<Snapshot>,
+    steps: Vec<QueuedStep>,
+    base: Option<Arc<image::RgbaImage>>,
+) {
+    let generation = ed.model.history_generation();
+    let present = ed.model.snapshot();
+    settle_displaced_steps(ed);
     abandon(ed.compose_job.take());
     ed.compose_seq += 1;
     let composed = steps.len();
     ed.compose_job = Some(ComposeRequest {
         seq: ed.compose_seq,
         kind,
-        generation: ed.model.history_generation(),
-        present: ed.model.snapshot(),
+        generation,
+        present,
         drag_baseline,
         next,
         steps,
@@ -263,6 +281,17 @@ fn register(
         output: ComposedOutput::queued(),
         launched: false,
     });
+}
+
+/// Pending steps about to be displaced by another request: applied now
+/// (the running compose's result waited for), never lost. `true` when
+/// there were some.
+fn settle_displaced_steps(ed: &mut EditorSession) -> bool {
+    if !steps_pending(ed) {
+        return false;
+    }
+    settle_steps(ed, None);
+    true
 }
 
 /// A replaced or dropped request: its worker never runs, or frees its own
@@ -625,8 +654,7 @@ pub(crate) fn handle_composed(
             // output. They are settled with the next interaction.
             if ed.busy {
                 debug_assert!(false, "a compose landed while busy");
-                ed.compose_job = Some(request);
-                discard(doc);
+                keep_steps_while_busy(ed, request, doc);
                 return Task::none();
             }
             land_steps(ed, Some(&coord), request, doc)
@@ -634,6 +662,18 @@ pub(crate) fn handle_composed(
     };
     held.release(state.editor.as_ref());
     task
+}
+
+/// Steps whose compose landed while an output runs: kept pending, with
+/// their result, so the next settle applies them without composing
+/// again; never dropped.
+fn keep_steps_while_busy(
+    ed: &mut EditorSession,
+    mut request: ComposeRequest,
+    doc: Option<ComposedDoc>,
+) {
+    request.output = ComposedOutput::new(doc);
+    ed.compose_job = Some(request);
 }
 
 /// A flatten landed. It is shown whenever it is over the document on
@@ -1368,5 +1408,77 @@ mod tests {
         ));
         let small = Arc::new(image::RgbaImage::new(40, 20));
         assert!(!lets_go_of_big_base(&[small], &[]));
+    }
+
+    /// An async editor with one annotation and an undo of it queued (its
+    /// worker not started).
+    fn editor_with_a_queued_undo() -> EditorSession {
+        let mut ed = EditorSession::new(image::RgbaImage::new(40, 20));
+        ed.async_compose_min_pixels = 0;
+        ed.model
+            .commit_annotation(readshot_core::Annotation::Pixelate {
+                rect: readshot_core::RectLike::new(2.0, 2.0, 10.0, 8.0),
+                block_size: 4.0,
+            });
+        ed.refresh_image();
+        let _ = queue_history_move(&mut ed, ComposeKind::Undo).expect("queued");
+        assert!(steps_pending(&ed));
+        assert_eq!(ed.model.annotations().len(), 1, "not applied yet");
+        ed
+    }
+
+    #[test]
+    fn a_request_registered_over_pending_steps_settles_them_never_drops_them() {
+        let mut ed = editor_with_a_queued_undo();
+        let generation = ed.model.history_generation();
+        let planned_from = ed.model.snapshot();
+        // As if a message bypassed `settle_before` and asked for a flatten.
+        register_settling_steps(
+            &mut ed,
+            ComposeKind::Flatten,
+            planned_from.clone(),
+            None,
+            Vec::new(),
+            None,
+        );
+        assert!(ed.model.annotations().is_empty(), "the undo was applied");
+        assert!(ed.history_sync_owed);
+        let job = ed.compose_job.as_ref().expect("the flatten is registered");
+        assert_eq!(job.kind, ComposeKind::Flatten);
+        // Tagged with the state it was planned from: it lands as stale.
+        assert_eq!(job.generation, generation);
+        assert_eq!(job.present, planned_from);
+        assert_ne!(ed.model.history_generation(), generation);
+    }
+
+    #[test]
+    fn steps_landing_while_busy_stay_pending_with_their_result() {
+        let mut ed = EditorSession::new(image::RgbaImage::new(40, 20));
+        ed.async_compose_min_pixels = 0;
+        ed.refresh_image();
+        // A rotate: its turned base was never composed (no cached base).
+        let _ = queue_geometry_step(
+            &mut ed,
+            ComposeKind::Rotate { clockwise: true },
+            "rotate",
+            |g| EditorState::rotated_geometry(g, true),
+        )
+        .expect("queued");
+        let request = ed.compose_job.take().expect("queued");
+        assert!(request.base.is_none());
+        let doc = compose_with(request.next.clone(), None);
+        ed.busy = true;
+        keep_steps_while_busy(&mut ed, request, Some(doc));
+        assert!(steps_pending(&ed), "never dropped");
+        assert_eq!(ed.image_size(), (40, 20), "not applied under busy");
+        ed.busy = false;
+        let composes = composes_on_this_thread();
+        settle_steps(&mut ed, None);
+        assert_eq!(ed.image_size(), (20, 40), "applied at the settle");
+        assert_eq!(
+            composes_on_this_thread(),
+            composes,
+            "with the kept result: no second compose"
+        );
     }
 }
