@@ -1557,10 +1557,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 readshot_ui::CanvasMessage::SelectDragged(p) => {
                     let mut background_without_selected = None;
                     // A redaction dragged on a document small enough to
-                    // render here is rendered where it is on each tick, so
-                    // its real effect (pixelate, blur) shows while it
-                    // moves; a large one keeps the canvas's opaque cover.
-                    let small = !ed.is_large();
+                    // render cheaply (under 4 MP) is rendered where it is
+                    // on each tick, so its real effect (pixelate, blur)
+                    // shows while it moves; on a bigger one the canvas
+                    // covers it opaquely and the release renders it.
+                    let small = ed.renders_redaction_drags_live();
                     let mut render_present = false;
                     if let Some(drag) = ed.move_drag.as_mut() {
                         let dx = p.x - drag.start.x;

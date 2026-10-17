@@ -15223,6 +15223,56 @@ mod tests {
     }
 
     #[test]
+    fn a_redaction_drag_renders_at_most_once_per_tick_and_never_above_the_live_limit() {
+        use crate::editor::ui_renders_on_this_thread as renders;
+        use readshot_ui::CanvasMessage;
+        for live in [true, false] {
+            let mut app = build_app(Arc::new(FakePermissions::granted()));
+            let mut ed = crate::editor::EditorSession::new(ramp(40, 20));
+            ed.model.commit_annotation(Annotation::Pixelate {
+                rect: RectLike::new(2.0, 2.0, 10.0, 8.0),
+                block_size: 4.0,
+            });
+            ed.model.set_tool(readshot_ui::editor::ToolState::Select);
+            ed.refresh_image();
+            if !live {
+                // As if the 800 px document were over the 4 MP limit.
+                ed.live_redaction_max_pixels = 800;
+            }
+            app.editor = Some(ed);
+            let before = renders();
+            let _ = update(
+                &mut app,
+                Message::EditorCanvas(CanvasMessage::SelectPressed(PointLike::new(5.0, 5.0))),
+            );
+            for x in [8.0, 11.0, 14.0, 17.0, 20.0] {
+                let _ = update(
+                    &mut app,
+                    Message::EditorCanvas(CanvasMessage::SelectDragged(PointLike::new(x, 5.0))),
+                );
+            }
+            let during = renders() - before;
+            let ed = app.editor.as_ref().unwrap();
+            if live {
+                assert!(during <= 5, "one render per tick at most: {during}");
+                assert!(ed.shows_present_render());
+            } else {
+                // One render of the document without it, then nothing per
+                // tick: the canvas's opaque cover stands in.
+                assert_eq!(during, 1, "{during}");
+                assert!(!ed.shows_present_render());
+            }
+            let _ = update(
+                &mut app,
+                Message::EditorCanvas(CanvasMessage::SelectReleased),
+            );
+            let ed = app.editor.as_ref().unwrap();
+            assert!(ed.shows_present_render(), "the release renders it");
+            assert!(renders() - before <= during + 1);
+        }
+    }
+
+    #[test]
     fn a_dragged_redaction_shows_its_real_effect_when_the_document_renders_here() {
         use readshot_ui::CanvasMessage;
         let pixelate = Annotation::Pixelate {
