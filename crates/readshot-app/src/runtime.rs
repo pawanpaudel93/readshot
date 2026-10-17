@@ -700,6 +700,20 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                 _ => None,
             }
         }));
+        // Left-button state: a slider cancelled while held ignores its
+        // ticks until release; one previewed by keys or Ctrl+wheel does not.
+        subs.push(iced::event::listen_with(|event, _status, _window| {
+            use iced::mouse::{Button, Event as MouseEvent};
+            match event {
+                iced::Event::Mouse(MouseEvent::ButtonPressed(Button::Left)) => {
+                    Some(Message::EditorPointerButton(true))
+                }
+                iced::Event::Mouse(MouseEvent::ButtonReleased(Button::Left)) => {
+                    Some(Message::EditorPointerButton(false))
+                }
+                _ => None,
+            }
+        }));
         // Command state for ⌘-click multi-select in the Text panel.
         subs.push(iced::event::listen_with(|event, _status, _window| {
             use iced::keyboard::Event as KbEvent;
@@ -1802,6 +1816,17 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                         ed.zoom = ed.actual_size_zoom();
                     }
                 }
+            }
+            Task::none()
+        }
+        Message::EditorPointerButton(pressed) => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.pointer_held = pressed;
+                // A press starts a new drag and a release ends the held
+                // one: either way a raised cancel flag belongs to a drag
+                // that is over.
+                ed.style_drag_cancelled = false;
+                ed.snapshot_drag_cancelled = false;
             }
             Task::none()
         }
@@ -3299,6 +3324,8 @@ mod tests {
             &mut app,
             Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
         );
+        // The mouse is down: this is a held slider drag.
+        let _ = update(&mut app, Message::EditorPointerButton(true));
         let _ = update(
             &mut app,
             Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
@@ -3336,6 +3363,8 @@ mod tests {
             &mut app,
             Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
         );
+        // The mouse is down: this is a held slider drag.
+        let _ = update(&mut app, Message::EditorPointerButton(true));
         let _ = update(&mut app, Message::EditorTextCancel);
         let _ = update(
             &mut app,
@@ -3371,6 +3400,122 @@ mod tests {
         );
         assert_eq!(ed.model.undo_depth(), depth + 1);
         assert!(ed.snapshot_drag_baseline.is_none());
+    }
+
+    /// A mouse drag on a Beautify slider: the press tick (iced sends it
+    /// before the button event reaches the subscription), the button,
+    /// more ticks, then release.
+    fn drag_padding(app: &mut App, values: &[u32]) {
+        use readshot_core::beautify::BeautifyEdit;
+        for (i, v) in values.iter().enumerate() {
+            let _ = update(
+                app,
+                Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(*v)),
+            );
+            if i == 0 {
+                assert_eq!(
+                    app.editor.as_ref().unwrap().model.beautify().padding,
+                    *v,
+                    "the press tick previews"
+                );
+                let _ = update(app, Message::EditorPointerButton(true));
+            }
+        }
+        let _ = update(app, Message::EditorSnapshotSliderCommit);
+        let _ = update(app, Message::EditorPointerButton(false));
+    }
+
+    #[test]
+    fn a_cancelled_key_or_wheel_slider_preview_never_swallows_the_next_drag() {
+        use readshot_core::beautify::{BeautifyEdit, BuiltinPreset};
+        // Each way a preview with no held slider can be cancelled.
+        type Cancel = fn(&mut App);
+        let cancels: [(&str, Cancel); 3] = [
+            ("esc", |app| {
+                let _ = update(app, Message::EditorTextCancel);
+            }),
+            ("undo", |app| {
+                let _ = update(
+                    app,
+                    Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+                );
+            }),
+            ("preset", |app| {
+                let _ = update(app, Message::EditorBeautifyPreset(BuiltinPreset::Minimal));
+            }),
+        ];
+        for (name, cancel) in cancels {
+            let mut app = build_app(Arc::new(FakePermissions::granted()));
+            app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+            let _ = update(
+                &mut app,
+                Message::EditorBeautifyPreset(BuiltinPreset::Minimal),
+            );
+            // Arrow keys (one tick) or a Ctrl+wheel burst (several): no
+            // button press, no release.
+            for v in [20, 21, 22] {
+                let _ = update(
+                    &mut app,
+                    Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(v)),
+                );
+            }
+            cancel(&mut app);
+            let ed = app.editor.as_ref().unwrap();
+            assert!(!ed.snapshot_drag_cancelled, "{name}: no held slider");
+            let depth = ed.model.undo_depth();
+            drag_padding(&mut app, &[40, 44]);
+            let ed = app.editor.as_ref().unwrap();
+            assert_eq!(ed.model.beautify().padding, 44, "{name}: the drag applies");
+            assert_eq!(ed.model.undo_depth(), depth + 1, "{name}: one undo step");
+        }
+    }
+
+    #[test]
+    fn a_cancelled_key_style_preview_never_swallows_the_next_drag() {
+        use readshot_ui::editor::StyleMessage;
+        let mut app = two_rects_first_selected();
+        // An arrow key over the corner slider, then Esc.
+        let _ = update(
+            &mut app,
+            Message::EditorStylePreview(StyleMessage::CornerRadius(6.0)),
+        );
+        let _ = update(&mut app, Message::EditorTextCancel);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(!ed.style_drag_cancelled);
+        let depth = ed.model.undo_depth();
+        let radius = |app: &App| match &app.editor.as_ref().unwrap().model.annotations()[0] {
+            Annotation::Rectangle { style, .. } => style.corner_radius,
+            other => panic!("expected rectangle, got {other:?}"),
+        };
+        assert_eq!(radius(&app), 0.0);
+        // Now a mouse drag on the same slider.
+        let _ = update(
+            &mut app,
+            Message::EditorStylePreview(StyleMessage::CornerRadius(9.0)),
+        );
+        assert_eq!(radius(&app), 9.0, "the press tick previews");
+        let _ = update(&mut app, Message::EditorPointerButton(true));
+        let _ = update(
+            &mut app,
+            Message::EditorStylePreview(StyleMessage::CornerRadius(11.0)),
+        );
+        let _ = update(&mut app, Message::EditorStyleCommit);
+        let _ = update(&mut app, Message::EditorPointerButton(false));
+        assert_eq!(radius(&app), 11.0);
+        assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth + 1);
+    }
+
+    #[test]
+    fn a_new_press_clears_a_stale_cancelled_drag_flag() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(16, 16));
+        ed.snapshot_drag_cancelled = true;
+        ed.style_drag_cancelled = true;
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorPointerButton(true));
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.pointer_held);
+        assert!(!ed.snapshot_drag_cancelled && !ed.style_drag_cancelled);
     }
 
     #[test]
@@ -8379,6 +8524,8 @@ mod tests {
             );
         };
         tick(&mut app, 6.0);
+        // The mouse is down: this is a held slider drag.
+        let _ = update(&mut app, Message::EditorPointerButton(true));
         let _ = update(
             &mut app,
             Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
@@ -8412,6 +8559,8 @@ mod tests {
             &mut app,
             Message::EditorStylePreview(StyleMessage::CornerRadius(6.0)),
         );
+        // The mouse is down: this is a held slider drag.
+        let _ = update(&mut app, Message::EditorPointerButton(true));
         let _ = update(&mut app, Message::EditorTextCancel);
         let _ = update(
             &mut app,
@@ -12139,6 +12288,8 @@ mod tests {
         app.editor = Some(two_part_editor());
         let depth = app.editor.as_ref().unwrap().model.undo_depth();
         let _ = update(&mut app, Message::EditorLayoutGapPreview(4));
+        // The mouse is down: this is a held slider drag.
+        let _ = update(&mut app, Message::EditorPointerButton(true));
         let _ = update(&mut app, Message::EditorLayoutGapPreview(9));
         let _ = update(
             &mut app,

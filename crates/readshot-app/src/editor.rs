@@ -352,8 +352,15 @@ pub struct EditorSession {
     pub snapshot_drag_baseline: Option<readshot_ui::editor::Snapshot>,
     /// Set when Esc, undo or another edit dropped a snapshot drag whose
     /// slider is still held: iced keeps sending ticks until release, and
-    /// they must not start a new preview. Cleared on release.
+    /// they must not start a new preview. Only raised while the mouse is
+    /// down ([`Self::pointer_held`]); cleared on release and on any new
+    /// press.
     pub snapshot_drag_cancelled: bool,
+    /// The left mouse button is down (tracked globally). A cancelled
+    /// slider drag only raises the `*_drag_cancelled` flags while it is:
+    /// a key or Ctrl+wheel preview has no held slider to ignore, and a
+    /// flag raised for it would swallow the next real drag.
+    pub pointer_held: bool,
     /// The newest combine gap slider value not previewed yet: gap ticks
     /// are throttled (each preview recomposes the document), and the
     /// last one is applied on the trailing edge, on release, or before
@@ -651,6 +658,7 @@ impl EditorSession {
             style_drag_cancelled: false,
             snapshot_drag_baseline: None,
             snapshot_drag_cancelled: false,
+            pointer_held: false,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
             beautify_hex_draft: String::new(),
@@ -713,6 +721,7 @@ impl EditorSession {
             style_drag_cancelled: false,
             snapshot_drag_baseline: None,
             snapshot_drag_cancelled: false,
+            pointer_held: false,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
             beautify_hex_draft: String::new(),

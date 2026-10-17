@@ -670,6 +670,11 @@ pub enum Message {
     /// modifiers globally and forwards them to the editor canvas, which
     /// uses them to constrain shape drags (square / 45°).
     EditorShiftChanged(bool),
+    /// The left mouse button went down (`true`) or up (`false`) in any
+    /// window while an editor is open. Slider drags have no press
+    /// message of their own; this tells a held drag from a key or
+    /// Ctrl+wheel preview.
+    EditorPointerButton(bool),
     /// Preview selected-annotation width while the toolbar slider is dragged.
     EditorLineWidthPreview(f32),
     /// Commit the toolbar slider's selected-annotation width preview.

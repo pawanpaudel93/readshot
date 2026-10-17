@@ -255,8 +255,11 @@ pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
         ed.model.cancel_preview_from_baseline(baseline);
         refresh = true;
     }
+    // Only a slider still held keeps sending ticks that must be ignored;
+    // a key or Ctrl+wheel preview has none, and its flag would swallow
+    // the next drag.
     if let Some(drag) = ed.style_drag_baseline.take() {
-        ed.style_drag_cancelled = true;
+        ed.style_drag_cancelled |= ed.pointer_held;
         ed.model.set_tool_style(drag.tool_style);
         if let Some(baseline) = drag.annotations {
             ed.model.cancel_preview_from_baseline(baseline);
@@ -267,7 +270,7 @@ pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
     ed.layout_gap_pending = None;
     if let Some(baseline) = ed.snapshot_drag_baseline.take() {
         ed.model.cancel_preview_snapshot(baseline);
-        ed.snapshot_drag_cancelled = true;
+        ed.snapshot_drag_cancelled |= ed.pointer_held;
         refresh = true;
     }
     if refresh {
