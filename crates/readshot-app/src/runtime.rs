@@ -11797,6 +11797,68 @@ mod tests {
     }
 
     #[test]
+    fn copy_lines_masks_a_word_hidden_only_by_a_resized_redactions_fringe() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(30, 30));
+        ed.model.scale_by(3.0, 3.0).unwrap();
+        app.editor = Some(ed);
+        // A word at x 20–21 of the capture: x 60–63 once tripled, just
+        // right of the blur's exact rect (x 30–60) but under the resize's
+        // fringe, which the exported image hides.
+        recognized(
+            &mut app,
+            readshot_core::document::ORIGINAL_PART,
+            positioned_doc("Zx9Qw7", RectLike::new(20.0, 10.0, 1.0, 10.0)),
+        );
+        let ed = app.editor.as_mut().unwrap();
+        ed.model
+            .commit_annotation(word_blur(RectLike::new(30.0, 30.0, 30.0, 30.0)));
+        let drawn = ed.model.drawn_annotations();
+        assert!(matches!(
+            drawn.as_slice(),
+            [Annotation::Blur { rect, .. }] if rect.x + rect.width > 61.5
+        ));
+        assert_eq!(
+            super::text_panel::copy_lines_text(ed, &[0], false).as_deref(),
+            Some("██████")
+        );
+    }
+
+    #[tokio::test]
+    async fn known_complete_redactions_still_mask_recognized_text() {
+        // A reopened scrub whose stored redactions are known: the editor's
+        // recognition is stored, masked with all of them.
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_positions_and_history(store.clone());
+        let (img, record) = reopened_scrubbed(&store);
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            img,
+            record.clone(),
+        ));
+        let ed = app.editor.as_mut().unwrap();
+        ed.model
+            .commit_annotation(word_blur(RectLike::new(20.0, 10.0, 5.0, 5.0)));
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let ed = app.editor.as_ref().unwrap();
+        let (target, cut) = super::text_panel::recognition_history_target(ed);
+        let target = target.expect("redactions known: text may be stored");
+        let _ = super::text_panel::store_recognized_text(
+            &app.coordinator,
+            &target,
+            cut.as_ref(),
+            Ok(positioned_doc(
+                &hidden_word(),
+                RectLike::new(2.0, 4.0, 10.0, 3.0),
+            )),
+        )
+        .await;
+        let text = stored_record(&store, record.id).ocr_text.unwrap();
+        assert_eq!(text, "█".repeat(6));
+    }
+
+    #[test]
     fn a_rotated_reopened_scrub_never_stores_the_raw_text_of_its_flattened_image() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));

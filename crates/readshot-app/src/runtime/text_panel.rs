@@ -704,7 +704,9 @@ pub(crate) fn redact_state(ed: &EditorSession) -> RedactState {
         ..RedactState::default()
     };
     for (m, rect) in rects {
-        let cov = coverage(rect, ed.model.annotations());
+        // What the output hides: the redactions as drawn.
+        let drawn = ed.model.drawn_annotations();
+        let cov = coverage(rect, &drawn);
         if cov != Coverage::None {
             out.covered.push(m.clone());
         }
@@ -829,7 +831,8 @@ pub(crate) fn copy_lines_text(
 ) -> Option<String> {
     use readshot_core::scrub::{hidden_spans, mask_document};
     let doc = ed.text_panel.document()?;
-    let spans = hidden_spans(doc, ed.model.annotations());
+    // Masked like the exported image: the redactions as drawn.
+    let spans = hidden_spans(doc, &ed.model.drawn_annotations());
     Some(if spans.is_empty() {
         readshot_core::text_lines::copy_lines(doc, indices, remove_breaks)
     } else {
