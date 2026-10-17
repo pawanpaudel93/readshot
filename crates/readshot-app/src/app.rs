@@ -888,6 +888,9 @@ pub struct App {
     /// capture (`sync_scroll_escape_hotkeys`): the user is scrolling
     /// another app, where the HUD's in-window key would never arrive.
     pub scroll_escape_hotkeys: Vec<global_hotkey::hotkey::HotKey>,
+    /// Registering them was tried for the running session (whatever
+    /// came of it): a failure is not retried, or logged, on every update.
+    pub scroll_escape_tried: bool,
     /// Whether the user-configured capture shortcut is currently
     /// registered. The fixed History / Settings shortcuts can still
     /// work when this is false, so this is tracked separately from
@@ -1345,6 +1348,7 @@ impl App {
             hotkey_manager: None,
             hotkey_actions: HashMap::new(),
             scroll_escape_hotkeys: Vec::new(),
+            scroll_escape_tried: false,
             capture_hotkey_registered: false,
             fixed_hotkey_failures: Vec::new(),
             tray: None,

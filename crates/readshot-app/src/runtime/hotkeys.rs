@@ -354,6 +354,40 @@ where
     true
 }
 
+/// Which scroll-capture esc chords are global hotkeys right now:
+/// `(esc, ⇧esc)`. The in-window HUD map leaves only those to the hotkey.
+pub(crate) fn scroll_escape_globals(state: &App) -> (bool, bool) {
+    let has = |a: GlobalHotkeyAction| {
+        state
+            .scroll_escape_hotkeys
+            .iter()
+            .any(|h| state.hotkey_actions.get(&h.id()) == Some(&a))
+    };
+    (
+        has(GlobalHotkeyAction::ScrollStop),
+        has(GlobalHotkeyAction::ScrollDiscard),
+    )
+}
+
+/// The HUD's in-window key map minus the esc chords that are global
+/// hotkeys (`plain`: esc, `shift`: ⇧esc), so one press is never seen
+/// twice (a doubled ⇧esc would confirm a discard).
+pub(crate) fn scroll_key_message_beside_globals(
+    key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+    plain: bool,
+    shift: bool,
+) -> Option<crate::app::Message> {
+    if matches!(
+        key,
+        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+    ) && (if modifiers.shift() { shift } else { plain })
+    {
+        return None;
+    }
+    super::scroll_key_message(key, modifiers)
+}
+
 /// While a scrolling capture runs (and is not stitching), esc and ⇧esc
 /// are global hotkeys: the user is scrolling another app, so the HUD's
 /// in-window keys would never arrive (WCAG 2.1.1). They are released as
@@ -383,10 +417,12 @@ pub(crate) fn sync_scroll_escape_hotkeys_with<R, U>(
     U: FnMut(HotKey),
 {
     let want = state.scroll_session.as_ref().is_some_and(|s| !s.stopping);
-    let have = !state.scroll_escape_hotkeys.is_empty();
-    if want == have {
+    // Registration is tried once per session: if the OS refuses a chord
+    // it is not retried (and logged) on every update.
+    if want == state.scroll_escape_tried {
         return;
     }
+    state.scroll_escape_tried = want;
     if want {
         use global_hotkey::hotkey::Modifiers;
         for (mods, action) in [
@@ -422,6 +458,7 @@ pub(crate) fn refresh_hotkey_registration(state: &mut App) {
     // Dropping the manager released the scrolling-capture esc keys too;
     // the next update registers them again if a session is running.
     state.scroll_escape_hotkeys.clear();
+    state.scroll_escape_tried = false;
     state.capture_hotkey_registered = false;
     state.fixed_hotkey_failures = Vec::new();
     if let Some(registration) = register_default_hotkey(&state.preferences) {

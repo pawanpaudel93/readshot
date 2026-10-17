@@ -25,6 +25,15 @@ fn mods(cmd: bool, shift: bool, alt: bool, ctrl: bool) -> Modifiers {
     m
 }
 
+/// The editor's second-level chord: ⌥⌘ on macOS, Ctrl+Shift elsewhere.
+fn alt_chord() -> Modifiers {
+    if cfg!(target_os = "macos") {
+        mods(true, false, true, false)
+    } else {
+        mods(true, true, false, false)
+    }
+}
+
 fn ch(c: &str) -> Key {
     Key::Character(c.into())
 }
@@ -108,11 +117,7 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
             mods(true, false, false, false),
             "EditorPinRequested",
         ),
-        (
-            ch("p"),
-            mods(true, false, true, false),
-            "EditorPanelToggled",
-        ),
+        (ch("p"), alt_chord(), "EditorPanelToggled"),
         (
             ch("s"),
             mods(true, false, false, false),
@@ -123,7 +128,7 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
             mods(true, false, false, false),
             "EditorDiscardRequested",
         ),
-        (ch("i"), mods(true, false, true, false), "EditorResizeOpen"),
+        (ch(RESIZE_LETTER), alt_chord(), "EditorResizeOpen"),
         (ch("["), mods(true, false, false, false), "clockwise: false"),
         (ch("]"), mods(true, false, false, false), "clockwise: true"),
         (ch("="), mods(true, false, false, false), "EditorZoomIn"),
@@ -156,16 +161,8 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
             mods(true, true, false, false),
             "EditorFlip(Vertical)",
         ),
-        (
-            ch("t"),
-            mods(true, false, true, false),
-            "EditorPanelTabKey(Text)",
-        ),
-        (
-            ch("b"),
-            mods(true, false, true, false),
-            "EditorPanelTabKey(Beautify)",
-        ),
+        (ch("t"), alt_chord(), "EditorPanelTabKey(Text)"),
+        (ch("b"), alt_chord(), "EditorPanelTabKey(Beautify)"),
         (named(Named::Tab), plain(), "EditorCycleSelection(1)"),
         (
             named(Named::Tab),
@@ -418,7 +415,7 @@ fn layout_gap_and_align_step_from_the_keyboard() {
 #[test]
 fn resize_opens_with_width_focused_and_tabs_through_the_dialog() {
     let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
-    press(&mut app, id, ch("i"), mods(true, false, true, false));
+    press(&mut app, id, ch(RESIZE_LETTER), alt_chord());
     assert_eq!(
         app.editor.as_ref().unwrap().popover,
         Some(EditorPopover::Resize)
@@ -538,7 +535,7 @@ fn closing_a_popover_opened_from_the_bar_returns_the_focus_to_it() {
 #[test]
 fn the_beautify_tab_is_operable_from_the_keyboard() {
     let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
-    press(&mut app, id, ch("b"), mods(true, false, true, false));
+    press(&mut app, id, ch("b"), alt_chord());
     assert_eq!(
         PanelTab::from_id(&app.preferences.editor_panel_tab),
         PanelTab::Beautify
@@ -603,7 +600,7 @@ fn text_lines_are_selected_copied_and_redacted_from_the_keyboard() {
     ready_editor(&mut app);
     let id = iced::window::Id::unique();
     app.editor.as_mut().unwrap().window_id = Some(id);
-    press(&mut app, id, ch("t"), mods(true, false, true, false));
+    press(&mut app, id, ch("t"), alt_chord());
     while focus(&app) != at(FocusZone::Panel, FocusItem::TextLines) {
         press(&mut app, id, named(Named::Tab), plain());
     }
@@ -753,9 +750,9 @@ fn alt_arrows_resize_a_selected_box_from_its_corner() {
 #[test]
 fn hiding_the_panel_hands_the_keys_back_to_the_canvas() {
     let (mut app, id) = editor_app(two_rects_first_selected().editor.take().unwrap());
-    press(&mut app, id, ch("b"), mods(true, false, true, false));
+    press(&mut app, id, ch("b"), alt_chord());
     assert_eq!(focus(&app), at(FocusZone::Panel, FocusItem::PanelTabs));
-    press(&mut app, id, ch("p"), mods(true, false, true, false));
+    press(&mut app, id, ch("p"), alt_chord());
     // The panel is gone: the arrow nudges the selection again.
     press(&mut app, id, named(Named::ArrowRight), plain());
     assert_eq!(focus(&app), None);
@@ -763,4 +760,158 @@ fn hiding_the_panel_hands_the_keys_back_to_the_canvas() {
         Annotation::Rectangle { rect, .. } => assert_eq!(rect.x, 1.0),
         other => panic!("{other:?}"),
     }
+}
+
+// ===== Fix round 1 =====
+
+/// A key a text field took never runs an editor chord: the field's own
+/// ⇧⌘V pastes and must not flip the image too.
+#[test]
+fn new_chords_stay_out_of_text_fields() {
+    let cases = [
+        (ch("v"), mods(true, true, false, false)),
+        (ch("h"), mods(true, true, false, false)),
+        (ch("i"), mods(true, true, false, false)),
+        (ch("t"), alt_chord()),
+        (ch("b"), alt_chord()),
+        (named(Named::Tab), plain()),
+        (named(Named::ArrowRight), mods(false, false, true, false)),
+    ];
+    for (k, m) in cases {
+        assert!(
+            editor_key_message(k.clone(), m, true).is_some(),
+            "{k:?} {m:?} works on the canvas"
+        );
+        assert!(
+            editor_key_message(k.clone(), m, false).is_none(),
+            "{k:?} {m:?} leaked out of a text field"
+        );
+    }
+    // ⇧⌘V pasted into the Color popover's hex field leaves the image alone.
+    let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
+    let _ = update(
+        &mut app,
+        Message::EditorPopoverToggled(EditorPopover::Color),
+    );
+    press_captured(&mut app, id, ch("v"), mods(true, true, false, false));
+    assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), 0);
+}
+
+/// Off macOS the second-level chords are Ctrl+Shift, never Ctrl+Alt
+/// (AltGr, and the desktop's Ctrl+Alt+T).
+#[test]
+fn second_level_chords_avoid_ctrl_alt_off_macos() {
+    let ctrl_alt = mods(true, false, true, false);
+    let ctrl_shift = mods(true, true, false, false);
+    for letter in ["p", "t", "b", RESIZE_LETTER] {
+        let k = ch(letter);
+        if cfg!(target_os = "macos") {
+            assert!(editor_alt_chord(&k, ctrl_alt, letter));
+            assert!(!editor_alt_chord(&k, ctrl_shift, letter));
+        } else {
+            assert!(editor_alt_chord(&k, ctrl_shift, letter));
+            assert!(!editor_alt_chord(&k, ctrl_alt, letter));
+        }
+    }
+    for k in [KEY_TEXT_TAB, KEY_BEAUTIFY_TAB, KEY_PANEL, KEY_RESIZE] {
+        assert!(!k.1.contains("Alt"), "{k:?}");
+    }
+}
+
+/// Tab in the Color popover leaves it, back to the bar control, and never
+/// moves the annotation selection under the hex being typed.
+#[test]
+fn tab_leaves_the_color_popover_without_touching_the_selection() {
+    let mut app = two_rects_first_selected();
+    let id = iced::window::Id::unique();
+    app.editor.as_mut().unwrap().window_id = Some(id);
+    press(&mut app, id, named(Named::F6), plain());
+    let color = focus(&app);
+    assert!(color.is_some());
+    press(&mut app, id, named(Named::Enter), plain());
+    assert_eq!(
+        app.editor.as_ref().unwrap().popover,
+        Some(EditorPopover::Color)
+    );
+    press(&mut app, id, named(Named::Tab), plain());
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.popover, None);
+    assert_eq!(ed.key_focus, color);
+    assert_eq!(ed.model.selected_annotation(), Some(0));
+}
+
+#[test]
+fn tab_does_not_cycle_while_a_popover_or_hex_draft_is_open() {
+    let mut app = two_rects_first_selected();
+    let _ = update(
+        &mut app,
+        Message::EditorPopoverToggled(EditorPopover::Image),
+    );
+    let _ = update(&mut app, Message::EditorCycleSelection(1));
+    assert_eq!(
+        app.editor.as_ref().unwrap().model.selected_annotation(),
+        Some(0)
+    );
+    let _ = update(&mut app, Message::EditorPopoverClosed);
+    app.editor.as_mut().unwrap().beautify_hex_draft = Some("#12".into());
+    let _ = update(&mut app, Message::EditorCycleSelection(1));
+    assert_eq!(
+        app.editor.as_ref().unwrap().model.selected_annotation(),
+        Some(0)
+    );
+}
+
+/// Picking a swatch closes the popover through the one close path, so
+/// the keyboard focus goes back to the Color control.
+#[test]
+fn a_swatch_returns_the_focus_to_the_color_control() {
+    let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
+    press(&mut app, id, ch("r"), plain());
+    press(&mut app, id, named(Named::F6), plain());
+    let color = focus(&app);
+    press(&mut app, id, named(Named::Enter), plain());
+    let _ = update(
+        &mut app,
+        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectColor(Rgba::OPAQUE_BLACK)),
+    );
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.popover, None);
+    assert_eq!(ed.key_focus, color);
+    assert!(ed.key_focus_return.is_none());
+}
+
+#[test]
+fn resize_fields_read_a_decimal_comma() {
+    assert_eq!(image_menu::resize_field_text("12,5"), "12.5");
+    assert_eq!(image_menu::resize_field_text("1,2.3"), "1.23");
+}
+
+/// A key instruction stays while what it explains goes on, and goes
+/// with it (WCAG 2.2.1).
+#[test]
+fn key_guides_stay_while_their_draft_lasts() {
+    let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(100, 50)));
+    press(&mut app, id, ch("c"), plain());
+    let age = |app: &mut App| {
+        app.editor.as_mut().unwrap().status_set_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
+    };
+    age(&mut app);
+    let _ = update(&mut app, Message::EditorStatusTick);
+    let ed = app.editor.as_ref().unwrap();
+    assert!(ed.status.is_some(), "the crop guide outlives the 4 s toast");
+    assert!(!crate::editor::status_tick_needed(ed));
+    // esc as the running editor delivers it (the canvas captures it).
+    press_captured(&mut app, id, named(Named::Escape), plain());
+    let _ = update(&mut app, Message::EditorStatusTick);
+    assert!(
+        app.editor.as_ref().unwrap().status.is_none(),
+        "it goes with the draft"
+    );
+    // The zone hint stays while the keyboard is in the zone.
+    press(&mut app, id, ch("r"), plain());
+    press(&mut app, id, named(Named::F6), plain());
+    age(&mut app);
+    let _ = update(&mut app, Message::EditorStatusTick);
+    assert!(app.editor.as_ref().unwrap().status.is_some());
 }

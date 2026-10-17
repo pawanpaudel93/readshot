@@ -999,8 +999,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     {
                         let ratio = ed.model.effective_style().crop_aspect.ratio();
                         ed.crop_draft = Some(keyboard_crop_draft(visible_frame(ed), ratio));
-                        ed.set_info(
+                        ed.set_guide(
                             "Arrows move the crop, ⌥ + arrows resize it (⇧ for 10 px). ↵ crops, esc cancels.",
+                            crate::editor::KeyGuide::CropDraft,
                         );
                     }
                 }
@@ -1015,11 +1016,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // toast has expired. Previously the dismissal only happened
             // locally in `editor_view`, which can't clear `ed.status`, so
             // the 1 Hz tick + redraw ran for the entire life of the
-            // editor window. Also expire stale "Discard? Click again"
-            // arms so the editor doesn't keep listening for a confirm
-            // that the user has already walked away from. The armed
-            // toast's Keep Editing / Discard buttons expire with the arm
-            // on purpose: the press-twice confirm is time-boxed.
+            // editor window. An armed Discard is sticky: it waits for
+            // Keep Editing, Discard or the next edit (WCAG 2.2.1).
             if let Some(ed) = state.editor.as_mut() {
                 if !ed.status_is_in_progress()
                     && !ed.status_is_sticky()
@@ -1031,10 +1029,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     ed.status_set_at = None;
                     ed.toast_action = None;
                 }
-                if let Some(t) = ed.discard_pending_at {
-                    if t.elapsed() > crate::editor::DISCARD_CONFIRM_WINDOW {
-                        ed.discard_pending_at = None;
-                    }
+                // A key guide whose draft, zone or selection has ended
+                // goes with it.
+                if ed.key_guide_live() == Some(false) {
+                    ed.status = None;
+                    ed.status_set_at = None;
+                    ed.key_guide = None;
                 }
             }
             Task::none()
@@ -1276,7 +1276,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // Two-stage discard guards against accidental data loss.
             // Clean editors close immediately. Editors with committed
             // annotations or non-empty draft text require a second
-            // click within `DISCARD_CONFIRM_WINDOW` before closing.
+            // click before closing; the arm waits for an answer.
             let dirty = state
                 .editor
                 .as_ref()
@@ -1285,10 +1285,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if dirty {
                 if let Some(ed) = state.editor.as_mut() {
                     let now = std::time::Instant::now();
-                    let armed = ed
-                        .discard_pending_at
-                        .map(|t| now.duration_since(t) < crate::editor::DISCARD_CONFIRM_WINDOW)
-                        .unwrap_or(false);
+                    let armed = ed.discard_pending_at.is_some();
                     if !armed {
                         ed.discard_pending_at = Some(now);
                         // The armed prompt replaces the toast; its old
@@ -1359,7 +1356,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
                 readshot_ui::ToolbarMessage::SelectColor(c) => {
                     apply_editor_color(ed, &state.coordinator, c);
-                    ed.popover = None;
+                    // Through the one close path, so the keyboard focus goes
+                    // back to the control that opened the popover.
+                    close_editor_popover(ed);
                 }
                 readshot_ui::ToolbarMessage::SetLineWidth(w) => {
                     apply_editor_line_width(ed, &state.coordinator, w);
@@ -1841,7 +1840,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         // switched mid-drag must not leave a draft behind.
                         if ed.model.active_tool() == readshot_ui::editor::ToolState::Crop {
                             ed.crop_draft = Some(rect);
-                            ed.set_info("Press ↵ to crop, esc to cancel.");
+                            ed.set_guide(
+                                "Press ↵ to crop, esc to cancel.",
+                                crate::editor::KeyGuide::CropDraft,
+                            );
                         } else {
                             ed.crop_draft = None;
                         }
@@ -2326,7 +2328,14 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
-            if ed.busy || ed.pending_text.is_some() || ed.move_drag.is_some() {
+            // Not while a popover or a text field has the keys: Tab out of
+            // a hex field must not move the selection under the value.
+            if ed.busy
+                || ed.pending_text.is_some()
+                || ed.move_drag.is_some()
+                || ed.popover.is_some()
+                || ed.beautify_hex_draft.is_some()
+            {
                 return Task::none();
             }
             let n = ed.model.annotations().len();
@@ -2336,12 +2345,17 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             cancel_editor_previews(ed);
             ed.model.select_index(Some(next));
             if let Some(kind) = ed.model.selected_kind_label() {
-                ed.set_info(format!(
-                    "{kind} selected ({} of {n}). Arrows move it, ⌫ removes it, esc deselects.",
-                    next + 1
-                ));
+                ed.set_guide(
+                    format!(
+                        "{kind} selected ({} of {n}). Arrows move it, ⌫ removes it, esc deselects.",
+                        next + 1
+                    ),
+                    crate::editor::KeyGuide::Selection,
+                );
             }
-            Task::none()
+            // Tab on the canvas also takes the caret out of any text field
+            // a click left it in, so typing goes to the canvas keys.
+            super::key_focus::unfocus_text_fields()
         }
         Message::EditorResizeByKeys(dx, dy) => {
             let Some(ed) = state.editor.as_mut() else {

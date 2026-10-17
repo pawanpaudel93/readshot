@@ -168,7 +168,7 @@ pub(crate) fn side_panel<'a>(
             AppIcon::Sidebar,
             p.t2,
             "Hide panel",
-            Some("⌥⌘P"),
+            Some(super::key_focus::key_label(super::key_focus::KEY_PANEL)),
             Some(Message::EditorPanelToggled),
             false,
             ICON_BTN_SM,

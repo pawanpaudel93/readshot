@@ -821,11 +821,22 @@ pub enum StatusTone {
 }
 
 /// Whether the 1 Hz status tick has work: a status that can still
-/// auto-dismiss, or an armed Discard to expire. Errors and warnings stay
-/// until dismissed, so they need no tick.
+/// auto-dismiss. Errors, warnings, an armed Discard and a live key
+/// guide stay, so they need no tick.
 pub fn status_tick_needed(ed: &EditorSession) -> bool {
-    ed.discard_pending_at.is_some()
-        || (ed.status.is_some() && !ed.status_is_in_progress() && !ed.status_is_sticky())
+    ed.status.is_some() && !ed.status_is_in_progress() && !ed.status_is_sticky()
+}
+
+/// What a keyboard instruction in the status line explains. It stays on
+/// screen while that is going on (WCAG 2.2.1), and goes when it ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyGuide {
+    /// A keyboard crop draft is open.
+    CropDraft,
+    /// The keyboard is in a focus zone.
+    Zone,
+    /// Tab selected an annotation, which is still selected.
+    Selection,
 }
 
 /// Button in the status toast.
@@ -892,10 +903,10 @@ pub struct EditorSession {
     /// the same monitor as the captured region.
     pub source_display_bounds: Option<(f32, f32, f32, f32)>,
     /// `Some` after the user has clicked Discard / pressed ⌘W once on
-    /// an editor with unsaved work. The next Discard click inside
-    /// [`DISCARD_CONFIRM_WINDOW`] commits; otherwise the flag expires
-    /// and the user is back to a single click. Prevents accidental
-    /// data loss without forcing a modal dialog.
+    /// an editor with unsaved work. The next Discard commits. It stays
+    /// armed until answered (Discard, Keep Editing) or the next edit or
+    /// status, with no time limit (WCAG 2.2.1). Prevents accidental data
+    /// loss without forcing a modal dialog.
     pub discard_pending_at: Option<std::time::Instant>,
     /// Wall-clock instant the current `status` toast was set. The
     /// runtime uses this to auto-dismiss successful status messages
@@ -906,6 +917,9 @@ pub struct EditorSession {
     /// [`Self::set_info`]). Compared with `status`, so any other write of
     /// `status` drops the tone with it.
     pub toned_status: Option<(String, StatusTone)>,
+    /// The status text set as a keyboard guide ([`Self::set_guide`]), and
+    /// what it explains.
+    pub key_guide: Option<(String, KeyGuide)>,
     /// A saved Beautify preset just removed, with its list index, while
     /// the toast offers Undo for it.
     pub removed_beautify_preset: Option<(usize, readshot_core::beautify::SavedBeautifyPreset)>,
@@ -1140,10 +1154,6 @@ pub struct EditorSession {
 #[derive(Clone, Debug, PartialEq)]
 struct EditorOutputCheckpoint(readshot_ui::editor::Snapshot);
 
-/// How long the "Press Discard again" prompt stays armed
-/// before reverting to a fresh single-click state.
-pub const DISCARD_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(4);
-
 /// Width the editor window opens at (logical px).
 pub const DEFAULT_WINDOW_WIDTH: f32 = 1100.0;
 
@@ -1322,6 +1332,7 @@ impl EditorSession {
             display_scale: display_scale.max(f32::EPSILON),
             source_display_bounds: None,
             discard_pending_at: None,
+            key_guide: None,
             popover: None,
             resize_draft: None,
             hex_draft: String::new(),
@@ -1410,6 +1421,7 @@ impl EditorSession {
             display_scale: display_scale.max(f32::EPSILON),
             source_display_bounds: None,
             discard_pending_at: None,
+            key_guide: None,
             popover: None,
             resize_draft: None,
             hex_draft: String::new(),
@@ -1525,6 +1537,28 @@ impl EditorSession {
         self.toned_status = Some((msg, StatusTone::Info));
     }
 
+    /// [`Self::set_info`] for a keyboard instruction that stays while
+    /// `guide` is going on (`key_guide_live`), instead of auto-dismissing.
+    pub fn set_guide(&mut self, msg: impl Into<String>, guide: KeyGuide) {
+        let msg = msg.into();
+        self.set_info(msg.clone());
+        self.key_guide = Some((msg, guide));
+    }
+
+    /// `Some(live)` while the status is a key guide: whether what it
+    /// explains is still going on.
+    pub fn key_guide_live(&self) -> Option<bool> {
+        let (text, guide) = self.key_guide.as_ref()?;
+        if self.status.as_deref() != Some(text.as_str()) {
+            return None;
+        }
+        Some(match guide {
+            KeyGuide::CropDraft => self.crop_draft.is_some(),
+            KeyGuide::Zone => self.key_focus.is_some(),
+            KeyGuide::Selection => self.model.selected_annotation().is_some(),
+        })
+    }
+
     /// The tone the current status was set with.
     pub fn status_tone(&self) -> StatusTone {
         match (&self.status, &self.toned_status) {
@@ -1546,7 +1580,10 @@ impl EditorSession {
 
     /// Errors and warnings stay until the next status replaces them.
     pub fn status_is_sticky(&self) -> bool {
-        self.status_is_error() || self.status_is_warning()
+        self.status_is_error()
+            || self.status_is_warning()
+            || self.discard_pending_at.is_some()
+            || self.key_guide_live() == Some(true)
     }
 
     /// The toast button to show: a redaction's Undo only while that

@@ -745,7 +745,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
                     "Stop & Stitch".to_string(),
                     ButtonKind::Primary,
                     (!waiting).then_some(Message::ScrollCaptureStopRequested),
-                    scroll_stop_key_chip(hud, compact, !state.scroll_escape_hotkeys.is_empty()),
+                    scroll_stop_key_chip(hud, compact, scroll_escape_globals(state).0),
                     3,
                 ),
             ]
@@ -2525,7 +2525,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 AppIcon::Sidebar,
                 p.t2,
                 "Show panel",
-                Some("⌥⌘P"),
+                Some(super::key_focus::key_label(super::key_focus::KEY_PANEL)),
                 Some(Message::EditorPanelToggled),
                 false,
                 ICON_BTN_SM,
@@ -2624,6 +2624,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     // errors are kept until the next transition overwrites them — an
     // error the user didn't act on shouldn't vanish after 4s.
     let status_text = match (ed.status.clone(), ed.status_set_at) {
+        // A key guide whose draft, zone or selection ended is stale.
+        (Some(_), _) if ed.key_guide_live() == Some(false) => None,
         (Some(s), Some(t))
             if !ed.status_is_in_progress()
                 && !ed.status_is_sticky()
@@ -3593,27 +3595,42 @@ pub(crate) fn editor_key_message(
     if let Some(forward) = zone_cycle_key(&key, modifiers) {
         return Some(Message::EditorFocusZoneCycle(forward));
     }
+    // ⌥⌘P / ⌥⌘I / ⌥⌘T / ⌥⌘B on macOS; Ctrl+Shift+P / R / T / B elsewhere,
+    // where Ctrl+Alt is AltGr on many layouts and a desktop chord
+    // (Ctrl+Alt+T opens a terminal on GNOME and KDE).
+    if editor_alt_chord(&key, modifiers, "p") {
+        return Some(Message::EditorPanelToggled);
+    }
+    if editor_alt_chord(&key, modifiers, RESIZE_LETTER) {
+        return Some(Message::EditorResizeOpen);
+    }
+    // The new chords never fire while a text field has the caret
+    // (`status_ignored` false): a field's own ⇧⌘V pastes, and must not
+    // also flip the image.
+    if status_ignored && editor_alt_chord(&key, modifiers, "t") {
+        return Some(Message::EditorPanelTabKey(crate::editor::PanelTab::Text));
+    }
+    if status_ignored && editor_alt_chord(&key, modifiers, "b") {
+        return Some(Message::EditorPanelTabKey(
+            crate::editor::PanelTab::Beautify,
+        ));
+    }
     match (&key, cmd, modifiers.shift()) {
-        (Key::Character(c), true, false) if modifiers.alt() && c.eq_ignore_ascii_case("p") => {
-            return Some(Message::EditorPanelToggled);
-        }
-        (Key::Character(c), true, false) if modifiers.alt() && c.eq_ignore_ascii_case("t") => {
-            return Some(Message::EditorPanelTabKey(crate::editor::PanelTab::Text));
-        }
-        (Key::Character(c), true, false) if modifiers.alt() && c.eq_ignore_ascii_case("b") => {
-            return Some(Message::EditorPanelTabKey(
-                crate::editor::PanelTab::Beautify,
-            ));
-        }
-        (Key::Character(c), true, true) if !modifiers.alt() && c.eq_ignore_ascii_case("i") => {
+        (Key::Character(c), true, true)
+            if status_ignored && !modifiers.alt() && c.eq_ignore_ascii_case("i") =>
+        {
             return Some(Message::EditorImageMenuKey);
         }
-        (Key::Character(c), true, true) if !modifiers.alt() && c.eq_ignore_ascii_case("h") => {
+        (Key::Character(c), true, true)
+            if status_ignored && !modifiers.alt() && c.eq_ignore_ascii_case("h") =>
+        {
             return Some(Message::EditorFlip(
                 readshot_core::document::FlipAxis::Horizontal,
             ));
         }
-        (Key::Character(c), true, true) if !modifiers.alt() && c.eq_ignore_ascii_case("v") => {
+        (Key::Character(c), true, true)
+            if status_ignored && !modifiers.alt() && c.eq_ignore_ascii_case("v") =>
+        {
             return Some(Message::EditorFlip(
                 readshot_core::document::FlipAxis::Vertical,
             ));
@@ -3638,9 +3655,6 @@ pub(crate) fn editor_key_message(
         }
         (Key::Character(c), true, false) if c.eq_ignore_ascii_case("w") => {
             return Some(Message::EditorDiscardRequested);
-        }
-        (Key::Character(c), true, false) if modifiers.alt() && c.eq_ignore_ascii_case("i") => {
-            return Some(Message::EditorResizeOpen);
         }
         (Key::Character(c), true, false) if status_ignored && !modifiers.alt() && c == "[" => {
             return Some(Message::EditorRotate { clockwise: false });

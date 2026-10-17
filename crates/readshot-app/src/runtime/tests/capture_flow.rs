@@ -834,10 +834,20 @@ fn a_capture_problem_with_no_window_to_show_it_is_notified() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let _ = update(&mut app, Message::RetakeLastRegionRequested);
     let status = app.last_capture_status.clone().expect("a status");
-    assert_eq!(notices(), vec![status.clone()]);
+    if CAPTURE_PROBLEM_ROUTE == CaptureProblemRoute::Notification {
+        assert_eq!(notices(), vec![status.clone()]);
+    } else {
+        assert!(app.windows.kinds().any(|k| k == WindowKind::Welcome));
+        return;
+    }
     // Another update with the same status doesn't notify again.
     let _ = update(&mut app, Message::NoOp);
     assert_eq!(notices().len(), 1);
+    // Off macOS there is no notification path: the Welcome window, which
+    // shows the status, opens instead.
+    let mut other = build_app(Arc::new(FakePermissions::granted()));
+    let _ = surface_capture_problem(&mut other, &status, CaptureProblemRoute::WelcomeWindow);
+    assert!(other.windows.kinds().any(|k| k == WindowKind::Welcome));
     // With the Welcome window open the status is shown there instead.
     CAPTURE_NOTICES.with(|n| n.borrow_mut().clear());
     let mut app = build_app(Arc::new(FakePermissions::granted()));
@@ -857,4 +867,47 @@ fn only_problems_are_notified() {
     ));
     assert!(!capture_status_is_problem("Scroll capture cancelled."));
     assert!(!capture_status_is_problem("Copied image to clipboard."));
+}
+
+/// A refused registration is not retried on every update, and only the
+/// chords that did register are left out of the in-window map.
+#[test]
+fn a_refused_scroll_esc_is_tried_once_and_the_other_still_works() {
+    use std::cell::Cell;
+    let tries = Cell::new(0);
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.scroll_session = Some(test_session());
+    let sync = |app: &mut App| {
+        sync_scroll_escape_hotkeys_with(
+            app,
+            |h| {
+                tries.set(tries.get() + 1);
+                if h.mods.contains(global_hotkey::hotkey::Modifiers::SHIFT) {
+                    Err("taken".into())
+                } else {
+                    Ok(())
+                }
+            },
+            |_| {},
+        )
+    };
+    sync(&mut app);
+    sync(&mut app);
+    sync(&mut app);
+    assert_eq!(tries.get(), 2, "each chord tried once per session");
+    assert_eq!(scroll_escape_globals(&app), (true, false));
+    use iced::keyboard::{key::Named, Key, Modifiers};
+    let esc = Key::Named(Named::Escape);
+    // esc is the hotkey's; ⇧esc still works in the HUD.
+    assert!(scroll_key_message_beside_globals(&esc, Modifiers::empty(), true, false).is_none());
+    assert!(matches!(
+        scroll_key_message_beside_globals(&esc, Modifiers::SHIFT, true, false),
+        Some(Message::ScrollCaptureCancelRequested)
+    ));
+    // A new session tries again.
+    app.scroll_session = None;
+    sync(&mut app);
+    app.scroll_session = Some(test_session());
+    sync(&mut app);
+    assert_eq!(tries.get(), 4);
 }

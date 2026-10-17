@@ -147,7 +147,7 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   with another capture (Add Capture Below / Beside) or an image file; gap
   and alignment are adjustable, and `⌘Z` removes an added part. `⌘W` closes; with unsaved
   edits the first press only warns; press again to discard, or click
-  Keep Editing.
+  Keep Editing (the warning waits for your answer).
 - **Editor keyboard focus:** `⌃Tab` / `F6` move the keyboard between the
   canvas, the options bar and the side panel (`⌃⇧Tab` / `⇧F6` go back);
   `⌥⌘T` / `⌥⌘B` open the side panel's Text / Beautify tab. Inside the bar or
@@ -156,7 +156,11 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   press it, and `esc` returns to the canvas. In the Text tab's line list,
   `↑` / `↓` move between lines (`⇧` extends the selection), `Space` selects,
   `↵` or `⌘C` copies and `R` redacts the line. A ring marks the focused
-  control. On Windows and Linux, `Ctrl` replaces `⌘` and `Alt` replaces `⌥`.
+  control. On Windows and Linux, `Ctrl` replaces `⌘` and `Alt` replaces `⌥`,
+  except the `⌥⌘` chords: there they are `Ctrl+Shift` (`Ctrl+Shift+P` panel,
+  `Ctrl+Shift+R` resize, `Ctrl+Shift+T` / `Ctrl+Shift+B` panel tabs), because
+  `Ctrl+Alt` is AltGr on many keyboards and `Ctrl+Alt+T` opens a terminal.
+  Editor chords never fire while a text field has the caret.
 - **History window:** `↑` / `↓` move between captures (moving past the
   last one shown loads more), `Enter` opens the selected one, `⌘C` copies
   its image and `⇧⌘C` its text, `⌘P` pins it, `⌥⌘R` reveals it in Finder,
@@ -177,7 +181,9 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   `⇧esc` or `⌘.` discards it (press twice to confirm, or click Keep Going
   to carry on capturing; the confirmation waits for your answer). While a
   session runs, `esc` and `⇧esc` work from any app, so you don't have to
-  click the window first.
+  click the window first. This reserves `esc` and `⇧esc` system-wide for
+  the length of the session: other apps don't receive them until it stops
+  or is discarded.
 - **Pinned windows:** `esc` / `⌘W` close, `L` lock, `-` / `+` adjust opacity,
   arrow keys move the window by 1 pixel (hold `⇧` for 10).
 - **Welcome screen:** `Enter` triggers the primary action (Allow / Open System

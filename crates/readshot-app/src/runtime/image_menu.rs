@@ -231,17 +231,19 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
 }
 
 /// What a Resize field keeps of the typed text: digits and one decimal
-/// point. The ⌥P / ⌥L dialog keys (unit, lock) type a symbol on macOS
+/// separator, written `.` (a `,` from a comma-decimal locale is read as
+/// one). The ⌥P / ⌥L dialog keys (unit, lock) type a symbol on macOS
 /// (π, ¬) that must not land in the number.
 pub(crate) fn resize_field_text(raw: &str) -> String {
     let mut seen_point = false;
     raw.chars()
-        .filter(|c| {
-            if *c == '.' {
-                !std::mem::replace(&mut seen_point, true)
-            } else {
-                c.is_ascii_digit()
+        .filter_map(|c| match c {
+            '.' | ',' if !seen_point => {
+                seen_point = true;
+                Some('.')
             }
+            c if c.is_ascii_digit() => Some(c),
+            _ => None,
         })
         .collect()
 }
@@ -301,7 +303,7 @@ pub(crate) fn image_popover<'a>(
         image_menu_row(
             AppIcon::Resize,
             "Resize…",
-            Some(platform_key("⌥⌘I", "Ctrl+Alt+I")),
+            Some(super::key_focus::key_label(super::key_focus::KEY_RESIZE)),
             on(Message::EditorResizeOpen),
             lit(F::MenuResize),
             p

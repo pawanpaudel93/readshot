@@ -607,32 +607,29 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // Esc anywhere ends the session (same as the Stop button);
         // Shift+Esc / ⌘. discards it (same as Cancel, which arms then
         // confirms). See `scroll_key_message`.
-        // With esc / ⇧esc registered globally (`scroll_escape_hotkeys`)
-        // the in-window map leaves them to the hotkey, so one press is
-        // never seen twice (a doubled ⇧esc would confirm a discard).
-        if state.scroll_escape_hotkeys.is_empty() {
-            subs.push(iced::event::listen_with(|event, _status, _window| {
-                use iced::keyboard::Event as KbEvent;
-                if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                    return scroll_key_message(&key, modifiers);
-                }
-                None
-            }));
-        } else {
-            subs.push(iced::event::listen_with(|event, _status, _window| {
-                use iced::keyboard::Event as KbEvent;
-                if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                    if matches!(
-                        key,
-                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
-                    ) {
-                        return None;
-                    }
-                    return scroll_key_message(&key, modifiers);
-                }
-                None
-            }));
+        // Esc chords registered globally (`scroll_escape_hotkeys`) are
+        // left to the hotkey, so one press is never seen twice (a doubled
+        // ⇧esc would confirm a discard). Subscriptions take plain fns, so
+        // there is one per combination.
+        fn listen<const PLAIN: bool, const SHIFT: bool>(
+            event: iced::Event,
+            _status: iced::event::Status,
+            _window: iced::window::Id,
+        ) -> Option<Message> {
+            use iced::keyboard::Event as KbEvent;
+            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
+                return scroll_key_message_beside_globals(&key, modifiers, PLAIN, SHIFT);
+            }
+            None
         }
+        subs.push(iced::event::listen_with(
+            match scroll_escape_globals(state) {
+                (false, false) => listen::<false, false>,
+                (true, false) => listen::<true, false>,
+                (false, true) => listen::<false, true>,
+                (true, true) => listen::<true, true>,
+            },
+        ));
     }
     if !state.overlay_displays.is_empty() || state.scroll_session.is_some() {
         // Global Shift watcher — iced 0.14 does not reliably route
@@ -905,7 +902,8 @@ pub(crate) fn history_key_message(
             Key::Character(c)
                 if modifiers.alt() && modifiers.shift() && c.eq_ignore_ascii_case("c") =>
             {
-                return action(HistoryKeyboardAction::CopyVisibleText);
+                // A focused search field may take ⌘C chords for itself.
+                return chord(HistoryKeyboardAction::CopyVisibleText);
             }
             Key::Named(Named::Backspace | Named::Delete)
                 if modifiers.shift() && !modifiers.alt() =>
@@ -978,8 +976,8 @@ fn app_window_shortcut_message(
 pub fn update(state: &mut App, message: Message) -> Task<Message> {
     let task = update_message(state, message);
     sync_scroll_escape_hotkeys(state);
-    announce_capture_status(state);
-    Task::batch([task, compose_jobs::after_update(state)])
+    let announce = announce_capture_status(state);
+    Task::batch([task, announce, compose_jobs::after_update(state)])
 }
 
 /// Whether a capture status reports a problem worth a notification:
@@ -993,21 +991,52 @@ pub(crate) fn capture_status_is_problem(status: &str) -> bool {
     }
 }
 
+/// How a capture problem no open window shows reaches the user.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CaptureProblemRoute {
+    /// A system notification (macOS, through osascript).
+    Notification,
+    /// The Welcome window, which shows the status, brought forward
+    /// (Windows and Linux, which have no notification path yet).
+    WelcomeWindow,
+}
+
+pub(crate) const CAPTURE_PROBLEM_ROUTE: CaptureProblemRoute = if cfg!(target_os = "macos") {
+    CaptureProblemRoute::Notification
+} else {
+    CaptureProblemRoute::WelcomeWindow
+};
+
 /// `last_capture_status` is drawn only in the Welcome window. A capture
 /// started by the hotkey or the tray that fails with no Welcome window
-/// open is raised as a system notification instead, once.
-fn announce_capture_status(state: &mut App) {
-    let Some(status) = state.last_capture_status.as_ref() else {
+/// open is raised another way ([`CAPTURE_PROBLEM_ROUTE`]), once.
+fn announce_capture_status(state: &mut App) -> Task<Message> {
+    let Some(status) = state.last_capture_status.clone() else {
         state.announced_capture_status = None;
-        return;
+        return Task::none();
     };
-    if state.announced_capture_status.as_ref() == Some(status) {
-        return;
+    if state.announced_capture_status.as_ref() == Some(&status) {
+        return Task::none();
     }
     state.announced_capture_status = Some(status.clone());
     let welcome_open = state.windows.kinds().any(|k| k == WindowKind::Welcome);
-    if !welcome_open && capture_status_is_problem(status) {
-        notify_capture_problem(status);
+    if welcome_open || !capture_status_is_problem(&status) {
+        return Task::none();
+    }
+    surface_capture_problem(state, &status, CAPTURE_PROBLEM_ROUTE)
+}
+
+pub(crate) fn surface_capture_problem(
+    state: &mut App,
+    status: &str,
+    route: CaptureProblemRoute,
+) -> Task<Message> {
+    match route {
+        CaptureProblemRoute::Notification => {
+            notify_capture_problem(status);
+            Task::none()
+        }
+        CaptureProblemRoute::WelcomeWindow => show_or_focus_welcome(state),
     }
 }
 

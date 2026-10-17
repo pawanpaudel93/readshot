@@ -50,8 +50,32 @@ const NO_TEXT_FOCUS_ID: &str = "editor-no-text-focus";
 pub(crate) const KEY_IMAGE_MENU: (&str, &str) = ("⇧⌘I", "Ctrl+Shift+I");
 pub(crate) const KEY_FLIP_H: (&str, &str) = ("⇧⌘H", "Ctrl+Shift+H");
 pub(crate) const KEY_FLIP_V: (&str, &str) = ("⇧⌘V", "Ctrl+Shift+V");
-pub(crate) const KEY_TEXT_TAB: (&str, &str) = ("⌥⌘T", "Ctrl+Alt+T");
-pub(crate) const KEY_BEAUTIFY_TAB: (&str, &str) = ("⌥⌘B", "Ctrl+Alt+B");
+pub(crate) const KEY_TEXT_TAB: (&str, &str) = ("⌥⌘T", "Ctrl+Shift+T");
+pub(crate) const KEY_BEAUTIFY_TAB: (&str, &str) = ("⌥⌘B", "Ctrl+Shift+B");
+pub(crate) const KEY_PANEL: (&str, &str) = ("⌥⌘P", "Ctrl+Shift+P");
+pub(crate) const KEY_RESIZE: (&str, &str) = ("⌥⌘I", "Ctrl+Shift+R");
+
+/// The letter of the Resize chord: ⌥⌘I on macOS, Ctrl+Shift+R elsewhere
+/// (Ctrl+Shift+I is the Image menu there, as ⇧⌘I is on macOS).
+pub(crate) const RESIZE_LETTER: &str = if cfg!(target_os = "macos") { "i" } else { "r" };
+
+/// The editor's "second-level" chord on `letter`: ⌥⌘ on macOS,
+/// Ctrl+Shift elsewhere. Off macOS, Ctrl+Alt is AltGr on many European
+/// layouts (so typing would trigger it) and a desktop chord (Ctrl+Alt+T
+/// opens a terminal on GNOME and KDE).
+pub(crate) fn editor_alt_chord(key: &Key, m: Modifiers, letter: &str) -> bool {
+    let Key::Character(c) = key else {
+        return false;
+    };
+    if !c.eq_ignore_ascii_case(letter) || !m.command() {
+        return false;
+    }
+    if cfg!(target_os = "macos") {
+        m.alt() && !m.shift() && !m.control()
+    } else {
+        m.shift() && !m.alt() && !m.logo()
+    }
+}
 pub(crate) const KEY_NEXT_ZONE: (&str, &str) = ("⌃Tab", "Ctrl+Tab");
 
 pub(crate) fn key_label(k: (&'static str, &'static str)) -> &'static str {
@@ -350,6 +374,24 @@ pub(crate) fn handle_focus_key(
     status_ignored: bool,
 ) -> Option<Task<Message>> {
     let ed = state.editor.as_ref()?;
+    // The Color and Width popovers are one stop: Tab (or ⇧Tab) leaves
+    // them, back to the bar control that opened them (or the canvas). It
+    // never reaches the canvas map, where it would change the selection
+    // under a hex value being typed.
+    if ed.key_focus.is_none()
+        && matches!(
+            ed.popover,
+            Some(EditorPopover::Color | EditorPopover::Width)
+        )
+        && matches!(key, Key::Named(Named::Tab))
+        && !m.command()
+        && !m.alt()
+        && !m.control()
+    {
+        let ed = state.editor.as_mut()?;
+        close_editor_popover(ed);
+        return Some(caret_task(ed.key_focus));
+    }
     // A pointer-opened Image menu or Resize dialog: ↓ / ↑ / Tab enter it.
     if ed.key_focus.is_none() && !m.command() && !m.alt() && !m.control() {
         let zone = match ed.popover {
@@ -891,7 +933,7 @@ pub(crate) fn handle_focus_message(state: &mut App, message: Message) -> Task<Me
             if let Some(ed) = state.editor.as_mut() {
                 set_focus(ed, next);
                 if let Some(f) = next {
-                    ed.set_info(zone_hint(f.zone));
+                    ed.set_guide(zone_hint(f.zone), crate::editor::KeyGuide::Zone);
                 }
             }
             caret_task(next)

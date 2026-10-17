@@ -1304,9 +1304,10 @@ fn warnings_can_be_dismissed_and_stop_the_status_tick() {
     assert!(!crate::editor::status_tick_needed(&ed));
     ed.set_status("Couldn't save — disk full.");
     assert!(!crate::editor::status_tick_needed(&ed));
-    // An armed Discard still needs the tick to expire.
+    // An armed Discard never expires, so it needs no tick (WCAG 2.2.1).
+    ed.set_status("Unsaved edits. Press Discard again to close without saving.");
     ed.discard_pending_at = Some(std::time::Instant::now());
-    assert!(crate::editor::status_tick_needed(&ed));
+    assert!(!crate::editor::status_tick_needed(&ed));
     // Dismiss clears a warning like an error.
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let mut ed = debug_editor_qa_session();
@@ -1314,4 +1315,30 @@ fn warnings_can_be_dismissed_and_stop_the_status_tick() {
     app.editor = Some(ed);
     let _ = update(&mut app, Message::EditorStatusDismissed);
     assert!(app.editor.as_ref().unwrap().status.is_none());
+}
+
+/// WCAG 2.2.1: the armed Discard waits for an answer, however long.
+#[test]
+fn an_armed_discard_does_not_expire() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let mut ed = debug_editor_qa_session();
+    ed.model.commit_annotation(Annotation::Rectangle {
+        rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+        color: Rgba::OPAQUE_BLACK,
+        line_width: 2.0,
+        style: Default::default(),
+    });
+    app.editor = Some(ed);
+    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let ed = app.editor.as_mut().unwrap();
+    let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(600);
+    ed.discard_pending_at = Some(long_ago);
+    ed.status_set_at = Some(long_ago);
+    let _ = update(&mut app, Message::EditorStatusTick);
+    let ed = app.editor.as_ref().unwrap();
+    assert!(ed.discard_pending_at.is_some(), "still armed");
+    assert!(ed.status.is_some(), "the prompt is still shown");
+    // The second press, ten minutes later, discards.
+    let _ = update(&mut app, Message::EditorDiscardRequested);
+    assert!(app.editor.is_none());
 }
