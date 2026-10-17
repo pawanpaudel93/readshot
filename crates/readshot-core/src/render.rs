@@ -242,19 +242,28 @@ fn draw_magnifier(
     color: Rgba,
     offset: (f32, f32),
 ) {
-    use crate::magnifier::{
-        bubble_radius, corner_radius, effective_zoom, in_bubble, leader_endpoints,
-    };
+    use crate::magnifier::{bubble_radius, effective_zoom, in_bubble};
     let src = shift_point(source, offset);
     let bub = shift_point(bubble, offset);
     let zoom = effective_zoom(zoom);
     let br = bubble_radius(radius, zoom);
-    let snapshot = pixmap.clone();
     let (w, h) = (pixmap.width() as i64, pixmap.height() as i64);
     let x0 = ((bub.x - br).floor() as i64).max(0);
     let y0 = ((bub.y - br).floor() as i64).max(0);
     let x1 = ((bub.x + br).ceil() as i64).min(w);
     let y1 = ((bub.y + br).ceil() as i64).min(h);
+    // The source coordinate a bubble pixel samples. Every step (int to
+    // float, the offsets, the division by a zoom of at least 1, floor,
+    // the saturating cast) is monotone in `p`, so the samples of the
+    // whole `x0..x1` × `y0..y1` scan lie between those of its first and
+    // last pixel: snapshot only that window, not the whole pixmap.
+    let sample_x = |px: i64| (src.x + (px as f32 + 0.5 - bub.x) / zoom).floor() as i64;
+    let sample_y = |py: i64| (src.y + (py as f32 + 0.5 - bub.y) / zoom).floor() as i64;
+    let window = SampleWindow::capture(
+        pixmap,
+        (x0 < x1).then(|| (sample_x(x0), sample_x(x1 - 1))),
+        (y0 < y1).then(|| (sample_y(y0), sample_y(y1 - 1))),
+    );
     for py in y0..y1 {
         for px in x0..x1 {
             let (dx, dy) = (px as f32 + 0.5 - bub.x, py as f32 + 0.5 - bub.y);
@@ -263,16 +272,84 @@ fn draw_magnifier(
             }
             let sx = (src.x + dx / zoom).floor() as i64;
             let sy = (src.y + dy / zoom).floor() as i64;
-            let sample = if (0..w).contains(&sx) && (0..h).contains(&sy) {
-                snapshot
-                    .pixel(sx as u32, sy as u32)
-                    .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT)
-            } else {
-                tiny_skia::PremultipliedColorU8::TRANSPARENT
+            let sample = match &window {
+                Some(window) if (0..w).contains(&sx) && (0..h).contains(&sy) => window.get(sx, sy),
+                _ => tiny_skia::PremultipliedColorU8::TRANSPARENT,
             };
             pixmap.pixels_mut()[(py * w + px) as usize] = sample;
         }
     }
+    draw_magnifier_chrome(pixmap, src, radius, bub, br, shape, color);
+}
+
+/// A copy of the composed pixels a magnifier bubble samples, taken
+/// before the bubble overwrites any of them: the bounding box of the
+/// sample coordinates, clipped to the pixmap. At 256 MP this is a few KB
+/// per bubble instead of a full ~1 GB copy per magnifier per render.
+struct SampleWindow {
+    x: i64,
+    y: i64,
+    width: i64,
+    pixels: Vec<tiny_skia::PremultipliedColorU8>,
+}
+
+impl SampleWindow {
+    /// `None` when no sample can land inside the pixmap (an empty scan,
+    /// or a sample range wholly outside it).
+    fn capture(pixmap: &Pixmap, xs: Option<(i64, i64)>, ys: Option<(i64, i64)>) -> Option<Self> {
+        let (w, h) = (pixmap.width() as i64, pixmap.height() as i64);
+        let clip = |(a, b): (i64, i64), len: i64| {
+            let (lo, hi) = (a.min(b).max(0), a.max(b).min(len - 1));
+            (lo <= hi).then_some((lo, hi))
+        };
+        let (sx0, sx1) = clip(xs?, w)?;
+        let (sy0, sy1) = clip(ys?, h)?;
+        let width = sx1 - sx0 + 1;
+        let all = pixmap.pixels();
+        let mut pixels = Vec::with_capacity((width * (sy1 - sy0 + 1)) as usize);
+        for y in sy0..=sy1 {
+            let row = (y * w) as usize;
+            pixels.extend_from_slice(&all[row + sx0 as usize..=row + sx1 as usize]);
+        }
+        Some(Self {
+            x: sx0,
+            y: sy0,
+            width,
+            pixels,
+        })
+    }
+
+    /// The snapshotted pixel at pixmap coordinate (`x`, `y`). Every
+    /// in-pixmap sample lies in the window (see `draw_magnifier`); were
+    /// one ever outside, it reads transparent — never a pixel the bubble
+    /// already overwrote.
+    fn get(&self, x: i64, y: i64) -> tiny_skia::PremultipliedColorU8 {
+        let (cx, cy) = (x - self.x, y - self.y);
+        debug_assert!(
+            (0..self.width).contains(&cx) && cy >= 0,
+            "sample outside window"
+        );
+        if !(0..self.width).contains(&cx) || cy < 0 {
+            return tiny_skia::PremultipliedColorU8::TRANSPARENT;
+        }
+        self.pixels
+            .get((cy * self.width + cx) as usize)
+            .copied()
+            .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT)
+    }
+}
+
+/// The bubble border, the source ring and the dashed leader.
+fn draw_magnifier_chrome(
+    pixmap: &mut Pixmap,
+    src: PointLike,
+    radius: f32,
+    bub: PointLike,
+    br: f32,
+    shape: crate::MagnifierShape,
+    color: Rgba,
+) {
+    use crate::magnifier::{corner_radius, leader_endpoints};
     let paint = stroke_paint(color);
     let outline = match shape {
         crate::MagnifierShape::Circle => PathBuilder::from_circle(bub.x, bub.y, br),
@@ -1260,6 +1337,170 @@ mod tests {
         let px = out.get_pixel(30, 20).0;
         assert_ne!(px, [255, 0, 0, 255], "cropped-away pixels leaked");
         assert_eq!(px[3], 0, "{px:?}");
+    }
+
+    /// The pre-#121 bubble fill: samples from a copy of the whole pixmap.
+    /// The windowed snapshot must reproduce it byte for byte.
+    fn fill_bubble_from_full_copy(
+        pixmap: &mut Pixmap,
+        source: PointLike,
+        radius: f32,
+        bubble: PointLike,
+        zoom: f32,
+        shape: crate::MagnifierShape,
+        offset: (f32, f32),
+    ) {
+        use crate::magnifier::{bubble_radius, effective_zoom, in_bubble};
+        let src = shift_point(source, offset);
+        let bub = shift_point(bubble, offset);
+        let zoom = effective_zoom(zoom);
+        let br = bubble_radius(radius, zoom);
+        let snapshot = pixmap.clone();
+        let (w, h) = (pixmap.width() as i64, pixmap.height() as i64);
+        let x0 = ((bub.x - br).floor() as i64).max(0);
+        let y0 = ((bub.y - br).floor() as i64).max(0);
+        let x1 = ((bub.x + br).ceil() as i64).min(w);
+        let y1 = ((bub.y + br).ceil() as i64).min(h);
+        for py in y0..y1 {
+            for px in x0..x1 {
+                let (dx, dy) = (px as f32 + 0.5 - bub.x, py as f32 + 0.5 - bub.y);
+                if !in_bubble(shape, dx, dy, br) {
+                    continue;
+                }
+                let sx = (src.x + dx / zoom).floor() as i64;
+                let sy = (src.y + dy / zoom).floor() as i64;
+                let sample = if (0..w).contains(&sx) && (0..h).contains(&sy) {
+                    snapshot
+                        .pixel(sx as u32, sy as u32)
+                        .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT)
+                } else {
+                    tiny_skia::PremultipliedColorU8::TRANSPARENT
+                };
+                pixmap.pixels_mut()[(py * w + px) as usize] = sample;
+            }
+        }
+    }
+
+    #[test]
+    fn windowed_magnifier_snapshot_matches_a_full_copy_byte_for_byte() {
+        use crate::MagnifierShape::{Circle, RoundedSquare};
+        // Per-pixel gradient with alpha variation: any mis-sampled pixel
+        // shows up as a byte difference.
+        let base = RgbaImage::from_fn(97, 61, |x, y| {
+            image::Rgba([
+                (x * 7 % 256) as u8,
+                (y * 11 % 256) as u8,
+                ((x * y) % 256) as u8,
+                (128 + (x + y) % 128) as u8,
+            ])
+        });
+        // (source, radius, bubble, zoom, shape): overlapping bubbles, a
+        // bubble over another's source, sources and bubbles past every
+        // edge, fractional positions, sub-1 and NaN zoom, a source wholly
+        // outside the image.
+        let cases: &[(PointLike, f32, PointLike, f32, crate::MagnifierShape)] = &[
+            (
+                PointLike::new(20.3, 20.7),
+                6.0,
+                PointLike::new(40.5, 25.2),
+                2.0,
+                Circle,
+            ),
+            (
+                PointLike::new(42.0, 26.0),
+                5.5,
+                PointLike::new(48.1, 30.9),
+                3.0,
+                RoundedSquare,
+            ),
+            (
+                PointLike::new(1.2, 59.6),
+                9.0,
+                PointLike::new(3.0, 55.0),
+                4.0,
+                Circle,
+            ),
+            (
+                PointLike::new(95.9, 0.4),
+                8.0,
+                PointLike::new(90.0, 4.0),
+                2.5,
+                RoundedSquare,
+            ),
+            (
+                PointLike::new(60.0, 30.0),
+                7.0,
+                PointLike::new(70.0, 35.0),
+                0.5,
+                Circle,
+            ),
+            (
+                PointLike::new(10.0, 10.0),
+                4.0,
+                PointLike::new(15.0, 12.0),
+                f32::NAN,
+                Circle,
+            ),
+            (
+                PointLike::new(-50.0, -50.0),
+                6.0,
+                PointLike::new(30.0, 40.0),
+                2.0,
+                Circle,
+            ),
+            (
+                PointLike::new(500.0, 30.0),
+                6.0,
+                PointLike::new(80.0, 50.0),
+                3.0,
+                RoundedSquare,
+            ),
+        ];
+        for offset in [(0.0, 0.0), (-3.5, 2.25)] {
+            let mut ours = Pixmap::new(base.width(), base.height()).unwrap();
+            blit_base(&mut ours, &base, (0.0, 0.0));
+            let mut reference = ours.clone();
+            for &(source, radius, bubble, zoom, shape) in cases {
+                draw_magnifier(
+                    &mut ours,
+                    source,
+                    radius,
+                    bubble,
+                    zoom,
+                    shape,
+                    Rgba::OPAQUE_WHITE,
+                    offset,
+                );
+                fill_bubble_from_full_copy(
+                    &mut reference,
+                    source,
+                    radius,
+                    bubble,
+                    zoom,
+                    shape,
+                    offset,
+                );
+                // Same chrome on both so later bubbles sample the same
+                // composed pixels.
+                let (src, bub) = (shift_point(source, offset), shift_point(bubble, offset));
+                let z = crate::magnifier::effective_zoom(zoom);
+                let br = crate::magnifier::bubble_radius(radius, z);
+                draw_magnifier_chrome(
+                    &mut reference,
+                    src,
+                    radius,
+                    bub,
+                    br,
+                    shape,
+                    Rgba::OPAQUE_WHITE,
+                );
+                assert_eq!(
+                    ours.data(),
+                    reference.data(),
+                    "diverged at {source:?}/{bubble:?} offset {offset:?}"
+                );
+            }
+        }
     }
 
     #[test]
