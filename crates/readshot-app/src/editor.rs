@@ -256,10 +256,16 @@ impl TextPanelState {
 pub const ASYNC_COMPOSE_MIN_PIXELS: u64 = 16_000_000;
 
 /// What an off-thread compose is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ComposeKind {
-    /// Image › Resize… to `width` × `height` (one undo step).
-    Resize { width: u32, height: u32 },
+    /// Image › Resize… to `width` × `height`, a scale of `sx` × `sy`
+    /// (one undo step).
+    Resize {
+        width: u32,
+        height: u32,
+        sx: f32,
+        sy: f32,
+    },
     /// Layout alignment (one undo step).
     Align(readshot_core::document::Align),
     /// A gap slider preview (no undo step; release commits).

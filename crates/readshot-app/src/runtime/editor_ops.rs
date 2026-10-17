@@ -344,14 +344,14 @@ pub(crate) fn settle_editor_for_output(
     ed: &mut crate::editor::EditorSession,
     coord: &CaptureCoordinator,
 ) {
+    // A resize / alignment still composing came before anything below.
+    super::compose_jobs::settle_all(ed, coord);
     commit_snapshot_drag(ed, coord);
     commit_style_drag(ed, coord);
     cancel_editor_previews(ed);
     commit_pending_editor_text(ed, coord);
-    // After the text draft: a pending resize was requested over it
-    // committed (`prepare`), so the commit can't make it stale.
-    super::compose_jobs::settle_pending_step(ed, coord);
     apply_crop_draft(ed, coord);
+    sync_owed_history(ed, coord);
 }
 
 /// Close the open popover, if any; returns whether one was open. A
@@ -379,9 +379,15 @@ pub(crate) fn close_editor_popover(ed: &mut crate::editor::EditorSession) -> boo
 pub(crate) fn sync_owed_editor_history(state: &mut App) {
     let coord = state.coordinator.clone();
     if let Some(ed) = state.editor.as_mut() {
-        if std::mem::take(&mut ed.history_sync_owed) {
-            sync_editor_history(ed, &coord);
-        }
+        sync_owed_history(ed, &coord);
+    }
+}
+
+/// [`sync_owed_editor_history`] for a session at hand: call it before
+/// the session is dropped (close, replace, pin).
+pub(crate) fn sync_owed_history(ed: &mut crate::editor::EditorSession, coord: &CaptureCoordinator) {
+    if ed.history_sync_owed {
+        sync_editor_history(ed, coord);
     }
 }
 

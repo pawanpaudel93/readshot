@@ -96,8 +96,10 @@ pub(crate) fn open_editor_window_replacing(
     if state.editor.is_some() {
         let coord = state.coordinator.clone();
         if let Some(old_editor) = state.editor.as_mut() {
+            super::compose_jobs::settle_all(old_editor, &coord);
             cancel_editor_previews(old_editor);
             commit_pending_editor_text(old_editor, &coord);
+            super::editor_ops::sync_owed_history(old_editor, &coord);
             if let Some(old_id) = old_editor.window_id {
                 state.windows.forget(old_id);
                 tasks.push(window::close(old_id));

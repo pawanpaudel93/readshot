@@ -175,6 +175,8 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
                         crate::editor::ComposeKind::Resize {
                             width: w,
                             height: h,
+                            sx,
+                            sy,
                         },
                         step,
                         None,
