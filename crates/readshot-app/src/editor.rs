@@ -739,6 +739,24 @@ pub enum HistoryFrame {
     Unknown,
 }
 
+/// How a status was set: `Auto` is classified from its wording;
+/// `Info` is an instruction; `Warning` a refusal or partial failure.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StatusTone {
+    #[default]
+    Auto,
+    Info,
+    Warning,
+}
+
+/// Whether the 1 Hz status tick has work: a status that can still
+/// auto-dismiss, or an armed Discard to expire. Errors and warnings stay
+/// until dismissed, so they need no tick.
+pub fn status_tick_needed(ed: &EditorSession) -> bool {
+    ed.discard_pending_at.is_some()
+        || (ed.status.is_some() && !ed.status_is_in_progress() && !ed.status_is_sticky())
+}
+
 /// Button in the status toast.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditorToastAction {
@@ -813,10 +831,10 @@ pub struct EditorSession {
     /// (e.g. "Saved to …") after a few seconds so the chrome doesn't
     /// stay loud forever.
     pub status_set_at: Option<std::time::Instant>,
-    /// The status text that was set as a warning ([`Self::set_warning`]):
-    /// a refusal or a partial failure. Compared with `status`, so any
-    /// other write of `status` drops the warning with it.
-    pub warned_status: Option<String>,
+    /// The status text and the tone it was set with ([`Self::set_warning`],
+    /// [`Self::set_info`]). Compared with `status`, so any other write of
+    /// `status` drops the tone with it.
+    pub toned_status: Option<(String, StatusTone)>,
     /// A saved Beautify preset just removed, with its list index, while
     /// the toast offers Undo for it.
     pub removed_beautify_preset: Option<(usize, readshot_core::beautify::SavedBeautifyPreset)>,
@@ -1233,7 +1251,7 @@ impl EditorSession {
             eyedropper: None,
             crop_draft: None,
             status_set_at: None,
-            warned_status: None,
+            toned_status: None,
             removed_beautify_preset: None,
             move_drag: None,
             width_drag_baseline: None,
@@ -1319,7 +1337,7 @@ impl EditorSession {
             eyedropper: None,
             crop_draft: None,
             status_set_at: None,
-            warned_status: None,
+            toned_status: None,
             removed_beautify_preset: None,
             move_drag: None,
             width_drag_baseline: None,
@@ -1396,7 +1414,7 @@ impl EditorSession {
     /// `EditorDiscardRequested`, not through this method).
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.toast_action = None;
-        self.warned_status = None;
+        self.toned_status = None;
         self.removed_beautify_preset = None;
         self.discard_pending_at = None;
         self.status = Some(msg.into());
@@ -1415,7 +1433,23 @@ impl EditorSession {
     pub fn set_warning(&mut self, msg: impl Into<String>) {
         let msg = msg.into();
         self.set_status(msg.clone());
-        self.warned_status = Some(msg);
+        self.toned_status = Some((msg, StatusTone::Warning));
+    }
+
+    /// [`Self::set_status`] for an instruction ("Press ↵ to crop…"): the
+    /// toast shows the neutral Info kind, never the success check.
+    pub fn set_info(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        self.set_status(msg.clone());
+        self.toned_status = Some((msg, StatusTone::Info));
+    }
+
+    /// The tone the current status was set with.
+    pub fn status_tone(&self) -> StatusTone {
+        match (&self.status, &self.toned_status) {
+            (Some(s), Some((t, tone))) if s == t => *tone,
+            _ => StatusTone::Auto,
+        }
     }
 
     /// [`Self::set_warning`] plus a button in the toast.
@@ -1426,7 +1460,7 @@ impl EditorSession {
 
     /// Whether the current status was set as a warning.
     pub fn status_is_warning(&self) -> bool {
-        self.status.is_some() && self.warned_status == self.status
+        self.status_tone() == StatusTone::Warning
     }
 
     /// Errors and warnings stay until the next status replaces them.

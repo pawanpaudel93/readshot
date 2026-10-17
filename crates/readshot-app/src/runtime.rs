@@ -633,8 +633,7 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     if state
         .editor
         .as_ref()
-        .map(|e| e.status.is_some() && !e.status_is_in_progress())
-        .unwrap_or(false)
+        .is_some_and(crate::editor::status_tick_needed)
     {
         // Slow tick drives the auto-dismiss of stale status pills.
         // Only runs while there's actually something to dismiss so

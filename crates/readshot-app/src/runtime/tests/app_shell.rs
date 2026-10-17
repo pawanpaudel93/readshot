@@ -1,6 +1,7 @@
 //! Theme, popovers, Beautify sliders, Esc, zoom and status toasts.
 
 use super::*;
+use crate::editor::StatusTone as Tone;
 
 #[test]
 fn overlay_like_windows_are_always_dark() {
@@ -1088,30 +1089,35 @@ fn editor_toast_kind_classifies_status() {
             "Couldn't save — the folder is read-only.",
             false,
             false,
-            false
+            Tone::Auto
         ),
         ToastKind::Error
     );
     assert_eq!(
-        editor_toast_kind("Copied image", false, false, false),
+        editor_toast_kind("Copied image", false, false, Tone::Auto),
         ToastKind::Ok
     );
     assert_eq!(
-        editor_toast_kind("Saving…", true, false, false),
+        editor_toast_kind("Saving…", true, false, Tone::Auto),
         ToastKind::Info
     );
     assert_eq!(
-        editor_toast_kind("anything", false, true, false),
+        editor_toast_kind("anything", false, true, Tone::Auto),
         ToastKind::Warn
     );
     // A status set as a warning is never the success check, but an
     // error string still reads as an error.
     assert_eq!(
-        editor_toast_kind("The image changed. Open Resize again.", false, false, true),
+        editor_toast_kind(
+            "The image changed. Open Resize again.",
+            false,
+            false,
+            Tone::Warning
+        ),
         ToastKind::Warn
     );
     assert_eq!(
-        editor_toast_kind("Couldn't locate 1 item.", false, false, true),
+        editor_toast_kind("Couldn't locate 1 item.", false, false, Tone::Warning),
         ToastKind::Error
     );
 }
@@ -1148,7 +1154,7 @@ fn a_partial_redaction_status_is_a_warning() {
         crate::editor::EditorToastAction::UndoRedaction { undo_depth: 0 },
     );
     assert_eq!(
-        editor_toast_kind(&s, false, false, ed.status_is_warning()),
+        editor_toast_kind(&s, false, false, ed.status_tone()),
         ToastKind::Warn
     );
 }
@@ -1172,7 +1178,7 @@ fn status_toast_kind_separates_notices_from_successes() {
     }
     // The editor shares the notice rule for its idle statuses.
     assert_eq!(
-        editor_toast_kind("No text recognized.", false, false, false),
+        editor_toast_kind("No text recognized.", false, false, Tone::Auto),
         ToastKind::Info
     );
 }
@@ -1208,7 +1214,7 @@ fn other_status_after_arming_disarms_discard() {
             &s,
             crate::editor::status_str_is_in_progress(&s),
             ed.discard_pending_at.is_some(),
-            false
+            Tone::Auto
         ),
         ToastKind::Warn
     );
@@ -1217,7 +1223,7 @@ fn other_status_after_arming_disarms_discard() {
     ed.set_status("Couldn't save — disk full.");
     let s = ed.status.clone().unwrap();
     assert_eq!(
-        editor_toast_kind(&s, false, ed.discard_pending_at.is_some(), false),
+        editor_toast_kind(&s, false, ed.discard_pending_at.is_some(), Tone::Auto),
         ToastKind::Error
     );
 }
@@ -1268,4 +1274,44 @@ fn popover_closed_message_clears_any_open_popover() {
     );
     let _ = update(&mut app, Message::EditorPopoverClosed);
     assert_eq!(app.editor.as_ref().unwrap().popover, None);
+}
+
+#[test]
+fn instructions_toast_as_info_not_success() {
+    assert_eq!(
+        editor_toast_kind("Press ↵ to crop, esc to cancel.", false, false, Tone::Info),
+        ToastKind::Info
+    );
+    // Drawing a crop draft sets its instruction as Info.
+    let mut ed = debug_editor_qa_session();
+    ed.set_info("Press ↵ to crop, esc to cancel.");
+    assert_eq!(ed.status_tone(), Tone::Info);
+    assert!(!ed.status_is_sticky());
+    ed.set_status("Cropped.");
+    assert_eq!(ed.status_tone(), Tone::Auto);
+}
+
+#[test]
+fn warnings_can_be_dismissed_and_stop_the_status_tick() {
+    assert!(toast_is_dismissable(ToastKind::Warn));
+    assert!(toast_is_dismissable(ToastKind::Error));
+    assert!(!toast_is_dismissable(ToastKind::Ok));
+    assert!(!toast_is_dismissable(ToastKind::Info));
+    let mut ed = debug_editor_qa_session();
+    ed.set_status("Saved.");
+    assert!(crate::editor::status_tick_needed(&ed));
+    ed.set_warning("Enter a width and height of at least 1 px.");
+    assert!(!crate::editor::status_tick_needed(&ed));
+    ed.set_status("Couldn't save — disk full.");
+    assert!(!crate::editor::status_tick_needed(&ed));
+    // An armed Discard still needs the tick to expire.
+    ed.discard_pending_at = Some(std::time::Instant::now());
+    assert!(crate::editor::status_tick_needed(&ed));
+    // Dismiss clears a warning like an error.
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let mut ed = debug_editor_qa_session();
+    ed.set_warning("The image changed. Open Resize again.");
+    app.editor = Some(ed);
+    let _ = update(&mut app, Message::EditorStatusDismissed);
+    assert!(app.editor.as_ref().unwrap().status.is_none());
 }

@@ -2588,7 +2588,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             &s,
             crate::editor::status_str_is_in_progress(&s),
             discard_armed,
-            ed.status_is_warning(),
+            ed.status_tone(),
         );
         let action: Option<Element<'_, Message>> = if discard_armed {
             Some(
@@ -2625,7 +2625,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             )]
             .spacing(SP1)
             .align_y(Alignment::Center);
-            if kind == ToastKind::Error {
+            if toast_is_dismissable(kind) {
                 r = r.push(icon_button(
                     AppIcon::Close,
                     p.t2,
@@ -2638,7 +2638,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 ));
             }
             Some(r.into())
-        } else if kind == ToastKind::Error {
+        } else if toast_is_dismissable(kind) {
             Some(icon_button(
                 AppIcon::Close,
                 p.t2,
@@ -2905,22 +2905,32 @@ pub(crate) fn toast_action_parts(
     }
 }
 
+/// Errors and warnings never auto-dismiss, so their toast carries a
+/// Dismiss button.
+pub(crate) fn toast_is_dismissable(kind: ToastKind) -> bool {
+    matches!(kind, ToastKind::Error | ToastKind::Warn)
+}
+
 /// Toast kind for the editor status line. Armed discard wins (amber),
-/// then errors, then in-flight work, then a status set as a warning
-/// (`EditorSession::set_warning`: refusals, partial failures); the rest
-/// is classified from the wording.
+/// then errors, then in-flight work, then the tone the status was set
+/// with (`EditorSession::set_warning`: refusals, partial failures;
+/// `set_info`: instructions); the rest is classified from the wording.
 pub(crate) fn editor_toast_kind(
     status: &str,
     in_progress: bool,
     discard_armed: bool,
-    warning: bool,
+    tone: crate::editor::StatusTone,
 ) -> ToastKind {
+    use crate::editor::StatusTone;
+    let error = crate::editor::status_str_is_error(status);
     if discard_armed {
         ToastKind::Warn
-    } else if in_progress && !crate::editor::status_str_is_error(status) {
+    } else if in_progress && !error {
         ToastKind::Info
-    } else if warning && !crate::editor::status_str_is_error(status) {
+    } else if tone == StatusTone::Warning && !error {
         ToastKind::Warn
+    } else if tone == StatusTone::Info && !error {
+        ToastKind::Info
     } else {
         status_toast_kind(status)
     }

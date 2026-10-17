@@ -24,7 +24,7 @@ pub(crate) fn handle_commit_annotation(
     ed.refresh_image();
     if cropped {
         let (w, h) = ed.effective_image_size();
-        ed.set_status(format!(
+        ed.set_info(format!(
             "Crop selected at {w} × {h}px. Drag handles to adjust; Delete or ⌘Z cancels."
         ));
     }
@@ -1679,7 +1679,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         // switched mid-drag must not leave a draft behind.
                         if ed.model.active_tool() == readshot_ui::editor::ToolState::Crop {
                             ed.crop_draft = Some(rect);
-                            ed.set_status("Press ↵ to crop, esc to cancel.");
+                            ed.set_info("Press ↵ to crop, esc to cancel.");
                         } else {
                             ed.crop_draft = None;
                         }
