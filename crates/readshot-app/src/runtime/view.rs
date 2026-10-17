@@ -2539,7 +2539,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let status_text = match (ed.status.clone(), ed.status_set_at) {
         (Some(s), Some(t))
             if !ed.status_is_in_progress()
-                && !ed.status_is_error()
+                && !ed.status_is_sticky()
                 && t.elapsed() > crate::editor::STATUS_AUTO_DISMISS =>
         {
             tracing::trace!(target: "readshot::editor", "auto-dismissed status: {s}");
@@ -2553,6 +2553,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             &s,
             crate::editor::status_str_is_in_progress(&s),
             discard_armed,
+            ed.status_is_warning(),
         );
         let action: Option<Element<'_, Message>> = if discard_armed {
             Some(
@@ -2865,16 +2866,26 @@ pub(crate) fn toast_action_parts(
             Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
         ),
         A::RetryRecognition => ("Retry", None, Message::EditorTextRecognize),
+        A::RestorePreset => ("Undo", None, Message::EditorBeautifyRestorePreset),
     }
 }
 
 /// Toast kind for the editor status line. Armed discard wins (amber),
-/// then errors, then in-flight work; everything else is a success.
-pub(crate) fn editor_toast_kind(status: &str, in_progress: bool, discard_armed: bool) -> ToastKind {
+/// then errors, then in-flight work, then a status set as a warning
+/// (`EditorSession::set_warning`: refusals, partial failures); the rest
+/// is classified from the wording.
+pub(crate) fn editor_toast_kind(
+    status: &str,
+    in_progress: bool,
+    discard_armed: bool,
+    warning: bool,
+) -> ToastKind {
     if discard_armed {
         ToastKind::Warn
     } else if in_progress && !crate::editor::status_str_is_error(status) {
         ToastKind::Info
+    } else if warning && !crate::editor::status_str_is_error(status) {
+        ToastKind::Warn
     } else {
         status_toast_kind(status)
     }

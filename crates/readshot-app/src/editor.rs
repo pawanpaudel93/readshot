@@ -748,6 +748,8 @@ pub enum EditorToastAction {
     UndoRedaction { undo_depth: usize },
     /// Recognition failed → Retry.
     RetryRecognition,
+    /// "Removed Preset N." → Undo puts the preset back.
+    RestorePreset,
 }
 
 /// A fresh, process-unique editor session id. Normally assigned by the
@@ -811,6 +813,13 @@ pub struct EditorSession {
     /// (e.g. "Saved to …") after a few seconds so the chrome doesn't
     /// stay loud forever.
     pub status_set_at: Option<std::time::Instant>,
+    /// The status text that was set as a warning ([`Self::set_warning`]):
+    /// a refusal or a partial failure. Compared with `status`, so any
+    /// other write of `status` drops the warning with it.
+    pub warned_status: Option<String>,
+    /// A saved Beautify preset just removed, with its list index, while
+    /// the toast offers Undo for it.
+    pub removed_beautify_preset: Option<(usize, readshot_core::beautify::SavedBeautifyPreset)>,
     /// Transient Select-tool move. The model previews movement
     /// without pushing undo history on every mouse move; release
     /// commits the final state against this baseline as one undoable
@@ -1224,6 +1233,8 @@ impl EditorSession {
             eyedropper: None,
             crop_draft: None,
             status_set_at: None,
+            warned_status: None,
+            removed_beautify_preset: None,
             move_drag: None,
             width_drag_baseline: None,
             style_drag_baseline: None,
@@ -1308,6 +1319,8 @@ impl EditorSession {
             eyedropper: None,
             crop_draft: None,
             status_set_at: None,
+            warned_status: None,
+            removed_beautify_preset: None,
             move_drag: None,
             width_drag_baseline: None,
             style_drag_baseline: None,
@@ -1383,6 +1396,8 @@ impl EditorSession {
     /// `EditorDiscardRequested`, not through this method).
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.toast_action = None;
+        self.warned_status = None;
+        self.removed_beautify_preset = None;
         self.discard_pending_at = None;
         self.status = Some(msg.into());
         self.status_set_at = Some(std::time::Instant::now());
@@ -1394,6 +1409,31 @@ impl EditorSession {
         self.toast_action = Some(action);
     }
 
+    /// [`Self::set_status`] for a refusal or a partial failure: the toast
+    /// shows the warning kind (never the success check) and is not
+    /// auto-dismissed, so an instruction in it stays readable.
+    pub fn set_warning(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        self.set_status(msg.clone());
+        self.warned_status = Some(msg);
+    }
+
+    /// [`Self::set_warning`] plus a button in the toast.
+    pub fn set_warning_with_action(&mut self, msg: impl Into<String>, action: EditorToastAction) {
+        self.set_warning(msg);
+        self.toast_action = Some(action);
+    }
+
+    /// Whether the current status was set as a warning.
+    pub fn status_is_warning(&self) -> bool {
+        self.status.is_some() && self.warned_status == self.status
+    }
+
+    /// Errors and warnings stay until the next status replaces them.
+    pub fn status_is_sticky(&self) -> bool {
+        self.status_is_error() || self.status_is_warning()
+    }
+
     /// The toast button to show: a redaction's Undo only while that
     /// redaction is still the newest history step.
     pub fn visible_toast_action(&self) -> Option<EditorToastAction> {
@@ -1402,6 +1442,7 @@ impl EditorSession {
                 self.model.undo_depth() == *undo_depth
             }
             EditorToastAction::RetryRecognition => true,
+            EditorToastAction::RestorePreset => self.removed_beautify_preset.is_some(),
         })
     }
 

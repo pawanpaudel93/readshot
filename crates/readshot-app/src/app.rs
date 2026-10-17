@@ -478,6 +478,8 @@ pub enum Message {
     EditorBeautifySavePreset,
     /// Remove a saved Beautify preset (by list index).
     EditorBeautifyDeletePreset(usize),
+    /// Undo in the "Removed …" toast: put the removed preset back.
+    EditorBeautifyRestorePreset,
     /// The Beautify background hex field was edited.
     EditorBeautifyHexChanged(String),
     /// The Beautify background hex field was submitted.
@@ -1393,11 +1395,36 @@ impl App {
         Some(name)
     }
 
-    pub(crate) fn delete_beautify_preset(&mut self, index: usize) {
+    /// Remove the saved preset at `index`, returning it so the toast
+    /// can offer Undo.
+    pub(crate) fn delete_beautify_preset(
+        &mut self,
+        index: usize,
+    ) -> Option<readshot_core::beautify::SavedBeautifyPreset> {
         if index < self.preferences.editor_beautify_presets.len() {
-            self.preferences.editor_beautify_presets.remove(index);
+            let removed = self.preferences.editor_beautify_presets.remove(index);
             self.persist_preferences_if_configured();
+            Some(removed)
+        } else {
+            None
         }
+    }
+
+    /// Put a removed preset back at `index` (clamped). Refused when the
+    /// list is full again.
+    pub(crate) fn restore_beautify_preset(
+        &mut self,
+        index: usize,
+        preset: readshot_core::beautify::SavedBeautifyPreset,
+    ) -> bool {
+        use readshot_core::beautify::MAX_SAVED_PRESETS;
+        let list = &mut self.preferences.editor_beautify_presets;
+        if list.len() >= MAX_SAVED_PRESETS {
+            return false;
+        }
+        list.insert(index.min(list.len()), preset);
+        self.persist_preferences_if_configured();
+        true
     }
 
     /// Add a non-preset color to the editor's Recent row and persist.

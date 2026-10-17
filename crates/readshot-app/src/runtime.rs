@@ -1930,6 +1930,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorSnapshotSliderCommit
         | Message::EditorBeautifySavePreset
         | Message::EditorBeautifyDeletePreset(..)
+        | Message::EditorBeautifyRestorePreset
         | Message::EditorBeautifyHexChanged(..)
         | Message::EditorBeautifyHexSubmitted
         | Message::EditorBeautifyPickBackground

@@ -31,17 +31,45 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
         };
         let saved = state.save_beautify_preset(s);
         if let Some(ed) = state.editor.as_mut() {
-            ed.set_status(match saved {
-                Some(name) => format!("Saved {name}."),
-                None => format!(
+            match saved {
+                Some(name) => ed.set_status(format!("Saved {name}.")),
+                None => ed.set_warning(format!(
                     "You can keep up to {MAX_SAVED_PRESETS} presets. Remove one to save another."
-                ),
-            });
+                )),
+            }
         }
         return Task::none();
     }
     if let Message::EditorBeautifyDeletePreset(i) = message {
-        state.delete_beautify_preset(i);
+        // Removing is immediate and persisted, so the toast offers Undo.
+        if let Some(removed) = state.delete_beautify_preset(i) {
+            if let Some(ed) = state.editor.as_mut() {
+                let status = format!("Removed {}.", removed.name);
+                ed.set_status_with_action(status, crate::editor::EditorToastAction::RestorePreset);
+                ed.removed_beautify_preset = Some((i, removed));
+            }
+        }
+        return Task::none();
+    }
+    if let Message::EditorBeautifyRestorePreset = message {
+        let pending = state.editor.as_mut().and_then(|ed| {
+            (ed.visible_toast_action() == Some(crate::editor::EditorToastAction::RestorePreset))
+                .then(|| ed.removed_beautify_preset.take())
+                .flatten()
+        });
+        if let Some((i, preset)) = pending {
+            let name = preset.name.clone();
+            let restored = state.restore_beautify_preset(i, preset);
+            if let Some(ed) = state.editor.as_mut() {
+                if restored {
+                    ed.set_status(format!("Restored {name}."));
+                } else {
+                    ed.set_status(format!(
+                        "Couldn't restore {name}: you can keep up to {MAX_SAVED_PRESETS} presets."
+                    ));
+                }
+            }
+        }
         return Task::none();
     }
     let saved = state.preferences.editor_beautify_presets.clone();

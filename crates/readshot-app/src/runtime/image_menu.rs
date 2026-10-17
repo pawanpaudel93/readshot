@@ -163,7 +163,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
                 return Task::none();
             };
             let Some((w, h)) = d.target() else {
-                ed.set_status("Enter a width and height of at least 1 px.");
+                ed.set_warning("Enter a width and height of at least 1 px.");
                 return Task::none();
             };
             // The dialog's percentages and ratio refer to the size it
@@ -171,7 +171,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
             // numbers no longer mean what they say.
             if ed.effective_image_size() != d.base {
                 close_editor_popover(ed);
-                ed.set_status("The image changed. Open Resize again.");
+                ed.set_warning("The image changed. Open Resize again.");
                 return Task::none();
             }
             let (bw, bh) = d.base;
