@@ -152,7 +152,10 @@ fn secured_key(record: &CaptureRecord) -> SecuredScrub {
 /// still match), never `None` (that is the capture as taken) and never an
 /// id the editor produces (those are a stored id or `<uuid>:<geometry>`).
 /// Fixed length, so reopening and cropping again never grows it.
-fn cropped_frame_id(frame: Option<&str>, crop: readshot_core::render::OutputCrop) -> String {
+pub(crate) fn cropped_frame_id(
+    frame: Option<&str>,
+    crop: readshot_core::render::OutputCrop,
+) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     frame.hash(&mut h);

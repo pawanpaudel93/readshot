@@ -77,20 +77,7 @@ pub fn redactions_in_crop(
     redactions: &[Annotation],
     crop: crate::render::OutputCrop,
 ) -> Vec<Annotation> {
-    let (w, h) = (crop.width as f32, crop.height as f32);
-    let clip = |r: RectLike| -> Option<RectLike> {
-        let (mut x0, mut x1) = (r.x - crop.x, r.x + r.width - crop.x);
-        let (mut y0, mut y1) = (r.y - crop.y, r.y + r.height - crop.y);
-        if x0 > x1 {
-            std::mem::swap(&mut x0, &mut x1);
-        }
-        if y0 > y1 {
-            std::mem::swap(&mut y0, &mut y1);
-        }
-        let (x0, x1) = (x0.max(0.0), x1.min(w));
-        let (y0, y1) = (y0.max(0.0), y1.min(h));
-        (x1 > x0 && y1 > y0).then(|| RectLike::new(x0, y0, x1 - x0, y1 - y0))
-    };
+    let clip = |r: RectLike| rect_in_crop(r, crop);
     redactions
         .iter()
         .filter(|a| is_redaction(a))
@@ -105,6 +92,138 @@ pub fn redactions_in_crop(
             Some(out)
         })
         .collect()
+}
+
+/// `r` (base px) moved into the pixels of an output cropped to `crop`
+/// and clipped to it; `None` when nothing of it is inside.
+fn rect_in_crop(r: RectLike, crop: crate::render::OutputCrop) -> Option<RectLike> {
+    let (w, h) = (crop.width as f32, crop.height as f32);
+    let (mut x0, mut x1) = (r.x - crop.x, r.x + r.width - crop.x);
+    let (mut y0, mut y1) = (r.y - crop.y, r.y + r.height - crop.y);
+    if x0 > x1 {
+        std::mem::swap(&mut x0, &mut x1);
+    }
+    if y0 > y1 {
+        std::mem::swap(&mut y0, &mut y1);
+    }
+    let (x0, x1) = (x0.max(0.0), x1.min(w));
+    let (y0, y1) = (y0.max(0.0), y1.min(h));
+    (x1 > x0 && y1 > y0).then(|| RectLike::new(x0, y0, x1 - x0, y1 - y0))
+}
+
+/// `doc` (positions in base px) as it reads in an output cropped to
+/// `crop` ([`crate::render::output_crop`]): only the text whose boxes
+/// intersect the crop, every box clipped to it and moved into the cropped
+/// output's pixels (the frame [`redactions_in_crop`] stores redactions
+/// in). What a History record whose stored image is that crop may say.
+///
+/// Each word box — and, for chars no word box accounts for, their
+/// proportional slice of the line box (the rule [`hidden_spans`] uses) —
+/// is kept or dropped whole with its chars. A line's kept tokens are
+/// joined by single spaces; lines with nothing kept are dropped;
+/// `layout_text` is the kept lines joined by newlines (the original
+/// layout can't be cut to the crop).
+///
+/// `None` without positions: nothing tells which text the crop keeps, so
+/// callers store no text (fail closed).
+pub fn document_in_crop(
+    doc: &TextDocument,
+    crop: crate::render::OutputCrop,
+) -> Option<TextDocument> {
+    use crate::text_lines::WordRect;
+    if !doc.positioned {
+        return None;
+    }
+    let mut lines = Vec::new();
+    for line in &doc.lines {
+        let line_rect = line.rect?;
+        let chars: Vec<char> = line.text.chars().collect();
+        let n = chars.len();
+        let usable: Vec<_> = line
+            .words
+            .iter()
+            .filter(|w| w.rect.width > 0.0 && w.rect.height > 0.0 && w.start < w.end)
+            .collect();
+        let covered = |i: usize| usable.iter().any(|w| w.start <= i && i < w.end);
+        // Every piece of text with its box, kept only when the box
+        // reaches into the crop.
+        let mut kept: Vec<(Range<usize>, RectLike)> = Vec::new();
+        for tok in tokens(&chars) {
+            for w in usable
+                .iter()
+                .filter(|w| tok.start < w.end && w.start < tok.end)
+            {
+                let r = tok.start.max(w.start)..tok.end.min(w.end).min(n);
+                if let Some(b) = rect_in_crop(w.rect, crop) {
+                    kept.push((r, b));
+                }
+            }
+            let mut i = tok.start;
+            while i < tok.end {
+                if covered(i) {
+                    i += 1;
+                    continue;
+                }
+                let rs = i;
+                while i < tok.end && !covered(i) {
+                    i += 1;
+                }
+                if let Some(b) = rect_in_crop(slice(line_rect, n, rs..i), crop) {
+                    kept.push((rs..i, b));
+                }
+            }
+        }
+        let mut keep = vec![false; n];
+        for (r, _) in &kept {
+            keep[r.clone()].iter_mut().for_each(|k| *k = true);
+        }
+        // The kept chars, token by token; `at[i]` is char i's new index.
+        let mut text = String::new();
+        let mut at = vec![0usize; n];
+        let mut len = 0usize;
+        for tok in tokens(&chars) {
+            if !keep[tok.clone()].contains(&true) {
+                continue;
+            }
+            if len > 0 {
+                text.push(' ');
+                len += 1;
+            }
+            for i in tok.filter(|&i| keep[i]) {
+                at[i] = len;
+                text.push(chars[i]);
+                len += 1;
+            }
+        }
+        if len == 0 {
+            continue;
+        }
+        let words: Vec<WordRect> = kept
+            .iter()
+            .map(|(r, b)| WordRect {
+                start: at[r.start],
+                end: at[r.end - 1] + 1,
+                rect: *b,
+            })
+            .collect();
+        let rect = words.iter().map(|w| w.rect).reduce(|a, b| {
+            let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
+            let x1 = (a.x + a.width).max(b.x + b.width);
+            let y1 = (a.y + a.height).max(b.y + b.height);
+            RectLike::new(x0, y0, x1 - x0, y1 - y0)
+        });
+        lines.push(TextLine { text, rect, words });
+    }
+    let layout_text = lines
+        .iter()
+        .map(|l| l.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(TextDocument {
+        lines,
+        positioned: true,
+        layout_text,
+    })
 }
 
 fn area(r: RectLike) -> f32 {
@@ -448,6 +567,79 @@ mod tests {
             ]
         );
         assert_eq!(crate::render::output_crop(400, 200, &out), None);
+    }
+
+    fn crop_of(x: f32, y: f32, w: f32, h: f32) -> crate::render::OutputCrop {
+        crate::render::output_crop(
+            400,
+            200,
+            &[Annotation::Crop {
+                rect: RectLike::new(x, y, w, h),
+            }],
+        )
+        .expect("a crop")
+    }
+
+    #[test]
+    fn document_in_crop_keeps_only_text_inside_the_crop_in_cropped_pixels() {
+        // x 45–125, y 10–20: "Zx9Qw7" (50–110) and "next" (120–160,
+        // reaching in) of line two; "key:" (0–40) and line one are out.
+        let out = document_in_crop(&doc(), crop_of(45.0, 10.0, 80.0, 10.0)).unwrap();
+        assert_eq!(out.lines.len(), 1);
+        let line = &out.lines[0];
+        assert_eq!(line.text, "Zx9Qw7 next");
+        assert_eq!(out.layout_text, "Zx9Qw7 next");
+        assert!(out.positioned);
+        assert_eq!(
+            line.words,
+            vec![
+                WordRect {
+                    start: 0,
+                    end: 6,
+                    rect: RectLike::new(5.0, 0.0, 60.0, 10.0),
+                },
+                WordRect {
+                    start: 7,
+                    end: 11,
+                    rect: RectLike::new(75.0, 0.0, 5.0, 10.0),
+                },
+            ]
+        );
+        assert_eq!(line.rect, Some(RectLike::new(5.0, 0.0, 75.0, 10.0)));
+        // Redactions moved the same way still hide their word.
+        let hide = redactions_in_crop(
+            &[solid(RectLike::new(50.0, 10.0, 60.0, 10.0))],
+            crop_of(45.0, 10.0, 80.0, 10.0),
+        );
+        assert_eq!(
+            masked_layout_text(&out, &hidden_spans(&out, &hide)),
+            "██████ next"
+        );
+    }
+
+    #[test]
+    fn document_in_crop_keeps_unboxed_tokens_by_their_line_slice() {
+        // No word boxes: 10 px per char of a 100 px line.
+        let d = TextDocument {
+            lines: vec![TextLine {
+                text: "alpha beta".into(),
+                rect: Some(RectLike::new(0.0, 0.0, 100.0, 10.0)),
+                words: Vec::new(),
+            }],
+            positioned: true,
+            layout_text: "alpha beta".into(),
+        };
+        let out = document_in_crop(&d, crop_of(60.0, 0.0, 40.0, 10.0)).unwrap();
+        assert_eq!(out.layout_text, "beta");
+        let out = document_in_crop(&d, crop_of(200.0, 0.0, 40.0, 10.0)).unwrap();
+        assert!(out.lines.is_empty());
+        assert_eq!(out.layout_text, "");
+    }
+
+    #[test]
+    fn document_in_crop_fails_closed_without_positions() {
+        let d = TextDocument::from_plain("alpha beta");
+        assert_eq!(document_in_crop(&d, crop_of(0.0, 0.0, 10.0, 10.0)), None);
     }
 
     /// "key: Zx9Qw7 next" with a box per word, 10 px per char.

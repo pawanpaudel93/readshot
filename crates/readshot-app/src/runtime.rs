@@ -10791,9 +10791,13 @@ mod tests {
         app.editor = None;
         app.coordinator.flush_history_updates();
         // The recognition task's History write, run with the editor gone.
-        let _ =
-            super::text_panel::store_recognized_text(&app.coordinator, &record, Ok(sample_doc()))
-                .await;
+        let _ = super::text_panel::store_recognized_text(
+            &app.coordinator,
+            &record,
+            None,
+            Ok(sample_doc()),
+        )
+        .await;
         let (stored, _) = stored(&store);
         let text = stored.ocr_text.unwrap();
         assert!(!text.contains(EMAIL), "{text}");
@@ -11255,7 +11259,8 @@ mod tests {
             .await
             .map_err(|e| e.to_string());
         assert!(doc.as_ref().unwrap().layout_text.contains(&hidden_word()));
-        let _ = super::text_panel::store_recognized_text(&app.coordinator, &framed, doc).await;
+        let _ =
+            super::text_panel::store_recognized_text(&app.coordinator, &framed, None, doc).await;
         let text = stored_record(&store, record.id)
             .ocr_text
             .unwrap_or_default();
@@ -11292,6 +11297,118 @@ mod tests {
             .unwrap_or_default();
         assert!(!text.contains(&hidden_word()), "{text}");
         assert_eq!(text, "█".repeat(6));
+    }
+
+    /// "outside inside <hidden word>" on a 40 × 20 capture: "outside" at
+    /// x 2–12, "inside" at x 22–28, the hidden word at x 30–36.
+    fn three_words() -> readshot_core::text_lines::TextDocument {
+        use readshot_core::text_lines::{TextDocument, TextLine, WordRect};
+        let text = format!("outside inside {}", hidden_word());
+        let word = |start, end, x| WordRect {
+            start,
+            end,
+            rect: RectLike::new(x, 2.0, if start == 0 { 10.0 } else { 6.0 }, 4.0),
+        };
+        TextDocument {
+            lines: vec![TextLine {
+                text: text.clone(),
+                rect: Some(RectLike::new(2.0, 2.0, 34.0, 4.0)),
+                words: vec![word(0, 7, 2.0), word(8, 14, 22.0), word(15, 21, 30.0)],
+            }],
+            positioned: true,
+            layout_text: text,
+        }
+    }
+
+    /// A saved 40 × 20 capture (its text already stored) open in the
+    /// editor, cropped to x 20–40 with the hidden word pixelated.
+    fn cropped_scrub_session(
+        store: &readshot_core::FsHistoryStore,
+        app: &mut App,
+        doc: Option<readshot_core::text_lines::TextDocument>,
+    ) -> readshot_core::CaptureRecord {
+        let img = solid(40, 20);
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+        record.ocr_text = Some(three_words().layout_text);
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            img,
+            record.clone(),
+        ));
+        if let Some(doc) = doc {
+            recognized(app, readshot_core::document::ORIGINAL_PART, doc);
+        }
+        let ed = app.editor.as_mut().unwrap();
+        ed.model.commit_annotation(Annotation::Crop {
+            rect: RectLike::new(20.0, 0.0, 20.0, 20.0),
+        });
+        ed.model.commit_annotation(Annotation::Pixelate {
+            rect: RectLike::new(30.0, 2.0, 6.0, 4.0),
+            block_size: 4.0,
+        });
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        record
+    }
+
+    #[test]
+    fn a_cropped_scrub_stores_only_the_text_inside_the_crop() {
+        use readshot_core::history::record_matches_query;
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_positions_and_history(store.clone());
+        let record = cropped_scrub_session(&store, &mut app, Some(three_words()));
+        let stored = stored_record(&store, record.id);
+        assert!(stored.redacted);
+        assert_eq!(stored_png_dims(&store, &record), (20, 20));
+        // Cut-away "outside" is gone, "inside" kept, the redaction masked.
+        assert_eq!(stored.ocr_text.as_deref(), Some("inside ██████"));
+        // History search and the MCP server (same sidecar, same matcher).
+        assert!(!record_matches_query(&stored, "outside"));
+        assert!(!record_matches_query(&stored, &hidden_word()));
+        assert!(record_matches_query(&stored, "inside"));
+    }
+
+    #[test]
+    fn a_cropped_scrub_without_word_boxes_stores_no_text() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        // An engine without positions: only the stored plain text is known.
+        let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+        let record = cropped_scrub_session(&store, &mut app, None);
+        let stored = stored_record(&store, record.id);
+        assert!(stored.redacted);
+        assert_eq!(
+            stored.ocr_text, None,
+            "fail closed: nothing tells what the crop keeps"
+        );
+    }
+
+    #[tokio::test]
+    async fn recognition_landing_after_a_cropped_scrub_stores_only_the_text_inside_the_crop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_positions_and_history(store.clone());
+        // Redacted and cropped before any recognition: no text yet.
+        let record = cropped_scrub_session(&store, &mut app, None);
+        assert_eq!(stored_record(&store, record.id).ocr_text, None);
+        // The recognition task's History write, run with the editor gone.
+        let (target, cut) =
+            super::text_panel::recognition_history_target(app.editor.as_ref().unwrap());
+        app.editor = None;
+        let target = target.expect("a History target");
+        assert!(cut.is_some());
+        let _ = super::text_panel::store_recognized_text(
+            &app.coordinator,
+            &target,
+            cut.as_ref(),
+            Ok(three_words()),
+        )
+        .await;
+        let stored = stored_record(&store, record.id);
+        assert_eq!(stored.ocr_text.as_deref(), Some("inside ██████"));
     }
 
     fn build_app_with_positions_and_history(history: Arc<dyn HistoryStore>) -> App {

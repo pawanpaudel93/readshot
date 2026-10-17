@@ -233,21 +233,7 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
         ed.toast_action = None;
     }
     let session = ed.session_id;
-    // The task stores masked text in History itself (so it lands after
-    // the editor closes) only while the document is the original frame:
-    // part px are document px there. Otherwise the editor-side write in
-    // `EditorTextRecognized` does it (decision D2). The record carries
-    // the frame id, so History drops the text if it holds another frame
-    // by the time it lands.
-    let history_record = if ed.model.geometry().is_original() {
-        let frame = history_geometry_id(ed);
-        ed.source_record.clone().map(|mut r| {
-            r.geometry_id = frame;
-            r
-        })
-    } else {
-        None
-    };
+    let (history_record, history_cut) = recognition_history_target(ed);
     // Only a shared handle here: the full-size pixel copy the engine
     // takes ownership of (~80 MB on a 5K capture) is made in the task,
     // off the UI thread.
@@ -267,7 +253,9 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
                 .await
                 .map_err(|e| e.to_string());
             match &history_record {
-                Some(record) => store_recognized_text(&coord, record, result).await,
+                Some(record) => {
+                    store_recognized_text(&coord, record, history_cut.as_ref(), result).await
+                }
                 None => result,
             }
         },
@@ -279,18 +267,80 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
     )
 }
 
+/// The History record (and crop) the recognition task stores its text
+/// for, if any. The task stores masked text in History itself (so it
+/// lands after the editor closes) only while the document is the original frame:
+/// part px are document px there. Otherwise the editor-side write in
+/// `EditorTextRecognized` does it (decision D2). The record carries
+/// the frame id, so History drops the text if it holds another frame
+/// by the time it lands.
+///
+/// A scrub that bakes a Crop stores the crop, in a frame of its own:
+/// the text is then cut to the crop (and pre-masked with what the
+/// scrub hides) before History masks it with the stored redactions.
+pub(crate) fn recognition_history_target(
+    ed: &EditorSession,
+) -> (Option<readshot_core::CaptureRecord>, Option<HistoryCut>) {
+    if ed.model.geometry().is_original() {
+        let frame = history_geometry_id(ed);
+        match super::editor_ops::history_crop(ed) {
+            None => (
+                ed.source_record.clone().map(|mut r| {
+                    r.geometry_id = frame;
+                    r
+                }),
+                None,
+            ),
+            Some(crop) => match super::editor_ops::history_hide(ed) {
+                Some(hide) => (
+                    ed.source_record.clone().map(|mut r| {
+                        r.geometry_id =
+                            Some(crate::coordinator::cropped_frame_id(frame.as_deref(), crop));
+                        r
+                    }),
+                    Some((crop, hide)),
+                ),
+                // Inherited redactions can't be placed: store nothing.
+                None => (None, None),
+            },
+        }
+    } else {
+        (None, None)
+    }
+}
+
+/// History's image is this crop of the document, hiding these annotations
+/// ([`store_recognized_text`]).
+pub(crate) type HistoryCut = (
+    readshot_core::render::OutputCrop,
+    Vec<readshot_core::Annotation>,
+);
+
 /// After the editor's recognition of a History capture: if the record
 /// was scrubbed, store the text masked with its redactions. Runs in the
 /// recognition task, not the editor, so it lands even when the editor
 /// closed meanwhile. An unredacted record is left alone. Passes `result`
 /// through.
+///
+/// `cut`: History's image is this crop of the document, hiding these
+/// annotations; only the text inside the crop is stored
+/// ([`super::editor_ops::cropped_history_document`]), and none without
+/// positions.
 pub(crate) async fn store_recognized_text(
     coord: &crate::coordinator::CaptureCoordinator,
     record: &readshot_core::CaptureRecord,
+    cut: Option<&HistoryCut>,
     result: Result<TextDocument, String>,
 ) -> Result<TextDocument, String> {
-    if let Ok(doc) = &result {
-        let (coord, record, doc) = (coord.clone(), record.clone(), doc.clone());
+    let for_history = match (&result, cut) {
+        (Ok(doc), None) => Some(doc.clone()),
+        (Ok(doc), Some((crop, hide))) => {
+            super::editor_ops::cropped_history_document(doc, hide, *crop)
+        }
+        (Err(_), _) => None,
+    };
+    if let Some(doc) = for_history {
+        let (coord, record) = (coord.clone(), record.clone());
         let written =
             tokio::task::spawn_blocking(move || coord.record_recognized_text(&record, &doc, false))
                 .await;

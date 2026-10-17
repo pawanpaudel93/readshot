@@ -605,6 +605,13 @@ pub(crate) fn scrubbed_history_text(
     let mut hide = ed.model.annotations().to_vec();
     hide.extend(inherited.iter().flatten().cloned());
     let mask = |doc: &TextDocument| masked_text(doc, &hide);
+    if let Some(crop) = history_crop(ed) {
+        // The stored image is the crop: only text whose boxes are inside
+        // it may be stored, and without boxes nothing tells which.
+        let doc = super::text_panel::current_positioned_document(ed)?;
+        inherited.as_ref()?;
+        return cropped_history_document(doc, &hide, crop).map(|d| d.layout_text);
+    }
     if let Some(doc) = super::text_panel::current_positioned_document(ed) {
         return inherited.is_some().then(|| mask(doc));
     }
@@ -623,6 +630,49 @@ pub(crate) fn scrubbed_history_text(
         }
         None => None,
     }
+}
+
+/// The crop History's image gets from a write now: a scrub bakes every
+/// annotation, a Crop included
+/// ([`CaptureCoordinator::rewrite_history_async`]); every other write
+/// stores the uncropped document. `None`: no crop.
+pub(crate) fn history_crop(
+    ed: &crate::editor::EditorSession,
+) -> Option<readshot_core::render::OutputCrop> {
+    let annotations = ed.model.annotations();
+    if !readshot_core::scrub::has_redaction(annotations) {
+        return None;
+    }
+    let base = ed.model.base();
+    readshot_core::render::output_crop(base.width(), base.height(), annotations)
+}
+
+/// What a scrub hides: the editor's annotations plus, for a reopened
+/// scrubbed record, the redactions baked into its image. `None` when
+/// those can't be placed ([`inherited_redactions`]): fail closed.
+pub(crate) fn history_hide(
+    ed: &crate::editor::EditorSession,
+) -> Option<Vec<readshot_core::Annotation>> {
+    let mut hide = ed.model.annotations().to_vec();
+    hide.extend(inherited_redactions(ed)?);
+    Some(hide)
+}
+
+/// `doc` (document px) as History may store it for an image cropped to
+/// `crop`: words hidden by `hide` masked, then cut to the text inside the
+/// crop in the cropped image's px, then masked again with `hide` moved
+/// into those px (a word half cut away still counts as hidden if it was
+/// hidden before the cut). `None` without positions (fail closed).
+pub(crate) fn cropped_history_document(
+    doc: &readshot_core::text_lines::TextDocument,
+    hide: &[readshot_core::Annotation],
+    crop: readshot_core::render::OutputCrop,
+) -> Option<readshot_core::text_lines::TextDocument> {
+    use readshot_core::scrub::{document_in_crop, hidden_spans, mask_document, redactions_in_crop};
+    let premasked = mask_document(doc, &hidden_spans(doc, hide));
+    let cut = document_in_crop(&premasked, crop)?;
+    let hide = redactions_in_crop(hide, crop);
+    Some(mask_document(&cut, &hidden_spans(&cut, &hide)))
 }
 
 /// The document is made of the opened image alone (perhaps transformed),
