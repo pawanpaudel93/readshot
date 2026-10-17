@@ -1698,6 +1698,103 @@ impl EditorSession {
             .collect()
     }
 
+    /// The magnifier bubbles (document px) the canvas must cover
+    /// opaquely: a bubble's pixels come from the image on screen, so when
+    /// that image lacks a redaction the present has (a Select drag's
+    /// render without it, a render still in flight, a lagging flatten),
+    /// a bubble whose source it hides magnifies what it hides. Every
+    /// magnifier of the image on screen whose sampled source meets such a
+    /// redaction (as drawn, [`DocGeometry::redaction_cover`]) — or meets
+    /// a bubble already covered (bubbles are composed in order, a later
+    /// one can magnify an earlier) — is covered, until a render with the
+    /// redaction is shown.
+    ///
+    /// [`DocGeometry::redaction_cover`]: readshot_core::document::DocGeometry::redaction_cover
+    pub fn magnifier_bubble_covers(&self) -> Vec<readshot_core::RectLike> {
+        let base = self.model.shared_base();
+        let Some(shown) = self.shown.annotations.as_ref() else {
+            return Vec::new();
+        };
+        if !std::sync::Arc::ptr_eq(&self.shown.base, &base) {
+            return Vec::new();
+        }
+        // Redactions the present has (and a Select drag's baseline: where
+        // the dragged one hid content before it moved) that the image on
+        // screen doesn't have rendered.
+        let mut unmatched: Vec<&Annotation> = shown.iter().collect();
+        let dragged = self
+            .move_drag
+            .as_ref()
+            .and_then(|drag| drag.baseline.get(drag.selected_index));
+        let geometry = self.model.geometry();
+        let missing: Vec<readshot_core::RectLike> = self
+            .model
+            .annotations()
+            .iter()
+            .chain(dragged)
+            .filter(|a| readshot_core::scrub::is_redaction(a))
+            .filter(|a| match unmatched.iter().position(|s| s == a) {
+                Some(i) => {
+                    unmatched.swap_remove(i);
+                    false
+                }
+                None => true,
+            })
+            .filter_map(|a| match a {
+                Annotation::Rectangle { rect, .. }
+                | Annotation::Blur { rect, .. }
+                | Annotation::Pixelate { rect, .. } => Some(geometry.redaction_cover(*rect)),
+                _ => None,
+            })
+            .collect();
+        if missing.is_empty() {
+            return Vec::new();
+        }
+        // The magnifiers composed into the image on screen: what each
+        // samples and the bubble it fills, both widened a pixel.
+        let magnifiers: Vec<(readshot_core::RectLike, readshot_core::RectLike)> = shown
+            .iter()
+            .filter_map(|a| match a {
+                Annotation::Magnifier {
+                    source,
+                    radius,
+                    bubble,
+                    zoom,
+                    ..
+                } => {
+                    let br = readshot_core::magnifier::bubble_radius(*radius, *zoom);
+                    let sampled = br / readshot_core::magnifier::effective_zoom(*zoom) + 1.0;
+                    Some((
+                        square_around(*source, sampled),
+                        square_around(*bubble, br + 1.0),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut covered = vec![false; magnifiers.len()];
+        let mut hides = missing;
+        loop {
+            let mut changed = false;
+            for (i, (source, bubble)) in magnifiers.iter().enumerate() {
+                if !covered[i] && hides.iter().any(|r| rects_meet(*r, *source)) {
+                    covered[i] = true;
+                    hides.push(*bubble);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        magnifiers
+            .iter()
+            .zip(covered)
+            .filter(|(_, c)| *c)
+            .map(|((_, bubble), _)| *bubble)
+            .collect()
+    }
+
     /// The annotations the display should show rendered: the present's,
     /// without its crops while a crop is dragged on a large document.
     pub fn wanted_display(&self) -> Vec<Annotation> {
@@ -1813,6 +1910,22 @@ impl EditorSession {
             _ => None,
         })
     }
+}
+
+/// The square of half-side `half` centred on `c`.
+fn square_around(c: PointLike, half: f32) -> readshot_core::RectLike {
+    readshot_core::RectLike::new(c.x - half, c.y - half, half * 2.0, half * 2.0)
+}
+
+/// Whether `a` and `b` share any area (either may have a negative size;
+/// a NaN never meets).
+fn rects_meet(a: readshot_core::RectLike, b: readshot_core::RectLike) -> bool {
+    let span = |p: f32, len: f32| (p.min(p + len), p.max(p + len));
+    let (ax0, ax1) = span(a.x, a.width);
+    let (ay0, ay1) = span(a.y, a.height);
+    let (bx0, bx1) = span(b.x, b.width);
+    let (by0, by1) = span(b.y, b.height);
+    ax0 < bx1 && bx0 < ax1 && ay0 < by1 && by0 < ay1
 }
 
 fn next_pin_number_after(annotations: &[Annotation]) -> u32 {

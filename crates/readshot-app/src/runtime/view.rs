@@ -2057,6 +2057,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let shown_part = shown_part_of_frame(ed, image_offset, (image_w, image_h));
     // Edits not yet in that render: the canvas draws them over it.
     let pending = ed.pending_overlay();
+    // Bubbles that may magnify what such an edit hides: covered.
+    let bubble_covers = ed.magnifier_bubble_covers();
     let beautify = ed.model.beautify();
     let zoom = ed.zoom;
     let display_scale = ed.display_scale;
@@ -2202,6 +2204,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             selected_preview: selected_preview.clone(),
             selected_preview_rendered,
             pending: pending.clone(),
+            bubble_covers: bubble_covers.clone(),
             shift_held: editor_shift_held,
             cancel_seq: drag_cancel_seq,
             style: ed.model.tool_style(),

@@ -203,6 +203,12 @@ pub struct EditorCanvas {
     /// is never on screen; one removed or moved away may linger in the
     /// image underneath until the render lands.
     pub pending: Vec<Annotation>,
+    /// Magnifier bubbles (document px) whose pixels in the image on
+    /// screen may magnify what a redaction not rendered there yet hides
+    /// (a dragged redaction left out of the render, one still in flight):
+    /// filled opaquely, like the redaction itself, until a render with it
+    /// is shown.
+    pub bubble_covers: Vec<RectLike>,
     /// Runtime-tracked Shift state. The editor listens to modifiers
     /// globally (the canvas only handles Escape itself) and passes the
     /// current state in here on each `view()`. When
@@ -779,6 +785,16 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                     frame,
                     annotation,
                     false,
+                    bounds,
+                    self.image_size,
+                    self.image_offset,
+                    self.display_scale,
+                );
+            }
+            for &rect in &self.bubble_covers {
+                cover_bubble(
+                    frame,
+                    rect,
                     bounds,
                     self.image_size,
                     self.image_offset,
@@ -1492,6 +1508,28 @@ fn redaction_overlay_fill(annotation: &Annotation, rendered: bool) -> Option<Opt
     let (_, fill) = redaction_cover(annotation)?;
     Some((!rendered).then_some(fill))
 }
+
+/// Fill a magnifier bubble's square (document px) opaquely, outward to
+/// whole canvas pixels: what it magnifies may be what a redaction not
+/// rendered yet hides.
+fn cover_bubble(
+    frame: &mut Frame,
+    rect: RectLike,
+    bounds: Rectangle,
+    image_size: (u32, u32),
+    image_offset: (f32, f32),
+    display_scale: Option<f32>,
+) {
+    if let Some(r) = base_rect_to_canvas(rect, bounds, image_size, image_offset, display_scale) {
+        let (x0, y0) = (r.x.floor(), r.y.floor());
+        let (x1, y1) = ((r.x + r.width).ceil(), (r.y + r.height).ceil());
+        let path = Path::rectangle(Point::new(x0, y0), iced::Size::new(x1 - x0, y1 - y0));
+        frame.fill(&path, BUBBLE_COVER);
+    }
+}
+
+/// Fill of a covered magnifier bubble: opaque.
+const BUBBLE_COVER: Color = REDACTION_OVERLAY;
 
 /// `rendered`: the image on screen already shows `annotation` where it
 /// is (see [`EditorCanvas::selected_preview_rendered`]).
@@ -2355,6 +2393,7 @@ mod tests {
             selected_preview: None,
             selected_preview_rendered: false,
             pending: Vec::new(),
+            bubble_covers: Vec::new(),
             shift_held: false,
             cancel_seq: 0,
             style: ToolStyle::default(),
@@ -3562,5 +3601,10 @@ mod tests {
             style: Default::default(),
         };
         assert!(super::redaction_cover(&outline).is_none());
+    }
+
+    #[test]
+    fn a_covered_magnifier_bubble_is_filled_opaquely() {
+        assert_eq!(super::BUBBLE_COVER.a, 1.0, "nothing under it shows");
     }
 }

@@ -16073,6 +16073,158 @@ mod tests {
         assert!(app.editor.as_ref().unwrap().pending_overlay().is_empty());
     }
 
+    /// A magnifier over (7, 6) whose 2× bubble sits at (30, 10).
+    fn magnifier_at_7_6() -> Annotation {
+        Annotation::Magnifier {
+            source: PointLike::new(7.0, 6.0),
+            radius: 3.0,
+            bubble: PointLike::new(30.0, 10.0),
+            zoom: 2.0,
+            shape: readshot_core::MagnifierShape::Circle,
+            color: readshot_core::Rgba::OPAQUE_BLACK,
+        }
+    }
+
+    /// The 2× bubble of [`magnifier_at_7_6`], as the editor covers it.
+    fn bubble_of_magnifier_at_7_6() -> RectLike {
+        RectLike::new(23.0, 3.0, 14.0, 14.0)
+    }
+
+    #[test]
+    fn a_dragged_redaction_left_out_of_the_render_covers_the_bubble_magnifying_it() {
+        use readshot_ui::CanvasMessage;
+        let pixelate = Annotation::Pixelate {
+            rect: RectLike::new(2.0, 2.0, 10.0, 8.0),
+            block_size: 4.0,
+        };
+        // Over the live limit (4 MP) and under the async one (16 MP),
+        // then over both.
+        for large in [false, true] {
+            let mut app = build_app(Arc::new(FakePermissions::granted()));
+            let mut ed = crate::editor::EditorSession::new(ramp(40, 20));
+            ed.model.commit_annotation(magnifier_at_7_6());
+            ed.model.commit_annotation(pixelate.clone());
+            ed.model.set_tool(readshot_ui::editor::ToolState::Select);
+            ed.refresh_image();
+            ed.live_redaction_max_pixels = 800;
+            app.editor = Some(if large { async_compose(ed) } else { ed });
+            assert!(app
+                .editor
+                .as_ref()
+                .unwrap()
+                .magnifier_bubble_covers()
+                .is_empty());
+            let _ = update(
+                &mut app,
+                Message::EditorCanvas(CanvasMessage::SelectPressed(PointLike::new(10.0, 4.0))),
+            );
+            assert_eq!(
+                app.editor
+                    .as_ref()
+                    .unwrap()
+                    .move_drag
+                    .as_ref()
+                    .unwrap()
+                    .selected_index,
+                1,
+                "the pixelate is dragged"
+            );
+            // One pixel: the pixelate still hides the source.
+            let _ = update(
+                &mut app,
+                Message::EditorCanvas(CanvasMessage::SelectDragged(PointLike::new(11.0, 4.0))),
+            );
+            finish_all(&mut app);
+            let ed = app.editor.as_ref().unwrap();
+            // The image on screen is the document without the pixelate.
+            let mut without = ed.model.annotations().to_vec();
+            without.remove(1);
+            assert!(ed.shown.shows(&ed.model.shared_base(), &without), "{large}");
+            if !large {
+                // ...so its bubble magnifies the source unredacted.
+                let present =
+                    readshot_core::render(&ed.model.shared_base(), &ed.model.drawn_annotations());
+                let iced::widget::image::Handle::Rgba { pixels, .. } = &ed.image_handle else {
+                    panic!("expected pixels");
+                };
+                let at = |x: u32, y: u32| (y * 40 + x) as usize * 4;
+                let differs = (25..35)
+                    .flat_map(|x| (5..15).map(move |y| (x, y)))
+                    .any(|(x, y)| {
+                        pixels[at(x, y)..at(x, y) + 4] != present.as_raw()[at(x, y)..at(x, y) + 4]
+                    });
+                assert!(differs, "the bubble on screen isn't the redacted one");
+            }
+            assert_eq!(
+                ed.magnifier_bubble_covers(),
+                vec![bubble_of_magnifier_at_7_6()],
+                "the bubble in the render without the pixelate is covered ({large})"
+            );
+            let _ = update(
+                &mut app,
+                Message::EditorCanvas(CanvasMessage::SelectReleased),
+            );
+            finish_all(&mut app);
+            let ed = app.editor.as_ref().unwrap();
+            assert!(ed.shows_present_render());
+            assert!(
+                ed.magnifier_bubble_covers().is_empty(),
+                "the render with it shows its real effect ({large})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_redaction_in_flight_covers_the_bubble_magnifying_it() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(ramp(40, 20));
+        ed.model.commit_annotation(magnifier_at_7_6());
+        ed.refresh_image();
+        app.editor = Some(async_compose(ed));
+        let redaction = Annotation::Pixelate {
+            rect: RectLike::new(4.0, 4.0, 4.0, 4.0),
+            block_size: 4.0,
+        };
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                redaction.clone(),
+            )),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.pending_overlay(), vec![redaction]);
+        assert_eq!(
+            ed.magnifier_bubble_covers(),
+            vec![bubble_of_magnifier_at_7_6()],
+            "covered until the render with the redaction lands"
+        );
+        finish_all(&mut app);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.shows_present_render());
+        assert!(ed.magnifier_bubble_covers().is_empty());
+    }
+
+    #[test]
+    fn a_redaction_away_from_every_source_covers_no_bubble() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(ramp(40, 20));
+        ed.model.commit_annotation(magnifier_at_7_6());
+        ed.refresh_image();
+        app.editor = Some(async_compose(ed));
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                Annotation::Pixelate {
+                    rect: RectLike::new(14.0, 14.0, 4.0, 4.0),
+                    block_size: 4.0,
+                },
+            )),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.pending_overlay().len(), 1);
+        assert!(ed.magnifier_bubble_covers().is_empty());
+    }
+
     #[test]
     fn a_large_select_release_draws_the_moved_annotation_until_rendered() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
