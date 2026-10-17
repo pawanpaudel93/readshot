@@ -25,7 +25,7 @@ find it later by searching the text inside the screenshot.
 - Multi-monitor capture with Retina-quality output.
 - Annotation editor with shapes (filled, dashed, rounded), curved and
   hand-drawn arrows, pen, highlighter, multi-line text (sizes, pill,
-  bold), blur, pixelate, spotlight, stamps, numbered pins, crop, undo,
+  bold), blur, pixelate, spotlight, stamps, numbered pins, magnifier, crop, undo,
   and redo.
   Hold Shift for squares, circles, and 45° lines.
 - Offline OCR via Apple Vision with layout-aware copied text and a
@@ -120,7 +120,7 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   copy image / copy text / save / pin, and the arrow keys nudge it (`⇧` ×10).
 - **Editor tools:** `V` select, `R` rectangle, `O` ellipse, `L` line,
   `A` arrow, `P` pen, `H` highlighter, `T` text, `B` blur, `X` pixelate,
-  `S` spotlight, `N` numbered pin, `E` stamp, `C` crop (Free / 16:9 / 4:3 / 1:1 in the options bar; `↵` applies,
+  `S` spotlight, `N` numbered pin, `E` stamp, `M` magnifier (drag over what to enlarge; drag the bubble anywhere), `C` crop (Free / 16:9 / 4:3 / 1:1 in the options bar; `↵` applies,
   `esc` cancels). `I` picks a color
   from the image (eyedropper). Arrow keys nudge the selection (hold `⇧` for
   larger steps), `⌫` removes it, `esc` deselects.

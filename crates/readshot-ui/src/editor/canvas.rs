@@ -32,8 +32,8 @@ use readshot_core::{
 };
 
 use super::state::{
-    annotation_bounds, annotation_hit_test, hit_tolerance_base, ResizeHandle,
-    HANDLE_HIT_RADIUS_SCREEN,
+    annotation_bounds, annotation_hit_test, hit_tolerance_base, magnifier_bubble_grab,
+    ResizeHandle, HANDLE_HIT_RADIUS_SCREEN,
 };
 use super::style::ToolStyle;
 use super::tool_state::ToolState;
@@ -1127,12 +1127,21 @@ impl EditorCanvas {
         let radius = hit_tolerance_base(HANDLE_HIT_RADIUS_SCREEN, scale);
         // Nearest handle wins, so Bend stays grabbable on short curved
         // lines where Start/End also fall inside the radius.
-        self.selected_handles
+        let nearest = self
+            .selected_handles
             .iter()
             .map(|(handle, center)| (*handle, (point.x - center.x).hypot(point.y - center.y)))
             .filter(|(_, d)| *d <= radius)
             .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(handle, _)| handle)
+            .map(|(handle, _)| handle);
+        // Anywhere in a selected magnifier's bubble grabs the bubble, so
+        // a press there with the Magnifier tool moves it instead of
+        // starting a new magnifier.
+        nearest.or_else(|| {
+            self.selected_annotation
+                .as_ref()
+                .and_then(|a| magnifier_bubble_grab(a, point))
+        })
     }
 }
 
@@ -2721,6 +2730,58 @@ mod tests {
         assert_eq!(
             message,
             Some(CanvasMessage::SelectPressed(PointLike::new(50.0, 40.0)))
+        );
+    }
+
+    #[test]
+    fn a_press_in_the_selected_bubble_moves_it_even_with_the_magnifier_tool() {
+        let canvas = EditorCanvas {
+            active_tool: ToolState::Magnifier,
+            selected_handles: vec![
+                (ResizeHandle::Start, PointLike::new(20.0, 20.0)),
+                (ResizeHandle::East, PointLike::new(30.0, 20.0)),
+                (ResizeHandle::End, PointLike::new(80.0, 20.0)),
+            ],
+            selected_annotation: Some(Annotation::Magnifier {
+                source: PointLike::new(20.0, 20.0),
+                radius: 10.0,
+                bubble: PointLike::new(80.0, 20.0),
+                zoom: 4.0,
+                shape: readshot_core::MagnifierShape::Circle,
+                color: CoreRgba::OPAQUE_BLACK,
+            }),
+            ..test_canvas()
+        };
+        // Base (110, 20): 30 px from the bubble centre, beyond the handle
+        // radius but inside the 40 px bubble.
+        assert_eq!(
+            canvas.selected_handle_at(PointLike::new(110.0, 20.0), 2.0),
+            Some(ResizeHandle::End)
+        );
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let mut state = DrawState::Idle;
+        let (message, _, _) = canvas
+            .update(
+                &mut state,
+                &Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)),
+                bounds,
+                Cursor::Available(Point::new(420.0, 240.0)),
+            )
+            .expect("a bubble press publishes a selection message")
+            .into_inner();
+        assert_eq!(
+            message,
+            Some(CanvasMessage::SelectPressed(PointLike::new(110.0, 20.0)))
+        );
+        // Outside the bubble the Magnifier tool still starts a new one.
+        assert_eq!(
+            canvas.selected_handle_at(PointLike::new(150.0, 80.0), 2.0),
+            None
         );
     }
 

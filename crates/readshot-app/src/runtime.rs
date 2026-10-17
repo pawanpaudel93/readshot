@@ -4777,6 +4777,28 @@ mod tests {
     }
 
     #[test]
+    fn m_selects_the_magnifier_only_when_not_typing() {
+        use iced::keyboard::{Key, Modifiers};
+        assert!(matches!(
+            editor_key_message(Key::Character("m".into()), Modifiers::empty(), true),
+            Some(Message::EditorToolbar(
+                readshot_ui::ToolbarMessage::SelectTool(readshot_ui::editor::ToolState::Magnifier)
+            ))
+        ));
+        assert!(
+            editor_key_message(Key::Character("m".into()), Modifiers::empty(), false).is_none()
+        );
+    }
+
+    #[test]
+    fn editor_selected_hint_explains_the_magnifier_handles() {
+        assert_eq!(
+            editor_selected_hint("Magnifier", false),
+            "Selected Magnifier — drag the bubble to move it · drag the centre to change what it shows · drag the ring to resize · ⌫ removes"
+        );
+    }
+
+    #[test]
     fn editor_selected_hint_special_cases_crop_and_text() {
         assert_eq!(
             editor_selected_hint("Crop", false),

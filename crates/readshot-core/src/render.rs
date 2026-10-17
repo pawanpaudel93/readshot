@@ -242,10 +242,12 @@ fn draw_magnifier(
     color: Rgba,
     offset: (f32, f32),
 ) {
-    use crate::magnifier::{bubble_radius, corner_radius, in_bubble, leader_endpoints};
+    use crate::magnifier::{
+        bubble_radius, corner_radius, effective_zoom, in_bubble, leader_endpoints,
+    };
     let src = shift_point(source, offset);
     let bub = shift_point(bubble, offset);
-    let zoom = zoom.max(1.0);
+    let zoom = effective_zoom(zoom);
     let br = bubble_radius(radius, zoom);
     let snapshot = pixmap.clone();
     let (w, h) = (pixmap.width() as i64, pixmap.height() as i64);

@@ -208,6 +208,29 @@ fn option_control<'a>(
             style.crop_aspect,
             |a| send(StyleMessage::CropAspect(a)),
         ),
+        O::MagnifierZoom => text_segment(
+            &[("2×", 2.0_f32), ("3×", 3.0), ("4×", 4.0)],
+            style.magnifier_zoom,
+            |z| send(StyleMessage::MagnifierZoom(z)),
+        ),
+        O::MagnifierShape => icon_segment(
+            &[
+                (
+                    AppIcon::Tool(readshot_ui::editor::ToolState::Ellipse),
+                    "Circle",
+                    readshot_core::MagnifierShape::Circle,
+                ),
+                (
+                    AppIcon::Tool(readshot_ui::editor::ToolState::Rectangle),
+                    "Rounded square",
+                    readshot_core::MagnifierShape::RoundedSquare,
+                ),
+            ],
+            style.magnifier_shape,
+            busy,
+            p,
+            |s| send(StyleMessage::MagnifierShape(s)),
+        ),
         O::CropApply => row![
             bar_button(
                 row![

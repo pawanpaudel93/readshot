@@ -600,16 +600,25 @@ impl EditorState {
 
     /// Select the topmost annotation under `point`, using the current
     /// display `scale` to keep the hit tolerance constant on screen.
+    ///
+    /// "Topmost" follows paint order: render draws every magnifier after
+    /// all other annotations, so magnifiers are tried first (newest
+    /// first), then everything else newest first. A press in a bubble
+    /// must never select a shape the bubble hides.
     pub fn select_at_scaled(&mut self, point: PointLike, scale: f32) -> Option<usize> {
-        let hit = self
-            .history
-            .current()
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(idx, annotation)| {
-                annotation_hit_test(annotation, point, scale).then_some(idx)
-            });
+        let annotations = self.history.current();
+        let is_magnifier = |a: &Annotation| matches!(a, Annotation::Magnifier { .. });
+        let hit_in = |magnifiers: bool| {
+            annotations
+                .iter()
+                .enumerate()
+                .rev()
+                .filter(|(_, a)| is_magnifier(a) == magnifiers)
+                .find_map(|(idx, annotation)| {
+                    annotation_hit_test(annotation, point, scale).then_some(idx)
+                })
+        };
+        let hit = hit_in(true).or_else(|| hit_in(false));
         self.selected_annotation = hit;
         hit
     }
@@ -1178,12 +1187,35 @@ fn annotation_resize_handle_at(
     let radius = hit_tolerance_base(HANDLE_HIT_RADIUS_SCREEN, scale);
     // Nearest handle wins, so Bend stays grabbable on short curved lines
     // where Start/End also fall inside the radius.
-    annotation_resize_handles(annotation)
+    let nearest = annotation_resize_handles(annotation)
         .into_iter()
         .map(|(handle, p)| (handle, distance(point, p)))
         .filter(|(_, d)| *d <= radius)
         .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(handle, _)| handle)
+        .map(|(handle, _)| handle);
+    nearest.or_else(|| magnifier_bubble_grab(annotation, point))
+}
+
+/// A press anywhere inside a magnifier's bubble grabs the bubble (End),
+/// not just its centre handle.
+pub(crate) fn magnifier_bubble_grab(
+    annotation: &Annotation,
+    point: PointLike,
+) -> Option<ResizeHandle> {
+    let Annotation::Magnifier {
+        source,
+        radius,
+        bubble,
+        zoom,
+        shape,
+        ..
+    } = annotation
+    else {
+        return None;
+    };
+    (readshot_core::magnifier::hit(*source, *radius, *bubble, *zoom, *shape, point, 0.0)
+        == Some(readshot_core::magnifier::MagnifierHit::Bubble))
+    .then_some(ResizeHandle::End)
 }
 
 fn annotation_resize_handles(annotation: &Annotation) -> Vec<(ResizeHandle, PointLike)> {
@@ -1201,6 +1233,21 @@ fn annotation_resize_handles(annotation: &Annotation) -> Vec<(ResizeHandle, Poin
             }
             handles
         }
+        // Source centre moves what is magnified, the rim resizes it, the
+        // bubble centre moves the bubble.
+        Annotation::Magnifier {
+            source,
+            radius,
+            bubble,
+            ..
+        } => vec![
+            (ResizeHandle::Start, *source),
+            (
+                ResizeHandle::East,
+                PointLike::new(source.x + radius, source.y),
+            ),
+            (ResizeHandle::End, *bubble),
+        ],
         _ => Vec::new(),
     }
 }
@@ -1298,6 +1345,26 @@ fn resize_annotation(annotation: &mut Annotation, handle: ResizeHandle, dx: f32,
                 _ => false,
             }
         }
+        Annotation::Magnifier {
+            source,
+            radius,
+            bubble,
+            ..
+        } => match handle {
+            ResizeHandle::Start => {
+                translate_point(source, dx, dy);
+                true
+            }
+            ResizeHandle::End => {
+                translate_point(bubble, dx, dy);
+                true
+            }
+            ResizeHandle::East => {
+                *radius = (*radius + dx).max(readshot_core::magnifier::MIN_SOURCE_RADIUS);
+                true
+            }
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -1428,6 +1495,113 @@ mod tests {
     use image::Rgba as ImgRgba;
     use readshot_core::render::text_pill_rect;
     use readshot_core::{PointLike, RectLike};
+
+    fn magnifier() -> Annotation {
+        Annotation::Magnifier {
+            source: PointLike::new(20.0, 20.0),
+            radius: 10.0,
+            bubble: PointLike::new(80.0, 20.0),
+            zoom: 2.0,
+            shape: readshot_core::MagnifierShape::Circle,
+            color: Rgba::OPAQUE_BLACK,
+        }
+    }
+
+    #[test]
+    fn magnifier_handles_move_source_bubble_and_radius_independently() {
+        let mut s = EditorState::new(RgbaImage::new(200, 100));
+        s.commit_annotation(magnifier());
+        // A press anywhere in the bubble grabs it (End).
+        assert_eq!(
+            s.resize_handle_at_scaled(PointLike::new(92.0, 25.0), 1.0),
+            Some(ResizeHandle::End)
+        );
+        assert_eq!(
+            s.resize_handle_at_scaled(PointLike::new(30.0, 20.0), 1.0),
+            Some(ResizeHandle::East)
+        );
+        let base = s.annotations().to_vec();
+        assert!(s.preview_resize_selected_from(&base, ResizeHandle::End, 10.0, 30.0));
+        let Annotation::Magnifier { source, bubble, .. } = s.annotations()[0].clone() else {
+            unreachable!()
+        };
+        assert_eq!(
+            (source, bubble),
+            (PointLike::new(20.0, 20.0), PointLike::new(90.0, 50.0))
+        );
+        assert!(s.preview_resize_selected_from(&base, ResizeHandle::Start, 5.0, 0.0));
+        let Annotation::Magnifier { source, bubble, .. } = s.annotations()[0].clone() else {
+            unreachable!()
+        };
+        assert_eq!(
+            (source, bubble),
+            (PointLike::new(25.0, 20.0), PointLike::new(80.0, 20.0))
+        );
+        assert!(s.preview_resize_selected_from(&base, ResizeHandle::East, -8.0, 0.0));
+        let Annotation::Magnifier { radius, .. } = s.annotations()[0].clone() else {
+            unreachable!()
+        };
+        assert_eq!(radius, readshot_core::magnifier::MIN_SOURCE_RADIUS);
+    }
+
+    #[test]
+    fn a_bubble_far_from_its_centre_handle_still_grabs_the_bubble() {
+        let mut s = EditorState::new(RgbaImage::new(200, 100));
+        let mut m = magnifier();
+        if let Annotation::Magnifier { zoom, .. } = &mut m {
+            *zoom = 4.0;
+        }
+        s.commit_annotation(m);
+        // 35 px from the bubble centre (radius 40): beyond the handle
+        // radius, still inside the bubble.
+        assert_eq!(
+            s.resize_handle_at_scaled(PointLike::new(115.0, 20.0), 1.0),
+            Some(ResizeHandle::End)
+        );
+        // Outside both: no handle.
+        assert_eq!(
+            s.resize_handle_at_scaled(PointLike::new(50.0, 90.0), 1.0),
+            None
+        );
+    }
+
+    #[test]
+    fn a_press_in_a_bubble_selects_the_magnifier_over_a_later_shape_it_covers() {
+        // The rectangle is newer, but render paints magnifiers last, so
+        // the bubble hides it where they overlap.
+        let mut s = EditorState::with_annotations(
+            RgbaImage::new(200, 100),
+            vec![
+                magnifier(),
+                Annotation::Rectangle {
+                    rect: RectLike::new(70.0, 10.0, 20.0, 20.0),
+                    color: Rgba::OPAQUE_BLACK,
+                    line_width: 2.0,
+                    style: Default::default(),
+                },
+            ],
+        );
+        assert_eq!(s.select_at(PointLike::new(80.0, 20.0)), Some(0));
+        // Outside the bubble the rectangle is still selectable.
+        assert_eq!(s.select_at(PointLike::new(150.0, 50.0)), None);
+        let mut s2 = EditorState::with_annotations(
+            RgbaImage::new(200, 100),
+            vec![
+                magnifier(),
+                Annotation::Rectangle {
+                    rect: RectLike::new(110.0, 10.0, 20.0, 20.0),
+                    color: Rgba::OPAQUE_BLACK,
+                    line_width: 2.0,
+                    style: Default::default(),
+                },
+            ],
+        );
+        assert_eq!(s2.select_at(PointLike::new(120.0, 20.0)), Some(1));
+        // Among magnifiers, the newest wins.
+        let mut s3 =
+            EditorState::with_annotations(RgbaImage::new(200, 100), vec![magnifier(), magnifier()]);
+        assert_eq!(s3.select_at(PointLike::new(80.0, 20.0)), Some(1));
+    }
 
     #[test]
     fn a_magnifier_is_grabbed_by_its_source_and_bubble_and_moves_whole() {

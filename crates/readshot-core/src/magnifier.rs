@@ -10,8 +10,17 @@ pub const MIN_SOURCE_RADIUS: f32 = 8.0;
 /// Space between the source ring and the bubble when placed.
 pub const BUBBLE_MARGIN: f32 = 24.0;
 
+/// Bubble radius for a source of `radius` enlarged `zoom`×. A zoom
+/// below 1 (or NaN, from a hand-edited record) counts as 1: the one
+/// place render, bounds, hit-testing and the canvas preview all read,
+/// so what is drawn is what is grabbed.
 pub fn bubble_radius(radius: f32, zoom: f32) -> f32 {
-    radius * zoom
+    radius * effective_zoom(zoom)
+}
+
+/// The zoom actually applied: at least 1×.
+pub fn effective_zoom(zoom: f32) -> f32 {
+    zoom.max(1.0)
 }
 
 /// Corner radius of a rounded-square bubble.
@@ -134,6 +143,32 @@ pub fn hit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_zoom_below_one_is_drawn_and_hit_as_one() {
+        assert_eq!(bubble_radius(10.0, 0.5), 10.0);
+        assert_eq!(bubble_radius(10.0, f32::NAN), 10.0);
+        assert_eq!(bubble_radius(10.0, 3.0), 30.0);
+        let (src, bub) = (PointLike::new(0.0, 0.0), PointLike::new(100.0, 0.0));
+        // 8 px from the bubble centre: inside a radius-10 bubble, which
+        // is what render draws for zoom 0.5.
+        assert_eq!(
+            hit(
+                src,
+                10.0,
+                bub,
+                0.5,
+                MagnifierShape::Circle,
+                PointLike::new(108.0, 0.0),
+                0.0
+            ),
+            Some(MagnifierHit::Bubble)
+        );
+        assert_eq!(
+            bounds(src, 10.0, bub, 0.5),
+            RectLike::new(-10.0, -10.0, 120.0, 20.0)
+        );
+    }
 
     #[test]
     fn default_bubble_sits_up_right_and_stays_inside_when_it_can() {

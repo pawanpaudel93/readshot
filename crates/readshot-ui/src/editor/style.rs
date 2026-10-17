@@ -211,6 +211,8 @@ pub enum StyleMessage {
     Stamp(StampKind),
     SnapToText(bool),
     CropAspect(CropAspect),
+    MagnifierZoom(f32),
+    MagnifierShape(MagnifierShape),
 }
 
 /// Controls the options bar can show, in display order.
@@ -232,6 +234,8 @@ pub enum OptionControl {
     SnapToText,
     CropAspect,
     CropApply,
+    MagnifierZoom,
+    MagnifierShape,
 }
 
 /// The tool that draws `annotation` — the options-bar target for a selection.
@@ -273,7 +277,7 @@ pub fn options_for(active: ToolState, selected: Option<&Annotation>) -> &'static
         ToolState::Spotlight => &[Dim, SpotlightShape],
         ToolState::NumberedPin => &[Color],
         ToolState::Stamp => &[Color, StampPicker],
-        ToolState::Magnifier => &[Color],
+        ToolState::Magnifier => &[Color, MagnifierZoom, MagnifierShape],
     }
 }
 
@@ -293,6 +297,8 @@ impl ToolStyle {
             StyleMessage::Stamp(k) => self.stamp = k,
             StyleMessage::SnapToText(v) => self.snap_to_text = v,
             StyleMessage::CropAspect(a) => self.crop_aspect = a,
+            StyleMessage::MagnifierZoom(z) => self.magnifier_zoom = z,
+            StyleMessage::MagnifierShape(s) => self.magnifier_shape = s,
         }
     }
 
@@ -394,6 +400,8 @@ pub fn apply_style_to_annotation(annotation: &mut Annotation, msg: StyleMessage)
             *dim = d.clamp(MIN_DIM, MAX_DIM)
         }
         (Annotation::Stamp { stamp, .. }, StyleMessage::Stamp(k)) => *stamp = k,
+        (Annotation::Magnifier { zoom, .. }, StyleMessage::MagnifierZoom(z)) => *zoom = z,
+        (Annotation::Magnifier { shape, .. }, StyleMessage::MagnifierShape(s)) => *shape = s,
         (Annotation::Crop { rect }, StyleMessage::CropAspect(a)) => {
             if let Some(r) = a.ratio() {
                 *rect = fit_aspect(*rect, r);
@@ -441,6 +449,37 @@ mod tests {
             line_width: 2.0,
             style: LineStyle::default(),
         }
+    }
+
+    #[test]
+    fn magnifier_options_restyle_zoom_and_shape() {
+        assert_eq!(
+            options_for(ToolState::Magnifier, None),
+            &[
+                OptionControl::Color,
+                OptionControl::MagnifierZoom,
+                OptionControl::MagnifierShape
+            ]
+        );
+        let mut a = Annotation::Magnifier {
+            source: PointLike::new(0.0, 0.0),
+            radius: 5.0,
+            bubble: PointLike::new(30.0, 0.0),
+            zoom: 2.0,
+            shape: readshot_core::MagnifierShape::Circle,
+            color: readshot_core::Rgba::OPAQUE_BLACK,
+        };
+        assert!(apply_style_to_annotation(
+            &mut a,
+            StyleMessage::MagnifierZoom(4.0)
+        ));
+        assert!(apply_style_to_annotation(
+            &mut a,
+            StyleMessage::MagnifierShape(readshot_core::MagnifierShape::RoundedSquare)
+        ));
+        assert!(
+            matches!(a, Annotation::Magnifier { zoom, shape: readshot_core::MagnifierShape::RoundedSquare, .. } if zoom == 4.0)
+        );
     }
 
     #[test]

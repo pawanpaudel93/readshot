@@ -32,6 +32,10 @@ pub(crate) fn handle_commit_annotation(
 
 pub(crate) fn editor_selected_hint(kind: &str, text_editable: bool) -> String {
     match (kind, text_editable) {
+        ("Magnifier", _) => {
+            "Selected Magnifier — drag the bubble to move it · drag the centre to change what it shows · drag the ring to resize · ⌫ removes"
+                .to_string()
+        }
         ("Crop", _) => {
             "Selected Crop — drag frame or handles · arrows nudge · Delete restores full image"
                 .to_string()
