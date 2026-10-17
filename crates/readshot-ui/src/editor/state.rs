@@ -282,9 +282,12 @@ impl EditorState {
             self.selected_annotation = None;
             return false;
         }
-        self.note_annotation_preview(baseline);
+        if !self.annotation_preview_may_go_on(baseline) {
+            return false;
+        }
         let mut next = baseline.to_vec();
         let changed = apply_style_to_annotation(&mut next[idx], msg);
+        self.open_annotation_preview(baseline);
         self.history.replace_present(next);
         self.flattened_cache = None;
         changed
@@ -879,10 +882,13 @@ impl EditorState {
             self.selected_annotation = None;
             return false;
         }
-        self.note_annotation_preview(baseline);
+        if !self.annotation_preview_may_go_on(baseline) {
+            return false;
+        }
         let mut next = baseline.to_vec();
         translate_annotation(&mut next[idx], dx, dy);
         self.clamp_crop_annotation_to_base(&mut next[idx], CropClampMode::Move);
+        self.open_annotation_preview(baseline);
         self.history.replace_present(next);
         self.flattened_cache = None;
         true
@@ -902,12 +908,15 @@ impl EditorState {
             self.selected_annotation = None;
             return false;
         }
-        self.note_annotation_preview(baseline);
+        if !self.annotation_preview_may_go_on(baseline) {
+            return false;
+        }
         let mut next = baseline.to_vec();
         if !resize_annotation(&mut next[idx], handle, dx, dy) {
             return false;
         }
         self.clamp_crop_annotation_to_base(&mut next[idx], CropClampMode::Resize);
+        self.open_annotation_preview(baseline);
         self.history.replace_present(next);
         self.flattened_cache = None;
         true
@@ -925,23 +934,46 @@ impl EditorState {
             self.selected_annotation = None;
             return false;
         }
-        self.note_annotation_preview(baseline);
+        if !self.annotation_preview_may_go_on(baseline) {
+            return false;
+        }
         let mut next = baseline.to_vec();
         if !set_annotation_width(&mut next[idx], width.clamp(0.5, 64.0)) {
+            self.open_annotation_preview(baseline);
             self.history.replace_present(next);
             self.flattened_cache = None;
             return false;
         }
+        self.open_annotation_preview(baseline);
         self.history.replace_present(next);
         self.flattened_cache = None;
         true
     }
 
-    /// Remember the generation an annotation preview from `baseline`
-    /// opened at (the first preview call from it). An entry from an
-    /// older generation is a leftover (a drag released without moving,
-    /// say), not this preview: it is replaced, never reused.
-    fn note_annotation_preview(&mut self, baseline: &[Annotation]) {
+    /// Whether a preview from `baseline` may go on (checked before each
+    /// tick). Fails safe when the history moved while this preview was
+    /// open — an entry for the same baseline at an older generation:
+    /// every handler that moves history cancels open previews first, so
+    /// this only happens if one forgets to. The present then holds a
+    /// newer edit made on top of the preview, so it is not re-opened:
+    /// the tick changes nothing, the release commits nothing
+    /// ([`Self::commit_preview_from_baseline`] needs it open) and a cancel
+    /// restores nothing ([`Self::cancel_preview_from_baseline`]).
+    ///
+    /// An entry is only opened by a tick that changed the present
+    /// ([`Self::open_annotation_preview`]), and every drag that changed it
+    /// ends with a commit or cancel, so a leftover entry can't block a
+    /// later drag.
+    fn annotation_preview_may_go_on(&self, baseline: &[Annotation]) -> bool {
+        !self
+            .annotation_preview
+            .as_ref()
+            .is_some_and(|(b, g)| b.as_slice() == baseline && *g != self.history.generation())
+    }
+
+    /// Record the generation an annotation preview from `baseline` opened
+    /// at: called by the first tick that replaces the present.
+    fn open_annotation_preview(&mut self, baseline: &[Annotation]) {
         if !self.annotation_preview_is_open(baseline) {
             self.annotation_preview = Some((baseline.to_vec(), self.history.generation()));
         }
@@ -3214,8 +3246,9 @@ mod tests {
         let mut s = EditorState::new(RgbaImage::new(100, 100));
         s.commit_annotation(rect(10.0));
         let base = s.annotations().to_vec();
-        // A refused resize tick (a rectangle has no Start handle) opens an
-        // entry; the drag is released without commit or cancel.
+        // A refused resize tick (a rectangle has no Start handle) changes
+        // nothing and opens no entry; the drag is released without commit
+        // or cancel.
         assert!(!s.preview_resize_selected_from(&base, ResizeHandle::Start, 5.0, 5.0));
         assert!(s.nudge_selected(1.0, 0.0));
         assert!(s.undo());
@@ -3229,6 +3262,37 @@ mod tests {
         assert!(s.preview_move_selected_from(&base, 3.0, 0.0));
         assert!(s.commit_preview_from_baseline(base.clone()));
         assert_eq!(s.undo_depth(), depth + 1);
+    }
+
+    #[test]
+    fn a_preview_whose_history_moved_mid_drag_is_never_reopened() {
+        let mut s = EditorState::new(RgbaImage::new(100, 100));
+        s.commit_annotation(rect(10.0));
+        let base = s.annotations().to_vec();
+        assert!(s.preview_move_selected_from(&base, 3.0, 0.0));
+        // A handler moves history without cancelling the preview first.
+        assert!(s.nudge_selected(0.0, 7.0));
+        let newer = s.annotations().to_vec();
+        let depth = s.undo_depth();
+        // Further ticks of the stale drag change nothing…
+        assert!(!s.preview_move_selected_from(&base, 9.0, 0.0));
+        assert_eq!(s.annotations(), newer.as_slice());
+        // …its release commits nothing over the newer edit…
+        assert!(!s.commit_preview_from_baseline(base.clone()));
+        assert_eq!(s.annotations(), newer.as_slice());
+        assert_eq!(s.undo_depth(), depth);
+        // …and the next drag, from the present, works.
+        assert!(s.preview_move_selected_from(&newer, 1.0, 0.0));
+        assert!(s.commit_preview_from_baseline(newer.clone()));
+        assert_eq!(s.undo_depth(), depth + 1);
+        // Same for a cancel (Esc) of a stale drag: nothing restored.
+        let base = s.annotations().to_vec();
+        assert!(s.preview_line_width_selected_from(&base, 9.0));
+        assert!(s.nudge_selected(1.0, 0.0));
+        let newer = s.annotations().to_vec();
+        assert!(!s.preview_line_width_selected_from(&base, 12.0));
+        s.cancel_preview_from_baseline(base);
+        assert_eq!(s.annotations(), newer.as_slice());
     }
 
     #[test]
