@@ -54,6 +54,10 @@ pub enum AppIcon {
     Resize,
     AddBelow,
     AddBeside,
+    /// Magnifier bubble shapes: a lens with a centre dot, so they don't
+    /// reuse the Ellipse / Rectangle drawing-tool glyphs.
+    BubbleCircle,
+    BubbleSquare,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -768,6 +772,8 @@ fn shapes(icon: AppIcon) -> &'static [Shape] {
             Line(17.5, 10.0, 17.5, 14.0),
             Line(15.5, 12.0, 19.5, 12.0),
         ],
+        AppIcon::BubbleCircle => &[Circle(12.0, 12.0, 8.0), Dot(12.0, 12.0)],
+        AppIcon::BubbleSquare => &[Rect(4.0, 4.0, 16.0, 16.0, 5.0), Dot(12.0, 12.0)],
         AppIcon::Tool(_) | AppIcon::Undo | AppIcon::Redo => &[],
     }
 }
@@ -836,6 +842,8 @@ shaped_icons![
     Resize,
     AddBelow,
     AddBeside,
+    BubbleCircle,
+    BubbleSquare,
 ];
 
 fn draw_shapes(frame: &mut Frame, list: &[Shape], color: Color, size: f32) {

@@ -124,3 +124,13 @@ fn a_selected_magnifiers_leader_moves_the_whole_magnifier() {
         None
     );
 }
+
+#[test]
+fn magnifier_shape_segments_do_not_reuse_drawing_tool_glyphs() {
+    for (glyph, _, _) in MAGNIFIER_SHAPE_SEGMENTS {
+        assert!(
+            !matches!(glyph, crate::icons::AppIcon::Tool(_)),
+            "{glyph:?}"
+        );
+    }
+}

@@ -214,18 +214,7 @@ fn option_control<'a>(
             |z| send(StyleMessage::MagnifierZoom(z)),
         ),
         O::MagnifierShape => icon_segment(
-            &[
-                (
-                    AppIcon::Tool(readshot_ui::editor::ToolState::Ellipse),
-                    "Circle",
-                    readshot_core::MagnifierShape::Circle,
-                ),
-                (
-                    AppIcon::Tool(readshot_ui::editor::ToolState::Rectangle),
-                    "Rounded square",
-                    readshot_core::MagnifierShape::RoundedSquare,
-                ),
-            ],
+            &MAGNIFIER_SHAPE_SEGMENTS,
             style.magnifier_shape,
             busy,
             p,
@@ -322,6 +311,21 @@ pub(crate) fn with_new_tool_dot<'a>(button: Element<'a, Message>) -> Element<'a,
     ]
     .into()
 }
+
+/// Magnifier bubble shapes. Their own glyphs: the Ellipse and Rectangle
+/// tool icons sit in the toolbar at the same time and mean "draw".
+pub(crate) const MAGNIFIER_SHAPE_SEGMENTS: [(AppIcon, &str, readshot_core::MagnifierShape); 2] = [
+    (
+        AppIcon::BubbleCircle,
+        "Circle",
+        readshot_core::MagnifierShape::Circle,
+    ),
+    (
+        AppIcon::BubbleSquare,
+        "Rounded square",
+        readshot_core::MagnifierShape::RoundedSquare,
+    ),
+];
 
 /// A text (or swatch + text) button in the bar. `selected` uses the same
 /// teal selected state as the icon buttons (§2.1: teal marks selection),
