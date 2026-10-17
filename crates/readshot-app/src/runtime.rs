@@ -1991,11 +1991,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorRedactAll
         | Message::EditorRedactLine(..)
         | Message::EditorHistoryWritten { .. }) => {
-            let shown = compose_jobs::settle_before(state, &msg)
-                .filter(|_| compose_jobs::points_into_the_shown_image(&msg));
-            let task = match (shown, state.editor.as_mut()) {
-                (Some(shown), Some(ed)) => {
-                    compose_jobs::drop_stale_press(ed, &msg, shown);
+            let frame_moved = compose_jobs::settle_before(state, &msg);
+            let task = match state.editor.as_mut() {
+                Some(ed) if frame_moved && compose_jobs::points_into_the_shown_image(&msg) => {
+                    compose_jobs::drop_stale_press(ed, &msg);
                     Task::none()
                 }
                 _ => editor_ops::handle_editor_message(state, msg),
@@ -12922,6 +12921,47 @@ mod tests {
             app.editor.as_ref().unwrap().model.annotations(),
             [old_frame]
         );
+    }
+
+    #[test]
+    fn a_drag_whose_release_never_came_refuses_no_later_commit() {
+        use readshot_ui::CanvasMessage;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(40, 20)));
+        let a = iced::window::Id::unique();
+        let pin = Annotation::NumberedPin {
+            origin: PointLike::new(5.0, 5.0),
+            number: 1,
+            color: Rgba::OPAQUE_BLACK,
+        };
+        let commit = |app: &mut App, a: Annotation| {
+            let _ = update(
+                app,
+                Message::EditorCanvas(CanvasMessage::CommitAnnotation(a)),
+            );
+        };
+        // A drag begins; its window closes before the release reaches us.
+        let _ = update(&mut app, Message::EditorPointerButton(true, Some(a)));
+        let _ = update(&mut app, Message::EditorCanvas(CanvasMessage::DragStarted));
+        let _ = update(&mut app, Message::WindowClosed(a));
+        let ed = app.editor.as_mut().unwrap();
+        assert!(ed.drag_started_in.is_none(), "its frame is forgotten");
+        // The frame changes later (a resize).
+        ed.canvas_drag_active = false;
+        assert!(ed.model.scale_by(2.0, 2.0).unwrap());
+        ed.refresh_image();
+        commit(&mut app, pin.clone());
+        assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 1);
+        // A pin never answers for a drag's frame, even one left behind.
+        let ed = app.editor.as_mut().unwrap();
+        ed.drag_started_in = Some(crate::editor::CanvasDragFrame::Live(Arc::new(
+            readshot_core::document::DocGeometry::original(Arc::new(solid(1, 1))),
+        )));
+        ed.canvas_drag_active = true;
+        commit(&mut app, pin);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.annotations().len(), 2);
+        assert!(ed.drag_started_in.is_none());
     }
 
     #[test]

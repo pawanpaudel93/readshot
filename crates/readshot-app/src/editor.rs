@@ -148,6 +148,18 @@ pub struct EyedropperState {
 
 /// Side-panel tabs (spec §2.3): Text and Beautify. A new tab is a
 /// variant here, its id, and one arm in `runtime::side_panel::side_panel`.
+/// The frame a canvas drag's points are in
+/// ([`EditorSession::drag_started_in`]).
+#[derive(Clone, Debug)]
+pub enum CanvasDragFrame {
+    /// Begun in this frame: its commit is kept only while it still is
+    /// the present one.
+    Live(std::sync::Arc<readshot_core::document::DocGeometry>),
+    /// Its press landed a pending step (`compose_jobs::drop_stale_press`):
+    /// the drag is aimed at a frame no longer shown and commits nothing.
+    Dropped,
+}
+
 /// Which message of an Escape that ended a crop re-drag was handled
 /// first ([`EditorSession::escape_ended_crop_drag`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,11 +464,12 @@ pub struct EditorSession {
     /// Cleared by its counterpart, and by any other key, press or drag
     /// start, so it can't swallow a later Escape.
     pub escape_ended_crop_drag: Option<EscapeSeenBy>,
-    /// The frame the live canvas drag began in (its `DragStarted`), so
-    /// its `CommitAnnotation` is refused when the frame changed since:
-    /// the shape's points are in the old frame. Cleared by the commit,
-    /// `Cancelled` and `DragEscaped`; `None` for click tools.
-    pub drag_started_in: Option<std::sync::Arc<readshot_core::document::DocGeometry>>,
+    /// The live canvas drag's frame ([`CanvasDragFrame`]), so a commit of
+    /// it is refused when its points are in another frame than the
+    /// present one. Cleared by any commit, `Cancelled`, `DragEscaped`,
+    /// and when the press's window loses focus or closes (its release may
+    /// never come). `None` while no drag is known.
+    pub drag_started_in: Option<CanvasDragFrame>,
     /// The newest combine gap slider value not previewed yet: gap ticks
     /// are throttled (each preview recomposes the document), and the
     /// last one is applied on the trailing edge, on release, or before
@@ -983,6 +996,9 @@ impl EditorSession {
     pub fn pointer_window_gone(&mut self, id: iced::window::Id) {
         if self.pointer_held && self.pointer_window == Some(id) {
             self.set_pointer_held(None);
+            // That drag's release (and so its commit or cancel) may never
+            // come: don't let its frame refuse a later commit.
+            self.drag_started_in = None;
         }
     }
 

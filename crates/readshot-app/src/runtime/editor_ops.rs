@@ -1458,7 +1458,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     // it rather than trigger discard.
                     ed.canvas_drag_active = true;
                     ed.escape_ended_crop_drag = None;
-                    ed.drag_started_in = Some(std::sync::Arc::clone(ed.model.geometry()));
+                    ed.drag_started_in = Some(crate::editor::CanvasDragFrame::Live(
+                        std::sync::Arc::clone(ed.model.geometry()),
+                    ));
                 }
                 readshot_ui::CanvasMessage::DragMoved(_)
                 | readshot_ui::CanvasMessage::PolylineMoved(_) => {
@@ -1606,11 +1608,24 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     // A drag's shape is in the frame it began in: if the
                     // frame changed since (a pending step landed on its
                     // press, or mid-drag), it would land somewhere else.
-                    if ed
-                        .drag_started_in
-                        .take()
-                        .is_some_and(|g| !std::sync::Arc::ptr_eq(&g, ed.model.geometry()))
-                    {
+                    // Pins and stamps commit on their own press (no drag),
+                    // in the frame on screen; a leftover drag frame never
+                    // applies to them.
+                    let from_drag = !matches!(
+                        annotation,
+                        readshot_core::Annotation::NumberedPin { .. }
+                            | readshot_core::Annotation::Stamp { .. }
+                    );
+                    let stale = match ed.drag_started_in.take() {
+                        Some(crate::editor::CanvasDragFrame::Dropped) => from_drag,
+                        Some(crate::editor::CanvasDragFrame::Live(g)) => {
+                            from_drag
+                                && ed.canvas_drag_active
+                                && !std::sync::Arc::ptr_eq(&g, ed.model.geometry())
+                        }
+                        None => false,
+                    };
+                    if stale {
                         ed.canvas_drag_active = false;
                         return Task::none();
                     }
