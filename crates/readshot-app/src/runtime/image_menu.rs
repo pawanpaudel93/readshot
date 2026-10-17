@@ -73,6 +73,19 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
     if ed.busy {
         return Task::none();
     }
+    // A held canvas drag (shape, freehand, Select move/resize) is in the
+    // present frame: changing the geometry under it would land the shape
+    // in the wrong place. ⌘[ / ⌘] / ⌥⌘I wait for the release.
+    let geometry_change = matches!(
+        message,
+        Message::EditorRotate { .. }
+            | Message::EditorFlip(_)
+            | Message::EditorResizeOpen
+            | Message::EditorResizeApply
+    );
+    if geometry_change && (ed.canvas_drag_active || ed.move_drag.is_some()) {
+        return Task::none();
+    }
     match message {
         Message::EditorRotate { clockwise } => {
             prepare(ed, &coord);

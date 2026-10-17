@@ -8977,6 +8977,44 @@ mod tests {
     }
 
     #[test]
+    fn rotate_flip_and_resize_wait_for_a_held_canvas_drag() {
+        for held_move in [false, true] {
+            for msg in [
+                Message::EditorRotate { clockwise: true },
+                Message::EditorFlip(readshot_core::document::FlipAxis::Horizontal),
+                Message::EditorResizeOpen,
+            ] {
+                let mut app = build_app(Arc::new(FakePermissions::granted()));
+                let mut ed = crate::editor::EditorSession::new(solid(16, 8));
+                if held_move {
+                    ed.move_drag = Some(crate::editor::MoveDrag {
+                        baseline: Vec::new(),
+                        selected_index: 0,
+                        start: PointLike::new(2.0, 2.0),
+                        moved: true,
+                        kind: crate::editor::MoveDragKind::Move,
+                    });
+                } else {
+                    ed.canvas_drag_active = true;
+                }
+                let depth = ed.model.undo_depth();
+                app.editor = Some(ed);
+                let _ = update(&mut app, msg.clone());
+                let ed = app.editor.as_ref().unwrap();
+                assert!(ed.model.geometry().is_original(), "{msg:?}");
+                assert_eq!(ed.model.undo_depth(), depth, "{msg:?}");
+                assert!(ed.popover.is_none(), "{msg:?}");
+                assert!(ed.resize_draft.is_none(), "{msg:?}");
+            }
+        }
+        // Released: the rotation applies.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(16, 8)));
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        assert!(!app.editor.as_ref().unwrap().model.geometry().is_original());
+    }
+
+    #[test]
     fn i_is_ignored_during_a_canvas_drag() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let mut ed = crate::editor::EditorSession::new(solid(16, 16));
