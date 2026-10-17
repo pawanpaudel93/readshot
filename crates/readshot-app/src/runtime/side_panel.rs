@@ -144,6 +144,23 @@ pub(crate) fn side_panel<'a>(
         }
         tabs = tabs.push(b);
     }
+    let tabs_key = match current {
+        PanelTab::Text => super::key_focus::KEY_BEAUTIFY_TAB,
+        PanelTab::Beautify => super::key_focus::KEY_TEXT_TAB,
+    };
+    let tabs = focus_ring(
+        tooltip_with_key(
+            tabs,
+            format!("Switch to {}", super::key_focus::other_tab_label(current)),
+            Some(super::key_focus::key_label(tabs_key)),
+            Position::Bottom,
+        ),
+        super::key_focus::is_focused(
+            ed,
+            crate::editor::FocusZone::Panel,
+            crate::editor::FocusItem::PanelTabs,
+        ),
+    );
     let header = row![
         tabs,
         Space::new().width(Length::Fill),

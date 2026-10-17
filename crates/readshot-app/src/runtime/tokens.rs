@@ -151,6 +151,16 @@ pub(crate) const SP2: f32 = 8.0;
 pub(crate) const SP3: f32 = 12.0;
 pub(crate) const SP4: f32 = 16.0;
 
+/// Keyboard focus ring (WCAG 2.4.7 / 2.4.11): a 2 px ring in the
+/// primary text colour. It is drawn by `ui_kit::focus_ring` around the
+/// control the keyboard is on, and is not teal, so it never reads as the
+/// `acc_text` outline that marks a selected value.
+pub(crate) const FOCUS_RING_WIDTH: f32 = 2.0;
+
+pub(crate) fn focus_ring_color(p: &Palette) -> Color {
+    p.t1
+}
+
 /// Composite `fg` (possibly translucent) over an opaque `bg`.
 #[cfg(test)]
 pub(crate) fn over(fg: Color, bg: Color) -> Color {
@@ -270,6 +280,28 @@ mod tests {
                 for bg in [base, over(p.float, base), over(p.acc_tint, base)] {
                     let r = contrast_ratio(p.acc_text, bg);
                     assert!(r >= 3.0, "acc_text on {bg:?} is {r:.2}:1");
+                }
+            }
+        }
+    }
+
+    /// The keyboard focus ring is a UI component (3:1 against every
+    /// surface it can sit on, including a selected control's tint) and is
+    /// a different colour from the selection outline.
+    #[test]
+    fn focus_ring_meets_non_text_contrast_and_is_not_the_selection_cue() {
+        for p in both() {
+            let ring = focus_ring_color(p);
+            assert_ne!(ring, p.acc_text);
+            for base in [p.bg, p.surface, p.raised] {
+                for bg in [
+                    base,
+                    over(p.float, base),
+                    over(p.acc_tint, base),
+                    over(p.hover, base),
+                ] {
+                    let r = contrast_ratio(ring, bg);
+                    assert!(r >= 3.0, "focus ring on {bg:?} is {r:.2}:1");
                 }
             }
         }

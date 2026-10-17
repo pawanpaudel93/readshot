@@ -130,15 +130,31 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   `esc` cancels). `I` picks a color
   from the image (eyedropper). Arrow keys nudge the selection (hold `⇧` for
   larger steps), `⌫` removes it, `esc` deselects (during a drag, `esc`
-  cancels only the drag).
+  cancels only the drag). `Tab` / `⇧Tab` select the next / previous
+  annotation; `⌥` + arrow keys resize the selection from its bottom-right
+  corner (a selected magnifier moves only its bubble). Pressing `C` starts a
+  crop area you can move with the arrow keys and size with `⌥` + arrows.
 - **Editor actions:** `⌘C` copy image, `⇧⌘C` copy all text (the side panel's Text tab also copies selected lines), `⌘S` save,
   `⌘P` pin, `⌥⌘P` show or hide the side panel, `⌘Z` / `⇧⌘Z` undo and
-  redo, `⌘[` / `⌘]` rotate left / right, `⌥⌘I` resize. The title bar's
+  redo, `⌘[` / `⌘]` rotate left / right, `⇧⌘H` / `⇧⌘V` flip horizontally /
+  vertically, `⌥⌘I` resize (focus starts in Width; `Tab` moves between the
+  fields, `⌥P` switches px / %, `⌥L` locks the aspect), `⇧⌘I` opens the Image
+  menu (`↑` / `↓` choose a row, `↵` runs it; `-` / `+` change the gap and
+  `,` / `.` the alignment of a combined image). The title bar's
   **Image** menu resizes, rotates and flips the capture, and combines it
   with another capture (Add Capture Below / Beside) or an image file; gap
   and alignment are adjustable, and `⌘Z` removes an added part. `⌘W` closes; with unsaved
   edits the first press only warns; press again to discard, or click
   Keep Editing.
+- **Editor keyboard focus:** `⌃Tab` / `F6` move the keyboard between the
+  canvas, the options bar and the side panel (`⌃⇧Tab` / `⇧F6` go back);
+  `⌥⌘T` / `⌥⌘B` open the side panel's Text / Beautify tab. Inside the bar or
+  the panel, `Tab` / `⇧Tab` (or `↓` / `↑`) move between controls, `←` / `→`
+  change the focused value (`⇧` for steps of 10 on sliders), `↵` or `Space`
+  press it, and `esc` returns to the canvas. In the Text tab's line list,
+  `↑` / `↓` move between lines (`⇧` extends the selection), `Space` selects,
+  `↵` or `⌘C` copies and `R` redacts the line. A ring marks the focused
+  control. On Windows and Linux, `Ctrl` replaces `⌘` and `Alt` replaces `⌥`.
 - **History window:** `↑` / `↓` move between captures, `Enter` opens the
   selected one, `⌘C` copies its image and `⇧⌘C` its text, `⌘⌫` deletes it,
   `⌘F` focuses the search, `esc` clears the search.

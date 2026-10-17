@@ -137,15 +137,27 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
             prepare(ed, &coord);
             ed.resize_draft = Some(ResizeDraft::new(ed.effective_image_size()));
             ed.popover = Some(EditorPopover::Resize);
+            // The keyboard lands in Width (WCAG 2.4.3): Tab moves on to
+            // Height, the unit, the lock and the buttons.
+            super::key_focus::set_focus(
+                ed,
+                Some(crate::editor::KeyFocus {
+                    zone: crate::editor::FocusZone::Resize,
+                    item: crate::editor::FocusItem::ResizeWidth,
+                }),
+            );
+            return iced::widget::operation::focus(iced::widget::Id::new(
+                super::key_focus::RESIZE_WIDTH_ID,
+            ));
         }
         Message::EditorResizeWidthChanged(v) => {
             if let Some(d) = ed.resize_draft.as_mut() {
-                d.set_width(&v);
+                d.set_width(&resize_field_text(&v));
             }
         }
         Message::EditorResizeHeightChanged(v) => {
             if let Some(d) = ed.resize_draft.as_mut() {
-                d.set_height(&v);
+                d.set_height(&resize_field_text(&v));
             }
         }
         Message::EditorResizeUnitChanged(u) => {
@@ -218,6 +230,22 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
     Task::none()
 }
 
+/// What a Resize field keeps of the typed text: digits and one decimal
+/// point. The ⌥P / ⌥L dialog keys (unit, lock) type a symbol on macOS
+/// (π, ¬) that must not land in the number.
+pub(crate) fn resize_field_text(raw: &str) -> String {
+    let mut seen_point = false;
+    raw.chars()
+        .filter(|c| {
+            if *c == '.' {
+                !std::mem::replace(&mut seen_point, true)
+            } else {
+                c.is_ascii_digit()
+            }
+        })
+        .collect()
+}
+
 /// (icon, label) colours of an Image menu row: a disabled row (the
 /// editor is busy) dims both, as the zoom segment does, so it does not
 /// look clickable.
@@ -234,6 +262,7 @@ pub(crate) fn image_menu_row<'a>(
     label: &'static str,
     key: Option<&'static str>,
     msg: Option<Message>,
+    focused: bool,
     p: &'static Palette,
 ) -> Element<'a, Message> {
     let (icon_color, label_color) = image_menu_row_colors(p, msg.is_some());
@@ -247,56 +276,66 @@ pub(crate) fn image_menu_row<'a>(
     if let Some(k) = key {
         r = r.push(key_chip_enabled(k, msg.is_some()));
     }
-    bar_button(
-        r.width(Length::Fill).into(),
-        ButtonKind::Ghost,
-        ButtonSize::Sm,
-        msg,
+    focus_ring(
+        bar_button(
+            r.width(Length::Fill).into(),
+            ButtonKind::Ghost,
+            ButtonSize::Sm,
+            msg,
+        )
+        .width(Length::Fill),
+        focused,
     )
-    .width(Length::Fill)
-    .into()
 }
 
 pub(crate) fn image_popover<'a>(
     ed: &'a EditorSession,
     p: &'static Palette,
 ) -> Element<'a, Message> {
+    use crate::editor::{FocusItem as F, FocusZone};
     const W: f32 = 260.0;
     let on = |m: Message| (!ed.busy).then_some(m);
+    let lit = |item: F| super::key_focus::is_focused(ed, FocusZone::ImageMenu, item);
+    let k = super::key_focus::key_label;
     let menu = column![
         image_menu_row(
             AppIcon::Resize,
             "Resize…",
-            Some("⌥⌘I"),
+            Some(platform_key("⌥⌘I", "Ctrl+Alt+I")),
             on(Message::EditorResizeOpen),
+            lit(F::MenuResize),
             p
         ),
         image_menu_row(
             AppIcon::RotateLeft,
             "Rotate Left",
-            Some("⌘["),
+            Some(platform_key("⌘[", "Ctrl+[")),
             on(Message::EditorRotate { clockwise: false }),
+            lit(F::MenuRotateLeft),
             p
         ),
         image_menu_row(
             AppIcon::RotateRight,
             "Rotate Right",
-            Some("⌘]"),
+            Some(platform_key("⌘]", "Ctrl+]")),
             on(Message::EditorRotate { clockwise: true }),
+            lit(F::MenuRotateRight),
             p
         ),
         image_menu_row(
             AppIcon::FlipH,
             "Flip Horizontal",
-            None,
+            Some(k(super::key_focus::KEY_FLIP_H)),
             on(Message::EditorFlip(FlipAxis::Horizontal)),
+            lit(F::MenuFlipH),
             p
         ),
         image_menu_row(
             AppIcon::FlipV,
             "Flip Vertical",
-            None,
+            Some(k(super::key_focus::KEY_FLIP_V)),
             on(Message::EditorFlip(FlipAxis::Vertical)),
+            lit(F::MenuFlipV),
             p
         ),
         menu_divider(),
@@ -305,6 +344,7 @@ pub(crate) fn image_popover<'a>(
             "Add Capture Below…",
             None,
             on(Message::EditorCombineCaptureRequested(Join::Below)),
+            lit(F::MenuAddBelow),
             p
         ),
         image_menu_row(
@@ -312,6 +352,7 @@ pub(crate) fn image_popover<'a>(
             "Add Capture Beside…",
             None,
             on(Message::EditorCombineCaptureRequested(Join::Beside)),
+            lit(F::MenuAddBeside),
             p
         ),
         image_menu_row(
@@ -319,6 +360,7 @@ pub(crate) fn image_popover<'a>(
             "Add Image from File…",
             None,
             on(Message::EditorAddImageFromFile),
+            lit(F::MenuAddImage),
             p
         ),
     ]
@@ -342,37 +384,47 @@ fn layout_section<'a>(ed: &'a EditorSession) -> Element<'a, Message> {
     let g = ed.model.geometry();
     // A coalesced tick not previewed yet is still what the slider shows.
     let gap = ed.layout_gap_pending.unwrap_or(g.gap);
+    use crate::editor::{FocusItem as F, FocusZone};
+    let lit = |item: F| super::key_focus::is_focused(ed, FocusZone::ImageMenu, item);
     column![
         popover_heading("Layout"),
-        row![
-            text("Gap")
-                .size(TYPE_CAPTION)
-                .style(text_t2)
-                .width(Length::Fixed(52.0)),
-            iced::widget::slider(0.0..=MAX_GAP as f32, gap as f32, |v| {
-                Message::EditorLayoutGapPreview(v.round() as u32)
-            })
-            .step(1.0)
-            .on_release(Message::EditorSnapshotSliderCommit)
-            .width(Length::Fill),
-            text(format!("{gap} px"))
-                .font(mono_font())
-                .size(TYPE_CAPTION)
-                .style(text_t2),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
-        row![
-            text("Align")
-                .size(TYPE_CAPTION)
-                .style(text_t2)
-                .width(Length::Fixed(52.0)),
-            text_segment(&Align::ALL.map(|a| (a.label(), a)), g.align, |a| {
-                (!ed.busy).then_some(Message::EditorLayoutAlign(a))
-            }),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center),
+        focus_ring(
+            row![
+                text("Gap")
+                    .size(TYPE_CAPTION)
+                    .style(text_t2)
+                    .width(Length::Fixed(52.0)),
+                iced::widget::slider(0.0..=MAX_GAP as f32, gap as f32, |v| {
+                    Message::EditorLayoutGapPreview(v.round() as u32)
+                })
+                .step(1.0)
+                .on_release(Message::EditorSnapshotSliderCommit)
+                .width(Length::Fill),
+                text(format!("{gap} px"))
+                    .font(mono_font())
+                    .size(TYPE_CAPTION)
+                    .style(text_t2),
+            ]
+            .spacing(8)
+            .padding([0, 4])
+            .align_y(Alignment::Center),
+            lit(F::MenuGap)
+        ),
+        focus_ring(
+            row![
+                text("Align")
+                    .size(TYPE_CAPTION)
+                    .style(text_t2)
+                    .width(Length::Fixed(52.0)),
+                text_segment(&Align::ALL.map(|a| (a.label(), a)), g.align, |a| {
+                    (!ed.busy).then_some(Message::EditorLayoutAlign(a))
+                }),
+            ]
+            .spacing(8)
+            .padding([0, 4])
+            .align_y(Alignment::Center),
+            lit(F::MenuAlign)
+        ),
     ]
     .spacing(6)
     .into()
@@ -386,18 +438,29 @@ pub(crate) fn resize_popover<'a>(
     let Some(d) = ed.resize_draft.as_ref() else {
         return Space::new().into();
     };
-    let field = |value: &str, on: fn(String) -> Message| {
+    use crate::editor::{FocusItem as F, FocusZone};
+    let lit = |item: F| super::key_focus::is_focused(ed, FocusZone::Resize, item);
+    let field = |value: &str, id: &'static str, on: fn(String) -> Message| {
         text_input("", value)
+            .id(iced::widget::Id::new(id))
             .on_input(on)
             .on_submit(Message::EditorResizeApply)
             .style(text_input_style)
             .size(TYPE_BODY)
             .width(Length::Fixed(84.0))
     };
-    let unit = text_segment(
-        &[("px", ResizeUnit::Pixels), ("%", ResizeUnit::Percent)],
-        d.unit,
-        |u| Some(Message::EditorResizeUnitChanged(u)),
+    let unit = focus_ring(
+        tooltip_with_key(
+            text_segment(
+                &[("px", ResizeUnit::Pixels), ("%", ResizeUnit::Percent)],
+                d.unit,
+                |u| Some(Message::EditorResizeUnitChanged(u)),
+            ),
+            "Unit",
+            Some(platform_key("⌥P", "Alt+P")),
+            iced::widget::tooltip::Position::Bottom,
+        ),
+        lit(F::ResizeUnit),
     );
     let preview = match d.target() {
         Some((w, h)) => format!("{} × {} px → {w} × {h} px", d.base.0, d.base.1),
@@ -416,7 +479,14 @@ pub(crate) fn resize_popover<'a>(
                 .size(TYPE_CAPTION)
                 .style(text_t2)
                 .width(Length::Fixed(52.0)),
-            field(&d.width, Message::EditorResizeWidthChanged),
+            focus_ring(
+                field(
+                    &d.width,
+                    super::key_focus::RESIZE_WIDTH_ID,
+                    Message::EditorResizeWidthChanged
+                ),
+                lit(F::ResizeWidth)
+            ),
             unit
         ]
         .spacing(8)
@@ -426,31 +496,52 @@ pub(crate) fn resize_popover<'a>(
                 .size(TYPE_CAPTION)
                 .style(text_t2)
                 .width(Length::Fixed(52.0)),
-            field(&d.height, Message::EditorResizeHeightChanged)
+            focus_ring(
+                field(
+                    &d.height,
+                    super::key_focus::RESIZE_HEIGHT_ID,
+                    Message::EditorResizeHeightChanged
+                ),
+                lit(F::ResizeHeight)
+            )
         ]
         .spacing(8)
         .align_y(Alignment::Center),
-        toggler(d.lock)
-            .label("Lock aspect ratio")
-            .text_size(TYPE_CAPTION)
-            .on_toggle(Message::EditorResizeLockToggled),
+        focus_ring(
+            tooltip_with_key(
+                toggler(d.lock)
+                    .label("Lock aspect ratio")
+                    .text_size(TYPE_CAPTION)
+                    .on_toggle(Message::EditorResizeLockToggled),
+                "Lock aspect ratio",
+                Some(platform_key("⌥L", "Alt+L")),
+                iced::widget::tooltip::Position::Bottom,
+            ),
+            lit(F::ResizeLock),
+        ),
         text(preview)
             .font(mono_font())
             .size(TYPE_CAPTION)
             .style(preview_style),
         row![
             Space::new().width(Length::Fill),
-            bar_button(
-                text("Cancel").size(ButtonSize::Sm.text_size()).into(),
-                ButtonKind::Ghost,
-                ButtonSize::Sm,
-                Some(Message::EditorPopoverClosed)
+            focus_ring(
+                bar_button(
+                    text("Cancel").size(ButtonSize::Sm.text_size()).into(),
+                    ButtonKind::Ghost,
+                    ButtonSize::Sm,
+                    Some(Message::EditorPopoverClosed)
+                ),
+                lit(F::ResizeCancel)
             ),
-            bar_button(
-                text("Resize").size(ButtonSize::Sm.text_size()).into(),
-                ButtonKind::Secondary,
-                ButtonSize::Sm,
-                (!ed.busy && d.target().is_some()).then_some(Message::EditorResizeApply),
+            focus_ring(
+                bar_button(
+                    text("Resize").size(ButtonSize::Sm.text_size()).into(),
+                    ButtonKind::Secondary,
+                    ButtonSize::Sm,
+                    (!ed.busy && d.target().is_some()).then_some(Message::EditorResizeApply),
+                ),
+                lit(F::ResizeApply)
             ),
         ]
         .spacing(SP1),

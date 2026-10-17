@@ -1235,6 +1235,34 @@ impl EditorState {
         true
     }
 
+    /// Select the annotation at `index` (keyboard Tab), or nothing.
+    /// Returns whether `index` names an annotation.
+    pub fn select_index(&mut self, index: Option<usize>) -> bool {
+        let valid = index.filter(|i| *i < self.history.current().len());
+        self.selected_annotation = valid;
+        valid.is_some() || index.is_none()
+    }
+
+    /// Drag the selected annotation's `handle` by `(dx, dy)` base-image
+    /// pixels as one undoable edit: the keyboard alternative to dragging
+    /// a handle (⌥ + arrow). Returns false when nothing is selected or the
+    /// annotation has no such handle.
+    pub fn resize_selected_by(&mut self, handle: ResizeHandle, dx: f32, dy: f32) -> bool {
+        let Some(idx) = self.selected_annotation() else {
+            return false;
+        };
+        let mut next = self.history.current().to_vec();
+        if !resize_annotation(&mut next[idx], handle, dx, dy) {
+            return false;
+        }
+        self.clamp_crop_annotation_to_base(&mut next[idx], CropClampMode::Resize);
+        self.clamp_annotation_into_base(&mut next[idx]);
+        self.push_annotations(next);
+        self.selected_annotation = Some(idx);
+        self.flattened_cache = None;
+        true
+    }
+
     pub fn preview_move_selected_from(
         &mut self,
         baseline: &[Annotation],
@@ -2140,6 +2168,29 @@ mod tests {
             shape: readshot_core::MagnifierShape::Circle,
             color: Rgba::OPAQUE_BLACK,
         }
+    }
+
+    #[test]
+    fn select_index_and_keyboard_resize_are_one_undo_step() {
+        let mut s = EditorState::new(RgbaImage::new(200, 100));
+        s.commit_annotation(magnifier());
+        assert!(s.select_index(Some(0)));
+        assert!(!s.select_index(Some(5)));
+        assert_eq!(s.selected_annotation(), None);
+        assert!(s.select_index(Some(0)));
+        let depth = s.undo_depth();
+        assert!(s.resize_selected_by(ResizeHandle::End, 0.0, 10.0));
+        assert_eq!(s.undo_depth(), depth + 1);
+        let Annotation::Magnifier { source, bubble, .. } = s.annotations()[0].clone() else {
+            panic!("magnifier");
+        };
+        assert_eq!(source, PointLike::new(20.0, 20.0));
+        assert_eq!(bubble, PointLike::new(80.0, 30.0));
+        // A handle the annotation lacks changes nothing.
+        assert!(!s.resize_selected_by(ResizeHandle::NorthWest, 1.0, 1.0));
+        assert_eq!(s.undo_depth(), depth + 1);
+        s.clear_selection();
+        assert!(!s.resize_selected_by(ResizeHandle::End, 1.0, 1.0));
     }
 
     #[test]

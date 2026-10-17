@@ -1116,6 +1116,8 @@ mod history_browser;
 mod history_scrub;
 /// Key maps of the scroll HUD, welcome, History, pins and Settings.
 mod key_maps;
+/// Editor keyboard focus zones, Tab selection, keyboard crop and resize.
+mod keyboard_focus;
 /// Off-thread composes and renders (D1) and pending steps.
 mod large_documents;
 /// Magnifier drags and keyboard width bumps.

@@ -72,6 +72,8 @@ mod compose_jobs;
 pub(crate) use combine::*;
 mod beautify_preview;
 pub(crate) use beautify_preview::*;
+mod key_focus;
+pub(crate) use key_focus::*;
 
 /// Initial URL action set from `main.rs` before `iced::daemon` starts.
 /// `start()` consumes this and feeds an extra `Message::UrlActionReceived`
@@ -1951,6 +1953,11 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorEyedropperToggled
         | Message::EditorCanvas(..)
         | Message::EditorEditSelectedText
+        | Message::EditorImageMenuKey
+        | Message::EditorPanelTabKey(..)
+        | Message::EditorFocusZoneCycle(..)
+        | Message::EditorCycleSelection(..)
+        | Message::EditorResizeByKeys(..)
         | Message::EditorDeleteSelected
         | Message::EditorCropApply
         | Message::EditorCropCancel

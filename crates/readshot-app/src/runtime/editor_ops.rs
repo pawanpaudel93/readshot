@@ -365,6 +365,22 @@ pub(crate) fn close_editor_popover(ed: &mut crate::editor::EditorSession) -> boo
     if was == crate::editor::EditorPopover::Resize {
         ed.resize_draft = None;
     }
+    // Keyboard focus goes back to the control that opened the popover
+    // (an options-bar Color or Width), or to the canvas when the popover
+    // was its own zone (Image menu, Resize).
+    match ed.key_focus_return.take() {
+        Some(back) => ed.key_focus = Some(back),
+        None => {
+            if ed.key_focus.is_some_and(|f| {
+                matches!(
+                    f.zone,
+                    crate::editor::FocusZone::ImageMenu | crate::editor::FocusZone::Resize
+                )
+            }) {
+                ed.key_focus = None;
+            }
+        }
+    }
     true
 }
 
@@ -730,6 +746,121 @@ pub(crate) fn history_write_followups(state: &mut App) -> Task<Message> {
     Task::batch(tasks)
 }
 
+/// The annotation Tab (`step` 1) or ⇧Tab (-1) selects next among `n`,
+/// wrapping; from no selection Tab starts at the first and ⇧Tab at the
+/// last. `None` when there are none.
+pub(crate) fn cycle_selection_index(n: usize, current: Option<usize>, step: i32) -> Option<usize> {
+    if n == 0 {
+        return None;
+    }
+    let n = n as i64;
+    let next = match current {
+        Some(c) => (c as i64 + i64::from(step.signum())).rem_euclid(n),
+        None if step < 0 => n - 1,
+        None => 0,
+    };
+    Some(next as usize)
+}
+
+/// The handle ⌥ + arrow drags on a selected annotation: a box's
+/// bottom-right corner, a line's end, a magnifier's bubble (so the bubble
+/// moves away from its source without a drag). Text, pins, stamps and
+/// freehand strokes have none.
+pub(crate) fn keyboard_resize_handle(
+    a: &readshot_core::Annotation,
+) -> Option<readshot_ui::editor::ResizeHandle> {
+    use readshot_core::Annotation as A;
+    use readshot_ui::editor::ResizeHandle as H;
+    match a {
+        A::Rectangle { .. }
+        | A::Ellipse { .. }
+        | A::Blur { .. }
+        | A::Pixelate { .. }
+        | A::Spotlight { .. }
+        | A::Crop { .. } => Some(H::SouthEast),
+        A::Line { .. } | A::Arrow { .. } | A::Magnifier { .. } => Some(H::End),
+        _ => None,
+    }
+}
+
+/// The part of the base image on screen (the current crop, or all of
+/// it), in base pixels: where a crop draft may go.
+pub(crate) fn visible_frame(ed: &crate::editor::EditorSession) -> readshot_core::RectLike {
+    let (x, y) = ed.crop_offset();
+    let (w, h) = ed.effective_image_size();
+    readshot_core::RectLike::new(x, y, w as f32, h as f32)
+}
+
+/// Smallest side a keyboard-sized crop draft keeps.
+const MIN_KEY_CROP: f32 = 8.0;
+
+/// A crop draft started from the keyboard (C with no draft): the visible
+/// image inset by a tenth on each side, at the chosen aspect when there
+/// is one.
+pub(crate) fn keyboard_crop_draft(
+    frame: readshot_core::RectLike,
+    ratio: Option<f32>,
+) -> readshot_core::RectLike {
+    let inset = readshot_core::RectLike::new(
+        frame.x + frame.width * 0.1,
+        frame.y + frame.height * 0.1,
+        (frame.width * 0.8).max(1.0),
+        (frame.height * 0.8).max(1.0),
+    );
+    match ratio {
+        Some(r) => readshot_ui::editor::style::fit_aspect(inset, r),
+        None => inset,
+    }
+}
+
+/// `draft` moved by `(dx, dy)`, kept inside `frame`.
+pub(crate) fn move_crop_draft(
+    draft: readshot_core::RectLike,
+    dx: f32,
+    dy: f32,
+    frame: readshot_core::RectLike,
+) -> readshot_core::RectLike {
+    let max_x = (frame.x + frame.width - draft.width).max(frame.x);
+    let max_y = (frame.y + frame.height - draft.height).max(frame.y);
+    readshot_core::RectLike::new(
+        (draft.x + dx).clamp(frame.x, max_x),
+        (draft.y + dy).clamp(frame.y, max_y),
+        draft.width,
+        draft.height,
+    )
+}
+
+/// `draft` grown (or shrunk) from its bottom-right edge by `(dx, dy)`,
+/// inside `frame` and at least [`MIN_KEY_CROP`] a side. With an aspect
+/// `ratio` the other side follows (the horizontal step leads).
+pub(crate) fn resize_crop_draft(
+    draft: readshot_core::RectLike,
+    dx: f32,
+    dy: f32,
+    ratio: Option<f32>,
+    frame: readshot_core::RectLike,
+) -> readshot_core::RectLike {
+    let max_w = (frame.x + frame.width - draft.x).max(MIN_KEY_CROP);
+    let max_h = (frame.y + frame.height - draft.y).max(MIN_KEY_CROP);
+    let (w, h) = match ratio {
+        Some(r) => {
+            let lead = if dx != 0.0 { dx } else { dy * r };
+            let mut w = (draft.width + lead).clamp(MIN_KEY_CROP, max_w);
+            let mut h = w / r;
+            if h > max_h {
+                h = max_h;
+                w = h * r;
+            }
+            (w, h.max(MIN_KEY_CROP))
+        }
+        None => (
+            (draft.width + dx).clamp(MIN_KEY_CROP, max_w),
+            (draft.height + dy).clamp(MIN_KEY_CROP, max_h),
+        ),
+    };
+    readshot_core::RectLike::new(draft.x, draft.y, w, h)
+}
+
 /// Every editor message arm, extracted from `runtime::update` so the
 /// top-level dispatcher stays navigable. Covers the
 /// editor session, its keyboard/canvas/toolbar flow, and the pin
@@ -819,7 +950,23 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     }
                 }
             }
+            // The keyboard focus outside the canvas (Image menu, options
+            // bar, side panel, Resize) gets the key first.
+            if let Some(task) =
+                super::key_focus::handle_focus_key(state, &key, modifiers, status_ignored)
+            {
+                return task;
+            }
             let message = editor_key_message(key, modifiers, status_ignored);
+            // C from the keyboard: a crop draft to move and size with the
+            // arrows, since the pointer is not there to drag one (WCAG
+            // 2.1.1 / 2.5.7). The toolbar button still waits for a drag.
+            let crop_key = matches!(
+                message,
+                Some(Message::EditorToolbar(
+                    readshot_ui::ToolbarMessage::SelectTool(readshot_ui::editor::ToolState::Crop)
+                ))
+            );
             // While the Color popover is open its hex field may have focus,
             // and an inline text draft owns its own field. iced's text_input
             // has no undo and doesn't capture Cmd+Z, so undo/redo would
@@ -840,10 +987,25 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }) {
                 return Task::none();
             }
-            match message {
+            let task = match message {
                 Some(message) => update(state, message),
                 None => Task::none(),
+            };
+            if crop_key {
+                if let Some(ed) = state.editor.as_mut() {
+                    if !ed.busy
+                        && ed.crop_draft.is_none()
+                        && ed.model.active_tool() == readshot_ui::editor::ToolState::Crop
+                    {
+                        let ratio = ed.model.effective_style().crop_aspect.ratio();
+                        ed.crop_draft = Some(keyboard_crop_draft(visible_frame(ed), ratio));
+                        ed.set_info(
+                            "Arrows move the crop, ⌥ + arrows resize it (⇧ for 10 px). ↵ crops, esc cancels.",
+                        );
+                    }
+                }
             }
+            task
         }
         Message::EditorStatusTick => {
             // Auto-dismiss stale, non-in-progress status pills *here* —
@@ -1774,6 +1936,13 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if ed.pending_text.is_some() || ed.move_drag.is_some() {
                 return Task::none();
             }
+            // An open crop draft owns the arrows: they move it (the
+            // keyboard alternative to dragging it, WCAG 2.5.7).
+            if let Some(draft) = ed.crop_draft {
+                let frame = visible_frame(ed);
+                ed.crop_draft = Some(move_crop_draft(draft, dx, dy, frame));
+                return Task::none();
+            }
             // Settle any in-flight preview first, then move the selection
             // by the keyboard step as one undoable edit. No status toast:
             // arrow presses are rapid and would spam the chrome.
@@ -2150,6 +2319,58 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             seq,
             output,
         } => super::compose_jobs::handle_composed(state, session, seq, output),
+        msg @ (Message::EditorImageMenuKey
+        | Message::EditorPanelTabKey(..)
+        | Message::EditorFocusZoneCycle(..)) => super::key_focus::handle_focus_message(state, msg),
+        Message::EditorCycleSelection(step) => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            if ed.busy || ed.pending_text.is_some() || ed.move_drag.is_some() {
+                return Task::none();
+            }
+            let n = ed.model.annotations().len();
+            let Some(next) = cycle_selection_index(n, ed.model.selected_annotation(), step) else {
+                return Task::none();
+            };
+            cancel_editor_previews(ed);
+            ed.model.select_index(Some(next));
+            if let Some(kind) = ed.model.selected_kind_label() {
+                ed.set_info(format!(
+                    "{kind} selected ({} of {n}). Arrows move it, ⌫ removes it, esc deselects.",
+                    next + 1
+                ));
+            }
+            Task::none()
+        }
+        Message::EditorResizeByKeys(dx, dy) => {
+            let Some(ed) = state.editor.as_mut() else {
+                return Task::none();
+            };
+            if ed.busy || ed.pending_text.is_some() || ed.move_drag.is_some() {
+                return Task::none();
+            }
+            if let Some(draft) = ed.crop_draft {
+                let frame = visible_frame(ed);
+                let ratio = ed.model.effective_style().crop_aspect.ratio();
+                ed.crop_draft = Some(resize_crop_draft(draft, dx, dy, ratio, frame));
+                return Task::none();
+            }
+            let Some(handle) = ed
+                .model
+                .selected_annotation()
+                .and_then(|i| ed.model.annotations().get(i))
+                .and_then(keyboard_resize_handle)
+            else {
+                return Task::none();
+            };
+            cancel_editor_previews(ed);
+            if ed.model.resize_selected_by(handle, dx, dy) {
+                ed.refresh_image();
+                sync_editor_history(ed, &state.coordinator);
+            }
+            Task::none()
+        }
         other => unreachable!("non-editor message routed to the editor handler: {other:?}"),
     }
 }

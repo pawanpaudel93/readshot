@@ -384,6 +384,48 @@ pub(crate) fn tooltip_with_key<'a>(
         .into()
 }
 
+/// A key label for this platform: the macOS glyph form (`mac`), or the
+/// Ctrl form (`other`) elsewhere. Every new key chip and tooltip goes
+/// through it so Windows and Linux never advertise a ⌘ chord.
+pub(crate) fn platform_key(mac: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        mac
+    } else {
+        other
+    }
+}
+
+/// The keyboard focus ring around `content` (`on`), drawn as a layer over
+/// it so focusing never moves anything. The layer is always present, so
+/// the widget tree (and any text field's own focus state) is the same
+/// with and without the ring. It takes no pointer input.
+pub(crate) fn focus_ring<'a>(
+    content: impl Into<Element<'a, Message>>,
+    on: bool,
+) -> Element<'a, Message> {
+    let ring = container(Space::new().width(Length::Fill).height(Length::Fill))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |theme| focus_ring_style(theme, on));
+    iced::widget::stack![content.into(), ring].into()
+}
+
+pub(crate) fn focus_ring_style(theme: &Theme, on: bool) -> container::Style {
+    let p = palette_for(theme);
+    container::Style {
+        border: Border {
+            radius: R_BUTTON.into(),
+            width: if on { FOCUS_RING_WIDTH } else { 0.0 },
+            color: if on {
+                focus_ring_color(p)
+            } else {
+                Color::TRANSPARENT
+            },
+        },
+        ..container::Style::default()
+    }
+}
+
 pub(crate) fn vsep() -> Element<'static, Message> {
     container(
         container(
@@ -772,6 +814,35 @@ mod chip_tests {
             };
             let fill = over(bg.a);
             assert!(contrast_ratio(fg, fill) >= 4.5);
+        }
+    }
+}
+
+#[cfg(test)]
+mod focus_ring_tests {
+    use super::*;
+
+    #[test]
+    fn the_focus_ring_shows_only_when_on_and_uses_the_ring_token() {
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            let theme = readshot_theme_for(mode);
+            let p = palette(mode);
+            let on = focus_ring_style(&theme, true);
+            assert_eq!(on.border.width, FOCUS_RING_WIDTH);
+            assert_eq!(on.border.color, focus_ring_color(p));
+            assert!(on.background.is_none(), "the ring never hides the control");
+            let off = focus_ring_style(&theme, false);
+            assert_eq!(off.border.width, 0.0);
+        }
+    }
+
+    #[test]
+    fn platform_key_picks_the_glyph_form_on_macos_only() {
+        let k = platform_key("⇧⌘I", "Ctrl+Shift+I");
+        if cfg!(target_os = "macos") {
+            assert_eq!(k, "⇧⌘I");
+        } else {
+            assert_eq!(k, "Ctrl+Shift+I");
         }
     }
 }

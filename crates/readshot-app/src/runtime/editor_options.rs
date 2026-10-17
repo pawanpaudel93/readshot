@@ -62,7 +62,14 @@ pub(crate) fn editor_options_bar<'a>(
         if i > 0 && matches!(controls[i - 1], OptionControl::Color | OptionControl::Width) {
             bar = bar.push(vsep());
         }
-        bar = bar.push(option_control(*control, ed, style, p));
+        bar = bar.push(focus_ring(
+            option_control(*control, ed, style, p),
+            super::key_focus::is_focused(
+                ed,
+                crate::editor::FocusZone::OptionsBar,
+                crate::editor::FocusItem::Option(*control),
+            ),
+        ));
     }
     Some(
         container(bar)
@@ -492,6 +499,7 @@ pub(crate) fn color_popover<'a>(
     }
     let preview = swatch_color(current);
     let mut field = iced::widget::text_input("#RRGGBB", hex_draft)
+        .id(iced::widget::Id::new(super::key_focus::COLOR_HEX_ID))
         .font(mono_font())
         .size(TYPE_CAPTION)
         .padding([4, 8])

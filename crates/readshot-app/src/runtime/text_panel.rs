@@ -930,6 +930,8 @@ pub(crate) fn text_tab<'a>(
     ed: &'a EditorSession,
     p: &'static Palette,
 ) -> Element<'a, Message> {
+    use crate::editor::{FocusItem as F, FocusZone};
+    let lit = |item: F| super::key_focus::is_focused(ed, FocusZone::Panel, item);
     let body: Element<'a, Message> = match &ed.text_panel.recognition {
         TextRecognition::Idle | TextRecognition::Recognizing { .. } => {
             recognizing_view(ed, state.reduce_motion)
@@ -939,30 +941,30 @@ pub(crate) fn text_tab<'a>(
             p,
             "Couldn't read text",
             "Text recognition didn't finish.",
-            Some(
+            Some(focus_ring(
                 bar_button(
                     text("Try Again").size(ButtonSize::Sm.text_size()).into(),
                     ButtonKind::Secondary,
                     ButtonSize::Sm,
                     Some(Message::EditorTextRecognize),
-                )
-                .into(),
-            ),
+                ),
+                lit(F::TextRetry),
+            )),
         ),
         TextRecognition::Ready(doc) if doc.is_empty() => empty_state(
             AppIcon::ScanText,
             p,
             "No text found",
             "This capture has no readable text. Recognition languages are in Settings › Text Recognition.",
-            Some(
+            Some(focus_ring(
                 bar_button(
                     text("Open Settings").size(ButtonSize::Sm.text_size()).into(),
                     ButtonKind::Secondary,
                     ButtonSize::Sm,
                     Some(Message::EditorOpenTextSettings),
-                )
-                .into(),
-            ),
+                ),
+                lit(F::TextOpenSettings),
+            )),
         ),
         TextRecognition::Ready(doc) => lines_view(state, ed, doc, p),
     };
@@ -1093,19 +1095,27 @@ fn redact_card<'a>(
     ]
     .spacing(SP2)
     .align_y(Alignment::Center);
-    let picker = pick_list(
-        &RedactStyle::ALL[..],
-        Some(ed.text_panel.redact_style),
-        Message::EditorRedactStyleChanged,
-    )
-    .text_size(TYPE_CAPTION)
-    .padding([4, 8])
-    .width(Length::Fill);
-    let redact_all = bar_button(
-        text("Redact All").size(ButtonSize::Sm.text_size()).into(),
-        ButtonKind::Secondary,
-        ButtonSize::Sm,
-        (!ed.busy && n > 0).then_some(Message::EditorRedactAll),
+    use crate::editor::{FocusItem as F, FocusZone};
+    let lit = |item: F| super::key_focus::is_focused(ed, FocusZone::Panel, item);
+    let picker = focus_ring(
+        pick_list(
+            &RedactStyle::ALL[..],
+            Some(ed.text_panel.redact_style),
+            Message::EditorRedactStyleChanged,
+        )
+        .text_size(TYPE_CAPTION)
+        .padding([4, 8])
+        .width(Length::Fill),
+        lit(F::TextRedactStyle),
+    );
+    let redact_all = focus_ring(
+        bar_button(
+            text("Redact All").size(ButtonSize::Sm.text_size()).into(),
+            ButtonKind::Secondary,
+            ButtonSize::Sm,
+            (!ed.busy && n > 0).then_some(Message::EditorRedactAll),
+        ),
+        lit(F::TextRedactAll),
     );
     let mut chips = row![].spacing(6);
     for (kind, count) in summary(pending.iter().map(|(m, _)| m)) {
@@ -1198,6 +1208,7 @@ fn line_row<'a>(
     index: usize,
     line: &'a TextLine,
     hovered: bool,
+    keyboard_cursor: bool,
     selected: bool,
     marks: &[Range<usize>],
     redacted: &[Range<usize>],
@@ -1240,11 +1251,16 @@ fn line_row<'a>(
     let body: Element<'a, Message> = if redact_button {
         iced::widget::stack![
             content,
-            container(bar_button(
-                text("Redact").size(ButtonSize::Xs.text_size()).into(),
-                ButtonKind::Secondary,
-                ButtonSize::Xs,
-                Some(Message::EditorRedactLine(index)),
+            container(tooltip_with_key(
+                bar_button(
+                    text("Redact").size(ButtonSize::Xs.text_size()).into(),
+                    ButtonKind::Secondary,
+                    ButtonSize::Xs,
+                    Some(Message::EditorRedactLine(index)),
+                ),
+                "Redact this line",
+                Some("R"),
+                iced::widget::tooltip::Position::Top,
             ))
             .width(Length::Fill)
             .align_x(Alignment::End)
@@ -1254,6 +1270,7 @@ fn line_row<'a>(
     } else {
         content.into()
     };
+    let body = focus_ring(body, keyboard_cursor);
     mouse_area(body)
         .on_enter(Message::EditorTextLineHovered(index))
         .on_exit(Message::EditorTextLineUnhovered(index))
@@ -1282,6 +1299,9 @@ fn lines_view<'a>(
             .style(text_t3),
     ]
     .align_y(Alignment::Center);
+    use crate::editor::{FocusItem as F, FocusZone};
+    let lit = |item: F| super::key_focus::is_focused(ed, FocusZone::Panel, item);
+    let lines_focused = lit(F::TextLines);
     let rs = redact_state(ed);
     let mut list = column![].spacing(1);
     for (i, line) in doc.lines.iter().enumerate() {
@@ -1297,11 +1317,15 @@ fn lines_view<'a>(
             .filter(|m| m.line == i)
             .map(|m| m.span.clone())
             .collect();
-        let hovered = tp.hovered == Some(i);
+        let keyboard_cursor = lines_focused && tp.cursor == Some(i);
+        // The keyboard cursor reads like hover: the line is outlined on
+        // the image and its Redact button shows (R presses it).
+        let hovered = tp.hovered == Some(i) || keyboard_cursor;
         list = list.push(line_row(
             i,
             line,
             hovered,
+            keyboard_cursor,
             tp.selected.contains(&i),
             &marks,
             &redacted,
@@ -1313,7 +1337,11 @@ fn lines_view<'a>(
     if let Some(card) = redact_card(ed, &rs, p) {
         col = col.push(card);
     }
-    col = col.push(header).push(scrollable(list).height(Length::Fill));
+    col = col.push(header).push(
+        scrollable(list)
+            .id(iced::widget::Id::new(super::key_focus::TEXT_LINES_ID))
+            .height(Length::Fill),
+    );
     if !doc.positioned {
         col = col.push(
             text("This platform's text recognition doesn't report where lines are, so hover-to-locate and smart redact are off.")
@@ -1321,21 +1349,27 @@ fn lines_view<'a>(
                 .style(text_t3),
         );
     }
-    let toggle = toggler(state.preferences.editor_copy_remove_line_breaks)
-        .label("Remove line breaks when copying")
-        .text_size(TYPE_CAPTION)
-        .size(16.0)
-        .on_toggle(Message::EditorRemoveLineBreaksToggled);
+    let toggle = focus_ring(
+        toggler(state.preferences.editor_copy_remove_line_breaks)
+            .label("Remove line breaks when copying")
+            .text_size(TYPE_CAPTION)
+            .size(16.0)
+            .on_toggle(Message::EditorRemoveLineBreaksToggled),
+        lit(F::TextLineBreaks),
+    );
     let n = tp.selected.len();
-    let copy_lines = bar_button(
-        text(copy_lines_label(n))
-            .size(ButtonSize::Sm.text_size())
-            .into(),
-        ButtonKind::Secondary,
-        ButtonSize::Sm,
-        (n > 0).then_some(Message::EditorCopyLines),
-    )
-    .width(Length::Fill);
+    let copy_lines = focus_ring(
+        bar_button(
+            text(copy_lines_label(n))
+                .size(ButtonSize::Sm.text_size())
+                .into(),
+            ButtonKind::Secondary,
+            ButtonSize::Sm,
+            (n > 0).then_some(Message::EditorCopyLines),
+        )
+        .width(Length::Fill),
+        lit(F::TextCopyLines),
+    );
     let copy_all = bar_button(
         row![
             text("Copy All").size(ButtonSize::Sm.text_size()),
@@ -1349,6 +1383,7 @@ fn lines_view<'a>(
         (!ed.busy).then_some(Message::EditorCopyTextRequested),
     )
     .width(Length::Fill);
+    let copy_all = focus_ring(copy_all, lit(F::TextCopyAll));
     col.push(toggle)
         .push(row![copy_lines, copy_all].spacing(SP2))
         .into()
@@ -1369,7 +1404,10 @@ pub(crate) fn text_marks(
     };
     let rect = |i: usize| doc.lines.get(i).and_then(|l| l.rect);
     (
-        ed.text_panel.hovered.and_then(rect),
+        ed.text_panel
+            .hovered
+            .or(ed.text_panel.cursor)
+            .and_then(rect),
         ed.text_panel
             .selected
             .iter()

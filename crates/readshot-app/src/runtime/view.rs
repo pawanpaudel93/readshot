@@ -2484,7 +2484,9 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 (!busy).then_some(Message::EditorPopoverToggled(EditorPopover::Image)),
             ),
             "Image: resize, rotate, flip",
-            None,
+            Some(super::key_focus::key_label(
+                super::key_focus::KEY_IMAGE_MENU,
+            )),
             Position::Bottom,
         ));
         if panel_hidden {
@@ -3538,9 +3540,34 @@ pub(crate) fn editor_key_message(
     use iced::keyboard::{key::Named, Key};
 
     let cmd = modifiers.command();
+    // ⌃Tab / F6 walk the keyboard focus zones, even from a text field.
+    if let Some(forward) = zone_cycle_key(&key, modifiers) {
+        return Some(Message::EditorFocusZoneCycle(forward));
+    }
     match (&key, cmd, modifiers.shift()) {
         (Key::Character(c), true, false) if modifiers.alt() && c.eq_ignore_ascii_case("p") => {
             return Some(Message::EditorPanelToggled);
+        }
+        (Key::Character(c), true, false) if modifiers.alt() && c.eq_ignore_ascii_case("t") => {
+            return Some(Message::EditorPanelTabKey(crate::editor::PanelTab::Text));
+        }
+        (Key::Character(c), true, false) if modifiers.alt() && c.eq_ignore_ascii_case("b") => {
+            return Some(Message::EditorPanelTabKey(
+                crate::editor::PanelTab::Beautify,
+            ));
+        }
+        (Key::Character(c), true, true) if !modifiers.alt() && c.eq_ignore_ascii_case("i") => {
+            return Some(Message::EditorImageMenuKey);
+        }
+        (Key::Character(c), true, true) if !modifiers.alt() && c.eq_ignore_ascii_case("h") => {
+            return Some(Message::EditorFlip(
+                readshot_core::document::FlipAxis::Horizontal,
+            ));
+        }
+        (Key::Character(c), true, true) if !modifiers.alt() && c.eq_ignore_ascii_case("v") => {
+            return Some(Message::EditorFlip(
+                readshot_core::document::FlipAxis::Vertical,
+            ));
         }
         (Key::Character(c), true, false) if c.eq_ignore_ascii_case("z") => {
             return Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
@@ -3593,7 +3620,28 @@ pub(crate) fn editor_key_message(
         _ => {}
     }
 
+    // ⌥ + arrow resizes the crop draft or the selection from its
+    // bottom-right edge (a selected magnifier: moves only its bubble).
+    if status_ignored && modifiers.alt() && !cmd && !modifiers.control() {
+        let step = if modifiers.shift() { 10.0 } else { 1.0 };
+        match key {
+            Key::Named(Named::ArrowLeft) => return Some(Message::EditorResizeByKeys(-step, 0.0)),
+            Key::Named(Named::ArrowRight) => return Some(Message::EditorResizeByKeys(step, 0.0)),
+            Key::Named(Named::ArrowUp) => return Some(Message::EditorResizeByKeys(0.0, -step)),
+            Key::Named(Named::ArrowDown) => return Some(Message::EditorResizeByKeys(0.0, step)),
+            _ => {}
+        }
+    }
     if status_ignored && !cmd && !modifiers.alt() && !modifiers.control() {
+        // Tab / ⇧Tab walk the annotations, so a keyboard user can select
+        // one (and then move, resize or delete it) without a click.
+        if matches!(key, Key::Named(Named::Tab)) {
+            return Some(Message::EditorCycleSelection(if modifiers.shift() {
+                -1
+            } else {
+                1
+            }));
+        }
         if matches!(
             key,
             Key::Named(Named::Delete) | Key::Named(Named::Backspace)

@@ -205,6 +205,7 @@ fn readout_width() -> f32 {
 }
 
 fn slider_row<'a>(
+    focused: bool,
     label: &'static str,
     max: u32,
     value: u32,
@@ -228,14 +229,17 @@ fn slider_row<'a>(
             .width(Length::Fill),
         );
     }
-    r.push(
-        text(readout)
-            .font(mono_font())
-            .size(TYPE_CAPTION)
-            .style(text_t2)
-            .width(Length::Fixed(readout_width())),
+    focus_ring(
+        r.push(
+            text(readout)
+                .font(mono_font())
+                .size(TYPE_CAPTION)
+                .style(text_t2)
+                .width(Length::Fixed(readout_width())),
+        )
+        .padding([2, 4]),
+        focused,
     )
-    .into()
 }
 
 pub(crate) fn beautify_tab<'a>(
@@ -243,37 +247,48 @@ pub(crate) fn beautify_tab<'a>(
     ed: &'a EditorSession,
     p: &'static Palette,
 ) -> Element<'a, Message> {
+    use crate::editor::{FocusItem as F, FocusZone};
+    let lit = |item: F| super::key_focus::is_focused(ed, FocusZone::Panel, item);
     let s = ed.model.beautify();
     let busy = ed.busy;
     let current = s.matching_builtin();
     // Presets: built-ins, then saved ones (each with a remove ×).
     let mut presets = row![].spacing(SP1);
     for preset in BuiltinPreset::ALL {
-        presets = presets.push(segment_button(
-            text(preset.label()).size(ButtonSize::Xs.text_size()).into(),
-            current == Some(preset),
-            (!busy).then_some(Message::EditorBeautifyPreset(preset)),
+        presets = presets.push(focus_ring(
+            segment_button(
+                text(preset.label()).size(ButtonSize::Xs.text_size()).into(),
+                current == Some(preset),
+                (!busy).then_some(Message::EditorBeautifyPreset(preset)),
+            ),
+            lit(F::BeautifyPreset(preset)),
         ));
     }
     for (i, saved) in state.preferences.editor_beautify_presets.iter().enumerate() {
         presets = presets.push(
             row![
-                segment_button(
-                    text(saved.name.clone())
-                        .size(ButtonSize::Xs.text_size())
-                        .into(),
-                    current.is_none() && saved.settings.clamped() == s,
-                    (!busy).then_some(Message::EditorBeautifySavedPresetApplied(i)),
+                focus_ring(
+                    segment_button(
+                        text(saved.name.clone())
+                            .size(ButtonSize::Xs.text_size())
+                            .into(),
+                        current.is_none() && saved.settings.clamped() == s,
+                        (!busy).then_some(Message::EditorBeautifySavedPresetApplied(i)),
+                    ),
+                    lit(F::BeautifySaved(i)),
                 ),
-                icon_button(
-                    AppIcon::Close,
-                    p.t3,
-                    "Remove preset",
-                    None,
-                    (!busy).then_some(Message::EditorBeautifyDeletePreset(i)),
-                    false,
-                    ICON_BTN_XS,
-                    Position::Bottom,
+                focus_ring(
+                    icon_button(
+                        AppIcon::Close,
+                        p.t3,
+                        "Remove preset",
+                        None,
+                        (!busy).then_some(Message::EditorBeautifyDeletePreset(i)),
+                        false,
+                        ICON_BTN_XS,
+                        Position::Bottom,
+                    ),
+                    lit(F::BeautifyRemoveSaved(i)),
                 ),
             ]
             .align_y(Alignment::Center),
@@ -296,51 +311,74 @@ pub(crate) fn beautify_tab<'a>(
         bg_row = bg_row.push(swatch(bg, s.background == bg, busy, "Solid color"));
     }
     let custom = row![
-        text_input("#RRGGBB", &ed.beautify_hex_shown())
-            .on_input(Message::EditorBeautifyHexChanged)
-            .on_submit(Message::EditorBeautifyHexSubmitted)
-            .style(text_input_style)
-            .size(TYPE_CAPTION)
-            .width(Length::Fixed(96.0)),
-        icon_button(
-            AppIcon::Dropper,
-            p.t2,
-            "Pick from image",
-            None,
-            (!busy).then_some(Message::EditorBeautifyPickBackground),
-            false,
-            ICON_BTN_SM,
-            Position::Bottom,
+        focus_ring(
+            text_input("#RRGGBB", &ed.beautify_hex_shown())
+                .id(iced::widget::Id::new(super::key_focus::BEAUTIFY_HEX_ID))
+                .on_input(Message::EditorBeautifyHexChanged)
+                .on_submit(Message::EditorBeautifyHexSubmitted)
+                .style(text_input_style)
+                .size(TYPE_CAPTION)
+                .width(Length::Fixed(96.0)),
+            lit(F::BeautifyHex),
+        ),
+        focus_ring(
+            icon_button(
+                AppIcon::Dropper,
+                p.t2,
+                "Pick from image",
+                None,
+                (!busy).then_some(Message::EditorBeautifyPickBackground),
+                false,
+                ICON_BTN_SM,
+                Position::Bottom,
+            ),
+            lit(F::BeautifyPick),
         ),
     ]
     .spacing(SP1)
     .align_y(Alignment::Center);
-    let canvas = text_segment(&CanvasSize::ALL.map(|c| (c.label(), c)), s.canvas, |c| {
-        (!busy).then_some(Message::EditorBeautifyEdit(BeautifyEdit::Canvas(c)))
-    });
-    let balance = toggler(s.balance)
-        .label("Auto Balance (center)")
-        .text_size(TYPE_CAPTION)
-        .on_toggle_maybe(
-            (!busy).then_some(|v| Message::EditorBeautifyEdit(BeautifyEdit::Balance(v))),
-        );
-    let save = bar_button(
-        text("Save Preset").size(ButtonSize::Sm.text_size()).into(),
-        ButtonKind::Secondary,
-        ButtonSize::Sm,
-        (!busy && state.preferences.editor_beautify_presets.len() < MAX_SAVED_PRESETS)
-            .then_some(Message::EditorBeautifySavePreset),
+    let canvas = focus_ring(
+        text_segment(&CanvasSize::ALL.map(|c| (c.label(), c)), s.canvas, |c| {
+            (!busy).then_some(Message::EditorBeautifyEdit(BeautifyEdit::Canvas(c)))
+        }),
+        lit(F::BeautifyCanvas),
+    );
+    let balance = focus_ring(
+        toggler(s.balance)
+            .label("Auto Balance (center)")
+            .text_size(TYPE_CAPTION)
+            .on_toggle_maybe(
+                (!busy).then_some(|v| Message::EditorBeautifyEdit(BeautifyEdit::Balance(v))),
+            ),
+        lit(F::BeautifyBalance),
+    );
+    let save = focus_ring(
+        bar_button(
+            text("Save Preset").size(ButtonSize::Sm.text_size()).into(),
+            ButtonKind::Secondary,
+            ButtonSize::Sm,
+            (!busy && state.preferences.editor_beautify_presets.len() < MAX_SAVED_PRESETS)
+                .then_some(Message::EditorBeautifySavePreset),
+        ),
+        lit(F::BeautifySave),
     );
     let level = usize::from(s.shadow_level());
     let body = column![
         section("Presets", presets.wrap().vertical_spacing(SP1).into()),
         section(
             "Background",
-            column![bg_row.wrap().vertical_spacing(SP1), custom]
-                .spacing(SP1)
-                .into()
+            column![
+                focus_ring(
+                    bg_row.wrap().vertical_spacing(SP1),
+                    lit(F::BeautifyBackground)
+                ),
+                custom
+            ]
+            .spacing(SP1)
+            .into()
         ),
         slider_row(
+            lit(F::BeautifyPadding),
             "Padding",
             MAX_PADDING,
             s.padding,
@@ -349,6 +387,7 @@ pub(crate) fn beautify_tab<'a>(
             BeautifyEdit::Padding
         ),
         slider_row(
+            lit(F::BeautifyCorners),
             "Corners",
             MAX_CORNER_RADIUS,
             s.corner_radius,
@@ -357,6 +396,7 @@ pub(crate) fn beautify_tab<'a>(
             BeautifyEdit::CornerRadius
         ),
         slider_row(
+            lit(F::BeautifyShadow),
             "Shadow",
             u32::from(MAX_SHADOW_LEVEL),
             level as u32,

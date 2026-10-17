@@ -668,6 +668,19 @@ pub enum Message {
     EditorNudgeSelected(f32, f32),
     /// Edit the selected text annotation, if one is selected.
     EditorEditSelectedText,
+    /// ⇧⌘I: open (or close) the Image menu with its first row focused.
+    EditorImageMenuKey,
+    /// ⌥⌘T / ⌥⌘B: show the side panel on that tab, its tabs focused.
+    EditorPanelTabKey(crate::editor::PanelTab),
+    /// ⌃Tab / F6 (`true`) or ⌃⇧Tab / ⇧F6: move the keyboard focus to the
+    /// next (previous) zone: canvas → options bar → side panel.
+    EditorFocusZoneCycle(bool),
+    /// Tab / ⇧Tab on the canvas: select the next (`1`) or previous (`-1`)
+    /// annotation, so arrows, ⌫ and ↵ reach it without a click.
+    EditorCycleSelection(i32),
+    /// ⌥ + arrow: grow or shrink the crop draft or the selection from
+    /// its bottom-right edge; a selected magnifier moves only its bubble.
+    EditorResizeByKeys(f32, f32),
     /// Keyboard event observed while an editor exists. Runtime filters
     /// it to the live editor window before acting.
     EditorKeyPressed {

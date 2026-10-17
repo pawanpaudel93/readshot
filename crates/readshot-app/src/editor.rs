@@ -283,6 +283,73 @@ impl PanelTab {
     }
 }
 
+/// A keyboard focus zone of the editor (WCAG 2.1.1). iced 0.14 buttons,
+/// sliders and pick-lists can't take focus, so the editor keeps its own
+/// focus: `None` is the canvas (tools, nudge, Tab through annotations);
+/// a zone is a group of pointer-only controls the keys walk through
+/// (`runtime/key_focus.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusZone {
+    /// The title bar's Image menu (and its Layout rows).
+    ImageMenu,
+    /// The options bar under the tool bar.
+    OptionsBar,
+    /// The side panel: its tabs, then the current tab's controls.
+    Panel,
+    /// The Resize dialog.
+    Resize,
+}
+
+/// One keyboard-focusable control inside a [`FocusZone`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FocusItem {
+    MenuResize,
+    MenuRotateLeft,
+    MenuRotateRight,
+    MenuFlipH,
+    MenuFlipV,
+    MenuAddBelow,
+    MenuAddBeside,
+    MenuAddImage,
+    MenuGap,
+    MenuAlign,
+    Option(readshot_ui::editor::OptionControl),
+    PanelTabs,
+    BeautifyPreset(readshot_core::beautify::BuiltinPreset),
+    BeautifySaved(usize),
+    BeautifyRemoveSaved(usize),
+    BeautifyBackground,
+    BeautifyHex,
+    BeautifyPick,
+    BeautifyPadding,
+    BeautifyCorners,
+    BeautifyShadow,
+    BeautifyCanvas,
+    BeautifyBalance,
+    BeautifySave,
+    TextRetry,
+    TextOpenSettings,
+    TextRedactStyle,
+    TextRedactAll,
+    TextLines,
+    TextLineBreaks,
+    TextCopyLines,
+    TextCopyAll,
+    ResizeWidth,
+    ResizeHeight,
+    ResizeUnit,
+    ResizeLock,
+    ResizeCancel,
+    ResizeApply,
+}
+
+/// Where the editor's keyboard focus is when it is not on the canvas.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeyFocus {
+    pub zone: FocusZone,
+    pub item: FocusItem,
+}
+
 /// Text-panel recognition of the session's base image.
 #[derive(Clone, Debug, Default)]
 pub enum TextRecognition {
@@ -301,6 +368,10 @@ pub struct TextPanelState {
     pub recognition: TextRecognition,
     /// Line under the pointer in the panel (outlined on the image).
     pub hovered: Option<usize>,
+    /// The Text panel's keyboard line cursor (↑/↓ while the panel has
+    /// keyboard focus): outlined on the image and shows the line's Redact
+    /// button, as hover does.
+    pub cursor: Option<usize>,
     /// Selected line indices (Copy N Lines).
     pub selected: std::collections::BTreeSet<usize>,
     /// ⇧-click range anchor.
@@ -946,6 +1017,12 @@ pub struct EditorSession {
     /// ([`Self::beautify_hex_shown`]), so it follows the tab opening, a
     /// preset, undo or the eyedropper.
     pub beautify_hex_draft: Option<String>,
+    /// The keyboard focus outside the canvas ([`KeyFocus`]); `None` is
+    /// the canvas. Drawn as a focus ring on that control.
+    pub key_focus: Option<KeyFocus>,
+    /// The control that opened the current popover from the keyboard:
+    /// closing the popover puts the focus back there.
+    pub key_focus_return: Option<KeyFocus>,
     /// Open color / line-width popover, if any. Esc and a
     /// click outside close it before any other Esc behaviour runs.
     pub popover: Option<EditorPopover>,
@@ -1279,6 +1356,8 @@ impl EditorSession {
             display_without: None,
             kept_display: None,
             beautify_hex_draft: None,
+            key_focus: None,
+            key_focus_return: None,
             canvas_drag_active: false,
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
@@ -1365,6 +1444,8 @@ impl EditorSession {
             display_without: None,
             kept_display: None,
             beautify_hex_draft: None,
+            key_focus: None,
+            key_focus_return: None,
             canvas_drag_active: false,
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
