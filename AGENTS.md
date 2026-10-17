@@ -36,15 +36,19 @@ crates/
                           (screencapturekit on macOS, xcap on win/linux).
   readshot-ocr/           OCREngine trait + per-OS backends
                           (Apple Vision, Windows.Media.Ocr, ocrs on linux).
-  readshot-ui/            iced widgets: overlay, editor, settings, tray, hotkey.
-  readshot-app/           Composition root. App state, coordinator,
-                          permissions, URL scheme, headless CLI.
+  readshot-ui/            iced widgets and models: the annotation editor
+                          (state, canvas, toolbar, undo), settings, hotkey.
+  readshot-app/           Composition root. App state, iced runtime,
+                          capture overlay, tray, coordinator, permissions,
+                          URL scheme, headless CLI.
   readshot-mcp/           Model Context Protocol stdio server.
   readshot-test-fixtures/ Shared image fixtures for snapshot tests.
 docs/
   INSTALL.md              End-user install + first-launch instructions.
   RELEASING.md            Maintainer release runbook.
   MCP.md                  How to wire readshot-mcp into AI-agent hosts.
+  CLI.md                  The command-line reference.
+  ROADMAP.md              Near-term workflow gaps (not a release promise).
 packaging/                Per-OS packaging configs (DMG, MSI, AppImage,
                           Flatpak, AUR, Sparkle appcast).
 .github/workflows/        CI test matrix + tag-driven release pipeline.
@@ -55,7 +59,7 @@ packaging/                Per-OS packaging configs (DMG, MSI, AppImage,
 ```bash
 cargo build --workspace
 cargo nextest run --workspace
-cargo clippy --workspace -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 ```
 
@@ -88,6 +92,14 @@ extra system packages beyond a stable Rust toolchain.
 | Change                              | Likely files                                   |
 |-------------------------------------|------------------------------------------------|
 | New annotation tool                 | `readshot-core::annotation`, `readshot-ui::editor` |
+| Editor message handling             | `readshot-app::runtime::editor_ops`, `readshot-app::editor` |
+| Image menu (resize, rotate, flip)   | `readshot-app::runtime::image_menu`, `readshot-core::document` |
+| Combine (add capture / image file)  | `readshot-app::runtime::combine`, `readshot-core::document` |
+| Crop presets, tool options bar      | `readshot-ui::editor::style`, `readshot-app::runtime::editor_options` |
+| Magnifier                           | `readshot-core::magnifier`, `readshot-ui::editor::canvas` |
+| Beautify (background, shadow, …)    | `readshot-core::beautify`, `readshot-app::runtime::beautify_panel` |
+| Side panel Text tab, Redact         | `readshot-app::runtime::text_panel`, `readshot-core::{redact,scrub,text_lines}` |
+| Large-document responsiveness       | `readshot-app::runtime::compose_jobs`          |
 | New OCR engine option               | `readshot-ocr` + `default_engine` switch       |
 | New capture backend                 | `readshot-capture` (mind the `Capturer` trait) |
 | New CLI subcommand                  | `readshot-app::cli`                            |
@@ -95,6 +107,30 @@ extra system packages beyond a stable Rust toolchain.
 | New preference field                | `readshot-core::preferences` (mind round-trip) |
 | New keyboard shortcut               | `readshot-ui::hotkey` + `readshot-app::app`    |
 | Per-OS packaging tweak              | `packaging/<os>/` and `release.yml`            |
+
+## The editor at a glance
+
+The editor opens a capture or a History record. Besides the
+annotation tools (shapes, arrows, pen, highlighter, text, blur,
+pixelate, spotlight, stamps, numbered pins, magnifier `M`, crop `C` with
+Free / 16:9 / 4:3 / 1:1 presets) it has:
+
+* the title bar's **Image** menu: resize (`⌥⌘I`), rotate (`⌘[` / `⌘]`),
+  flip, and combine with another capture (below / beside) or an image
+  file, with adjustable gap and alignment;
+* a side panel (`⌥⌘P`) with a **Text** tab (recognized lines, copy
+  lines, find and redact sensitive text) and a **Beautify** tab
+  (background, padding, corners, shadow, canvas size, presets), which
+  replaced the old Frame styles (`tests/beautify_parity.rs` keeps the
+  built-in presets byte-identical to them);
+* off-UI-thread composing for documents of 16 MP and more
+  (`compose_jobs`): pending steps settle before any interaction or
+  output, so nothing lands under an open drag.
+
+Privacy rule: after a redaction, History and the MCP server never
+serve unredacted content (pixels or recognized text). Redaction guards
+(`redactions_complete`, `drawn_annotations()`, the canvas's opaque
+cover for redactions not rendered yet) must not be weakened.
 
 ## Design constraints worth knowing
 

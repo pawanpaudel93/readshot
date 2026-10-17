@@ -1,17 +1,17 @@
-//! iced application skeleton.
+//! The application's state and message types.
 //!
-//! This module wires the typed message enums from `readshot-ui` and
-//! the service `CaptureCoordinator` into a single state machine. The
-//! actual `iced::daemon` invocation lives in `main.rs`; this module
-//! exposes the pieces it needs (`App`, `Message`, `update`, `view`).
+//! [`App`] holds everything the running app knows: preferences, the
+//! capture coordinator, which window is which ([`Windows`]), the welcome
+//! flow, the History browser, the region overlay, scroll and combine
+//! captures, pins, and the open editor session. [`Message`] is every
+//! event the app handles, from capture triggers (tray, hotkeys, URL
+//! scheme, CLI) to editor, History and Settings interactions.
 //!
-//! The full iced wiring — multi-window orchestration, the scroll
-//! window's frame/pulse timers, `tray-icon` and `global-hotkey` integrations —
-//! is structurally laid out below but commented as TODOs the runtime
-//! implementer fills in once the GUI is exercised on a real display.
-//! Everything that is *testable* without iced (state transitions,
-//! permission gating, message routing) is covered by unit tests in
-//! sibling modules.
+//! The iced daemon itself is started in `main.rs` with
+//! `crate::runtime::{start, update, view}`; `runtime` turns messages
+//! into state changes and `iced::Task`s. [`App::update_sync`] is the
+//! synchronous part of that state machine (permissions, settings,
+//! History paging) and is unit-tested here without a display.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -36,13 +36,12 @@ pub const HISTORY_PAGE_SIZE: usize = 50;
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum WindowKind {
     Welcome,
-    /// Transparent fullscreen region-selection overlay. Phase B
-    /// supports a single overlay (primary display only); the value
-    /// is reserved for future per-display indexing.
+    /// Transparent region-selection overlay (one per display).
     Overlay,
-    /// Annotation / actions editor for a freshly-captured image.
-    /// Phase C ships the action row only (Save / Copy / Copy Text /
-    /// Discard); annotation tools land in a follow-up.
+    /// The editor for a capture or a History record: annotation tools,
+    /// the Image menu (resize, rotate, flip, crop presets, combine), the
+    /// Text and Beautify side panel, and the Save / Copy / Copy Text /
+    /// Pin / Discard actions.
     Editor,
     /// Floating "pin" window — a borderless, always-on-top thumbnail
     /// of a flattened capture the user can drag around so it stays
@@ -92,8 +91,8 @@ pub enum GlobalHotkeyAction {
 }
 
 /// Mapping from live `window::Id`s to their kind, so the daemon's
-/// per-window callbacks know what tree to render. Phase A only ever
-/// has a single Welcome window; the structure is built to grow.
+/// per-window callbacks know what tree to render (several kinds are
+/// open at once: overlays, the editor, pins, History, Settings).
 #[derive(Default)]
 pub struct Windows {
     by_id: HashMap<window::Id, WindowKind>,
@@ -1420,13 +1419,12 @@ impl App {
         true
     }
 
-    /// Handle a top-level message and produce side-effects.
+    /// Handle the synchronous part of a top-level message.
     ///
     /// Returns `true` if the change is user-visible (caller may
-    /// re-render). Most messages eventually need to dispatch async
-    /// work via `iced::Task` — that wiring lives in `main.rs` once
-    /// the daemon is up; this method handles only the synchronous
-    /// state-machine portion that's testable today.
+    /// re-render). Messages that need async work (capture, save, OCR,
+    /// windows) are handled by `crate::runtime::update`, which calls
+    /// this for the shared synchronous transitions.
     pub fn update_sync(&mut self, message: Message) -> bool {
         match message {
             Message::PermissionPoll(status) => {

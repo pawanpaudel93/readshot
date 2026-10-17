@@ -1,7 +1,8 @@
-//! System tray integration (Phase A.5).
+//! System tray integration.
 //!
-//! Builds a small icon at runtime, registers it as a tray icon with a
-//! two-item menu (Capture / Quit), and exposes a non-blocking
+//! Builds a small icon at runtime, registers it as a tray icon with the
+//! app's menu (Capture, Scrolling Capture, Retake Last Region, History,
+//! Settings, Check for Updates on macOS, Quit), and exposes a non-blocking
 //! [`TrayController::drain`] that the iced runtime polls every few ms
 //! to surface tray + menu events as typed actions. A left-click on
 //! the icon itself fires Capture too, matching the muscle memory of

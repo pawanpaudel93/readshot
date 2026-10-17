@@ -1,30 +1,28 @@
-//! iced daemon runtime — Phase A.
+//! iced daemon runtime.
 //!
-//! Wires [`crate::app::App`] to the iced 0.14 daemon API so the
-//! binary actually opens a window. This module owns:
+//! Wires [`crate::app::App`] to the iced 0.14 daemon API. This module
+//! owns:
 //!
-//! * `start` — boot fn that opens the welcome window and returns the
-//!   initial `App` state.
+//! * `start` — boot fn that builds the initial `App` and opens the
+//!   welcome window when onboarding is needed.
 //! * `update` — async-aware version of `App::update_sync` that
-//!   produces `Task<Message>`s for capture/save/permission work.
-//! * `view` / `title` / `theme` — per-window rendering hooks.
-//! * `subscription` — drives the permission-poll timer and any
-//!   external event channels (tray + hotkey come in a follow-up).
+//!   produces `Task<Message>`s for capture, save, OCR, History and
+//!   window work.
+//! * `view` / `title` / `theme` — per-window rendering hooks (welcome,
+//!   region overlay, scroll capture, editor, pins, History, Settings).
+//! * `subscription` — the permission poll, the tray, global hotkeys, URL
+//!   scheme events and the editor's timers and key/pointer events.
 //!
-//! Phase A scope (kept tight on purpose):
+//! Its submodules hold the larger areas: the annotation editor's
+//! message handling (`editor_ops`), off-thread document composes
+//! (`compose_jobs`), the Image menu (resize, rotate, flip, crop presets)
+//! and combine (`image_menu`, `combine`), the side panel's Text and
+//! Beautify tabs (`text_panel`, `beautify_panel`), scroll capture,
+//! History, Settings and hotkeys.
 //!
-//! * One window kind for now: a welcome / launcher window with a
-//!   permission-status panel and a "Capture primary display" button.
-//! * No multi-window overlay (Phase B) and no annotation editor
-//!   (Phase C); the launcher saves the captured PNG to the user's
-//!   Desktop with a timestamped filename.
-//! * No tray icon or global hotkey yet — the launcher-button + URL
-//!   scheme are the trigger surfaces for now.
-//!
-//! Everything testable without iced (state transitions, capture
-//! orchestration helpers) is covered by sibling unit tests in
-//! `app.rs` / `coordinator.rs` / `cli.rs` — this module's job is to
-//! glue the typed state machine into iced and stay thin.
+//! Everything testable without a display (state transitions, capture
+//! orchestration, editor behaviour through `update`) is covered by the
+//! unit tests at the bottom of this file and in the sibling modules.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};

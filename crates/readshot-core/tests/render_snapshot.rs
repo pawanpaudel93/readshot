@@ -1,23 +1,18 @@
 //! Snapshot tests for the annotation renderer.
 //!
-//! These tests are intentionally written before the renderer body exists
-//! (Task 3 precedes Task 4 in the plan). Each test:
+//! Each test:
 //!
 //! 1. Builds an annotation model exercising one variant — or two
 //!    composites combining several variants.
 //! 2. Calls [`readshot_core::render`] over the canonical 256×256 base
 //!    canvas from `readshot-test-fixtures`.
 //! 3. PNG-encodes the result and asserts it via
-//!    `insta::assert_binary_snapshot!`.
+//!    `insta::assert_binary_snapshot!` against the committed `.snap.png`
+//!    files.
 //!
-//! Until Task 4 lands, every call to `render` panics in `unimplemented!()`
-//! — every test below fails. That failure is the green light to begin
-//! writing the renderer.
-//!
-//! Once Task 4 ships, run `cargo insta review` once to accept the
-//! generated `.snap.png` files. Future renderer changes that produce
-//! different bytes will cause an `insta` diff that the developer reviews
-//! and accepts (or rejects, indicating a regression).
+//! A renderer change that produces different bytes fails here with an
+//! `insta` diff; review it with `cargo insta review` and accept it only
+//! when the new output is intended (otherwise it is a regression).
 
 use std::io::Cursor;
 

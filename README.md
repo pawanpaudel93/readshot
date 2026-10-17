@@ -25,9 +25,15 @@ find it later by searching the text inside the screenshot.
 - Multi-monitor capture with Retina-quality output.
 - Annotation editor with shapes (filled, dashed, rounded), curved and
   hand-drawn arrows, pen, highlighter, multi-line text (sizes, pill,
-  bold), blur, pixelate, spotlight, stamps, numbered pins, magnifier, crop, undo,
-  and redo.
+  bold), blur, pixelate, spotlight, stamps, numbered pins, magnifier, crop
+  (free or 16:9 / 4:3 / 1:1), undo, and redo.
   Hold Shift for squares, circles, and 45° lines.
+- An **Image** menu to resize, rotate, and flip a capture, or combine it
+  with another capture or an image file.
+- A side panel with a **Text** tab (recognized lines to copy, and
+  one-click redaction of sensitive text) and a **Beautify** tab
+  (background, padding, rounded corners, shadow, canvas size, and
+  presets).
 - Offline OCR via Apple Vision with layout-aware copied text and a
   choice of recognition languages.
 - Searchable capture history with open, reveal, copy, pin, and delete
@@ -123,7 +129,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   `S` spotlight, `N` numbered pin, `E` stamp, `M` magnifier (drag over what to enlarge; drag the bubble anywhere), `C` crop (Free / 16:9 / 4:3 / 1:1 in the options bar; `↵` applies,
   `esc` cancels). `I` picks a color
   from the image (eyedropper). Arrow keys nudge the selection (hold `⇧` for
-  larger steps), `⌫` removes it, `esc` deselects.
+  larger steps), `⌫` removes it, `esc` deselects (during a drag, `esc`
+  cancels only the drag).
 - **Editor actions:** `⌘C` copy image, `⇧⌘C` copy all text (the side panel's Text tab also copies selected lines), `⌘S` save,
   `⌘P` pin, `⌥⌘P` show or hide the side panel, `⌘Z` / `⇧⌘Z` undo and
   redo, `⌘[` / `⌘]` rotate left / right, `⌥⌘I` resize. The title bar's

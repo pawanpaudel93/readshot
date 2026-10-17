@@ -10,9 +10,9 @@ file in sync when the rules change.
 1. **Commit straight to `main`.** No per-task feature branches. CI
    gates apply on push. The user has confirmed this preference more
    than once.
-2. **Run `cargo build`, `cargo nextest run`, and `cargo clippy --
-   -D warnings` before claiming a task complete.** `cargo fmt --all`
-   if you touched `.rs` files.
+2. **Run `cargo build`, `cargo nextest run`, and `cargo clippy
+   --all-targets -- -D warnings` before claiming a task complete.**
+   `cargo fmt --all` if you touched `.rs` files.
 3. **Never add `Co-Authored-By` lines to commit messages.**
 4. **Don't re-introduce `anyhow`.** All public errors are `thiserror`
    enums.
@@ -27,7 +27,8 @@ file in sync when the rules change.
 
 ## Where to look first
 
-* Architecture overview, build/test commands, common-change matrix:
+* Architecture overview, build/test commands, common-change matrix,
+  the editor's features at a glance and the redaction privacy rule:
   see `AGENTS.md`.
 * End-user install instructions: `docs/INSTALL.md`.
 * Maintainer release runbook: `docs/RELEASING.md`.
@@ -39,6 +40,11 @@ file in sync when the rules change.
 | When the user asks about… | Start by reading…                                       |
 |--------------------------|----------------------------------------------------------|
 | GUI behaviour            | `crates/readshot-ui/src/`, `crates/readshot-app/src/app.rs` |
+| Editor interactions      | `crates/readshot-app/src/runtime/editor_ops.rs`, `crates/readshot-ui/src/editor/` |
+| Image menu / combine     | `crates/readshot-app/src/runtime/{image_menu,combine}.rs`, `crates/readshot-core/src/document.rs` |
+| Beautify                 | `crates/readshot-core/src/beautify.rs`, `crates/readshot-app/src/runtime/beautify_panel.rs` |
+| Text panel / Redact      | `crates/readshot-app/src/runtime/text_panel.rs`, `crates/readshot-core/src/{redact,scrub}.rs` |
+| Large documents          | `crates/readshot-app/src/runtime/compose_jobs.rs`         |
 | Region capture           | `crates/readshot-capture/src/lib.rs` + per-OS `*.rs`     |
 | OCR                      | `crates/readshot-ocr/src/lib.rs` + per-OS `*.rs`         |
 | CLI                      | `crates/readshot-app/src/cli.rs`                         |
