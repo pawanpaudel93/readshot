@@ -646,8 +646,51 @@ impl DocGeometry {
             gap: self.gap,
             align: self.align,
             transform: Transform::default(),
-            baked_from: Some(self.fingerprint().unwrap_or_else(|| "original".into())),
+            baked_from: Some(baked_from_id(self.fingerprint().as_deref())),
         })
+    }
+}
+
+/// The `baked_from` of a bake of the frame with fingerprint `prior`
+/// (`None`: the original frame). A fixed-size hash of the prior
+/// fingerprint, so repeated bakes never grow the fingerprint (each used to
+/// nest the whole previous one). Fingerprints are only ever compared for
+/// equality, so an id persisted by an older build simply matches nothing
+/// and its text is dropped (fail closed).
+fn baked_from_id(prior: Option<&str>) -> String {
+    let mut h = Fnv1a64::new();
+    h.write(b"bake-v1\0");
+    match prior {
+        None => h.write(b"original"),
+        Some(f) => {
+            h.write(b"frame\0");
+            h.write(f.as_bytes());
+        }
+    }
+    format!("fnv:{:016x}", h.finish())
+}
+
+/// 64-bit FNV-1a. Implemented here rather than with std's
+/// `DefaultHasher`, whose output may change between Rust releases: these
+/// hashes are persisted and must stay the same across builds.
+struct Fnv1a64(u64);
+
+impl Fnv1a64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    fn new() -> Self {
+        Self(Self::OFFSET)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(Self::PRIME);
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
     }
 }
 
@@ -1262,6 +1305,65 @@ mod tests {
         assert!(!baked.is_original());
         assert_eq!(*baked.compose(), *r.compose());
         assert_ne!(baked.fingerprint(), None);
+    }
+
+    #[test]
+    fn fnv1a64_matches_the_published_test_vectors() {
+        let hash = |s: &[u8]| {
+            let mut h = Fnv1a64::new();
+            h.write(s);
+            h.finish()
+        };
+        assert_eq!(hash(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(hash(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(hash(b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    #[test]
+    fn repeated_bakes_keep_the_fingerprint_bounded_and_history_specific() {
+        // 50 bake/rotate rounds: the fingerprint must not grow with the
+        // number of bakes behind it.
+        let bake_chain = |turns: &[bool]| {
+            let mut g = DocGeometry::original(grid(3, 2));
+            let mut lens = Vec::new();
+            for (i, &cw) in turns.iter().enumerate() {
+                let t = if cw {
+                    g.transform.rotated_cw()
+                } else {
+                    g.transform.flipped(FlipAxis::Horizontal)
+                };
+                g = g.with_transform(t).baked(i as PartId + 1).unwrap();
+                lens.push(g.fingerprint().unwrap().len());
+            }
+            (g.fingerprint().unwrap(), lens)
+        };
+        let ops: Vec<bool> = (0..50).map(|i| i % 3 != 0).collect();
+        let (fp, lens) = bake_chain(&ops);
+        let max = *lens.iter().max().unwrap();
+        assert!(max <= 160, "fingerprint grew to {max} bytes: {fp}");
+        assert!(
+            lens[10..].iter().all(|&l| l == lens[10]),
+            "length still changes with bake count: {lens:?}"
+        );
+        // Same history, same id; a history differing in one early step
+        // (same part ids, same final transform kind), a different id.
+        assert_eq!(bake_chain(&ops).0, fp);
+        let mut other = ops.clone();
+        other[1] = !other[1];
+        assert_ne!(bake_chain(&other).0, fp);
+        // Two bakes of one original with different pixels never share a
+        // fingerprint even with the same fresh part id.
+        let g = DocGeometry::original(grid(3, 2));
+        let a = g.with_transform(g.transform.rotated_cw()).baked(9).unwrap();
+        let b = g
+            .with_transform(g.transform.flipped(FlipAxis::Vertical))
+            .baked(9)
+            .unwrap();
+        assert_ne!(a.fingerprint(), b.fingerprint());
+        // A bake of the untouched original differs from a bake of any
+        // transformed frame.
+        let plain = g.baked(9).unwrap();
+        assert_ne!(plain.fingerprint(), a.fingerprint());
     }
 
     #[test]
