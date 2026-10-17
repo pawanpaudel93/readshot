@@ -11886,6 +11886,15 @@ mod tests {
             s.starts_with("Couldn't flip") && s.contains("too large"),
             "{s}"
         );
+        assert!(!s.contains("uncropped"), "{s}");
+        // With a crop, the pixel limit is the uncropped image's too.
+        let s = geometry_error_status(
+            "resize",
+            true,
+            readshot_core::document::GeometryError::TooManyPixels { pixels: 9, max: 8 },
+        );
+        assert!(s.starts_with("Couldn't resize"), "{s}");
+        assert!(s.contains("the uncropped image would be 9 px"), "{s}");
     }
 
     #[test]

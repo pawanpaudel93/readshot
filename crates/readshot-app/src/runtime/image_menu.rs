@@ -58,6 +58,9 @@ pub(crate) fn geometry_error_status(action: &str, cropped: bool, e: GeometryErro
         GeometryError::TooLarge { width, height } => format!(
             "Couldn't {action} — {what} {width} × {height} px, and the limit is {MAX_DOC_SIDE} px on a side."
         ),
+        GeometryError::TooManyPixels { pixels, .. } if cropped => format!(
+            "Couldn't {action} — the uncropped image would be {pixels} px, over the {MAX_DOC_PIXELS} px limit."
+        ),
         GeometryError::TooManyPixels { pixels, .. } => format!(
             "Couldn't {action} — image too large: {pixels} px is over the {MAX_DOC_PIXELS} px limit."
         ),
