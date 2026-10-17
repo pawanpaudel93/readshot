@@ -672,24 +672,32 @@ fn baked_from_id(prior: Option<&str>) -> String {
 
 /// 64-bit FNV-1a. Implemented here rather than with std's
 /// `DefaultHasher`, whose output may change between Rust releases: these
-/// hashes are persisted and must stay the same across builds.
-struct Fnv1a64(u64);
+/// hashes are persisted and must stay the same across builds (here and
+/// in the app's History frame ids).
+#[derive(Clone, Debug)]
+pub struct Fnv1a64(u64);
+
+impl Default for Fnv1a64 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Fnv1a64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
 
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self(Self::OFFSET)
     }
 
-    fn write(&mut self, bytes: &[u8]) {
+    pub fn write(&mut self, bytes: &[u8]) {
         for &b in bytes {
             self.0 = (self.0 ^ u64::from(b)).wrapping_mul(Self::PRIME);
         }
     }
 
-    fn finish(&self) -> u64 {
+    pub fn finish(&self) -> u64 {
         self.0
     }
 }

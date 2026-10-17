@@ -152,14 +152,26 @@ fn secured_key(record: &CaptureRecord) -> SecuredScrub {
 /// still match), never `None` (that is the capture as taken) and never an
 /// id the editor produces (those are a stored id or `<uuid>:<geometry>`).
 /// Fixed length, so reopening and cropping again never grows it.
+/// Persisted, so hashed with FNV-1a (stable across builds), not std's
+/// `DefaultHasher` (whose output may change with the toolchain, and an
+/// id that stops matching drops the record's text).
 pub(crate) fn cropped_frame_id(
     frame: Option<&str>,
     crop: readshot_core::render::OutputCrop,
 ) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    frame.hash(&mut h);
-    (crop.x.to_bits(), crop.y.to_bits(), crop.width, crop.height).hash(&mut h);
+    let mut h = readshot_core::document::Fnv1a64::new();
+    h.write(b"crop-v1\0");
+    match frame {
+        None => h.write(b"original"),
+        Some(f) => {
+            h.write(b"frame\0");
+            h.write(f.as_bytes());
+        }
+    }
+    h.write(b"\0");
+    for v in [crop.x.to_bits(), crop.y.to_bits(), crop.width, crop.height] {
+        h.write(&v.to_le_bytes());
+    }
     format!("crop:{:016x}", h.finish())
 }
 
@@ -985,6 +997,26 @@ mod tests {
             scale: 1.0,
             hide_cursor: true,
         }
+    }
+
+    #[test]
+    fn cropped_frame_ids_are_stable_known_values() {
+        let crop = readshot_core::render::OutputCrop {
+            x: 20.0,
+            y: 0.0,
+            width: 20,
+            height: 20,
+        };
+        // Persisted ids: these must never change between builds.
+        assert_eq!(cropped_frame_id(None, crop), "crop:73d1ba24128a984d");
+        assert_eq!(
+            cropped_frame_id(Some("frame-a"), crop),
+            "crop:ec73c80d9e8f8bb4"
+        );
+        assert_ne!(
+            cropped_frame_id(Some("frame-a"), crop),
+            cropped_frame_id(Some("frame-b"), crop)
+        );
     }
 
     #[tokio::test]
