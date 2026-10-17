@@ -156,16 +156,26 @@ pub(crate) fn icon_button_style(
 
 /// Colour of an icon button's canvas glyph. The glyph is a canvas, so
 /// the button's `text_color` never reaches it; this mirrors the style:
-/// selected draws in `acc_text`, disabled at most 45 % alpha (callers
-/// that already dimmed stay as they are).
+/// selected draws in `acc_text`, hover brightens (t2 -> t1, selected
+/// toward t1), disabled at most 45 % alpha (callers that already dimmed
+/// stay as they are).
 pub(crate) fn icon_button_glyph_color(
     p: &Palette,
     color: Color,
     selected: bool,
     enabled: bool,
+    hovered: bool,
 ) -> Color {
     let base = if selected { p.acc_text } else { color };
-    if enabled {
+    if enabled && hovered {
+        if selected {
+            mix(p.acc_text, p.t1, 0.25)
+        } else if color == p.t2 {
+            p.t1
+        } else {
+            base
+        }
+    } else if enabled {
         base
     } else {
         Color {
@@ -475,13 +485,9 @@ pub(crate) fn icon_button<'a>(
     position: tooltip::Position,
 ) -> Element<'a, Message> {
     let enabled = msg.is_some();
-    let mut b = button(
-        container(crate::icons::button_icon(
-            glyph, color, ICON_SIZE, selected, enabled,
-        ))
-        .center_x(Length::Fill)
-        .center_y(Length::Fill),
-    )
+    let mut b = button(crate::icons::button_icon(
+        glyph, color, ICON_SIZE, selected, enabled,
+    ))
     .width(Length::Fixed(size))
     .height(Length::Fixed(size))
     .padding(0)
@@ -636,15 +642,25 @@ mod tests {
     #[test]
     fn icon_glyph_follows_the_button_state() {
         let p = &LIGHT;
-        assert_eq!(icon_button_glyph_color(p, p.t2, false, true), p.t2);
-        assert_eq!(icon_button_glyph_color(p, p.t1, true, true), p.acc_text);
-        let off = icon_button_glyph_color(p, p.t2, false, false);
+        assert_eq!(icon_button_glyph_color(p, p.t2, false, true, false), p.t2);
+        assert_eq!(
+            icon_button_glyph_color(p, p.t1, true, true, false),
+            p.acc_text
+        );
+        let off = icon_button_glyph_color(p, p.t2, false, false, false);
         assert!(off.a <= 0.45);
         // Already-dimmed colours are not dimmed twice.
         let pre = Color { a: 0.45, ..p.t2 };
-        assert_eq!(icon_button_glyph_color(p, pre, false, false), pre);
-        let sel_off = icon_button_glyph_color(p, p.t2, true, false);
+        assert_eq!(icon_button_glyph_color(p, pre, false, false, false), pre);
+        let sel_off = icon_button_glyph_color(p, p.t2, true, false, false);
         assert_eq!((sel_off.r, sel_off.a), (p.acc_text.r, 0.45));
+        // Hover follows the style's text colour; a disabled button ignores it.
+        assert_eq!(icon_button_glyph_color(p, p.t2, false, true, true), p.t1);
+        assert_ne!(
+            icon_button_glyph_color(p, p.t2, true, true, true),
+            p.acc_text
+        );
+        assert!(icon_button_glyph_color(p, p.t2, false, false, true).a <= 0.45);
     }
 
     #[test]

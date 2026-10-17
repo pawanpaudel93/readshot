@@ -83,7 +83,10 @@ pub fn icon<'a>(icon: AppIcon, color: Color, size: f32) -> Element<'a, Message> 
     .into()
 }
 
-/// Glyph for an icon button: selected draws in `acc_text`, disabled dims.
+/// Glyph for an icon button: selected draws in `acc_text`, disabled dims,
+/// hover brightens like the button's text. The canvas fills the button
+/// (the glyph is centred in it) so the cursor test matches the button's
+/// own hover area.
 pub fn button_icon<'a>(
     icon: AppIcon,
     color: Color,
@@ -97,8 +100,8 @@ pub fn button_icon<'a>(
         size,
         button: Some((selected, enabled)),
     })
-    .width(Length::Fixed(size))
-    .height(Length::Fixed(size))
+    .width(Length::Fill)
+    .height(Length::Fill)
     .into()
 }
 
@@ -111,16 +114,24 @@ impl canvas::Program<Message, Theme, Renderer> for IconProgram {
         renderer: &Renderer,
         theme: &Theme,
         bounds: Rectangle,
-        _cursor: iced::mouse::Cursor,
+        cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let color = match self.button {
-            Some((selected, enabled)) => crate::runtime::icon_button_glyph_color(
-                crate::runtime::palette_for(theme),
-                self.color,
-                selected,
-                enabled,
-            ),
+            Some((selected, enabled)) => {
+                // Centre the glyph in the button-sized canvas.
+                frame.translate(iced::Vector::new(
+                    ((bounds.width - self.size) / 2.0).max(0.0),
+                    ((bounds.height - self.size) / 2.0).max(0.0),
+                ));
+                crate::runtime::icon_button_glyph_color(
+                    crate::runtime::palette_for(theme),
+                    self.color,
+                    selected,
+                    enabled,
+                    cursor.is_over(bounds),
+                )
+            }
             None => self.color,
         };
         match self.icon {
