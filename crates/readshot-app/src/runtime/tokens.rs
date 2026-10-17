@@ -36,6 +36,15 @@ pub(crate) struct Palette {
     pub float: Color,
     pub float_border: Color,
     pub tip_bg: Color,
+    /// Tooltip text, border, shadow and key chip: tooltips are dark in
+    /// both themes, so these hold the same values in each palette.
+    pub tip_fg: Color,
+    pub tip_border: Color,
+    pub tip_shadow: Color,
+    pub tip_kbd_bg: Color,
+    pub tip_kbd_fg: Color,
+    /// The dark brand tile behind the app glyph (Welcome).
+    pub tile_bg: Color,
     pub kbd_bg: Color,
     pub shadow: Color,
 }
@@ -62,6 +71,12 @@ pub(crate) const DARK: Palette = Palette {
     float: Color::from_rgba(0.110, 0.110, 0.118, 0.96),
     float_border: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
     tip_bg: Color::from_rgb8(0x0F, 0x0F, 0x10),
+    tip_fg: Color::from_rgb8(0xED, 0xED, 0xED),
+    tip_border: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
+    tip_shadow: Color::from_rgba(0.0, 0.0, 0.0, 0.35),
+    tip_kbd_bg: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
+    tip_kbd_fg: Color::from_rgb8(0xE5, 0xE5, 0xE5),
+    tile_bg: Color::from_rgb8(0x14, 0x18, 0x1E),
     kbd_bg: Color::from_rgba(1.0, 1.0, 1.0, 0.08),
     shadow: Color::from_rgba(0.0, 0.0, 0.0, 0.45),
 };
@@ -83,11 +98,17 @@ pub(crate) const LIGHT: Palette = Palette {
     pri_fg: Color::from_rgb8(0xFF, 0xFF, 0xFF),
     ok: Color::from_rgb8(0x16, 0xA3, 0x4A),
     warn: Color::from_rgb8(0xD9, 0x77, 0x06),
-    danger: Color::from_rgb8(0xDC, 0x26, 0x26),
+    danger: Color::from_rgb8(0xC8, 0x1E, 0x1E),
     danger_fg: Color::from_rgb8(0xFF, 0xFF, 0xFF),
     float: Color::from_rgba(1.0, 1.0, 1.0, 0.97),
     float_border: Color::from_rgba(0.0, 0.0, 0.0, 0.10),
     tip_bg: Color::from_rgb8(0x17, 0x17, 0x17),
+    tip_fg: Color::from_rgb8(0xED, 0xED, 0xED),
+    tip_border: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
+    tip_shadow: Color::from_rgba(0.0, 0.0, 0.0, 0.35),
+    tip_kbd_bg: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
+    tip_kbd_fg: Color::from_rgb8(0xE5, 0xE5, 0xE5),
+    tile_bg: Color::from_rgb8(0x14, 0x18, 0x1E),
     kbd_bg: Color::from_rgba(0.0, 0.0, 0.0, 0.06),
     shadow: Color::from_rgba(0.0, 0.0, 0.0, 0.14),
 };
@@ -197,6 +218,29 @@ mod tests {
             for bg in surfaces {
                 let r = contrast_ratio(p.t3, bg);
                 assert!(r >= 4.5, "t3 on {bg:?} is {r:.2}:1");
+            }
+        }
+    }
+
+    #[test]
+    fn tooltip_text_and_key_chips_are_readable() {
+        for p in both() {
+            assert!(contrast_ratio(p.tip_fg, p.tip_bg) >= 4.5);
+            let chip = over(p.tip_kbd_bg, p.tip_bg);
+            assert!(contrast_ratio(p.tip_kbd_fg, chip) >= 4.5);
+        }
+    }
+
+    /// Danger text (the "Danger zone" heading, error help lines, error
+    /// toasts) is small text on the window, panel and float surfaces.
+    #[test]
+    fn danger_text_meets_aa_on_every_surface() {
+        for p in both() {
+            for base in [p.bg, p.surface, p.raised] {
+                for bg in [base, over(p.float, base)] {
+                    let r = contrast_ratio(p.danger, bg);
+                    assert!(r >= 4.5, "danger on {bg:?} is {r:.2}:1");
+                }
             }
         }
     }

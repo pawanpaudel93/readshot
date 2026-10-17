@@ -933,6 +933,10 @@ const HISTORY_KEY_COPY_IMAGE: &str = "⌘C";
 
 /// Widget id of the History search field, focused when the window opens.
 pub(crate) const HISTORY_SEARCH_ID: &str = "history-search";
+/// The idle Clear All button: outlined danger, like Settings' Reset and
+/// Uninstall (`ActionKind::DangerQuiet`), so every arming step of a
+/// destructive action reads the same.
+pub(crate) const HISTORY_CLEAR_ALL_KIND: ButtonKind = ButtonKind::Danger;
 
 /// Human timestamp for History: "Today 14:03", "Yesterday 09:10",
 /// "Sep 25, 14:03" this year, "Sep 25, 2025" for older captures. The
@@ -1148,8 +1152,8 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
         None,
         Position::Bottom,
     );
-    // Two-stage Clear All: the idle button arms; armed shows a solid
-    // danger confirm plus Cancel.
+    // Two-stage Clear All: the idle (outlined danger) button arms; armed
+    // shows a solid danger confirm plus Cancel.
     let clear_controls: Element<'_, Message> = if state.history_clear_all_pending {
         row![
             bar_button(
@@ -1173,7 +1177,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     } else {
         bar_button(
             text("Clear All").size(ButtonSize::Sm.text_size()).into(),
-            ButtonKind::Ghost,
+            HISTORY_CLEAR_ALL_KIND,
             ButtonSize::Sm,
             (total > 0).then_some(Message::HistoryClearAllRequested),
         )
@@ -1328,12 +1332,16 @@ fn history_split<'a>(
             } else {
                 png_path
             };
-            image_widget(image_widget::Handle::from_path(path))
-                .width(Length::Fixed(HISTORY_THUMB_W))
-                .height(Length::Fixed(HISTORY_THUMB_H))
-                .content_fit(iced::ContentFit::Cover)
-                .border_radius(R_CHIP)
-                .into()
+            container(
+                image_widget(image_widget::Handle::from_path(path))
+                    .width(Length::Fixed(HISTORY_THUMB_W - 2.0))
+                    .height(Length::Fixed(HISTORY_THUMB_H - 2.0))
+                    .content_fit(iced::ContentFit::Cover)
+                    .border_radius(R_CHIP - 1.0),
+            )
+            .padding(1)
+            .style(|theme| capture_outline_style(theme, R_CHIP))
+            .into()
         } else {
             container(crate::icons::icon(crate::icons::AppIcon::Image, p.t3, 14.0))
                 .width(Length::Fixed(HISTORY_THUMB_W))
@@ -1398,7 +1406,7 @@ fn history_split<'a>(
                         Color::TRANSPARENT
                     },
                     width: if is_selected { 1.0 } else { 0.0 },
-                    radius: 9.0.into(),
+                    radius: R_BUTTON.into(),
                 },
                 ..container::Style::default()
             }
@@ -1512,12 +1520,20 @@ pub(crate) fn history_selected_panel<'a>(
         } else {
             thumb_path
         };
+        // Shrink: the image takes its fitted size, so the 1 px outline
+        // hugs the capture instead of the letterboxed pane.
         container(
-            image_widget(image_widget::Handle::from_path(path))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .content_fit(iced::ContentFit::Contain),
+            container(
+                image_widget(image_widget::Handle::from_path(path))
+                    .width(Length::Shrink)
+                    .height(Length::Shrink)
+                    .content_fit(iced::ContentFit::Contain),
+            )
+            .padding(1)
+            .style(|theme| capture_outline_style(theme, 0.0)),
         )
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
         .padding(SP2)
         .into()
     } else {
@@ -1731,6 +1747,19 @@ pub(crate) fn history_selected_panel<'a>(
 }
 
 /// Selected list row: accent tint fill with a 35 % accent hairline.
+/// A 1 px `border` outline around a capture image, so a white
+/// screenshot does not dissolve into a white surface in Light mode.
+pub(crate) fn capture_outline_style(theme: &Theme, radius: f32) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        border: iced::Border {
+            color: palette_for(theme).border,
+            width: 1.0,
+            radius: radius.into(),
+        },
+        ..iced::widget::container::Style::default()
+    }
+}
+
 pub(crate) fn history_selected_fill(p: &Palette) -> Color {
     p.acc_tint
 }
@@ -4347,7 +4376,7 @@ fn settings_nav_style(theme: &Theme, status: button::Status, selected: bool) -> 
         background: Some(bg.into()),
         text_color: if selected { p.t1 } else { p.t2 },
         border: iced::Border {
-            radius: 7.0.into(),
+            radius: R_BUTTON.into(),
             ..iced::Border::default()
         },
         ..button::Style::default()
@@ -4389,15 +4418,38 @@ fn settings_block<'a>(
     help: impl Into<String>,
     control: Element<'a, Message>,
 ) -> Element<'a, Message> {
+    settings_block_with(label, help, None, control)
+}
+
+/// [`settings_block`] whose help line can be an error: with
+/// `error_icon` (the palette's danger colour) it is set in `danger` with
+/// an Alert glyph, not in the neutral help grey.
+fn settings_block_with<'a>(
+    label: &'a str,
+    help: impl Into<String>,
+    error_icon: Option<Color>,
+    control: Element<'a, Message>,
+) -> Element<'a, Message> {
+    let help_is_error = error_icon.is_some();
     let help = help.into();
     let mut head = column![text(label).size(TYPE_BODY).style(text_t1)].spacing(2);
     if !help.is_empty() {
-        head = head.push(
-            text(help)
-                .size(TYPE_CAPTION)
-                .style(text_t3)
-                .wrapping(iced::widget::text::Wrapping::Word),
-        );
+        let line = text(help)
+            .size(TYPE_CAPTION)
+            .style(if help_is_error { text_danger } else { text_t3 })
+            .wrapping(iced::widget::text::Wrapping::Word);
+        let help_line: Element<'a, Message> = if let Some(c) = error_icon {
+            row![
+                crate::icons::icon(crate::icons::AppIcon::Alert, c, 14.0),
+                line
+            ]
+            .spacing(6)
+            .align_y(Alignment::Start)
+            .into()
+        } else {
+            line.into()
+        };
+        head = head.push(help_line);
     }
     column![head, control]
         .spacing(SP2)
@@ -4471,6 +4523,20 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
     ]
 }
 
+/// Whether the capture-hotkey help line reports a problem (a rejected or
+/// unregistered chord, a fixed shortcut that failed) rather than help.
+/// Mirrors the branch order that builds the line.
+pub(crate) fn capture_hotkey_hint_is_error(state: &App) -> bool {
+    let chord = &state.preferences.capture_hotkey;
+    state.settings_hotkey_error.is_some()
+        || !state.fixed_hotkey_failures.is_empty()
+        || (!state.settings_recording_hotkey
+            && state.settings_hotkey_status.is_none()
+            && (readshot_ui::hotkey::parse(chord).is_err()
+                || capture_hotkey_conflict(chord).is_some()
+                || !state.capture_hotkey_registered))
+}
+
 fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
     use iced::widget::pick_list;
     use iced::widget::tooltip::Position;
@@ -4531,6 +4597,7 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
     if hotkey_hint.is_empty() {
         hotkey_hint = "Opens the capture overlay from any app.".to_string();
     }
+    let hotkey_hint_is_error = capture_hotkey_hint_is_error(state);
     let hotkey_label = if state.settings_recording_hotkey {
         "Press shortcut…".to_string()
     } else {
@@ -4604,9 +4671,10 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
 
     vec![
         settings_group_heading("Shortcut", text_t3),
-        settings_group(vec![settings_block(
+        settings_group(vec![settings_block_with(
             "Capture hotkey",
             hotkey_hint,
+            hotkey_hint_is_error.then_some(palette(state.theme_mode).danger),
             hotkey_control,
         )]),
         settings_group_heading("History", text_t3),
@@ -5200,12 +5268,7 @@ enum WelcomeTile {
 fn welcome_brand(p: &'static Palette, tile: WelcomeTile) -> Element<'static, Message> {
     use crate::icons::AppIcon;
     let (glyph, color, radius, fill) = match tile {
-        WelcomeTile::App => (
-            AppIcon::ScanText,
-            p.acc_text,
-            16.0,
-            Color::from_rgb8(0x14, 0x18, 0x1E),
-        ),
+        WelcomeTile::App => (AppIcon::ScanText, p.acc_text, 16.0, p.tile_bg),
         WelcomeTile::Done => (AppIcon::CheckCircle, p.ok, 32.0, Color { a: 0.14, ..p.ok }),
     };
     let tile_el = container(crate::icons::icon(glyph, color, 30.0))

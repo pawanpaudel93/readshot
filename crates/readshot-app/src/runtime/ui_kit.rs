@@ -232,14 +232,14 @@ pub(crate) fn tooltip_style(theme: &Theme) -> container::Style {
     let p = palette_for(theme);
     container::Style {
         background: Some(p.tip_bg.into()),
-        text_color: Some(Color::from_rgb8(0xED, 0xED, 0xED)),
+        text_color: Some(p.tip_fg),
         border: Border {
             radius: R_TIP.into(),
             width: 1.0,
-            color: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
+            color: p.tip_border,
         },
         shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.35),
+            color: p.tip_shadow,
             offset: Vector::new(0.0, 8.0),
             blur_radius: 20.0,
         },
@@ -264,17 +264,15 @@ text_role!(text_warn, warn);
 text_role!(text_danger, danger);
 text_role!(text_acc, acc_text);
 
-/// Key chip on a dark surface (tooltips, overlay). Fixed colors: tooltips
-/// are dark in both themes.
+/// Key chip on a dark surface (tooltips, overlay): the `tip_kbd_*`
+/// tokens, which are dark in both themes.
 fn key_chip_on_dark<'a>(label: &'a str) -> Element<'a, Message> {
-    container(
-        text(label)
-            .size(TYPE_MICRO)
-            .color(Color::from_rgb8(0xE5, 0xE5, 0xE5)),
-    )
+    container(text(label).size(TYPE_MICRO).style(|theme| text::Style {
+        color: Some(palette_for(theme).tip_kbd_fg),
+    }))
     .padding([3, 6])
-    .style(|_| container::Style {
-        background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.12).into()),
+    .style(|theme| container::Style {
+        background: Some(palette_for(theme).tip_kbd_bg.into()),
         border: Border {
             radius: R_CHIP.into(),
             ..Border::default()
@@ -509,7 +507,7 @@ pub(crate) fn empty_state<'a>(
         .style(|theme| container::Style {
             background: Some(palette_for(theme).hover.into()),
             border: Border {
-                radius: 12.0.into(),
+                radius: R_WINDOW.into(),
                 ..Border::default()
             },
             ..container::Style::default()

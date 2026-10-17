@@ -727,3 +727,29 @@ fn capture_failure_message_lands_in_toast() {
     let toast = app.last_capture_status.as_deref().unwrap();
     assert!(toast.contains("permission denied"));
 }
+
+#[test]
+fn clear_all_arms_with_the_same_outlined_danger_as_settings() {
+    let quiet = action_button_style(
+        &readshot_theme_for(ThemeMode::Light),
+        button::Status::Active,
+        ActionKind::DangerQuiet,
+    );
+    let clear = button_style(
+        &readshot_theme_for(ThemeMode::Light),
+        button::Status::Active,
+        HISTORY_CLEAR_ALL_KIND,
+    );
+    assert_eq!(clear, quiet);
+    assert_eq!(clear.text_color, LIGHT.danger);
+}
+
+#[test]
+fn capture_images_have_a_hairline_outline_in_both_themes() {
+    for mode in [ThemeMode::Dark, ThemeMode::Light] {
+        let t = readshot_theme_for(mode);
+        let s = capture_outline_style(&t, R_CHIP);
+        assert_eq!(s.border.width, 1.0);
+        assert_eq!(s.border.color, palette(mode).border);
+    }
+}
