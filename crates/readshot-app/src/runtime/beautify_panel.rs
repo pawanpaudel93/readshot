@@ -65,7 +65,7 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
                     ed.set_status(format!("Restored {name}."));
                 } else {
                     ed.set_status(format!(
-                        "Couldn't restore {name}: you can keep up to {MAX_SAVED_PRESETS} presets."
+                        "Couldn’t restore {name}: you can keep up to {MAX_SAVED_PRESETS} presets."
                     ));
                 }
             }
@@ -129,7 +129,7 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
                     }));
                     set(ed, s, &format!("Background set to {}", c.to_hex()));
                 }
-                None => ed.set_status("Couldn't read that color. Use a hex value like #4F46E5."),
+                None => ed.set_status("Couldn’t read that color. Use a hex value like #4F46E5."),
             }
         }
         Message::EditorBeautifyPickBackground => {

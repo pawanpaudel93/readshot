@@ -980,7 +980,7 @@ fn unlocatable_items_are_reported_not_dropped() {
     assert_eq!(ed.model.annotations().len(), 2);
     assert_eq!(
         ed.status.as_deref(),
-        Some("Redacted 2 items. 1 more couldn't be located; cover it by hand.")
+        Some("Redacted 2 items. 1 more couldn’t be located; cover it by hand.")
     );
     assert!(ed.visible_toast_action().is_some());
 
@@ -988,7 +988,7 @@ fn unlocatable_items_are_reported_not_dropped() {
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
         ed.status.as_deref(),
-        Some("Couldn't locate 1 sensitive item. Cover it by hand.")
+        Some("Couldn’t locate 1 sensitive item. Cover it by hand.")
     );
     assert!(ed.status_is_error());
 }

@@ -1554,14 +1554,14 @@ fn tool_and_selection_hints_reach_the_status_line() {
     app.editor
         .as_mut()
         .unwrap()
-        .set_status("Couldn't save the image. Try again.");
+        .set_status("Couldn’t save the image. Try again.");
     let _ = update(
         &mut app,
         Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(T::Crop)),
     );
     assert_eq!(
         app.editor.as_ref().unwrap().status.as_deref(),
-        Some("Couldn't save the image. Try again.")
+        Some("Couldn’t save the image. Try again.")
     );
 
     // A clicked selection explains itself while it lasts.

@@ -204,14 +204,14 @@ pub(crate) fn load_part_file(
     let io_err = |what: &str, e: std::io::Error| {
         tracing::warn!(target: "readshot::editor", "add image: {what}: {e}");
         let reason =
-            history_ops::io_reason_hint(&e.to_string()).unwrap_or("the file couldn't be read");
+            history_ops::io_reason_hint(&e.to_string()).unwrap_or("the file couldn’t be read");
         format!("{reason}. {CHOOSE_ANOTHER}")
     };
     let meta = std::fs::metadata(path).map_err(|e| io_err("metadata", e))?;
     // A FIFO, device or directory can report any length and block (or
     // fail) on read: only regular files are opened.
     if !meta.is_file() {
-        return Err(format!("that isn't an image file. {CHOOSE_FORMAT}"));
+        return Err(format!("that isn’t an image file. {CHOOSE_FORMAT}"));
     }
     if meta.len() > MAX_PART_FILE_BYTES {
         return Err(file_too_large());
@@ -286,7 +286,7 @@ pub(crate) fn decode_part_image(
     bytes: &[u8],
     budget: PartBudget,
 ) -> Result<image::RgbaImage, String> {
-    let not_an_image = || format!("that file isn't an image Readshot can read. {CHOOSE_FORMAT}");
+    let not_an_image = || format!("that file isn’t an image Readshot can read. {CHOOSE_FORMAT}");
     let reader = || {
         image::ImageReader::new(std::io::Cursor::new(bytes))
             .with_guessed_format()
@@ -378,7 +378,7 @@ async fn pick_and_decode_image(
     .await
     .map_err(|e| {
         tracing::warn!(target: "readshot::editor", "add image worker: {e}");
-        "the file couldn't be read".to_string()
+        "the file couldn’t be read".to_string()
     })?
 }
 
@@ -569,7 +569,7 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
                     Task::none()
                 }
                 Err(e) => {
-                    ed.set_status(format!("Couldn't add the image — {e}"));
+                    ed.set_status(format!("Couldn’t add the image — {e}"));
                     Task::none()
                 }
             }

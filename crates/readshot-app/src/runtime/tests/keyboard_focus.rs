@@ -1003,7 +1003,7 @@ fn tab_applies_a_typed_hex_and_esc_still_cancels() {
         .status
         .as_deref()
         .unwrap_or("")
-        .starts_with("Couldn't read that color"));
+        .starts_with("Couldn’t read that color"));
     // Esc cancels: the typed value is dropped.
     let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
     open_color(&mut app, id);

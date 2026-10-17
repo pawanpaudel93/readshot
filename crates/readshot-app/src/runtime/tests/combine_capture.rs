@@ -62,7 +62,7 @@ fn a_failed_or_cancelled_combine_capture_restores_the_editor_unchanged() {
         .status
         .as_deref()
         .unwrap()
-        .starts_with("Couldn't add the capture"));
+        .starts_with("Couldn’t add the capture"));
     assert!(app.combine_capture.is_none());
     let _ = update(
         &mut app,
@@ -200,7 +200,7 @@ fn a_bake_before_recognition_recognizes_the_source_part_upright() {
     assert_eq!(
         ed.text_panel.recognizing_part,
         Some(ORIGINAL_PART),
-        "the baked part's source, in its own upright pixels"
+        "the baked part’s source, in its own upright pixels"
     );
     let _ = update(
         &mut app,
@@ -306,7 +306,7 @@ async fn a_combined_scrubbed_record_keeps_no_partial_text() {
     assert_eq!((stored.width_px, stored.height_px), (8, 8));
     assert_eq!(
         stored.ocr_text, None,
-        "the opened image's text alone isn't the combined document's"
+        "the opened image’s text alone isn’t the combined document’s"
     );
 }
 
@@ -390,7 +390,7 @@ fn no_display_or_a_retake_never_strands_a_combine_capture() {
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
         ed.status.as_deref(),
-        Some("Couldn't add the capture — no display was detected.")
+        Some("Couldn’t add the capture — no display was detected.")
     );
     let _ = update(
         &mut app,
@@ -409,7 +409,7 @@ fn no_display_or_a_retake_never_strands_a_combine_capture() {
         .status
         .as_deref()
         .unwrap()
-        .starts_with("Couldn't add the capture"));
+        .starts_with("Couldn’t add the capture"));
 }
 
 #[test]
@@ -436,7 +436,7 @@ fn an_overlay_that_cannot_open_gives_the_editor_back() {
         .status
         .as_deref()
         .unwrap()
-        .starts_with("Couldn't add the capture"));
+        .starts_with("Couldn’t add the capture"));
 }
 
 #[test]
@@ -543,7 +543,7 @@ fn only_regular_files_are_read() {
     let err = load_part_file(&fake, NO_DOC).unwrap_err();
     assert_eq!(
         err,
-        "that isn't an image file. Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file."
+        "that isn’t an image file. Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file."
     );
     let real = dir.path().join("y.png");
     std::fs::write(&real, readshot_core::encode_png(&solid(3, 2)).unwrap()).unwrap();
@@ -867,7 +867,7 @@ fn a_selected_combine_capture_that_fails_gives_the_editor_back() {
         .status
         .as_deref()
         .unwrap()
-        .starts_with("Couldn't add the capture"));
+        .starts_with("Couldn’t add the capture"));
 }
 
 #[test]
@@ -875,7 +875,7 @@ fn a_picked_file_is_decoded_as_untrusted_input() {
     let ok = readshot_core::encode_png(&solid(3, 2)).unwrap();
     assert_eq!(decode_part_image(&ok, NO_DOC).unwrap().dimensions(), (3, 2));
     let err = decode_part_image(b"not an image at all", NO_DOC).unwrap_err();
-    assert!(err.contains("isn't an image"), "{err}");
+    assert!(err.contains("isn’t an image"), "{err}");
     assert!(
         err.ends_with("Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file."),
         "{err}"
@@ -905,7 +905,7 @@ fn a_file_that_fails_to_load_leaves_the_editor_unchanged() {
         Message::EditorPartLoaded {
             session,
             result: Err(
-                "that file isn't an image Readshot can read. Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file."
+                "that file isn’t an image Readshot can read. Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file."
                     .into(),
             ),
         },
@@ -915,6 +915,6 @@ fn a_file_that_fails_to_load_leaves_the_editor_unchanged() {
     assert_eq!(ed.model.part_ids().len(), 1);
     assert_eq!(
         ed.status.as_deref(),
-        Some("Couldn't add the image — that file isn't an image Readshot can read. Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file.")
+        Some("Couldn’t add the image — that file isn’t an image Readshot can read. Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file.")
     );
 }

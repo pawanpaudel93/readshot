@@ -83,18 +83,18 @@ pub(crate) fn geometry_error_status(action: &str, cropped: bool, e: GeometryErro
     let next = geometry_recovery(action);
     match e {
         GeometryError::TooLarge { width, height } => format!(
-            "Couldn't {action} — {what} {} × {} px, and the limit is {} px on a side. {next}",
+            "Couldn’t {action} — {what} {} × {} px, and the limit is {} px on a side. {next}",
             group_digits(width.into()),
             group_digits(height.into()),
             group_digits(MAX_DOC_SIDE.into()),
         ),
         GeometryError::TooManyPixels { pixels, .. } => format!(
-            "Couldn't {action} — {what} {} px, over the {} px limit. {next}",
+            "Couldn’t {action} — {what} {} px, over the {} px limit. {next}",
             group_digits(pixels),
             group_digits(MAX_DOC_PIXELS),
         ),
         GeometryError::Empty => format!(
-            "Couldn't {action} — the image has no content. Undo the last change, then try again."
+            "Couldn’t {action} — the image has no content. Undo the last change, then try again."
         ),
     }
 }

@@ -655,8 +655,8 @@ pub(crate) fn friendly_capture_error(raw: &str) -> String {
 /// is recorded.
 fn compose_friendly(action: &str, reason: Option<&str>, next_step: Option<&str>) -> String {
     let mut msg = match reason {
-        Some(reason) => format!("Couldn't {action} — {reason}."),
-        None => format!("Couldn't {action}."),
+        Some(reason) => format!("Couldn’t {action} — {reason}."),
+        None => format!("Couldn’t {action}."),
     };
     msg.push(' ');
     msg.push_str(next_step.unwrap_or(RETRY_HINT));

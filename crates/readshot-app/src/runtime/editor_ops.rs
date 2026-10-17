@@ -1612,7 +1612,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 return Task::none();
             }
             let Some(color) = readshot_core::Rgba::from_hex(&ed.hex_draft) else {
-                ed.set_status("Couldn't read that color. Use a hex value like #4F46E5.");
+                ed.set_status("Couldn’t read that color. Use a hex value like #4F46E5.");
                 return Task::none();
             };
             apply_editor_color(ed, &state.coordinator, color);

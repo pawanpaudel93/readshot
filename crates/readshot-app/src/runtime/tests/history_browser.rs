@@ -589,7 +589,7 @@ fn friendly_errors_hide_raw_internals_and_keep_hints() {
     // Unclassified io errors fall back to a generic message.
     let other = HistoryError::Io("broken pipe".into());
     let msg = history_ops::friendly_history_error("clear the history", &other);
-    assert!(msg.starts_with("Couldn't clear the history"), "{msg}");
+    assert!(msg.starts_with("Couldn’t clear the history"), "{msg}");
     assert!(!msg.contains("broken pipe"), "{msg}");
 
     // String-typed (clipboard / file-manager) errors: not-found
@@ -612,7 +612,7 @@ fn friendly_errors_hide_raw_internals_and_keep_hints() {
     let msg = history_ops::friendly_history_error("delete this capture", &damaged);
     assert_eq!(
         msg,
-        "Couldn't delete this capture — the history data looks damaged. Quit and reopen Readshot, then try again."
+        "Couldn’t delete this capture — the history data looks damaged. Quit and reopen Readshot, then try again."
     );
 
     // A recovery next-step is appended as a second sentence; an
@@ -632,7 +632,7 @@ fn friendly_errors_hide_raw_internals_and_keep_hints() {
         "weird backend",
         Some("Try again."),
     );
-    assert_eq!(retry, "Couldn't copy the text. Try again.", "{retry}");
+    assert_eq!(retry, "Couldn’t copy the text. Try again.", "{retry}");
 
     // Capture errors suggest the Screen Recording permission only
     // when the error looks permission-related, never otherwise.
@@ -763,7 +763,7 @@ fn capture_request_marks_in_flight_and_clears_on_completion() {
 #[test]
 fn welcome_status_dismissed_clears_capture_status() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
-    app.last_capture_status = Some("Couldn't save.".into());
+    app.last_capture_status = Some("Couldn’t save.".into());
     let _ = update(&mut app, Message::WelcomeStatusDismissed);
     assert!(app.last_capture_status.is_none());
 }
@@ -832,7 +832,7 @@ fn an_update_check_failure_points_to_a_reinstall_not_the_network() {
     ]);
     for e in errors {
         let msg = crate::runtime::platform::update_check_failure_message(&e);
-        assert!(msg.starts_with("Couldn't check for updates — "), "{msg}");
+        assert!(msg.starts_with("Couldn’t check for updates — "), "{msg}");
         assert!(
             msg.ends_with("Reinstall Readshot from readshot.pawanpaudel.com.np to get updates."),
             "{msg}"

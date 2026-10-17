@@ -1293,7 +1293,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
             crate::icons::AppIcon::Alert,
             p,
             "History unavailable",
-            "Readshot couldn't find a folder to keep history in. Quit and reopen Readshot to try again.",
+            "Readshot couldn’t find a folder to keep history in. Quit and reopen Readshot to try again.",
             None,
         )
     } else if shown == 0 {
@@ -4906,7 +4906,7 @@ pub(crate) fn capture_hotkey_hint(state: &App) -> String {
         status.clone()
     } else if readshot_ui::hotkey::parse(&state.preferences.capture_hotkey).is_err() {
         format!(
-            "Couldn't read the saved shortcut “{}”. Press Record to choose a new one.",
+            "Couldn’t read the saved shortcut “{}”. Press Record to choose a new one.",
             state.preferences.capture_hotkey
         )
     } else if let Some(reserved) = capture_hotkey_conflict(&state.preferences.capture_hotkey) {
@@ -5176,7 +5176,7 @@ fn settings_ocr_pane(state: &App) -> Vec<Element<'_, Message>> {
         settings_group(vec![
             group_row(
                 "OCR engine",
-                "System default uses your platform's built-in recognizer. Takes effect after restart.",
+                "System default uses your platform’s built-in recognizer. Takes effect after restart.",
                 engine_control,
             ),
             settings_block(
@@ -5732,7 +5732,7 @@ fn welcome_brand(p: &'static Palette, tile: WelcomeTile) -> Element<'static, Mes
         });
     let (title, tagline) = match tile {
         WelcomeTile::App => ("Readshot", Some("Capture, search, find again.")),
-        WelcomeTile::Done => ("You're all set.", None),
+        WelcomeTile::Done => ("You’re all set.", None),
     };
     let mut c = column![
         tile_el,

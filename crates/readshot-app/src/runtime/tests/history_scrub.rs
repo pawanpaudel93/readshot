@@ -312,7 +312,7 @@ fn an_added_part_needs_its_own_recognition_and_the_scrub_fails_closed_until_then
     sync_editor_history(ed, &app.coordinator);
     assert!(
         ed.text_panel.positioned_document().is_none(),
-        "the new part isn't recognized yet"
+        "the new part isn’t recognized yet"
     );
     assert_eq!(
         scrubbed_history_text(ed, true),
@@ -536,7 +536,7 @@ async fn a_cropped_scrub_stores_its_redactions_in_the_stored_png_and_masks_reope
             rect: RectLike::new(10.0, 2.0, 6.0, 4.0),
             block_size: 4.0,
         }],
-        "in the stored PNG's pixels"
+        "in the stored PNG’s pixels"
     );
     // The capture's own OCR of the uncropped image lands late: its
     // boxes are in another frame than the stored image's.

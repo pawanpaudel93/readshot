@@ -359,7 +359,7 @@ pub(crate) fn update_check_failure_message(e: &crate::updater::UpdaterError) -> 
         _ => "the updater in this copy of Readshot is missing or damaged",
     };
     format!(
-        "Couldn't check for updates — {reason}. Reinstall Readshot from {UPDATE_SITE} to get updates."
+        "Couldn’t check for updates — {reason}. Reinstall Readshot from {UPDATE_SITE} to get updates."
     )
 }
 

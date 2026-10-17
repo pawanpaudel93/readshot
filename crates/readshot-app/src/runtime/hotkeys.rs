@@ -475,7 +475,7 @@ pub(crate) fn set_hotkey_registration_notice(state: &mut App) {
     state.settings_hotkey_status = None;
     if hotkey::parse(&state.preferences.capture_hotkey).is_err() {
         state.settings_hotkey_error =
-            Some("Couldn't read that shortcut. Press Record and try another.".to_string());
+            Some("Couldn’t read that shortcut. Press Record and try another.".to_string());
     } else if let Some(reserved) = capture_hotkey_conflict(&state.preferences.capture_hotkey) {
         state.settings_hotkey_error = Some(format!(
             "{pretty} is reserved for the {reserved} shortcut. Choose a different shortcut."

@@ -1305,9 +1305,9 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             // selection was made): see `abort_combine_capture`.
             let restore = if refused && !overlay_up && !combine_selection_made(state) {
                 let why = if state.capture_in_flight || state.scroll_session.is_some() {
-                    "Couldn't add the capture — another capture is in progress."
+                    "Couldn’t add the capture — another capture is in progress."
                 } else {
-                    "Couldn't add the capture. Try again."
+                    "Couldn’t add the capture. Try again."
                 };
                 abort_combine_capture(state, Some(why))
             } else {
@@ -1407,10 +1407,10 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                 clear_pending_capture_state(state);
                 tracing::warn!(target: "readshot::capture", "no displays detected");
                 state.last_capture_status =
-                    Some("Couldn't capture — no display was detected.".into());
+                    Some("Couldn’t capture — no display was detected.".into());
                 let restore = abort_combine_capture(
                     state,
-                    Some("Couldn't add the capture — no display was detected."),
+                    Some("Couldn’t add the capture — no display was detected."),
                 );
                 return if state.cli_interactive_output.is_some() {
                     Task::batch([
@@ -1770,7 +1770,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                             let Some(last) = state.last_regions.get(&display_id).copied() else {
                                 state.last_capture_status =
                                     Some(format!(
-                                        "Couldn't start the scrolling capture — the selected area was lost. {}",
+                                        "Couldn’t start the scrolling capture — the selected area was lost. {}",
                                         scroll::SCROLL_RETRY_HINT
                                     ));
                                 return Task::batch([history_task]);

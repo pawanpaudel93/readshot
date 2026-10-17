@@ -679,7 +679,7 @@ fn update_settings_hotkey_change_persists_value_when_reregister_fails() {
     assert!(!app.capture_hotkey_registered);
     assert_eq!(
         app.settings_hotkey_error.as_deref(),
-        Some("Couldn't read that shortcut. Press Record and try another."),
+        Some("Couldn’t read that shortcut. Press Record and try another."),
     );
 }
 

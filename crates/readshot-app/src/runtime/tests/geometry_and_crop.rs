@@ -146,7 +146,7 @@ fn resize_apply_scales_the_document_and_refuses_oversize() {
     let _ = update(&mut app, Message::EditorResizeApply);
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.effective_image_size(), (20, 10), "unchanged");
-    assert!(ed.status.as_deref().unwrap().starts_with("Couldn't resize"));
+    assert!(ed.status.as_deref().unwrap().starts_with("Couldn’t resize"));
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
             height: 10,
         },
     );
-    assert!(s.starts_with("Couldn't rotate"), "{s}");
+    assert!(s.starts_with("Couldn’t rotate"), "{s}");
     assert!(s.contains("uncropped image would be 40,000 × 10 px"), "{s}");
     assert!(s.contains("32,767 px on a side"), "{s}");
     assert!(
@@ -209,7 +209,7 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
         readshot_core::document::GeometryError::TooManyPixels { pixels: 9, max: 8 },
     );
     assert!(
-        s.starts_with("Couldn't flip") && s.contains("over the 256,000,000 px limit"),
+        s.starts_with("Couldn’t flip") && s.contains("over the 256,000,000 px limit"),
         "{s}"
     );
     assert!(!s.contains("uncropped"), "{s}");
@@ -219,7 +219,7 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
         true,
         readshot_core::document::GeometryError::TooManyPixels { pixels: 9, max: 8 },
     );
-    assert!(s.starts_with("Couldn't resize"), "{s}");
+    assert!(s.starts_with("Couldn’t resize"), "{s}");
     assert!(s.contains("the uncropped image would be 9 px"), "{s}");
     assert!(s.ends_with("Choose a smaller size."), "{s}");
     let s = geometry_error_status(
@@ -232,7 +232,7 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
     );
     assert_eq!(
         s,
-        "Couldn't add the image — the image would be 268,435,456 px, over the 256,000,000 px limit. Resize the image smaller first, then add it again."
+        "Couldn’t add the image — the image would be 268,435,456 px, over the 256,000,000 px limit. Resize the image smaller first, then add it again."
     );
     let s = geometry_error_status(
         "align",

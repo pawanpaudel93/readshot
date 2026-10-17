@@ -634,7 +634,7 @@ fn open_overlay_sets_opening_guard_until_display_list_completes() {
     assert!(!app.overlay_opening);
     assert_eq!(
         app.last_capture_status.as_deref(),
-        Some("Couldn't capture — no display was detected.")
+        Some("Couldn’t capture — no display was detected.")
     );
 }
 
@@ -662,7 +662,7 @@ fn overlay_display_list_error_clears_pending_capture_state() {
     // The raw backend error is logged, not leaked into the status —
     // the user sees friendly recovery text instead.
     let status = app.last_capture_status.as_deref().unwrap();
-    assert!(status.starts_with("Couldn't capture"), "{status}");
+    assert!(status.starts_with("Couldn’t capture"), "{status}");
     assert!(!status.contains("backend unavailable"), "{status}");
 }
 
@@ -860,7 +860,7 @@ fn a_capture_problem_with_no_window_to_show_it_is_notified() {
 #[test]
 fn only_problems_are_notified() {
     assert!(capture_status_is_problem(
-        "Couldn't capture — no display was detected."
+        "Couldn’t capture — no display was detected."
     ));
     assert!(capture_status_is_problem(
         "No previous region to retake. Capture a region first, then use Retake Last Region."

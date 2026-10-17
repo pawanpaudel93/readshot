@@ -568,7 +568,7 @@ pub(crate) fn retention_feedback(v: readshot_core::HistoryRetention) -> String {
         R::Last50 | R::Last30Days => {
             format!("History retention: {v}. Older captures are deleted at the next capture.")
         }
-        R::Off => format!("History retention: {v}. New captures aren't saved."),
+        R::Off => format!("History retention: {v}. New captures aren’t saved."),
         R::Unlimited => format!("History retention: {v}"),
     }
 }

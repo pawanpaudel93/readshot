@@ -1180,7 +1180,12 @@ pub fn status_str_is_in_progress(s: &str) -> bool {
 /// failure phrasing. Errors are never auto-dismissed.
 pub fn status_str_is_error(s: &str) -> bool {
     let lower = s.to_lowercase();
-    lower.contains("fail") || lower.contains("error") || lower.starts_with("couldn't")
+    // Typographic or straight apostrophe: the app writes ’, text from
+    // elsewhere (a log, a test) may not.
+    lower.contains("fail")
+        || lower.contains("error")
+        || lower.starts_with("couldn’t")
+        || lower.starts_with("couldn't")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2169,8 +2174,8 @@ mod tests {
         // "Couldn't …" phrasing the failure paths now produce, which
         // carries neither "fail" nor "error".
         for s in [
-            "Couldn't save the image — the disk is full. Pick a different folder in Settings and try again.",
-            "Couldn't copy the text — permission denied. Try again.",
+            "Couldn’t save the image — the disk is full. Pick a different folder in Settings and try again.",
+            "Couldn’t copy the text — permission denied. Try again.",
             "Unexpected error",
         ] {
             assert!(status_str_is_error(s), "{s:?} should be an error");
@@ -2192,7 +2197,7 @@ mod tests {
     #[test]
     fn editor_session_status_helpers_match_free_classifiers() {
         let mut s = EditorSession::new(solid(8, 8));
-        s.set_status("Couldn't save the image — the disk is full. Pick a different folder in Settings and try again.");
+        s.set_status("Couldn’t save the image — the disk is full. Pick a different folder in Settings and try again.");
         assert!(s.status_is_error());
         assert!(!s.status_is_in_progress());
         s.set_status("Saving…");

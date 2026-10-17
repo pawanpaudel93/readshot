@@ -1091,7 +1091,7 @@ fn editor_chrome_layers_clear_the_stage() {
 fn editor_toast_kind_classifies_status() {
     assert_eq!(
         editor_toast_kind(
-            "Couldn't save — the folder is read-only.",
+            "Couldn’t save — the folder is read-only.",
             false,
             false,
             Tone::Auto
@@ -1122,7 +1122,7 @@ fn editor_toast_kind_classifies_status() {
         ToastKind::Warn
     );
     assert_eq!(
-        editor_toast_kind("Couldn't locate 1 item.", false, false, Tone::Warning),
+        editor_toast_kind("Couldn’t locate 1 item.", false, false, Tone::Warning),
         ToastKind::Error
     );
 }
@@ -1176,9 +1176,9 @@ fn status_toast_kind_separates_notices_from_successes() {
         assert_eq!(status_toast_kind(s), ToastKind::Info, "{s:?}");
     }
     for s in [
-        "Couldn't read the history — permission denied. Close History and open it again.",
-        "Couldn't stitch the scrolling capture. Start the scrolling capture again.",
-        "Couldn't start the scrolling capture — the selected area was lost. Start the scrolling capture again.",
+        "Couldn’t read the history — permission denied. Close History and open it again.",
+        "Couldn’t stitch the scrolling capture. Start the scrolling capture again.",
+        "Couldn’t start the scrolling capture — the selected area was lost. Start the scrolling capture again.",
     ] {
         assert_eq!(status_toast_kind(s), ToastKind::Error, "{s:?}");
     }
@@ -1195,7 +1195,7 @@ fn status_toast_kind_separates_notices_from_successes() {
 #[test]
 fn history_status_dismissed_clears_history_status() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
-    app.history_status = Some("Couldn't read history: denied".into());
+    app.history_status = Some("Couldn’t read history: denied".into());
     let _ = update(&mut app, Message::HistoryStatusDismissed);
     assert!(app.history_status.is_none());
 }
@@ -1229,7 +1229,7 @@ fn other_status_after_arming_disarms_discard() {
     );
     let _ = update(&mut app, Message::EditorDiscardRequested);
     let ed = app.editor.as_mut().unwrap();
-    ed.set_status("Couldn't save — disk full.");
+    ed.set_status("Couldn’t save — disk full.");
     let s = ed.status.clone().unwrap();
     assert_eq!(
         editor_toast_kind(&s, false, ed.discard_pending_at.is_some(), Tone::Auto),
@@ -1254,7 +1254,7 @@ fn keep_editing_disarms_discard() {
 fn dismissing_status_clears_it_and_tick_keeps_errors() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let mut ed = debug_editor_qa_session();
-    ed.status = Some("Couldn't save — the folder is read-only.".into());
+    ed.status = Some("Couldn’t save — the folder is read-only.".into());
     ed.status_set_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
     app.editor = Some(ed);
     let _ = update(&mut app, Message::EditorStatusTick);
@@ -1311,7 +1311,7 @@ fn warnings_can_be_dismissed_and_stop_the_status_tick() {
     assert!(crate::editor::status_tick_needed(&ed));
     ed.set_warning("Enter a width and height of at least 1 px.");
     assert!(!crate::editor::status_tick_needed(&ed));
-    ed.set_status("Couldn't save — disk full.");
+    ed.set_status("Couldn’t save — disk full.");
     assert!(!crate::editor::status_tick_needed(&ed));
     // An armed Discard never expires, so it needs no tick (WCAG 2.2.1).
     ed.set_status("Unsaved edits. Press Discard again to close without saving.");

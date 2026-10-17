@@ -80,7 +80,7 @@ fn a_pending_resize_is_applied_before_the_next_edit_never_dropped() {
     assert_eq!(ed.model.undo_depth(), depth + 2);
     assert!(
         ed.compose_job.as_ref().is_none_or(|j| !j.kind.is_step()),
-        "only the delete's re-render may run"
+        "only the delete’s re-render may run"
     );
     // Its late result changes nothing.
     let _ = update(&mut app, late);
@@ -1064,7 +1064,7 @@ fn copy_keeps_a_coalesced_gap_value_as_one_undo_step() {
     let _ = update(&mut app, Message::EditorLayoutGapPreview(12));
     let _ = update(&mut app, Message::EditorCopyImageRequested);
     let ed = app.editor.as_ref().unwrap();
-    assert_eq!(ed.image_size(), (40, 32), "the slider's value is output");
+    assert_eq!(ed.image_size(), (40, 32), "the slider’s value is output");
     assert_eq!(ed.model.undo_depth(), depth + 1);
     assert!(ed.snapshot_drag_baseline.is_none());
 }
@@ -1481,11 +1481,11 @@ fn cancelling_a_large_gap_preview_puts_the_baseline_back_without_a_render() {
     let before = composes(&app);
     // ⌘Z while the slider is held cancels the drag.
     let _ = update(&mut app, undo_msg());
-    assert_eq!(composes(&app), before, "the baseline's base was kept");
+    assert_eq!(composes(&app), before, "the baseline’s base was kept");
     let ed = app.editor.as_mut().unwrap();
     assert_eq!(ed.status.as_deref(), Some("Cancelled the slider change."));
     assert_eq!(ed.image_size(), (40, 20));
-    assert_eq!(handle_id(ed), baseline, "the baseline's display is back");
+    assert_eq!(handle_id(ed), baseline, "the baseline’s display is back");
     assert!(ed.model.has_flattened(), "and its flattened image");
     assert!(ed.compose_job.is_none(), "nothing to render");
     assert_eq!(ed.model.undo_depth(), depth);
@@ -1918,7 +1918,7 @@ fn a_dragged_redaction_left_out_of_the_render_covers_the_bubble_magnifying_it() 
                 .any(|(x, y)| {
                     pixels[at(x, y)..at(x, y) + 4] != present.as_raw()[at(x, y)..at(x, y) + 4]
                 });
-            assert!(differs, "the bubble on screen isn't the redacted one");
+            assert!(differs, "the bubble on screen isn’t the redacted one");
         }
         assert_eq!(
             ed.magnifier_bubble_covers(),

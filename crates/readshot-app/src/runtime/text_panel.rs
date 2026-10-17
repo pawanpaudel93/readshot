@@ -736,12 +736,12 @@ pub(crate) fn redact_status(n: usize, missed: usize) -> String {
     match (n, missed) {
         (0, 0) => "No sensitive items left to redact.".to_string(),
         (0, m) => format!(
-            "Couldn't locate {}. Cover {pronoun} by hand.",
+            "Couldn’t locate {}. Cover {pronoun} by hand.",
             counted(m, "sensitive item", "sensitive items")
         ),
         (n, 0) => format!("Redacted {}.", items(n)),
         (n, m) => format!(
-            "Redacted {}. {m} more couldn't be located; cover {pronoun} by hand.",
+            "Redacted {}. {m} more couldn’t be located; cover {pronoun} by hand.",
             items(n)
         ),
     }
@@ -939,8 +939,8 @@ pub(crate) fn text_tab<'a>(
         TextRecognition::Failed(_) => empty_state(
             AppIcon::Alert,
             p,
-            "Couldn't read text",
-            "Text recognition didn't finish.",
+            "Couldn’t read text",
+            "Text recognition didn’t finish.",
             Some(focus_ring(
                 bar_button(
                     text("Try Again").size(ButtonSize::Sm.text_size()).into(),
@@ -1064,9 +1064,9 @@ pub(crate) const REDACT_NOTE_SIZE: f32 = TYPE_CAPTION;
 /// The note for matches that can't be placed on the image.
 pub(crate) fn unlocatable_note(m: usize) -> String {
     if m == 1 {
-        "1 item couldn't be located on the image. Cover it by hand.".to_string()
+        "1 item couldn’t be located on the image. Cover it by hand.".to_string()
     } else {
-        format!("{m} items couldn't be located on the image. Cover them by hand.")
+        format!("{m} items couldn’t be located on the image. Cover them by hand.")
     }
 }
 
@@ -1373,7 +1373,7 @@ fn lines_view<'a>(
     );
     if !doc.positioned {
         col = col.push(
-            text("This platform's text recognition doesn't report where lines are, so hover-to-locate and smart redact are off.")
+            text("This platform’s text recognition doesn’t report where lines are, so hover-to-locate and smart redact are off.")
                 .size(REDACT_NOTE_SIZE)
                 .style(text_t3),
         );
@@ -1613,11 +1613,11 @@ mod tests {
         assert_eq!(redact_status(4, 0), "Redacted 4 items.");
         assert_eq!(
             redact_status(2, 1),
-            "Redacted 2 items. 1 more couldn't be located; cover it by hand."
+            "Redacted 2 items. 1 more couldn’t be located; cover it by hand."
         );
         assert_eq!(
             redact_status(0, 3),
-            "Couldn't locate 3 sensitive items. Cover them by hand."
+            "Couldn’t locate 3 sensitive items. Cover them by hand."
         );
     }
 
@@ -1646,11 +1646,11 @@ mod tests {
         assert!(REDACT_BUTTON_ROOM >= button, "{button}");
         assert_eq!(
             unlocatable_note(1),
-            "1 item couldn't be located on the image. Cover it by hand."
+            "1 item couldn’t be located on the image. Cover it by hand."
         );
         assert_eq!(
             unlocatable_note(3),
-            "3 items couldn't be located on the image. Cover them by hand."
+            "3 items couldn’t be located on the image. Cover them by hand."
         );
     }
 
