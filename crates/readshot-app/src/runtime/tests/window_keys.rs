@@ -20,21 +20,27 @@ fn history_reveal_pin_copy_visible_and_clear_all_have_keys() {
     let w = iced::window::Id::unique();
     let cmd = command_modifiers();
     let ch = |c: &str| Key::Character(c.into());
+    // ⌥⌘ on macOS, Ctrl+Shift elsewhere (Ctrl+Alt is AltGr).
+    let second = if cfg!(target_os = "macos") {
+        cmd | Modifiers::ALT
+    } else {
+        cmd | Modifiers::SHIFT
+    };
     assert_eq!(
-        hist(history_key_message(w, &ch("r"), cmd | Modifiers::ALT, true)),
+        hist(history_key_message(w, &ch("r"), second, true)),
         Some(HistoryKeyboardAction::Reveal)
     );
     assert_eq!(
         hist(history_key_message(w, &ch("p"), cmd, true)),
         Some(HistoryKeyboardAction::Pin)
     );
+    let (visible_key, visible_mods) = if cfg!(target_os = "macos") {
+        (ch("c"), cmd | Modifiers::ALT | Modifiers::SHIFT)
+    } else {
+        (ch("a"), cmd | Modifiers::SHIFT)
+    };
     assert_eq!(
-        hist(history_key_message(
-            w,
-            &ch("c"),
-            cmd | Modifiers::ALT | Modifiers::SHIFT,
-            true
-        )),
+        hist(history_key_message(w, &visible_key, visible_mods, true)),
         Some(HistoryKeyboardAction::CopyVisibleText)
     );
     assert_eq!(
@@ -378,4 +384,64 @@ fn welcome_restart_and_reset_permission_have_keys() {
     assert!(welcome_key_message(W::Granted, false, &r, shift).is_none());
     // A bare R is never Reset Permission.
     assert!(welcome_key_message(W::Denied, false, &r, Modifiers::empty()).is_none());
+}
+
+/// Every History chord is distinct, and none is Ctrl+Alt off macOS.
+#[test]
+fn history_chords_are_unique_and_avoid_ctrl_alt() {
+    let w = iced::window::Id::unique();
+    let cmd = command_modifiers();
+    let ch = |c: &str| Key::Character(c.into());
+    let mac = cfg!(target_os = "macos");
+    let second = if mac {
+        cmd | Modifiers::ALT
+    } else {
+        cmd | Modifiers::SHIFT
+    };
+    let rows: Vec<(Key, Modifiers, HistoryKeyboardAction)> = vec![
+        (ch("c"), cmd, HistoryKeyboardAction::CopyImage),
+        (
+            ch("c"),
+            cmd | Modifiers::SHIFT,
+            HistoryKeyboardAction::CopyText,
+        ),
+        (ch("f"), cmd, HistoryKeyboardAction::FocusSearch),
+        (ch("p"), cmd, HistoryKeyboardAction::Pin),
+        (ch("r"), second, HistoryKeyboardAction::Reveal),
+        if mac {
+            (
+                ch("c"),
+                cmd | Modifiers::ALT | Modifiers::SHIFT,
+                HistoryKeyboardAction::CopyVisibleText,
+            )
+        } else {
+            (
+                ch("a"),
+                cmd | Modifiers::SHIFT,
+                HistoryKeyboardAction::CopyVisibleText,
+            )
+        },
+        (
+            Key::Named(Named::Backspace),
+            cmd,
+            HistoryKeyboardAction::Delete,
+        ),
+        (
+            Key::Named(Named::Backspace),
+            cmd | Modifiers::SHIFT,
+            HistoryKeyboardAction::ClearAll,
+        ),
+    ];
+    for (i, (k, m, _)) in rows.iter().enumerate() {
+        for (k2, m2, a) in &rows[i + 1..] {
+            assert!(!(k == k2 && m == m2), "{k:?} {m:?} bound twice ({a:?})");
+        }
+    }
+    for (k, m, want) in rows {
+        assert_eq!(
+            hist(history_key_message(w, &k, m, true)),
+            Some(want),
+            "{k:?} {m:?}"
+        );
+    }
 }

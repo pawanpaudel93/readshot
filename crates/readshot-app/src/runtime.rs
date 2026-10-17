@@ -889,9 +889,8 @@ pub(crate) fn history_key_message(
     // 2.1.1). A focused search field keeps none of these but ⇧⌘⌫.
     if modifiers.command() && !extra_command_modifier(modifiers) {
         match key {
-            Key::Character(c)
-                if modifiers.alt() && !modifiers.shift() && c.eq_ignore_ascii_case("r") =>
-            {
+            // ⌥⌘R on macOS, Ctrl+Shift+R elsewhere (Ctrl+Alt is AltGr).
+            _ if editor_alt_chord(key, modifiers, "r") => {
                 return action(HistoryKeyboardAction::Reveal);
             }
             Key::Character(c)
@@ -899,9 +898,9 @@ pub(crate) fn history_key_message(
             {
                 return action(HistoryKeyboardAction::Pin);
             }
-            Key::Character(c)
-                if modifiers.alt() && modifiers.shift() && c.eq_ignore_ascii_case("c") =>
-            {
+            // ⌥⇧⌘C on macOS, Ctrl+Shift+A elsewhere (Ctrl+Shift+C is Copy
+            // Text there too, and Ctrl+Alt is AltGr).
+            _ if history_copy_visible_chord(key, modifiers) => {
                 // A focused search field may take ⌘C chords for itself.
                 return chord(HistoryKeyboardAction::CopyVisibleText);
             }
@@ -946,6 +945,22 @@ pub(crate) fn history_key_message(
         Key::Named(Named::Enter) => action(HistoryKeyboardAction::Open),
         Key::Named(Named::Escape) => action(HistoryKeyboardAction::Escape),
         _ => None,
+    }
+}
+
+/// History's Copy Visible Text chord: ⌥⇧⌘C on macOS, Ctrl+Shift+A
+/// elsewhere.
+pub(crate) fn history_copy_visible_chord(
+    key: &iced::keyboard::Key,
+    m: iced::keyboard::Modifiers,
+) -> bool {
+    let iced::keyboard::Key::Character(c) = key else {
+        return false;
+    };
+    if cfg!(target_os = "macos") {
+        m.command() && m.alt() && m.shift() && c.eq_ignore_ascii_case("c")
+    } else {
+        m.command() && m.shift() && !m.alt() && !m.logo() && c.eq_ignore_ascii_case("a")
     }
 }
 
@@ -2075,6 +2090,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorPanelTabKey(..)
         | Message::EditorFocusZoneCycle(..)
         | Message::EditorCycleSelection(..)
+        | Message::EditorTabResolved { .. }
         | Message::EditorResizeByKeys(..)
         | Message::EditorDeleteSelected
         | Message::EditorCropApply

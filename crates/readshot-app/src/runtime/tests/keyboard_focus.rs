@@ -915,3 +915,102 @@ fn key_guides_stay_while_their_draft_lasts() {
     let _ = update(&mut app, Message::EditorStatusTick);
     assert!(app.editor.as_ref().unwrap().status.is_some());
 }
+
+// ===== Fix round 2 =====
+
+fn beautify_shown(app: &mut App) {
+    app.preferences.editor_panel_tab = PanelTab::Beautify.id().to_string();
+    assert!(beautify_hex_on_screen(app));
+}
+
+/// With the Beautify hex field on screen, a canvas Tab first asks iced
+/// whether that field has the caret; only the answer moves the selection.
+#[test]
+fn a_canvas_tab_checks_the_beautify_hex_field_first() {
+    let mut app = two_rects_first_selected();
+    beautify_shown(&mut app);
+    let _ = update(&mut app, Message::EditorCycleSelection(1));
+    assert_eq!(
+        app.editor.as_ref().unwrap().model.selected_annotation(),
+        Some(0),
+        "nothing moves until the field check answers"
+    );
+    // The field has the caret: Tab only leaves it.
+    let _ = update(
+        &mut app,
+        Message::EditorTabResolved {
+            step: 1,
+            field_focused: true,
+        },
+    );
+    assert_eq!(
+        app.editor.as_ref().unwrap().model.selected_annotation(),
+        Some(0)
+    );
+    // It doesn't: the selection moves.
+    let _ = update(
+        &mut app,
+        Message::EditorTabResolved {
+            step: 1,
+            field_focused: false,
+        },
+    );
+    assert_eq!(
+        app.editor.as_ref().unwrap().model.selected_annotation(),
+        Some(1)
+    );
+    // Without the Beautify tab on screen there is nothing to ask.
+    app.preferences.editor_panel_tab = PanelTab::Text.id().to_string();
+    assert!(!beautify_hex_on_screen(&app));
+    let _ = update(&mut app, Message::EditorCycleSelection(1));
+    assert_eq!(
+        app.editor.as_ref().unwrap().model.selected_annotation(),
+        Some(0)
+    );
+}
+
+/// Tab leaving the Color popover applies a typed hex as ↵ would; an
+/// invalid one keeps the popover open and says why; Esc still cancels.
+#[test]
+fn tab_applies_a_typed_hex_and_esc_still_cancels() {
+    let red = Rgba::from_hex("#FF0000").unwrap();
+    let open_color = |app: &mut App, id: iced::window::Id| {
+        press(app, id, ch("r"), plain());
+        press(app, id, named(Named::F6), plain());
+        press(app, id, named(Named::Enter), plain());
+        assert_eq!(
+            app.editor.as_ref().unwrap().popover,
+            Some(EditorPopover::Color)
+        );
+    };
+    let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
+    open_color(&mut app, id);
+    let color_focus = app.editor.as_ref().unwrap().key_focus_return;
+    let _ = update(&mut app, Message::EditorHexChanged("#ff0000".into()));
+    press(&mut app, id, named(Named::Tab), plain());
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.popover, None);
+    assert!(swatch_eq(ed.model.effective_color(), red));
+    assert_eq!(ed.key_focus, color_focus);
+    // Invalid: the popover stays, with the existing message.
+    let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
+    open_color(&mut app, id);
+    let _ = update(&mut app, Message::EditorHexChanged("#12".into()));
+    press(&mut app, id, named(Named::Tab), plain());
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.popover, Some(EditorPopover::Color));
+    assert!(ed
+        .status
+        .as_deref()
+        .unwrap_or("")
+        .starts_with("Couldn't read that color"));
+    // Esc cancels: the typed value is dropped.
+    let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
+    open_color(&mut app, id);
+    let before = app.editor.as_ref().unwrap().model.effective_color();
+    let _ = update(&mut app, Message::EditorHexChanged("#ff0000".into()));
+    press_captured(&mut app, id, named(Named::Escape), plain());
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.popover, None);
+    assert!(swatch_eq(ed.model.effective_color(), before));
+}

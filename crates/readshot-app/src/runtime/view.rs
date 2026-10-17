@@ -939,9 +939,9 @@ const HISTORY_REVEAL_LABEL: &str = "Show in Folder";
 const HISTORY_KEY_DELETE: &str = "⌘⌫";
 const HISTORY_KEY_COPY_TEXT: &str = "⇧⌘C";
 const HISTORY_KEY_COPY_IMAGE: &str = "⌘C";
-const HISTORY_KEY_REVEAL: (&str, &str) = ("⌥⌘R", "Ctrl+Alt+R");
+const HISTORY_KEY_REVEAL: (&str, &str) = ("⌥⌘R", "Ctrl+Shift+R");
 const HISTORY_KEY_PIN: (&str, &str) = ("⌘P", "Ctrl+P");
-const HISTORY_KEY_COPY_VISIBLE: (&str, &str) = ("⌥⇧⌘C", "Ctrl+Alt+Shift+C");
+const HISTORY_KEY_COPY_VISIBLE: (&str, &str) = ("⌥⇧⌘C", "Ctrl+Shift+A");
 const HISTORY_KEY_CLEAR_ALL: (&str, &str) = ("⇧⌘⌫", "Ctrl+Shift+Backspace");
 
 fn history_key(k: (&'static str, &'static str)) -> &'static str {

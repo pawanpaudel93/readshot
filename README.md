@@ -160,13 +160,16 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   except the `⌥⌘` chords: there they are `Ctrl+Shift` (`Ctrl+Shift+P` panel,
   `Ctrl+Shift+R` resize, `Ctrl+Shift+T` / `Ctrl+Shift+B` panel tabs), because
   `Ctrl+Alt` is AltGr on many keyboards and `Ctrl+Alt+T` opens a terminal.
-  Editor chords never fire while a text field has the caret.
+  Editor chords never fire while a text field has the caret. `Tab` in the
+  Color popover applies a typed hex (as `↵` does) and returns to the bar;
+  `esc` cancels it.
 - **History window:** `↑` / `↓` move between captures (moving past the
   last one shown loads more), `Enter` opens the selected one, `⌘C` copies
   its image and `⇧⌘C` its text, `⌘P` pins it, `⌥⌘R` reveals it in Finder,
   `⌘⌫` deletes it, `⌥⇧⌘C` copies the text of every visible capture,
   `⇧⌘⌫` clears all (press twice to confirm), `⌘F` focuses the search, and
-  `esc` cancels an armed prompt or clears the search.
+  `esc` cancels an armed prompt or clears the search. On Windows and Linux,
+  Reveal is `Ctrl+Shift+R` and Copy Visible Text is `Ctrl+Shift+A`.
 - **Settings window:** `⌘1`–`⌘7` switch panes; `esc` / `⌘W` close; `⌘L`
   toggles launch-at-login and `⌘D` toggles debug logging; `⌘R`, `⌘E`, `⌘F`
   cycle retention, OCR engine, and format; `⌘K` records a new capture

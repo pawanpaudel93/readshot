@@ -746,6 +746,54 @@ pub(crate) fn history_write_followups(state: &mut App) -> Task<Message> {
     Task::batch(tasks)
 }
 
+/// Not while a popover or a text field has the keys: Tab out of a hex
+/// field must not move the selection under the value.
+fn tab_may_cycle(state: &App) -> bool {
+    state.editor.as_ref().is_some_and(|ed| {
+        !(ed.busy
+            || ed.pending_text.is_some()
+            || ed.move_drag.is_some()
+            || ed.popover.is_some()
+            || ed.beautify_hex_draft.is_some())
+    })
+}
+
+/// Whether the Beautify tab (with its hex field) is on screen.
+pub(crate) fn beautify_hex_on_screen(state: &App) -> bool {
+    state.editor.as_ref().is_some_and(|ed| {
+        matches!(
+            editor_panel_mode(state, ed),
+            PanelMode::Docked | PanelMode::Overlay
+        ) && crate::editor::PanelTab::from_id(&state.preferences.editor_panel_tab)
+            == crate::editor::PanelTab::Beautify
+    })
+}
+
+/// Tab on the canvas: select the next (previous) annotation.
+fn cycle_selection_by_tab(state: &mut App, step: i32) -> Task<Message> {
+    let Some(ed) = state.editor.as_mut() else {
+        return Task::none();
+    };
+    let n = ed.model.annotations().len();
+    let Some(next) = cycle_selection_index(n, ed.model.selected_annotation(), step) else {
+        return Task::none();
+    };
+    cancel_editor_previews(ed);
+    ed.model.select_index(Some(next));
+    if let Some(kind) = ed.model.selected_kind_label() {
+        ed.set_guide(
+            format!(
+                "{kind} selected ({} of {n}). Arrows move it, ⌫ removes it, esc deselects.",
+                next + 1
+            ),
+            crate::editor::KeyGuide::Selection,
+        );
+    }
+    // Takes the caret out of any other text field, so typing goes to
+    // the canvas keys.
+    super::key_focus::unfocus_text_fields()
+}
+
 /// The annotation Tab (`step` 1) or ⇧Tab (-1) selects next among `n`,
 /// wrapping; from no selection Tab starts at the first and ⇧Tab at the
 /// last. `None` when there are none.
@@ -2325,37 +2373,36 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         | Message::EditorPanelTabKey(..)
         | Message::EditorFocusZoneCycle(..)) => super::key_focus::handle_focus_message(state, msg),
         Message::EditorCycleSelection(step) => {
-            let Some(ed) = state.editor.as_mut() else {
-                return Task::none();
-            };
-            // Not while a popover or a text field has the keys: Tab out of
-            // a hex field must not move the selection under the value.
-            if ed.busy
-                || ed.pending_text.is_some()
-                || ed.move_drag.is_some()
-                || ed.popover.is_some()
-                || ed.beautify_hex_draft.is_some()
-            {
+            if !tab_may_cycle(state) {
                 return Task::none();
             }
-            let n = ed.model.annotations().len();
-            let Some(next) = cycle_selection_index(n, ed.model.selected_annotation(), step) else {
-                return Task::none();
-            };
-            cancel_editor_previews(ed);
-            ed.model.select_index(Some(next));
-            if let Some(kind) = ed.model.selected_kind_label() {
-                ed.set_guide(
-                    format!(
-                        "{kind} selected ({} of {n}). Arrows move it, ⌫ removes it, esc deselects.",
-                        next + 1
-                    ),
-                    crate::editor::KeyGuide::Selection,
-                );
+            // A click can leave the caret in the Beautify hex field without
+            // any message reaching the app. While that field is on screen,
+            // ask iced whether it has the caret (one round trip) before
+            // moving the selection.
+            if beautify_hex_on_screen(state) {
+                return iced::widget::operation::is_focused(iced::widget::Id::new(
+                    super::key_focus::BEAUTIFY_HEX_ID,
+                ))
+                .map(move |field_focused| Message::EditorTabResolved {
+                    step,
+                    field_focused,
+                });
             }
-            // Tab on the canvas also takes the caret out of any text field
-            // a click left it in, so typing goes to the canvas keys.
-            super::key_focus::unfocus_text_fields()
+            cycle_selection_by_tab(state, step)
+        }
+        Message::EditorTabResolved {
+            step,
+            field_focused,
+        } => {
+            if field_focused {
+                // Tab leaves the field; the selection stays.
+                return super::key_focus::unfocus_text_fields();
+            }
+            if !tab_may_cycle(state) {
+                return Task::none();
+            }
+            cycle_selection_by_tab(state, step)
         }
         Message::EditorResizeByKeys(dx, dy) => {
             let Some(ed) = state.editor.as_mut() else {

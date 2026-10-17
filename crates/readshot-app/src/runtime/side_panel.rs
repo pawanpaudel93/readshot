@@ -1,8 +1,9 @@
 //! Editor side panel (spec §2.3): right, 300 px, tabs (Text,
-//! Beautify), hide/show ⌥⌘P, open state and tab remembered.
+//! Beautify), hide/show ⌥⌘P (Ctrl+Shift+P off macOS), open state and
+//! tab remembered.
 //! Docks and reflows the canvas when the window is wide enough. Below
 //! `PANEL_DOCK_MIN_WINDOW` it collapses to the title-row "Show panel"
-//! button, which opens a temporary overlay (esc / ⌥⌘P / click outside
+//! button, which opens a temporary overlay (esc / the panel key / click outside
 //! close it), so the bars keep their one-row, unobscured 720 px layout.
 
 use super::*;
@@ -29,7 +30,8 @@ pub(crate) enum PanelMode {
     /// Narrow window: only the title-row "Show panel" button.
     Collapsed,
     /// Narrow window, opened on demand: floats over the canvas's right
-    /// edge until esc, ⌥⌘P or a click outside.
+    /// edge until esc, the panel key (⌥⌘P / Ctrl+Shift+P) or a click
+    /// outside.
     Overlay,
 }
 
@@ -115,7 +117,7 @@ fn panel_style(theme: &Theme, overlay: bool) -> container::Style {
     }
 }
 
-/// The whole panel: tab header (with Hide panel ⌥⌘P) over the current
+/// The whole panel: tab header (with Hide panel, ⌥⌘P / Ctrl+Shift+P) over the current
 /// tab's body.
 pub(crate) fn side_panel<'a>(
     state: &'a App,

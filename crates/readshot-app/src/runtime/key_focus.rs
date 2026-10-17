@@ -203,6 +203,13 @@ fn zone_on_screen(state: &App, ed: &EditorSession, zone: FocusZone) -> bool {
     }
 }
 
+/// The Color popover's hex field holds something other than the current
+/// colour: typed, not yet submitted.
+pub(crate) fn color_hex_pending(ed: &EditorSession) -> bool {
+    let current = ed.model.effective_color().to_hex();
+    !ed.hex_draft.is_empty() && !ed.hex_draft.eq_ignore_ascii_case(&current)
+}
+
 /// The zones ⌃Tab / F6 walk, in order, that can take focus now.
 fn cycle_zones(state: &App, ed: &EditorSession) -> Vec<FocusZone> {
     let mut zones = Vec::new();
@@ -388,6 +395,17 @@ pub(crate) fn handle_focus_key(
         && !m.alt()
         && !m.control()
     {
+        // A hex typed but not submitted is applied, as ↵ would (an
+        // invalid one keeps the popover open and says why). Esc stays
+        // cancel.
+        if ed.popover == Some(EditorPopover::Color) && color_hex_pending(ed) {
+            let task = update(state, Message::EditorHexSubmitted);
+            let ed = state.editor.as_ref()?;
+            if ed.popover.is_some() {
+                return Some(task);
+            }
+            return Some(Task::batch([task, caret_task(ed.key_focus)]));
+        }
         let ed = state.editor.as_mut()?;
         close_editor_popover(ed);
         return Some(caret_task(ed.key_focus));

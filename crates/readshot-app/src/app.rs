@@ -81,11 +81,13 @@ pub enum HistoryKeyboardAction {
     CopyImage,
     /// ⌘F: focus the search field (shown in the History key legend).
     FocusSearch,
-    /// ⌥⌘R: reveal the selected capture in Finder / its folder.
+    /// ⌥⌘R (Ctrl+Shift+R off macOS): reveal the selected capture in
+    /// Finder / its folder.
     Reveal,
     /// ⌘P: pin the selected capture.
     Pin,
-    /// ⌥⇧⌘C: copy the text of every visible capture.
+    /// ⌥⇧⌘C (Ctrl+Shift+A off macOS): copy the text of every visible
+    /// capture.
     CopyVisibleText,
     /// ⇧⌘⌫: arm Clear All; pressed again while armed, confirm it.
     ClearAll,
@@ -551,7 +553,8 @@ pub enum Message {
         session: u64,
         result: Option<Result<(), String>>,
     },
-    /// Show / hide the editor side panel (⌥⌘P, or the panel buttons). In
+    /// Show / hide the editor side panel (⌥⌘P; Ctrl+Shift+P off macOS; or
+    /// the panel buttons). In
     /// narrow windows this opens / closes the temporary overlay instead.
     EditorPanelToggled,
     /// A side-panel tab was chosen.
@@ -639,7 +642,8 @@ pub enum Message {
         clockwise: bool,
     },
     EditorFlip(readshot_core::document::FlipAxis),
-    /// Open the Resize dialog (⌥⌘I or Image › Resize…).
+    /// Open the Resize dialog (⌥⌘I; Ctrl+Shift+R off macOS; or
+    /// Image › Resize…).
     EditorResizeOpen,
     EditorResizeWidthChanged(String),
     EditorResizeHeightChanged(String),
@@ -714,7 +718,8 @@ pub enum Message {
     EditorEditSelectedText,
     /// ⇧⌘I: open (or close) the Image menu with its first row focused.
     EditorImageMenuKey,
-    /// ⌥⌘T / ⌥⌘B: show the side panel on that tab, its tabs focused.
+    /// ⌥⌘T / ⌥⌘B (Ctrl+Shift+T / B off macOS): show the side panel on
+    /// that tab, its tabs focused.
     EditorPanelTabKey(crate::editor::PanelTab),
     /// ⌃Tab / F6 (`true`) or ⌃⇧Tab / ⇧F6: move the keyboard focus to the
     /// next (previous) zone: canvas → options bar → side panel.
@@ -722,6 +727,13 @@ pub enum Message {
     /// Tab / ⇧Tab on the canvas: select the next (`1`) or previous (`-1`)
     /// annotation, so arrows, ⌫ and ↵ reach it without a click.
     EditorCycleSelection(i32),
+    /// The answer to a canvas Tab's check of the Beautify hex field: with
+    /// the field focused, Tab only leaves it; otherwise the selection
+    /// moves by `step`.
+    EditorTabResolved {
+        step: i32,
+        field_focused: bool,
+    },
     /// ⌥ + arrow: grow or shrink the crop draft or the selection from
     /// its bottom-right edge; a selected magnifier moves only its bubble.
     EditorResizeByKeys(f32, f32),
