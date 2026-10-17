@@ -156,6 +156,26 @@ fn swatch<'a>(
     tooltip_with_key(b, tip, None, Position::Bottom)
 }
 
+/// The shadow slider's readout, one label per level.
+const SHADOW_LABELS: [&str; 5] = ["None", "Subtle", "Soft", "Medium", "Strong"];
+
+/// Advance of one glyph of the mono font (JetBrains Mono: 600 units per
+/// 1000-unit em), as a fraction of its size.
+const MONO_ADVANCE: f32 = 0.6;
+
+/// Width of a slider readout: fits the widest one any slider shows
+/// (shadow names, the padding and corner numbers) at the caption size,
+/// plus a pixel either side so rounding never wraps or clips it.
+fn readout_width() -> f32 {
+    let widest = SHADOW_LABELS
+        .iter()
+        .map(|l| l.chars().count())
+        .chain([MAX_PADDING, MAX_CORNER_RADIUS].map(|n| n.to_string().len()))
+        .max()
+        .unwrap_or(0);
+    widest as f32 * TYPE_CAPTION * MONO_ADVANCE + 2.0
+}
+
 fn slider_row<'a>(
     label: &'static str,
     max: u32,
@@ -185,7 +205,7 @@ fn slider_row<'a>(
             .font(mono_font())
             .size(TYPE_CAPTION)
             .style(text_t2)
-            .width(Length::Fixed(40.0)),
+            .width(Length::Fixed(readout_width())),
     )
     .into()
 }
@@ -311,7 +331,7 @@ pub(crate) fn beautify_tab<'a>(
             "Shadow",
             u32::from(MAX_SHADOW_LEVEL),
             level as u32,
-            ["None", "Subtle", "Soft", "Medium", "Strong"][level].to_string(),
+            SHADOW_LABELS[level].to_string(),
             busy,
             |v| BeautifyEdit::ShadowLevel(v as u8)
         ),
@@ -322,4 +342,25 @@ pub(crate) fn beautify_tab<'a>(
     .spacing(SP3)
     .padding(SP3);
     iced::widget::scrollable(body).height(Length::Fill).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_slider_readout_fits_its_width() {
+        let w = readout_width();
+        let labels = SHADOW_LABELS
+            .iter()
+            .map(|l| l.to_string())
+            .chain([MAX_PADDING, MAX_CORNER_RADIUS].map(|n| n.to_string()));
+        for label in labels {
+            let needed = label.chars().count() as f32 * TYPE_CAPTION * MONO_ADVANCE;
+            assert!(needed < w, "{label:?} needs {needed} px of {w}");
+        }
+        // "Medium" and "Strong" did not fit the old fixed 40 px.
+        let medium = "Medium".len() as f32 * TYPE_CAPTION * MONO_ADVANCE;
+        assert!(medium > 40.0 && medium < w);
+    }
 }
