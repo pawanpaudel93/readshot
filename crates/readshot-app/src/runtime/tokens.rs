@@ -49,7 +49,7 @@ pub(crate) const DARK: Palette = Palette {
     border: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
     t1: Color::from_rgb8(0xED, 0xED, 0xED),
     t2: Color::from_rgb8(0xB4, 0xB4, 0xB4),
-    t3: Color::from_rgb8(0x8A, 0x8A, 0x8A),
+    t3: Color::from_rgb8(0x93, 0x93, 0x93),
     acc: Color::from_rgb8(0x14, 0xB8, 0xA6),
     acc_tint: Color::from_rgba(0.078, 0.722, 0.651, 0.14),
     acc_text: Color::from_rgb8(0x5E, 0xEA, 0xD4),
@@ -75,7 +75,7 @@ pub(crate) const LIGHT: Palette = Palette {
     border: Color::from_rgba(0.0, 0.0, 0.0, 0.11),
     t1: Color::from_rgb8(0x17, 0x17, 0x17),
     t2: Color::from_rgb8(0x52, 0x52, 0x5B),
-    t3: Color::from_rgb8(0x8A, 0x8A, 0x93),
+    t3: Color::from_rgb8(0x63, 0x63, 0x6B),
     acc: Color::from_rgb8(0x0D, 0x94, 0x88),
     acc_tint: Color::from_rgba(0.051, 0.580, 0.533, 0.12),
     acc_text: Color::from_rgb8(0x0F, 0x76, 0x6E),
@@ -178,7 +178,39 @@ mod tests {
             for bg in [p.bg, p.surface, p.raised] {
                 assert!(contrast_ratio(p.t1, bg) >= 4.5, "t1 on {bg:?}");
                 assert!(contrast_ratio(p.t2, bg) >= 4.5, "t2 on {bg:?}");
-                assert!(contrast_ratio(p.t3, bg) >= 3.0, "t3 on {bg:?}");
+            }
+        }
+    }
+
+    /// t3 carries 11-12 px help text, metadata and captions, so it must
+    /// meet WCAG 1.4.3 AA (4.5:1) on every surface it sits on, including
+    /// floating bars and the selected / hovered list row.
+    #[test]
+    fn tertiary_text_meets_aa_on_every_surface_it_sits_on() {
+        for p in both() {
+            let mut surfaces = vec![p.bg, p.surface, p.raised];
+            for base in [p.bg, p.surface] {
+                surfaces.push(over(p.float, base));
+                surfaces.push(over(p.acc_tint, base));
+                surfaces.push(over(p.hover, base));
+            }
+            for bg in surfaces {
+                let r = contrast_ratio(p.t3, bg);
+                assert!(r >= 4.5, "t3 on {bg:?} is {r:.2}:1");
+            }
+        }
+    }
+
+    /// The `acc_text` outline that marks a selected segment, tab or line
+    /// (the non-colour cue next to the tint) is a UI component: 3:1.
+    #[test]
+    fn accent_outline_meets_non_text_contrast() {
+        for p in both() {
+            for base in [p.bg, p.surface, p.raised] {
+                for bg in [base, over(p.float, base), over(p.acc_tint, base)] {
+                    let r = contrast_ratio(p.acc_text, bg);
+                    assert!(r >= 3.0, "acc_text on {bg:?} is {r:.2}:1");
+                }
             }
         }
     }
