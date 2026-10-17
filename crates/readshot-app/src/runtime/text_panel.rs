@@ -104,6 +104,33 @@ pub(crate) fn resolve_baked_docs(tp: &mut crate::editor::TextPanelState) -> bool
     }
 }
 
+/// Release the bake sources (each a whole earlier document) no held
+/// state can reach any more: a baked part no undo/redo state, open
+/// preview or slider baseline uses, nor any bake source still kept
+/// (a bake of a bake). Part ids are never reused, so a dropped part never
+/// comes back. Runs on every history change (`sync_editor_history`).
+pub(crate) fn prune_bake_sources(ed: &mut EditorSession) {
+    if ed.text_panel.bake_sources.is_empty() {
+        return;
+    }
+    let mut live = ed.model.referenced_part_ids();
+    if let Some(b) = &ed.snapshot_drag_baseline {
+        live.extend(b.doc.geometry.parts.iter().map(|p| p.id));
+    }
+    let mut pending: Vec<_> = live.iter().copied().collect();
+    while let Some(id) = pending.pop() {
+        if let Some(src) = ed.text_panel.bake_sources.get(&id) {
+            for p in &src.parts {
+                if live.insert(p.id) {
+                    pending.push(p.id);
+                }
+            }
+        }
+    }
+    let tp = &mut ed.text_panel;
+    tp.bake_sources.retain(|id, _| live.contains(id));
+}
+
 /// The next part to recognize, upright in its own pixels: the first of
 /// `parts` with no recognition, or for a baked part, the first of its
 /// source parts that has none.

@@ -369,6 +369,7 @@ pub(crate) fn sync_editor_history(
             ed.toast_action = None;
         }
     }
+    super::text_panel::prune_bake_sources(ed);
     write_editor_history(ed, coord);
 }
 

@@ -133,6 +133,18 @@ impl EditorState {
         }
     }
 
+    /// The id of every part any held document state uses: the undo and
+    /// redo stacks, the present and an open preview's baseline. A part
+    /// outside this set can never be shown again (ids are never reused),
+    /// so data kept per part elsewhere can be released.
+    pub fn referenced_part_ids(&self) -> std::collections::BTreeSet<PartId> {
+        self.history
+            .states()
+            .chain(self.preview_baseline.as_ref().map(|(b, _)| b))
+            .flat_map(|s| s.doc.geometry.parts.iter().map(|p| p.id))
+            .collect()
+    }
+
     /// The composed document image for the present geometry.
     pub fn base(&self) -> &RgbaImage {
         &self.base

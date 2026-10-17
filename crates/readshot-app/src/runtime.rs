@@ -12867,6 +12867,63 @@ mod tests {
     }
 
     #[test]
+    fn a_bake_source_no_state_can_reach_is_released() {
+        use readshot_core::document::Join;
+        let undo = || Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo);
+        let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        let _ = update(
+            &mut app,
+            Message::EditorCombineCaptureRequested(Join::Below),
+        );
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(20, 10))));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.part_ids().len(), 2, "combined");
+        assert_eq!(ed.text_panel.bake_sources.len(), 1, "baked");
+        let source = Arc::downgrade(ed.text_panel.bake_sources.values().next().unwrap());
+        // Undone, the bake is still on the redo stack: kept.
+        let _ = update(&mut app, undo());
+        let _ = update(&mut app, undo());
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.part_ids().len(), 1);
+        assert_eq!(
+            ed.text_panel.bake_sources.len(),
+            1,
+            "redo can still reach it"
+        );
+        // A new edit truncates the redo stack: nothing reaches the baked
+        // part, so its source (a whole earlier document) is released.
+        let _ = update(&mut app, Message::EditorRotate { clockwise: false });
+        let ed = app.editor.as_ref().unwrap();
+        assert!(!ed.model.can_redo());
+        assert!(ed.text_panel.bake_sources.is_empty(), "source kept");
+        assert!(source.upgrade().is_none(), "source geometry still alive");
+    }
+
+    #[test]
+    fn a_bake_of_a_bake_keeps_the_inner_source() {
+        use readshot_core::document::Join;
+        let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
+        for _ in 0..2 {
+            let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+            let _ = update(
+                &mut app,
+                Message::EditorCombineCaptureRequested(Join::Below),
+            );
+            let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(20, 10))));
+        }
+        let ed = app.editor.as_ref().unwrap();
+        // The second bake's source holds the first baked part, whose own
+        // source must stay to place the original's text.
+        assert_eq!(ed.text_panel.bake_sources.len(), 2);
+        assert!(
+            super::text_panel::original_part_affine(&ed.text_panel, ed.model.geometry()).is_some()
+        );
+    }
+
+    #[test]
     fn a_baked_part_is_never_recognized_in_its_own_pixels() {
         use readshot_core::document::Join;
         let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));

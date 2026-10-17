@@ -137,6 +137,14 @@ impl History {
         Some(&self.present.annotations)
     }
 
+    /// Every state held: the undo stack, the present and the redo stack.
+    pub fn states(&self) -> impl Iterator<Item = &Snapshot> {
+        self.past
+            .iter()
+            .chain(std::iter::once(&self.present))
+            .chain(self.future.iter())
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.past.is_empty()
     }
