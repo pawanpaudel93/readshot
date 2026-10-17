@@ -2004,12 +2004,19 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorHistoryWritten { .. }) => {
             // Images the message lets go of are freed off the UI thread.
             let held = state.editor.as_ref().map(compose_jobs::hold);
-            let moved_from = compose_jobs::settle_before(state, &msg);
-            // A canvas point computed against the frame shown before is
-            // mapped into the present one, or the message is dropped.
-            let msg = match (state.editor.as_mut(), moved_from) {
-                (Some(ed), Some(old)) if compose_jobs::points_into_the_shown_image(&msg) => {
-                    compose_jobs::remap_stale_press(ed, &old, msg)
+            // The frame the canvas computed this message's points in: the
+            // one the last view showed (a step settled now, or a change
+            // handled earlier in the same batch, may have moved it).
+            let shown = state.editor.as_ref().map(|ed| ed.shown_frame());
+            compose_jobs::settle_before(state, &msg);
+            // A canvas point computed against another frame than the
+            // present one is mapped into it, or the message is dropped.
+            let msg = match (state.editor.as_mut(), shown) {
+                (Some(ed), Some(shown))
+                    if compose_jobs::points_into_the_shown_image(&msg)
+                        && !crate::editor::same_frame(&shown, ed.model.geometry()) =>
+                {
+                    compose_jobs::remap_stale_press(ed, &shown, msg)
                 }
                 (Some(ed), _) => compose_jobs::remap_same_batch_drag(ed, msg),
                 (None, _) => Some(msg),
@@ -13933,11 +13940,146 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_same_batch_drag_over_another_part_moves_with_the_press_map() {
+        // A gap step pending on two parts; the press (lower part) lands it
+        // and is mapped 10 px down. The drag point the canvas sent with it
+        // is over the upper part, which did not move: it must still go
+        // through the press's map, so the move is the 10 px up the user
+        // dragged, not 20.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = async_compose(two_part_editor());
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(2.0, 12.0, 6.0, 6.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        ed.model.clear_selection();
+        app.editor = Some(ed);
+        let _ = update(&mut app, Message::EditorLayoutGapPreview(10));
+        let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
+        select_drag(&mut app, (4.0, 14.0), (4.0, 4.0));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.geometry().gap, 10);
+        assert!(
+            matches!(
+                ed.model.annotations(),
+                [Annotation::Rectangle { rect, .. }] if *rect == RectLike::new(2.0, 12.0, 6.0, 6.0)
+            ),
+            "{:?}",
+            ed.model.annotations()
+        );
+    }
+
+    #[test]
+    fn a_press_after_a_same_batch_frame_change_is_mapped_or_dropped() {
+        use readshot_ui::CanvasMessage;
+        let outline = Annotation::Rectangle {
+            rect: RectLike::new(2.0, 2.0, 10.0, 6.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        };
+        let fresh = || {
+            let mut app = build_app(Arc::new(FakePermissions::granted()));
+            let mut ed = crate::editor::EditorSession::new(solid(40, 20));
+            ed.model.commit_annotation(outline.clone());
+            ed.model.clear_selection();
+            ed.model.set_tool(readshot_ui::editor::ToolState::Select);
+            app.editor = Some(ed);
+            built_a_view(&app);
+            app
+        };
+        let press = |app: &mut App| {
+            // On the rectangle's left edge in the frame the view showed.
+            let _ = update(
+                app,
+                Message::EditorCanvas(CanvasMessage::SelectPressed(PointLike::new(2.0, 5.0))),
+            );
+        };
+        // A rotate handled earlier in the same batch (small document: no
+        // pending step) turned the frame: the press is mapped with it and
+        // selects the rectangle. Before, it passed unmapped and missed.
+        let mut app = fresh();
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        press(&mut app);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (20, 40));
+        assert_eq!(ed.model.selected_annotation(), Some(0));
+        // An image added in the same batch is not an affine of the frame
+        // shown: the press is dropped (before, it passed unmapped).
+        let mut app = fresh();
+        let session = app.editor.as_ref().unwrap().session_id;
+        let _ = update(
+            &mut app,
+            Message::EditorPartLoaded {
+                session,
+                result: Ok(Some(Arc::new(solid(20, 10)))),
+            },
+        );
+        assert_eq!(app.editor.as_ref().unwrap().model.part_ids().len(), 2);
+        press(&mut app);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.selected_annotation(), None);
+        assert!(ed.move_drag.is_none());
+        // A drawing drag begun there is refused too, and its commit with it.
+        let _ = update(&mut app, Message::EditorCanvas(CanvasMessage::DragStarted));
+        assert!(matches!(
+            app.editor.as_ref().unwrap().drag_started_in,
+            Some(crate::editor::CanvasDragFrame::Dropped)
+        ));
+        // Once a view shows the new frame, a press works as it is.
+        built_a_view(&app);
+        press(&mut app);
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.selected_annotation(),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn a_remapped_press_hit_tests_handles_at_the_scale_it_was_made_at() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = async_compose(crate::editor::EditorSession::new(solid(40, 20)));
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(2.0, 2.0, 10.0, 6.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        assert_eq!(ed.model.select_at(PointLike::new(2.0, 5.0)), Some(0));
+        ed.model.set_tool(readshot_ui::editor::ToolState::Select);
+        // Shown at 1 screen px per document px.
+        ed.render_scale.set(1.0);
+        app.editor = Some(ed);
+        apply_resize_width(&mut app, "80");
+        // 9 screen px below the bottom-right handle (12, 8): inside the
+        // 14 px grab radius on the image shown. In the resized frame that
+        // is 18 document px, which is still 9 screen px as pressed.
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
+                12.0, 17.0,
+            ))),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (80, 40));
+        assert!(
+            matches!(
+                ed.move_drag.as_ref().map(|d| d.kind),
+                Some(crate::editor::MoveDragKind::Resize(
+                    readshot_ui::editor::ResizeHandle::SouthEast
+                ))
+            ),
+            "the handle is grabbed (before: missed at the old scale)"
+        );
+    }
+
     /// What `view()` does to the canvas frame: points the canvas sends
     /// from now on are in the present frame.
     fn built_a_view(app: &App) {
-        let seq = &app.editor.as_ref().unwrap().canvas_view_seq;
-        seq.set(seq.get() + 1);
+        app.editor.as_ref().unwrap().note_canvas_built();
     }
 
     #[test]

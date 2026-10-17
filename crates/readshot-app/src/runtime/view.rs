@@ -2083,8 +2083,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let (text_hover, text_selected) = text_marks(ed, panel_visible);
     let stage_offset = ed.stage_offset.clone();
     // A new canvas program, in the present frame.
-    ed.canvas_view_seq
-        .set(ed.canvas_view_seq.get().wrapping_add(1));
+    ed.note_canvas_built();
     // Combined images (document px): a new magnifier bubble avoids the
     // gutters between them.
     let part_rects: Vec<readshot_core::RectLike> = {

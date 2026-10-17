@@ -831,17 +831,16 @@ fn chains_onto_steps(message: &Message) -> bool {
 /// apply, then wait — and nothing ever lands under, or is lost to, a
 /// later interaction.
 ///
-/// Returns the frame shown before when settling changed it (a step or
-/// gap value landed): a canvas position in `message` was then computed
-/// against that frame ([`points_into_the_shown_image`]).
-pub(crate) fn settle_before(
-    state: &mut App,
-    message: &Message,
-) -> Option<Arc<readshot_core::document::DocGeometry>> {
+/// Settling may change the document frame (a step or gap value lands):
+/// the dispatcher then maps a canvas position in `message`, computed
+/// against the frame the last view showed, into the present one
+/// ([`points_into_the_shown_image`]).
+pub(crate) fn settle_before(state: &mut App, message: &Message) {
     let (mut steps_may_wait, gap_may_wait) = may_wait(message);
     let coord = state.coordinator.clone();
-    let ed = state.editor.as_mut()?;
-    let before = Arc::clone(ed.model.geometry());
+    let Some(ed) = state.editor.as_mut() else {
+        return;
+    };
     if !gap_may_wait {
         queue_released_gap(ed);
     }
@@ -855,12 +854,13 @@ pub(crate) fn settle_before(
     if !gap_may_wait {
         settle_gap(ed, &coord);
     }
-    (!Arc::ptr_eq(&before, ed.model.geometry())).then_some(before)
 }
 
 /// A canvas press (or a click tool's commit) whose position was mapped
 /// against the image on screen when it happened. If settling just
-/// changed the frame ([`settle_before`]), that point means something
+/// changed the frame ([`settle_before`]), or a change handled earlier
+/// in the same batch did (the frame the last view showed is not the
+/// present one: `EditorSession::shown_frame`), that point means something
 /// else now — it could select or move another annotation, a redaction
 /// included — so it is mapped into the new frame when that is exact
 /// ([`remap_stale_press`]), else the message is dropped
@@ -901,13 +901,21 @@ pub(crate) fn remap_stale_press(
     let new = Arc::clone(ed.model.geometry());
     let remapped = match &message {
         Message::EditorCanvas(CanvasMessage::SelectPressed(p)) => {
-            map_point(old, &new, *p).map(|q| {
+            frame_map_at(old, &new, *p).map(|m| {
+                let len = m.length_scale();
+                let shown_scale = ed.render_scale.get();
                 ed.press_remap = Some(crate::editor::PressRemap {
                     old: Arc::clone(old),
                     new: Arc::clone(&new),
+                    map: m,
+                    scale: if len.is_finite() && len > 0.0 {
+                        shown_scale / len
+                    } else {
+                        shown_scale
+                    },
                     view_seq: ed.canvas_view_seq.get(),
                 });
-                Message::EditorCanvas(CanvasMessage::SelectPressed(q))
+                Message::EditorCanvas(CanvasMessage::SelectPressed(m.apply(*p)))
             })
         }
         Message::EditorCanvas(CanvasMessage::RequestText(p)) => {
@@ -930,9 +938,9 @@ pub(crate) fn remap_stale_press(
 
 /// A Select drag point the canvas sent before a view was built after a
 /// remapped press ([`EditorSession::press_remap`]) is in the old frame:
-/// mapped like the press, or dropped (`None`) when it can't be (the next
-/// point, or the release, carries on). Once a view is built, points are
-/// in the present frame and pass as they are.
+/// mapped with the press's own map, so the move's delta is in one frame
+/// (even over another part, or a gutter). Once a view is built, points
+/// are in the present frame and pass as they are.
 pub(crate) fn remap_same_batch_drag(ed: &mut EditorSession, message: Message) -> Option<Message> {
     use readshot_ui::CanvasMessage;
     let Some(r) = ed.press_remap.as_ref() else {
@@ -943,10 +951,9 @@ pub(crate) fn remap_same_batch_drag(ed: &mut EditorSession, message: Message) ->
         return Some(message);
     }
     match message {
-        Message::EditorCanvas(CanvasMessage::SelectDragged(p)) => {
-            readshot_core::document::map_point(&r.old, &r.new, p)
-                .map(|q| Message::EditorCanvas(CanvasMessage::SelectDragged(q)))
-        }
+        Message::EditorCanvas(CanvasMessage::SelectDragged(p)) => Some(Message::EditorCanvas(
+            CanvasMessage::SelectDragged(r.map.apply(p)),
+        )),
         other => Some(other),
     }
 }

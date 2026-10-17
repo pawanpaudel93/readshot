@@ -1476,9 +1476,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     // it rather than trigger discard.
                     ed.canvas_drag_active = true;
                     ed.escape_ended_drag = None;
-                    ed.drag_started_in = Some(crate::editor::CanvasDragFrame::Live(
-                        std::sync::Arc::clone(ed.model.geometry()),
-                    ));
+                    // The frame its points are in: the one shown, which is
+                    // the present one (a press in another was dropped).
+                    ed.drag_started_in =
+                        Some(crate::editor::CanvasDragFrame::Live(ed.shown_frame()));
                 }
                 readshot_ui::CanvasMessage::DragMoved(_)
                 | readshot_ui::CanvasMessage::PolylineMoved(_) => {
@@ -1512,7 +1513,13 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     ed.escape_ended_drag = None;
                     cancel_editor_previews(ed);
                     commit_pending_editor_text(ed, &state.coordinator);
-                    let scale = ed.render_scale.get();
+                    // A press mapped from the frame shown before hit-tests
+                    // at the scale it was made at, in present document px.
+                    let scale = ed
+                        .press_remap
+                        .as_ref()
+                        .filter(|r| r.view_seq == ed.canvas_view_seq.get())
+                        .map_or_else(|| ed.render_scale.get(), |r| r.scale);
                     if let Some(handle) = ed.model.resize_handle_at_scaled(p, scale) {
                         let Some(selected_index) = ed.model.selected_annotation() else {
                             return Task::none();
@@ -1656,7 +1663,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         Some(crate::editor::CanvasDragFrame::Live(g)) => {
                             from_drag
                                 && ed.canvas_drag_active
-                                && !std::sync::Arc::ptr_eq(&g, ed.model.geometry())
+                                && !crate::editor::same_frame(&g, ed.model.geometry())
                         }
                         None => false,
                     };

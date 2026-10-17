@@ -219,9 +219,24 @@ pub struct PressRemap {
     pub old: std::sync::Arc<readshot_core::document::DocGeometry>,
     /// The present frame they are mapped into.
     pub new: std::sync::Arc<readshot_core::document::DocGeometry>,
+    /// The one map the press was mapped with (the affine of the part
+    /// under it): every same-batch drag point goes through it too, so the
+    /// move's delta is in one frame whichever part a point is over.
+    pub map: readshot_core::document::Affine,
+    /// Display scale (screen px per present document px) the press was
+    /// made at: the old view's scale through `map`, for its hit tests.
+    pub scale: f32,
     /// `canvas_view_seq` when the press was mapped: once a view is built
     /// after it, the canvas sends points in the new frame.
     pub view_seq: u64,
+}
+
+/// Whether two frames are the same: one geometry, or equal ones (a copy).
+pub fn same_frame(
+    a: &std::sync::Arc<readshot_core::document::DocGeometry>,
+    b: &std::sync::Arc<readshot_core::document::DocGeometry>,
+) -> bool {
+    std::sync::Arc::ptr_eq(a, b) || **a == **b
 }
 
 /// Which message of an Escape that ended a canvas drag was handled
@@ -916,6 +931,12 @@ pub struct EditorSession {
     /// of the last view built, so canvas messages handled before the next
     /// one are still in that frame ([`Self::press_remap`]).
     pub canvas_view_seq: std::rc::Rc<std::cell::Cell<u64>>,
+    /// The frame the last `view()` built the canvas in: every canvas
+    /// position handled before the next view is in it. `None` until a
+    /// view is built (the present frame is then the one shown).
+    pub canvas_frame: std::rc::Rc<
+        std::cell::RefCell<Option<std::sync::Arc<readshot_core::document::DocGeometry>>>,
+    >,
     /// A Select press that landed a pending step and was mapped into the
     /// new frame (`compose_jobs::remap_stale_press`): drag points the
     /// canvas sent before the next view are in the old frame too and are
@@ -1206,6 +1227,7 @@ impl EditorSession {
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
             stage_offset: std::rc::Rc::new(std::cell::Cell::new((0.0, 0.0))),
             canvas_view_seq: std::rc::Rc::new(std::cell::Cell::new(0)),
+            canvas_frame: std::rc::Rc::new(std::cell::RefCell::new(None)),
             press_remap: None,
             canvas_cache: std::rc::Rc::new(iced::widget::canvas::Cache::default()),
             output_checkpoint,
@@ -1287,6 +1309,7 @@ impl EditorSession {
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
             stage_offset: std::rc::Rc::new(std::cell::Cell::new((0.0, 0.0))),
             canvas_view_seq: std::rc::Rc::new(std::cell::Cell::new(0)),
+            canvas_frame: std::rc::Rc::new(std::cell::RefCell::new(None)),
             press_remap: None,
             canvas_cache: std::rc::Rc::new(iced::widget::canvas::Cache::default()),
             output_checkpoint,
@@ -1373,6 +1396,22 @@ impl EditorSession {
     pub fn mark_output_clean(&mut self) {
         self.output_checkpoint = EditorOutputCheckpoint(self.model.snapshot());
         self.clear_discard_confirmation();
+    }
+
+    /// The frame canvas positions handled now are in: the one the last
+    /// view showed, else (no view yet) the present one.
+    pub fn shown_frame(&self) -> std::sync::Arc<readshot_core::document::DocGeometry> {
+        self.canvas_frame
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| std::sync::Arc::clone(self.model.geometry()))
+    }
+
+    /// A view was built: the canvas maps positions in the present frame.
+    pub fn note_canvas_built(&self) {
+        self.canvas_view_seq
+            .set(self.canvas_view_seq.get().wrapping_add(1));
+        *self.canvas_frame.borrow_mut() = Some(std::sync::Arc::clone(self.model.geometry()));
     }
 
     /// Whether a canvas drag is live: a draw (shape, redaction, crop,
