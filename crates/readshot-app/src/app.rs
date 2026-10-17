@@ -639,6 +639,8 @@ pub enum Message {
     EditorZoomActual,
     /// Reset editor preview to fit-down mode.
     EditorZoomFit,
+    /// The editor stage scrolled to this offset (content px).
+    EditorStageScrolled(f32, f32),
     /// The OS reported a new scale factor for a tracked window.
     WindowRescaled(iced::window::Id, f32),
     /// Text-tool inline input — content typed by the user. Empty

@@ -2075,6 +2075,17 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         PanelMode::Docked | PanelMode::Overlay
     );
     let (text_hover, text_selected) = text_marks(ed, panel_visible);
+    let stage_offset = ed.stage_offset.clone();
+    // Combined images (document px): a new magnifier bubble avoids the
+    // gutters between them.
+    let part_rects: Vec<readshot_core::RectLike> = {
+        let g = ed.model.geometry();
+        if g.parts.len() > 1 {
+            g.parts.iter().filter_map(|p| g.part_rect(p.id)).collect()
+        } else {
+            Vec::new()
+        }
+    };
     let image_area_content = responsive(move |stage| {
         // The stage is already inset clear of the floating bars.
         let available = stage;
@@ -2099,6 +2110,25 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         let content_h = output_h.max(available.height);
 
         let filter = editor_image_filter(scale, display_scale);
+        let needs_horizontal_scroll = output_w > available.width + 0.5;
+        let needs_vertical_scroll = output_h > available.height + 0.5;
+        if !(needs_horizontal_scroll || needs_vertical_scroll) {
+            // No scrollable this frame: one shown later starts at 0, 0.
+            stage_offset.set((0.0, 0.0));
+        }
+        let viewport = stage_viewport_in_document(StageViewport {
+            offset: stage_offset.get(),
+            available: (available.width, available.height),
+            content: (content_w, content_h),
+            output: (output_w, output_h),
+            pad: if framed {
+                (m.pad.left, m.pad.top)
+            } else {
+                (0.0, 0.0)
+            },
+            scale,
+            image_offset,
+        });
 
         let image_layer: Element<'_, Message> = container(
             iced::widget::image(image_handle.clone())
@@ -2148,6 +2178,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             } else {
                 ed.crop_draft
             },
+            viewport,
+            parts: part_rects.clone(),
             cache: ed.canvas_cache.clone(),
         };
         let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
@@ -2272,8 +2304,6 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             .center_x(Length::Fill)
             .center_y(Length::Fill);
 
-        let needs_horizontal_scroll = output_w > available.width + 0.5;
-        let needs_vertical_scroll = output_h > available.height + 0.5;
         if needs_horizontal_scroll || needs_vertical_scroll {
             let scroll_direction = match (needs_horizontal_scroll, needs_vertical_scroll) {
                 (true, true) => iced::widget::scrollable::Direction::Both {
@@ -2286,6 +2316,10 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             };
             scrollable(content)
                 .direction(scroll_direction)
+                .on_scroll(|v| {
+                    let o = v.absolute_offset();
+                    Message::EditorStageScrolled(o.x, o.y)
+                })
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -5249,6 +5283,50 @@ pub(crate) fn welcome_permission_guidance(state: WelcomeState) -> (&'static str,
     }
 }
 
+/// What [`stage_viewport_in_document`] needs about the editor stage.
+pub(crate) struct StageViewport {
+    /// The scrollable's offset (content px).
+    pub offset: (f32, f32),
+    /// The stage's size (screen px).
+    pub available: (f32, f32),
+    /// The scrolled content's size: the output, at least the stage.
+    pub content: (f32, f32),
+    /// The (beautified) output's size, centred in the content.
+    pub output: (f32, f32),
+    /// The image's top-left inside the output.
+    pub pad: (f32, f32),
+    /// Screen px per document px.
+    pub scale: f32,
+    /// The displayed image's top-left in document px (a crop's origin).
+    pub image_offset: (f32, f32),
+}
+
+/// The part of the document the stage shows (document px): the stage
+/// rect at the scroll offset (clamped as the scrollable clamps it), mapped
+/// through the image's place in the content; the canvas cuts it to the
+/// image. `None` when the scale or stage size is unusable.
+pub(crate) fn stage_viewport_in_document(v: StageViewport) -> Option<readshot_core::RectLike> {
+    if !(v.scale.is_finite() && v.scale > 0.0) {
+        return None;
+    }
+    let ox = v
+        .offset
+        .0
+        .clamp(0.0, (v.content.0 - v.available.0).max(0.0));
+    let oy = v
+        .offset
+        .1
+        .clamp(0.0, (v.content.1 - v.available.1).max(0.0));
+    // The image's top-left in content px.
+    let ix = (v.content.0 - v.output.0) * 0.5 + v.pad.0;
+    let iy = (v.content.1 - v.output.1) * 0.5 + v.pad.1;
+    let x0 = (ox - ix) / v.scale + v.image_offset.0;
+    let y0 = (oy - iy) / v.scale + v.image_offset.1;
+    let w = v.available.0 / v.scale;
+    let h = v.available.1 / v.scale;
+    (w > 0.0 && h > 0.0).then(|| readshot_core::RectLike::new(x0, y0, w, h))
+}
+
 #[cfg(test)]
 mod tests {
     use super::ocr_language_display_name;
@@ -5257,6 +5335,52 @@ mod tests {
         history_selected_fill, history_word_count,
     };
     use crate::runtime::{DARK, LIGHT};
+
+    #[test]
+    fn the_stage_viewport_maps_scroll_and_zoom_into_document_px() {
+        use super::{stage_viewport_in_document, StageViewport};
+        use readshot_core::RectLike;
+        // A 2000 × 1000 image at 2× in an 800 × 600 stage, scrolled to
+        // (1000, 400): document x 500–900, y 200–500.
+        let v = |offset, pad, image_offset| StageViewport {
+            offset,
+            available: (800.0, 600.0),
+            content: (4000.0 + 2.0 * pad, 2000.0 + 2.0 * pad),
+            output: (4000.0 + 2.0 * pad, 2000.0 + 2.0 * pad),
+            pad: (pad, pad),
+            scale: 2.0,
+            image_offset,
+        };
+        assert_eq!(
+            stage_viewport_in_document(v((1000.0, 400.0), 0.0, (0.0, 0.0))),
+            Some(RectLike::new(500.0, 200.0, 400.0, 300.0))
+        );
+        // Beautify padding and a crop's origin shift it; an offset past
+        // the end is clamped as the scrollable clamps it.
+        assert_eq!(
+            stage_viewport_in_document(v((1e9, 0.0), 100.0, (10.0, 20.0))),
+            Some(RectLike::new(
+                10.0 + (3400.0 - 100.0) / 2.0,
+                20.0 - 50.0,
+                400.0,
+                300.0
+            ))
+        );
+        // Not scrolling: the output centred in a bigger stage.
+        let fit = StageViewport {
+            offset: (0.0, 0.0),
+            available: (800.0, 600.0),
+            content: (800.0, 600.0),
+            output: (400.0, 200.0),
+            pad: (0.0, 0.0),
+            scale: 0.2,
+            image_offset: (0.0, 0.0),
+        };
+        assert_eq!(
+            stage_viewport_in_document(fit),
+            Some(RectLike::new(-1000.0, -1000.0, 4000.0, 3000.0))
+        );
+    }
 
     #[test]
     fn no_hardcoded_white_text_left_in_themed_views() {

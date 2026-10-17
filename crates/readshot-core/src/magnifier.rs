@@ -34,18 +34,42 @@ fn fits(c: PointLike, r: f32, v: RectLike) -> bool {
 
 /// Where a new bubble goes: diagonally up-right of the source, clear of
 /// it; else up-left, down-right, down-left — the first that fits inside
-/// `visible`; else the first, clamped inside.
-pub fn default_bubble(source: PointLike, radius: f32, zoom: f32, visible: RectLike) -> PointLike {
+/// `visible` (the part of the document on screen, document px); else the
+/// first, clamped inside.
+///
+/// `parts` (document px; empty for a single image) are the combined
+/// images: a candidate wholly inside one part is preferred, then one
+/// centred on a part, over one in a gutter (the transparent space between
+/// parts).
+pub fn default_bubble(
+    source: PointLike,
+    radius: f32,
+    zoom: f32,
+    visible: RectLike,
+    parts: &[RectLike],
+) -> PointLike {
     let br = bubble_radius(radius, zoom);
     let d = (radius + br + BUBBLE_MARGIN) / std::f32::consts::SQRT_2;
-    let candidates = [(d, -d), (-d, -d), (d, d), (-d, d)];
-    for (dx, dy) in candidates {
-        let c = PointLike::new(source.x + dx, source.y + dy);
-        if fits(c, br, visible) {
+    let candidates = [(d, -d), (-d, -d), (d, d), (-d, d)]
+        .map(|(dx, dy)| PointLike::new(source.x + dx, source.y + dy));
+    let inside_a_part = |c: PointLike| parts.iter().any(|p| fits(c, br, *p));
+    let centred_on_a_part = |c: PointLike| parts.iter().any(|p| fits(c, 0.0, *p));
+    let tiers: [&dyn Fn(PointLike) -> bool; 3] = [&inside_a_part, &centred_on_a_part, &|_| true];
+    let tiers = if parts.is_empty() {
+        &tiers[2..]
+    } else {
+        &tiers[..]
+    };
+    for in_part in tiers {
+        if let Some(c) = candidates
+            .iter()
+            .copied()
+            .find(|&c| fits(c, br, visible) && in_part(c))
+        {
             return c;
         }
     }
-    let c = PointLike::new(source.x + d, source.y - d);
+    let c = candidates[0];
     let clamp = |v: f32, lo: f32, hi: f32| {
         if lo > hi {
             (lo + hi) * 0.5
@@ -173,14 +197,46 @@ mod tests {
     #[test]
     fn default_bubble_sits_up_right_and_stays_inside_when_it_can() {
         let visible = RectLike::new(0.0, 0.0, 400.0, 300.0);
-        let b = default_bubble(PointLike::new(100.0, 200.0), 10.0, 2.0, visible);
+        let b = default_bubble(PointLike::new(100.0, 200.0), 10.0, 2.0, visible, &[]);
         assert!(b.x > 100.0 && b.y < 200.0, "{b:?}");
         // Near the top-right corner it flips to a side that fits.
-        let b = default_bubble(PointLike::new(390.0, 10.0), 10.0, 2.0, visible);
+        let b = default_bubble(PointLike::new(390.0, 10.0), 10.0, 2.0, visible, &[]);
         assert!(
             b.x - 20.0 >= 0.0 && b.y + 20.0 <= 300.0 && b.x < 390.0 && b.y > 10.0,
             "{b:?}"
         );
+    }
+
+    #[test]
+    fn default_bubble_lands_in_the_visible_viewport() {
+        // A big document scrolled so only x 1000–1400, y 500–800 shows.
+        let viewport = RectLike::new(1000.0, 500.0, 400.0, 300.0);
+        let b = default_bubble(PointLike::new(1390.0, 510.0), 10.0, 2.0, viewport, &[]);
+        assert!(
+            b.x - 20.0 >= 1000.0 && b.x + 20.0 <= 1400.0,
+            "on screen: {b:?}"
+        );
+        assert!(b.y - 20.0 >= 500.0 && b.y + 20.0 <= 800.0, "{b:?}");
+    }
+
+    #[test]
+    fn default_bubble_prefers_a_part_over_a_combine_gutter() {
+        // Two parts side by side with a 200 px gutter (x 200–400). Up-right
+        // of a source near the first part's right edge is the gutter.
+        let parts = [
+            RectLike::new(0.0, 0.0, 200.0, 400.0),
+            RectLike::new(400.0, 0.0, 200.0, 400.0),
+        ];
+        let visible = RectLike::new(0.0, 0.0, 600.0, 400.0);
+        let src = PointLike::new(180.0, 200.0);
+        let ungated = default_bubble(src, 10.0, 2.0, visible, &[]);
+        assert!(ungated.x > 200.0 && ungated.x < 400.0, "{ungated:?}");
+        let b = default_bubble(src, 10.0, 2.0, visible, &parts);
+        assert!(
+            parts.iter().any(|p| fits(b, 20.0, *p)),
+            "inside a part: {b:?}"
+        );
+        assert!(b.x < 180.0, "flipped left: {b:?}");
     }
 
     #[test]

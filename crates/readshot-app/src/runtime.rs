@@ -1985,6 +1985,13 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             editor_ops::sync_owed_editor_history(state);
             Task::batch([task, editor_ops::history_write_followups(state)])
         }
+        // Bookkeeping only (no history, no settle): what the stage shows.
+        Message::EditorStageScrolled(x, y) => {
+            if let Some(ed) = state.editor.as_ref() {
+                ed.stage_offset.set((x, y));
+            }
+            Task::none()
+        }
         Message::OverlayCopyDone(result) => {
             state.last_capture_status = Some(match result {
                 Ok(()) => "Copied image to clipboard.".into(),

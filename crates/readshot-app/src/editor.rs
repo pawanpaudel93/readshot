@@ -493,6 +493,11 @@ pub struct EditorSession {
     /// `resize_handle_at_scaled` to keep grab targets constant on screen.
     /// Interior-mutable so `view()` (which takes `&self`) can record it.
     pub render_scale: std::rc::Rc<std::cell::Cell<f32>>,
+    /// The stage scrollable's offset (content px) as last reported by
+    /// its `on_scroll`; `view()` resets it while the stage doesn't scroll
+    /// (a scrollable shown again starts at the top-left). Where a new
+    /// magnifier bubble may go depends on what is on screen.
+    pub stage_offset: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
     /// Tessellated-geometry cache for the annotation canvas. Shared
     /// (cheap-clone `Rc`) into the freshly-built `EditorCanvas` program
     /// each `view()`. Background polling subscriptions (hotkey / tray /
@@ -768,6 +773,7 @@ impl EditorSession {
             canvas_drag_active: false,
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
+            stage_offset: std::rc::Rc::new(std::cell::Cell::new((0.0, 0.0))),
             canvas_cache: std::rc::Rc::new(iced::widget::canvas::Cache::default()),
             output_checkpoint,
             crop_drag_flat: None,
@@ -838,6 +844,7 @@ impl EditorSession {
             canvas_drag_active: false,
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
+            stage_offset: std::rc::Rc::new(std::cell::Cell::new((0.0, 0.0))),
             canvas_cache: std::rc::Rc::new(iced::widget::canvas::Cache::default()),
             output_checkpoint,
             crop_drag_flat: None,

@@ -215,6 +215,13 @@ pub struct EditorCanvas {
     pub text_selected: Vec<RectLike>,
     /// Pending crop (document px): shaded outside, framed, thirds guides.
     pub crop_draft: Option<RectLike>,
+    /// The part of the document the stage shows now (document px),
+    /// after scrolling and zoom; `None`: all of the displayed image.
+    /// Where a new magnifier bubble must land.
+    pub viewport: Option<RectLike>,
+    /// Where each combined image sits (document px); empty for a single
+    /// image. A new magnifier bubble avoids the gutters between them.
+    pub parts: Vec<RectLike>,
     /// Shared tessellated-geometry cache, owned by the editor session.
     /// `draw` reuses the stored geometry unless the canvas size changed
     /// or the session explicitly cleared it (on editor messages). This
@@ -610,6 +617,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                                 self.color,
                                 &self.style,
                                 self.visible_rect(),
+                                &self.parts,
                             )
                         } else {
                             annotation_for_drag(
@@ -831,6 +839,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                                             self.color,
                                             &self.style,
                                             self.visible_rect(),
+                                            &self.parts,
                                         )
                                     } else {
                                         annotation_for_drag(
@@ -1122,15 +1131,27 @@ fn resize_handle_cursor(handle: ResizeHandle) -> iced::mouse::Interaction {
 }
 
 impl EditorCanvas {
-    /// The displayed image in base-image px: where a new magnifier
-    /// bubble must fit.
+    /// The displayed image in base-image px, cut to what the stage shows
+    /// ([`Self::viewport`]): where a new magnifier bubble must fit.
     fn visible_rect(&self) -> RectLike {
-        RectLike::new(
+        let image = RectLike::new(
             self.image_offset.0,
             self.image_offset.1,
             self.image_size.0 as f32,
             self.image_size.1 as f32,
-        )
+        );
+        let Some(v) = self.viewport else {
+            return image;
+        };
+        let x0 = image.x.max(v.x);
+        let y0 = image.y.max(v.y);
+        let x1 = (image.x + image.width).min(v.x + v.width);
+        let y1 = (image.y + image.height).min(v.y + v.height);
+        if x1 > x0 && y1 > y0 {
+            RectLike::new(x0, y0, x1 - x0, y1 - y0)
+        } else {
+            image
+        }
     }
 
     /// Hit-test the selected annotation's handles. `scale` is the
@@ -2025,13 +2046,15 @@ pub fn annotation_for_drag(
 
 /// Magnifier drag: anchor = source centre, distance = radius (at least
 /// `MIN_SOURCE_RADIUS`); the bubble goes where `default_bubble` puts it
-/// inside the visible image (`visible`, document px).
+/// inside the visible image (`visible`, document px), clear of the
+/// gutters between `parts` when it can be.
 pub fn magnifier_for_drag(
     p0: PointLike,
     p1: PointLike,
     color: CoreRgba,
     style: &ToolStyle,
     visible: RectLike,
+    parts: &[RectLike],
 ) -> Option<Annotation> {
     use readshot_core::magnifier::{default_bubble, MIN_SOURCE_RADIUS};
     let (dx, dy) = (p1.x - p0.x, p1.y - p0.y);
@@ -2040,7 +2063,7 @@ pub fn magnifier_for_drag(
     Some(Annotation::Magnifier {
         source: p0,
         radius,
-        bubble: default_bubble(p0, radius, zoom, visible),
+        bubble: default_bubble(p0, radius, zoom, visible, parts),
         zoom,
         shape: style.magnifier_shape,
         color,
@@ -2208,6 +2231,8 @@ mod tests {
             text_hover: None,
             text_selected: Vec::new(),
             crop_draft: None,
+            viewport: None,
+            parts: Vec::new(),
             cache: std::rc::Rc::new(canvas::Cache::default()),
         }
     }
@@ -2520,6 +2545,47 @@ mod tests {
     }
 
     #[test]
+    fn a_new_bubble_fits_the_scrolled_viewport_not_the_whole_image() {
+        // 200 × 100 image; the stage shows only x 150–250, y 50–150 of
+        // the document (cut to the image: x 150–200, y 50–100).
+        let canvas = EditorCanvas {
+            viewport: Some(RectLike::new(150.0, 50.0, 100.0, 100.0)),
+            ..test_canvas()
+        };
+        assert_eq!(
+            canvas.visible_rect(),
+            RectLike::new(150.0, 50.0, 50.0, 50.0)
+        );
+        let a = magnifier_for_drag(
+            PointLike::new(160.0, 90.0),
+            PointLike::new(160.0, 98.0),
+            CoreRgba::OPAQUE_BLACK,
+            &ToolStyle::default(),
+            canvas.visible_rect(),
+            &canvas.parts,
+        )
+        .unwrap();
+        let Annotation::Magnifier { bubble, .. } = a else {
+            unreachable!()
+        };
+        // Radius 16 bubble: inside x 150–200, y 50–100 (clamped).
+        assert!(
+            bubble.x >= 166.0 && bubble.x <= 184.0 && bubble.y >= 66.0 && bubble.y <= 84.0,
+            "{bubble:?}"
+        );
+        // No viewport (or none overlapping): the whole displayed image.
+        assert_eq!(
+            test_canvas().visible_rect(),
+            RectLike::new(0.0, 0.0, 200.0, 100.0)
+        );
+        let off = EditorCanvas {
+            viewport: Some(RectLike::new(500.0, 500.0, 10.0, 10.0)),
+            ..test_canvas()
+        };
+        assert_eq!(off.visible_rect(), RectLike::new(0.0, 0.0, 200.0, 100.0));
+    }
+
+    #[test]
     fn a_magnifier_drag_sets_the_source_and_places_the_bubble_inside() {
         let style = ToolStyle::default();
         let a = magnifier_for_drag(
@@ -2528,6 +2594,7 @@ mod tests {
             CoreRgba::OPAQUE_BLACK,
             &style,
             RectLike::new(0.0, 0.0, 200.0, 200.0),
+            &[],
         )
         .unwrap();
         let Annotation::Magnifier {
@@ -2551,7 +2618,8 @@ mod tests {
             PointLike::new(1.0, 1.0),
             CoreRgba::OPAQUE_BLACK,
             &style,
-            RectLike::new(0.0, 0.0, 10.0, 10.0)
+            RectLike::new(0.0, 0.0, 10.0, 10.0),
+            &[],
         )
         .is_some_and(|a| matches!(a, Annotation::Magnifier { radius, .. } if radius == readshot_core::magnifier::MIN_SOURCE_RADIUS)));
     }
