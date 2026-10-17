@@ -218,6 +218,17 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
     Task::none()
 }
 
+/// (icon, label) colours of an Image menu row: a disabled row (the
+/// editor is busy) dims both, as the zoom segment does, so it does not
+/// look clickable.
+pub(crate) fn image_menu_row_colors(p: &Palette, enabled: bool) -> (Color, Color) {
+    if enabled {
+        (p.t2, p.t1)
+    } else {
+        (Color { a: 0.45, ..p.t2 }, Color { a: 0.45, ..p.t1 })
+    }
+}
+
 pub(crate) fn image_menu_row<'a>(
     icon: AppIcon,
     label: &'static str,
@@ -225,9 +236,10 @@ pub(crate) fn image_menu_row<'a>(
     msg: Option<Message>,
     p: &'static Palette,
 ) -> Element<'a, Message> {
+    let (icon_color, label_color) = image_menu_row_colors(p, msg.is_some());
     let mut r = row![
-        crate::icons::icon(icon, p.t2, ICON_SIZE),
-        text(label).size(TYPE_BODY).style(text_t1)
+        crate::icons::icon(icon, icon_color, ICON_SIZE),
+        text(label).size(TYPE_BODY).color(label_color)
     ]
     .spacing(8)
     .align_y(Alignment::Center);
@@ -378,6 +390,7 @@ pub(crate) fn resize_popover<'a>(
         text_input("", value)
             .on_input(on)
             .on_submit(Message::EditorResizeApply)
+            .style(text_input_style)
             .size(TYPE_BODY)
             .width(Length::Fixed(84.0))
     };
@@ -389,6 +402,12 @@ pub(crate) fn resize_popover<'a>(
     let preview = match d.target() {
         Some((w, h)) => format!("{} × {} px → {w} × {h} px", d.base.0, d.base.1),
         None => "Enter a width and height of at least 1 px.".into(),
+    };
+    // The preview is metadata; the validation line instructs (t2).
+    let preview_style = if d.target().is_some() {
+        text_t3
+    } else {
+        text_t2
     };
     column![
         popover_heading("Resize"),
@@ -418,7 +437,7 @@ pub(crate) fn resize_popover<'a>(
         text(preview)
             .font(mono_font())
             .size(TYPE_CAPTION)
-            .style(text_t3),
+            .style(preview_style),
         row![
             Space::new().width(Length::Fill),
             bar_button(
@@ -439,4 +458,18 @@ pub(crate) fn resize_popover<'a>(
     .spacing(8)
     .width(Length::Fixed(W))
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_disabled_image_menu_row_is_dimmed() {
+        for p in [&DARK, &LIGHT] {
+            assert_eq!(image_menu_row_colors(p, true), (p.t2, p.t1));
+            let (icon, label) = image_menu_row_colors(p, false);
+            assert!(icon.a <= 0.5 && label.a <= 0.5);
+        }
+    }
 }

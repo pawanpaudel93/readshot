@@ -271,6 +271,7 @@ pub(crate) fn beautify_tab<'a>(
         text_input("#RRGGBB", &ed.beautify_hex_shown())
             .on_input(Message::EditorBeautifyHexChanged)
             .on_submit(Message::EditorBeautifyHexSubmitted)
+            .style(text_input_style)
             .size(TYPE_CAPTION)
             .width(Length::Fixed(96.0)),
         icon_button(

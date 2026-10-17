@@ -2487,7 +2487,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         container(
             text("Click the image to pick a color · esc cancels")
                 .size(TYPE_CAPTION)
-                .style(text_t3),
+                .style(text_t2),
         )
         .width(Length::Fill)
         .height(Length::Fill)
@@ -2516,7 +2516,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 } else {
                     editor_compact_hint(active_tool).to_string()
                 };
-                container(text(hint_str).size(TYPE_CAPTION).style(text_t3))
+                container(text(hint_str).size(TYPE_CAPTION).style(text_t2))
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .padding(iced::Padding {

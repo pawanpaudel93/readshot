@@ -1122,7 +1122,7 @@ fn redact_card<'a>(
                 "Pixelate and blur are weaker than a solid block: text can sometimes be recovered.",
             )
             .size(TYPE_MICRO)
-            .style(text_t3),
+            .style(text_t2),
         );
     }
     if n > 0 {
