@@ -1216,6 +1216,12 @@ pub enum CaptureIntent {
 pub struct CombineCapture {
     pub session: u64,
     pub join: readshot_core::document::Join,
+    /// The overlay selection for this combine was made: its capture is
+    /// in flight and must land in (or fail back to) this editor, so the
+    /// "overlay never opened / went away" safety nets leave it alone.
+    /// Kept here rather than inferred from `App::pending_display_id`,
+    /// which other flows (scroll capture, retake) also set.
+    pub selected: bool,
 }
 
 impl App {

@@ -1141,8 +1141,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 || state.scroll_session.is_some()
                 || overlay_up;
             // Never once the combine's own capture is in flight (its
-            // selection set the pending display): see `abort_combine_capture`.
-            let restore = if refused && !overlay_up && state.pending_display_id.is_none() {
+            // selection was made): see `abort_combine_capture`.
+            let restore = if refused && !overlay_up && !combine_selection_made(state) {
                 let why = if state.capture_in_flight || state.scroll_session.is_some() {
                     "Couldn't add the capture — another capture is in progress."
                 } else {
@@ -1327,7 +1327,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             // An Add Capture's overlay always returns to its editor, even
             // if another flow overwrote the pending intent meanwhile: the
             // hidden editor must never be stranded.
-            let intent = if state.combine_capture.is_some() {
+            let intent = if let Some(cc) = state.combine_capture.as_mut() {
+                cc.selected = true;
                 crate::app::CaptureIntent::CombineIntoEditor
             } else {
                 intent
@@ -1380,8 +1381,10 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 };
                 state.reduce_motion = os_reduce_motion();
                 state.scroll_session = Some(session);
-                state.pending_intent = None;
-                state.pending_display_bounds = None;
+                // The session carries its own display; the pending
+                // fields are for a one-shot region capture and would be
+                // stale for whatever capture comes next.
+                clear_pending_capture_state(state);
                 let (region_id, region_open) = window::open(scroll_region_window_settings(bounds));
                 state.windows.register(region_id, WindowKind::ScrollRegion);
                 if let Some(s) = state.scroll_session.as_mut() {
@@ -1481,7 +1484,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                     Err(e) => {
                         tracing::warn!(target: "readshot::capture", "region capture failed: {e}");
                         let status = combine_capture_failed_status(&e);
-                        abort_combine_capture(state, Some(&status))
+                        fail_combine_capture(state, Some(&status))
                     }
                 };
             }
@@ -1713,13 +1716,13 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             state.overlay_displays.remove(&id);
             // The last overlay went away without a selection or a cancel
             // (closed by the OS): an Add Capture waiting on it gives its
-            // hidden editor back. A confirmed selection has set the pending
-            // display (cleared when its capture completes), so that capture
-            // is left to finish.
+            // hidden editor back. A confirmed selection marked the combine
+            // (it ends when its capture completes), so that capture is left
+            // to finish.
             let restore = if state.combine_capture.is_some()
                 && !state.overlay_opening
                 && !state.capture_in_flight
-                && state.pending_display_id.is_none()
+                && !combine_selection_made(state)
                 && !state.windows.kinds().any(|k| k == WindowKind::Overlay)
             {
                 state.overlay_selections.clear();
@@ -11594,7 +11597,7 @@ mod tests {
             Message::EditorCombineCaptureRequested(Join::Below),
         );
         assert!(
-            matches!(app.combine_capture, Some(crate::app::CombineCapture { session: s, join: Join::Below }) if s == session)
+            matches!(app.combine_capture, Some(crate::app::CombineCapture { session: s, join: Join::Below, selected: false }) if s == session)
         );
         assert_eq!(
             app.pending_intent,
@@ -12321,6 +12324,175 @@ mod tests {
         assert_eq!(ed.model.part_ids().len(), 2);
         assert!(ed.source_record.is_none(), "no History record made");
         assert!(app.combine_capture.is_none());
+    }
+
+    // ---- Task 9b: the combine's own selection flag ----
+
+    /// Run a scroll capture through its real start (an overlay selection
+    /// with the scroll intent), then end its session as a stitch does.
+    fn app_after_a_scroll_capture() -> App {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let overlay = window::Id::unique();
+        app.windows.register(overlay, WindowKind::Overlay);
+        app.overlay_displays.insert(
+            overlay,
+            crate::app::OverlayDisplay {
+                display_id: "display-a".into(),
+                scale: 2.0,
+                origin_x: 0.0,
+                origin_y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+        );
+        app.pending_intent = Some(crate::app::CaptureIntent::ScrollCapture);
+        let _ = update(
+            &mut app,
+            Message::OverlaySelected {
+                display_id: "display-a".into(),
+                rect: readshot_core::geom::Rect::from_xywh(10.0, 10.0, 200.0, 100.0).unwrap(),
+                intent: crate::app::CaptureIntent::ScrollCapture,
+            },
+        );
+        let s = app.scroll_session.take().expect("scroll session started");
+        for id in [s.hud_window_id, s.region_window_id].into_iter().flatten() {
+            app.windows.forget(id);
+        }
+        assert!(!app.windows.kinds().any(|k| k == WindowKind::Overlay));
+        app
+    }
+
+    fn start_add_capture(app: &mut App) {
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
+        let _ = update(
+            app,
+            Message::EditorCombineCaptureRequested(readshot_core::document::Join::Below),
+        );
+        assert!(app.combine_capture.is_some(), "Add Capture started");
+    }
+
+    #[test]
+    fn a_finished_scroll_capture_leaves_no_pending_display() {
+        let app = app_after_a_scroll_capture();
+        assert_eq!(app.pending_display_id, None);
+        assert_eq!(app.pending_display_scale, None);
+        assert_eq!(app.pending_intent, None);
+    }
+
+    #[test]
+    fn add_capture_after_a_scroll_capture_is_never_stranded() {
+        // The overlay is refused (welcome showing): the editor comes back.
+        let mut app = app_after_a_scroll_capture();
+        start_add_capture(&mut app);
+        app.welcome = crate::welcome::WelcomeState::Pending;
+        let _ = update(&mut app, Message::OpenOverlayRequested);
+        assert!(app.combine_capture.is_none(), "welcome refusal restores");
+        assert!(app.pending_intent.is_none());
+
+        // The overlay is closed by the OS before any selection.
+        let mut app = app_after_a_scroll_capture();
+        start_add_capture(&mut app);
+        app.overlay_opening = false;
+        let id = window::Id::unique();
+        app.windows.register(id, WindowKind::Overlay);
+        let _ = update(&mut app, Message::WindowClosed(id));
+        assert!(app.combine_capture.is_none(), "OS close restores");
+        assert!(app.pending_intent.is_none());
+
+        // The user cancels the overlay.
+        let mut app = app_after_a_scroll_capture();
+        start_add_capture(&mut app);
+        let _ = update(&mut app, Message::OverlayCancelled);
+        assert!(app.combine_capture.is_none(), "cancel restores");
+    }
+
+    #[test]
+    fn a_combine_with_no_selection_restores_despite_a_stale_pending_display() {
+        // Another flow left the shared pending display set; the combine
+        // has made no selection, so its safety nets still fire.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        start_add_capture(&mut app);
+        app.pending_display_id = Some("display-a".into());
+        app.welcome = crate::welcome::WelcomeState::Pending;
+        let _ = update(&mut app, Message::OpenOverlayRequested);
+        assert!(app.combine_capture.is_none(), "welcome refusal restores");
+
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        start_add_capture(&mut app);
+        app.pending_display_id = Some("display-a".into());
+        app.overlay_opening = false;
+        let id = window::Id::unique();
+        app.windows.register(id, WindowKind::Overlay);
+        let _ = update(&mut app, Message::WindowClosed(id));
+        assert!(app.combine_capture.is_none(), "OS close restores");
+
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        start_add_capture(&mut app);
+        app.pending_display_id = Some("display-a".into());
+        let _ = abort_combine_capture(&mut app, None);
+        assert!(app.combine_capture.is_none(), "abort restores");
+    }
+
+    #[test]
+    fn a_combine_whose_selection_is_made_is_never_aborted() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        start_add_capture(&mut app);
+        let session = app.editor.as_ref().unwrap().session_id;
+        app.overlay_opening = false;
+        let id = window::Id::unique();
+        app.windows.register(id, WindowKind::Overlay);
+        let _ = update(
+            &mut app,
+            Message::OverlaySelected {
+                display_id: Default::default(),
+                rect: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 10.0, 10.0).unwrap(),
+                intent: crate::app::CaptureIntent::CombineIntoEditor,
+            },
+        );
+        assert!(app.combine_capture.is_some_and(|cc| cc.selected));
+        // A stray cancel clears the shared pending state; the combine's
+        // own flag still says its capture is in flight.
+        let _ = update(&mut app, Message::OverlayCancelled);
+        assert!(app.combine_capture.is_some(), "cancel after selection");
+        let _ = update(&mut app, Message::WindowClosed(id));
+        assert!(app.combine_capture.is_some(), "OS close after selection");
+        app.welcome = crate::welcome::WelcomeState::Pending;
+        let _ = update(&mut app, Message::OpenOverlayRequested);
+        assert!(app.combine_capture.is_some(), "welcome after selection");
+        let _ = abort_combine_capture(&mut app, None);
+        assert!(app.combine_capture.is_some(), "abort after selection");
+        // Its capture still lands in the same editor.
+        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 16))));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.session_id, session);
+        assert_eq!(ed.model.part_ids().len(), 2);
+        assert!(app.combine_capture.is_none());
+    }
+
+    #[test]
+    fn a_selected_combine_capture_that_fails_gives_the_editor_back() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        start_add_capture(&mut app);
+        let _ = update(
+            &mut app,
+            Message::OverlaySelected {
+                display_id: Default::default(),
+                rect: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 10.0, 10.0).unwrap(),
+                intent: crate::app::CaptureIntent::CombineIntoEditor,
+            },
+        );
+        let _ = update(
+            &mut app,
+            Message::RegionCaptureCompleted(Err("boom".into())),
+        );
+        assert!(app.combine_capture.is_none());
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.part_ids().len(), 1);
+        assert!(ed
+            .status
+            .as_deref()
+            .unwrap()
+            .starts_with("Couldn't add the capture"));
     }
 
     fn png_header_only(w: u32, h: u32) -> Vec<u8> {
