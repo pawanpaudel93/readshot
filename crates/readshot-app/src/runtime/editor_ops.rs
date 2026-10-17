@@ -1549,6 +1549,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
                 readshot_ui::CanvasMessage::SelectDragged(p) => {
                     let mut background_without_selected = None;
+                    // A redaction dragged on a document small enough to
+                    // render here is rendered where it is on each tick, so
+                    // its real effect (pixelate, blur) shows while it
+                    // moves; a large one keeps the canvas's opaque cover.
+                    let small = !ed.is_large();
+                    let mut render_present = false;
                     if let Some(drag) = ed.move_drag.as_mut() {
                         let dx = p.x - drag.start.x;
                         let dy = p.y - drag.start.y;
@@ -1564,7 +1570,13 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                                 .preview_resize_selected_from(&drag.baseline, handle, dx, dy),
                         };
                         if changed {
-                            if !drag.moved
+                            let redaction = drag
+                                .baseline
+                                .get(drag.selected_index)
+                                .is_some_and(readshot_core::scrub::is_redaction);
+                            if small && redaction {
+                                render_present = true;
+                            } else if !drag.moved
                                 && can_preview_drag_annotation(&drag.baseline, drag.selected_index)
                             {
                                 background_without_selected = Some(drag.selected_index);
@@ -1585,6 +1597,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     }
                     if let Some(index) = background_without_selected {
                         ed.show_without_dragged(index);
+                    }
+                    if render_present {
+                        ed.refresh_image();
                     }
                 }
                 readshot_ui::CanvasMessage::SelectReleased => {

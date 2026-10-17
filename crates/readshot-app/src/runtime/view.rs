@@ -2071,6 +2071,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             drag.moved && can_preview_drag_annotation(&drag.baseline, drag.selected_index)
         })
         .and_then(|drag| ed.model.annotations().get(drag.selected_index).cloned());
+    let selected_preview_rendered = selected_preview.is_some() && ed.shows_present_render();
     // Interior-mutable handle so the responsive closure can record the
     // scale it renders at; the runtime reads it back to hit-test grabs.
     let render_scale = ed.render_scale.clone();
@@ -2195,6 +2196,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 Vec::new()
             },
             selected_preview: selected_preview.clone(),
+            selected_preview_rendered,
             pending: pending.clone(),
             shift_held: editor_shift_held,
             cancel_seq: drag_cancel_seq,

@@ -191,6 +191,12 @@ pub struct EditorCanvas {
     /// background texture stable and ask the canvas to draw only this
     /// transient overlay.
     pub selected_preview: Option<Annotation>,
+    /// The image on screen is the present's render, `selected_preview`
+    /// included where it is now (a document small enough to render on
+    /// the UI thread re-renders on each drag tick): a redaction's real
+    /// effect is showing, so it is only outlined. Never set otherwise; a
+    /// redaction not in the image yet gets the opaque cover.
+    pub selected_preview_rendered: bool,
     /// Annotations in the document but not yet in the image on screen (a
     /// large document's render is still in flight): drawn over it so an
     /// edit shows at once. A redaction is drawn opaque, so what it hides
@@ -772,6 +778,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 draw_overlay_annotation(
                     frame,
                     annotation,
+                    false,
                     bounds,
                     self.image_size,
                     self.image_offset,
@@ -983,6 +990,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 draw_overlay_annotation(
                     frame,
                     annotation,
+                    self.selected_preview_rendered,
                     bounds,
                     self.image_size,
                     self.image_offset,
@@ -1456,8 +1464,8 @@ const REDACTION_OVERLAY: Color = Color::from_rgb(0.33, 0.33, 0.35);
 
 /// An annotation drawn by the canvas over the image (a moving selection,
 /// or one whose render is in flight). A redaction covers its area
-/// opaquely (a solid redaction in its own color); anything else is drawn
-/// as its preview.
+/// opaquely (a solid redaction in its own color) unless its real effect
+/// is already in the image there; anything else is drawn as its preview.
 /// The opaque cover the canvas draws for a redaction: its rect and fill
 /// (a solid redaction's own color, else a neutral grey; never
 /// translucent). `None` for anything that isn't a redaction.
@@ -1476,16 +1484,31 @@ fn redaction_cover(annotation: &Annotation) -> Option<(RectLike, Color)> {
     }
 }
 
+/// What the canvas fills a redaction's area with: its opaque cover,
+/// unless `rendered` (its real effect is in the image on screen at this
+/// very place), when it is only outlined. `None` for anything that isn't
+/// a redaction.
+fn redaction_overlay_fill(annotation: &Annotation, rendered: bool) -> Option<Option<Color>> {
+    let (_, fill) = redaction_cover(annotation)?;
+    Some((!rendered).then_some(fill))
+}
+
+/// `rendered`: the image on screen already shows `annotation` where it
+/// is (see [`EditorCanvas::selected_preview_rendered`]).
 fn draw_overlay_annotation(
     frame: &mut Frame,
     annotation: &Annotation,
+    rendered: bool,
     bounds: Rectangle,
     image_size: (u32, u32),
     image_offset: (f32, f32),
     display_scale: Option<f32>,
 ) {
     if readshot_core::scrub::is_redaction(annotation) {
-        let Some((rect, fill)) = redaction_cover(annotation) else {
+        let (Some((rect, _)), Some(fill)) = (
+            redaction_cover(annotation),
+            redaction_overlay_fill(annotation, rendered),
+        ) else {
             return;
         };
         if let Some(r) = base_rect_to_canvas(rect, bounds, image_size, image_offset, display_scale)
@@ -1494,7 +1517,9 @@ fn draw_overlay_annotation(
             let (x0, y0) = (r.x.floor(), r.y.floor());
             let (x1, y1) = ((r.x + r.width).ceil(), (r.y + r.height).ceil());
             let path = Path::rectangle(Point::new(x0, y0), iced::Size::new(x1 - x0, y1 - y0));
-            frame.fill(&path, fill);
+            if let Some(fill) = fill {
+                frame.fill(&path, fill);
+            }
             frame.stroke(
                 &path,
                 Stroke::default()
@@ -2328,6 +2353,7 @@ mod tests {
             selected_handles: Vec::new(),
             selected_annotation: None,
             selected_preview: None,
+            selected_preview_rendered: false,
             pending: Vec::new(),
             shift_held: false,
             cancel_seq: 0,
@@ -3056,6 +3082,28 @@ mod tests {
             unselected.mouse_interaction(&DrawState::Idle, bounds, at),
             iced::mouse::Interaction::Crosshair
         );
+    }
+
+    #[test]
+    fn a_redaction_is_covered_opaquely_unless_its_effect_is_on_screen() {
+        let pixelate = Annotation::Pixelate {
+            rect: RectLike::new(2.0, 2.0, 10.0, 8.0),
+            block_size: 4.0,
+        };
+        // Not in the image on screen yet: the opaque cover.
+        assert_eq!(
+            redaction_overlay_fill(&pixelate, false),
+            Some(Some(REDACTION_OVERLAY))
+        );
+        // Rendered there already: outlined only, the real effect showing.
+        assert_eq!(redaction_overlay_fill(&pixelate, true), Some(None));
+        let outline = Annotation::Rectangle {
+            rect: RectLike::new(2.0, 2.0, 10.0, 8.0),
+            color: CoreRgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        };
+        assert_eq!(redaction_overlay_fill(&outline, false), None);
     }
 
     #[test]

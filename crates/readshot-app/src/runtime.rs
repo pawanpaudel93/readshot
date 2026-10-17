@@ -14981,6 +14981,58 @@ mod tests {
         })
     }
 
+    #[test]
+    fn a_dragged_redaction_shows_its_real_effect_when_the_document_renders_here() {
+        use readshot_ui::CanvasMessage;
+        let pixelate = Annotation::Pixelate {
+            rect: RectLike::new(2.0, 2.0, 10.0, 8.0),
+            block_size: 4.0,
+        };
+        for large in [false, true] {
+            let mut app = build_app(Arc::new(FakePermissions::granted()));
+            let mut ed = crate::editor::EditorSession::new(ramp(40, 20));
+            ed.model.commit_annotation(pixelate.clone());
+            ed.model.set_tool(readshot_ui::editor::ToolState::Select);
+            ed.refresh_image();
+            app.editor = Some(if large { async_compose(ed) } else { ed });
+            let _ = update(
+                &mut app,
+                Message::EditorCanvas(CanvasMessage::SelectPressed(PointLike::new(5.0, 5.0))),
+            );
+            let _ = update(
+                &mut app,
+                Message::EditorCanvas(CanvasMessage::SelectDragged(PointLike::new(20.0, 9.0))),
+            );
+            let ed = app.editor.as_ref().unwrap();
+            assert_ne!(ed.model.annotations()[0], pixelate, "it moved");
+            if large {
+                // Rendered off the UI thread: the canvas's opaque cover
+                // stands in until then.
+                assert!(!ed.shows_present_render());
+                continue;
+            }
+            // Before, the image was the document without the redaction
+            // and the canvas covered it with an opaque grey box.
+            assert!(ed.shows_present_render());
+            let expected = readshot_core::render(
+                &ed.model.shared_base(),
+                &ed.model.geometry().cover_redactions(ed.model.annotations()),
+            );
+            match &ed.image_handle {
+                iced::widget::image::Handle::Rgba { pixels, .. } => {
+                    assert_eq!(&pixels[..], expected.as_raw().as_slice())
+                }
+                other => panic!("expected pixels, got {other:?}"),
+            }
+            // Released, it commits; Esc on another drag puts it back.
+            let _ = update(
+                &mut app,
+                Message::EditorCanvas(CanvasMessage::SelectReleased),
+            );
+            assert!(app.editor.as_ref().unwrap().shows_present_render());
+        }
+    }
+
     /// An async editor over `ramp(40, 20)` with one selected rectangle.
     fn large_editor(app: &mut App) -> usize {
         let mut ed = sync_editor();

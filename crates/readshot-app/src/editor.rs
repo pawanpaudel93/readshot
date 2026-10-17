@@ -1549,6 +1549,17 @@ impl EditorSession {
 
     /// Whether the document is large enough that its composes and
     /// renders run off the UI thread ([`Self::async_compose_min_pixels`]).
+    /// Whether the image on screen is exactly the present's render (every
+    /// annotation drawn, redactions with their real effect, where they
+    /// are now).
+    pub fn shows_present_render(&self) -> bool {
+        self.display_without.is_none()
+            && self.crop_drag_flat.is_none()
+            && self
+                .shown
+                .shows(&self.model.shared_base(), self.model.annotations())
+    }
+
     pub fn is_large(&self) -> bool {
         let (w, h) = self.model.geometry().size();
         u64::from(w) * u64::from(h) >= self.async_compose_min_pixels
