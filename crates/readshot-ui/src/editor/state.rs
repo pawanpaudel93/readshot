@@ -611,8 +611,11 @@ impl EditorState {
     /// "Topmost" follows paint order: render draws every magnifier
     /// bubble after all other annotations, so a press inside a bubble
     /// picks that magnifier first (newest first) and never a shape the
-    /// bubble hides. Elsewhere (including a magnifier's source disc,
-    /// which only paints a thin ring) everything is tried newest first.
+    /// bubble hides. Next, the selected magnifier's leader line keeps it
+    /// selected (a press there moves the whole magnifier; an unselected
+    /// leader stays click-through). Elsewhere (including a magnifier's
+    /// source disc, which only paints a thin ring) everything is tried
+    /// newest first.
     pub fn select_at_scaled(&mut self, point: PointLike, scale: f32) -> Option<usize> {
         let annotations = self.history.current();
         let in_bubble = annotations
@@ -620,7 +623,14 @@ impl EditorState {
             .enumerate()
             .rev()
             .find_map(|(idx, a)| magnifier_bubble_grab(a, point).map(|_| idx));
-        let hit = in_bubble.or_else(|| {
+        let on_selected_leader = || {
+            self.selected_annotation.filter(|&idx| {
+                annotations
+                    .get(idx)
+                    .is_some_and(|a| magnifier_leader_hit(a, point, scale))
+            })
+        };
+        let hit = in_bubble.or_else(on_selected_leader).or_else(|| {
             annotations
                 .iter()
                 .enumerate()
@@ -1277,6 +1287,27 @@ pub(crate) fn magnifier_bubble_grab(
     .then_some(ResizeHandle::End)
 }
 
+/// Whether `point` is on a magnifier's leader line (within the hit
+/// tolerance for the display `scale`).
+fn magnifier_leader_hit(annotation: &Annotation, point: PointLike, scale: f32) -> bool {
+    let Annotation::Magnifier {
+        source,
+        radius,
+        bubble,
+        zoom,
+        ..
+    } = annotation
+    else {
+        return false;
+    };
+    let br = readshot_core::magnifier::bubble_radius(*radius, *zoom);
+    readshot_core::magnifier::leader_endpoints(*source, *radius, *bubble, br).is_some_and(
+        |(a, b)| {
+            distance_to_segment(point, a, b) <= hit_tolerance_base(HIT_TOLERANCE_SCREEN, scale)
+        },
+    )
+}
+
 fn annotation_resize_handles(annotation: &Annotation) -> Vec<(ResizeHandle, PointLike)> {
     match annotation {
         Annotation::Rectangle { rect, .. }
@@ -1419,7 +1450,16 @@ fn resize_annotation(annotation: &mut Annotation, handle: ResizeHandle, dx: f32,
                 true
             }
             ResizeHandle::East => {
-                *radius = (*radius + dx).max(readshot_core::magnifier::MIN_SOURCE_RADIUS);
+                // The rim follows the pointer in any direction: the new
+                // radius is the grabbed rim point's distance from the
+                // source once moved by the drag.
+                let (rx, ry) = (*radius + dx, dy);
+                let next = (rx * rx + ry * ry).sqrt();
+                *radius = if next.is_finite() {
+                    next.max(readshot_core::magnifier::MIN_SOURCE_RADIUS)
+                } else {
+                    *radius
+                };
                 true
             }
             _ => false,
@@ -1601,6 +1641,41 @@ mod tests {
             unreachable!()
         };
         assert_eq!(radius, readshot_core::magnifier::MIN_SOURCE_RADIUS);
+    }
+
+    #[test]
+    fn the_magnifier_rim_follows_the_pointer() {
+        let mut s = EditorState::new(RgbaImage::new(200, 100));
+        s.commit_annotation(magnifier());
+        let base = s.annotations().to_vec();
+        let radius = |s: &EditorState| match s.annotations()[0] {
+            Annotation::Magnifier { radius, .. } => radius,
+            _ => unreachable!(),
+        };
+        // Rim handle at (30, 20); dragged straight down to (30, 40): the
+        // rim is now ~22.4 px from the source at (20, 20).
+        assert!(s.preview_resize_selected_from(&base, ResizeHandle::East, 0.0, 20.0));
+        assert!((radius(&s) - 500f32.sqrt()).abs() < 1e-4, "{}", radius(&s));
+        // Across the source to (5, 20): 15 px on the other side.
+        assert!(s.preview_resize_selected_from(&base, ResizeHandle::East, -25.0, 0.0));
+        assert_eq!(radius(&s), 15.0);
+        // Onto the source centre: floored.
+        assert!(s.preview_resize_selected_from(&base, ResizeHandle::East, -10.0, 0.0));
+        assert_eq!(radius(&s), readshot_core::magnifier::MIN_SOURCE_RADIUS);
+    }
+
+    #[test]
+    fn a_selected_magnifiers_leader_keeps_it_selected_and_an_unselected_one_does_not() {
+        // Source (20, 20) r 10, bubble (80, 20) r 20: the leader runs
+        // from x 30 to x 60 along y 20.
+        let mut s = EditorState::with_annotations(RgbaImage::new(200, 100), vec![magnifier()]);
+        let on_leader = PointLike::new(45.0, 21.0);
+        assert_eq!(s.select_at(on_leader), None, "unselected: click-through");
+        assert_eq!(s.select_at(PointLike::new(80.0, 20.0)), Some(0));
+        assert_eq!(s.resize_handle_at(on_leader), None, "not a handle");
+        assert_eq!(s.select_at(on_leader), Some(0), "selected: grabbed");
+        // Off the leader the selection still clears.
+        assert_eq!(s.select_at(PointLike::new(45.0, 40.0)), None);
     }
 
     #[test]

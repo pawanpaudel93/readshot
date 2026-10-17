@@ -1388,18 +1388,16 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                             kind: crate::editor::MoveDragKind::Resize(handle),
                         });
                     } else if let Some(selected_index) = ed.model.select_at_scaled(p, scale) {
-                        // A press inside an unselected magnifier's bubble
-                        // grabs the bubble on this first drag too, not
-                        // the whole magnifier.
-                        let kind = if ed.model.selected_kind_label() == Some("Magnifier")
-                            && ed.model.resize_handle_at_scaled(p, scale)
-                                == Some(readshot_ui::editor::ResizeHandle::End)
-                        {
-                            crate::editor::MoveDragKind::Resize(
-                                readshot_ui::editor::ResizeHandle::End,
-                            )
-                        } else {
-                            crate::editor::MoveDragKind::Move
+                        // A press on an unselected magnifier's bubble,
+                        // source centre or rim grabs that part on this
+                        // first drag too, as the second drag would; only
+                        // elsewhere does it move the whole magnifier.
+                        let handle = (ed.model.selected_kind_label() == Some("Magnifier"))
+                            .then(|| ed.model.resize_handle_at_scaled(p, scale))
+                            .flatten();
+                        let kind = match handle {
+                            Some(handle) => crate::editor::MoveDragKind::Resize(handle),
+                            None => crate::editor::MoveDragKind::Move,
                         };
                         ed.move_drag = Some(crate::editor::MoveDrag {
                             baseline: ed.model.annotations().to_vec(),

@@ -6359,6 +6359,109 @@ mod tests {
         }
     }
 
+    fn magnifier_app(selected: bool) -> App {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(300, 200));
+        // Source (40, 40) r 20, bubble (200, 40) r 40: the leader runs
+        // from x 60 to x 160 along y 40.
+        ed.model.commit_annotation(Annotation::Magnifier {
+            source: PointLike::new(40.0, 40.0),
+            radius: 20.0,
+            bubble: PointLike::new(200.0, 40.0),
+            zoom: 2.0,
+            shape: readshot_core::MagnifierShape::Circle,
+            color: Rgba::OPAQUE_BLACK,
+        });
+        if !selected {
+            ed.model.clear_selection();
+        }
+        app.editor = Some(ed);
+        app
+    }
+
+    fn select_drag(app: &mut App, from: (f32, f32), to: (f32, f32)) {
+        for msg in [
+            readshot_ui::CanvasMessage::SelectPressed(PointLike::new(from.0, from.1)),
+            readshot_ui::CanvasMessage::SelectDragged(PointLike::new(to.0, to.1)),
+            readshot_ui::CanvasMessage::SelectReleased,
+        ] {
+            let _ = update(app, Message::EditorCanvas(msg));
+        }
+    }
+
+    fn magnifier_parts(app: &App) -> (PointLike, f32, PointLike) {
+        match &app.editor.as_ref().unwrap().model.annotations()[0] {
+            Annotation::Magnifier {
+                source,
+                radius,
+                bubble,
+                ..
+            } => (*source, *radius, *bubble),
+            other => panic!("expected magnifier, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_first_drag_on_an_unselected_magnifiers_handles_matches_the_second() {
+        for selected in [false, true] {
+            // Near the source centre (the Start handle): only the source.
+            let mut app = magnifier_app(selected);
+            select_drag(&mut app, (43.0, 42.0), (53.0, 47.0));
+            assert_eq!(
+                magnifier_parts(&app),
+                (
+                    PointLike::new(50.0, 45.0),
+                    20.0,
+                    PointLike::new(200.0, 40.0)
+                ),
+                "selected: {selected}"
+            );
+            // Inside the disc near the rim (the East handle): the radius.
+            let mut app = magnifier_app(selected);
+            select_drag(&mut app, (55.0, 40.0), (65.0, 40.0));
+            assert_eq!(
+                magnifier_parts(&app),
+                (
+                    PointLike::new(40.0, 40.0),
+                    30.0,
+                    PointLike::new(200.0, 40.0)
+                ),
+                "selected: {selected}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_selected_magnifiers_leader_moves_the_whole_magnifier() {
+        let mut app = magnifier_app(true);
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        select_drag(&mut app, (110.0, 41.0), (120.0, 51.0));
+        assert_eq!(
+            magnifier_parts(&app),
+            (
+                PointLike::new(50.0, 50.0),
+                20.0,
+                PointLike::new(210.0, 50.0)
+            )
+        );
+        assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth + 1);
+        // An unselected leader stays click-through.
+        let mut app = magnifier_app(false);
+        select_drag(&mut app, (110.0, 41.0), (120.0, 51.0));
+        assert_eq!(
+            magnifier_parts(&app),
+            (
+                PointLike::new(40.0, 40.0),
+                20.0,
+                PointLike::new(200.0, 40.0)
+            )
+        );
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.selected_annotation(),
+            None
+        );
+    }
+
     #[test]
     fn editor_select_drag_cancel_restores_baseline_without_undo_step() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
