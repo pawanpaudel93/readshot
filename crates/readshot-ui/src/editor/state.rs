@@ -100,7 +100,44 @@ pub struct EditorState {
     /// tool colour (`set_color`) or line width (`set_line_width`) does not
     /// touch it: those only style the next annotation, not the rendered
     /// stack, so the flattened image is unchanged.
-    flattened_cache: Option<RgbaImage>,
+    flattened_cache: Option<Arc<RgbaImage>>,
+    /// Composed bases other than the present's, kept so undo, redo and a
+    /// preview cancel swap an image in instead of recomposing. Only bases
+    /// that were composed anyway are kept (never composed ahead), and only
+    /// for an open preview's baseline and the states one undo or one redo
+    /// away ([`Self::trim_bases`]); the rest are dropped.
+    bases: Vec<(Arc<DocGeometry>, Arc<RgbaImage>)>,
+    /// How many bases were composed on this thread (`sync_base`).
+    base_composes: u64,
+    /// The flattened image of an open snapshot preview's baseline, kept
+    /// when the preview opened so a cancel restores it without a render.
+    preview_baseline_flat: Option<Arc<RgbaImage>>,
+}
+
+/// One history move of a queued document step, applied with its composed
+/// result by [`EditorState::apply_ops_precomposed`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum DocOp {
+    /// Push this state as one undo step (a geometry change).
+    Push(Snapshot),
+    Undo,
+    Redo,
+}
+
+fn apply_op(history: &mut History, op: &DocOp) -> bool {
+    match op {
+        DocOp::Push(next) => {
+            history.push_snapshot(next.clone());
+            true
+        }
+        DocOp::Undo => history.undo().is_some(),
+        DocOp::Redo => history.redo().is_some(),
+    }
+}
+
+fn same_geometry(a: &Arc<DocGeometry>, b: &Arc<DocGeometry>) -> bool {
+    // `Part::eq` compares image pointers, so this is cheap.
+    Arc::ptr_eq(a, b) || **a == **b
 }
 
 impl EditorState {
@@ -130,6 +167,9 @@ impl EditorState {
             next_part_id: ORIGINAL_PART + 1,
             preview_baseline: None,
             annotation_preview: None,
+            bases: Vec::new(),
+            base_composes: 0,
+            preview_baseline_flat: None,
         }
     }
 
@@ -347,17 +387,177 @@ impl EditorState {
     /// Recompose `base` when the present snapshot's geometry differs from
     /// the one it was built from (undo/redo across a transform).
     fn sync_base(&mut self) {
-        let g = &self.history.doc().geometry;
-        if Arc::ptr_eq(g, &self.base_geometry) {
+        let g = Arc::clone(&self.history.doc().geometry);
+        if Arc::ptr_eq(&g, &self.base_geometry) {
+            self.trim_bases();
             return;
         }
         // Equal by value (cheap: `Part::eq` compares pointers) keeps the
-        // composed image; only a real change recomposes.
-        if **g != *self.base_geometry {
-            self.base = g.compose();
+        // composed image; only a real change swaps it, from the cache when
+        // it was composed before.
+        if *g != *self.base_geometry {
+            let base = match self.cached_base(&g) {
+                Some(base) => base,
+                None => {
+                    self.base_composes += 1;
+                    g.compose()
+                }
+            };
+            self.swap_base(Arc::clone(&g), base);
             self.flattened_cache = None;
+        } else {
+            self.base_geometry = g;
         }
-        self.base_geometry = Arc::clone(g);
+        self.trim_bases();
+    }
+
+    /// Make `base` (composed from `geometry`) the present base, keeping
+    /// the outgoing one in the cache ([`Self::trim_bases`] decides).
+    fn swap_base(&mut self, geometry: Arc<DocGeometry>, base: Arc<RgbaImage>) {
+        let old_geometry = std::mem::replace(&mut self.base_geometry, geometry);
+        let old_base = std::mem::replace(&mut self.base, base);
+        if !self
+            .bases
+            .iter()
+            .any(|(g, _)| same_geometry(g, &old_geometry))
+        {
+            self.bases.push((old_geometry, old_base));
+        }
+    }
+
+    /// Keep only the cached bases a cheap move can need: an open preview's
+    /// baseline and the states one undo or one redo away. The present's
+    /// own base is `self.base`.
+    fn trim_bases(&mut self) {
+        let keep: Vec<Arc<DocGeometry>> = self
+            .preview_baseline
+            .as_ref()
+            .map(|(b, _)| &b.doc.geometry)
+            .into_iter()
+            .chain(self.history.peek_undo().map(|s| &s.doc.geometry))
+            .chain(self.history.peek_redo().map(|s| &s.doc.geometry))
+            .cloned()
+            .collect();
+        let present = Arc::clone(&self.base_geometry);
+        self.bases.retain(|(g, _)| {
+            !same_geometry(g, &present) && keep.iter().any(|k| same_geometry(g, k))
+        });
+    }
+
+    /// The composed base of `geometry`, when it is the present's or one
+    /// kept in the cache (no compose).
+    pub fn cached_base(&self, geometry: &Arc<DocGeometry>) -> Option<Arc<RgbaImage>> {
+        if same_geometry(geometry, &self.base_geometry) {
+            return Some(Arc::clone(&self.base));
+        }
+        self.bases
+            .iter()
+            .find(|(g, _)| same_geometry(g, geometry))
+            .map(|(_, b)| Arc::clone(b))
+    }
+
+    /// How many bases were composed by this model on the calling thread
+    /// (a cache hit composes nothing). Off-thread composes are counted by
+    /// whoever runs them.
+    pub fn base_composes(&self) -> u64 {
+        self.base_composes
+    }
+
+    /// An open snapshot preview's baseline.
+    pub fn preview_baseline(&self) -> Option<&Snapshot> {
+        self.preview_baseline.as_ref().map(|(b, _)| b)
+    }
+
+    /// The cached flattened image of the present, shared (no copy).
+    pub fn flattened_shared(&self) -> Option<Arc<RgbaImage>> {
+        self.flattened_cache.clone()
+    }
+
+    /// Whether a snapshot preview (slider drag) is open.
+    pub fn preview_is_open(&self) -> bool {
+        self.preview_baseline.is_some()
+    }
+
+    /// The state [`Self::undo`] would move to (no preview open).
+    pub fn peek_undo(&self) -> Option<&Snapshot> {
+        self.history.peek_undo()
+    }
+
+    /// The state [`Self::redo`] would move to (no preview open).
+    pub fn peek_redo(&self) -> Option<&Snapshot> {
+        self.history.peek_redo()
+    }
+
+    /// The present state after `ops`, without applying them or composing
+    /// anything. `None` while a snapshot preview is open, or when an op
+    /// can't apply (an undo with nothing to undo).
+    pub fn plan_ops(&self, ops: &[DocOp]) -> Option<Snapshot> {
+        if self.preview_baseline.is_some() {
+            return None;
+        }
+        let mut history = self.history.clone();
+        ops.iter()
+            .all(|op| apply_op(&mut history, op))
+            .then(|| history.snapshot().clone())
+    }
+
+    /// Apply `ops` (each one undo step, or one undo / redo) with the end
+    /// state's document already composed (`base`) and flattened (`flat`,
+    /// `render(base, annotations)`), so nothing is composed here; the
+    /// states in between get their bases when they are next shown. The
+    /// caller checks the history has not moved since the ops were
+    /// planned. `Ok(false)` (nothing changed) while a preview is open or
+    /// when an op can't apply.
+    pub fn apply_ops_precomposed(
+        &mut self,
+        ops: &[DocOp],
+        base: Arc<RgbaImage>,
+        flat: RgbaImage,
+    ) -> Result<bool, GeometryError> {
+        if self.preview_baseline.is_some() {
+            return Ok(false);
+        }
+        let mut history = self.history.clone();
+        if !ops.iter().all(|op| apply_op(&mut history, op)) {
+            return Ok(false);
+        }
+        history.doc().geometry.validate()?;
+        self.history = history;
+        let geometry = Arc::clone(&self.history.doc().geometry);
+        self.install_base(geometry, base, flat);
+        Ok(true)
+    }
+
+    /// Install `flat`, rendered off the UI thread as `render(base,
+    /// annotations)`, as the flattened image, if the present still is
+    /// `annotations` over `base`. Returns whether it was installed.
+    pub fn install_flattened(
+        &mut self,
+        base: &Arc<RgbaImage>,
+        annotations: &[Annotation],
+        flat: RgbaImage,
+    ) -> bool {
+        if !Arc::ptr_eq(base, &self.base) || self.history.current() != annotations {
+            return false;
+        }
+        self.flattened_cache = Some(Arc::new(flat));
+        true
+    }
+
+    /// Every image this model holds (the base, the cached bases, the
+    /// flattened images), shared: a caller can keep them across a change
+    /// so the big ones it releases are freed elsewhere.
+    pub fn held_images(&self) -> Vec<Arc<RgbaImage>> {
+        std::iter::once(Arc::clone(&self.base))
+            .chain(self.bases.iter().map(|(_, b)| Arc::clone(b)))
+            .chain(self.flattened_cache.iter().cloned())
+            .chain(self.preview_baseline_flat.iter().cloned())
+            .collect()
+    }
+
+    /// Whether [`Self::flatten`] would return a cached image (no render).
+    pub fn has_flattened(&self) -> bool {
+        self.flattened_cache.is_some()
     }
 
     fn alloc_part_id(&mut self) -> PartId {
@@ -398,14 +598,33 @@ impl EditorState {
     /// frame. An invalid geometry is refused and nothing changes.
     pub fn preview_snapshot(&mut self, snapshot: Snapshot) -> Result<(), GeometryError> {
         snapshot.doc.geometry.validate()?;
-        if self.preview_baseline.is_none() {
-            self.preview_baseline = Some((self.snapshot(), self.history.generation()));
-        }
+        self.open_snapshot_preview();
+        // Beautify is drawn around the flattened image, not into it: a
+        // preview with the same annotations on the same document keeps it.
+        let same_pixels = snapshot.annotations == self.history.current()
+            && same_geometry(&snapshot.doc.geometry, &self.history.doc().geometry);
         self.history.replace_present_snapshot(snapshot);
         self.sync_base();
         self.clamp_selection();
-        self.flattened_cache = None;
+        if !same_pixels {
+            self.flattened_cache = None;
+        }
         Ok(())
+    }
+
+    /// Open a snapshot preview over the present (if none is open), keeping
+    /// the present's flattened image for a cancel.
+    fn open_snapshot_preview(&mut self) {
+        if self.preview_baseline.is_none() {
+            self.preview_baseline = Some((self.snapshot(), self.history.generation()));
+            self.preview_baseline_flat = self.flattened_cache.clone();
+        }
+    }
+
+    /// The preview is closed: what it kept for a cancel goes.
+    fn take_preview_baseline(&mut self) -> Option<(Snapshot, u64)> {
+        self.preview_baseline_flat = None;
+        self.preview_baseline.take()
     }
 
     /// Keep the previewed state as one undo step over `baseline`. Does
@@ -413,7 +632,7 @@ impl EditorState {
     pub fn commit_preview_snapshot(&mut self, baseline: Snapshot) -> bool {
         // Refuse when no preview is open or the history moved since it
         // opened: the baseline is stale and would clobber a newer edit.
-        match self.preview_baseline.take() {
+        match self.take_preview_baseline() {
             Some((b, g)) if g == self.history.generation() && b == baseline => {}
             _ => return false,
         }
@@ -432,15 +651,17 @@ impl EditorState {
     /// open and the history has not moved; a stale baseline would
     /// clobber newer edits.
     pub fn cancel_preview_snapshot(&mut self, baseline: Snapshot) {
+        let flat = self.preview_baseline_flat.take();
         match self.preview_baseline.take() {
             Some((b, g)) if g == self.history.generation() && b == baseline => {}
             _ => return,
         }
-        // `baseline` came from `snapshot()`, so its geometry is valid.
+        // `baseline` came from `snapshot()`, so its geometry is valid. Its
+        // base is cached and its flattened image was kept: no render.
         self.history.replace_present_snapshot(baseline);
         self.sync_base();
         self.clamp_selection();
-        self.flattened_cache = None;
+        self.flattened_cache = flat;
     }
 
     /// Close an open snapshot preview, restoring its baseline.
@@ -448,10 +669,12 @@ impl EditorState {
     fn close_preview(&mut self) -> bool {
         // Restore only while the history has not moved; otherwise the
         // baseline is stale and the present already holds newer edits.
+        let flat = self.preview_baseline_flat.take();
         if let Some((b, g)) = self.preview_baseline.take() {
             if g == self.history.generation() {
                 self.history.replace_present_snapshot(b);
                 self.sync_base();
+                self.flattened_cache = flat;
                 return true;
             }
         }
@@ -469,18 +692,83 @@ impl EditorState {
     /// the present geometry. Pair with [`Self::push_precomposed`] to
     /// compose the document off the UI thread.
     pub fn geometry_step(&self, next: DocGeometry) -> Result<Option<Snapshot>, GeometryError> {
+        Self::step_from(self.history.snapshot(), next)
+    }
+
+    /// [`Self::geometry_step`] from any state `from` (a queued step's).
+    pub fn step_from(
+        from: &Snapshot,
+        next: DocGeometry,
+    ) -> Result<Option<Snapshot>, GeometryError> {
         next.validate()?;
-        if **self.geometry() == next {
+        if *from.doc.geometry == next {
             return Ok(None);
         }
-        let annotations = remap_annotations(self.geometry(), &next, self.annotations());
+        let annotations = remap_annotations(&from.doc.geometry, &next, &from.annotations);
         Ok(Some(Snapshot {
             annotations,
             doc: DocState {
                 geometry: Arc::new(next),
-                beautify: self.beautify(),
+                beautify: from.doc.beautify,
             },
         }))
+    }
+
+    /// `g` turned a quarter (what [`Self::rotate`] moves to).
+    pub fn rotated_geometry(g: &DocGeometry, clockwise: bool) -> DocGeometry {
+        let t = if clockwise {
+            g.transform.rotated_cw()
+        } else {
+            g.transform.rotated_ccw()
+        };
+        g.with_transform(t)
+    }
+
+    /// `g` mirrored (what [`Self::flip`] moves to).
+    pub fn flipped_geometry(g: &DocGeometry, axis: FlipAxis) -> DocGeometry {
+        g.with_transform(g.transform.flipped(axis))
+    }
+
+    /// The undo step [`Self::add_part`] would push from `from`, without
+    /// pushing it or composing anything; allocates the new part's id
+    /// (and a bake's), which are never reused even if the step isn't.
+    pub fn add_part_step(
+        &mut self,
+        from: &Snapshot,
+        image: Arc<RgbaImage>,
+        join: Join,
+    ) -> Result<(Snapshot, PartId), GeometryError> {
+        let old = Arc::clone(&from.doc.geometry);
+        old.validate()?;
+        // Two steps when a bake is involved: old -> baked, then
+        // baked -> baked + part. Never old -> baked + part directly.
+        let (staged, annotations) = if old.transform.is_identity() {
+            ((*old).clone(), from.annotations.clone())
+        } else {
+            let baked_id = self.alloc_part_id();
+            // The bake's image is the document as composed: the cached base
+            // when there is one (no compose).
+            let baked = match self.cached_base(&old) {
+                Some(image) => old.baked_from_image(baked_id, image)?,
+                None => old.baked(baked_id)?,
+            };
+            let annotations = remap_annotations(&old, &baked, &from.annotations);
+            (baked, annotations)
+        };
+        let id = self.alloc_part_id();
+        let next = staged.with_part(Part { id, image, join });
+        next.validate()?;
+        let annotations = remap_annotations(&staged, &next, &annotations);
+        Ok((
+            Snapshot {
+                annotations,
+                doc: DocState {
+                    geometry: Arc::new(next),
+                    beautify: from.doc.beautify,
+                },
+            },
+            id,
+        ))
     }
 
     /// The state [`Self::preview_geometry`] would show for `next` over
@@ -542,9 +830,7 @@ impl EditorState {
         flattened: RgbaImage,
     ) -> Result<(), GeometryError> {
         snapshot.doc.geometry.validate()?;
-        if self.preview_baseline.is_none() {
-            self.preview_baseline = Some((self.snapshot(), self.history.generation()));
-        }
+        self.open_snapshot_preview();
         let geometry = Arc::clone(&snapshot.doc.geometry);
         self.history.replace_present_snapshot(snapshot);
         self.install_base(geometry, base, flattened);
@@ -552,11 +838,15 @@ impl EditorState {
     }
 
     fn install_base(&mut self, geometry: Arc<DocGeometry>, base: Arc<RgbaImage>, flat: RgbaImage) {
-        debug_assert_eq!(base.dimensions(), flat.dimensions());
-        self.base = base;
-        self.base_geometry = geometry;
+        debug_assert_eq!(base.dimensions(), geometry.size());
+        if Arc::ptr_eq(&base, &self.base) {
+            self.base_geometry = geometry;
+        } else {
+            self.swap_base(geometry, base);
+        }
+        self.trim_bases();
         self.clamp_selection();
-        self.flattened_cache = Some(flat);
+        self.flattened_cache = Some(Arc::new(flat));
     }
 
     /// Move to `next` as one undo step; annotations follow their parts.
@@ -604,21 +894,14 @@ impl EditorState {
     }
 
     pub fn rotate(&mut self, clockwise: bool) -> Result<bool, GeometryError> {
-        let g = self.geometry();
-        let t = if clockwise {
-            g.transform.rotated_cw()
-        } else {
-            g.transform.rotated_ccw()
-        };
-        let next = g.with_transform(t);
+        let next = Self::rotated_geometry(self.geometry(), clockwise);
         // Any transform drops the untouched-original exemption from the
         // size limits, so this can fail on a huge capture.
         self.apply_geometry(next)
     }
 
     pub fn flip(&mut self, axis: FlipAxis) -> Result<bool, GeometryError> {
-        let g = self.geometry();
-        let next = g.with_transform(g.transform.flipped(axis));
+        let next = Self::flipped_geometry(self.geometry(), axis);
         self.apply_geometry(next)
     }
 
@@ -632,34 +915,9 @@ impl EditorState {
     /// Append `image` joined `join` (decision D4: a transformed document
     /// is baked into one part first). One undo step; returns the new id.
     pub fn add_part(&mut self, image: RgbaImage, join: Join) -> Result<PartId, GeometryError> {
-        let old = Arc::clone(self.geometry());
-        old.validate()?;
-        // Two steps when a bake is involved: old -> baked, then
-        // baked -> baked + part. Never old -> baked + part directly.
-        let (staged, annotations) = if old.transform.is_identity() {
-            ((*old).clone(), self.annotations().to_vec())
-        } else {
-            let baked_id = self.alloc_part_id();
-            let baked = old.baked(baked_id)?;
-            let annotations = remap_annotations(&old, &baked, self.annotations());
-            (baked, annotations)
-        };
-        let id = self.alloc_part_id();
-        let next = staged.with_part(Part {
-            id,
-            image: Arc::new(image),
-            join,
-        });
-        next.validate()?;
-        let annotations = remap_annotations(&staged, &next, &annotations);
-        let beautify = self.beautify();
-        self.history.push_snapshot(Snapshot {
-            annotations,
-            doc: DocState {
-                geometry: Arc::new(next),
-                beautify,
-            },
-        });
+        let from = self.snapshot();
+        let (step, id) = self.add_part_step(&from, Arc::new(image), join)?;
+        self.history.push_snapshot(step);
         self.sync_base();
         self.clamp_selection();
         self.flattened_cache = None;
@@ -674,6 +932,7 @@ impl EditorState {
     /// Discard all annotations and reset undo/redo. Used by the
     /// "Discard" action button before the editor closes.
     pub fn discard(&mut self) {
+        self.preview_baseline_flat = None;
         self.history.clear();
         self.selected_annotation = None;
         self.flattened_cache = None;
@@ -1040,10 +1299,10 @@ impl EditorState {
     /// The cache is cleared on every state change.
     pub fn flatten(&mut self) -> RgbaImage {
         if let Some(img) = &self.flattened_cache {
-            return img.clone();
+            return RgbaImage::clone(img);
         }
         let img = render(&self.base, self.history.current());
-        self.flattened_cache = Some(img.clone());
+        self.flattened_cache = Some(Arc::new(img.clone()));
         img
     }
 
@@ -3311,5 +3570,193 @@ mod tests {
         assert!(!s.commit_preview_from_baseline(Vec::new()));
         assert_eq!(s.undo_depth(), depth);
         assert_eq!(s.annotations(), moved.as_slice());
+    }
+
+    #[test]
+    fn undo_and_redo_across_a_rotation_swap_cached_bases_in() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        s.commit_annotation(block(2.0, 0.0));
+        let original = s.shared_base();
+        s.rotate(true).unwrap();
+        assert_eq!(s.base_composes(), 1);
+        let rotated = s.shared_base();
+        assert!(s.undo());
+        assert!(Arc::ptr_eq(&s.shared_base(), &original));
+        assert!(s.redo());
+        assert!(Arc::ptr_eq(&s.shared_base(), &rotated));
+        assert!(s.undo());
+        assert_eq!(s.base_composes(), 1, "every move swapped a cached base in");
+    }
+
+    #[test]
+    fn cached_bases_are_only_the_adjacent_states() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        for _ in 0..3 {
+            s.rotate(true).unwrap();
+        }
+        // The state one undo away only; the present's is `base`.
+        assert_eq!(s.bases.len(), 1);
+        assert!(s
+            .cached_base(&s.peek_undo().unwrap().doc.geometry)
+            .is_some());
+        let composes = s.base_composes();
+        assert!(s.undo());
+        assert_eq!(s.base_composes(), composes, "swapped in");
+        // The state one redo away is kept; two undos back was evicted
+        // when it stopped being adjacent (nothing is composed ahead).
+        assert_eq!(s.bases.len(), 1);
+        assert!(s
+            .cached_base(&s.peek_redo().unwrap().doc.geometry)
+            .is_some());
+        assert!(s
+            .cached_base(&s.peek_undo().unwrap().doc.geometry)
+            .is_none());
+        assert!(s.undo());
+        assert_eq!(s.base_composes(), composes + 1);
+        assert!(s.bases.len() <= 2);
+    }
+
+    #[test]
+    fn queued_ops_plan_and_apply_as_their_undo_steps() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        s.commit_annotation(block(2.0, 0.0));
+        let start = s.snapshot();
+        let turn = |from: &Snapshot| {
+            EditorState::step_from(
+                from,
+                EditorState::rotated_geometry(&from.doc.geometry, true),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let one = turn(&start);
+        let two = turn(&one);
+        let ops = vec![
+            DocOp::Push(one.clone()),
+            DocOp::Push(two.clone()),
+            DocOp::Undo,
+        ];
+        assert_eq!(s.plan_ops(&ops), Some(one.clone()));
+        assert_eq!(s.snapshot(), start, "planning changes nothing");
+        let base = one.doc.geometry.compose();
+        let flat = render(&base, &one.annotations);
+        assert!(s.apply_ops_precomposed(&ops, base, flat).unwrap());
+        assert_eq!(s.snapshot(), one);
+        assert_eq!(s.undo_depth(), 2);
+        assert_eq!(s.redo_depth(), 1);
+        assert_eq!(s.base().dimensions(), (2, 3));
+        assert!(s.has_flattened());
+        // The same as doing them one by one.
+        let mut sync = EditorState::new(px_grid(3, 2));
+        sync.commit_annotation(block(2.0, 0.0));
+        sync.rotate(true).unwrap();
+        sync.rotate(true).unwrap();
+        assert!(sync.undo());
+        assert_eq!(s.annotations(), sync.annotations());
+        assert!(s.flatten() == sync.flatten());
+        assert!(s.redo());
+        assert_eq!(s.snapshot(), two);
+    }
+
+    #[test]
+    fn an_op_that_cannot_apply_plans_nothing_and_applies_nothing() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        assert_eq!(s.plan_ops(&[DocOp::Undo]), None);
+        assert_eq!(s.plan_ops(&[DocOp::Redo]), None);
+        let base = s.shared_base();
+        let flat = s.flatten();
+        assert!(!s.apply_ops_precomposed(&[DocOp::Undo], base, flat).unwrap());
+        assert_eq!(s.undo_depth(), 0);
+        // Not while a snapshot preview is open either.
+        let baseline = s.snapshot();
+        let mut next = baseline.clone();
+        next.doc.beautify.padding = 12;
+        s.preview_snapshot(next).unwrap();
+        assert_eq!(s.plan_ops(&[]), None);
+    }
+
+    #[test]
+    fn a_flatten_rendered_elsewhere_is_installed_only_for_the_present() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        s.commit_annotation(block(2.0, 0.0));
+        let base = s.shared_base();
+        let annotations = s.annotations().to_vec();
+        let flat = render(&base, &annotations);
+        s.commit_annotation(block(0.0, 0.0));
+        assert!(!s.install_flattened(&base, &annotations, flat.clone()));
+        assert!(!s.has_flattened());
+        assert!(s.undo());
+        assert!(s.install_flattened(&base, &annotations, flat.clone()));
+        assert!(s.has_flattened());
+        assert!(s.flatten() == flat);
+        // Another base (same size) is not this document's.
+        let other = Arc::new(px_grid(3, 2));
+        assert!(!s.install_flattened(&other, &annotations, flat));
+    }
+
+    #[test]
+    fn a_cancelled_snapshot_preview_restores_its_flattened_image_without_a_render() {
+        let mut s = EditorState::new(px_grid(4, 2));
+        s.add_part(px_grid(4, 3), readshot_core::document::Join::Below)
+            .unwrap();
+        s.commit_annotation(block(1.0, 1.0));
+        let _ = s.flatten();
+        let kept = s.flattened_shared().unwrap();
+        let composes = s.base_composes();
+        let baseline = s.snapshot();
+        let g = baseline
+            .doc
+            .geometry
+            .with_layout(5, baseline.doc.geometry.align);
+        s.preview_geometry(&baseline, g).unwrap();
+        assert_eq!(s.base_composes(), composes + 1);
+        assert!(!s.has_flattened());
+        s.cancel_preview_snapshot(baseline);
+        assert_eq!(
+            s.base_composes(),
+            composes + 1,
+            "the baseline's base was cached"
+        );
+        assert!(Arc::ptr_eq(&s.flattened_shared().unwrap(), &kept));
+        // A Beautify-only preview keeps the flattened image throughout.
+        let baseline = s.snapshot();
+        let mut next = baseline.clone();
+        next.doc.beautify.padding = 20;
+        s.preview_snapshot(next).unwrap();
+        assert!(Arc::ptr_eq(&s.flattened_shared().unwrap(), &kept));
+        s.cancel_preview_snapshot(baseline);
+        assert!(Arc::ptr_eq(&s.flattened_shared().unwrap(), &kept));
+    }
+
+    #[test]
+    fn adding_to_a_rotated_document_bakes_its_cached_base_without_a_compose() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        s.rotate(true).unwrap();
+        let composes = s.base_composes();
+        let from = s.snapshot();
+        let (step, _) = s
+            .add_part_step(
+                &from,
+                Arc::new(px_grid(2, 2)),
+                readshot_core::document::Join::Below,
+            )
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&step.doc.geometry.parts[0].image, &s.shared_base()),
+            "the bake is the composed base"
+        );
+        assert_eq!(s.base_composes(), composes);
+        let mut sync = EditorState::new(px_grid(3, 2));
+        sync.rotate(true).unwrap();
+        sync.add_part(px_grid(2, 2), readshot_core::document::Join::Below)
+            .unwrap();
+        let (a, b) = (&step.doc.geometry, sync.geometry());
+        assert_eq!(a.baked_from, b.baked_from);
+        assert_eq!(a.parts.len(), b.parts.len());
+        for (p, q) in a.parts.iter().zip(&b.parts) {
+            assert_eq!(p.id, q.id);
+            assert!(*p.image == *q.image, "the same pixels");
+        }
+        assert_eq!(step.annotations, sync.annotations());
     }
 }

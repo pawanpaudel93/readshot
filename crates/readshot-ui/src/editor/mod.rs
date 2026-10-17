@@ -35,7 +35,7 @@ pub mod undo;
 
 pub use action_bar::ActionMessage;
 pub use canvas::{CanvasMessage, EditorCanvas, Loupe, LOUPE_RADIUS};
-pub use state::{EditorState, ResizeHandle, TextEdit};
+pub use state::{DocOp, EditorState, ResizeHandle, TextEdit};
 pub use style::{
     apply_style_to_annotation, options_for, tool_for_annotation, LinePathKind, OptionControl,
     StyleMessage, TextSize, ToolStyle,

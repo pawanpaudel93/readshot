@@ -627,6 +627,24 @@ impl DocGeometry {
     /// the untouched capture is never matched to baked pixels.
     pub fn baked(&self, id: PartId) -> Result<Self, GeometryError> {
         self.validate()?;
+        let image = self.try_compose()?;
+        self.baked_from_image(id, image)
+    }
+
+    /// [`Self::baked`] with the document already composed (`image`, which
+    /// must be [`Self::compose`]'s result), so nothing is composed here.
+    /// An image of another size is not this document's: composed instead.
+    pub fn baked_from_image(
+        &self,
+        id: PartId,
+        image: Arc<RgbaImage>,
+    ) -> Result<Self, GeometryError> {
+        self.validate()?;
+        let image = if image.dimensions() == self.size() {
+            image
+        } else {
+            self.try_compose()?
+        };
         let id = if id == ORIGINAL_PART {
             self.parts
                 .iter()
@@ -640,7 +658,7 @@ impl DocGeometry {
         Ok(Self {
             parts: vec![Part {
                 id,
-                image: self.try_compose()?,
+                image,
                 join: Join::Below,
             }],
             gap: self.gap,

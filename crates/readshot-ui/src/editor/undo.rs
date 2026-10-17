@@ -145,6 +145,16 @@ impl History {
             .chain(self.future.iter())
     }
 
+    /// The state [`Self::undo`] would move to.
+    pub fn peek_undo(&self) -> Option<&Snapshot> {
+        self.past.last()
+    }
+
+    /// The state [`Self::redo`] would move to.
+    pub fn peek_redo(&self) -> Option<&Snapshot> {
+        self.future.last()
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.past.is_empty()
     }
