@@ -278,12 +278,21 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
 /// A scrub that bakes a Crop stores the crop, in a frame of its own:
 /// the text is then cut to the crop (and pre-masked with what the
 /// scrub hides) before History masks it with the stored redactions.
+///
+/// Nothing is stored for a reopened scrubbed record whose baked-in
+/// redactions are unknown (no stored redactions): History could only mask
+/// with the redactions added since, and the recognition of the opened
+/// image may read a word under an old weak blur or pixelate.
 pub(crate) fn recognition_history_target(
     ed: &EditorSession,
 ) -> (Option<readshot_core::CaptureRecord>, Option<HistoryCut>) {
     if ed.model.geometry().is_original() {
         let frame = history_geometry_id(ed);
         match super::editor_ops::history_crop(ed) {
+            // A reopened scrub whose baked-in redactions are unknown: its
+            // recognition may read words under them that nothing can mask
+            // (a weak blur), so none of it is stored (fail closed).
+            None if super::editor_ops::history_hide(ed).is_none() => (None, None),
             None => (
                 ed.source_record.clone().map(|mut r| {
                     r.geometry_id = frame;

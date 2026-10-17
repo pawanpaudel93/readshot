@@ -77,14 +77,6 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                         previous,
                     );
                     state.history_status = None;
-                    // Records left without text (migrated on load, or a
-                    // scrub that had to drop it): recover it from the
-                    // stored image. Each state is tried once per run.
-                    return stored_recognition_task(
-                        state.coordinator.clone(),
-                        stored_recognition_due(&state.history_records),
-                        state.preferences.ocr_languages.clone(),
-                    );
                 }
                 Err(e) => {
                     state.history_records.clear();

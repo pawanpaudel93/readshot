@@ -435,13 +435,8 @@ pub fn start() -> (App, Task<Message>) {
     // not, so the app just appears in the menu bar at every boot
     // instead of popping a window in the user's face.
     let initial_url_action = take_initial_url_action();
-    let mut tasks: Vec<Task<Message>> = vec![
-        iced::system::theme().map(Message::SystemThemeChanged),
-        history_sweep_task(
-            app.coordinator.clone(),
-            app.preferences.ocr_languages.clone(),
-        ),
-    ];
+    let mut tasks: Vec<Task<Message>> =
+        vec![iced::system::theme().map(Message::SystemThemeChanged)];
     let needs_welcome_window = needs_welcome_window_on_boot(
         app.welcome,
         initial_url_action.is_some(),
@@ -2757,77 +2752,6 @@ fn history_list_task(coord: CaptureCoordinator) -> Task<Message> {
         },
         Message::HistoryListLoaded,
     )
-}
-
-/// Recognize the stored image of each of `records` again, storing its
-/// text masked with the record's stored redactions when History holds
-/// none ([`CaptureCoordinator::recognize_stored_history`], which checks
-/// the record as stored now), one after another. Then an open History
-/// window refreshes (`HistoryRecordPersisted`). Callers that list
-/// History pass only records that [`readshot_core::history::needs_stored_recognition`].
-pub(crate) fn stored_recognition_task(
-    coord: CaptureCoordinator,
-    records: Vec<readshot_core::CaptureRecord>,
-    languages: Vec<String>,
-) -> Task<Message> {
-    if records.is_empty() {
-        return Task::none();
-    }
-    Task::perform(
-        async move {
-            let mut any = false;
-            for record in &records {
-                match coord
-                    .recognize_stored_history(record, languages.clone())
-                    .await
-                {
-                    Ok(done) => any |= done,
-                    Err(e) => tracing::warn!(
-                        target: "readshot::history",
-                        "recognizing a stored History image failed: {e}"
-                    ),
-                }
-            }
-            Ok(any)
-        },
-        Message::HistoryRecordPersisted,
-    )
-}
-
-/// The History records [`stored_recognition_task`] should recognize.
-pub(crate) fn stored_recognition_due(
-    records: &[readshot_core::CaptureRecord],
-) -> Vec<readshot_core::CaptureRecord> {
-    records
-        .iter()
-        .filter(|r| readshot_core::history::needs_stored_recognition(r))
-        .cloned()
-        .collect()
-}
-
-/// At launch: load History once — which migrates records written by
-/// older builds ([`readshot_core::history::migrate_legacy_record`])
-/// before anything can serve their old text — then recognize the stored
-/// images of the records left without text ([`stored_recognition_task`]).
-fn history_sweep_task(coord: CaptureCoordinator, languages: Vec<String>) -> Task<Message> {
-    let lister = coord.clone();
-    Task::perform(
-        async move {
-            match tokio::task::spawn_blocking(move || lister.history_list()).await {
-                Ok(Ok(records)) => stored_recognition_due(&records),
-                Ok(Err(e)) => {
-                    tracing::warn!(target: "readshot::history", "history sweep failed: {e}");
-                    Vec::new()
-                }
-                Err(e) => {
-                    tracing::warn!(target: "readshot::history", "history sweep worker: {e}");
-                    Vec::new()
-                }
-            }
-        },
-        std::convert::identity,
-    )
-    .then(move |due| stored_recognition_task(coord.clone(), due, languages.clone()))
 }
 
 fn editor_output_image(ed: &mut EditorSession) -> image::RgbaImage {
@@ -11683,174 +11607,11 @@ mod tests {
         App::new(coord, perms, Preferences::default())
     }
 
-    #[tokio::test]
-    async fn a_new_redaction_on_a_scrub_without_stored_redactions_recovers_text_from_the_stored_image(
-    ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
-        // OCR of the image reads "visible" (x 0–9 of 30) and the word the
-        // new redaction hides (x 18–24, y 12–16).
-        let mut app = build_app_reading(
-            store.clone(),
-            vec![
-                ocr_line("visible", 0.0, 0.1, 0.3, 0.2),
-                ocr_line(&hidden_word(), 0.6, 0.6, 0.2, 0.2),
-            ],
-        );
-        // Scrubbed by a build that kept no redactions: masked text only.
-        let img = solid(30, 20);
-        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 30, 20, "d");
-        record.redacted = true;
-        record.ocr_text = Some("visible ██████".into());
-        store
-            .save(&record, &readshot_core::encode_png(&img).unwrap())
-            .unwrap();
-        app.editor = Some(crate::editor::EditorSession::from_history(
-            img,
-            record.clone(),
-        ));
-        let ed = app.editor.as_mut().unwrap();
-        ed.model
-            .commit_annotation(word_blur(RectLike::new(18.0, 12.0, 6.0, 4.0)));
-        assert!(super::editor_ops::scrub_drops_stored_text(ed));
-        sync_editor_history(ed, &app.coordinator);
-        app.coordinator.flush_history_updates();
-        // Fail closed first: nothing could mask the editor's recognition.
-        let stored = stored_record(&store, record.id);
-        assert_eq!(stored.ocr_text, None);
-        assert!(readshot_core::history::needs_stored_recognition(&stored));
-        // Once the image landed: the stored image is recognized and its
-        // text stored masked with the stored redaction, so search works.
-        assert!(app
-            .coordinator
-            .recognize_stored_history(&record, Vec::new())
-            .await
-            .unwrap());
-        let text = stored_record(&store, record.id).ocr_text.unwrap();
-        assert!(text.contains("visible"), "{text}");
-        assert!(!text.contains(&hidden_word()), "{text}");
-        assert!(text.contains('█'), "{text}");
-        // Tried once per stored state.
-        assert!(!app
-            .coordinator
-            .recognize_stored_history(&record, Vec::new())
-            .await
-            .unwrap());
-    }
-
-    /// [`FakeOcrEngine`] that runs `hook` once, while recognizing.
-    struct HookedOcr {
-        inner: FakeOcrEngine,
-        hook: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl readshot_ocr::OCREngine for HookedOcr {
-        fn supported_languages(&self) -> Vec<String> {
-            self.inner.supported_languages()
-        }
-        fn reports_positions(&self) -> bool {
-            self.inner.reports_positions()
-        }
-        async fn recognise(
-            &self,
-            req: readshot_ocr::OCRRequest,
-        ) -> Result<readshot_ocr::OCRResult, readshot_core::error::OCRError> {
-            if let Some(hook) = self.hook.lock().unwrap().take() {
-                hook();
-            }
-            self.inner.recognise(req).await
-        }
-    }
-
-    #[tokio::test]
-    async fn a_newer_scrub_requested_during_recovery_always_wins() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
-        let ocr = Arc::new(HookedOcr {
-            inner: FakeOcrEngine::with_lines(vec![ocr_line("visible", 0.0, 0.1, 0.3, 0.2)]),
-            hook: std::sync::Mutex::new(None),
-        });
-        let perms = Arc::new(FakePermissions::granted());
-        let coord = CaptureCoordinator::new(
-            Arc::new(FakeCapturer::new()),
-            ocr.clone(),
-            perms,
-            Some(store.clone()),
-        );
-        // A settled scrub that needs its text recovered.
-        let img = solid(30, 20);
-        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 30, 20, "d");
-        record.redacted = true;
-        record.redactions = vec![word_blur(RectLike::new(18.0, 12.0, 6.0, 4.0))];
-        store
-            .save(&record, &readshot_core::encode_png(&img).unwrap())
-            .unwrap();
-        // While the stored image is being recognized, the editor asks for
-        // a newer scrub of the record, same frame, other redactions.
-        let newer = {
-            let mut r = record.clone();
-            r.redactions.clear();
-            r
-        };
-        let (c2, n2) = (coord.clone(), newer.clone());
-        *ocr.hook.lock().unwrap() = Some(Box::new(move || {
-            drop(c2.rewrite_history_async(
-                n2,
-                Arc::new(solid(30, 20)),
-                vec![word_blur(RectLike::new(1.0, 1.0, 4.0, 4.0))],
-            ));
-        }));
-        assert!(!coord
-            .recognize_stored_history(&record, Vec::new())
-            .await
-            .unwrap());
-        coord.flush_history_updates();
-        let stored = stored_record(&store, record.id);
-        assert_eq!(
-            stored.redactions,
-            vec![word_blur(RectLike::new(1.0, 1.0, 4.0, 4.0))]
-        );
-        assert_eq!(
-            stored.ocr_text, None,
-            "the older version's text never lands"
-        );
-    }
-
     #[test]
-    fn only_a_scrub_over_unknown_baked_in_redactions_recovers_text_from_the_stored_image() {
+    fn a_cropped_record_of_an_older_rule_drops_its_text_on_load_and_stores_none() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
-        let (img, record) = reopened_scrubbed(&store);
-        // Stored redactions known: the editor masks its own recognition.
-        let mut ed = crate::editor::EditorSession::from_history(img.clone(), record);
-        ed.model
-            .commit_annotation(word_blur(RectLike::new(20.0, 10.0, 5.0, 5.0)));
-        assert!(!super::editor_ops::scrub_drops_stored_text(&ed));
-        // A fresh capture: likewise.
-        let mut ed = crate::editor::EditorSession::from_history(
-            img,
-            readshot_core::CaptureRecord::new(chrono::Utc::now(), 30, 20, "d"),
-        );
-        ed.model
-            .commit_annotation(word_blur(RectLike::new(20.0, 10.0, 5.0, 5.0)));
-        assert!(!super::editor_ops::scrub_drops_stored_text(&ed));
-    }
-
-    #[tokio::test]
-    async fn a_cropped_record_of_an_older_rule_drops_its_text_on_load_and_recovers_it_from_the_stored_crop(
-    ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
-        // OCR of the stored crop (20 × 20) reads "kept" and the weakly
-        // pixelated word at x 10–16, y 2–6 (the stored redaction).
-        let app = build_app_reading(
-            store.clone(),
-            vec![
-                ocr_line("kept", 0.0, 0.5, 0.4, 0.2),
-                ocr_line(&hidden_word(), 0.5, 0.1, 0.3, 0.2),
-            ],
-        );
+        let mut app = build_app_reading(store.clone(), vec![ocr_line("kept", 0.0, 0.5, 0.4, 0.2)]);
         let record = cropped_weak_pixelate_scrub(&store, &app);
         // Rewrite the sidecar as an older build left it: an unprefixed crop
         // id and text holding a word from the cut-away area.
@@ -11869,19 +11630,100 @@ mod tests {
             listed[0].geometry_id.as_deref(),
             Some("crop3:73d1ba24128a984d")
         );
-        let due = stored_recognition_due(&listed);
-        assert_eq!(due.len(), 1);
-        assert!(app
-            .coordinator
-            .recognize_stored_history(&due[0], Vec::new())
-            .await
-            .unwrap());
+        // Whether that era's stored redactions are complete is unknown: no
+        // text is recovered from the stored image (fail closed).
+        let _ = update(&mut app, Message::HistoryListLoaded(Ok(listed)));
+        app.coordinator.flush_history_updates();
+        assert_eq!(stored_record(&store, record.id).ocr_text, None);
+    }
+
+    /// A record scrubbed by a build that kept no redactions: its image has
+    /// a weak blur over [`hidden_word`] (x 2–12, y 4–7) that nothing
+    /// records, and its text is masked.
+    fn scrubbed_without_redactions(
+        store: &readshot_core::FsHistoryStore,
+    ) -> (image::RgbaImage, readshot_core::CaptureRecord) {
+        let img = solid(30, 20);
+        let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 30, 20, "d");
+        record.redacted = true;
+        record.ocr_text = Some("██████ visible".into());
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        (img, record)
+    }
+
+    #[tokio::test]
+    async fn a_new_redaction_over_unknown_baked_in_redactions_never_recovers_text() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_positions_and_history(store.clone());
+        let (img, record) = scrubbed_without_redactions(&store);
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            img,
+            record.clone(),
+        ));
+        let ed = app.editor.as_mut().unwrap();
+        ed.model
+            .commit_annotation(word_blur(RectLike::new(20.0, 10.0, 5.0, 5.0)));
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        assert_eq!(stored_record(&store, record.id).ocr_text, None);
+        // The editor's recognition of the opened image reads the word under
+        // the unknown blur: it has nowhere to be stored.
+        let ed = app.editor.as_ref().unwrap();
+        let (target, cut) = super::text_panel::recognition_history_target(ed);
+        assert!(target.is_none(), "{target:?}");
+        let doc = positioned_doc(&hidden_word(), RectLike::new(2.0, 4.0, 10.0, 3.0));
+        if let Some(target) = target {
+            let _ = super::text_panel::store_recognized_text(
+                &app.coordinator,
+                &target,
+                cut.as_ref(),
+                Ok(doc),
+            )
+            .await;
+        }
+        // Nor does loading History recover anything.
+        let listed = app.coordinator.history_list().unwrap();
+        let _ = update(&mut app, Message::HistoryListLoaded(Ok(listed)));
+        app.coordinator.flush_history_updates();
+        let text = stored_record(&store, record.id).ocr_text;
+        assert_eq!(text, None, "fail closed");
+    }
+
+    #[tokio::test]
+    async fn known_complete_redactions_still_mask_recognized_text() {
+        // A reopened scrub whose stored redactions are known: the editor's
+        // recognition is stored, masked with all of them.
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_positions_and_history(store.clone());
+        let (img, record) = reopened_scrubbed(&store);
+        app.editor = Some(crate::editor::EditorSession::from_history(
+            img,
+            record.clone(),
+        ));
+        let ed = app.editor.as_mut().unwrap();
+        ed.model
+            .commit_annotation(word_blur(RectLike::new(20.0, 10.0, 5.0, 5.0)));
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let ed = app.editor.as_ref().unwrap();
+        let (target, cut) = super::text_panel::recognition_history_target(ed);
+        let target = target.expect("redactions known: text may be stored");
+        let _ = super::text_panel::store_recognized_text(
+            &app.coordinator,
+            &target,
+            cut.as_ref(),
+            Ok(positioned_doc(
+                &hidden_word(),
+                RectLike::new(2.0, 4.0, 10.0, 3.0),
+            )),
+        )
+        .await;
         let text = stored_record(&store, record.id).ocr_text.unwrap();
-        assert!(text.contains("kept"), "{text}");
-        assert!(!text.contains("cutaway"), "{text}");
-        assert!(!text.contains(&hidden_word()), "{text}");
-        // Migrated once: nothing is due any more.
-        assert!(stored_recognition_due(&app.coordinator.history_list().unwrap()).is_empty());
+        assert_eq!(text, "█".repeat(6));
     }
 
     #[test]

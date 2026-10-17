@@ -61,11 +61,6 @@ pub struct CaptureCoordinator {
     history_update_tx: Option<std::sync::mpsc::Sender<HistoryUpdate>>,
     /// See [`Scrubs`].
     scrubs: Arc<Scrubs>,
-    /// Stored states (frame and redactions) of records whose stored image
-    /// [`Self::recognize_stored_history`] already tried, so each is
-    /// recognized at most once per run.
-    stored_recognitions:
-        Arc<std::sync::Mutex<std::collections::HashMap<readshot_core::Uuid, SecuredScrub>>>,
 }
 
 /// Message for the background history writer thread.
@@ -527,7 +522,6 @@ impl CaptureCoordinator {
             history,
             history_update_tx,
             scrubs,
-            stored_recognitions: Arc::default(),
         }
     }
 
@@ -803,102 +797,6 @@ impl CaptureCoordinator {
             Some(h) => h.record_recognized_text(record, doc, fill_unredacted),
             None => Ok(()),
         }
-    }
-
-    /// Recognize `record`'s **stored** image again and store the text
-    /// masked with its stored redactions, when History holds no text for
-    /// it but can ([`readshot_core::history::needs_stored_recognition`]):
-    /// a cropped record migrated on load (its old text was dropped), or a
-    /// scrub whose text had to be dropped because the redactions already
-    /// in its image were unknown.
-    ///
-    /// Fails closed at every step:
-    /// - only the stored, already redacted (and cropped) PNG is recognized,
-    ///   and only while the sidecar read before and after reading it is
-    ///   the same, settled version (no scrub pending), so the pixels are
-    ///   that version's;
-    /// - only a recognition with positions is stored, masked with the
-    ///   redactions stored in that version, in the stored image's px;
-    /// - the text lands only if, under the commit gate, no rewrite of the
-    ///   record was requested since it started (a newer scrub or restore
-    ///   always wins) and the sidecar is still exactly that version
-    ///   ([`HistoryStore::record_recovered_text`]).
-    ///
-    /// Each stored state (frame and redactions) is tried once per run.
-    /// `Ok(true)` when text was stored.
-    pub async fn recognize_stored_history(
-        &self,
-        record: &CaptureRecord,
-        languages: Vec<String>,
-    ) -> Result<bool, String> {
-        use readshot_core::history::needs_stored_recognition;
-        let Some(store) = self.history.clone() else {
-            return Ok(false);
-        };
-        // The newest rewrite request when this started: any later one
-        // makes this recognition stale.
-        let seq = lock(&self.scrubs.state).latest.get(&record.id).copied();
-        let (st, probe) = (Arc::clone(&store), record.clone());
-        let read = tokio::task::spawn_blocking(move || {
-            let before = st.stored_record(&probe).filter(needs_stored_recognition)?;
-            let png = st.read_png(&before).ok()?;
-            let after = st.stored_record(&probe)?;
-            (after == before).then_some((before, png))
-        })
-        .await
-        .map_err(|e| e.to_string())?;
-        let Some((stored, png)) = read else {
-            return Ok(false);
-        };
-        if !self.claim_stored_recognition(&stored) {
-            return Ok(false);
-        }
-        let image = tokio::task::spawn_blocking(move || {
-            image::load_from_memory(&png)
-                .map(|img| img.to_rgba8())
-                .map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| e.to_string())??;
-        let doc = self
-            .recognise_document(OCRRequest {
-                image,
-                languages,
-                use_language_correction: true,
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-        if !doc.positioned {
-            return Ok(false);
-        }
-        let scrubs = Arc::clone(&self.scrubs);
-        tokio::task::spawn_blocking(move || {
-            // Commit gate, then state (the documented order).
-            let b = lock(&scrubs.book);
-            let id = stored.id;
-            let moved = lock(&scrubs.state).latest.get(&id).copied() != seq
-                || b.parked.contains_key(&id)
-                || b.unsecured.contains_key(&id);
-            if moved {
-                return Ok(false);
-            }
-            store.record_recovered_text(&stored, &doc)
-        })
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
-    }
-
-    /// `true` the first time `stored`'s state is claimed for
-    /// [`Self::recognize_stored_history`].
-    fn claim_stored_recognition(&self, stored: &CaptureRecord) -> bool {
-        let key = secured_key(stored);
-        let mut tried = lock(&self.stored_recognitions);
-        if tried.get(&stored.id) == Some(&key) {
-            return false;
-        }
-        tried.insert(stored.id, key);
-        true
     }
 
     /// Block until every history update queued before this call has
