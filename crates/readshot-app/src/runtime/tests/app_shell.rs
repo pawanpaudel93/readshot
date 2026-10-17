@@ -870,14 +870,30 @@ fn background_hex_and_eyedropper_set_a_solid_background() {
 fn title_shows_the_output_size_when_beautified() {
     use readshot_core::beautify::BuiltinPreset;
     let mut ed = crate::editor::EditorSession::new(solid(100, 50));
-    assert_eq!(editor_size_label(&ed), "100 × 50 px");
+    assert_eq!(editor_size_label(&ed), "100\u{a0}×\u{a0}50\u{a0}px");
     ed.model.set_beautify(BuiltinPreset::Minimal.settings());
-    assert_eq!(editor_size_label(&ed), "100 × 50 → 148 × 98 px");
-    // A tall beautified capture's label fits the ≈ 232 px the title row
-    // leaves at the 720 px minimum (12 px mono, 0.6 em a glyph); a longer
-    // one clips, and its tooltip carries the whole value.
-    let tall = "1440 × 12000 → 1600 × 12160 px";
-    assert!(tall.chars().count() as f32 * crate::runtime::TYPE_CAPTION * 0.6 <= 232.0);
+    assert_eq!(
+        editor_size_label(&ed),
+        "100\u{a0}×\u{a0}50 → 148\u{a0}×\u{a0}98\u{a0}px"
+    );
+    // The widest realistic label (a 4-digit by 5-digit capture, as a
+    // long scroll capture is, beautified) fits the ≈ 232 px the title
+    // row leaves at the 720 px minimum (12 px mono, 0.6 em a glyph). A
+    // longer one clips, and its tooltip carries the whole value.
+    let mut tall = crate::editor::EditorSession::new(solid(1440, 10000));
+    tall.model.set_beautify(BuiltinPreset::Minimal.settings());
+    let label = editor_size_label(&tall);
+    assert_eq!(
+        label.chars().filter(|c| c.is_ascii_digit()).count(),
+        18,
+        "{label}"
+    );
+    assert!(
+        label.chars().count() as f32 * crate::runtime::TYPE_CAPTION * 0.6 <= 232.0,
+        "{label}"
+    );
+    // "px" and the × never wrap away from their numbers.
+    assert!(!label.contains(" px") && !label.contains(" ×") && !label.contains("× "));
 }
 
 #[test]
@@ -1130,7 +1146,7 @@ fn editor_toast_kind_classifies_status() {
 #[test]
 fn refusals_and_partial_failures_toast_as_sticky_warnings() {
     let mut ed = debug_editor_qa_session();
-    ed.set_warning("Enter a width and height of at least 1 px.");
+    ed.set_warning("Enter a width and height of at least 1\u{a0}px.");
     assert!(ed.status_is_warning());
     assert!(ed.status_is_sticky());
     // Any later status (or a direct write) drops the warning.
@@ -1309,7 +1325,7 @@ fn warnings_can_be_dismissed_and_stop_the_status_tick() {
     let mut ed = debug_editor_qa_session();
     ed.set_status("Saved.");
     assert!(crate::editor::status_tick_needed(&ed));
-    ed.set_warning("Enter a width and height of at least 1 px.");
+    ed.set_warning("Enter a width and height of at least 1\u{a0}px.");
     assert!(!crate::editor::status_tick_needed(&ed));
     ed.set_status("Couldn’t save — disk full.");
     assert!(!crate::editor::status_tick_needed(&ed));

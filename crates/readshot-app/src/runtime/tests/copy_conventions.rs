@@ -96,10 +96,11 @@ fn is_sentence_case(s: &str) -> bool {
     };
     first.chars().next().is_some_and(|c| !c.is_lowercase())
         && words.all(|w| {
-            // Proper names keep their capital.
-            w.chars().next().is_some_and(|c| c.is_lowercase())
+            // Later words are not capitalized; digits and symbols
+            // ("Last 50 captures", "(center)") are fine, and proper names
+            // keep their capital.
+            w.chars().next().is_some_and(|c| !c.is_uppercase())
                 || ["Readshot", "OCR", "Tab"].contains(&w)
-                || w.starts_with('(')
         })
 }
 
@@ -112,6 +113,15 @@ fn tooltips_name_their_control_in_title_case() {
     for (name, file) in names {
         assert!(is_title_case(&name), "{file}: tooltip {name:?}");
     }
+}
+
+#[test]
+fn the_case_checks_accept_digits_and_symbols() {
+    assert!(is_sentence_case("Last 50 captures"));
+    assert!(is_sentence_case("Center automatically (8 px)"));
+    assert!(!is_sentence_case("Lock Aspect ratio"));
+    assert!(is_title_case("Copy Text from 3 Visible Captures"));
+    assert!(!is_title_case("Zoom out"));
 }
 
 #[test]

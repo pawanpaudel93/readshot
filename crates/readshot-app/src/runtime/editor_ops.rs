@@ -25,7 +25,7 @@ pub(crate) fn handle_commit_annotation(
     if cropped {
         let (w, h) = ed.effective_image_size();
         ed.set_info(format!(
-            "Crop selected at {w} × {h} px. Drag the handles to adjust; {DELETE_KEY} or {UNDO_KEY} cancels."
+            "Crop selected at {w}\u{a0}×\u{a0}{h}\u{a0}px. Drag the handles to adjust; {DELETE_KEY} or {UNDO_KEY} cancels."
         ));
     }
 }
@@ -190,7 +190,9 @@ pub(crate) fn apply_crop_draft(
         .commit_annotation(readshot_core::Annotation::Crop { rect });
     ed.refresh_image();
     let (w, h) = ed.effective_image_size();
-    ed.set_status(format!("Cropped to {w} × {h} px. {UNDO_HINT}"));
+    ed.set_status(format!(
+        "Cropped to {w}\u{a0}×\u{a0}{h}\u{a0}px. {UNDO_HINT}"
+    ));
     sync_editor_history(ed, coord);
     true
 }
@@ -801,7 +803,7 @@ fn cycle_selection_by_tab(state: &mut App, step: i32) -> Task<Message> {
     if let Some(kind) = ed.model.selected_kind_label() {
         ed.set_guide(
             format!(
-                "{kind} selected ({} of {n}). Arrows move it, {DELETE_KEY} removes it, esc deselects.",
+                "{kind} selected ({} of {n}). Arrows move it, {DELETE_KEY} removes it, {ESC_KEY} deselects.",
                 next + 1
             ),
             crate::editor::KeyGuide::Selection,
@@ -1067,7 +1069,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         ed.crop_draft = Some(keyboard_crop_draft(visible_frame(ed), ratio));
                         ed.set_guide(
                             format!(
-                                "Arrows move the crop, {OPTION_KEY} + arrows resize it ({SHIFT_KEY} for 10 px). ↵ crops, esc cancels."
+                                "Arrows move the crop, {OPTION_KEY} + arrows resize it ({SHIFT_KEY} for 10\u{a0}px). {RETURN_KEY} crops, {ESC_KEY} cancels."
                             ),
                             crate::editor::KeyGuide::CropDraft,
                         );
@@ -1935,7 +1937,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         if ed.model.active_tool() == readshot_ui::editor::ToolState::Crop {
                             ed.crop_draft = Some(rect);
                             ed.set_guide(
-                                "Press ↵ to crop, esc to cancel.",
+                                format!("Press {RETURN_KEY} to crop, {ESC_KEY} to cancel."),
                                 crate::editor::KeyGuide::CropDraft,
                             );
                         } else {

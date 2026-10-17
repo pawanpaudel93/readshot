@@ -16,10 +16,9 @@ use iced::Task;
 /// runaway loop bounded by these caps still produces a sane stitched
 /// output and doesn't gobble gigabytes of RAM. The limits below cover
 /// roughly 30 s of continuous scrolling at the configured tick rate.
+pub(crate) const SCROLL_MAX_FRAMES: usize = 120;
 /// The way back from a failed scrolling capture.
 pub(crate) const SCROLL_RETRY_HINT: &str = "Start the scrolling capture again.";
-
-pub(crate) const SCROLL_MAX_FRAMES: usize = 120;
 /// Maximum captures allowed in flight at once. Lets a fast scroll
 /// overlap several SCK round-trips (each ~100 ms on macOS) instead
 /// of serialising them, so heavy trackpad scrolls don't lose frames.
@@ -525,7 +524,9 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
                     let (w, h) = (image.width(), image.height());
                     let mut ed =
                         crate::editor::EditorSession::new_with_display_scale(image, display_scale);
-                    ed.set_status(format!("Scrolling capture stitched into {w} × {h} px."));
+                    ed.set_status(format!(
+                        "Scrolling capture stitched into {w}\u{a0}×\u{a0}{h}\u{a0}px."
+                    ));
                     Task::batch([
                         close_hud,
                         open_editor_window_replacing(state, ed, display_bounds),

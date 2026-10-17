@@ -1339,12 +1339,12 @@ fn landed_status(ed: &EditorSession, kind: ComposeKind) -> String {
     match kind {
         ComposeKind::Resize { .. } => {
             let (w, h) = ed.effective_image_size();
-            format!("Resized to {w} × {h} px. {UNDO_HINT}")
+            format!("Resized to {w}\u{a0}×\u{a0}{h}\u{a0}px. {UNDO_HINT}")
         }
         ComposeKind::Align(align) => {
             format!("Aligned to {}. {UNDO_HINT}", align.label().to_lowercase())
         }
-        ComposeKind::Gap(gap) => format!("Gap set to {gap} px. {UNDO_HINT}"),
+        ComposeKind::Gap(gap) => format!("Gap set to {gap}\u{a0}px. {UNDO_HINT}"),
         ComposeKind::Rotate { clockwise } => {
             let dir = if clockwise { "right" } else { "left" };
             format!("Rotated {dir}. {UNDO_HINT}")

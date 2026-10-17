@@ -353,7 +353,7 @@ pub(crate) fn hint_segments(cli_interactive: bool, too_small: bool) -> Vec<HintS
     if too_small {
         vec![
             Text("Drag to select a larger area"),
-            Key("esc"),
+            Key(crate::runtime::ESC_KEY),
             Muted("Cancel"),
         ]
     } else if cli_interactive {
@@ -362,7 +362,7 @@ pub(crate) fn hint_segments(cli_interactive: bool, too_small: bool) -> Vec<HintS
             Muted("Release to capture"),
             Key(SHIFT_CHIP),
             Muted("Square"),
-            Key("esc"),
+            Key(crate::runtime::ESC_KEY),
             Muted("Cancel"),
         ]
     } else {
@@ -370,9 +370,9 @@ pub(crate) fn hint_segments(cli_interactive: bool, too_small: bool) -> Vec<HintS
             Text("Drag to select an area"),
             Key(SHIFT_CHIP),
             Muted("Square"),
-            Key("↵"),
+            Key(crate::runtime::RETURN_KEY),
             Muted("Full screen"),
-            Key("esc"),
+            Key(crate::runtime::ESC_KEY),
             Muted("Cancel"),
         ]
     }
@@ -382,13 +382,13 @@ pub(crate) fn hint_segments(cli_interactive: bool, too_small: bool) -> Vec<HintS
 pub(crate) fn selection_hint_segments() -> Vec<HintSeg> {
     use HintSeg::*;
     vec![
-        Key("↵"),
+        Key(crate::runtime::RETURN_KEY),
         Text("Edit"),
         Key("←→↑↓"),
         Muted("Move"),
         Key(RESIZE_CHIP),
         Muted("Resize"),
-        Key("esc"),
+        Key(crate::runtime::ESC_KEY),
         Muted("Cancel"),
     ]
 }
@@ -415,7 +415,7 @@ fn fit_hint_segments(mut segs: Vec<HintSeg>, max_w: f32) -> Vec<HintSeg> {
     while segs_width(&segs) > max_w {
         let drop = segs
             .iter()
-            .position(|s| matches!(s, HintSeg::Key(k) if *k != "esc"))
+            .position(|s| matches!(s, HintSeg::Key(k) if *k != crate::runtime::ESC_KEY))
             .or_else(|| {
                 segs.iter()
                     .skip(1)
@@ -1313,12 +1313,17 @@ mod tests {
     #[test]
     fn a_selection_hint_names_its_keys() {
         let segs = selection_hint_segments();
-        for k in ["↵", "←→↑↓", RESIZE_CHIP, "esc"] {
+        for k in [
+            crate::runtime::RETURN_KEY,
+            "←→↑↓",
+            RESIZE_CHIP,
+            crate::runtime::ESC_KEY,
+        ] {
             assert!(segs.contains(&HintSeg::Key(k)), "{k}");
         }
         // It fits a narrow display by dropping pairs, never esc.
         let fit = fit_hint_segments(segs, 260.0);
-        assert!(fit.contains(&HintSeg::Key("esc")));
+        assert!(fit.contains(&HintSeg::Key(crate::runtime::ESC_KEY)));
     }
 
     use super::*;
@@ -1328,10 +1333,12 @@ mod tests {
         for (cli, small) in [(false, false), (true, false), (false, true)] {
             let segs = hint_segments(cli, small);
             assert!(matches!(segs[0], HintSeg::Text(_)), "instruction first");
-            assert!(segs.iter().any(|s| matches!(s, HintSeg::Key("esc"))));
+            assert!(segs
+                .iter()
+                .any(|s| matches!(s, HintSeg::Key(crate::runtime::ESC_KEY))));
         }
         let normal = hint_segments(false, false);
-        assert!(normal.contains(&HintSeg::Key("↵")));
+        assert!(normal.contains(&HintSeg::Key(crate::runtime::RETURN_KEY)));
         assert!(normal.contains(&HintSeg::Key(SHIFT_CHIP)));
     }
 
@@ -1339,8 +1346,8 @@ mod tests {
     fn hint_variants_match_live_behavior() {
         let small = hint_segments(false, true);
         assert!(small.contains(&HintSeg::Text("Drag to select a larger area")));
-        assert!(!small.contains(&HintSeg::Key("↵")));
-        assert!(!hint_segments(true, false).contains(&HintSeg::Key("↵")));
+        assert!(!small.contains(&HintSeg::Key(crate::runtime::RETURN_KEY)));
+        assert!(!hint_segments(true, false).contains(&HintSeg::Key(crate::runtime::RETURN_KEY)));
     }
 
     #[test]
@@ -1348,7 +1355,7 @@ mod tests {
         let t = "Drag to select an area";
         let w = seg_width(&HintSeg::Text(t));
         assert!((w - t.chars().count() as f32 * 13.0 * 0.6).abs() < 1e-3);
-        let k = seg_width(&HintSeg::Key("esc"));
+        let k = seg_width(&HintSeg::Key(crate::runtime::ESC_KEY));
         assert!((k - (3.0 * 11.0 * 0.6 + HINT_KEY_PAD)).abs() < 1e-3);
     }
 
@@ -1356,8 +1363,8 @@ mod tests {
     fn narrow_hint_keeps_instruction_and_esc() {
         let segs = fit_hint_segments(hint_segments(false, false), 260.0);
         assert!(matches!(segs[0], HintSeg::Text(_)));
-        assert!(segs.contains(&HintSeg::Key("esc")));
-        assert!(!segs.contains(&HintSeg::Key("↵")));
+        assert!(segs.contains(&HintSeg::Key(crate::runtime::ESC_KEY)));
+        assert!(!segs.contains(&HintSeg::Key(crate::runtime::RETURN_KEY)));
     }
 
     #[test]

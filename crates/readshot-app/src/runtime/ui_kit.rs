@@ -434,7 +434,7 @@ pub(crate) fn mono_readout<'a>(value: String, widest: &str) -> iced::widget::Tex
 
 /// A pixel size as every readout writes it: "1200 × 800 px".
 pub(crate) fn size_px(w: impl std::fmt::Display, h: impl std::fmt::Display) -> String {
-    format!("{w} × {h} px")
+    format!("{w}\u{a0}×\u{a0}{h}\u{a0}px")
 }
 
 /// "1 capture" / "3 captures": a count with the whole singular or plural

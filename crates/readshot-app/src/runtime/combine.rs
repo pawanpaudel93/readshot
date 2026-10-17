@@ -262,7 +262,7 @@ impl PartBudget {
         let ch = u64::from(self.doc_height) + u64::from(self.gap) + u64::from(h);
         if u64::from(cw) > u64::from(MAX_DOC_SIDE) || ch > u64::from(MAX_DOC_SIDE) {
             return Err(format!(
-                "the combined image would be {} × {} px, and the limit is {} px on a side. {COMBINED_TOO_LARGE}",
+                "the combined image would be {}\u{a0}×\u{a0}{}\u{a0}px, and the limit is {}\u{a0}px on a side. {COMBINED_TOO_LARGE}",
                 group_digits(cw.into()),
                 group_digits(ch),
                 group_digits(MAX_DOC_SIDE.into()),
@@ -271,7 +271,7 @@ impl PartBudget {
         let pixels = u64::from(cw) * ch;
         if pixels > MAX_DOC_PIXELS {
             return Err(format!(
-                "the combined image would be {} px, over the {} px limit. {COMBINED_TOO_LARGE}",
+                "the combined image would be {}\u{a0}px, over the {}\u{a0}px limit. {COMBINED_TOO_LARGE}",
                 group_digits(pixels),
                 group_digits(MAX_DOC_PIXELS),
             ));
@@ -304,7 +304,7 @@ pub(crate) fn decode_part_image(
     }
     if w > MAX_DOC_SIDE || h > MAX_DOC_SIDE {
         return Err(format!(
-            "the image is {} × {} px, and the limit is {} px on a side. {CHOOSE_SMALLER}",
+            "the image is {}\u{a0}×\u{a0}{}\u{a0}px, and the limit is {}\u{a0}px on a side. {CHOOSE_SMALLER}",
             group_digits(w.into()),
             group_digits(h.into()),
             group_digits(MAX_DOC_SIDE.into()),
@@ -313,7 +313,7 @@ pub(crate) fn decode_part_image(
     let pixels = u64::from(w) * u64::from(h);
     if pixels > MAX_DOC_PIXELS {
         return Err(format!(
-            "the image is {} px, over the {} px limit. {CHOOSE_SMALLER}",
+            "the image is {}\u{a0}px, over the {}\u{a0}px limit. {CHOOSE_SMALLER}",
             group_digits(pixels),
             group_digits(MAX_DOC_PIXELS),
         ));
@@ -378,7 +378,7 @@ async fn pick_and_decode_image(
     .await
     .map_err(|e| {
         tracing::warn!(target: "readshot::editor", "add image worker: {e}");
-        "the file couldn’t be read".to_string()
+        format!("the file couldn’t be read. {CHOOSE_ANOTHER}")
     })?
 }
 

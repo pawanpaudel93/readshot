@@ -878,7 +878,7 @@ pub(crate) fn zone_hint(zone: FocusZone) -> String {
         FocusZone::Resize => "Resize",
     };
     format!(
-        "{name}: Tab moves, ←→ change, ↵ presses, esc leaves. {} goes to the next area.",
+        "{name}: Tab moves, ←→ change, {RETURN_KEY} presses, {ESC_KEY} leaves. {} goes to the next area.",
         key_label(KEY_NEXT_ZONE)
     )
 }

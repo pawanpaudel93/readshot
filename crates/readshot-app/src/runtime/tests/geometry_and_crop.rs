@@ -76,7 +76,7 @@ fn resize_draft_locks_the_ratio_in_px_and_percent() {
     d.set_width("abc");
     assert_eq!(d.target(), None);
     d.set_width("0");
-    assert_eq!(d.target(), None, "at least 1 px");
+    assert_eq!(d.target(), None, "at least 1\u{a0}px");
 }
 
 #[test]
@@ -197,8 +197,11 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
         },
     );
     assert!(s.starts_with("Couldn’t rotate"), "{s}");
-    assert!(s.contains("uncropped image would be 40,000 × 10 px"), "{s}");
-    assert!(s.contains("32,767 px on a side"), "{s}");
+    assert!(
+        s.contains("uncropped image would be 40,000\u{a0}×\u{a0}10\u{a0}px"),
+        "{s}"
+    );
+    assert!(s.contains("32,767\u{a0}px on a side"), "{s}");
     assert!(
         s.ends_with("Resize the image smaller, then try again."),
         "{s}"
@@ -209,7 +212,7 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
         readshot_core::document::GeometryError::TooManyPixels { pixels: 9, max: 8 },
     );
     assert!(
-        s.starts_with("Couldn’t flip") && s.contains("over the 256,000,000 px limit"),
+        s.starts_with("Couldn’t flip") && s.contains("over the 256,000,000\u{a0}px limit"),
         "{s}"
     );
     assert!(!s.contains("uncropped"), "{s}");
@@ -220,7 +223,7 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
         readshot_core::document::GeometryError::TooManyPixels { pixels: 9, max: 8 },
     );
     assert!(s.starts_with("Couldn’t resize"), "{s}");
-    assert!(s.contains("the uncropped image would be 9 px"), "{s}");
+    assert!(s.contains("the uncropped image would be 9\u{a0}px"), "{s}");
     assert!(s.ends_with("Choose a smaller size."), "{s}");
     let s = geometry_error_status(
         "add the image",
@@ -232,7 +235,7 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
     );
     assert_eq!(
         s,
-        "Couldn’t add the image — the image would be 268,435,456 px, over the 256,000,000 px limit. Resize the image smaller first, then add it again."
+        "Couldn’t add the image — the image would be 268,435,456\u{a0}px, over the 256,000,000\u{a0}px limit. Resize the image smaller first, then add it again."
     );
     let s = geometry_error_status(
         "align",

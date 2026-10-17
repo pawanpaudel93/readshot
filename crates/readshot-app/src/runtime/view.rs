@@ -204,7 +204,7 @@ pub(crate) fn scroll_keep_going_label(window_w: f32) -> &'static str {
 pub(crate) fn scroll_discard_prompt(frame_count: usize) -> String {
     format!(
         "Press Discard or {} to throw away {}, or keep going.",
-        platform_key("⇧esc", "Shift+Esc"),
+        SHIFT_ESC_KEY,
         counted(frame_count, "frame", "frames")
     )
 }
@@ -219,7 +219,7 @@ pub(crate) fn scroll_stop_key_chip(
     compact: bool,
     esc_global: bool,
 ) -> Option<&'static str> {
-    (hud == ScrollHudState::Recording && !compact && esc_global).then_some("esc")
+    (hud == ScrollHudState::Recording && !compact && esc_global).then_some(ESC_KEY)
 }
 
 /// Distances (stage px, measured up from the bottom of the strip) of the
@@ -561,7 +561,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
             crate::icons::AppIcon::Close,
             DARK.t2,
             "Cancel",
-            Some(platform_key("⇧esc", "Shift+Esc")),
+            Some(SHIFT_ESC_KEY),
             (!stopping).then_some(Message::ScrollCaptureCancelRequested),
             false,
             ICON_BTN,
@@ -644,7 +644,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
     let count_row = row![count, label].spacing(SP2).align_y(Alignment::End);
     let dims = (session.stitched_rows > 0).then(|| {
         text(format!(
-            "{} × {} px",
+            "{}\u{a0}×\u{a0}{}\u{a0}px",
             (session.rect.width() * session.scale).round() as u32,
             session.stitched_rows
         ))
@@ -747,7 +747,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
                         2,
                     ),
                     "Cancel and Discard",
-                    Some(platform_key("⇧esc", "Shift+Esc")),
+                    Some(SHIFT_ESC_KEY),
                     Position::Top,
                 ),
                 scroll_hud_button(
@@ -1230,7 +1230,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                     Some(Message::HistoryClearAllCancelled),
                 ),
                 "Cancel",
-                Some("esc"),
+                Some(ESC_KEY),
                 Position::Bottom,
             ),
         ]
@@ -1382,7 +1382,7 @@ pub(crate) fn history_clear_warning(total: usize) -> String {
         format!("all {total} captures")
     };
     format!(
-        "This deletes {what}, images and text, permanently. Press the button again to confirm, or esc to cancel."
+        "This deletes {what}, images and text, permanently. Press the button again to confirm, or {ESC_KEY} to cancel."
     )
 }
 
@@ -1566,7 +1566,7 @@ fn history_split<'a>(
     let footer = container(
         row![
             legend_item("↑↓", "Move"),
-            legend_item("↵", "Open"),
+            legend_item(RETURN_KEY, "Open"),
             legend_item(history_key(HISTORY_KEY_DELETE), "Delete"),
             legend_item(history_key(HISTORY_KEY_SEARCH), "Search"),
         ]
@@ -1792,7 +1792,7 @@ pub(crate) fn history_selected_panel<'a>(
             AppIcon::Open,
             p.t2,
             "Open in Editor",
-            Some("↵"),
+            Some(RETURN_KEY),
             Some(Message::HistoryOpenInEditor(id)),
             false,
             ICON_BTN,
@@ -2682,20 +2682,16 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
 
     // --- Options bar under the tool bar (falls back to the hint line) ---
     let options_layer: Element<'_, Message> = if ed.eyedropper.is_some() {
-        container(
-            text("Click the image to pick a color, or press esc to cancel.")
-                .size(TYPE_CAPTION)
-                .style(text_t2),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(iced::Padding {
-            top: EDITOR_HINT_TOP,
-            ..iced::Padding::ZERO
-        })
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Start)
-        .into()
+        container(text(EYEDROPPER_HINT).size(TYPE_CAPTION).style(text_t2))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(iced::Padding {
+                top: EDITOR_HINT_TOP,
+                ..iced::Padding::ZERO
+            })
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Start)
+            .into()
     } else {
         match editor_options_bar(ed, p) {
             Some(bar) => container(bar)
@@ -3309,7 +3305,7 @@ fn width_popover<'a>(
         row![
             popover_heading("Line width"),
             Space::new().width(Length::Fill),
-            text(format!("{} px", line_width_label(line_width)))
+            text(format!("{}\u{a0}px", line_width_label(line_width)))
                 .font(mono)
                 .size(TYPE_CAPTION)
                 .style(text_t2),
@@ -3328,8 +3324,11 @@ pub(crate) fn editor_size_label(ed: &crate::editor::EditorSession) -> String {
     let (w, h) = ed.effective_image_size();
     let s = ed.model.beautify();
     match readshot_core::beautify::output_geometry(w, h, &s) {
-        Some(g) if !s.is_identity() => format!("{w} × {h} → {} × {} px", g.width, g.height),
-        _ => format!("{w} × {h} px"),
+        Some(g) if !s.is_identity() => format!(
+            "{w}\u{a0}×\u{a0}{h} → {}\u{a0}×\u{a0}{}\u{a0}px",
+            g.width, g.height
+        ),
+        _ => format!("{w}\u{a0}×\u{a0}{h}\u{a0}px"),
     }
 }
 
@@ -3457,7 +3456,7 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
             AppIcon::Close,
             DARK.t1,
             "Close",
-            Some("esc"),
+            Some(ESC_KEY),
             Some(Message::PinClosePressed(id)),
             false,
             ICON_BTN_SM,
@@ -4390,7 +4389,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
         .style(|t, s| button_style(t, s, ButtonKind::Primary))
         .on_press(sel(CaptureIntent::Editor)),
         "Open in Editor",
-        Some("\u{21b5}"),
+        Some(RETURN_KEY),
         tip_pos,
     );
     let buttons = row![
@@ -4450,7 +4449,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             AppIcon::Close,
             fg,
             "Cancel",
-            Some("esc"),
+            Some(ESC_KEY),
             Some(Message::OverlayCancelled),
             false,
             ICON_BTN,
@@ -4581,7 +4580,7 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         .spacing(SP2)
         .align_y(Alignment::Center),
         row![
-            key_chip("esc"),
+            key_chip(ESC_KEY),
             text("/").size(TYPE_CAPTION).style(text_t3),
             key_chip(CLOSE_KEY),
             text("Close").size(TYPE_CAPTION).style(text_t3)
@@ -5016,7 +5015,7 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
         if settings_recording_hotkey {
             column![
                 main,
-                text("Press the new shortcut, or esc to cancel.")
+                text(format!("Press the new shortcut, or {ESC_KEY} to cancel."))
                     .size(TYPE_CAPTION)
                     .style(text_acc),
             ]
@@ -5610,7 +5609,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                 "Allow Screen Recording",
                 ButtonKind::Primary,
                 ButtonSize::Lg,
-                Some("\u{21B5}"),
+                Some(RETURN_KEY),
                 p,
                 Some(Message::GrantPermissionRequested),
             ));
@@ -5622,7 +5621,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                 "Open System Settings",
                 ButtonKind::Primary,
                 ButtonSize::Lg,
-                Some("\u{21B5}"),
+                Some(RETURN_KEY),
                 p,
                 Some(Message::OpenPermissionSettingsRequested),
             ));
@@ -5648,7 +5647,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                 "Capture Screen",
                 ButtonKind::Primary,
                 ButtonSize::Lg,
-                (!state.capture_in_flight).then_some("\u{21B5}"),
+                (!state.capture_in_flight).then_some(RETURN_KEY),
                 p,
                 (!state.capture_in_flight).then_some(Message::OpenOverlayRequested),
             ));

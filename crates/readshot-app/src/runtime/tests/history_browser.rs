@@ -920,5 +920,5 @@ fn the_compact_scroll_footer_keeps_both_labels_whole() {
 
 #[test]
 fn every_size_readout_reads_the_same_way() {
-    assert_eq!(size_px(1200, 800), "1200 × 800 px");
+    assert_eq!(size_px(1200, 800), "1200\u{a0}×\u{a0}800\u{a0}px");
 }

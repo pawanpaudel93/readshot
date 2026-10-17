@@ -31,7 +31,7 @@ fn a_large_resize_composes_off_thread_and_lands_as_one_undo_step() {
         .status
         .as_deref()
         .unwrap()
-        .starts_with("Resized to 80 × 40"));
+        .starts_with("Resized to 80\u{a0}×\u{a0}40"));
     // The same document and pixels as the synchronous path.
     let mut sync = crate::editor::EditorSession::new(solid(40, 20));
     sync.model.commit_annotations(rect_at(5.0));

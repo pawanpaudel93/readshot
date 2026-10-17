@@ -422,7 +422,7 @@ mod tests {
             .chain([MAX_PADDING, MAX_CORNER_RADIUS].map(|n| n.to_string()));
         for label in labels {
             let needed = label.chars().count() as f32 * TYPE_CAPTION * MONO_ADVANCE;
-            assert!(needed < w, "{label:?} needs {needed} px of {w}");
+            assert!(needed < w, "{label:?} needs {needed}\u{a0}px of {w}");
         }
         // "Medium" and "Strong" did not fit the old fixed 40 px.
         let medium = "Medium".len() as f32 * TYPE_CAPTION * MONO_ADVANCE;

@@ -1381,7 +1381,9 @@ fn preview_drag_label(
     let b = canvas_to_image(cursor, bounds, image_size, display_scale).unwrap_or(cursor);
     let width = (a.x - b.x).abs().round().max(1.0) as u32;
     let height = (a.y - b.y).abs().round().max(1.0) as u32;
-    Some(format!("{label_prefix}{width} × {height} px"))
+    Some(format!(
+        "{label_prefix}{width}\u{a0}×\u{a0}{height}\u{a0}px"
+    ))
 }
 
 impl EditorCanvas {
@@ -2409,7 +2411,7 @@ mod tests {
 
     #[test]
     fn a_long_preview_badge_keeps_even_padding() {
-        let label = "Spotlight 12000 × 12000 px";
+        let label = "Spotlight 12000\u{a0}×\u{a0}12000\u{a0}px";
         let text_w = label.chars().count() as f32 * CANVAS_BADGE_TEXT * 0.6;
         let w = super::preview_badge_width(label);
         assert!((w - text_w - 14.0).abs() < 1e-3, "{w} vs {text_w}");
@@ -2854,7 +2856,7 @@ mod tests {
                 (800, 400),
                 None,
             ),
-            Some("Crop 400 × 200 px".into())
+            Some("Crop 400\u{a0}×\u{a0}200\u{a0}px".into())
         );
         assert_eq!(
             preview_drag_label(

@@ -265,6 +265,10 @@ fn settings_cycle_shortcuts_report_the_new_value() {
     );
     // A choice that deletes older captures says so.
     use readshot_core::HistoryRetention as R;
+    // Every retention line is whole sentences.
+    for v in [R::Off, R::Last50, R::Last30Days, R::Unlimited] {
+        assert!(crate::runtime::settings_ops::retention_feedback(v).ends_with('.'));
+    }
     for v in [R::Last50, R::Last30Days] {
         assert!(crate::runtime::settings_ops::retention_feedback(v)
             .ends_with("Older captures are deleted at the next capture."));

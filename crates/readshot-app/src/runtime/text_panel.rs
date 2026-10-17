@@ -1055,7 +1055,6 @@ pub(crate) fn redact_card_title(pending: usize, unlocatable: usize, weak: usize)
     }
 }
 
-/// Card note for items covered only by a Blur or Pixelate.
 /// Size of the Text tab's safety and redaction notes: full sentences,
 /// so the readable caption size, never Micro (spec §2.2 keeps 11 px for
 /// key chips and labels).
@@ -1070,6 +1069,7 @@ pub(crate) fn unlocatable_note(m: usize) -> String {
     }
 }
 
+/// Card note for items covered only by a Blur or Pixelate.
 pub(crate) fn weak_note(weak: usize, style: RedactStyle) -> String {
     let (lead, verb) = if weak == 1 {
         ("1 item is".to_string(), "it")

@@ -233,7 +233,7 @@ fn option_control<'a>(
             bar_button(
                 row![
                     text("Cancel").size(ButtonSize::Xs.text_size()),
-                    key_chip("esc")
+                    key_chip(ESC_KEY)
                 ]
                 .spacing(6)
                 .align_y(Alignment::Center)
@@ -245,7 +245,7 @@ fn option_control<'a>(
             bar_button(
                 row![
                     text("Apply").size(ButtonSize::Xs.text_size()),
-                    key_chip("↵")
+                    key_chip(RETURN_KEY)
                 ]
                 .spacing(6)
                 .align_y(Alignment::Center)
@@ -442,7 +442,7 @@ pub(crate) fn labeled_slider<'a>(
 /// the maximum), so its label never changes the bar's width.
 pub(crate) fn widest_line_width_label() -> String {
     format!(
-        "{} px",
+        "{}\u{a0}px",
         line_width_label(readshot_ui::editor::toolbar::MAX_LINE_WIDTH - 0.5)
     )
 }
@@ -645,7 +645,7 @@ fn width_button<'a>(line_width: f32, open: bool, busy: bool) -> Element<'a, Mess
                 ..Default::default()
             }),
             mono_readout(
-                format!("{} px", line_width_label(line_width)),
+                format!("{}\u{a0}px", line_width_label(line_width)),
                 &widest_line_width_label(),
             ),
         ]
@@ -671,7 +671,10 @@ mod tests {
         };
         let max_gap = readshot_core::document::MAX_GAP;
         for gap in 0..=max_gap {
-            assert!(fits(format!("{gap} px"), &format!("{max_gap} px")));
+            assert!(fits(
+                format!("{gap}\u{a0}px"),
+                &format!("{max_gap}\u{a0}px")
+            ));
         }
         let max_r = readshot_ui::editor::style::MAX_CORNER_RADIUS;
         for r in 0..=max_r as u32 {
@@ -680,13 +683,19 @@ mod tests {
         let widest = widest_line_width_label();
         let mut w = readshot_ui::editor::toolbar::MIN_LINE_WIDTH;
         while w <= readshot_ui::editor::toolbar::MAX_LINE_WIDTH {
-            assert!(fits(format!("{} px", line_width_label(w)), &widest), "{w}");
+            assert!(
+                fits(format!("{}\u{a0}px", line_width_label(w)), &widest),
+                "{w}"
+            );
             w += 0.5;
         }
         for pct in [5, 25, 100, 400, 800] {
             assert!(fits(format!("{pct}%"), "800%"));
         }
-        assert_eq!(mono_readout_width("40 px", 12.0), 5.0 * 12.0 * 0.6 + 2.0);
+        assert_eq!(
+            mono_readout_width("40\u{a0}px", 12.0),
+            5.0 * 12.0 * 0.6 + 2.0
+        );
     }
 
     fn blank_session() -> crate::editor::EditorSession {

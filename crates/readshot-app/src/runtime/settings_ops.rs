@@ -569,7 +569,7 @@ pub(crate) fn retention_feedback(v: readshot_core::HistoryRetention) -> String {
             format!("History retention: {v}. Older captures are deleted at the next capture.")
         }
         R::Off => format!("History retention: {v}. New captures aren’t saved."),
-        R::Unlimited => format!("History retention: {v}"),
+        R::Unlimited => format!("History retention: {v}. Every capture is kept."),
     }
 }
 

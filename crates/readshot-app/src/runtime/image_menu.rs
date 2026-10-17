@@ -83,13 +83,13 @@ pub(crate) fn geometry_error_status(action: &str, cropped: bool, e: GeometryErro
     let next = geometry_recovery(action);
     match e {
         GeometryError::TooLarge { width, height } => format!(
-            "Couldn’t {action} — {what} {} × {} px, and the limit is {} px on a side. {next}",
+            "Couldn’t {action} — {what} {}\u{a0}×\u{a0}{}\u{a0}px, and the limit is {}\u{a0}px on a side. {next}",
             group_digits(width.into()),
             group_digits(height.into()),
             group_digits(MAX_DOC_SIDE.into()),
         ),
         GeometryError::TooManyPixels { pixels, .. } => format!(
-            "Couldn’t {action} — {what} {} px, over the {} px limit. {next}",
+            "Couldn’t {action} — {what} {}\u{a0}px, over the {}\u{a0}px limit. {next}",
             group_digits(pixels),
             group_digits(MAX_DOC_PIXELS),
         ),
@@ -206,7 +206,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
                 return Task::none();
             };
             let Some((w, h)) = d.target() else {
-                ed.set_warning("Enter a width and height of at least 1 px.");
+                ed.set_warning("Enter a width and height of at least 1\u{a0}px.");
                 return Task::none();
             };
             // The dialog's percentages and ratio refer to the size it
@@ -248,7 +248,11 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
             match ed.model.scale_by(sx, sy) {
                 Ok(true) => {
                     close_editor_popover(ed);
-                    changed(ed, &coord, format!("Resized to {w} × {h} px. {UNDO_HINT}"));
+                    changed(
+                        ed,
+                        &coord,
+                        format!("Resized to {w}\u{a0}×\u{a0}{h}\u{a0}px. {UNDO_HINT}"),
+                    );
                 }
                 Ok(false) => {
                     close_editor_popover(ed);
@@ -433,7 +437,8 @@ fn layout_section<'a>(ed: &'a EditorSession) -> Element<'a, Message> {
                 .step(1.0)
                 .on_release(Message::EditorSnapshotSliderCommit)
                 .width(Length::Fill),
-                mono_readout(format!("{gap} px"), &format!("{MAX_GAP} px")).style(text_t2),
+                mono_readout(format!("{gap}\u{a0}px"), &format!("{MAX_GAP}\u{a0}px"))
+                    .style(text_t2),
             ]
             .spacing(SP2)
             .padding([0.0, SP1])
@@ -493,8 +498,11 @@ pub(crate) fn resize_popover<'a>(
         lit(F::ResizeUnit),
     );
     let preview = match d.target() {
-        Some((w, h)) => format!("{} × {} px → {w} × {h} px", d.base.0, d.base.1),
-        None => "Enter a width and height of at least 1 px.".into(),
+        Some((w, h)) => format!(
+            "{}\u{a0}×\u{a0}{}\u{a0}px → {w}\u{a0}×\u{a0}{h}\u{a0}px",
+            d.base.0, d.base.1
+        ),
+        None => "Enter a width and height of at least 1\u{a0}px.".into(),
     };
     // The preview is metadata; the validation line instructs (t2).
     let preview_style = if d.target().is_some() {
