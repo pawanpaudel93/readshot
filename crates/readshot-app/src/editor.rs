@@ -427,7 +427,14 @@ pub struct EditorSession {
     /// slider drag only raises the `*_drag_cancelled` flags while it is:
     /// a key or Ctrl+wheel preview has no held slider to ignore, and a
     /// flag raised for it would swallow the next real drag.
+    /// Set through [`Self::set_pointer_held`]; cleared also when the
+    /// window the press began in loses focus or closes
+    /// ([`Self::pointer_window_gone`]), whose release may never come. A
+    /// new session starts with it clear.
     pub pointer_held: bool,
+    /// The window the held press began in (`None`: not held, or not
+    /// known).
+    pub pointer_window: Option<iced::window::Id>,
     /// Escape just ended a live crop re-drag (the canvas published
     /// `DragEscaped`). The key press of that same Escape arrives next
     /// and must not also drop the draft the drag was hiding: one Esc,
@@ -760,6 +767,7 @@ impl EditorSession {
             snapshot_drag_baseline: None,
             snapshot_drag_cancelled: false,
             pointer_held: false,
+            pointer_window: None,
             escape_ended_crop_drag: false,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
@@ -831,6 +839,7 @@ impl EditorSession {
             snapshot_drag_baseline: None,
             snapshot_drag_cancelled: false,
             pointer_held: false,
+            pointer_window: None,
             escape_ended_crop_drag: false,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
@@ -934,6 +943,24 @@ impl EditorSession {
 
     pub fn has_output_changes(&self) -> bool {
         self.output_checkpoint.0 != self.model.snapshot()
+    }
+
+    /// A left press (`Some(window)`, the window when known) or release
+    /// (`None`). Either way a raised cancel flag belongs to a drag that
+    /// is over: a press starts a new drag, a release ends the held one.
+    pub fn set_pointer_held(&mut self, pressed_in: Option<Option<iced::window::Id>>) {
+        self.pointer_held = pressed_in.is_some();
+        self.pointer_window = pressed_in.flatten();
+        self.style_drag_cancelled = false;
+        self.snapshot_drag_cancelled = false;
+    }
+
+    /// Window `id` lost focus or closed: a press held since it began
+    /// there counts as released.
+    pub fn pointer_window_gone(&mut self, id: iced::window::Id) {
+        if self.pointer_held && self.pointer_window == Some(id) {
+            self.set_pointer_held(None);
+        }
     }
 
     /// The Beautify hex field's text: the user's draft while they edit

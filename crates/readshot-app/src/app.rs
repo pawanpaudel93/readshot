@@ -683,8 +683,11 @@ pub enum Message {
     /// The left mouse button went down (`true`) or up (`false`) in any
     /// window while an editor is open. Slider drags have no press
     /// message of their own; this tells a held drag from a key or
-    /// Ctrl+wheel preview.
-    EditorPointerButton(bool),
+    /// Ctrl+wheel preview. Carries the window the event came from.
+    EditorPointerButton(bool, Option<iced::window::Id>),
+    /// A window lost focus: if the held press began there, its release
+    /// may never reach the app.
+    EditorPointerWindowUnfocused(iced::window::Id),
     /// Preview selected-annotation width while the toolbar slider is dragged.
     EditorLineWidthPreview(f32),
     /// Commit the toolbar slider's selected-annotation width preview.

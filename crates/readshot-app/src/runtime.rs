@@ -703,14 +703,19 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         }));
         // Left-button state: a slider cancelled while held ignores its
         // ticks until release; one previewed by keys or Ctrl+wheel does not.
-        subs.push(iced::event::listen_with(|event, _status, _window| {
+        // Focus loss of the window a press began in clears it (its
+        // release may go elsewhere or never come).
+        subs.push(iced::event::listen_with(|event, _status, window| {
             use iced::mouse::{Button, Event as MouseEvent};
             match event {
                 iced::Event::Mouse(MouseEvent::ButtonPressed(Button::Left)) => {
-                    Some(Message::EditorPointerButton(true))
+                    Some(Message::EditorPointerButton(true, Some(window)))
                 }
                 iced::Event::Mouse(MouseEvent::ButtonReleased(Button::Left)) => {
-                    Some(Message::EditorPointerButton(false))
+                    Some(Message::EditorPointerButton(false, Some(window)))
+                }
+                iced::Event::Window(iced::window::Event::Unfocused) => {
+                    Some(Message::EditorPointerWindowUnfocused(window))
                 }
                 _ => None,
             }
@@ -1728,6 +1733,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::WindowClosed(id) => {
+            // A press that began in the closed window never gets its
+            // release.
+            if let Some(ed) = state.editor.as_mut() {
+                ed.pointer_window_gone(id);
+            }
             // Always drop the id from `Windows` so helpers that
             // probe the live-window map (e.g. `show_or_focus_welcome`)
             // don't try to focus a dead window.
@@ -1822,14 +1832,15 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::EditorPointerButton(pressed) => {
+        Message::EditorPointerButton(pressed, window) => {
             if let Some(ed) = state.editor.as_mut() {
-                ed.pointer_held = pressed;
-                // A press starts a new drag and a release ends the held
-                // one: either way a raised cancel flag belongs to a drag
-                // that is over.
-                ed.style_drag_cancelled = false;
-                ed.snapshot_drag_cancelled = false;
+                ed.set_pointer_held(pressed.then_some(window));
+            }
+            Task::none()
+        }
+        Message::EditorPointerWindowUnfocused(id) => {
+            if let Some(ed) = state.editor.as_mut() {
+                ed.pointer_window_gone(id);
             }
             Task::none()
         }
@@ -3382,7 +3393,7 @@ mod tests {
             Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
         );
         // The mouse is down: this is a held slider drag.
-        let _ = update(&mut app, Message::EditorPointerButton(true));
+        let _ = update(&mut app, Message::EditorPointerButton(true, None));
         let _ = update(
             &mut app,
             Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
@@ -3421,7 +3432,7 @@ mod tests {
             Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
         );
         // The mouse is down: this is a held slider drag.
-        let _ = update(&mut app, Message::EditorPointerButton(true));
+        let _ = update(&mut app, Message::EditorPointerButton(true, None));
         let _ = update(&mut app, Message::EditorTextCancel);
         let _ = update(
             &mut app,
@@ -3475,11 +3486,11 @@ mod tests {
                     *v,
                     "the press tick previews"
                 );
-                let _ = update(app, Message::EditorPointerButton(true));
+                let _ = update(app, Message::EditorPointerButton(true, None));
             }
         }
         let _ = update(app, Message::EditorSnapshotSliderCommit);
-        let _ = update(app, Message::EditorPointerButton(false));
+        let _ = update(app, Message::EditorPointerButton(false, None));
     }
 
     #[test]
@@ -3551,15 +3562,42 @@ mod tests {
             Message::EditorStylePreview(StyleMessage::CornerRadius(9.0)),
         );
         assert_eq!(radius(&app), 9.0, "the press tick previews");
-        let _ = update(&mut app, Message::EditorPointerButton(true));
+        let _ = update(&mut app, Message::EditorPointerButton(true, None));
         let _ = update(
             &mut app,
             Message::EditorStylePreview(StyleMessage::CornerRadius(11.0)),
         );
         let _ = update(&mut app, Message::EditorStyleCommit);
-        let _ = update(&mut app, Message::EditorPointerButton(false));
+        let _ = update(&mut app, Message::EditorPointerButton(false, None));
         assert_eq!(radius(&app), 11.0);
         assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth + 1);
+    }
+
+    #[test]
+    fn a_press_whose_window_loses_focus_or_closes_is_no_longer_held() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
+        let (a, b) = (iced::window::Id::unique(), iced::window::Id::unique());
+        let held = |app: &App| app.editor.as_ref().unwrap().pointer_held;
+        // Focus loss of another window leaves the press held.
+        let _ = update(&mut app, Message::EditorPointerButton(true, Some(a)));
+        let _ = update(&mut app, Message::EditorPointerWindowUnfocused(b));
+        let _ = update(&mut app, Message::WindowClosed(b));
+        assert!(held(&app));
+        // The press's own window losing focus: its release may never come.
+        app.editor.as_mut().unwrap().snapshot_drag_cancelled = true;
+        let _ = update(&mut app, Message::EditorPointerWindowUnfocused(a));
+        assert!(!held(&app));
+        assert!(!app.editor.as_ref().unwrap().snapshot_drag_cancelled);
+        // …or closing before the release reaches the app.
+        let _ = update(&mut app, Message::EditorPointerButton(true, Some(b)));
+        assert!(held(&app));
+        let _ = update(&mut app, Message::WindowClosed(b));
+        assert!(!held(&app));
+        // A new editor session starts with nothing held.
+        let _ = update(&mut app, Message::EditorPointerButton(true, Some(a)));
+        app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
+        assert!(!held(&app));
     }
 
     #[test]
@@ -3569,7 +3607,7 @@ mod tests {
         ed.snapshot_drag_cancelled = true;
         ed.style_drag_cancelled = true;
         app.editor = Some(ed);
-        let _ = update(&mut app, Message::EditorPointerButton(true));
+        let _ = update(&mut app, Message::EditorPointerButton(true, None));
         let ed = app.editor.as_ref().unwrap();
         assert!(ed.pointer_held);
         assert!(!ed.snapshot_drag_cancelled && !ed.style_drag_cancelled);
@@ -8685,7 +8723,7 @@ mod tests {
         };
         tick(&mut app, 6.0);
         // The mouse is down: this is a held slider drag.
-        let _ = update(&mut app, Message::EditorPointerButton(true));
+        let _ = update(&mut app, Message::EditorPointerButton(true, None));
         let _ = update(
             &mut app,
             Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
@@ -8720,7 +8758,7 @@ mod tests {
             Message::EditorStylePreview(StyleMessage::CornerRadius(6.0)),
         );
         // The mouse is down: this is a held slider drag.
-        let _ = update(&mut app, Message::EditorPointerButton(true));
+        let _ = update(&mut app, Message::EditorPointerButton(true, None));
         let _ = update(&mut app, Message::EditorTextCancel);
         let _ = update(
             &mut app,
@@ -13214,7 +13252,7 @@ mod tests {
         let depth = app.editor.as_ref().unwrap().model.undo_depth();
         let _ = update(&mut app, Message::EditorLayoutGapPreview(4));
         // The mouse is down: this is a held slider drag.
-        let _ = update(&mut app, Message::EditorPointerButton(true));
+        let _ = update(&mut app, Message::EditorPointerButton(true, None));
         let _ = update(&mut app, Message::EditorLayoutGapPreview(9));
         let _ = update(
             &mut app,
