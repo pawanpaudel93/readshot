@@ -1430,9 +1430,17 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     }
                 }
                 readshot_ui::CanvasMessage::SelectReleased => {
-                    let Some(drag) = ed.move_drag.take().filter(|drag| drag.moved) else {
+                    let Some(drag) = ed.move_drag.take() else {
                         return Task::none();
                     };
+                    if !drag.moved {
+                        // A preview tick that changed nothing (a refused
+                        // resize) still opened an entry; close it so it
+                        // can't pass for a later preview from the same
+                        // baseline.
+                        ed.model.end_annotation_preview();
+                        return Task::none();
+                    }
                     if !ed.model.commit_preview_from_baseline(drag.baseline) {
                         ed.refresh_image();
                         return Task::none();

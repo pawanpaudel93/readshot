@@ -817,15 +817,21 @@ impl EditorState {
     }
 
     /// Remember the generation an annotation preview from `baseline`
-    /// opened at (the first preview call from it).
+    /// opened at (the first preview call from it). An entry from an
+    /// older generation is a leftover (a drag released without moving,
+    /// say), not this preview: it is replaced, never reused.
     fn note_annotation_preview(&mut self, baseline: &[Annotation]) {
-        let open = self
-            .annotation_preview
-            .as_ref()
-            .is_some_and(|(b, _)| b.as_slice() == baseline);
-        if !open {
+        if !self.annotation_preview_is_open(baseline) {
             self.annotation_preview = Some((baseline.to_vec(), self.history.generation()));
         }
+    }
+
+    /// Whether `baseline`'s preview is the open one, opened at the
+    /// present generation.
+    fn annotation_preview_is_open(&self, baseline: &[Annotation]) -> bool {
+        self.annotation_preview
+            .as_ref()
+            .is_some_and(|(b, g)| b.as_slice() == baseline && *g == self.history.generation())
     }
 
     /// Whether `baseline`'s preview opened before the history last moved:
@@ -837,9 +843,19 @@ impl EditorState {
             .is_some_and(|(b, g)| b.as_slice() == baseline && g != self.history.generation())
     }
 
+    /// Forget the open annotation preview without touching the present
+    /// (a drag released before anything changed).
+    pub fn end_annotation_preview(&mut self) {
+        self.annotation_preview = None;
+    }
+
+    /// Keep the open preview from `baseline` as one undo step. Only the
+    /// preview that is open now, at the present generation, commits: a
+    /// stale or foreign baseline would push an edit over newer history.
     pub fn commit_preview_from_baseline(&mut self, baseline: Vec<Annotation>) -> bool {
-        if self.annotation_preview_is_stale(&baseline) {
-            // The preview is already part of the newer history.
+        let open = self.annotation_preview_is_open(&baseline);
+        self.annotation_preview = None;
+        if !open {
             return false;
         }
         let final_state = self.history.current().to_vec();
@@ -2929,5 +2945,45 @@ mod tests {
         other.doc.beautify = BuiltinPreset::Dark.settings();
         s.cancel_preview_snapshot(other);
         assert_eq!(s.beautify(), BuiltinPreset::Soft.settings());
+    }
+
+    #[test]
+    fn a_leftover_preview_entry_never_passes_for_a_new_preview() {
+        let mut s = EditorState::new(RgbaImage::new(100, 100));
+        s.commit_annotation(rect(10.0));
+        let base = s.annotations().to_vec();
+        // A refused resize tick (a rectangle has no Start handle) opens an
+        // entry; the drag is released without commit or cancel.
+        assert!(!s.preview_resize_selected_from(&base, ResizeHandle::Start, 5.0, 5.0));
+        assert!(s.nudge_selected(1.0, 0.0));
+        assert!(s.undo());
+        assert_eq!(s.annotations(), base.as_slice());
+        // A new preview from the same baseline, then Esc: restored.
+        assert!(s.preview_move_selected_from(&base, 3.0, 0.0));
+        s.cancel_preview_from_baseline(base.clone());
+        assert_eq!(s.annotations(), base.as_slice(), "cancel restores");
+        // And a commit is one undo step.
+        let depth = s.undo_depth();
+        assert!(s.preview_move_selected_from(&base, 3.0, 0.0));
+        assert!(s.commit_preview_from_baseline(base.clone()));
+        assert_eq!(s.undo_depth(), depth + 1);
+    }
+
+    #[test]
+    fn commit_preview_from_baseline_needs_that_preview_open() {
+        let mut s = EditorState::new(RgbaImage::new(100, 100));
+        s.commit_annotation(rect(10.0));
+        let depth = s.undo_depth();
+        // No preview open at all.
+        assert!(!s.commit_preview_from_baseline(Vec::new()));
+        assert_eq!(s.undo_depth(), depth);
+        assert_eq!(s.annotations().len(), 1);
+        // A preview from another baseline is open.
+        let base = s.annotations().to_vec();
+        assert!(s.preview_move_selected_from(&base, 3.0, 0.0));
+        let moved = s.annotations().to_vec();
+        assert!(!s.commit_preview_from_baseline(Vec::new()));
+        assert_eq!(s.undo_depth(), depth);
+        assert_eq!(s.annotations(), moved.as_slice());
     }
 }
