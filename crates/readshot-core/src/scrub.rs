@@ -68,6 +68,45 @@ fn redaction_rects(annotations: &[Annotation]) -> Vec<RectLike> {
         .collect()
 }
 
+/// `redactions` (base px) moved into the pixels of an output cropped to
+/// `crop` ([`crate::render::output_crop`]): translated by minus the crop
+/// origin and clipped to the output, dropping any left with no area.
+/// What a scrub that bakes a Crop stores, so the redactions line up with
+/// the stored (cropped) image. Only redactions ([`is_redaction`]) are kept.
+pub fn redactions_in_crop(
+    redactions: &[Annotation],
+    crop: crate::render::OutputCrop,
+) -> Vec<Annotation> {
+    let (w, h) = (crop.width as f32, crop.height as f32);
+    let clip = |r: RectLike| -> Option<RectLike> {
+        let (mut x0, mut x1) = (r.x - crop.x, r.x + r.width - crop.x);
+        let (mut y0, mut y1) = (r.y - crop.y, r.y + r.height - crop.y);
+        if x0 > x1 {
+            std::mem::swap(&mut x0, &mut x1);
+        }
+        if y0 > y1 {
+            std::mem::swap(&mut y0, &mut y1);
+        }
+        let (x0, x1) = (x0.max(0.0), x1.min(w));
+        let (y0, y1) = (y0.max(0.0), y1.min(h));
+        (x1 > x0 && y1 > y0).then(|| RectLike::new(x0, y0, x1 - x0, y1 - y0))
+    };
+    redactions
+        .iter()
+        .filter(|a| is_redaction(a))
+        .filter_map(|a| {
+            let mut out = a.clone();
+            match &mut out {
+                Annotation::Rectangle { rect, .. }
+                | Annotation::Blur { rect, .. }
+                | Annotation::Pixelate { rect, .. } => *rect = clip(*rect)?,
+                _ => return None,
+            }
+            Some(out)
+        })
+        .collect()
+}
+
 fn area(r: RectLike) -> f32 {
     r.width.max(0.0) * r.height.max(0.0)
 }
@@ -375,6 +414,40 @@ mod tests {
             end,
             rect: RectLike::new(x, y, w, 10.0),
         }
+    }
+
+    #[test]
+    fn redactions_in_crop_translate_into_the_cropped_output_and_clip() {
+        let crop = crate::render::output_crop(
+            400,
+            200,
+            &[Annotation::Crop {
+                rect: RectLike::new(200.0, 0.0, 200.0, 200.0),
+            }],
+        )
+        .expect("a crop");
+        let px = |rect| Annotation::Pixelate {
+            rect,
+            block_size: 4.0,
+        };
+        let out = redactions_in_crop(
+            &[
+                px(RectLike::new(300.0, 10.0, 60.0, 20.0)),
+                // Straddles the crop's left edge: clipped.
+                solid(RectLike::new(150.0, 50.0, 100.0, 10.0)),
+                // Wholly outside: dropped.
+                px(RectLike::new(10.0, 10.0, 50.0, 50.0)),
+            ],
+            crop,
+        );
+        assert_eq!(
+            out,
+            vec![
+                px(RectLike::new(100.0, 10.0, 60.0, 20.0)),
+                solid(RectLike::new(0.0, 50.0, 50.0, 10.0)),
+            ]
+        );
+        assert_eq!(crate::render::output_crop(400, 200, &out), None);
     }
 
     /// "key: Zx9Qw7 next" with a box per word, 10 px per char.

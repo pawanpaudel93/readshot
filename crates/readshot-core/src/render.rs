@@ -319,6 +319,31 @@ fn draw_magnifier(
 //  Output geometry
 // ---------------------------------------------------------------------------
 
+/// The crop [`render`] applies to a `base_w`×`base_h` base for `model`:
+/// the output's top-left in base px and the output size. `None` when
+/// `model` has no [`Annotation::Crop`] (the output is the base as is).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OutputCrop {
+    pub x: f32,
+    pub y: f32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// See [`OutputCrop`].
+pub fn output_crop(base_w: u32, base_h: u32, model: &[Annotation]) -> Option<OutputCrop> {
+    if !model.iter().any(|a| matches!(a, Annotation::Crop { .. })) {
+        return None;
+    }
+    let (width, height, (ox, oy)) = compute_output_geometry(base_w, base_h, model);
+    Some(OutputCrop {
+        x: -ox,
+        y: -oy,
+        width,
+        height,
+    })
+}
+
 fn compute_output_geometry(
     base_w: u32,
     base_h: u32,

@@ -146,6 +146,20 @@ fn secured_key(record: &CaptureRecord) -> SecuredScrub {
     (record.geometry_id.clone(), record.redactions.clone())
 }
 
+/// The frame id of a scrub's stored image when it is `crop` of the
+/// document in frame `frame`: deterministic (the same crop of the same
+/// frame is the same frame, so the secured cache and kept masked text
+/// still match), never `None` (that is the capture as taken) and never an
+/// id the editor produces (those are a stored id or `<uuid>:<geometry>`).
+/// Fixed length, so reopening and cropping again never grows it.
+fn cropped_frame_id(frame: Option<&str>, crop: readshot_core::render::OutputCrop) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    frame.hash(&mut h);
+    (crop.x.to_bits(), crop.y.to_bits(), crop.width, crop.height).hash(&mut h);
+    format!("crop:{:016x}", h.finish())
+}
+
 fn next_rewrite_seq() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -623,6 +637,30 @@ impl CaptureCoordinator {
                     .filter(|a| readshot_core::scrub::is_redaction(a))
                     .cloned(),
             );
+        }
+        // The stored image is `bake` rendered onto `base`: a baked Crop
+        // makes it the crop. The record then describes that image, not the
+        // document it was cut from: its size, its redactions in its own px
+        // (OCR of the stored image is masked with them), and a frame id of
+        // its own, so OCR of the uncropped document (the capture's, or the
+        // open editor's) never lands on it masked with boxes in another
+        // frame.
+        let crop = readshot_core::render::output_crop(base.width(), base.height(), &bake);
+        match crop {
+            Some(crop) => {
+                record.width_px = crop.width;
+                record.height_px = crop.height;
+                if record.redacted {
+                    record.redactions =
+                        readshot_core::scrub::redactions_in_crop(&record.redactions, crop);
+                    record.geometry_id =
+                        Some(cropped_frame_id(record.geometry_id.as_deref(), crop));
+                }
+            }
+            None => {
+                record.width_px = base.width();
+                record.height_px = base.height();
+            }
         }
         if !record.redacted {
             // A restore (rare). Under the commit gate, then the state

@@ -10721,6 +10721,210 @@ mod tests {
         assert_eq!((stored.width_px, stored.height_px), (8, 4));
     }
 
+    fn stored_png_dims(
+        store: &readshot_core::FsHistoryStore,
+        record: &readshot_core::CaptureRecord,
+    ) -> (u32, u32) {
+        image::image_dimensions(readshot_core::FsHistoryStore::abs_png_path(
+            store.root(),
+            record,
+        ))
+        .unwrap()
+    }
+
+    fn arrow() -> Annotation {
+        Annotation::Arrow {
+            a: PointLike::new(1.0, 1.0),
+            b: PointLike::new(3.0, 3.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+            style: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_plain_edit_after_a_rotation_keeps_the_stored_size_of_the_rotated_png() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+        let img = solid(8, 4);
+        let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 8, 4, "d");
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        let mut ed = crate::editor::EditorSession::from_history(img, record.clone());
+        ed.model.rotate(true).unwrap();
+        write_editor_history(&mut ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        // An ordinary edit afterwards: the plain sidecar sync.
+        ed.model.commit_annotation(arrow());
+        write_editor_history(&mut ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let stored = store.list().unwrap().remove(0);
+        assert_eq!(stored.annotation_model.len(), 1, "the plain sync landed");
+        assert_eq!(stored_png_dims(&store, &record), (4, 8));
+        assert_eq!((stored.width_px, stored.height_px), (4, 8));
+    }
+
+    #[test]
+    fn a_plain_edit_after_a_combine_stores_the_combined_size() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+        let img = solid(8, 4);
+        let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 8, 4, "d");
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        let mut ed = crate::editor::EditorSession::from_history(img, record.clone());
+        ed.model
+            .add_part(solid(8, 6), readshot_core::document::Join::Below)
+            .unwrap();
+        write_editor_history(&mut ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        ed.model.commit_annotation(arrow());
+        write_editor_history(&mut ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let stored = store.list().unwrap().remove(0);
+        assert_eq!(stored.annotation_model.len(), 1, "the plain sync landed");
+        let png = stored_png_dims(&store, &record);
+        assert_eq!(png, (ed.model.base().width(), ed.model.base().height()));
+        assert_ne!(png, (8, 4));
+        assert_eq!((stored.width_px, stored.height_px), png);
+    }
+
+    /// A 40 × 20 capture cropped to x 20–40, with a weak pixelate over a
+    /// word at x 30–36 (x 10–16 of the cropped image).
+    fn cropped_weak_pixelate_scrub(
+        store: &Arc<readshot_core::FsHistoryStore>,
+        app: &App,
+    ) -> readshot_core::CaptureRecord {
+        let img = solid(40, 20);
+        let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+        store
+            .save(&record, &readshot_core::encode_png(&img).unwrap())
+            .unwrap();
+        let mut ed = crate::editor::EditorSession::from_history(img, record.clone());
+        ed.model.commit_annotation(Annotation::Crop {
+            rect: RectLike::new(20.0, 0.0, 20.0, 20.0),
+        });
+        ed.model.commit_annotation(Annotation::Pixelate {
+            rect: RectLike::new(30.0, 2.0, 6.0, 4.0),
+            block_size: 4.0,
+        });
+        write_editor_history(&mut ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        record
+    }
+
+    #[tokio::test]
+    async fn a_cropped_scrub_stores_its_redactions_in_the_stored_png_and_masks_reopen_ocr() {
+        use readshot_core::ocr_layout::RecognizedLine;
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        // OCR of the stored (cropped) image reads the weakly hidden word
+        // where it is in that image: x 10–16 of 20.
+        let perms = Arc::new(FakePermissions::granted());
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_lines(vec![RecognizedLine {
+                text: hidden_word(),
+                x: 0.5,
+                y: 0.1,
+                w: 0.3,
+                h: 0.2,
+                words: Vec::new(),
+            }])),
+            perms.clone(),
+            Some(store.clone()),
+        );
+        let app = App::new(coord, perms, Preferences::default());
+        let record = cropped_weak_pixelate_scrub(&store, &app);
+        let stored = stored_record(&store, record.id);
+        assert!(stored.redacted);
+        assert_eq!(stored_png_dims(&store, &record), (20, 20));
+        assert_eq!((stored.width_px, stored.height_px), (20, 20));
+        assert_eq!(
+            stored.redactions,
+            vec![Annotation::Pixelate {
+                rect: RectLike::new(10.0, 2.0, 6.0, 4.0),
+                block_size: 4.0,
+            }],
+            "in the stored PNG's pixels"
+        );
+        // The capture's own OCR of the uncropped image lands late: its
+        // boxes are in another frame than the stored image's.
+        app.coordinator
+            .record_recognized_text(
+                &record,
+                &positioned_doc(&hidden_word(), RectLike::new(30.0, 2.0, 6.0, 4.0)),
+                true,
+            )
+            .unwrap();
+        let text = stored_record(&store, record.id)
+            .ocr_text
+            .unwrap_or_default();
+        assert!(!text.contains(&hidden_word()), "{text}");
+        // Reopen: the editor recognizes the stored image; the task's
+        // History write masks it with the stored redactions.
+        let png = image::open(readshot_core::FsHistoryStore::abs_png_path(
+            store.root(),
+            &stored,
+        ))
+        .unwrap()
+        .to_rgba8();
+        let ed = crate::editor::EditorSession::from_history(png.clone(), stored.clone());
+        let mut framed = stored.clone();
+        framed.geometry_id = history_geometry_id(&ed);
+        let doc = app
+            .coordinator
+            .recognise_document(readshot_ocr::OCRRequest {
+                image: png,
+                languages: Vec::new(),
+                use_language_correction: true,
+            })
+            .await
+            .map_err(|e| e.to_string());
+        assert!(doc.as_ref().unwrap().layout_text.contains(&hidden_word()));
+        let _ = super::text_panel::store_recognized_text(&app.coordinator, &framed, doc).await;
+        let text = stored_record(&store, record.id)
+            .ocr_text
+            .unwrap_or_default();
+        assert!(!text.contains(&hidden_word()), "{text}");
+        assert!(text.contains('█'), "{text}");
+    }
+
+    #[test]
+    fn a_reopened_cropped_scrub_masks_its_text_with_the_inherited_redactions() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut app = build_app_with_positions_and_history(store.clone());
+        let record = cropped_weak_pixelate_scrub(&store, &app);
+        let stored = stored_record(&store, record.id);
+        let png = image::open(readshot_core::FsHistoryStore::abs_png_path(
+            store.root(),
+            &stored,
+        ))
+        .unwrap()
+        .to_rgba8();
+        app.editor = Some(crate::editor::EditorSession::from_history(png, stored));
+        // OCR of the stored image reads the word at x 10–16.
+        recognized(
+            &mut app,
+            readshot_core::document::ORIGINAL_PART,
+            positioned_doc(&hidden_word(), RectLike::new(10.0, 2.0, 6.0, 4.0)),
+        );
+        let ed = app.editor.as_mut().unwrap();
+        ed.model.rotate(true).unwrap();
+        sync_editor_history(ed, &app.coordinator);
+        app.coordinator.flush_history_updates();
+        let text = stored_record(&store, record.id)
+            .ocr_text
+            .unwrap_or_default();
+        assert!(!text.contains(&hidden_word()), "{text}");
+        assert_eq!(text, "█".repeat(6));
+    }
+
     fn build_app_with_positions_and_history(history: Arc<dyn HistoryStore>) -> App {
         let perms = Arc::new(FakePermissions::granted());
         let coord = CaptureCoordinator::new(

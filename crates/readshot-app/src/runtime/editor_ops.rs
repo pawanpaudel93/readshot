@@ -367,6 +367,11 @@ pub(crate) fn write_editor_history(
     };
     record.annotation_model = ed.model.annotations().to_vec();
     record.geometry_id = frame.clone();
+    // History stores the document's current base (rotated, resized,
+    // combined…), so its size is the base's. A rewrite also sets it from
+    // what it renders; a plain sync must not put the opened size back.
+    record.width_px = ed.model.base().width();
+    record.height_px = ed.model.base().height();
     let mut record = record.clone();
     // A reopened scrubbed record keeps its baked-in redactions, mapped
     // into this frame, so text recognized later is still masked with
