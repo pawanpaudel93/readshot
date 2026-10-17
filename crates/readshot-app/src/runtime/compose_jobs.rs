@@ -158,13 +158,21 @@ pub(crate) struct Held {
     handles: Vec<iced::widget::image::Handle>,
 }
 
-pub(crate) fn hold(ed: &EditorSession) -> Held {
-    let (bases, flats) = ed.model.held_images();
-    let mut bases = bases;
+/// Every composed base `ed` holds (model, display and kept display).
+fn held_bases(ed: &EditorSession) -> Vec<Arc<image::RgbaImage>> {
+    let (mut bases, _) = ed.model.held_images();
     bases.push(Arc::clone(&ed.shown.base));
-    let mut handles = vec![ed.image_handle.clone()];
     if let Some(kept) = &ed.kept_display {
         bases.push(Arc::clone(&kept.shown.base));
+    }
+    bases
+}
+
+pub(crate) fn hold(ed: &EditorSession) -> Held {
+    let (_, flats) = ed.model.held_images();
+    let bases = held_bases(ed);
+    let mut handles = vec![ed.image_handle.clone()];
+    if let Some(kept) = &ed.kept_display {
         handles.push(kept.handle.clone());
     }
     Held {
@@ -181,10 +189,24 @@ fn handle_bytes(h: &iced::widget::image::Handle) -> usize {
     }
 }
 
+/// Whether `held` has a big base that `live` (what the editor still
+/// holds) does not: dropping `held` may then free it, so it goes to the
+/// dropper thread. Never decided by reference counts (see [`Held::release`]).
+fn lets_go_of_big_base(held: &[Arc<image::RgbaImage>], live: &[Arc<image::RgbaImage>]) -> bool {
+    held.iter().any(|b| {
+        b.as_raw().len() >= FREE_OFF_THREAD_MIN_BYTES && !live.iter().any(|l| Arc::ptr_eq(l, b))
+    })
+}
+
 impl Held {
     /// Let go of what was held: when that frees a big image (nothing in
     /// `ed` holds it any more), on the dropper thread; else here.
+    ///
+    /// A base counts as let go when `ed` no longer holds it, whatever else
+    /// may: a worker holding a copy can drop it at any moment, so counting
+    /// references would race and could free the image here.
     pub(crate) fn release(self, ed: Option<&EditorSession>) {
+        let live_bases: Vec<Arc<image::RgbaImage>> = ed.map(held_bases).unwrap_or_default();
         let live: Vec<_> = ed
             .map(|ed| {
                 let (_, flats) = ed.model.held_images();
@@ -195,12 +217,7 @@ impl Held {
             })
             .unwrap_or_default();
         let big = |bytes: usize| bytes >= FREE_OFF_THREAD_MIN_BYTES;
-        // Each base appears here at most a few times; it is freed with us
-        // when only our own copies of it are left.
-        let frees_base = self.bases.iter().any(|b| {
-            let ours = self.bases.iter().filter(|o| Arc::ptr_eq(o, b)).count();
-            Arc::strong_count(b) <= ours && big(b.as_raw().len())
-        });
+        let frees_base = lets_go_of_big_base(&self.bases, &live_bases);
         let frees_pixels = self
             .flats
             .iter()
@@ -1249,4 +1266,26 @@ fn after_gap_landed(
         commit_snapshot_drag(ed, coord);
     }
     Task::none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_big_base_let_go_of_goes_to_the_dropper_even_while_a_worker_holds_it() {
+        let big = Arc::new(image::RgbaImage::new(1_100, 1_000));
+        // A worker's copy: counting references would see it and decide the
+        // base is not freed here, then the worker drops its copy and ours
+        // frees the image on the UI thread.
+        let worker = Arc::clone(&big);
+        assert!(lets_go_of_big_base(std::slice::from_ref(&big), &[]));
+        // Still shown by the editor: dropping our copy frees nothing.
+        assert!(!lets_go_of_big_base(
+            std::slice::from_ref(&big),
+            std::slice::from_ref(&worker)
+        ));
+        let small = Arc::new(image::RgbaImage::new(40, 20));
+        assert!(!lets_go_of_big_base(&[small], &[]));
+    }
 }
