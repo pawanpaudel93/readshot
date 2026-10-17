@@ -12924,6 +12924,48 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_drag_stays_dropped_when_its_window_loses_focus() {
+        use readshot_ui::CanvasMessage;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = async_compose(crate::editor::EditorSession::new(solid(40, 20)));
+        ed.model.set_tool(readshot_ui::editor::ToolState::Pixelate);
+        app.editor = Some(ed);
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        apply_resize_width(&mut app, "80");
+        let a = iced::window::Id::unique();
+        let redaction = Annotation::Pixelate {
+            rect: RectLike::new(5.0, 2.0, 6.0, 4.0),
+            block_size: 4.0,
+        };
+        // The press lands the pending resize; its window then loses focus
+        // before the release, and the old-frame commit arrives late.
+        let _ = update(&mut app, Message::EditorPointerButton(true, Some(a)));
+        let _ = update(&mut app, Message::EditorCanvas(CanvasMessage::DragStarted));
+        let _ = update(&mut app, Message::EditorPointerWindowUnfocused(a));
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(CanvasMessage::CommitAnnotation(redaction.clone())),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (80, 40));
+        assert!(
+            ed.model.annotations().is_empty(),
+            "the late commit is refused"
+        );
+        assert_eq!(ed.model.undo_depth(), depth + 1, "the resize only");
+        // The next real drag commits.
+        let _ = update(&mut app, Message::EditorCanvas(CanvasMessage::DragStarted));
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(CanvasMessage::CommitAnnotation(redaction.clone())),
+        );
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.annotations(),
+            [redaction]
+        );
+    }
+
+    #[test]
     fn a_drag_whose_release_never_came_refuses_no_later_commit() {
         use readshot_ui::CanvasMessage;
         let mut app = build_app(Arc::new(FakePermissions::granted()));

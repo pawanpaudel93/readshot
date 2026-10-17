@@ -997,8 +997,12 @@ impl EditorSession {
         if self.pointer_held && self.pointer_window == Some(id) {
             self.set_pointer_held(None);
             // That drag's release (and so its commit or cancel) may never
-            // come: don't let its frame refuse a later commit.
-            self.drag_started_in = None;
+            // come: don't let its frame refuse a later commit. A dropped
+            // drag stays dropped (its late commit is still old-frame) until
+            // the next drag start, cancel or commit.
+            if matches!(self.drag_started_in, Some(CanvasDragFrame::Live(_))) {
+                self.drag_started_in = None;
+            }
         }
     }
 
