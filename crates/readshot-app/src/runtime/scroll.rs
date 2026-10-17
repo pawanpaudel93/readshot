@@ -6,12 +6,6 @@ use super::*;
 use crate::app::Message;
 use iced::Task;
 
-/// Returns the captured image instead of saving — the editor flow
-/// uses this so the user can choose what to do with the bytes.
-///
-/// Looks up the named display so the request carries its real HiDPI
-/// scale; without that, the macOS backend would render at half
-/// resolution on Retina monitors.
 /// Hard limits for a single scrolling-capture session. Tuned so a
 /// runaway loop bounded by these caps still produces a sane stitched
 /// output and doesn't gobble gigabytes of RAM. The limits below cover
