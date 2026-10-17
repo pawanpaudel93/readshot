@@ -92,6 +92,12 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
     match message {
         Message::EditorRotate { clockwise } => {
             prepare(ed, &coord);
+            let kind = crate::editor::ComposeKind::Rotate { clockwise };
+            if let Some(task) = super::compose_jobs::queue_geometry_step(ed, kind, "rotate", |g| {
+                readshot_ui::editor::EditorState::rotated_geometry(g, clockwise)
+            }) {
+                return task;
+            }
             let cropped = ed.last_crop().is_some();
             match ed.model.rotate(clockwise) {
                 Ok(true) => {
@@ -104,6 +110,12 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
         }
         Message::EditorFlip(axis) => {
             prepare(ed, &coord);
+            let kind = crate::editor::ComposeKind::Flip(axis);
+            if let Some(task) = super::compose_jobs::queue_geometry_step(ed, kind, "flip", |g| {
+                readshot_ui::editor::EditorState::flipped_geometry(g, axis)
+            }) {
+                return task;
+            }
             let cropped = ed.last_crop().is_some();
             match ed.model.flip(axis) {
                 Ok(true) => {
@@ -170,10 +182,10 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
                 None => Ok(None),
             };
             match step {
-                Ok(Some(step)) if super::compose_jobs::is_large(ed, &step) => {
+                Ok(Some(step)) if ed.is_large() || super::compose_jobs::is_large(ed, &step) => {
                     close_editor_popover(ed);
                     ed.set_status("Resizing…");
-                    return super::compose_jobs::spawn(
+                    return super::compose_jobs::queue_push(
                         ed,
                         crate::editor::ComposeKind::Resize {
                             width: w,
@@ -182,7 +194,6 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
                             sy,
                         },
                         step,
-                        None,
                     );
                 }
                 Ok(_) => {}

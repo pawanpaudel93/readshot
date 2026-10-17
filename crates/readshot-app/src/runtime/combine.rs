@@ -43,12 +43,24 @@ fn show_editor(id: Option<window::Id>) -> Task<Message> {
 
 /// Append `image` to the editor's document; returns follow-up tasks
 /// (recognition of the new part). `what` is "capture" or "image".
-fn append(state: &mut App, image: image::RgbaImage, join: Join, what: &str) -> Task<Message> {
+fn append(
+    state: &mut App,
+    image: image::RgbaImage,
+    join: Join,
+    what: &'static str,
+) -> Task<Message> {
     let coord = state.coordinator.clone();
     let panel_open = state.preferences.editor_panel_open;
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
     };
+    // A large document composes off the UI thread: the part lands as a
+    // queued step (`compose_jobs`), its recognition requested then.
+    let image = Arc::new(image);
+    if let Some(task) = super::compose_jobs::queue_add_part(ed, &image, join, what) {
+        return task;
+    }
+    let image = Arc::unwrap_or_clone(image);
     let old = Arc::clone(ed.model.geometry());
     // Same test as `EditorState::add_part`: a transformed document is
     // baked into one fresh part first (D4).
@@ -73,18 +85,7 @@ fn append(state: &mut App, image: image::RgbaImage, join: Join, what: &str) -> T
             // Rebuilds the word boxes for the new frame (no document while
             // the new part is unrecognized) and rewrites History.
             sync_editor_history(ed, &coord);
-            // Recognize the new part when text is in use: panel open, the
-            // earlier parts recognized or being recognized, a History
-            // record that keeps text, or a redaction that needs masked text.
-            let wanted = panel_open
-                || !ed.text_panel.part_docs.is_empty()
-                || matches!(
-                    ed.text_panel.recognition,
-                    crate::editor::TextRecognition::Recognizing { .. }
-                )
-                || ed.source_record.is_some()
-                || readshot_core::scrub::has_redaction(ed.model.annotations());
-            if wanted {
+            if part_recognition_wanted(ed, panel_open) {
                 super::text_panel::request_text_recognition(state)
             } else {
                 Task::none()
@@ -99,6 +100,20 @@ fn append(state: &mut App, image: image::RgbaImage, join: Join, what: &str) -> T
             Task::none()
         }
     }
+}
+
+/// Whether a newly added part is recognized: when text is in use (panel
+/// open, the earlier parts recognized or being recognized, a History
+/// record that keeps text, or a redaction that needs masked text).
+pub(crate) fn part_recognition_wanted(ed: &EditorSession, panel_open: bool) -> bool {
+    panel_open
+        || !ed.text_panel.part_docs.is_empty()
+        || matches!(
+            ed.text_panel.recognition,
+            crate::editor::TextRecognition::Recognizing { .. }
+        )
+        || ed.source_record.is_some()
+        || readshot_core::scrub::has_redaction(ed.model.annotations())
 }
 
 /// `RegionCaptureCompleted(Ok)` with intent `CombineIntoEditor`: append
@@ -573,9 +588,9 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
             let cropped = ed.last_crop().is_some();
             let next = ed.model.geometry().with_layout(gap, align);
             match ed.model.geometry_step(next) {
-                Ok(Some(step)) if super::compose_jobs::is_large(ed, &step) => {
+                Ok(Some(step)) if ed.is_large() || super::compose_jobs::is_large(ed, &step) => {
                     ed.set_status("Aligning…");
-                    return super::compose_jobs::spawn(ed, ComposeKind::Align(align), step, None);
+                    return super::compose_jobs::queue_push(ed, ComposeKind::Align(align), step);
                 }
                 Ok(_) => {}
                 Err(e) => {

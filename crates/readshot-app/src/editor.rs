@@ -272,9 +272,11 @@ impl TextPanelState {
     }
 }
 
-/// Output size from which a resize, alignment or gap preview composes the
-/// document off the UI thread: below it a compose takes a few ms; near the
-/// 256 MP budget it allocates and fills ~1 GB, twice (compose, flatten).
+/// Output size from which document work runs off the UI thread: a
+/// resize, alignment or gap preview, a rotate or flip, an added part,
+/// undo / redo, and re-rendering the annotations over the document after
+/// an edit. Below it a compose takes a few ms; near the 256 MP budget it
+/// allocates and fills ~1 GB, twice (compose, flatten).
 pub const ASYNC_COMPOSE_MIN_PIXELS: u64 = 16_000_000;
 
 /// What an off-thread compose is for.
@@ -292,20 +294,80 @@ pub enum ComposeKind {
     Align(readshot_core::document::Align),
     /// A gap slider preview (no undo step; release commits).
     GapPreview(u32),
+    /// A gap slider drag released while its preview composed: the value
+    /// kept, as one undo step.
+    Gap(u32),
+    /// Rotate a quarter (one undo step).
+    Rotate { clockwise: bool },
+    /// Flip (one undo step).
+    Flip(readshot_core::document::FlipAxis),
+    /// Add a part, `what` being "capture" or "image" (one undo step).
+    AddPart {
+        join: readshot_core::document::Join,
+        what: &'static str,
+    },
+    /// Undo one step.
+    Undo,
+    /// Redo one step.
+    Redo,
+    /// Re-render the annotations over the present document for display
+    /// (no history change): see [`EditorSession::refresh_image`].
+    Flatten,
+}
+
+impl ComposeKind {
+    /// A history step: queued, applied in order, never dropped.
+    pub fn is_step(self) -> bool {
+        !matches!(self, Self::GapPreview(_) | Self::Flatten)
+    }
+}
+
+/// One queued history step ([`ComposeKind::is_step`]): its history move
+/// and what landing it needs besides.
+#[derive(Clone, Debug)]
+pub struct QueuedStep {
+    pub kind: ComposeKind,
+    pub op: readshot_ui::editor::DocOp,
+    /// An added part's image (to redo the step on a moved document).
+    pub part: Option<std::sync::Arc<image::RgbaImage>>,
+    /// An added part baked the transformed document first: the baked
+    /// part's id and the geometry it was baked from (the Text panel maps
+    /// the old recognitions through it).
+    pub bake: Option<(
+        readshot_core::document::PartId,
+        std::sync::Arc<readshot_core::document::DocGeometry>,
+    )>,
 }
 
 /// One off-thread compose: `next` is the state to show once composed.
 /// It applies only while it is the newest request and the editor is
 /// still in `present` at `generation` (and, for a gap preview, the same
-/// slider drag): anything else made it stale, and it is dropped.
+/// slider drag; for a flatten, the same annotations over the same base):
+/// anything else made it stale, and it is dropped.
+///
+/// History steps queue in `steps` (in order; one compose in flight, for
+/// the first `composed` of them): a step that arrives while one composes
+/// is applied with it or composed next, never dropped.
 #[derive(Clone, Debug)]
 pub struct ComposeRequest {
     pub seq: u64,
+    /// The newest queued step's kind (or the preview / flatten).
     pub kind: ComposeKind,
     pub generation: u64,
     pub present: readshot_ui::editor::Snapshot,
     pub drag_baseline: Option<readshot_ui::editor::Snapshot>,
     pub next: readshot_ui::editor::Snapshot,
+    pub steps: Vec<QueuedStep>,
+    /// How many of `steps` the compose in flight covers.
+    pub composed: usize,
+    /// `next`'s composed base when it was cached (the worker then only
+    /// flattens; for a flatten, always the present base).
+    pub base: Option<std::sync::Arc<image::RgbaImage>>,
+    /// The worker's result slot, shared with its message, so settling
+    /// can wait for a compose already running instead of redoing it.
+    pub output: ComposedOutput,
+    /// Whether its worker was started (`compose_jobs::launch`).
+    pub launched: bool,
 }
 
 /// A composed document: `base` is `next`'s geometry composed, and
@@ -317,18 +379,100 @@ pub struct ComposedDoc {
     pub handle: iced::widget::image::Handle,
 }
 
-/// A compose result carried by a message; taken once by the handler.
-/// `None` inside when the worker failed.
+/// A compose result slot shared by the worker, its message and the
+/// request; taken once. `None` inside when the worker failed.
 #[derive(Clone)]
-pub struct ComposedOutput(std::sync::Arc<std::sync::Mutex<Option<ComposedDoc>>>);
+pub struct ComposedOutput(std::sync::Arc<OutputSlot>);
+
+pub struct OutputSlot {
+    state: std::sync::Mutex<SlotState>,
+    done: std::sync::Condvar,
+}
+
+enum SlotState {
+    /// The worker hasn't started.
+    Queued,
+    /// The worker is composing.
+    Running,
+    /// The worker finished (`None`: it failed).
+    Done(Option<ComposedDoc>),
+    /// Taken, or claimed by the UI thread before the worker started.
+    Taken,
+}
 
 impl ComposedOutput {
+    /// A slot holding `doc` already.
     pub fn new(doc: Option<ComposedDoc>) -> Self {
-        Self(std::sync::Arc::new(std::sync::Mutex::new(doc)))
+        Self::with(SlotState::Done(doc))
     }
 
+    /// A slot for a worker that hasn't started.
+    pub fn queued() -> Self {
+        Self::with(SlotState::Queued)
+    }
+
+    fn with(state: SlotState) -> Self {
+        Self(std::sync::Arc::new(OutputSlot {
+            state: std::sync::Mutex::new(state),
+            done: std::sync::Condvar::new(),
+        }))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, SlotState> {
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The worker's result, once.
     pub fn take(&self) -> Option<ComposedDoc> {
-        self.0.lock().ok().and_then(|mut d| d.take())
+        let mut state = self.lock();
+        match std::mem::replace(&mut *state, SlotState::Taken) {
+            SlotState::Done(doc) => doc,
+            other @ (SlotState::Queued | SlotState::Running) => {
+                // Not finished: leave it for whoever waits on it.
+                *state = other;
+                None
+            }
+            SlotState::Taken => None,
+        }
+    }
+
+    /// Run `work` as the worker, unless the slot was claimed first.
+    /// The slot is always finished, a panic included.
+    pub fn run(&self, work: impl FnOnce() -> ComposedDoc) {
+        {
+            let mut state = self.lock();
+            if !matches!(*state, SlotState::Queued) {
+                return;
+            }
+            *state = SlotState::Running;
+        }
+        let doc = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).ok();
+        *self.lock() = SlotState::Done(doc);
+        self.0.done.notify_all();
+    }
+
+    /// The UI thread needs the result now: a worker not started yet is
+    /// cancelled (`None`: compose it here), a running one is waited for
+    /// (no second compose of the same document), a finished one taken.
+    pub fn claim(&self) -> Option<ComposedDoc> {
+        let mut state = self.lock();
+        loop {
+            match std::mem::replace(&mut *state, SlotState::Taken) {
+                SlotState::Running => {
+                    *state = SlotState::Running;
+                    state = self
+                        .0
+                        .done
+                        .wait(state)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+                SlotState::Done(doc) => return doc,
+                SlotState::Queued | SlotState::Taken => return None,
+            }
+        }
     }
 }
 
@@ -337,6 +481,69 @@ impl std::fmt::Debug for ComposedOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ComposedOutput")
     }
+}
+
+/// What [`EditorSession::image_handle`] shows: `annotations` rendered
+/// over `base`, cut to its frame (`offset`, `size` in document px).
+#[derive(Clone, Debug)]
+pub struct ShownImage {
+    pub base: std::sync::Arc<image::RgbaImage>,
+    /// `None`: not a whole render (a crop drag's sub-image).
+    pub annotations: Option<Vec<Annotation>>,
+    pub offset: (f32, f32),
+    pub size: (u32, u32),
+}
+
+impl ShownImage {
+    pub fn of(base: std::sync::Arc<image::RgbaImage>, annotations: Vec<Annotation>) -> Self {
+        let (offset, size) = frame_of(base.dimensions(), &annotations);
+        Self {
+            base,
+            annotations: Some(annotations),
+            offset,
+            size,
+        }
+    }
+
+    /// Whether this is `annotations` rendered over `base`.
+    pub fn shows(
+        &self,
+        base: &std::sync::Arc<image::RgbaImage>,
+        annotations: &[Annotation],
+    ) -> bool {
+        std::sync::Arc::ptr_eq(&self.base, base) && self.annotations.as_deref() == Some(annotations)
+    }
+}
+
+/// A display kept for a snapshot preview's baseline, restored by a
+/// cancel without a render.
+#[derive(Clone, Debug)]
+pub struct KeptDisplay {
+    pub shown: ShownImage,
+    pub handle: iced::widget::image::Handle,
+}
+
+/// The frame `annotations` give a document of `base` size: the offset and
+/// size of the last crop (clamped to the base, rounded like the
+/// renderer), else the whole document.
+pub fn frame_of(base: (u32, u32), annotations: &[Annotation]) -> ((f32, f32), (u32, u32)) {
+    let (bw, bh) = base;
+    let crop = annotations.iter().rev().find_map(|a| match a {
+        Annotation::Crop { rect } => Some(*rect),
+        _ => None,
+    });
+    let Some(r) = crop else {
+        return ((0.0, 0.0), base);
+    };
+    let bw_f = bw as f32;
+    let bh_f = bh as f32;
+    let x = r.x.max(0.0).min(bw_f);
+    let y = r.y.max(0.0).min(bh_f);
+    let w = (r.width + r.x - x).min(bw_f - x).max(1.0);
+    let h = (r.height + r.y - y).min(bh_f - y).max(1.0);
+    // Round like the renderer does: a crop remapped by a resize is
+    // fractional, and truncating would read 1 px small.
+    ((x, y), (w.round() as u32, h.round() as u32))
 }
 
 /// What History's image for this capture is known to show.
@@ -497,6 +704,27 @@ pub struct EditorSession {
     /// Documents of at least this many output pixels compose off the UI
     /// thread ([`ASYNC_COMPOSE_MIN_PIXELS`]; tests lower it).
     pub async_compose_min_pixels: u64,
+    /// A part was added by a step that landed off the UI thread: its
+    /// recognition is requested once the message is handled.
+    pub recognition_owed: bool,
+    /// What [`Self::image_handle`] shows.
+    pub shown: ShownImage,
+    /// The handle lags the present: on a large document the annotations
+    /// are re-rendered off the UI thread (`compose_jobs::after_update`),
+    /// the previous render staying on screen, positioned in the present
+    /// frame by the view, until the new one lands.
+    pub display_dirty: bool,
+    /// A crop is dragged on a large document: the display wanted is the
+    /// document rendered without its crop, which the view cuts to the
+    /// live crop (no render per tick).
+    pub crop_drag_uncropped: bool,
+    /// A Select drag moves the annotation at this index on a large
+    /// document: the display wanted is the document without it (the
+    /// canvas draws the moving one), rendered once off the UI thread.
+    pub display_without: Option<usize>,
+    /// The display before a snapshot preview or a Select drag began, so a
+    /// cancel restores it without a render.
+    pub kept_display: Option<KeptDisplay>,
     /// What the user typed into the Beautify tab's background hex field
     /// and hasn't applied yet. `None` while they aren't editing it: the
     /// field then shows the current solid background
@@ -770,6 +998,7 @@ impl EditorSession {
     pub fn new_with_display_scale(image: image::RgbaImage, display_scale: f32) -> Self {
         let mut model = Model::new(image);
         let image_handle = build_handle(&mut model);
+        let shown = ShownImage::of(model.shared_base(), model.annotations().to_vec());
         let output_checkpoint = EditorOutputCheckpoint(model.snapshot());
         Self {
             model,
@@ -808,6 +1037,12 @@ impl EditorSession {
             gap_commit_on_land: false,
             history_sync_owed: false,
             async_compose_min_pixels: ASYNC_COMPOSE_MIN_PIXELS,
+            recognition_owed: false,
+            shown,
+            display_dirty: false,
+            crop_drag_uncropped: false,
+            display_without: None,
+            kept_display: None,
             beautify_hex_draft: None,
             canvas_drag_active: false,
             drag_cancel_seq: 0,
@@ -842,6 +1077,7 @@ impl EditorSession {
         let next_pin_number = next_pin_number_after(&record.annotation_model);
         let mut model = Model::with_annotations(image, record.annotation_model.clone());
         let image_handle = build_handle(&mut model);
+        let shown = ShownImage::of(model.shared_base(), model.annotations().to_vec());
         let output_checkpoint = EditorOutputCheckpoint(model.snapshot());
         let history_geometry_base = record.geometry_id.clone();
         Self {
@@ -881,6 +1117,12 @@ impl EditorSession {
             gap_commit_on_land: false,
             history_sync_owed: false,
             async_compose_min_pixels: ASYNC_COMPOSE_MIN_PIXELS,
+            recognition_owed: false,
+            shown,
+            display_dirty: false,
+            crop_drag_uncropped: false,
+            display_without: None,
+            kept_display: None,
             beautify_hex_draft: None,
             canvas_drag_active: false,
             drag_cancel_seq: 0,
@@ -1054,16 +1296,143 @@ impl EditorSession {
     /// pixels. Call after any mutation that affects the rendered
     /// output: `commit_annotation`, `undo`, `redo`, `discard`, or
     /// when the base image changes (Crop replaces it).
+    ///
+    /// Nothing is rendered when the handle already shows the present, or
+    /// (a preview cancelled) the kept baseline display does. A large
+    /// document ([`Self::is_large`]) in the frame shown is re-rendered
+    /// off the UI thread instead ([`Self::display_dirty`]); a change of
+    /// document renders here (geometry changes normally land composed).
     pub fn refresh_image(&mut self) {
         self.crop_drag_flat = None;
-        self.image_handle = build_handle(&mut self.model);
+        self.crop_drag_uncropped = false;
+        self.display_without = None;
+        let base = self.model.shared_base();
+        if self.shown.shows(&base, self.model.annotations()) {
+            self.display_dirty = false;
+            self.forget_kept_display();
+            return;
+        }
+        if let Some(kept) = self
+            .kept_display
+            .take_if(|k| k.shown.shows(&base, self.model.annotations()))
+        {
+            self.set_display(kept.handle, kept.shown);
+            return;
+        }
+        if self.is_large() && std::sync::Arc::ptr_eq(&self.shown.base, &base) {
+            self.keep_baseline_display();
+            self.forget_kept_display();
+            self.display_dirty = true;
+            return;
+        }
+        let handle = build_handle(&mut self.model);
+        let shown = ShownImage::of(base, self.model.annotations().to_vec());
+        self.set_display(handle, shown);
     }
 
     /// [`Self::refresh_image`] with the handle already built (from the
     /// model's flattened image, off the UI thread).
     pub fn install_image(&mut self, handle: iced::widget::image::Handle) {
+        let shown = ShownImage::of(self.model.shared_base(), self.model.annotations().to_vec());
+        self.set_display(handle, shown);
+    }
+
+    /// Show `handle` (`shown`). The display it replaces is kept when it is
+    /// an open snapshot preview's baseline's.
+    pub fn set_display(&mut self, handle: iced::widget::image::Handle, shown: ShownImage) {
         self.crop_drag_flat = None;
+        self.keep_baseline_display();
         self.image_handle = handle;
+        self.shown = shown;
+        self.display_dirty = false;
+        self.forget_kept_display();
+    }
+
+    /// Keep the display on screen when it shows an open snapshot preview's
+    /// baseline (a cancel puts it back).
+    fn keep_baseline_display(&mut self) {
+        if self.kept_display.is_some() {
+            return;
+        }
+        let Some(baseline) = self.model.preview_baseline() else {
+            return;
+        };
+        let Some(base) = self.model.cached_base(&baseline.doc.geometry) else {
+            return;
+        };
+        if self.shown.shows(&base, &baseline.annotations) {
+            self.kept_display = Some(KeptDisplay {
+                shown: self.shown.clone(),
+                handle: self.image_handle.clone(),
+            });
+        }
+    }
+
+    /// Drop the kept display once no preview or Select drag could
+    /// restore it.
+    fn forget_kept_display(&mut self) {
+        if !self.model.preview_is_open() && self.move_drag.is_none() {
+            self.kept_display = None;
+        }
+    }
+
+    /// A Select drag of the annotation at `index` began moving: show the
+    /// document without it under the canvas's live preview. On a large
+    /// document that render is made off the UI thread, the display before
+    /// the drag kept for a cancel.
+    pub fn show_without_dragged(&mut self, index: usize) {
+        let base = self.model.shared_base();
+        let mut without = self.model.annotations().to_vec();
+        if index < without.len() {
+            without.remove(index);
+        }
+        if self.is_large() && std::sync::Arc::ptr_eq(&self.shown.base, &base) {
+            if self.kept_display.is_none() && self.shown.annotations.is_some() {
+                self.kept_display = Some(KeptDisplay {
+                    shown: self.shown.clone(),
+                    handle: self.image_handle.clone(),
+                });
+            }
+            self.display_without = Some(index);
+            if !self.shown.shows(&base, &without) {
+                self.display_dirty = true;
+            }
+            return;
+        }
+        let flat = readshot_core::render(&base, &without);
+        let handle =
+            iced::widget::image::Handle::from_rgba(flat.width(), flat.height(), flat.into_raw());
+        self.image_handle = handle;
+        self.shown = ShownImage::of(base, without);
+    }
+
+    /// Whether the document is large enough that its composes and
+    /// renders run off the UI thread ([`Self::async_compose_min_pixels`]).
+    pub fn is_large(&self) -> bool {
+        let (w, h) = self.model.geometry().size();
+        u64::from(w) * u64::from(h) >= self.async_compose_min_pixels
+    }
+
+    /// The annotations the display should show rendered: the present's,
+    /// without its crops while a crop is dragged on a large document.
+    pub fn wanted_display(&self) -> Vec<Annotation> {
+        let annotations = self.model.annotations();
+        if let Some(index) = self.display_without {
+            let mut without = annotations.to_vec();
+            if index < without.len() {
+                without.remove(index);
+            }
+            return without;
+        }
+        if self.crop_drag_uncropped {
+            annotations
+                .iter()
+                .filter(|a| !matches!(a, Annotation::Crop { .. }))
+                .cloned()
+                .collect()
+        } else {
+            annotations.to_vec()
+        }
     }
 
     /// Cheap image-handle refresh for Crop drag ticks. The full
@@ -1077,6 +1446,17 @@ impl EditorSession {
             self.refresh_image();
             return;
         };
+        if self.is_large() && std::sync::Arc::ptr_eq(&self.shown.base, &self.model.shared_base()) {
+            // The view cuts whatever render is shown to the live crop; the
+            // uncropped render is made once, off the UI thread.
+            self.crop_drag_flat = None;
+            self.crop_drag_uncropped = true;
+            let base = self.model.shared_base();
+            if !self.shown.shows(&base, &self.wanted_display()) {
+                self.display_dirty = true;
+            }
+            return;
+        }
         if self.crop_drag_flat.is_none() {
             let uncropped: Vec<_> = self
                 .model
@@ -1099,6 +1479,13 @@ impl EditorSession {
         let img = image::imageops::crop_imm(flat, x0 as u32, y0 as u32, w, h).to_image();
         self.image_handle =
             iced::widget::image::Handle::from_rgba(img.width(), img.height(), img.into_raw());
+        self.shown = ShownImage {
+            base: self.model.shared_base(),
+            annotations: None,
+            offset: ((x0 as u32) as f32, (y0 as u32) as f32),
+            size: (w, h),
+        };
+        self.display_dirty = false;
     }
 
     /// Pixel size of the *base* image (pre-crop). Useful for hint
@@ -1115,21 +1502,7 @@ impl EditorSession {
     /// base) if one exists. Mirrors what the renderer outputs and
     /// what the user actually sees in the editor.
     pub fn effective_image_size(&self) -> (u32, u32) {
-        let (bw, bh) = self.image_size();
-        if let Some(r) = self.last_crop() {
-            let (rx, ry, rw, rh) = (r.x, r.y, r.width, r.height);
-            let bw_f = bw as f32;
-            let bh_f = bh as f32;
-            let x = rx.max(0.0).min(bw_f);
-            let y = ry.max(0.0).min(bh_f);
-            let w = (rw + rx - x).min(bw_f - x).max(1.0);
-            let h = (rh + ry - y).min(bh_f - y).max(1.0);
-            // Round like the renderer does: a crop remapped by a resize
-            // is fractional, and truncating would read 1 px small.
-            (w.round() as u32, h.round() as u32)
-        } else {
-            (bw, bh)
-        }
+        frame_of(self.image_size(), self.model.annotations()).1
     }
 
     /// Offset of the effective displayed image inside the base
@@ -1398,5 +1771,70 @@ mod tests {
         assert_ne!(a.session_id, b.session_id);
         assert!(matches!(a.text_panel.recognition, TextRecognition::Idle));
         assert!(a.text_panel.document().is_none());
+    }
+
+    fn composed(w: u32) -> ComposedDoc {
+        let base = std::sync::Arc::new(image::RgbaImage::new(w, 1));
+        let flattened = image::RgbaImage::new(w, 1);
+        ComposedDoc {
+            next: readshot_ui::editor::Snapshot::default(),
+            handle: iced::widget::image::Handle::from_rgba(w, 1, flattened.clone().into_raw()),
+            base,
+            flattened,
+        }
+    }
+
+    #[test]
+    fn a_claimed_slot_cancels_a_worker_that_has_not_started() {
+        let slot = ComposedOutput::queued();
+        assert!(slot.claim().is_none(), "the UI thread composes it itself");
+        let ran = std::cell::Cell::new(false);
+        slot.run(|| {
+            ran.set(true);
+            composed(1)
+        });
+        assert!(!ran.get(), "the worker skips it");
+        assert!(slot.take().is_none());
+    }
+
+    #[test]
+    fn a_claim_waits_for_a_running_worker_instead_of_composing_again() {
+        let slot = ComposedOutput::queued();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let worker = slot.clone();
+        let thread = std::thread::spawn(move || {
+            worker.run(|| {
+                started_tx.send(()).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                composed(3)
+            });
+        });
+        started_rx.recv().unwrap();
+        let doc = slot.claim().expect("the running worker's result");
+        assert_eq!(doc.base.width(), 3);
+        thread.join().unwrap();
+        assert!(slot.take().is_none(), "taken once");
+    }
+
+    #[test]
+    fn a_panicking_worker_still_finishes_its_slot() {
+        let slot = ComposedOutput::queued();
+        let worker = slot.clone();
+        std::thread::spawn(move || worker.run(|| panic!("compose failed")))
+            .join()
+            .unwrap();
+        // Finished with no result: a claim never waits forever.
+        assert!(slot.claim().is_none());
+    }
+
+    #[test]
+    fn a_finished_slot_is_taken_once_by_whichever_asks_first() {
+        let slot = ComposedOutput::queued();
+        slot.run(|| composed(2));
+        assert!(slot.take().is_some());
+        assert!(slot.claim().is_none());
+        let slot = ComposedOutput::new(Some(composed(2)));
+        assert!(slot.claim().is_some());
+        assert!(slot.take().is_none());
     }
 }

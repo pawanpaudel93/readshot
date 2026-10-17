@@ -2052,6 +2052,9 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let image_handle = ed.image_handle.clone();
     let (image_w, image_h) = ed.effective_image_size();
     let image_offset = ed.crop_offset();
+    // A render still in flight leaves the previous one on screen: where
+    // it sits in the present frame (same document, maybe another crop).
+    let shown_part = shown_part_of_frame(ed, image_offset, (image_w, image_h));
     let beautify = ed.model.beautify();
     let zoom = ed.zoom;
     let display_scale = ed.display_scale;
@@ -2130,16 +2133,32 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             image_offset,
         });
 
-        let image_layer: Element<'_, Message> = container(
-            iced::widget::image(image_handle.clone())
+        let image: Element<'_, Message> = match shown_part {
+            None => iced::widget::image(image_handle.clone())
                 .width(Length::Fixed(displayed_w))
                 .height(Length::Fixed(displayed_h))
                 .content_fit(iced::ContentFit::Contain)
-                .filter_method(filter),
-        )
-        .width(Length::Fixed(displayed_w))
-        .height(Length::Fixed(displayed_h))
-        .into();
+                .filter_method(filter)
+                .into(),
+            Some(None) => Space::new().into(),
+            Some(Some(part)) => iced::widget::pin(
+                iced::widget::image(image_handle.clone())
+                    .crop(part.region)
+                    .width(Length::Fixed(part.size.0 * scale))
+                    .height(Length::Fixed(part.size.1 * scale))
+                    .content_fit(iced::ContentFit::Fill)
+                    .filter_method(filter),
+            )
+            .x(part.at.0 * scale)
+            .y(part.at.1 * scale)
+            .width(Length::Fixed(displayed_w))
+            .height(Length::Fixed(displayed_h))
+            .into(),
+        };
+        let image_layer: Element<'_, Message> = container(image)
+            .width(Length::Fixed(displayed_w))
+            .height(Length::Fixed(displayed_h))
+            .into();
 
         let canvas_program = EditorCanvas {
             active_tool,
@@ -5506,4 +5525,58 @@ mod tests {
         assert_eq!(label, "Retry");
         assert!(matches!(msg, crate::app::Message::EditorTextRecognize));
     }
+}
+
+/// The part of a shown render that falls inside the present frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ShownPart {
+    /// Its pixels in the shown image.
+    pub region: iced::Rectangle<u32>,
+    /// Where they go in the present frame (document px).
+    pub at: (f32, f32),
+    /// Their size (document px).
+    pub size: (f32, f32),
+}
+
+/// Where the shown render sits in the present frame (`offset`, `size`):
+/// `None` when it is exactly that frame (drawn as is); `Some(None)` when
+/// none of it is inside; else the visible part. A render of another
+/// document can't be placed: drawn as is (geometry changes land composed,
+/// so this doesn't happen).
+pub(crate) fn shown_part_of_frame(
+    ed: &crate::editor::EditorSession,
+    offset: (f32, f32),
+    size: (u32, u32),
+) -> Option<Option<ShownPart>> {
+    let shown = &ed.shown;
+    if !std::sync::Arc::ptr_eq(&shown.base, &ed.model.shared_base())
+        || (shown.offset == offset && shown.size == size)
+    {
+        return None;
+    }
+    let x0 = shown.offset.0.max(offset.0);
+    let y0 = shown.offset.1.max(offset.1);
+    let x1 = (shown.offset.0 + shown.size.0 as f32).min(offset.0 + size.0 as f32);
+    let y1 = (shown.offset.1 + shown.size.1 as f32).min(offset.1 + size.1 as f32);
+    if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+        return Some(None);
+    }
+    let rx = (x0 - shown.offset.0).round().max(0.0) as u32;
+    let ry = (y0 - shown.offset.1).round().max(0.0) as u32;
+    let rw = ((x1 - x0).round() as u32)
+        .min(shown.size.0.saturating_sub(rx))
+        .max(1);
+    let rh = ((y1 - y0).round() as u32)
+        .min(shown.size.1.saturating_sub(ry))
+        .max(1);
+    Some(Some(ShownPart {
+        region: iced::Rectangle {
+            x: rx,
+            y: ry,
+            width: rw,
+            height: rh,
+        },
+        at: (x0 - offset.0, y0 - offset.1),
+        size: (rw as f32, rh as f32),
+    }))
 }

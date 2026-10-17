@@ -245,17 +245,9 @@ pub(crate) fn editor_text_commit_label(is_editing: bool) -> &'static str {
 
 pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
     // A gap drag already released (its commit waiting on an off-thread
-    // compose) is kept, not cancelled: settle it now.
-    if std::mem::take(&mut ed.gap_commit_on_land) {
-        super::combine::flush_gap_preview(ed);
-        if let Some(baseline) = ed.snapshot_drag_baseline.take() {
-            if ed.model.commit_preview_snapshot(baseline) {
-                ed.clear_discard_confirmation();
-                ed.refresh_image();
-                ed.history_sync_owed = true;
-            }
-        }
-    }
+    // compose) is kept, not cancelled: settled now as its step, with the
+    // running compose's result.
+    super::compose_jobs::settle_released_gap(ed);
     let mut refresh = false;
     if let Some(drag) = ed.move_drag.take() {
         let restore_image_handle =
@@ -352,6 +344,8 @@ pub(crate) fn settle_editor_for_output(
     commit_pending_editor_text(ed, coord);
     apply_crop_draft(ed, coord);
     sync_owed_history(ed, coord);
+    // The output renders the present: reuse a render of it in flight.
+    super::compose_jobs::settle_flatten(ed);
 }
 
 /// Close the open popover, if any; returns whether one was open. A
@@ -1218,6 +1212,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     ed.crop_draft = None;
                     cancel_editor_previews(ed);
                     commit_pending_editor_text(ed, &state.coordinator);
+                    if let Some(task) = super::compose_jobs::queue_history_move(
+                        ed,
+                        crate::editor::ComposeKind::Undo,
+                    ) {
+                        return task;
+                    }
                     if ed.model.undo() {
                         ed.refresh_image();
                         ed.set_status("Undid edit. ⇧⌘Z to redo.");
@@ -1228,6 +1228,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     ed.crop_draft = None;
                     cancel_editor_previews(ed);
                     commit_pending_editor_text(ed, &state.coordinator);
+                    if let Some(task) = super::compose_jobs::queue_history_move(
+                        ed,
+                        crate::editor::ComposeKind::Redo,
+                    ) {
+                        return task;
+                    }
                     if ed.model.redo() {
                         ed.refresh_image();
                         ed.set_status("Redid edit. ⌘Z to undo.");
@@ -1564,7 +1570,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         }
                     }
                     if let Some(index) = background_without_selected {
-                        ed.image_handle = editor_image_handle_without_annotation(ed, index);
+                        ed.show_without_dragged(index);
                     }
                 }
                 readshot_ui::CanvasMessage::SelectReleased => {

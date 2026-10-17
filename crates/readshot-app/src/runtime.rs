@@ -925,8 +925,15 @@ fn app_window_shortcut_message(
 }
 
 /// Top-level update fn. Delegates testable transitions to
-/// [`App::update_sync`] and adds the iced-only async branches.
+/// [`App::update_sync`] and adds the iced-only async branches. After
+/// every message the editor's off-thread document work is started
+/// ([`compose_jobs::after_update`]).
 pub fn update(state: &mut App, message: Message) -> Task<Message> {
+    let task = update_message(state, message);
+    Task::batch([task, compose_jobs::after_update(state)])
+}
+
+fn update_message(state: &mut App, message: Message) -> Task<Message> {
     match message {
         Message::WelcomeWindowReady(id) => {
             if !state.welcome.should_show() {
@@ -1991,6 +1998,8 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorRedactAll
         | Message::EditorRedactLine(..)
         | Message::EditorHistoryWritten { .. }) => {
+            // Images the message lets go of are freed off the UI thread.
+            let held = state.editor.as_ref().map(compose_jobs::hold);
             let frame_moved = compose_jobs::settle_before(state, &msg);
             let task = match state.editor.as_mut() {
                 Some(ed) if frame_moved && compose_jobs::points_into_the_shown_image(&msg) => {
@@ -2000,6 +2009,7 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 _ => editor_ops::handle_editor_message(state, msg),
             };
             editor_ops::sync_owed_editor_history(state);
+            compose_jobs::free_off_thread(held);
             Task::batch([task, editor_ops::history_write_followups(state)])
         }
         // Bookkeeping only (no history, no settle): what the stage shows.
@@ -2743,7 +2753,11 @@ fn history_list_task(coord: CaptureCoordinator) -> Task<Message> {
 }
 
 fn editor_output_image(ed: &mut EditorSession) -> image::RgbaImage {
-    let img = ed.model.flatten();
+    // The cached flattened image is shared, not copied, into the frame.
+    let img = match ed.model.flattened_shared() {
+        Some(img) => img,
+        None => Arc::new(ed.model.flatten()),
+    };
     readshot_core::beautify::render(&img, &ed.model.beautify())
 }
 
@@ -2760,18 +2774,6 @@ fn refresh_image_during_select_drag(
     annotations
         .get(index)
         .is_some_and(|annotation| matches!(annotation, readshot_core::Annotation::Crop { .. }))
-}
-
-fn editor_image_handle_without_annotation(
-    ed: &EditorSession,
-    index: usize,
-) -> iced::widget::image::Handle {
-    let (base, mut annotations) = ed.model.render_snapshot();
-    if index < annotations.len() {
-        annotations.remove(index);
-    }
-    let img = readshot_core::render(&base, &annotations);
-    rgba_handle(img)
 }
 
 /// Push an RGBA image to the system clipboard. Runs the arboard
@@ -12686,6 +12688,7 @@ mod tests {
         ed.model
             .add_part(solid(20, 10), readshot_core::document::Join::Below)
             .unwrap();
+        ed.refresh_image();
         ed
     }
 
@@ -12707,10 +12710,28 @@ mod tests {
         Message::EditorComposed {
             session,
             seq: job.seq,
-            output: crate::editor::ComposedOutput::new(Some(super::compose_jobs::compose(
+            output: crate::editor::ComposedOutput::new(Some(super::compose_jobs::compose_with(
                 job.next.clone(),
+                job.base.clone(),
             ))),
         }
+    }
+
+    /// Run every compose the editor is waiting on, as their workers
+    /// would, until none is left.
+    fn finish_all(app: &mut App) {
+        for _ in 0..16 {
+            if app
+                .editor
+                .as_ref()
+                .is_none_or(|ed| ed.compose_job.is_none())
+            {
+                return;
+            }
+            let landed = finish_compose(app);
+            let _ = update(app, landed);
+        }
+        panic!("composes never settle");
     }
 
     fn handle_id(ed: &crate::editor::EditorSession) -> iced::widget::image::Handle {
@@ -12762,6 +12783,9 @@ mod tests {
             &mut app,
             Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
         );
+        // A large undo lands composed too.
+        assert_eq!(app.editor.as_ref().unwrap().image_size(), (80, 40));
+        finish_all(&mut app);
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.image_size(), (40, 20));
         assert_eq!(ed.model.undo_depth(), depth);
@@ -12792,19 +12816,60 @@ mod tests {
         app.editor = Some(async_compose(crate::editor::EditorSession::new(solid(
             40, 20,
         ))));
+        app.editor
+            .as_mut()
+            .unwrap()
+            .model
+            .commit_annotations(rect_at(5.0));
         let depth = app.editor.as_ref().unwrap().model.undo_depth();
         apply_resize_width(&mut app, "80");
         let late = finish_compose(&app);
-        // Rotate before the result lands: the resize is applied first.
-        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        // Another edit before the result lands: the resize is applied first.
+        let ed = app.editor.as_mut().unwrap();
+        ed.model.select_at(PointLike::new(6.0, 3.0));
+        assert!(ed.model.selected_annotation().is_some());
+        let _ = update(&mut app, Message::EditorDeleteSelected);
         let ed = app.editor.as_ref().unwrap();
-        assert_eq!(ed.image_size(), (40, 80), "resized, then rotated");
+        assert_eq!(ed.image_size(), (80, 40), "resized");
+        assert!(ed.model.annotations().is_empty(), "then deleted");
         assert_eq!(ed.model.undo_depth(), depth + 2);
-        assert!(ed.compose_job.is_none());
+        assert!(
+            ed.compose_job.as_ref().is_none_or(|j| !j.kind.is_step()),
+            "only the delete's re-render may run"
+        );
         // Its late result changes nothing.
         let _ = update(&mut app, late);
         let ed = app.editor.as_ref().unwrap();
-        assert_eq!(ed.image_size(), (40, 80));
+        assert_eq!(ed.image_size(), (80, 40));
+        assert_eq!(ed.model.undo_depth(), depth + 2);
+    }
+
+    #[test]
+    fn a_rotate_after_a_pending_resize_queues_behind_it() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(async_compose(crate::editor::EditorSession::new(solid(
+            40, 20,
+        ))));
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        apply_resize_width(&mut app, "80");
+        let late = finish_compose(&app);
+        // ⌘] before the result lands: queued behind the resize, nothing
+        // composed on the UI thread.
+        let before = super::compose_jobs::composes_on_this_thread();
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        assert_eq!(super::compose_jobs::composes_on_this_thread(), before);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (40, 20), "nothing applied yet");
+        assert_eq!(ed.model.undo_depth(), depth);
+        assert_eq!(ed.compose_job.as_ref().map(|j| j.steps.len()), Some(2));
+        // The resize lands; the rotate composes next.
+        let _ = update(&mut app, late);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (80, 40), "resized");
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+        finish_all(&mut app);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (40, 80), "resized, then rotated");
         assert_eq!(ed.model.undo_depth(), depth + 2);
     }
 
@@ -13041,6 +13106,7 @@ mod tests {
         let late = finish_compose(&app);
         let _ = update(&mut app, undo_msg());
         let _ = update(&mut app, late);
+        finish_all(&mut app);
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.image_size(), (40, 20));
         assert_eq!(ed.model.undo_depth(), depth, "the earlier step is kept");
@@ -13050,6 +13116,7 @@ mod tests {
             &mut app,
             Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
         );
+        finish_all(&mut app);
         assert_eq!(app.editor.as_ref().unwrap().image_size(), (80, 40));
     }
 
@@ -13422,6 +13489,7 @@ mod tests {
             &mut app,
             Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
         );
+        finish_all(&mut app);
         assert_eq!(app.editor.as_ref().unwrap().image_size(), (40, 20));
     }
 
@@ -13448,10 +13516,12 @@ mod tests {
         let late = finish_compose(&app);
         let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
         assert!(app.editor.as_ref().unwrap().gap_commit_on_land);
-        // Rotate before the compose lands: the released gap is settled as
-        // its own step first, never cancelled.
+        // Rotate before the compose lands: the released gap is kept as its
+        // own step first (queued, its running compose reused), never
+        // cancelled; the rotate queues behind it.
         let _ = update(&mut app, Message::EditorRotate { clockwise: true });
         let _ = update(&mut app, late);
+        finish_all(&mut app);
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.model.undo_depth(), depth + 2);
         assert_eq!(ed.model.geometry().gap, 10);
@@ -13460,6 +13530,7 @@ mod tests {
             &mut app,
             Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
         );
+        finish_all(&mut app);
         assert_eq!(app.editor.as_ref().unwrap().image_size(), (40, 30));
         // Undo right after a release (before landing) undoes the gap step.
         let (depth, _) = gap_drag_composing(&mut app);
@@ -13468,6 +13539,7 @@ mod tests {
             &mut app,
             Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
         );
+        finish_all(&mut app);
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.model.undo_depth(), depth);
         assert!(ed.model.can_redo(), "the gap step is on the redo stack");
@@ -14445,5 +14517,679 @@ mod tests {
             ed.status.as_deref(),
             Some("Couldn't add the image — that file isn't an image Readshot can read.")
         );
+    }
+
+    // ===== D1: no UI-thread compose or render at large sizes =====
+
+    /// A non-uniform image, so a turned or flipped document differs.
+    fn ramp(w: u32, h: u32) -> image::RgbaImage {
+        image::RgbaImage::from_fn(w, h, |x, y| {
+            image::Rgba([(x * 6) as u8, (y * 11) as u8, (x ^ y) as u8, 255])
+        })
+    }
+
+    /// An async editor over `ramp(40, 20)` with one selected rectangle.
+    fn large_editor(app: &mut App) -> usize {
+        let mut ed = sync_editor();
+        ed.refresh_image();
+        app.editor = Some(async_compose(ed));
+        app.editor.as_ref().unwrap().model.undo_depth()
+    }
+
+    /// The same document built synchronously, for comparing outputs.
+    fn sync_editor() -> crate::editor::EditorSession {
+        let mut ed = crate::editor::EditorSession::new(ramp(40, 20));
+        ed.model.commit_annotation(rect_at(5.0).remove(0));
+        ed
+    }
+
+    fn redo_msg() -> Message {
+        Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo)
+    }
+
+    fn job_kind(app: &App) -> Option<crate::editor::ComposeKind> {
+        app.editor
+            .as_ref()
+            .unwrap()
+            .compose_job
+            .as_ref()
+            .map(|j| j.kind)
+    }
+
+    /// Nothing composed or rendered on the UI thread since `before`.
+    fn composes(app: &App) -> (u64, u64) {
+        (
+            super::compose_jobs::composes_on_this_thread(),
+            app.editor.as_ref().unwrap().model.base_composes(),
+        )
+    }
+
+    #[test]
+    fn a_large_rotate_composes_off_thread_and_lands_as_one_undo_step() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let depth = large_editor(&mut app);
+        let shown = handle_id(app.editor.as_ref().unwrap());
+        let before = composes(&app);
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        // Queued: nothing composed here, nothing changes until it lands.
+        assert_eq!(composes(&app), before);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            job_kind(&app),
+            Some(crate::editor::ComposeKind::Rotate { clockwise: true })
+        );
+        assert_eq!(ed.image_size(), (40, 20));
+        assert_eq!(ed.model.undo_depth(), depth);
+        assert_eq!(handle_id(ed), shown);
+        let landed = finish_compose(&app);
+        let _ = update(&mut app, landed);
+        let ed = app.editor.as_mut().unwrap();
+        assert!(ed.compose_job.is_none());
+        assert_eq!(ed.image_size(), (20, 40));
+        assert_eq!(ed.model.undo_depth(), depth + 1, "one undo step");
+        assert_ne!(handle_id(ed), shown);
+        assert_eq!(ed.status.as_deref(), Some("Rotated right. ⌘Z to undo."));
+        let mut sync = sync_editor();
+        assert!(sync.model.rotate(true).unwrap());
+        assert_eq!(ed.model.annotations(), sync.model.annotations());
+        assert!(*ed.model.base() == *sync.model.base(), "base");
+        assert!(
+            editor_output_image(ed) == editor_output_image(&mut sync),
+            "the output is the rotated document"
+        );
+    }
+
+    #[test]
+    fn an_edit_before_a_large_rotate_lands_applies_it_first_and_drops_its_late_result() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let depth = large_editor(&mut app);
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        let late = finish_compose(&app);
+        // Delete is not chained: the rotate is applied first, then the
+        // selected rectangle (now in the turned frame) is deleted.
+        let _ = update(&mut app, Message::EditorDeleteSelected);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (20, 40), "rotated");
+        assert!(ed.model.annotations().is_empty(), "then deleted");
+        assert_eq!(ed.model.undo_depth(), depth + 2);
+        assert!(!super::compose_jobs::steps_pending(ed));
+        // The late result is stale: dropped.
+        let _ = update(&mut app, late);
+        finish_all(&mut app);
+        let ed = app.editor.as_mut().unwrap();
+        assert_eq!(ed.image_size(), (20, 40));
+        assert_eq!(ed.model.undo_depth(), depth + 2);
+        let mut sync = sync_editor();
+        sync.model.rotate(true).unwrap();
+        assert!(sync.model.delete_selected_annotation());
+        assert!(editor_output_image(ed) == editor_output_image(&mut sync));
+    }
+
+    #[test]
+    fn rotate_flip_undo_and_redo_on_a_large_document_queue_and_land_in_order() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let depth = large_editor(&mut app);
+        let before = composes(&app);
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        // ⌘[ ⌘] ⌘Z ⇧⌘Z arrive as keys while the rotate composes: each
+        // queues behind it, none settles it.
+        let window = iced::window::Id::unique();
+        app.editor.as_mut().unwrap().window_id = Some(window);
+        let key = |c: &str, shift: bool| {
+            let mut modifiers = command_modifiers();
+            if shift {
+                modifiers.insert(iced::keyboard::Modifiers::SHIFT);
+            }
+            Message::EditorKeyPressed {
+                window,
+                key: iced::keyboard::Key::Character(c.into()),
+                modifiers,
+                status_ignored: true,
+            }
+        };
+        let _ = update(
+            &mut app,
+            Message::EditorFlip(readshot_core::document::FlipAxis::Horizontal),
+        );
+        let _ = update(&mut app, key("z", false));
+        let _ = update(&mut app, key("z", true));
+        let _ = update(&mut app, key("[", false));
+        assert_eq!(composes(&app), before, "nothing composed on the UI thread");
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.undo_depth(), depth, "nothing applied yet");
+        assert_eq!(ed.compose_job.as_ref().unwrap().steps.len(), 5);
+        assert_eq!(ed.compose_job.as_ref().unwrap().composed, 1);
+        finish_all(&mut app);
+        let ed = app.editor.as_mut().unwrap();
+        assert_eq!(ed.model.undo_depth(), depth + 3, "rotate, flip, rotate");
+        assert!(!ed.model.can_redo());
+        let mut sync = sync_editor();
+        sync.model.rotate(true).unwrap();
+        sync.model
+            .flip(readshot_core::document::FlipAxis::Horizontal)
+            .unwrap();
+        assert!(sync.model.undo());
+        assert!(sync.model.redo());
+        sync.model.rotate(false).unwrap();
+        assert_eq!(
+            ed.model.geometry().transform,
+            sync.model.geometry().transform
+        );
+        assert_eq!(ed.model.annotations(), sync.model.annotations());
+        assert!(editor_output_image(ed) == editor_output_image(&mut sync));
+    }
+
+    #[test]
+    fn a_large_undo_and_redo_across_a_rotate_swap_the_cached_bases_in() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let depth = large_editor(&mut app);
+        let original = app.editor.as_ref().unwrap().model.shared_base();
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        finish_all(&mut app);
+        let rotated = app.editor.as_ref().unwrap().model.shared_base();
+        let before = composes(&app);
+        let _ = update(&mut app, undo_msg());
+        let job = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
+        assert_eq!(job.kind, crate::editor::ComposeKind::Undo);
+        assert!(
+            job.base.as_ref().is_some_and(|b| Arc::ptr_eq(b, &original)),
+            "the worker gets the cached base"
+        );
+        assert_eq!(app.editor.as_ref().unwrap().image_size(), (20, 40));
+        finish_all(&mut app);
+        assert_eq!(composes(&app), before, "no recompose for the undo");
+        let ed = app.editor.as_mut().unwrap();
+        assert_eq!(ed.image_size(), (40, 20));
+        assert_eq!(ed.model.undo_depth(), depth);
+        assert!(Arc::ptr_eq(&ed.model.shared_base(), &original));
+        assert_eq!(ed.status.as_deref(), Some("Undid edit. ⇧⌘Z to redo."));
+        let mut sync = sync_editor();
+        assert!(editor_output_image(ed) == editor_output_image(&mut sync));
+        let _ = update(&mut app, redo_msg());
+        let job = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
+        assert!(job.base.as_ref().is_some_and(|b| Arc::ptr_eq(b, &rotated)));
+        finish_all(&mut app);
+        assert_eq!(composes(&app), before, "no recompose for the redo");
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (20, 40));
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+    }
+
+    #[test]
+    fn rapid_large_undos_land_in_order_one_compose_at_a_time() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let depth = large_editor(&mut app);
+        for msg in [
+            Message::EditorRotate { clockwise: true },
+            Message::EditorFlip(readshot_core::document::FlipAxis::Vertical),
+            Message::EditorRotate { clockwise: true },
+        ] {
+            let _ = update(&mut app, msg);
+            finish_all(&mut app);
+        }
+        assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth + 3);
+        for _ in 0..3 {
+            let _ = update(&mut app, undo_msg());
+        }
+        let job = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
+        assert_eq!((job.steps.len(), job.composed), (3, 1));
+        let first = finish_compose(&app);
+        let _ = update(&mut app, first);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.undo_depth(), depth + 2, "the first undo landed");
+        let job = ed.compose_job.clone().unwrap();
+        assert_eq!(
+            (job.steps.len(), job.composed),
+            (2, 2),
+            "the rest compose next"
+        );
+        finish_all(&mut app);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.undo_depth(), depth);
+        assert_eq!(ed.model.redo_depth(), 3);
+        assert!(ed.model.geometry().is_original());
+        assert_eq!(ed.image_size(), (40, 20));
+    }
+
+    #[test]
+    fn an_edit_before_a_large_undo_lands_applies_it_first_and_drops_its_late_result() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let depth = large_editor(&mut app);
+        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+        finish_all(&mut app);
+        let _ = update(&mut app, undo_msg());
+        let late = finish_compose(&app);
+        let _ = update(&mut app, Message::EditorDeleteSelected);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (40, 20), "undone");
+        assert!(ed.model.annotations().is_empty(), "then deleted");
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+        assert!(!ed.model.can_redo(), "the delete dropped the redo");
+        let _ = update(&mut app, late);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (40, 20));
+        assert!(ed.model.annotations().is_empty());
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+    }
+
+    #[test]
+    fn a_large_added_part_lands_as_one_undo_step_with_its_bake() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.preferences.editor_panel_open = true;
+        let mut ed = sync_editor();
+        // A turned document is baked into one part first (D4).
+        ed.model.rotate(true).unwrap();
+        let mut ed = async_compose(ed);
+        ed.refresh_image();
+        app.editor = Some(ed);
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        let session = app.editor.as_ref().unwrap().session_id;
+        let before = composes(&app);
+        let _ = update(
+            &mut app,
+            Message::EditorPartLoaded {
+                session,
+                result: Ok(Some(Arc::new(ramp(20, 10)))),
+            },
+        );
+        assert_eq!(composes(&app), before, "the bake reused the cached base");
+        assert!(matches!(
+            job_kind(&app),
+            Some(crate::editor::ComposeKind::AddPart { .. })
+        ));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.part_ids().len(), 1, "not applied yet");
+        assert_eq!(ed.model.undo_depth(), depth);
+        let landed = finish_compose(&app);
+        let _ = update(&mut app, landed);
+        let ed = app.editor.as_mut().unwrap();
+        assert_eq!(ed.model.part_ids().len(), 2);
+        assert_eq!(ed.model.undo_depth(), depth + 1, "one undo step");
+        assert_eq!(ed.status.as_deref(), Some("Added image below. ⌘Z to undo."));
+        let baked = ed.model.part_ids()[0];
+        assert!(ed.text_panel.bake_sources.contains_key(&baked));
+        assert!(
+            matches!(
+                ed.text_panel.recognition,
+                crate::editor::TextRecognition::Recognizing { .. }
+            ),
+            "the new part is recognized"
+        );
+        let mut sync = sync_editor();
+        sync.model.rotate(true).unwrap();
+        sync.model
+            .add_part(ramp(20, 10), readshot_core::document::Join::Below)
+            .unwrap();
+        assert_eq!(ed.model.part_ids(), sync.model.part_ids());
+        assert_eq!(ed.model.annotations(), sync.model.annotations());
+        assert!(editor_output_image(ed) == editor_output_image(&mut sync));
+        let _ = update(&mut app, undo_msg());
+        finish_all(&mut app);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.part_ids().len(), 1);
+        assert_eq!(ed.model.undo_depth(), depth);
+    }
+
+    #[test]
+    fn an_edit_before_a_large_added_part_lands_applies_it_first() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let depth = large_editor(&mut app);
+        let session = app.editor.as_ref().unwrap().session_id;
+        let _ = update(
+            &mut app,
+            Message::EditorPartLoaded {
+                session,
+                result: Ok(Some(Arc::new(ramp(20, 10)))),
+            },
+        );
+        let late = finish_compose(&app);
+        let _ = update(&mut app, Message::EditorDeleteSelected);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.part_ids().len(), 2, "added");
+        assert!(ed.model.annotations().is_empty(), "then deleted");
+        assert_eq!(ed.model.undo_depth(), depth + 2);
+        let _ = update(&mut app, late);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.part_ids().len(), 2);
+        assert_eq!(ed.model.undo_depth(), depth + 2);
+    }
+
+    #[test]
+    fn cancelling_a_large_gap_preview_puts_the_baseline_back_without_a_render() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let (depth, _) = gap_drag_composing(&mut app);
+        let baseline = handle_id(app.editor.as_ref().unwrap());
+        let landed = finish_compose(&app);
+        let _ = update(&mut app, landed);
+        assert_eq!(app.editor.as_ref().unwrap().image_size(), (40, 30));
+        let before = composes(&app);
+        // ⌘Z while the slider is held cancels the drag.
+        let _ = update(&mut app, undo_msg());
+        assert_eq!(composes(&app), before, "the baseline's base was kept");
+        let ed = app.editor.as_mut().unwrap();
+        assert_eq!(ed.status.as_deref(), Some("Cancelled the slider change."));
+        assert_eq!(ed.image_size(), (40, 20));
+        assert_eq!(handle_id(ed), baseline, "the baseline's display is back");
+        assert!(ed.model.has_flattened(), "and its flattened image");
+        assert!(ed.compose_job.is_none(), "nothing to render");
+        assert_eq!(ed.model.undo_depth(), depth);
+        let mut sync = two_part_editor();
+        assert!(editor_output_image(ed) == editor_output_image(&mut sync));
+    }
+
+    #[test]
+    fn an_annotation_commit_on_a_large_document_renders_off_the_ui_thread() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let depth = large_editor(&mut app);
+        let shown = handle_id(app.editor.as_ref().unwrap());
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                rect_at(20.0).remove(0),
+            )),
+        );
+        let ed = app.editor.as_mut().unwrap();
+        // The edit is in the model at once (one step); the previous render
+        // stays on screen while the new one renders off the UI thread.
+        assert_eq!(ed.model.annotations().len(), 2);
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+        assert_eq!(handle_id(ed), shown);
+        assert!(ed.display_dirty);
+        assert!(!ed.model.has_flattened());
+        assert_eq!(job_kind(&app), Some(crate::editor::ComposeKind::Flatten));
+        // An output meanwhile is the exact present document.
+        let ed = app.editor.as_mut().unwrap();
+        let expected = readshot_core::render(ed.model.base(), ed.model.annotations());
+        assert!(editor_output_image(ed) == expected);
+        let landed = finish_compose(&app);
+        let _ = update(&mut app, landed);
+        let ed = app.editor.as_ref().unwrap();
+        assert_ne!(handle_id(ed), shown);
+        assert!(!ed.display_dirty);
+        assert!(ed.compose_job.is_none());
+        assert!(ed
+            .shown
+            .shows(&ed.model.shared_base(), ed.model.annotations()));
+    }
+
+    #[test]
+    fn an_output_takes_the_render_of_the_present_already_made() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        large_editor(&mut app);
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                rect_at(20.0).remove(0),
+            )),
+        );
+        let job = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
+        assert_eq!(job.kind, crate::editor::ComposeKind::Flatten);
+        // Its worker finished, as on its thread; then ⌘C.
+        job.output
+            .run(|| super::compose_jobs::compose_with(job.next.clone(), job.base.clone()));
+        let coord = app.coordinator.clone();
+        let ed = app.editor.as_mut().unwrap();
+        settle_editor_for_output(ed, &coord);
+        assert!(ed.model.has_flattened(), "no second render for the output");
+        assert!(!ed.display_dirty);
+        assert!(ed.compose_job.is_none());
+        let expected = readshot_core::render(ed.model.base(), ed.model.annotations());
+        assert!(editor_output_image(ed) == expected);
+    }
+
+    #[test]
+    fn a_stale_flatten_is_dropped_and_the_newest_edit_rendered() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        large_editor(&mut app);
+        let commit = |x: f32| {
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                rect_at(x).remove(0),
+            ))
+        };
+        let _ = update(&mut app, commit(20.0));
+        let first = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
+        let _ = update(&mut app, commit(30.0));
+        // One render in flight: the second edit waits for it.
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.compose_job.as_ref().unwrap().seq, first.seq);
+        let shown = handle_id(ed);
+        let landed = finish_compose(&app);
+        let _ = update(&mut app, landed);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(handle_id(ed), shown, "the stale render is not shown");
+        assert!(ed.display_dirty);
+        let second = ed.compose_job.clone().expect("the newest is rendered next");
+        assert_ne!(second.seq, first.seq);
+        assert_eq!(second.next.annotations, ed.model.annotations());
+        finish_all(&mut app);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(!ed.display_dirty);
+        assert!(ed
+            .shown
+            .shows(&ed.model.shared_base(), ed.model.annotations()));
+    }
+
+    #[test]
+    fn a_crop_on_a_large_document_shows_the_previous_render_cut_to_its_frame() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        large_editor(&mut app);
+        app.editor
+            .as_mut()
+            .unwrap()
+            .model
+            .set_tool(readshot_ui::editor::ToolState::Crop);
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                Annotation::Crop {
+                    rect: RectLike::new(10.0, 5.0, 20.0, 10.0),
+                },
+            )),
+        );
+        let _ = update(&mut app, Message::EditorCropApply);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.effective_image_size(), (20, 10));
+        // Until the cropped render lands, the uncropped one is shown cut
+        // to the crop: the same pixels in the same place.
+        let part = super::view::shown_part_of_frame(ed, ed.crop_offset(), (20, 10));
+        assert_eq!(
+            part,
+            Some(Some(super::view::ShownPart {
+                region: iced::Rectangle {
+                    x: 10,
+                    y: 5,
+                    width: 20,
+                    height: 10
+                },
+                at: (0.0, 0.0),
+                size: (20.0, 10.0),
+            }))
+        );
+        finish_all(&mut app);
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            super::view::shown_part_of_frame(ed, ed.crop_offset(), (20, 10)),
+            None,
+            "the cropped render is the frame"
+        );
+    }
+
+    #[test]
+    fn a_large_select_drag_renders_the_background_once_and_a_cancel_restores_it() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let depth = large_editor(&mut app);
+        let shown = handle_id(app.editor.as_ref().unwrap());
+        app.editor.as_mut().unwrap().model.clear_selection();
+        for msg in [
+            readshot_ui::CanvasMessage::SelectPressed(PointLike::new(5.0, 3.0)),
+            readshot_ui::CanvasMessage::SelectDragged(PointLike::new(9.0, 4.0)),
+        ] {
+            let _ = update(&mut app, Message::EditorCanvas(msg));
+        }
+        // The document without the dragged rectangle renders off the UI
+        // thread; then every tick reuses it.
+        assert_eq!(job_kind(&app), Some(crate::editor::ComposeKind::Flatten));
+        assert!(app
+            .editor
+            .as_ref()
+            .unwrap()
+            .compose_job
+            .as_ref()
+            .unwrap()
+            .next
+            .annotations
+            .is_empty());
+        finish_all(&mut app);
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::SelectDragged(PointLike::new(
+                12.0, 4.0,
+            ))),
+        );
+        assert!(app.editor.as_ref().unwrap().compose_job.is_none());
+        // Esc cancels the drag: the display before it is back, no render.
+        let ed = app.editor.as_mut().unwrap();
+        cancel_editor_previews(ed);
+        assert_eq!(handle_id(ed), shown);
+        assert!(!ed.display_dirty);
+        assert_eq!(ed.model.undo_depth(), depth);
+    }
+
+    #[test]
+    fn a_released_gap_drag_settled_by_another_action_reuses_its_running_compose() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let (depth, session) = gap_drag_composing(&mut app);
+        let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
+        assert!(app.editor.as_ref().unwrap().gap_commit_on_land);
+        // Its worker finishes, as on its thread, before the next action.
+        let job = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
+        job.output
+            .run(|| super::compose_jobs::compose_with(job.next.clone(), job.base.clone()));
+        let before = composes(&app);
+        // Delete is not chained: the released drag is settled first.
+        let _ = update(&mut app, Message::EditorDeleteSelected);
+        assert_eq!(composes(&app), before, "nothing composed on the UI thread");
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.undo_depth(), depth + 1, "one step for the drag");
+        assert_eq!(ed.model.geometry().gap, 10);
+        assert_eq!(ed.image_size(), (40, 30));
+        assert!(ed.snapshot_drag_baseline.is_none());
+        assert!(!ed.gap_commit_on_land);
+        // Its message, arriving late, changes nothing.
+        let _ = update(
+            &mut app,
+            Message::EditorComposed {
+                session,
+                seq: job.seq,
+                output: job.output.clone(),
+            },
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.undo_depth(), depth + 1);
+        assert_eq!(ed.image_size(), (40, 30));
+    }
+
+    #[test]
+    fn undo_during_a_held_large_gap_drag_cancels_it_without_composing_its_value() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let (depth, session) = gap_drag_composing(&mut app);
+        let first = finish_compose(&app);
+        let _ = update(&mut app, first);
+        // A newer value waits on the throttle; the slider is still held.
+        let _ = update(&mut app, Message::EditorLayoutGapPreview(30));
+        let _ = update(&mut app, Message::EditorLayoutGapFlush { session });
+        let before = composes(&app);
+        let _ = update(&mut app, undo_msg());
+        assert_eq!(
+            composes(&app),
+            before,
+            "the dropped value is never composed"
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.status.as_deref(), Some("Cancelled the slider change."));
+        assert_eq!(ed.image_size(), (40, 20));
+        assert_eq!(ed.model.undo_depth(), depth);
+        assert!(ed.compose_job.is_none());
+    }
+
+    #[test]
+    fn a_new_gap_drag_after_a_release_keeps_the_released_value_with_its_compose() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let (depth, _) = gap_drag_composing(&mut app);
+        let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
+        let job = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
+        job.output
+            .run(|| super::compose_jobs::compose_with(job.next.clone(), job.base.clone()));
+        let before = composes(&app);
+        // The next drag starts before the released one landed.
+        let _ = update(&mut app, Message::EditorLayoutGapPreview(4));
+        assert_eq!(composes(&app), before, "the running compose was reused");
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(
+            ed.model.undo_depth(),
+            depth + 1,
+            "the released drag is a step"
+        );
+        assert_eq!(ed.model.geometry().gap, 10);
+        assert!(matches!(
+            ed.compose_job.as_ref().map(|j| j.kind),
+            Some(crate::editor::ComposeKind::GapPreview(4))
+        ));
+    }
+
+    /// UI-thread time of rotate, undo, redo and an annotation commit at
+    /// ~96 MP: the message itself, then the landing of its off-thread
+    /// result (the worker's compose is run untimed, as on its thread).
+    /// Release build: `cargo test --release -p readshot-app --lib
+    /// ui_thread_time -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement; run in release"]
+    fn ui_thread_time_of_rotate_and_undo_at_96_mp() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(12_000, 8_000));
+        ed.model.commit_annotations(rect_at(50.0));
+        app.editor = Some(ed);
+        let step = |app: &mut App, what: &str, msg: Message| {
+            let t = std::time::Instant::now();
+            let _ = update(app, msg);
+            let handled = t.elapsed();
+            let mut landed = std::time::Duration::ZERO;
+            while app.editor.as_ref().unwrap().compose_job.is_some() {
+                let done = finish_compose(app);
+                let t = std::time::Instant::now();
+                let _ = update(app, done);
+                landed += t.elapsed();
+            }
+            println!("96 MP UI thread: {what}: message {handled:?}, landing {landed:?}");
+        };
+        step(
+            &mut app,
+            "rotate",
+            Message::EditorRotate { clockwise: true },
+        );
+        step(&mut app, "undo", undo_msg());
+        step(
+            &mut app,
+            "redo",
+            Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
+        );
+        step(&mut app, "undo again", undo_msg());
+        step(
+            &mut app,
+            "commit annotation",
+            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
+                rect_at(90.0).remove(0),
+            )),
+        );
+        let session = app.editor.as_ref().unwrap().session_id;
+        step(
+            &mut app,
+            "add part (12000 x 1000)",
+            Message::EditorPartLoaded {
+                session,
+                result: Ok(Some(Arc::new(solid(12_000, 1_000)))),
+            },
+        );
+        step(&mut app, "undo the part", undo_msg());
     }
 }
