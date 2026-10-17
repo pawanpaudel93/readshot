@@ -72,6 +72,11 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
             if ed.snapshot_drag_cancelled {
                 return Task::none();
             }
+            // A released gap drag still composing is kept first; this is
+            // a new drag with its own baseline.
+            if ed.gap_commit_on_land {
+                cancel_editor_previews(ed);
+            }
             if ed.snapshot_drag_baseline.is_none() {
                 // Settle any other open preview before taking the baseline.
                 cancel_editor_previews(ed);

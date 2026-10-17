@@ -618,6 +618,14 @@ pub enum Message {
         session: u64,
     },
     EditorLayoutAlign(readshot_core::document::Align),
+    /// An off-thread document compose (large resize, alignment or gap
+    /// preview) finished; applied only when `seq` is still the newest
+    /// request of `session` and nothing moved meanwhile.
+    EditorComposed {
+        session: u64,
+        seq: u64,
+        output: crate::editor::ComposedOutput,
+    },
     /// Cycle the editor's active palette colour. `+1` moves to the
     /// next swatch in `PALETTE`, `-1` to the previous; the runtime
     /// wraps via `rem_euclid` so the cycle is endless. Triggered by

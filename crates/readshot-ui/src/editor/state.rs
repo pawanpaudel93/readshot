@@ -455,6 +455,107 @@ impl EditorState {
         false
     }
 
+    /// Changes on every push, undo and redo; never on a preview. A result
+    /// prepared for one generation is stale under any other.
+    pub fn history_generation(&self) -> u64 {
+        self.history.generation()
+    }
+
+    /// The undo step [`Self::apply_geometry`] would push for `next`,
+    /// without pushing it or composing anything: `None` when `next` is
+    /// the present geometry. Pair with [`Self::push_precomposed`] to
+    /// compose the document off the UI thread.
+    pub fn geometry_step(&self, next: DocGeometry) -> Result<Option<Snapshot>, GeometryError> {
+        next.validate()?;
+        if **self.geometry() == next {
+            return Ok(None);
+        }
+        let annotations = remap_annotations(self.geometry(), &next, self.annotations());
+        Ok(Some(Snapshot {
+            annotations,
+            doc: DocState {
+                geometry: Arc::new(next),
+                beautify: self.beautify(),
+            },
+        }))
+    }
+
+    /// The state [`Self::preview_geometry`] would show for `next` over
+    /// `baseline`, without showing it or composing anything.
+    pub fn geometry_preview_step(
+        baseline: &Snapshot,
+        next: DocGeometry,
+    ) -> Result<Snapshot, GeometryError> {
+        next.validate()?;
+        let annotations = remap_annotations(&baseline.doc.geometry, &next, &baseline.annotations);
+        let geometry = if *baseline.doc.geometry == next {
+            Arc::clone(&baseline.doc.geometry)
+        } else {
+            Arc::new(next)
+        };
+        Ok(Snapshot {
+            annotations,
+            doc: DocState {
+                geometry,
+                beautify: baseline.doc.beautify,
+            },
+        })
+    }
+
+    /// The geometry [`Self::scale_by`] would move to; `None` for a
+    /// factor it ignores.
+    pub fn scaled_geometry(&self, sx: f32, sy: f32) -> Option<DocGeometry> {
+        if !(sx.is_finite() && sy.is_finite() && sx > 0.0 && sy > 0.0) {
+            return None;
+        }
+        let g = self.geometry();
+        Some(g.with_transform(g.transform.scaled(sx, sy)))
+    }
+
+    /// Push `step` (from [`Self::geometry_step`]) as one undo step with
+    /// its document already composed (`base`, from `step`'s geometry)
+    /// and flattened (`flattened`, `render(base, step.annotations)`),
+    /// so nothing is recomposed here. The caller checks the history has
+    /// not moved since `step` was made.
+    pub fn push_precomposed(
+        &mut self,
+        step: Snapshot,
+        base: Arc<RgbaImage>,
+        flattened: RgbaImage,
+    ) -> Result<(), GeometryError> {
+        step.doc.geometry.validate()?;
+        let geometry = Arc::clone(&step.doc.geometry);
+        self.history.push_snapshot(step);
+        self.install_base(geometry, base, flattened);
+        Ok(())
+    }
+
+    /// [`Self::preview_snapshot`] with the document already composed
+    /// and flattened (see [`Self::push_precomposed`]).
+    pub fn preview_precomposed(
+        &mut self,
+        snapshot: Snapshot,
+        base: Arc<RgbaImage>,
+        flattened: RgbaImage,
+    ) -> Result<(), GeometryError> {
+        snapshot.doc.geometry.validate()?;
+        if self.preview_baseline.is_none() {
+            self.preview_baseline = Some((self.snapshot(), self.history.generation()));
+        }
+        let geometry = Arc::clone(&snapshot.doc.geometry);
+        self.history.replace_present_snapshot(snapshot);
+        self.install_base(geometry, base, flattened);
+        Ok(())
+    }
+
+    fn install_base(&mut self, geometry: Arc<DocGeometry>, base: Arc<RgbaImage>, flat: RgbaImage) {
+        debug_assert_eq!(base.dimensions(), flat.dimensions());
+        self.base = base;
+        self.base_geometry = geometry;
+        self.clamp_selection();
+        self.flattened_cache = Some(flat);
+    }
+
     /// Move to `next` as one undo step; annotations follow their parts.
     pub fn apply_geometry(&mut self, next: DocGeometry) -> Result<bool, GeometryError> {
         next.validate()?;
@@ -519,12 +620,10 @@ impl EditorState {
     }
 
     pub fn scale_by(&mut self, sx: f32, sy: f32) -> Result<bool, GeometryError> {
-        if !(sx.is_finite() && sy.is_finite() && sx > 0.0 && sy > 0.0) {
-            return Ok(false);
+        match self.scaled_geometry(sx, sy) {
+            Some(next) => self.apply_geometry(next),
+            None => Ok(false),
         }
-        let g = self.geometry();
-        let next = g.with_transform(g.transform.scaled(sx, sy));
-        self.apply_geometry(next)
     }
 
     /// Append `image` joined `join` (decision D4: a transformed document
@@ -2846,6 +2945,67 @@ mod tests {
         s.preview_snapshot(next).unwrap();
         s.cancel_preview_snapshot(base2);
         assert_eq!(s.beautify().padding, 30);
+    }
+
+    #[test]
+    fn a_precomposed_step_matches_apply_geometry_and_undoes_in_one() {
+        let ann = Annotation::Rectangle {
+            rect: RectLike::new(1.0, 1.0, 2.0, 2.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+            style: Default::default(),
+        };
+        let mut sync = EditorState::with_annotations(px_grid(6, 4), vec![ann.clone()]);
+        let mut pre = EditorState::with_annotations(px_grid(6, 4), vec![ann]);
+        let next = sync.scaled_geometry(2.0, 1.5).unwrap();
+        assert!(sync.apply_geometry(next.clone()).unwrap());
+        let step = pre.geometry_step(next).unwrap().expect("a change");
+        assert_eq!(pre.undo_depth(), 0, "making a step changes nothing");
+        let base = step.doc.geometry.compose();
+        let flat = render(&base, &step.annotations);
+        pre.push_precomposed(step, base, flat).unwrap();
+        assert_eq!(pre.undo_depth(), 1);
+        assert_eq!(pre.annotations(), sync.annotations());
+        assert_eq!(pre.base().dimensions(), (12, 6));
+        assert!(*pre.base() == *sync.base());
+        assert!(pre.flatten() == sync.flatten());
+        // Undo recomposes the original frame.
+        assert!(pre.undo());
+        assert_eq!(pre.base().dimensions(), (6, 4));
+        // No change, no step.
+        let same = (**pre.geometry()).clone();
+        assert!(pre.geometry_step(same).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_precomposed_preview_commits_and_cancels_like_a_preview() {
+        let mut s = EditorState::new(px_grid(4, 2));
+        s.add_part(px_grid(4, 3), readshot_core::document::Join::Below)
+            .unwrap();
+        let baseline = s.snapshot();
+        let next = baseline
+            .doc
+            .geometry
+            .with_layout(5, baseline.doc.geometry.align);
+        let step = EditorState::geometry_preview_step(&baseline, next).unwrap();
+        let base = step.doc.geometry.compose();
+        let flat = render(&base, &step.annotations);
+        s.preview_precomposed(step, base, flat).unwrap();
+        assert_eq!(s.base().dimensions(), (4, 10));
+        assert_eq!(s.undo_depth(), 1, "a preview never pushes");
+        s.cancel_preview_snapshot(baseline.clone());
+        assert_eq!(s.base().dimensions(), (4, 5));
+        let next = baseline
+            .doc
+            .geometry
+            .with_layout(7, baseline.doc.geometry.align);
+        let step = EditorState::geometry_preview_step(&baseline, next).unwrap();
+        let base = step.doc.geometry.compose();
+        let flat = render(&base, &step.annotations);
+        s.preview_precomposed(step, base, flat).unwrap();
+        assert!(s.commit_preview_snapshot(baseline));
+        assert_eq!(s.undo_depth(), 2);
+        assert_eq!(s.base().dimensions(), (4, 12));
     }
 
     #[test]

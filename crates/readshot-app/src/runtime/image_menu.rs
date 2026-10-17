@@ -162,6 +162,30 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
             let (bw, bh) = d.base;
             let (sx, sy) = (w as f32 / bw.max(1) as f32, h as f32 / bh.max(1) as f32);
             let cropped = ed.last_crop().is_some();
+            let step = match ed.model.scaled_geometry(sx, sy) {
+                Some(next) => ed.model.geometry_step(next),
+                None => Ok(None),
+            };
+            match step {
+                Ok(Some(step)) if super::compose_jobs::is_large(ed, &step) => {
+                    close_editor_popover(ed);
+                    ed.set_status("Resizing…");
+                    return super::compose_jobs::spawn(
+                        ed,
+                        crate::editor::ComposeKind::Resize {
+                            width: w,
+                            height: h,
+                        },
+                        step,
+                        None,
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    ed.set_status(geometry_error_status("resize", cropped, e));
+                    return Task::none();
+                }
+            }
             match ed.model.scale_by(sx, sy) {
                 Ok(true) => {
                     close_editor_popover(ed);

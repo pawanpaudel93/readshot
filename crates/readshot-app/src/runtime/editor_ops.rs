@@ -244,6 +244,18 @@ pub(crate) fn editor_text_commit_label(is_editing: bool) -> &'static str {
 }
 
 pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
+    // A gap drag already released (its commit waiting on an off-thread
+    // compose) is kept, not cancelled: settle it now.
+    if std::mem::take(&mut ed.gap_commit_on_land) {
+        super::combine::flush_gap_preview(ed);
+        if let Some(baseline) = ed.snapshot_drag_baseline.take() {
+            if ed.model.commit_preview_snapshot(baseline) {
+                ed.clear_discard_confirmation();
+                ed.refresh_image();
+                ed.history_sync_owed = true;
+            }
+        }
+    }
     let mut refresh = false;
     if let Some(drag) = ed.move_drag.take() {
         let restore_image_handle =
@@ -266,8 +278,10 @@ pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
             refresh = true;
         }
     }
-    // A coalesced gap tick belongs to the drag being dropped.
+    // A coalesced gap tick (or an off-thread gap compose) belongs to the
+    // drag being dropped.
     ed.layout_gap_pending = None;
+    super::compose_jobs::cancel_gap_compose(ed);
     if let Some(baseline) = ed.snapshot_drag_baseline.take() {
         ed.model.cancel_preview_snapshot(baseline);
         ed.snapshot_drag_cancelled |= ed.pointer_held;
@@ -288,8 +302,10 @@ pub(crate) fn commit_snapshot_drag(
     ed: &mut crate::editor::EditorSession,
     coord: &CaptureCoordinator,
 ) {
-    // The gap slider's newest value may still be waiting on its throttle.
+    // The gap slider's newest value may still be waiting on its throttle
+    // or composing off the UI thread: shown now, so it is what is kept.
     super::combine::flush_gap_preview(ed);
+    ed.gap_commit_on_land = false;
     if let Some(baseline) = ed.snapshot_drag_baseline.take() {
         if ed.model.commit_preview_snapshot(baseline) {
             ed.clear_discard_confirmation();
@@ -332,6 +348,9 @@ pub(crate) fn settle_editor_for_output(
     commit_style_drag(ed, coord);
     cancel_editor_previews(ed);
     commit_pending_editor_text(ed, coord);
+    // After the text draft: a pending resize was requested over it
+    // committed (`prepare`), so the commit can't make it stale.
+    super::compose_jobs::settle_pending_step(ed, coord);
     apply_crop_draft(ed, coord);
 }
 
@@ -355,11 +374,23 @@ pub(crate) fn close_editor_popover(ed: &mut crate::editor::EditorSession) -> boo
     true
 }
 
+/// Run the History sync a step taken inside `cancel_editor_previews`
+/// still owes (see `EditorSession::history_sync_owed`).
+pub(crate) fn sync_owed_editor_history(state: &mut App) {
+    let coord = state.coordinator.clone();
+    if let Some(ed) = state.editor.as_mut() {
+        if std::mem::take(&mut ed.history_sync_owed) {
+            sync_editor_history(ed, &coord);
+        }
+    }
+}
+
 pub(crate) fn sync_editor_history(
     ed: &mut crate::editor::EditorSession,
     coord: &CaptureCoordinator,
 ) {
     ed.clear_discard_confirmation();
+    ed.history_sync_owed = false;
     // Every history change passes here. A redaction's toast Undo is
     // only valid while that redaction is the newest step: once anything
     // else changes history, drop it for good (depth alone could match
@@ -916,7 +947,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if let Some(ed) = state.editor.as_mut() {
                 // Release ends the drag: a cancelled one commits nothing.
                 ed.snapshot_drag_cancelled = false;
-                commit_snapshot_drag(ed, &state.coordinator);
+                return super::combine::release_gap_slider(ed, &state.coordinator);
             }
             Task::none()
         }
@@ -1105,7 +1136,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     ed.set_status("Cancelled the crop.");
                 }
                 readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
-                    if ed.snapshot_drag_baseline.is_some() || ed.style_drag_baseline.is_some() =>
+                    if (ed.snapshot_drag_baseline.is_some() && !ed.gap_commit_on_land)
+                        || ed.style_drag_baseline.is_some() =>
                 {
                     // One step per press: an open slider drag ends (back to
                     // its value before the drag) and history stays put.
@@ -1691,7 +1723,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
                 // One Esc = one step: a live options-bar slider drag is
                 // cancelled on its own, keeping the selection (and the bar).
-                if ed.style_drag_baseline.is_some() || ed.snapshot_drag_baseline.is_some() {
+                if ed.style_drag_baseline.is_some()
+                    || (ed.snapshot_drag_baseline.is_some() && !ed.gap_commit_on_land)
+                {
                     cancel_editor_previews(ed);
                     return Task::none();
                 }
@@ -1956,6 +1990,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         | Message::EditorLayoutGapPreview(..)
         | Message::EditorLayoutGapFlush { .. }
         | Message::EditorLayoutAlign(..)) => super::combine::handle_combine_message(state, msg),
+        Message::EditorComposed {
+            session,
+            seq,
+            output,
+        } => super::compose_jobs::handle_composed(state, session, seq, output),
         other => unreachable!("non-editor message routed to the editor handler: {other:?}"),
     }
 }

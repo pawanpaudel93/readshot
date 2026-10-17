@@ -250,6 +250,67 @@ impl TextPanelState {
     }
 }
 
+/// Output size from which a resize, alignment or gap preview composes the
+/// document off the UI thread: below it a compose takes a few ms; near the
+/// 256 MP budget it allocates and fills ~1 GB, twice (compose, flatten).
+pub const ASYNC_COMPOSE_MIN_PIXELS: u64 = 16_000_000;
+
+/// What an off-thread compose is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposeKind {
+    /// Image › Resize… to `width` × `height` (one undo step).
+    Resize { width: u32, height: u32 },
+    /// Layout alignment (one undo step).
+    Align(readshot_core::document::Align),
+    /// A gap slider preview (no undo step; release commits).
+    GapPreview(u32),
+}
+
+/// One off-thread compose: `next` is the state to show once composed.
+/// It applies only while it is the newest request and the editor is
+/// still in `present` at `generation` (and, for a gap preview, the same
+/// slider drag): anything else made it stale, and it is dropped.
+#[derive(Clone, Debug)]
+pub struct ComposeRequest {
+    pub seq: u64,
+    pub kind: ComposeKind,
+    pub generation: u64,
+    pub present: readshot_ui::editor::Snapshot,
+    pub drag_baseline: Option<readshot_ui::editor::Snapshot>,
+    pub next: readshot_ui::editor::Snapshot,
+}
+
+/// A composed document: `base` is `next`'s geometry composed, and
+/// `flattened` is `render(base, next.annotations)` (also in `handle`).
+pub struct ComposedDoc {
+    pub next: readshot_ui::editor::Snapshot,
+    pub base: std::sync::Arc<image::RgbaImage>,
+    pub flattened: image::RgbaImage,
+    pub handle: iced::widget::image::Handle,
+}
+
+/// A compose result carried by a message; taken once by the handler.
+/// `None` inside when the worker failed.
+#[derive(Clone)]
+pub struct ComposedOutput(std::sync::Arc<std::sync::Mutex<Option<ComposedDoc>>>);
+
+impl ComposedOutput {
+    pub fn new(doc: Option<ComposedDoc>) -> Self {
+        Self(std::sync::Arc::new(std::sync::Mutex::new(doc)))
+    }
+
+    pub fn take(&self) -> Option<ComposedDoc> {
+        self.0.lock().ok().and_then(|mut d| d.take())
+    }
+}
+
+impl std::fmt::Debug for ComposedOutput {
+    // Never the pixels.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ComposedOutput")
+    }
+}
+
 /// What History's image for this capture is known to show.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HistoryFrame {
@@ -373,6 +434,26 @@ pub struct EditorSession {
     pub layout_gap_pending: Option<u32>,
     /// When the last gap preview was applied (throttle clock).
     pub layout_gap_previewed_at: Option<std::time::Instant>,
+    /// The document compose running off the UI thread (a large resize,
+    /// alignment or gap preview), if any. Only the newest request's
+    /// result is applied, and only while the editor is still in the
+    /// state it was requested from.
+    pub compose_job: Option<ComposeRequest>,
+    /// Source of [`ComposeRequest::seq`].
+    pub compose_seq: u64,
+    /// The newest gap value that arrived while a gap compose was running:
+    /// previewed when that one lands (one compose in flight at a time).
+    pub gap_queued: Option<u32>,
+    /// The gap slider was released while its compose was still running:
+    /// commit the drag once the newest value has landed.
+    pub gap_commit_on_land: bool,
+    /// A history step was taken where no History sync could run (a
+    /// released gap drag settled inside `cancel_editor_previews`); synced
+    /// once the message that caused it is handled.
+    pub history_sync_owed: bool,
+    /// Documents of at least this many output pixels compose off the UI
+    /// thread ([`ASYNC_COMPOSE_MIN_PIXELS`]; tests lower it).
+    pub async_compose_min_pixels: u64,
     /// Draft of the Beautify tab's background hex field.
     pub beautify_hex_draft: String,
     /// Open color / line-width popover, if any. Esc and a
@@ -667,6 +748,12 @@ impl EditorSession {
             escape_ended_crop_drag: false,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
+            compose_job: None,
+            compose_seq: 0,
+            gap_queued: None,
+            gap_commit_on_land: false,
+            history_sync_owed: false,
+            async_compose_min_pixels: ASYNC_COMPOSE_MIN_PIXELS,
             beautify_hex_draft: String::new(),
             canvas_drag_active: false,
             drag_cancel_seq: 0,
@@ -731,6 +818,12 @@ impl EditorSession {
             escape_ended_crop_drag: false,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
+            compose_job: None,
+            compose_seq: 0,
+            gap_queued: None,
+            gap_commit_on_land: false,
+            history_sync_owed: false,
+            async_compose_min_pixels: ASYNC_COMPOSE_MIN_PIXELS,
             beautify_hex_draft: String::new(),
             canvas_drag_active: false,
             drag_cancel_seq: 0,
@@ -863,6 +956,13 @@ impl EditorSession {
     pub fn refresh_image(&mut self) {
         self.crop_drag_flat = None;
         self.image_handle = build_handle(&mut self.model);
+    }
+
+    /// [`Self::refresh_image`] with the handle already built (from the
+    /// model's flattened image, off the UI thread).
+    pub fn install_image(&mut self, handle: iced::widget::image::Handle) {
+        self.crop_drag_flat = None;
+        self.image_handle = handle;
     }
 
     /// Cheap image-handle refresh for Crop drag ticks. The full

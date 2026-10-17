@@ -21,7 +21,7 @@ use iced::{window, Task};
 use readshot_core::document::{Join, MAX_DOC_PIXELS, MAX_DOC_SIDE};
 
 use crate::app::{App, CaptureIntent, CombineCapture, Message};
-use crate::editor::EditorSession;
+use crate::editor::{ComposeKind, EditorSession};
 
 /// Gap slider previews recompose the whole document, so they are
 /// throttled to this interval; the newest value is applied on the
@@ -341,8 +341,41 @@ async fn pick_and_decode_image(
 }
 
 /// Preview the gap slider's `gap` over the drag's baseline (no undo
-/// step; release commits). A refused layout changes nothing.
-fn preview_gap(ed: &mut EditorSession, gap: u32) {
+/// step; release commits). A refused layout changes nothing. A large
+/// document composes off the UI thread (`compose_jobs`), one compose at
+/// a time: a value arriving meanwhile queues, newest wins.
+pub(crate) fn preview_gap(ed: &mut EditorSession, gap: u32) -> Task<Message> {
+    let Some(base) = ed.snapshot_drag_baseline.clone() else {
+        return Task::none();
+    };
+    if super::compose_jobs::gap_outstanding(ed) {
+        ed.gap_queued = Some(gap);
+        return Task::none();
+    }
+    let next = base.doc.geometry.with_layout(gap, base.doc.geometry.align);
+    let cropped = ed.last_crop().is_some();
+    let step = readshot_ui::editor::EditorState::geometry_preview_step(&base, next);
+    ed.layout_gap_previewed_at = Some(Instant::now());
+    match step {
+        Ok(step) if super::compose_jobs::is_large(ed, &step) => {
+            super::compose_jobs::spawn(ed, ComposeKind::GapPreview(gap), step, Some(base))
+        }
+        Ok(step) => {
+            match ed.model.preview_snapshot(step) {
+                Ok(()) => ed.refresh_image(),
+                Err(e) => ed.set_status(geometry_error_status("change the gap", cropped, e)),
+            }
+            Task::none()
+        }
+        Err(e) => {
+            ed.set_status(geometry_error_status("change the gap", cropped, e));
+            Task::none()
+        }
+    }
+}
+
+/// [`preview_gap`] on the UI thread, whatever the document size.
+fn preview_gap_now(ed: &mut EditorSession, gap: u32) {
     let Some(base) = ed.snapshot_drag_baseline.clone() else {
         return;
     };
@@ -355,16 +388,46 @@ fn preview_gap(ed: &mut EditorSession, gap: u32) {
     ed.layout_gap_previewed_at = Some(Instant::now());
 }
 
-/// Apply a coalesced gap value that hasn't been previewed yet, while its
-/// drag is still open. Release and every output path
-/// (`commit_snapshot_drag`) call this first, so what is kept is the
-/// value the slider shows.
+/// Apply the newest gap value not shown yet (throttled, queued or still
+/// composing), while its drag is still open, on the UI thread. Every
+/// output path (`commit_snapshot_drag`) calls this first, so what is
+/// kept is the value the slider shows.
 pub(crate) fn flush_gap_preview(ed: &mut EditorSession) {
-    if let Some(gap) = ed.layout_gap_pending.take() {
+    let outstanding = super::compose_jobs::take_outstanding_gap(ed);
+    if let Some(gap) = ed.layout_gap_pending.take().or(outstanding) {
         if ed.snapshot_drag_baseline.is_some() && !ed.snapshot_drag_cancelled {
-            preview_gap(ed, gap);
+            preview_gap_now(ed, gap);
         }
     }
+}
+
+/// The throttle's trailing edge: preview the coalesced value, off the UI
+/// thread for a large document.
+fn flush_gap_preview_async(ed: &mut EditorSession) -> Task<Message> {
+    match ed.layout_gap_pending.take() {
+        Some(gap) if ed.snapshot_drag_baseline.is_some() && !ed.snapshot_drag_cancelled => {
+            preview_gap(ed, gap)
+        }
+        _ => Task::none(),
+    }
+}
+
+/// Gap slider release. When a gap compose is still running (or a value
+/// waits on it or on the throttle), the commit waits for the newest
+/// value to land instead of composing it here; otherwise it commits now.
+pub(crate) fn release_gap_slider(
+    ed: &mut EditorSession,
+    coord: &crate::coordinator::CaptureCoordinator,
+) -> Task<Message> {
+    if ed.snapshot_drag_baseline.is_some() && !ed.snapshot_drag_cancelled {
+        let follow = flush_gap_preview_async(ed);
+        if super::compose_jobs::gap_outstanding(ed) {
+            ed.gap_commit_on_land = true;
+            return follow;
+        }
+    }
+    commit_snapshot_drag(ed, coord);
+    Task::none()
 }
 
 pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<Message> {
@@ -448,6 +511,11 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
             if ed.snapshot_drag_cancelled {
                 return Task::none();
             }
+            // The previous drag was released while composing: keep it as
+            // its own step before this one takes a baseline.
+            if ed.gap_commit_on_land {
+                cancel_editor_previews(ed);
+            }
             if ed.snapshot_drag_baseline.is_none() {
                 // Settle every other preview and draft before the baseline:
                 // the parts are about to move under them.
@@ -474,20 +542,20 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
                 }
                 _ => {
                     ed.layout_gap_pending = None;
-                    preview_gap(ed, gap);
+                    return preview_gap(ed, gap);
                 }
             }
             Task::none()
         }
         Message::EditorLayoutGapFlush { session } => {
-            if let Some(ed) = state
+            match state
                 .editor
                 .as_mut()
                 .filter(|ed| ed.session_id == session && !ed.busy)
             {
-                flush_gap_preview(ed);
+                Some(ed) => flush_gap_preview_async(ed),
+                None => Task::none(),
             }
-            Task::none()
         }
         Message::EditorLayoutAlign(align) => {
             let coord = state.coordinator.clone();
@@ -503,6 +571,18 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
             ed.crop_draft = None;
             let gap = ed.model.geometry().gap;
             let cropped = ed.last_crop().is_some();
+            let next = ed.model.geometry().with_layout(gap, align);
+            match ed.model.geometry_step(next) {
+                Ok(Some(step)) if super::compose_jobs::is_large(ed, &step) => {
+                    ed.set_status("Aligning…");
+                    return super::compose_jobs::spawn(ed, ComposeKind::Align(align), step, None);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    ed.set_status(geometry_error_status("align", cropped, e));
+                    return Task::none();
+                }
+            }
             match ed.model.set_layout(gap, align) {
                 Ok(true) => {
                     ed.refresh_image();
