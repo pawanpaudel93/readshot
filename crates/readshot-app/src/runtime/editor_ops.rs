@@ -1456,6 +1456,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     // it rather than trigger discard.
                     ed.canvas_drag_active = true;
                     ed.escape_ended_crop_drag = None;
+                    ed.drag_started_in = Some(std::sync::Arc::clone(ed.model.geometry()));
                 }
                 readshot_ui::CanvasMessage::DragMoved(_)
                 | readshot_ui::CanvasMessage::PolylineMoved(_) => {
@@ -1464,9 +1465,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
                 readshot_ui::CanvasMessage::Cancelled => {
                     ed.canvas_drag_active = false;
+                    ed.drag_started_in = None;
                     cancel_editor_previews(ed);
                 }
                 readshot_ui::CanvasMessage::DragEscaped => {
+                    ed.drag_started_in = None;
                     // A re-drag over an open crop draft hides the draft;
                     // this Escape ends the re-drag only, and the draft is
                     // back. The next Esc cancels it. The key press of the
@@ -1598,6 +1601,17 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     });
                 }
                 readshot_ui::CanvasMessage::CommitAnnotation(annotation) => {
+                    // A drag's shape is in the frame it began in: if the
+                    // frame changed since (a pending step landed on its
+                    // press, or mid-drag), it would land somewhere else.
+                    if ed
+                        .drag_started_in
+                        .take()
+                        .is_some_and(|g| !std::sync::Arc::ptr_eq(&g, ed.model.geometry()))
+                    {
+                        ed.canvas_drag_active = false;
+                        return Task::none();
+                    }
                     ed.canvas_drag_active = false;
                     cancel_editor_previews(ed);
                     if let readshot_core::Annotation::Crop { rect } = annotation {

@@ -452,6 +452,11 @@ pub struct EditorSession {
     /// Cleared by its counterpart, and by any other key, press or drag
     /// start, so it can't swallow a later Escape.
     pub escape_ended_crop_drag: Option<EscapeSeenBy>,
+    /// The frame the live canvas drag began in (its `DragStarted`), so
+    /// its `CommitAnnotation` is refused when the frame changed since:
+    /// the shape's points are in the old frame. Cleared by the commit,
+    /// `Cancelled` and `DragEscaped`; `None` for click tools.
+    pub drag_started_in: Option<std::sync::Arc<readshot_core::document::DocGeometry>>,
     /// The newest combine gap slider value not previewed yet: gap ticks
     /// are throttled (each preview recomposes the document), and the
     /// last one is applied on the trailing edge, on release, or before
@@ -781,6 +786,7 @@ impl EditorSession {
             pointer_held: false,
             pointer_window: None,
             escape_ended_crop_drag: None,
+            drag_started_in: None,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
             compose_job: None,
@@ -853,6 +859,7 @@ impl EditorSession {
             pointer_held: false,
             pointer_window: None,
             escape_ended_crop_drag: None,
+            drag_started_in: None,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
             compose_job: None,

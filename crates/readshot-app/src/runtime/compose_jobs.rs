@@ -247,16 +247,16 @@ fn may_wait(message: &Message) -> (bool, bool) {
 /// then wait — and nothing ever lands under, or is lost to, a later
 /// interaction.
 ///
-/// Returns whether settling changed the document frame (a resize,
+/// Returns the frame shown before when settling changed it (a resize,
 /// alignment or gap value landed): a canvas position in `message` was
-/// then computed against the image shown before
-/// ([`points_into_the_shown_image`]).
-pub(crate) fn settle_before(state: &mut App, message: &Message) -> bool {
+/// then computed against that frame ([`points_into_the_shown_image`]).
+pub(crate) fn settle_before(
+    state: &mut App,
+    message: &Message,
+) -> Option<std::sync::Arc<readshot_core::document::DocGeometry>> {
     let (step_may_wait, gap_may_wait) = may_wait(message);
     let coord = state.coordinator.clone();
-    let Some(ed) = state.editor.as_mut() else {
-        return false;
-    };
+    let ed = state.editor.as_mut()?;
     let before = std::sync::Arc::clone(ed.model.geometry());
     if !step_may_wait {
         settle_pending_step(ed, &coord);
@@ -264,7 +264,7 @@ pub(crate) fn settle_before(state: &mut App, message: &Message) -> bool {
     if !gap_may_wait {
         settle_gap(ed, &coord);
     }
-    !std::sync::Arc::ptr_eq(&before, ed.model.geometry())
+    (!std::sync::Arc::ptr_eq(&before, ed.model.geometry())).then_some(before)
 }
 
 /// A canvas press (or a click tool's commit) whose position was mapped
@@ -287,14 +287,22 @@ pub(crate) fn points_into_the_shown_image(message: &Message) -> bool {
     )
 }
 
-/// Drop a press the frame moved under ([`points_into_the_shown_image`]).
-/// The canvas keeps its own drag state, so a drag it started is cancelled
-/// through the cancel sequence (its next event, or its release, drops it);
-/// a Select press opens no move drag, so its drags and release do nothing.
-pub(crate) fn drop_stale_press(ed: &mut EditorSession, message: &Message) {
+/// Drop a press the frame moved under ([`points_into_the_shown_image`]);
+/// `shown` is the frame it was aimed at. The canvas keeps its own drag
+/// state, so a drag it started is cancelled through the cancel sequence
+/// (its next event, or its release, drops it), and remembered as begun in
+/// `shown`, so a commit of it that still arrives is refused
+/// ([`EditorSession::drag_started_in`]). A Select press opens no move
+/// drag, so its drags and release do nothing.
+pub(crate) fn drop_stale_press(
+    ed: &mut EditorSession,
+    message: &Message,
+    shown: std::sync::Arc<readshot_core::document::DocGeometry>,
+) {
     if let Message::EditorCanvas(readshot_ui::CanvasMessage::DragStarted) = message {
         ed.canvas_drag_active = false;
         ed.drag_cancel_seq = ed.drag_cancel_seq.wrapping_add(1);
+        ed.drag_started_in = Some(shown);
     }
     ed.move_drag = None;
     ed.canvas_cache.clear();

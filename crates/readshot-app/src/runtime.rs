@@ -1991,10 +1991,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorRedactAll
         | Message::EditorRedactLine(..)
         | Message::EditorHistoryWritten { .. }) => {
-            let frame_moved = compose_jobs::settle_before(state, &msg);
-            let task = match state.editor.as_mut() {
-                Some(ed) if frame_moved && compose_jobs::points_into_the_shown_image(&msg) => {
-                    compose_jobs::drop_stale_press(ed, &msg);
+            let shown = compose_jobs::settle_before(state, &msg)
+                .filter(|_| compose_jobs::points_into_the_shown_image(&msg));
+            let task = match (shown, state.editor.as_mut()) {
+                (Some(shown), Some(ed)) => {
+                    compose_jobs::drop_stale_press(ed, &msg, shown);
                     Task::none()
                 }
                 _ => editor_ops::handle_editor_message(state, msg),
@@ -12861,6 +12862,8 @@ mod tests {
         assert_eq!(ed.image_size(), (80, 40));
         assert!(!ed.canvas_drag_active, "no drag started");
         assert_ne!(ed.drag_cancel_seq, seq, "the canvas drops its drag");
+        // …which it reports on its next event.
+        let _ = update(&mut app, Message::EditorCanvas(CanvasMessage::Cancelled));
         // A click tool's commit (a pin) is dropped the same way.
         apply_resize_width(&mut app, "40");
         let pin = Annotation::NumberedPin {
@@ -12882,6 +12885,43 @@ mod tests {
             Message::EditorCanvas(CanvasMessage::CommitAnnotation(pin)),
         );
         assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 1);
+    }
+
+    #[test]
+    fn a_redaction_drag_whose_press_landed_a_pending_resize_commits_nothing() {
+        use readshot_ui::CanvasMessage;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = async_compose(crate::editor::EditorSession::new(solid(40, 20)));
+        ed.model.set_tool(readshot_ui::editor::ToolState::Pixelate);
+        app.editor = Some(ed);
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        apply_resize_width(&mut app, "80");
+        // A pixelate drag over x 5–11 of the old image: its press lands
+        // the resize; its commit still arrives (old-frame points).
+        let old_frame = Annotation::Pixelate {
+            rect: RectLike::new(5.0, 2.0, 6.0, 4.0),
+            block_size: 4.0,
+        };
+        let _ = update(&mut app, Message::EditorCanvas(CanvasMessage::DragStarted));
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(CanvasMessage::CommitAnnotation(old_frame.clone())),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (80, 40));
+        assert!(ed.model.annotations().is_empty(), "no old-frame redaction");
+        assert_eq!(ed.model.undo_depth(), depth + 1, "the resize only");
+        assert!(!ed.canvas_drag_active);
+        // The next drag, begun on the new frame, commits.
+        let _ = update(&mut app, Message::EditorCanvas(CanvasMessage::DragStarted));
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(CanvasMessage::CommitAnnotation(old_frame.clone())),
+        );
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.annotations(),
+            [old_frame]
+        );
     }
 
     #[test]
@@ -12997,19 +13037,22 @@ mod tests {
         let depth = app.editor.as_ref().unwrap().model.undo_depth();
         apply_resize_width(&mut app, "80");
         let late = finish_compose(&app);
-        let _ = update(
-            &mut app,
-            Message::EditorCanvas(readshot_ui::CanvasMessage::DragStarted),
-        );
-        // The drag starts on the resized document.
-        assert_eq!(app.editor.as_ref().unwrap().image_size(), (80, 40));
         let rect = RectLike::new(10.0, 10.0, 50.0, 20.0);
-        let _ = update(
-            &mut app,
-            Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
-                Annotation::Crop { rect },
-            )),
-        );
+        let drag = |app: &mut App| {
+            for m in [
+                readshot_ui::CanvasMessage::DragStarted,
+                readshot_ui::CanvasMessage::CommitAnnotation(Annotation::Crop { rect }),
+            ] {
+                let _ = update(app, Message::EditorCanvas(m));
+            }
+        };
+        // The press lands the resize: that drag was aimed at the old
+        // image, so its commit is refused.
+        drag(&mut app);
+        assert_eq!(app.editor.as_ref().unwrap().image_size(), (80, 40));
+        assert_eq!(app.editor.as_ref().unwrap().crop_draft, None);
+        // Dragged again, on the resized document.
+        drag(&mut app);
         let _ = update(&mut app, late);
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.crop_draft, Some(rect));
