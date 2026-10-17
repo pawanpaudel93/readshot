@@ -112,20 +112,31 @@ fn rect_in_crop(r: RectLike, crop: crate::render::OutputCrop) -> Option<RectLike
 }
 
 /// `doc` (positions in base px) as it reads in an output cropped to
-/// `crop` ([`crate::render::output_crop`]): only the text whose boxes
-/// intersect the crop, every box clipped to it and moved into the cropped
+/// `crop` ([`crate::render::output_crop`]): only characters estimated to
+/// lie **wholly** inside the crop, with their boxes moved into the cropped
 /// output's pixels (the frame [`redactions_in_crop`] stores redactions
-/// in). What a History record whose stored image is that crop may say.
+/// in). What a History record whose stored image is that crop may say:
+/// never a character from the cut-away area, at the cost of a few edge
+/// characters.
 ///
-/// Each word box — and, for chars no word box accounts for, their
-/// proportional slice of the line box (the rule [`hidden_spans`] uses) —
-/// is kept or dropped whole with its chars. A line's kept tokens are
-/// joined by single spaces; lines with nothing kept are dropped;
-/// `layout_text` is the kept lines joined by newlines (the original
-/// layout can't be cut to the crop).
+/// - A word box wholly inside the crop keeps all its characters.
+/// - A box not wholly inside vertically, or wholly outside, keeps none.
+/// - A box straddling a vertical crop edge is split into equal slots, one
+///   per grapheme cluster (box width / cluster count); a cluster is kept
+///   only when its slot lies entirely inside the crop (rounded inward).
+///   This covers a long token or URL cut by the edge, and a no-space
+///   script line (CJK, Thai) the engine boxed as one word.
+/// - Characters no word box accounts for get the same slots across their
+///   line box (clusters of the whole line).
+/// - A box whose slots can't be computed (zero, negative or non-finite
+///   size) keeps nothing; a slot is never widened.
 ///
-/// `None` without positions: nothing tells which text the crop keeps, so
-/// callers store no text (fail closed).
+/// A line's kept tokens are joined by single spaces; lines with nothing
+/// kept are dropped; `layout_text` is the kept lines joined by newlines
+/// (the original layout can't be cut to the crop).
+///
+/// `None` without positions, or when a line has no box: nothing tells
+/// which text the crop keeps, so callers store no text (fail closed).
 pub fn document_in_crop(
     doc: &TextDocument,
     crop: crate::render::OutputCrop,
@@ -142,35 +153,39 @@ pub fn document_in_crop(
         let usable: Vec<_> = line
             .words
             .iter()
-            .filter(|w| w.rect.width > 0.0 && w.rect.height > 0.0 && w.start < w.end)
+            .filter(|w| w.start < w.end.min(n))
             .collect();
         let covered = |i: usize| usable.iter().any(|w| w.start <= i && i < w.end);
-        // Every piece of text with its box, kept only when the box
-        // reaches into the crop.
+        // Kept char ranges, each with its box in cropped-output px.
         let mut kept: Vec<(Range<usize>, RectLike)> = Vec::new();
-        for tok in tokens(&chars) {
-            for w in usable
-                .iter()
-                .filter(|w| tok.start < w.end && w.start < tok.end)
-            {
-                let r = tok.start.max(w.start)..tok.end.min(w.end).min(n);
-                if let Some(b) = rect_in_crop(w.rect, crop) {
-                    kept.push((r, b));
-                }
+        for w in &usable {
+            let span = w.start..w.end.min(n);
+            let clusters: Vec<Range<usize>> = graphemes(&chars[span.clone()])
+                .into_iter()
+                .map(|c| c.start + span.start..c.end + span.start)
+                .collect();
+            if let Some(k) = slots_in_crop(w.rect, &clusters, 0..clusters.len(), crop) {
+                kept.push(k);
             }
-            let mut i = tok.start;
-            while i < tok.end {
-                if covered(i) {
-                    i += 1;
-                    continue;
-                }
-                let rs = i;
-                while i < tok.end && !covered(i) {
-                    i += 1;
-                }
-                if let Some(b) = rect_in_crop(slice(line_rect, n, rs..i), crop) {
-                    kept.push((rs..i, b));
-                }
+        }
+        // Chars no word box accounts for: slots across the line box.
+        let line_clusters = graphemes(&chars);
+        let mut c = 0;
+        while c < line_clusters.len() {
+            let unboxed = |c: usize| {
+                let r = &line_clusters[c];
+                !chars[r.clone()].iter().all(|ch| ch.is_whitespace()) && !r.clone().any(covered)
+            };
+            if !unboxed(c) {
+                c += 1;
+                continue;
+            }
+            let run_start = c;
+            while c < line_clusters.len() && unboxed(c) {
+                c += 1;
+            }
+            if let Some(k) = slots_in_crop(line_rect, &line_clusters, run_start..c, crop) {
+                kept.push(k);
             }
         }
         let mut keep = vec![false; n];
@@ -179,7 +194,7 @@ pub fn document_in_crop(
         }
         // The kept chars, token by token; `at[i]` is char i's new index.
         let mut text = String::new();
-        let mut at = vec![0usize; n];
+        let mut at = vec![None; n];
         let mut len = 0usize;
         for tok in tokens(&chars) {
             if !keep[tok.clone()].contains(&true) {
@@ -190,7 +205,7 @@ pub fn document_in_crop(
                 len += 1;
             }
             for i in tok.filter(|&i| keep[i]) {
-                at[i] = len;
+                at[i] = Some(len);
                 text.push(chars[i]);
                 len += 1;
             }
@@ -200,10 +215,14 @@ pub fn document_in_crop(
         }
         let words: Vec<WordRect> = kept
             .iter()
-            .map(|(r, b)| WordRect {
-                start: at[r.start],
-                end: at[r.end - 1] + 1,
-                rect: *b,
+            .filter_map(|(r, b)| {
+                let first = r.clone().find_map(|i| at[i])?;
+                let last = r.clone().rev().find_map(|i| at[i])?;
+                Some(WordRect {
+                    start: first,
+                    end: last + 1,
+                    rect: *b,
+                })
             })
             .collect();
         let rect = words.iter().map(|w| w.rect).reduce(|a, b| {
@@ -224,6 +243,86 @@ pub fn document_in_crop(
         positioned: true,
         layout_text,
     })
+}
+
+/// Of `clusters` laid out in equal slots across `rect` (cluster `i` in
+/// slot `i`), those at `pick` whose slot is wholly inside `crop`: their
+/// char range and box (cropped-output px). `None` when none is, when
+/// `rect` isn't wholly inside the crop vertically, or when the slots
+/// can't be computed. The kept clusters are contiguous (one crop rect).
+fn slots_in_crop(
+    rect: RectLike,
+    clusters: &[Range<usize>],
+    pick: Range<usize>,
+    crop: crate::render::OutputCrop,
+) -> Option<(Range<usize>, RectLike)> {
+    let count = clusters.len();
+    let finite = [rect.x, rect.y, rect.width, rect.height, crop.x, crop.y]
+        .iter()
+        .all(|v| v.is_finite());
+    if !finite || rect.width <= 0.0 || rect.height <= 0.0 || count == 0 {
+        return None;
+    }
+    let (cx0, cy0) = (crop.x, crop.y);
+    let (cx1, cy1) = (cx0 + crop.width as f32, cy0 + crop.height as f32);
+    if rect.y < cy0 || rect.y + rect.height > cy1 {
+        return None;
+    }
+    let slot = rect.width / count as f32;
+    if !slot.is_finite() || slot <= 0.0 {
+        return None;
+    }
+    let inside = |i: usize| {
+        let x0 = rect.x + slot * i as f32;
+        let x1 = rect.x + slot * (i + 1) as f32;
+        x0 >= cx0 && x1 <= cx1
+    };
+    let first = pick.clone().find(|&i| inside(i))?;
+    let last = pick.rev().find(|&i| inside(i))?;
+    let x0 = rect.x + slot * first as f32;
+    let x1 = rect.x + slot * (last + 1) as f32;
+    Some((
+        clusters[first].start..clusters[last].end,
+        RectLike::new(x0 - cx0, rect.y - cy0, x1 - x0, rect.height),
+    ))
+}
+
+/// Grapheme clusters of `chars` (char ranges), approximated without a
+/// Unicode segmentation table: combining marks, variation selectors,
+/// emoji modifiers and tags join the preceding cluster, and a zero-width
+/// joiner joins its neighbours. Close enough for slot estimates; a mark
+/// split off can only shrink what is kept, never widen a slot.
+fn graphemes(chars: &[char]) -> Vec<Range<usize>> {
+    fn extends(c: char) -> bool {
+        matches!(c as u32,
+            0x0300..=0x036F
+            | 0x0483..=0x0489
+            | 0x0591..=0x05BD
+            | 0x0610..=0x061A
+            | 0x064B..=0x065F
+            | 0x0900..=0x0903
+            | 0x093A..=0x094F
+            | 0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E
+            | 0x1AB0..=0x1AFF
+            | 0x1DC0..=0x1DFF
+            | 0x200C..=0x200D
+            | 0x20D0..=0x20FF
+            | 0x3099..=0x309A
+            | 0xFE00..=0xFE0F
+            | 0xFE20..=0xFE2F
+            | 0x1F3FB..=0x1F3FF
+            | 0xE0020..=0xE007F
+            | 0xE0100..=0xE01EF)
+    }
+    let mut out: Vec<Range<usize>> = Vec::new();
+    for (i, &c) in chars.iter().enumerate() {
+        let joins = extends(c) || (i > 0 && chars[i - 1] == '\u{200D}');
+        match out.last_mut() {
+            Some(last) if joins => last.end = i + 1,
+            _ => out.push(i..i + 1),
+        }
+    }
+    out
 }
 
 fn area(r: RectLike) -> f32 {
@@ -582,13 +681,15 @@ mod tests {
 
     #[test]
     fn document_in_crop_keeps_only_text_inside_the_crop_in_cropped_pixels() {
-        // x 45–125, y 10–20: "Zx9Qw7" (50–110) and "next" (120–160,
-        // reaching in) of line two; "key:" (0–40) and line one are out.
-        let out = document_in_crop(&doc(), crop_of(45.0, 10.0, 80.0, 10.0)).unwrap();
+        // x 45–135, y 10–20: "Zx9Qw7" (50–110) is wholly inside; "next"
+        // (120–160, 10 px a char) straddles the edge: only "n" (120–130)
+        // is wholly inside. "key:" (0–40) and line one are out.
+        let crop = crop_of(45.0, 10.0, 90.0, 10.0);
+        let out = document_in_crop(&doc(), crop).unwrap();
         assert_eq!(out.lines.len(), 1);
         let line = &out.lines[0];
-        assert_eq!(line.text, "Zx9Qw7 next");
-        assert_eq!(out.layout_text, "Zx9Qw7 next");
+        assert_eq!(line.text, "Zx9Qw7 n");
+        assert_eq!(out.layout_text, "Zx9Qw7 n");
         assert!(out.positioned);
         assert_eq!(
             line.words,
@@ -600,25 +701,102 @@ mod tests {
                 },
                 WordRect {
                     start: 7,
-                    end: 11,
-                    rect: RectLike::new(75.0, 0.0, 5.0, 10.0),
+                    end: 8,
+                    rect: RectLike::new(75.0, 0.0, 10.0, 10.0),
                 },
             ]
         );
-        assert_eq!(line.rect, Some(RectLike::new(5.0, 0.0, 75.0, 10.0)));
+        assert_eq!(line.rect, Some(RectLike::new(5.0, 0.0, 80.0, 10.0)));
+        // Rounded inward: a slot even partly outside goes ("n" ends at
+        // 130, past a crop ending at 125).
+        let out = document_in_crop(&doc(), crop_of(45.0, 10.0, 80.0, 10.0)).unwrap();
+        assert_eq!(out.layout_text, "Zx9Qw7");
         // Redactions moved the same way still hide their word.
-        let hide = redactions_in_crop(
-            &[solid(RectLike::new(50.0, 10.0, 60.0, 10.0))],
-            crop_of(45.0, 10.0, 80.0, 10.0),
-        );
+        let hide = redactions_in_crop(&[solid(RectLike::new(50.0, 10.0, 60.0, 10.0))], crop);
+        let out = document_in_crop(&doc(), crop).unwrap();
         assert_eq!(
             masked_layout_text(&out, &hidden_spans(&out, &hide)),
-            "██████ next"
+            "██████ n"
         );
     }
 
+    /// One line, one word box over all of `text` at x `x`, 10 px a char.
+    fn one_box_line(text: &str, x: f32, y: f32) -> TextDocument {
+        let n = text.chars().count();
+        TextDocument {
+            lines: vec![TextLine {
+                text: text.into(),
+                rect: Some(RectLike::new(x, y, 10.0 * n as f32, 10.0)),
+                words: vec![word(0, n, x, y, 10.0 * n as f32)],
+            }],
+            positioned: true,
+            layout_text: text.into(),
+        }
+    }
+
     #[test]
-    fn document_in_crop_keeps_unboxed_tokens_by_their_line_slice() {
+    fn document_in_crop_cuts_a_token_at_the_crop_edge() {
+        let url = "https://host/reset?token=abc123";
+        // Only x 0–100 is kept: the first ten characters.
+        let out =
+            document_in_crop(&one_box_line(url, 0.0, 0.0), crop_of(0.0, 0.0, 100.0, 20.0)).unwrap();
+        assert_eq!(out.layout_text, "https://ho");
+        assert!(!out.layout_text.contains("token"));
+        assert_eq!(
+            out.lines[0].words,
+            vec![WordRect {
+                start: 0,
+                end: 10,
+                rect: RectLike::new(0.0, 0.0, 100.0, 10.0),
+            }]
+        );
+        // Cut on the left edge too.
+        let out = document_in_crop(
+            &one_box_line(url, 0.0, 0.0),
+            crop_of(255.0, 0.0, 100.0, 20.0),
+        )
+        .unwrap();
+        assert_eq!(out.layout_text, "bc123");
+    }
+
+    #[test]
+    fn document_in_crop_cuts_a_no_space_line_boxed_as_one_word() {
+        // A CJK line Vision boxes as one word, x 100–190; the crop ends
+        // at 150.
+        let line = "日本語のテキスト行";
+        let out = document_in_crop(
+            &one_box_line(line, 100.0, 0.0),
+            crop_of(0.0, 0.0, 150.0, 20.0),
+        )
+        .unwrap();
+        assert_eq!(out.layout_text, "日本語のテ");
+        // A combining mark stays with its base: "é" (e + U+0301) is one
+        // 10 px slot of a 2-cluster box.
+        let decomposed = "e\u{301}x";
+        let d = TextDocument {
+            lines: vec![TextLine {
+                text: decomposed.into(),
+                rect: Some(RectLike::new(0.0, 0.0, 20.0, 10.0)),
+                words: vec![word(0, 3, 0.0, 0.0, 20.0)],
+            }],
+            positioned: true,
+            layout_text: decomposed.into(),
+        };
+        let out = document_in_crop(&d, crop_of(0.0, 0.0, 10.0, 20.0)).unwrap();
+        assert_eq!(out.layout_text, "e\u{301}");
+    }
+
+    #[test]
+    fn document_in_crop_drops_a_word_straddling_a_horizontal_edge() {
+        // y 5–20: line one (y 0–10) straddles the top edge; line two
+        // (y 10–20) is wholly inside.
+        let out = document_in_crop(&doc(), crop_of(0.0, 5.0, 200.0, 15.0)).unwrap();
+        assert_eq!(out.layout_text, "key: Zx9Qw7 next");
+        assert!(!out.layout_text.contains("intro"));
+    }
+
+    #[test]
+    fn document_in_crop_cuts_unboxed_text_by_its_line_slots() {
         // No word boxes: 10 px per char of a 100 px line.
         let d = TextDocument {
             lines: vec![TextLine {
@@ -629,11 +807,41 @@ mod tests {
             positioned: true,
             layout_text: "alpha beta".into(),
         };
-        let out = document_in_crop(&d, crop_of(60.0, 0.0, 40.0, 10.0)).unwrap();
-        assert_eq!(out.layout_text, "beta");
+        let cut = |x: f32| document_in_crop(&d, crop_of(x, 0.0, 100.0 - x, 10.0)).unwrap();
+        assert_eq!(cut(60.0).layout_text, "beta");
+        assert_eq!(cut(55.0).layout_text, "beta");
+        // "b" (60–70) is partly outside x 65: dropped.
+        assert_eq!(cut(65.0).layout_text, "eta");
         let out = document_in_crop(&d, crop_of(200.0, 0.0, 40.0, 10.0)).unwrap();
         assert!(out.lines.is_empty());
         assert_eq!(out.layout_text, "");
+        // Characters a word box doesn't account for use the line's slots;
+        // a box with no usable size keeps nothing.
+        let mixed = TextDocument {
+            lines: vec![TextLine {
+                text: "alpha beta".into(),
+                rect: Some(RectLike::new(0.0, 0.0, 100.0, 10.0)),
+                words: vec![
+                    word(0, 5, 0.0, 0.0, 50.0),
+                    WordRect {
+                        start: 6,
+                        end: 8,
+                        rect: RectLike::new(60.0, 0.0, f32::NAN, 10.0),
+                    },
+                ],
+            }],
+            positioned: true,
+            layout_text: "alpha beta".into(),
+        };
+        let out = document_in_crop(&mixed, crop_of(0.0, 0.0, 100.0, 10.0)).unwrap();
+        assert_eq!(out.layout_text, "alpha ta");
+        // No line box at all: fail closed.
+        let mut boxless = d.clone();
+        boxless.lines[0].rect = None;
+        assert_eq!(
+            document_in_crop(&boxless, crop_of(0.0, 0.0, 100.0, 10.0)),
+            None
+        );
     }
 
     #[test]
