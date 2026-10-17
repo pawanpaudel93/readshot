@@ -1991,8 +1991,14 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorRedactAll
         | Message::EditorRedactLine(..)
         | Message::EditorHistoryWritten { .. }) => {
-            compose_jobs::settle_before(state, &msg);
-            let task = editor_ops::handle_editor_message(state, msg);
+            let frame_moved = compose_jobs::settle_before(state, &msg);
+            let task = match state.editor.as_mut() {
+                Some(ed) if frame_moved && compose_jobs::points_into_the_shown_image(&msg) => {
+                    compose_jobs::drop_stale_press(ed, &msg);
+                    Task::none()
+                }
+                _ => editor_ops::handle_editor_message(state, msg),
+            };
             editor_ops::sync_owed_editor_history(state);
             Task::batch([task, editor_ops::history_write_followups(state)])
         }
@@ -12803,6 +12809,82 @@ mod tests {
     }
 
     #[test]
+    fn a_canvas_press_that_lands_a_pending_resize_is_consumed() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = async_compose(crate::editor::EditorSession::new(solid(40, 20)));
+        // A redaction at x 5–11; after a 2× resize it sits at x 10–22.
+        ed.model.commit_annotation(Annotation::Pixelate {
+            rect: RectLike::new(5.0, 2.0, 6.0, 4.0),
+            block_size: 4.0,
+        });
+        ed.model.clear_selection();
+        app.editor = Some(ed);
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        apply_resize_width(&mut app, "80");
+        let late = finish_compose(&app);
+        // A Select press aimed at the old image (the redaction at x 8):
+        // in the new frame x 16 hits it, but the press is consumed.
+        select_drag(&mut app, (16.0, 6.0), (40.0, 30.0));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (80, 40), "the resize landed");
+        assert_eq!(ed.model.undo_depth(), depth + 1, "resize only");
+        assert_eq!(ed.model.selected_annotation(), None, "nothing selected");
+        assert!(ed.move_drag.is_none(), "no drag started");
+        let moved = |app: &App| {
+            app.editor.as_ref().unwrap().model.annotations()[0]
+                != Annotation::Pixelate {
+                    rect: RectLike::new(10.0, 4.0, 12.0, 8.0),
+                    block_size: 8.0,
+                }
+        };
+        assert!(!moved(&app), "the redaction did not move");
+        let _ = update(&mut app, late);
+        // A second press works normally, in the new frame.
+        select_drag(&mut app, (16.0, 6.0), (20.0, 6.0));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.model.undo_depth(), depth + 2);
+        assert!(moved(&app));
+    }
+
+    #[test]
+    fn a_drawing_press_that_lands_a_pending_resize_starts_no_drag() {
+        use readshot_ui::CanvasMessage;
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(async_compose(crate::editor::EditorSession::new(solid(
+            40, 20,
+        ))));
+        let depth = app.editor.as_ref().unwrap().model.undo_depth();
+        apply_resize_width(&mut app, "80");
+        let seq = app.editor.as_ref().unwrap().drag_cancel_seq;
+        let _ = update(&mut app, Message::EditorCanvas(CanvasMessage::DragStarted));
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (80, 40));
+        assert!(!ed.canvas_drag_active, "no drag started");
+        assert_ne!(ed.drag_cancel_seq, seq, "the canvas drops its drag");
+        // A click tool's commit (a pin) is dropped the same way.
+        apply_resize_width(&mut app, "40");
+        let pin = Annotation::NumberedPin {
+            origin: PointLike::new(5.0, 5.0),
+            number: 1,
+            color: Rgba::OPAQUE_BLACK,
+        };
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(CanvasMessage::CommitAnnotation(pin.clone())),
+        );
+        let ed = app.editor.as_ref().unwrap();
+        assert_eq!(ed.image_size(), (40, 20));
+        assert!(ed.model.annotations().is_empty());
+        assert_eq!(ed.model.undo_depth(), depth + 2, "two resizes only");
+        // Pressed again with nothing pending: drawn normally.
+        let _ = update(
+            &mut app,
+            Message::EditorCanvas(CanvasMessage::CommitAnnotation(pin)),
+        );
+        assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 1);
+    }
+
+    #[test]
     fn each_resize_applies_in_order_and_foreign_results_are_ignored() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         app.editor = Some(async_compose(crate::editor::EditorSession::new(solid(
@@ -12883,14 +12965,17 @@ mod tests {
         let depth = app.editor.as_ref().unwrap().model.undo_depth();
         apply_resize_width(&mut app, "80");
         let late = finish_compose(&app);
-        let _ = update(
-            &mut app,
-            Message::EditorCanvas(readshot_ui::CanvasMessage::RequestText(PointLike::new(
-                50.0, 30.0,
-            ))),
-        );
-        // The draft opened on the resized document.
+        let request = Message::EditorCanvas(readshot_ui::CanvasMessage::RequestText(
+            PointLike::new(50.0, 30.0),
+        ));
+        // The click that lands the resize was aimed at the old image: it
+        // opens no draft.
+        let _ = update(&mut app, request.clone());
         assert_eq!(app.editor.as_ref().unwrap().image_size(), (80, 40));
+        assert!(app.editor.as_ref().unwrap().pending_text.is_none());
+        // Clicked again: the draft opens on the resized document.
+        let _ = update(&mut app, request);
+        assert!(app.editor.as_ref().unwrap().pending_text.is_some());
         let _ = update(&mut app, Message::EditorTextChanged("Hi".into()));
         let _ = update(&mut app, Message::EditorSaveRequested);
         let _ = update(&mut app, late);
@@ -12982,8 +13067,17 @@ mod tests {
         apply_resize_width(&mut app, "80");
         let landed = finish_compose(&app);
         // Press (inside the blur in both frames), the result lands, drag,
-        // release.
+        // release: the press landed the resize, so the drag does nothing.
         let canvas = |m| Message::EditorCanvas(m);
+        let drag = |app: &mut App| {
+            for m in [
+                readshot_ui::CanvasMessage::SelectPressed(PointLike::new(10.0, 10.0)),
+                readshot_ui::CanvasMessage::SelectDragged(PointLike::new(12.0, 10.0)),
+                readshot_ui::CanvasMessage::SelectReleased,
+            ] {
+                let _ = update(app, canvas(m));
+            }
+        };
         let _ = update(
             &mut app,
             canvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
@@ -12998,6 +13092,13 @@ mod tests {
             ))),
         );
         let _ = update(&mut app, canvas(readshot_ui::CanvasMessage::SelectReleased));
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.undo_depth(),
+            depth + 1,
+            "resize only"
+        );
+        // Pressed again, on the resized image.
+        drag(&mut app);
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.image_size(), (80, 40));
         assert_eq!(ed.model.undo_depth(), depth + 2, "resize, then move");
@@ -13064,7 +13165,7 @@ mod tests {
     }
 
     #[test]
-    fn a_select_drag_after_a_gap_release_starts_in_the_settled_frame() {
+    fn a_select_drag_after_a_gap_release_waits_for_a_press_on_the_settled_frame() {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         let mut ed = async_compose(two_part_editor());
         // In the lower part: it moves down with the gap.
@@ -13080,6 +13181,10 @@ mod tests {
         let _ = update(&mut app, Message::EditorLayoutGapPreview(10));
         let late = finish_compose(&app);
         let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
+        // The first press lands the gap: it was aimed at the frame shown
+        // before, so it does nothing.
+        select_drag(&mut app, (4.0, 14.0), (6.0, 14.0));
+        assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth + 1);
         // A press on the rectangle where the settled gap puts it.
         select_drag(&mut app, (4.0, 24.0), (6.0, 24.0));
         let _ = update(&mut app, late);

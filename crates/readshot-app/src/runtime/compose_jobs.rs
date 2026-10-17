@@ -246,18 +246,58 @@ fn may_wait(message: &Message) -> (bool, bool) {
 /// drag committed). The async path stays for the common case — apply,
 /// then wait — and nothing ever lands under, or is lost to, a later
 /// interaction.
-pub(crate) fn settle_before(state: &mut App, message: &Message) {
+///
+/// Returns whether settling changed the document frame (a resize,
+/// alignment or gap value landed): a canvas position in `message` was
+/// then computed against the image shown before
+/// ([`points_into_the_shown_image`]).
+pub(crate) fn settle_before(state: &mut App, message: &Message) -> bool {
     let (step_may_wait, gap_may_wait) = may_wait(message);
     let coord = state.coordinator.clone();
     let Some(ed) = state.editor.as_mut() else {
-        return;
+        return false;
     };
+    let before = std::sync::Arc::clone(ed.model.geometry());
     if !step_may_wait {
         settle_pending_step(ed, &coord);
     }
     if !gap_may_wait {
         settle_gap(ed, &coord);
     }
+    !std::sync::Arc::ptr_eq(&before, ed.model.geometry())
+}
+
+/// A canvas press (or a click tool's commit) whose position was mapped
+/// against the image on screen when it happened. If settling just
+/// changed the frame ([`settle_before`]), that point means something
+/// else now — it could select or move another annotation, a redaction
+/// included — so the message is dropped ([`drop_stale_press`]) and the
+/// user presses again on the new image.
+pub(crate) fn points_into_the_shown_image(message: &Message) -> bool {
+    use readshot_ui::CanvasMessage;
+    matches!(
+        message,
+        Message::EditorCanvas(
+            CanvasMessage::SelectPressed(_)
+                | CanvasMessage::DragStarted
+                | CanvasMessage::CommitAnnotation(_)
+                | CanvasMessage::RequestText(_)
+                | CanvasMessage::EyedropperPick(_)
+        )
+    )
+}
+
+/// Drop a press the frame moved under ([`points_into_the_shown_image`]).
+/// The canvas keeps its own drag state, so a drag it started is cancelled
+/// through the cancel sequence (its next event, or its release, drops it);
+/// a Select press opens no move drag, so its drags and release do nothing.
+pub(crate) fn drop_stale_press(ed: &mut EditorSession, message: &Message) {
+    if let Message::EditorCanvas(readshot_ui::CanvasMessage::DragStarted) = message {
+        ed.canvas_drag_active = false;
+        ed.drag_cancel_seq = ed.drag_cancel_seq.wrapping_add(1);
+    }
+    ed.move_drag = None;
+    ed.canvas_cache.clear();
 }
 
 /// Settle everything off-thread compose holds back: the pending step,
