@@ -134,9 +134,10 @@ pub enum CanvasMessage {
     /// User pressed Escape or released a zero-area drag — drop
     /// in-progress preview without committing anything.
     Cancelled,
-    /// Escape ended a live shape or freehand drag. Like `Cancelled`, and
-    /// tells the editor this Escape is spent: the key press that follows
-    /// must not also cancel what the drag was hiding (a crop draft).
+    /// Escape ended a live drag (shape, freehand, or a Select press).
+    /// Like `Cancelled`, and tells the editor this Escape is spent: the
+    /// key press of it must not also cancel the selection, text draft or
+    /// crop draft.
     DragEscaped,
 }
 
@@ -724,9 +725,13 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
                 ..
             }) => {
+                // Any held drag, a Select press included: the runtime
+                // ends it and nothing else with this Escape.
                 let drawing = matches!(
                     state,
-                    DrawState::Dragging { .. } | DrawState::Drawing { .. }
+                    DrawState::Dragging { .. }
+                        | DrawState::Drawing { .. }
+                        | DrawState::Selecting { .. }
                 );
                 *state = DrawState::Idle;
                 let message = if drawing {
@@ -3244,6 +3249,25 @@ mod tests {
             .into_inner();
         assert_eq!(message, Some(CanvasMessage::DragEscaped));
         assert_eq!(state, DrawState::Idle);
+        // A held Select press (a move or resize) and a freehand stroke too;
+        // before, a Select drag sent a plain cancel.
+        for mut live in [
+            DrawState::Selecting {
+                last: PointLike::new(10.0, 10.0),
+            },
+            DrawState::Drawing {
+                points: vec![Point::new(300.0, 320.0)],
+                tool_at_press: ToolState::Pen,
+                cancel_seq: 0,
+            },
+        ] {
+            let (message, _, _) = canvas
+                .update(&mut live, &escape, bounds, cursor)
+                .expect("escape is handled")
+                .into_inner();
+            assert_eq!(message, Some(CanvasMessage::DragEscaped));
+            assert_eq!(live, DrawState::Idle);
+        }
         // With nothing live it is a plain cancel.
         let (message, _, _) = canvas
             .update(&mut state, &escape, bounds, cursor)

@@ -211,8 +211,8 @@ pub enum CanvasDragFrame {
     Dropped,
 }
 
-/// Which message of an Escape that ended a crop re-drag was handled
-/// first ([`EditorSession::escape_ended_crop_drag`]).
+/// Which message of an Escape that ended a canvas drag was handled
+/// first ([`EditorSession::escape_ended_drag`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EscapeSeenBy {
     /// The canvas's `DragEscaped`; the key press is still to come.
@@ -798,13 +798,15 @@ pub struct EditorSession {
     /// The window the held press began in (`None`: not held, or not
     /// known).
     pub pointer_window: Option<iced::window::Id>,
-    /// One Escape just ended a live crop re-drag, seen by one of its two
-    /// messages (the canvas's `DragEscaped`, the key subscription's
-    /// `EditorKeyPressed`); the other, in whichever order it comes, must
-    /// not also drop the draft the drag was hiding: one Esc, one step.
+    /// One Escape just ended a live canvas drag (a shape, redaction or
+    /// crop draw, a Select move or resize, a magnifier handle), seen by
+    /// one of its two messages (the canvas's `DragEscaped`, the key
+    /// subscription's `EditorKeyPressed`); the other, in whichever order
+    /// it comes, must not also clear the selection, text draft or crop
+    /// draft: one Esc, one step.
     /// Cleared by its counterpart, and by any other key, press or drag
     /// start, so it can't swallow a later Escape.
-    pub escape_ended_crop_drag: Option<EscapeSeenBy>,
+    pub escape_ended_drag: Option<EscapeSeenBy>,
     /// The live canvas drag's frame ([`CanvasDragFrame`]), so a commit of
     /// it is refused when its points are in another frame than the
     /// present one. Cleared by any commit, `Cancelled`, `DragEscaped`,
@@ -1160,7 +1162,7 @@ impl EditorSession {
             snapshot_drag_cancelled: false,
             pointer_held: false,
             pointer_window: None,
-            escape_ended_crop_drag: None,
+            escape_ended_drag: None,
             drag_started_in: None,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
@@ -1239,7 +1241,7 @@ impl EditorSession {
             snapshot_drag_cancelled: false,
             pointer_held: false,
             pointer_window: None,
-            escape_ended_crop_drag: None,
+            escape_ended_drag: None,
             drag_started_in: None,
             layout_gap_pending: None,
             layout_gap_previewed_at: None,
@@ -1347,6 +1349,13 @@ impl EditorSession {
         self.clear_discard_confirmation();
     }
 
+    /// Whether a canvas drag is live: a draw (shape, redaction, crop,
+    /// freehand) or a Select move/resize (handles, a magnifier's parts).
+    /// An Escape ends it and nothing else ([`Self::escape_ended_drag`]).
+    pub fn canvas_drag_in_progress(&self) -> bool {
+        self.canvas_drag_active || self.move_drag.is_some()
+    }
+
     pub fn has_output_changes(&self) -> bool {
         self.output_checkpoint.0 != self.model.snapshot()
     }
@@ -1357,7 +1366,7 @@ impl EditorSession {
     pub fn set_pointer_held(&mut self, pressed_in: Option<Option<iced::window::Id>>) {
         if pressed_in.is_some() {
             // A new press: an Escape marker still waiting is stale.
-            self.escape_ended_crop_drag = None;
+            self.escape_ended_drag = None;
         }
         self.pointer_held = pressed_in.is_some();
         self.pointer_window = pressed_in.flatten();

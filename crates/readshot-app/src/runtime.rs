@@ -12720,25 +12720,20 @@ mod tests {
         let ed = app.editor.as_ref().unwrap();
         assert!(!ed.canvas_drag_active, "the re-drag is cancelled");
         assert_eq!(ed.crop_draft, draft, "the previous draft is back");
-        assert_eq!(ed.escape_ended_crop_drag, None, "nothing left to swallow");
+        assert_eq!(ed.escape_ended_drag, None, "nothing left to swallow");
         // A stale marker (its counterpart never came) can't swallow a
         // later Escape: another key clears it.
         canvas(&mut app, CanvasMessage::DragStarted);
         canvas(&mut app, CanvasMessage::DragEscaped);
-        assert!(app
-            .editor
-            .as_ref()
-            .unwrap()
-            .escape_ended_crop_drag
-            .is_some());
+        assert!(app.editor.as_ref().unwrap().escape_ended_drag.is_some());
         key(&mut app, Named::Shift);
-        assert_eq!(app.editor.as_ref().unwrap().escape_ended_crop_drag, None);
+        assert_eq!(app.editor.as_ref().unwrap().escape_ended_drag, None);
         // …and so does a press.
         canvas(&mut app, CanvasMessage::DragStarted);
         canvas(&mut app, CanvasMessage::DragEscaped);
         let _ = update(&mut app, Message::EditorPointerButton(true, None));
         let _ = update(&mut app, Message::EditorPointerButton(false, None));
-        assert_eq!(app.editor.as_ref().unwrap().escape_ended_crop_drag, None);
+        assert_eq!(app.editor.as_ref().unwrap().escape_ended_drag, None);
         assert_eq!(app.editor.as_ref().unwrap().crop_draft, draft);
         // The next Esc (key first again) cancels the draft, and only that.
         key(&mut app, Named::Escape);
@@ -12746,6 +12741,91 @@ mod tests {
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.crop_draft, None, "the next Esc cancels the draft");
         assert_eq!(ed.model.selected_annotation(), Some(0), "and only that");
+    }
+
+    #[test]
+    fn esc_during_any_canvas_drag_ends_only_the_drag_in_either_order() {
+        use iced::keyboard::key::Named;
+        use readshot_ui::CanvasMessage;
+        let rect0 = Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        };
+        for key_first in [false, true] {
+            let mut app = crop_app_with_rect_selected();
+            let id = iced::window::Id::unique();
+            app.editor.as_mut().unwrap().window_id = Some(id);
+            let esc = |app: &mut App, canvas: CanvasMessage| {
+                let key = Message::EditorKeyPressed {
+                    window: id,
+                    key: iced::keyboard::Key::Named(Named::Escape),
+                    modifiers: iced::keyboard::Modifiers::empty(),
+                    status_ignored: false,
+                };
+                if key_first {
+                    let _ = update(app, key);
+                    let _ = update(app, Message::EditorCanvas(canvas));
+                } else {
+                    let _ = update(app, Message::EditorCanvas(canvas));
+                    let _ = update(app, key);
+                }
+            };
+            let draft = app.editor.as_ref().unwrap().crop_draft;
+
+            // A shape draw, over a selection, a crop draft and a text
+            // draft: the Esc ends the draw and keeps all three.
+            let ed = app.editor.as_mut().unwrap();
+            ed.model.set_tool(readshot_ui::editor::ToolState::Rectangle);
+            ed.pending_text = Some(crate::editor::PendingText {
+                origin: PointLike::new(50.0, 50.0),
+                content: "typing".into(),
+                edit_index: None,
+            });
+            let _ = update(&mut app, Message::EditorCanvas(CanvasMessage::DragStarted));
+            esc(&mut app, CanvasMessage::DragEscaped);
+            let ed = app.editor.as_ref().unwrap();
+            assert!(!ed.canvas_drag_in_progress(), "key first: {key_first}");
+            assert_eq!(ed.model.selected_annotation(), Some(0), "{key_first}");
+            assert!(ed.pending_text.is_some(), "{key_first}");
+            assert_eq!(ed.crop_draft, draft, "{key_first}");
+            assert_eq!(ed.escape_ended_drag, None, "{key_first}");
+            app.editor.as_mut().unwrap().pending_text = None;
+
+            // A Select move: the Esc puts the annotation back and keeps
+            // it selected (and the crop draft open).
+            app.editor
+                .as_mut()
+                .unwrap()
+                .model
+                .set_tool(readshot_ui::editor::ToolState::Select);
+            let _ = update(
+                &mut app,
+                Message::EditorCanvas(CanvasMessage::SelectPressed(PointLike::new(5.0, 5.0))),
+            );
+            let _ = update(
+                &mut app,
+                Message::EditorCanvas(CanvasMessage::SelectDragged(PointLike::new(15.0, 15.0))),
+            );
+            assert_ne!(app.editor.as_ref().unwrap().model.annotations()[0], rect0);
+            esc(&mut app, CanvasMessage::DragEscaped);
+            let ed = app.editor.as_ref().unwrap();
+            assert!(!ed.canvas_drag_in_progress(), "{key_first}");
+            assert_eq!(ed.model.annotations()[0], rect0, "moved back: {key_first}");
+            assert_eq!(ed.model.selected_annotation(), Some(0), "{key_first}");
+            assert_eq!(ed.crop_draft, draft, "{key_first}");
+
+            // The next Esc does what it always did: the crop draft, then
+            // the selection.
+            esc(&mut app, CanvasMessage::Cancelled);
+            let ed = app.editor.as_ref().unwrap();
+            assert_eq!(ed.crop_draft, None, "{key_first}");
+            assert_eq!(ed.model.selected_annotation(), Some(0), "{key_first}");
+            esc(&mut app, CanvasMessage::Cancelled);
+            let ed = app.editor.as_ref().unwrap();
+            assert_eq!(ed.model.selected_annotation(), None, "{key_first}");
+        }
     }
 
     #[test]
