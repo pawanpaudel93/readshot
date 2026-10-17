@@ -521,6 +521,12 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
         }
         Message::EditorPanelTabSelected(tab) => {
             state.set_editor_panel_tab(tab);
+            // The Beautify tab opens showing the current background.
+            if tab == crate::editor::PanelTab::Beautify {
+                if let Some(ed) = state.editor.as_mut() {
+                    ed.beautify_hex_draft = None;
+                }
+            }
             Task::none()
         }
         Message::EditorOpenTextSettings => {

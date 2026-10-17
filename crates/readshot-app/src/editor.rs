@@ -460,8 +460,12 @@ pub struct EditorSession {
     /// Documents of at least this many output pixels compose off the UI
     /// thread ([`ASYNC_COMPOSE_MIN_PIXELS`]; tests lower it).
     pub async_compose_min_pixels: u64,
-    /// Draft of the Beautify tab's background hex field.
-    pub beautify_hex_draft: String,
+    /// What the user typed into the Beautify tab's background hex field
+    /// and hasn't applied yet. `None` while they aren't editing it: the
+    /// field then shows the current solid background
+    /// ([`Self::beautify_hex_shown`]), so it follows the tab opening, a
+    /// preset, undo or the eyedropper.
+    pub beautify_hex_draft: Option<String>,
     /// Open color / line-width popover, if any. Esc and a
     /// click outside close it before any other Esc behaviour runs.
     pub popover: Option<EditorPopover>,
@@ -760,7 +764,7 @@ impl EditorSession {
             gap_commit_on_land: false,
             history_sync_owed: false,
             async_compose_min_pixels: ASYNC_COMPOSE_MIN_PIXELS,
-            beautify_hex_draft: String::new(),
+            beautify_hex_draft: None,
             canvas_drag_active: false,
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
@@ -830,7 +834,7 @@ impl EditorSession {
             gap_commit_on_land: false,
             history_sync_owed: false,
             async_compose_min_pixels: ASYNC_COMPOSE_MIN_PIXELS,
-            beautify_hex_draft: String::new(),
+            beautify_hex_draft: None,
             canvas_drag_active: false,
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
@@ -923,6 +927,20 @@ impl EditorSession {
 
     pub fn has_output_changes(&self) -> bool {
         self.output_checkpoint.0 != self.model.snapshot()
+    }
+
+    /// The Beautify hex field's text: the user's draft while they edit
+    /// it, else the current solid background (empty for any other).
+    pub fn beautify_hex_shown(&self) -> String {
+        if let Some(draft) = &self.beautify_hex_draft {
+            return draft.clone();
+        }
+        match self.model.beautify().background {
+            readshot_core::beautify::Background::Solid { rgba } => {
+                readshot_core::Rgba::from_rgba8(rgba).to_hex()
+            }
+            _ => String::new(),
+        }
     }
 
     pub fn clear_discard_confirmation(&mut self) {

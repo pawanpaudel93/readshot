@@ -87,10 +87,12 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
             // A refused preview (invalid geometry) changes nothing.
             let _ = ed.model.preview_snapshot(next);
         }
-        Message::EditorBeautifyHexChanged(raw) => ed.beautify_hex_draft = raw,
+        Message::EditorBeautifyHexChanged(raw) => ed.beautify_hex_draft = Some(raw),
         Message::EditorBeautifyHexSubmitted => {
-            match readshot_core::Rgba::from_hex(&ed.beautify_hex_draft) {
+            match readshot_core::Rgba::from_hex(&ed.beautify_hex_shown()) {
                 Some(c) => {
+                    // Applied: the field follows the background again.
+                    ed.beautify_hex_draft = None;
                     cancel_editor_previews(ed);
                     ed.snapshot_drag_cancelled = false;
                     let mut s = ed.model.beautify();
@@ -246,7 +248,7 @@ pub(crate) fn beautify_tab<'a>(
         bg_row = bg_row.push(swatch(bg, s.background == bg, busy, "Solid color"));
     }
     let custom = row![
-        text_input("#RRGGBB", &ed.beautify_hex_draft)
+        text_input("#RRGGBB", &ed.beautify_hex_shown())
             .on_input(Message::EditorBeautifyHexChanged)
             .on_submit(Message::EditorBeautifyHexSubmitted)
             .size(TYPE_CAPTION)

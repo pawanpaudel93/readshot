@@ -1418,6 +1418,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                                     picked = Some(color);
                                 }
                                 crate::editor::EyedropperTarget::BeautifyBackground => {
+                                    // A pick replaces whatever was typed.
+                                    ed.beautify_hex_draft = None;
                                     cancel_editor_previews(ed);
                                     ed.snapshot_drag_cancelled = false;
                                     let mut s = ed.model.beautify();

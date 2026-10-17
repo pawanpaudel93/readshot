@@ -3238,6 +3238,50 @@ mod tests {
     }
 
     #[test]
+    fn the_beautify_hex_field_follows_the_solid_background_unless_mid_edit() {
+        use readshot_core::beautify::{Background, BeautifyEdit, BuiltinPreset};
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+        let hex = |app: &App| app.editor.as_ref().unwrap().beautify_hex_shown();
+        // Opening the tab: seeded from the current solid background.
+        let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Soft));
+        let _ = update(
+            &mut app,
+            Message::EditorPanelTabSelected(crate::editor::PanelTab::Beautify),
+        );
+        assert_eq!(hex(&app), "#E5EAF0");
+        // Changed elsewhere (a swatch, a preset): the field follows.
+        let solid_bg = |rgba| BeautifyEdit::Background(Background::Solid { rgba });
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifyEdit(solid_bg([0x4f, 0x46, 0xe5, 255])),
+        );
+        assert_eq!(hex(&app), "#4F46E5");
+        let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::None));
+        assert_eq!(hex(&app), "", "no solid background");
+        // Mid-edit: a background change doesn't clobber what is typed.
+        let _ = update(&mut app, Message::EditorBeautifyHexChanged("#12".into()));
+        let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Soft));
+        assert_eq!(hex(&app), "#12");
+        // Applied: follows the background again.
+        let _ = update(
+            &mut app,
+            Message::EditorBeautifyHexChanged("#123456".into()),
+        );
+        let _ = update(&mut app, Message::EditorBeautifyHexSubmitted);
+        assert_eq!(hex(&app), "#123456");
+        let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Soft));
+        assert_eq!(hex(&app), "#E5EAF0");
+        // Reopening the tab drops an abandoned draft.
+        let _ = update(&mut app, Message::EditorBeautifyHexChanged("#9".into()));
+        let _ = update(
+            &mut app,
+            Message::EditorPanelTabSelected(crate::editor::PanelTab::Beautify),
+        );
+        assert_eq!(hex(&app), "#E5EAF0");
+    }
+
+    #[test]
     fn beautify_slider_drag_is_one_undo_step_and_esc_cancels_it() {
         use readshot_core::beautify::{BeautifyEdit, BuiltinPreset};
         let mut app = build_app(Arc::new(FakePermissions::granted()));
