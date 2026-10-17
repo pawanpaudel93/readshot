@@ -3603,7 +3603,7 @@ mod tests {
         assert!(contrast(SELECTION_TEAL, Color::WHITE) < 3.0);
         assert!(contrast(SELECTION_HALO, Color::WHITE) >= 3.0);
         assert!(contrast(SELECTION_TEAL, Color::BLACK) >= 3.0);
-        assert!(SELECTION_HALO_EXTRA >= 2.0);
+        const { assert!(SELECTION_HALO_EXTRA >= 2.0) };
     }
 
     #[test]

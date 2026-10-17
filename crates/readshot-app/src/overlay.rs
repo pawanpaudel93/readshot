@@ -1588,7 +1588,7 @@ mod tests {
         // On a white screen the halo alone carries it (the base did).
         let veiled_white = over(VEIL, Color::WHITE);
         assert!(contrast_ratio(CROSSHAIR_HALO, veiled_white) >= 3.0);
-        assert!(CROSSHAIR_HALO_WIDTH > 2.0);
+        const { assert!(CROSSHAIR_HALO_WIDTH > 2.0) };
     }
 
     #[test]

@@ -784,7 +784,7 @@ fn hotkey_problems_are_flagged_as_errors_not_help() {
     app.settings_hotkey_error = Some("reserved".into());
     assert!(capture_hotkey_hint_is_error(&app));
     app.settings_hotkey_error = None;
-    app.fixed_hotkey_failures.push("History".into());
+    app.fixed_hotkey_failures.push("History");
     assert!(capture_hotkey_hint_is_error(&app));
     app.fixed_hotkey_failures.clear();
     app.settings_hotkey_status = Some("⇧⌘X is ready.".into());
