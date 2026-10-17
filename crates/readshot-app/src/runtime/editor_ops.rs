@@ -1952,9 +1952,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 // Fit mode the step starts from the scale the stage last
                 // rendered at, resolved now: a view built before a window
                 // resize would carry a stale scale.
-                ed.zoom = ed.zoom.zoom_in_from_display_scale(ed.render_scale.get());
+                let next = ed.zoom.zoom_in_from_display_scale(ed.render_scale.get());
                 ed.clear_eyedropper_loupe();
-                return super::view::pin_stage_offset(ed);
+                return super::view::zoom_keeping_center(ed, next);
             }
             Task::none()
         }
@@ -1964,9 +1964,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     return Task::none();
                 }
                 // See `EditorZoomIn`.
-                ed.zoom = ed.zoom.zoom_out_from_display_scale(ed.render_scale.get());
+                let next = ed.zoom.zoom_out_from_display_scale(ed.render_scale.get());
                 ed.clear_eyedropper_loupe();
-                return super::view::pin_stage_offset(ed);
+                return super::view::zoom_keeping_center(ed, next);
             }
             Task::none()
         }
@@ -1975,9 +1975,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if ed.busy {
                     return Task::none();
                 }
-                ed.zoom = ed.actual_size_zoom();
+                let next = ed.actual_size_zoom();
                 ed.clear_eyedropper_loupe();
-                return super::view::pin_stage_offset(ed);
+                return super::view::zoom_keeping_center(ed, next);
             }
             Task::none()
         }
@@ -1986,9 +1986,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if ed.busy {
                     return Task::none();
                 }
-                ed.zoom = crate::editor::EditorZoom::Fit;
                 ed.clear_eyedropper_loupe();
-                return super::view::pin_stage_offset(ed);
+                return super::view::zoom_keeping_center(ed, crate::editor::EditorZoom::Fit);
             }
             Task::none()
         }

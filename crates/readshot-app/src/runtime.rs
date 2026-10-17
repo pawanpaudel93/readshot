@@ -3954,6 +3954,29 @@ mod tests {
     }
 
     #[test]
+    fn zoom_keys_keep_the_stage_centre_on_the_same_point() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let ed = crate::editor::EditorSession::new_with_display_scale(solid(1000, 500), 1.0);
+        ed.stage_size.set((800.0, 600.0));
+        ed.stage_offset.set((100.0, 0.0));
+        app.editor = Some(ed);
+        app.editor.as_mut().unwrap().zoom = crate::editor::EditorZoom::Percent(1.0);
+        let _ = update(&mut app, Message::EditorZoomIn);
+        let ed = app.editor.as_ref().unwrap();
+        let s = crate::editor::EditorZoom::STEP;
+        assert_eq!(ed.zoom, crate::editor::EditorZoom::Percent(s));
+        // Document (500, 250) was at the stage centre; it still is.
+        let (ox, oy) = ed.stage_offset.get();
+        assert!((ox - (500.0 * s - 400.0)).abs() < 1e-3, "{ox}");
+        assert!(
+            (oy - (250.0 * s + (600.0 - 500.0 * s).max(0.0) / 2.0 - 300.0).max(0.0)).abs() < 1e-3,
+            "{oy}"
+        );
+        // Before, the offset stayed (100, 0).
+        assert_ne!((ox, oy), (100.0, 0.0));
+    }
+
+    #[test]
     fn zoom_steps_from_fit_use_the_scale_rendered_at_update_time() {
         // The view can be stale after a resize (iced relayouts without a
         // rebuild), so the step resolves the Fit scale when handled.

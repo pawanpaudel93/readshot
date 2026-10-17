@@ -951,6 +951,9 @@ pub struct EditorSession {
     /// (a scrollable shown again starts at the top-left). Where a new
     /// magnifier bubble may go depends on what is on screen.
     pub stage_offset: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
+    /// The stage's size (screen px) at the last layout; a zoom keeps the
+    /// point at its centre fixed with it. `(0, 0)` until laid out.
+    pub stage_size: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
     /// Bumped by each `view()`: the canvas maps its points with the frame
     /// of the last view built, so canvas messages handled before the next
     /// one are still in that frame ([`Self::press_remap`]).
@@ -1251,6 +1254,7 @@ impl EditorSession {
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
             stage_offset: std::rc::Rc::new(std::cell::Cell::new((0.0, 0.0))),
+            stage_size: std::rc::Rc::new(std::cell::Cell::new((0.0, 0.0))),
             canvas_view_seq: std::rc::Rc::new(std::cell::Cell::new(0)),
             canvas_frame: std::rc::Rc::new(std::cell::RefCell::new(None)),
             press_remap: None,
@@ -1334,6 +1338,7 @@ impl EditorSession {
             drag_cancel_seq: 0,
             render_scale: std::rc::Rc::new(std::cell::Cell::new(1.0)),
             stage_offset: std::rc::Rc::new(std::cell::Cell::new((0.0, 0.0))),
+            stage_size: std::rc::Rc::new(std::cell::Cell::new((0.0, 0.0))),
             canvas_view_seq: std::rc::Rc::new(std::cell::Cell::new(0)),
             canvas_frame: std::rc::Rc::new(std::cell::RefCell::new(None)),
             press_remap: None,

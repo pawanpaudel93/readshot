@@ -2082,6 +2082,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     );
     let (text_hover, text_selected) = text_marks(ed, panel_visible);
     let stage_offset = ed.stage_offset.clone();
+    let stage_size = ed.stage_size.clone();
     // A new canvas program, in the present frame.
     ed.note_canvas_built();
     // Combined images (document px): a new magnifier bubble avoids the
@@ -2097,6 +2098,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let image_area_content = responsive(move |stage| {
         // The stage is already inset clear of the floating bars.
         let available = stage;
+        stage_size.set((available.width, available.height));
         let iw = image_w as f32;
         let ih = image_h as f32;
         let m = preview_metrics(
@@ -5354,6 +5356,106 @@ pub(crate) fn clamp_stage_offset(
     )
 }
 
+/// Where the image sits in the stage's scrolled content at one zoom.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct StageFrame {
+    /// Screen px per document px.
+    pub scale: f32,
+    /// The scrolled content: the output, at least the stage.
+    pub content: (f32, f32),
+    /// The (beautified) output, centred in the content.
+    pub output: (f32, f32),
+    /// The image's top-left inside the output.
+    pub pad: (f32, f32),
+}
+
+impl StageFrame {
+    /// As the editor view lays out an `image` px document in an
+    /// `available` stage at `explicit_zoom` (`None`: fit).
+    pub(crate) fn of(
+        image: (u32, u32),
+        beautify: &readshot_core::beautify::BeautifySettings,
+        available: (f32, f32),
+        explicit_zoom: Option<f32>,
+    ) -> Self {
+        let m = preview_metrics(
+            image.0,
+            image.1,
+            beautify,
+            iced::Size::new(available.0, available.1),
+            explicit_zoom,
+        );
+        Self {
+            scale: m.scale,
+            content: (m.output_w.max(available.0), m.output_h.max(available.1)),
+            output: (m.output_w, m.output_h),
+            pad: if beautify.is_identity() {
+                (0.0, 0.0)
+            } else {
+                (m.pad.left, m.pad.top)
+            },
+        }
+    }
+
+    /// The image's top-left in content px.
+    fn image_origin(&self) -> (f32, f32) {
+        (
+            (self.content.0 - self.output.0) * 0.5 + self.pad.0,
+            (self.content.1 - self.output.1) * 0.5 + self.pad.1,
+        )
+    }
+}
+
+/// The scroll offset after a zoom from `old` to `new` that keeps the
+/// document point at the stage's centre where it is on screen (clamped as
+/// the scrollable clamps it).
+pub(crate) fn offset_keeping_center(
+    offset: (f32, f32),
+    available: (f32, f32),
+    old: &StageFrame,
+    new: &StageFrame,
+) -> (f32, f32) {
+    if !(old.scale.is_finite() && old.scale > 0.0 && new.scale.is_finite()) {
+        return clamp_stage_offset(offset, new.content, available);
+    }
+    let (ox, oy) = clamp_stage_offset(offset, old.content, available);
+    let (ix, iy) = old.image_origin();
+    let cx = (ox + available.0 * 0.5 - ix) / old.scale;
+    let cy = (oy + available.1 * 0.5 - iy) / old.scale;
+    let (nx, ny) = new.image_origin();
+    clamp_stage_offset(
+        (
+            cx * new.scale + nx - available.0 * 0.5,
+            cy * new.scale + ny - available.1 * 0.5,
+        ),
+        new.content,
+        available,
+    )
+}
+
+/// Zoom `ed` to `next`, keeping the point at the stage's centre fixed, and
+/// pin the scrollable to the offset that does it.
+pub(crate) fn zoom_keeping_center(
+    ed: &mut EditorSession,
+    next: crate::editor::EditorZoom,
+) -> Task<Message> {
+    let available = ed.stage_size.get();
+    if available.0 > 0.0 && available.1 > 0.0 {
+        let image = ed.effective_image_size();
+        let beautify = ed.model.beautify();
+        let old = StageFrame::of(image, &beautify, available, ed.zoom.explicit_scale());
+        let new = StageFrame::of(image, &beautify, available, next.explicit_scale());
+        ed.stage_offset.set(offset_keeping_center(
+            ed.stage_offset.get(),
+            available,
+            &old,
+            &new,
+        ));
+    }
+    ed.zoom = next;
+    pin_stage_offset(ed)
+}
+
 /// After a zoom or relayout (no scroll event): set the stage scrollable to
 /// the offset the editor recorded (clamped to what was on screen by the
 /// last `view`). The scrollable otherwise keeps an older, larger offset it
@@ -5475,6 +5577,39 @@ mod tests {
         let back = stage_viewport_in_document(at(recorded, 2.0)).unwrap();
         assert_eq!(back, RectLike::new(100.0, 0.0, 400.0, 300.0));
         assert!(back.x + back.width <= 2000.0 && back.y + back.height <= 1000.0);
+    }
+
+    #[test]
+    fn a_zoom_keeps_the_point_at_the_stage_centre_fixed() {
+        use super::{offset_keeping_center, StageFrame};
+        // A 1000 × 500 image in an 800 × 600 stage, no beautify.
+        let at = |scale: f32| StageFrame {
+            scale,
+            content: ((1000.0 * scale).max(800.0), (500.0 * scale).max(600.0)),
+            output: (1000.0 * scale, 500.0 * scale),
+            pad: (0.0, 0.0),
+        };
+        // At 1×, scrolled 100 px right: the centre shows document
+        // (500, 250) (the image is centred vertically, 50 px down).
+        let offset = offset_keeping_center((100.0, 0.0), (800.0, 600.0), &at(1.0), &at(2.0));
+        // At 2× that point is at content (1000, 500): the centre stays on it.
+        assert_eq!(offset, (600.0, 200.0));
+        // Back to 1×: the same point, the same offset as before.
+        assert_eq!(
+            offset_keeping_center(offset, (800.0, 600.0), &at(2.0), &at(1.0)),
+            (100.0, 0.0)
+        );
+        // Zoomed out to fit nothing scrolls.
+        assert_eq!(
+            offset_keeping_center(offset, (800.0, 600.0), &at(2.0), &at(0.5)),
+            (0.0, 0.0)
+        );
+        // Matches what the view lays out.
+        let b = readshot_core::beautify::BeautifySettings::default();
+        assert_eq!(
+            StageFrame::of((1000, 500), &b, (800.0, 600.0), Some(2.0)),
+            at(2.0)
+        );
     }
 
     #[test]
