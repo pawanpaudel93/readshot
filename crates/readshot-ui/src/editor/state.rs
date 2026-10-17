@@ -2981,6 +2981,21 @@ mod tests {
     }
 
     #[test]
+    fn undo_that_only_closes_a_preview_clamps_the_selection_and_redraws() {
+        let mut s = EditorState::new(px_grid(4, 4));
+        let mut next = s.snapshot();
+        next.annotations.push(block(0.0, 0.0));
+        s.preview_snapshot(next).unwrap();
+        assert_eq!(s.select_at(PointLike::new(0.5, 0.5)), Some(0));
+        let previewed = s.flatten();
+        assert!(s.undo(), "closing the preview is a change");
+        assert_eq!(s.undo_depth(), 0);
+        assert!(s.annotations().is_empty());
+        assert_eq!(s.selected_annotation(), None, "selection clamped");
+        assert_ne!(s.flatten(), previewed, "the cache was reset");
+    }
+
+    #[test]
     fn commit_preview_snapshot_refuses_a_different_baseline() {
         use readshot_core::beautify::BuiltinPreset;
         let mut s = EditorState::new(px_grid(4, 4));
