@@ -190,6 +190,12 @@ pub struct EditorCanvas {
     /// background texture stable and ask the canvas to draw only this
     /// transient overlay.
     pub selected_preview: Option<Annotation>,
+    /// Annotations in the document but not yet in the image on screen (a
+    /// large document's render is still in flight): drawn over it so an
+    /// edit shows at once. A redaction is drawn opaque, so what it hides
+    /// is never on screen; one removed or moved away may linger in the
+    /// image underneath until the render lands.
+    pub pending: Vec<Annotation>,
     /// Runtime-tracked Shift state. The editor listens to modifiers
     /// globally (the canvas only handles Escape itself) and passes the
     /// current state in here on each `view()`. When
@@ -752,6 +758,16 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 display_scale_for_bounds(bounds, self.image_size, self.display_scale)
                     .unwrap_or(1.0);
             let preview_width = preview_stroke_width(self.line_width, preview_scale);
+            for annotation in &self.pending {
+                draw_overlay_annotation(
+                    frame,
+                    annotation,
+                    bounds,
+                    self.image_size,
+                    self.image_offset,
+                    self.display_scale,
+                );
+            }
             let stroke_color = Color::from_rgba(self.color.r, self.color.g, self.color.b, 1.0);
             let preview_stroke = Stroke::default()
                 .with_color(stroke_color)
@@ -954,7 +970,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
             }
 
             if let Some(annotation) = &self.selected_preview {
-                draw_annotation_preview(
+                draw_overlay_annotation(
                     frame,
                     annotation,
                     bounds,
@@ -1410,6 +1426,73 @@ fn draw_preview_badge(frame: &mut Frame, bounds: Rectangle, rect: Rectangle, lab
         font: iced::Font::with_name(FONT_FAMILY),
         ..Default::default()
     });
+}
+
+/// Fill for a redaction drawn by the canvas: opaque, so what it hides
+/// is never on screen while its render is in flight.
+const REDACTION_OVERLAY: Color = Color::from_rgb(0.33, 0.33, 0.35);
+
+/// An annotation drawn by the canvas over the image (a moving selection,
+/// or one whose render is in flight). A redaction covers its area
+/// opaquely (a solid redaction in its own color); anything else is drawn
+/// as its preview.
+/// The opaque cover the canvas draws for a redaction: its rect and fill
+/// (a solid redaction's own color, else a neutral grey; never
+/// translucent). `None` for anything that isn't a redaction.
+fn redaction_cover(annotation: &Annotation) -> Option<(RectLike, Color)> {
+    if !readshot_core::scrub::is_redaction(annotation) {
+        return None;
+    }
+    match annotation {
+        Annotation::Rectangle { rect, color, .. } => {
+            Some((*rect, Color::from_rgb(color.r, color.g, color.b)))
+        }
+        Annotation::Blur { rect, .. } | Annotation::Pixelate { rect, .. } => {
+            Some((*rect, REDACTION_OVERLAY))
+        }
+        _ => None,
+    }
+}
+
+fn draw_overlay_annotation(
+    frame: &mut Frame,
+    annotation: &Annotation,
+    bounds: Rectangle,
+    image_size: (u32, u32),
+    image_offset: (f32, f32),
+    display_scale: Option<f32>,
+) {
+    if readshot_core::scrub::is_redaction(annotation) {
+        let Some((rect, fill)) = redaction_cover(annotation) else {
+            return;
+        };
+        if let Some(r) = base_rect_to_canvas(rect, bounds, image_size, image_offset, display_scale)
+        {
+            // Outward to whole canvas pixels: no sliver left uncovered.
+            let (x0, y0) = (r.x.floor(), r.y.floor());
+            let (x1, y1) = ((r.x + r.width).ceil(), (r.y + r.height).ceil());
+            let path = Path::rectangle(Point::new(x0, y0), iced::Size::new(x1 - x0, y1 - y0));
+            frame.fill(&path, fill);
+            frame.stroke(
+                &path,
+                Stroke::default()
+                    .with_color(Color {
+                        a: 0.72,
+                        ..SELECTION_TEAL
+                    })
+                    .with_width(1.5),
+            );
+        }
+        return;
+    }
+    draw_annotation_preview(
+        frame,
+        annotation,
+        bounds,
+        image_size,
+        image_offset,
+        display_scale,
+    );
 }
 
 fn draw_annotation_preview(
@@ -2223,6 +2306,7 @@ mod tests {
             selected_handles: Vec::new(),
             selected_annotation: None,
             selected_preview: None,
+            pending: Vec::new(),
             shift_held: false,
             cancel_seq: 0,
             style: ToolStyle::default(),
@@ -3270,5 +3354,38 @@ mod tests {
             intersect_rect(RectLike::new(70.0, 20.0, 5.0, 5.0), crop),
             None
         );
+    }
+
+    #[test]
+    fn an_overlaid_redaction_is_covered_opaquely() {
+        let rect = RectLike::new(2.0, 3.0, 10.0, 6.0);
+        for a in [
+            Annotation::Pixelate {
+                rect,
+                block_size: 8.0,
+            },
+            Annotation::Blur { rect, radius: 6.0 },
+            Annotation::Rectangle {
+                rect,
+                color: CoreRgba::new(0.1, 0.2, 0.3, 1.0),
+                line_width: 2.0,
+                style: readshot_core::ShapeStyle {
+                    fill: readshot_core::FillMode::Filled,
+                    ..Default::default()
+                },
+            },
+        ] {
+            let (r, fill) = super::redaction_cover(&a).expect("a redaction is covered");
+            assert_eq!(r, rect);
+            assert_eq!(fill.a, 1.0, "opaque: nothing under it shows");
+        }
+        // An outline rectangle is no redaction: drawn as its preview.
+        let outline = Annotation::Rectangle {
+            rect,
+            color: CoreRgba::new(0.1, 0.2, 0.3, 1.0),
+            line_width: 2.0,
+            style: Default::default(),
+        };
+        assert!(super::redaction_cover(&outline).is_none());
     }
 }

@@ -408,12 +408,46 @@ fn preview_gap_now(ed: &mut EditorSession, gap: u32) {
 /// output path (`commit_snapshot_drag`) calls this first, so what is
 /// kept is the value the slider shows.
 pub(crate) fn flush_gap_preview(ed: &mut EditorSession) {
-    let outstanding = super::compose_jobs::take_outstanding_gap(ed);
-    if let Some(gap) = ed.layout_gap_pending.take().or(outstanding) {
-        if ed.snapshot_drag_baseline.is_some() && !ed.snapshot_drag_cancelled {
-            preview_gap_now(ed, gap);
+    let open = ed.snapshot_drag_baseline.is_some() && !ed.snapshot_drag_cancelled;
+    let running = ed
+        .compose_job
+        .take_if(|j| matches!(j.kind, ComposeKind::GapPreview(_)));
+    let running_gap = running.as_ref().and_then(|j| match j.kind {
+        ComposeKind::GapPreview(gap) => Some(gap),
+        _ => None,
+    });
+    let newest = ed
+        .layout_gap_pending
+        .take()
+        .or(ed.gap_queued.take())
+        .or(running_gap);
+    let Some(gap) = newest.filter(|_| open) else {
+        super::compose_jobs::abandon(running);
+        return;
+    };
+    match running {
+        Some(job) if running_gap == Some(gap) => {
+            // Its compose is of the newest value: wait for it rather than
+            // compose the same document again here.
+            let fresh = ed.model.history_generation() == job.generation
+                && ed.model.snapshot() == job.present
+                && ed.snapshot_drag_baseline == job.drag_baseline;
+            if let Some(doc) = job.output.claim().filter(|_| fresh) {
+                if ed
+                    .model
+                    .preview_precomposed(doc.next, doc.base, doc.flattened)
+                    .is_ok()
+                {
+                    let handle = ed.model.flattened_handle();
+                    ed.install_image(handle);
+                    ed.layout_gap_previewed_at = Some(Instant::now());
+                    return;
+                }
+            }
         }
+        other => super::compose_jobs::abandon(other),
     }
+    preview_gap_now(ed, gap);
 }
 
 /// The throttle's trailing edge: preview the coalesced value, off the UI

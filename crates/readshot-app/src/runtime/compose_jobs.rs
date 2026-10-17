@@ -25,15 +25,25 @@
 //!   the view, until the new one lands ([`after_update`]).
 //!
 //! Every request is tagged (`seq`, the history generation and present
-//! state, a gap preview's slider baseline, a flatten's base and
-//! annotations) and its result is dropped when stale.
+//! state, a gap preview's slider baseline, a flatten's base) and a stale
+//! step or preview result is dropped. A stale flatten is still shown
+//! when it is over the document on screen (it is newer than what is
+//! there), the newest rendering next; only a render of the present enters
+//! the model, which outputs and History use, so they never use a display.
+//! Edits not in the image on screen yet are drawn over it by the canvas
+//! ([`EditorSession::pending_overlay`]), redactions opaque.
 //!
-//! A step or preview never lands under an open interaction: every editor
-//! message that could start a drag or draft, set `busy`, output or move
-//! history first settles the pending work on the UI thread
-//! ([`settle_before`]; only an allow-list of passive messages may wait,
-//! and the chained steps above). Settling waits for a compose already
-//! running rather than composing the same document twice.
+//! A step never lands under an open interaction: every editor message
+//! that could start a drag or draft, set `busy`, output or move history
+//! first settles pending steps on the UI thread ([`settle_before`]; an
+//! allow-list of passive messages, key presses themselves (the message a
+//! key maps to settles on its own) and the chained steps above may
+//! wait). Settling waits for a compose already running rather than
+//! composing the same document twice. A held gap drag is not settled: a
+//! value of it landing under an interaction stays queued, and its commit
+//! shows the newest value first. Superseded workers are abandoned (never
+//! started, or free their own result), and big images let go of are
+//! freed on one long-lived dropper thread.
 
 use super::*;
 
@@ -75,43 +85,130 @@ pub(crate) fn compose_with(next: Snapshot, base: Option<Arc<image::RgbaImage>>) 
         next.doc.geometry.compose()
     });
     let flattened = readshot_core::render(&base, &next.annotations);
-    let handle = iced::widget::image::Handle::from_rgba(
-        flattened.width(),
-        flattened.height(),
-        flattened.clone().into_raw(),
-    );
     ComposedDoc {
         next,
         base,
         flattened,
-        handle,
     }
 }
 
-/// Free `t` on a helper thread: releasing a document-sized image takes the
-/// UI thread ~2 ms per 100 MP (the pages are unmapped).
+/// Below this many bytes an image is freed where it is let go.
+const FREE_OFF_THREAD_MIN_BYTES: usize = 4 << 20;
+
+type Garbage = Box<dyn Send>;
+
+/// The one long-lived thread that frees big images (fed by a channel).
+fn dropper() -> Option<&'static std::sync::mpsc::Sender<Garbage>> {
+    static DROPPER: std::sync::OnceLock<Option<std::sync::mpsc::Sender<Garbage>>> =
+        std::sync::OnceLock::new();
+    DROPPER
+        .get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<Garbage>();
+            std::thread::Builder::new()
+                .name("readshot-free".into())
+                .spawn(move || {
+                    for garbage in rx {
+                        drop(garbage);
+                    }
+                })
+                .ok()
+                .map(|_| tx)
+        })
+        .as_ref()
+}
+
+#[cfg(test)]
+thread_local! {
+    static SENT_TO_DROPPER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread sent something to the dropper thread.
+#[cfg(test)]
+pub(crate) fn sent_to_dropper() -> u64 {
+    SENT_TO_DROPPER.with(std::cell::Cell::get)
+}
+
+/// Free `t` on the dropper thread: releasing a document-sized image takes
+/// the UI thread ~2 ms per 100 MP (its pages are unmapped). Without the
+/// thread, `t` is dropped here.
 pub(crate) fn free_off_thread<T: Send + 'static>(t: T) {
-    // If no thread can be made, `t` is dropped here instead.
-    let _ = std::thread::Builder::new()
-        .name("readshot-free".into())
-        .spawn(move || drop(t));
+    #[cfg(test)]
+    SENT_TO_DROPPER.with(|c| c.set(c.get() + 1));
+    match dropper() {
+        Some(tx) => {
+            let _ = tx.send(Box::new(t));
+        }
+        None => drop(t),
+    }
+}
+
+/// A finished compose nobody will use, freed off the UI thread.
+fn discard(doc: Option<ComposedDoc>) {
+    if doc.is_some() {
+        free_off_thread(doc);
+    }
 }
 
 /// The images the editor shows or keeps now, held across a change so
-/// those it lets go are freed off the UI thread ([`free_off_thread`]).
+/// those it lets go are freed off the UI thread ([`Held::release`]).
 pub(crate) struct Held {
-    _model: Vec<Arc<image::RgbaImage>>,
-    _handle: iced::widget::image::Handle,
-    _shown: ShownImage,
-    _kept: Option<crate::editor::KeptDisplay>,
+    bases: Vec<Arc<image::RgbaImage>>,
+    flats: Vec<readshot_ui::editor::Flattened>,
+    handles: Vec<iced::widget::image::Handle>,
 }
 
 pub(crate) fn hold(ed: &EditorSession) -> Held {
+    let (bases, flats) = ed.model.held_images();
+    let mut bases = bases;
+    bases.push(Arc::clone(&ed.shown.base));
+    let mut handles = vec![ed.image_handle.clone()];
+    if let Some(kept) = &ed.kept_display {
+        bases.push(Arc::clone(&kept.shown.base));
+        handles.push(kept.handle.clone());
+    }
     Held {
-        _model: ed.model.held_images(),
-        _handle: ed.image_handle.clone(),
-        _shown: ed.shown.clone(),
-        _kept: ed.kept_display.clone(),
+        bases,
+        flats,
+        handles,
+    }
+}
+
+fn handle_bytes(h: &iced::widget::image::Handle) -> usize {
+    match h {
+        iced::widget::image::Handle::Rgba { pixels, .. } => pixels.len(),
+        _ => 0,
+    }
+}
+
+impl Held {
+    /// Let go of what was held: when that frees a big image (nothing in
+    /// `ed` holds it any more), on the dropper thread; else here.
+    pub(crate) fn release(self, ed: Option<&EditorSession>) {
+        let live: Vec<_> = ed
+            .map(|ed| {
+                let (_, flats) = ed.model.held_images();
+                std::iter::once(ed.image_handle.id())
+                    .chain(ed.kept_display.iter().map(|k| k.handle.id()))
+                    .chain(flats.iter().map(|f| f.handle().id()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let big = |bytes: usize| bytes >= FREE_OFF_THREAD_MIN_BYTES;
+        // Each base appears here at most a few times; it is freed with us
+        // when only our own copies of it are left.
+        let frees_base = self.bases.iter().any(|b| {
+            let ours = self.bases.iter().filter(|o| Arc::ptr_eq(o, b)).count();
+            Arc::strong_count(b) <= ours && big(b.as_raw().len())
+        });
+        let frees_pixels = self
+            .flats
+            .iter()
+            .map(|f| f.handle())
+            .chain(self.handles.iter().cloned())
+            .any(|h| !live.contains(&h.id()) && big(handle_bytes(&h)));
+        if frees_base || frees_pixels {
+            free_off_thread(self);
+        }
     }
 }
 
@@ -132,6 +229,7 @@ fn register(
         ed.compose_job.as_ref().is_none_or(|j| !j.kind.is_step()),
         "a pending step would be lost"
     );
+    abandon(ed.compose_job.take());
     ed.compose_seq += 1;
     let composed = steps.len();
     ed.compose_job = Some(ComposeRequest {
@@ -147,6 +245,14 @@ fn register(
         output: ComposedOutput::queued(),
         launched: false,
     });
+}
+
+/// A replaced or dropped request: its worker never runs, or frees its own
+/// result ([`ComposedOutput::abandon`]).
+pub(crate) fn abandon(job: Option<ComposeRequest>) {
+    if let Some(job) = job {
+        discard(job.output.abandon());
+    }
 }
 
 /// Start the worker of the registered request, if it hasn't started.
@@ -200,6 +306,18 @@ pub(crate) fn planned_present(ed: &EditorSession) -> Option<Snapshot> {
     match ed.compose_job.as_ref().filter(|j| j.kind.is_step()) {
         Some(job) => ed.model.plan_ops(&ops_of(&job.steps)),
         None => Some(ed.model.snapshot()),
+    }
+}
+
+/// Whether undo and redo are possible once the queued steps land (what
+/// the toolbar shows; ⌘Z and ⇧⌘Z plan against the same state).
+pub(crate) fn can_undo_redo(ed: &EditorSession) -> (bool, bool) {
+    match ed.compose_job.as_ref().filter(|j| j.kind.is_step()) {
+        Some(job) => ed
+            .model
+            .planned_undo_redo(&ops_of(&job.steps))
+            .unwrap_or((ed.model.can_undo(), ed.model.can_redo())),
+        None => (ed.model.can_undo(), ed.model.can_redo()),
     }
 }
 
@@ -409,7 +527,7 @@ pub(crate) fn gap_outstanding(ed: &EditorSession) -> bool {
 pub(crate) fn take_outstanding_gap(ed: &mut EditorSession) -> Option<u32> {
     let running = match ed.compose_job.as_ref().map(|j| j.kind) {
         Some(ComposeKind::GapPreview(gap)) => {
-            ed.compose_job = None;
+            abandon(ed.compose_job.take());
             Some(gap)
         }
         _ => None,
@@ -437,7 +555,7 @@ pub(crate) fn handle_composed(
     };
     // Superseded by a newer request (or settled already): never applied.
     let Some(request) = ed.compose_job.take_if(|j| j.seq == seq) else {
-        free_off_thread(output.take());
+        discard(output.take());
         return Task::none();
     };
     let doc = output.take();
@@ -445,9 +563,9 @@ pub(crate) fn handle_composed(
     let task = match request.kind {
         ComposeKind::GapPreview(gap) => {
             if interaction_open(ed) {
-                // Unreachable once `settle_before` runs: never install a
-                // frame under an open interaction; keep the value instead.
-                tracing::warn!(target: "readshot::editor", "gap compose landed under an interaction");
+                // A held drag isn't settled before other messages: never
+                // install a frame under an open interaction; keep the
+                // value for the drag's commit (or its cancel) instead.
                 ed.gap_queued.get_or_insert(gap);
                 return Task::none();
             }
@@ -462,9 +580,9 @@ pub(crate) fn handle_composed(
                         next,
                         base,
                         flattened,
-                        handle,
                     } = doc;
                     if ed.model.preview_precomposed(next, base, flattened).is_ok() {
+                        let handle = ed.model.flattened_handle();
                         ed.install_image(handle);
                         ed.layout_gap_previewed_at = Some(std::time::Instant::now());
                     }
@@ -474,7 +592,7 @@ pub(crate) fn handle_composed(
                     ed.gap_queued.get_or_insert(gap);
                     super::combine::flush_gap_preview(ed);
                 }
-                stale => free_off_thread(stale),
+                stale => discard(stale),
             }
             after_gap_landed(ed, &coord)
         }
@@ -490,19 +608,23 @@ pub(crate) fn handle_composed(
             if ed.busy {
                 debug_assert!(false, "a compose landed while busy");
                 ed.compose_job = Some(request);
-                free_off_thread(doc);
+                discard(doc);
                 return Task::none();
             }
             land_steps(ed, Some(&coord), request, doc)
         }
     };
-    free_off_thread(held);
+    held.release(state.editor.as_ref());
     task
 }
 
-/// A flatten landed: shown when it still is what the display wants
-/// (the same annotations over the same base); a stale one is dropped and
-/// [`after_update`] starts the newest.
+/// A flatten landed. It is shown whenever it is over the document on
+/// screen, even if the edits moved on meanwhile: it is newer than what is
+/// shown (one flatten runs at a time), so continuous input (a slider,
+/// held arrow keys) keeps the screen moving. If it isn't what the display
+/// wants, the display stays dirty and [`after_update`] renders the newest.
+/// Only a render of the present enters the model's cache, which outputs
+/// use; a display never does.
 fn land_flatten(ed: &mut EditorSession, request: ComposeRequest, doc: Option<ComposedDoc>) {
     let base = ed.model.shared_base();
     let Some(doc) = doc else {
@@ -513,8 +635,11 @@ fn land_flatten(ed: &mut EditorSession, request: ComposeRequest, doc: Option<Com
         return;
     };
     let wanted = ed.wanted_display();
-    if !Arc::ptr_eq(&doc.base, &base) || doc.next.annotations != wanted {
-        free_off_thread(doc);
+    let same_document = Arc::ptr_eq(&doc.base, &base) && Arc::ptr_eq(&ed.shown.base, &base);
+    if !same_document || ed.shown.shows(&base, &wanted) {
+        // Another document, or the display is current already (a kept
+        // display put back): nothing to show.
+        discard(Some(doc));
         return;
     }
     debug_assert!(request
@@ -522,16 +647,24 @@ fn land_flatten(ed: &mut EditorSession, request: ComposeRequest, doc: Option<Com
         .as_ref()
         .is_some_and(|b| Arc::ptr_eq(b, &doc.base)));
     let ComposedDoc {
-        next,
-        flattened,
-        handle,
-        ..
+        next, flattened, ..
     } = doc;
-    if next.annotations == ed.model.annotations() {
+    // `base` is the model's (checked above): a render of the present is
+    // installed, its pixels shared with the display.
+    let handle = if next.annotations == ed.model.annotations() {
         ed.model
             .install_flattened(&base, &next.annotations, flattened);
-    }
+        ed.model.flattened_handle()
+    } else {
+        iced::widget::image::Handle::from_rgba(
+            flattened.width(),
+            flattened.height(),
+            flattened.into_raw(),
+        )
+    };
+    let current = next.annotations == wanted;
     ed.set_display(handle, ShownImage::of(base, next.annotations));
+    ed.display_dirty = !current;
 }
 
 /// Before an output: a render of the present already running is waited
@@ -555,13 +688,12 @@ pub(crate) fn settle_flatten(ed: &mut EditorSession) {
 fn render_display_now(ed: &mut EditorSession) {
     let base = ed.model.shared_base();
     let wanted = ed.wanted_display();
-    let flat = if wanted == ed.model.annotations() {
-        ed.model.flatten()
+    let handle = if wanted == ed.model.annotations() {
+        ed.model.flattened_handle()
     } else {
-        readshot_core::render(&base, &wanted)
+        let flat = readshot_core::render(&base, &wanted);
+        iced::widget::image::Handle::from_rgba(flat.width(), flat.height(), flat.into_raw())
     };
-    let handle =
-        iced::widget::image::Handle::from_rgba(flat.width(), flat.height(), flat.into_raw());
     ed.set_display(handle, ShownImage::of(base, wanted));
 }
 
@@ -619,7 +751,11 @@ fn interaction_open(ed: &EditorSession) -> bool {
 fn may_wait(message: &Message) -> (bool, bool) {
     use readshot_ui::CanvasMessage;
     match message {
-        Message::EditorComposed { .. }
+        // A key press settles nothing itself: the message it maps to is
+        // dispatched (and settles) on its own; one that maps to nothing,
+        // like a bare modifier, only updates held-key state.
+        Message::EditorKeyPressed { .. }
+        | Message::EditorComposed { .. }
         | Message::EditorStatusTick
         | Message::EditorStatusDismissed
         | Message::EditorWindowReady(..)
@@ -659,33 +795,21 @@ fn may_wait(message: &Message) -> (bool, bool) {
 /// history steps instead of settling them: they only need the state the
 /// steps lead to, never the pixels or the frame on screen.
 fn chains_onto_steps(message: &Message) -> bool {
-    let chains = |m: &Message| {
-        matches!(
-            m,
-            Message::EditorRotate { .. }
-                | Message::EditorFlip(..)
-                | Message::EditorToolbar(
-                    readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
-                )
-        )
-    };
-    match message {
-        Message::EditorKeyPressed {
-            key,
-            modifiers,
-            status_ignored,
-            ..
-        } => super::view::editor_key_message(key.clone(), *modifiers, *status_ignored)
-            .is_some_and(|m| chains(&m)),
-        m => chains(m),
-    }
+    matches!(
+        message,
+        Message::EditorRotate { .. }
+            | Message::EditorFlip(..)
+            | Message::EditorToolbar(
+                readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
+            )
+    )
 }
 
 /// Run before an editor message is handled: unless `message` may wait,
 /// pending steps are applied now (waiting for their compose if it is
-/// running, composing here if it hasn't started) and a gap compose is
-/// shown now (a released drag is committed, as a queued step when its
-/// compose is still running). The async path stays for the common case —
+/// running, composing here if it hasn't started) and a released gap drag
+/// is committed (as a queued step when its compose is still running). A
+/// held gap drag is left to the handler. The async path stays for the common case —
 /// apply, then wait — and nothing ever lands under, or is lost to, a
 /// later interaction.
 ///
@@ -709,9 +833,7 @@ pub(crate) fn settle_before(state: &mut App, message: &Message) -> bool {
     if !steps_may_wait {
         settle_pending_step(ed, &coord);
     }
-    // A held gap drag is cancelled by a chained message's handler (back
-    // to its baseline): showing its newest value first would be wasted.
-    if !gap_may_wait && !chained {
+    if !gap_may_wait {
         settle_gap(ed, &coord);
     }
     !Arc::ptr_eq(&before, ed.model.geometry())
@@ -761,12 +883,13 @@ pub(crate) fn settle_all(ed: &mut EditorSession, coord: &crate::coordinator::Cap
     settle_gap(ed, coord);
 }
 
-/// Show an outstanding gap value now; commit a drag released while it
-/// composed.
+/// Commit a gap drag released while it composed (when it couldn't be
+/// queued as a step). A drag still held is left alone: whatever the
+/// message does next either cancels it (its value is never composed) or
+/// keeps it through `commit_snapshot_drag`, which shows the newest value
+/// first; a value landing meanwhile never lands under an interaction
+/// (`handle_composed` keeps it queued instead).
 fn settle_gap(ed: &mut EditorSession, coord: &crate::coordinator::CaptureCoordinator) {
-    if gap_outstanding(ed) {
-        super::combine::flush_gap_preview(ed);
-    }
     if ed.gap_commit_on_land {
         commit_snapshot_drag(ed, coord);
     }
@@ -928,21 +1051,19 @@ fn land_steps(
         let doc = match doc {
             Some(doc) if doc.next == request.next => doc,
             other => {
-                free_off_thread(other);
+                discard(other);
                 compose_with(request.next, request.base)
             }
         };
         let ComposedDoc {
-            base,
-            flattened,
-            handle,
-            ..
+            base, flattened, ..
         } = doc;
         match ed
             .model
             .apply_ops_precomposed(&ops_of(&landed), base, flattened)
         {
             Ok(true) => {
+                let handle = ed.model.flattened_handle();
                 ed.install_image(handle);
                 after_steps_landed(ed, coord, &landed);
             }

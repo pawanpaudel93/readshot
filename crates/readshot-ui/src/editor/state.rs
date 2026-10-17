@@ -100,7 +100,7 @@ pub struct EditorState {
     /// tool colour (`set_color`) or line width (`set_line_width`) does not
     /// touch it: those only style the next annotation, not the rendered
     /// stack, so the flattened image is unchanged.
-    flattened_cache: Option<Arc<RgbaImage>>,
+    flattened_cache: Option<Flattened>,
     /// Composed bases other than the present's, kept so undo, redo and a
     /// preview cancel swap an image in instead of recomposing. Only bases
     /// that were composed anyway are kept (never composed ahead), and only
@@ -111,7 +111,52 @@ pub struct EditorState {
     base_composes: u64,
     /// The flattened image of an open snapshot preview's baseline, kept
     /// when the preview opened so a cancel restores it without a render.
-    preview_baseline_flat: Option<Arc<RgbaImage>>,
+    preview_baseline_flat: Option<Flattened>,
+}
+
+/// A flattened image, held once for both the display and an output: its
+/// pixels live in an iced image handle (shared, reference counted), so
+/// showing it copies nothing and it is read back without a render.
+#[derive(Clone, Debug)]
+pub struct Flattened {
+    handle: iced::widget::image::Handle,
+    width: u32,
+    height: u32,
+}
+
+impl Flattened {
+    /// Take `image`'s pixels (no copy).
+    pub fn new(image: RgbaImage) -> Self {
+        let (width, height) = image.dimensions();
+        Self {
+            handle: iced::widget::image::Handle::from_rgba(width, height, image.into_raw()),
+            width,
+            height,
+        }
+    }
+
+    /// The handle to show it with (shares its pixels).
+    pub fn handle(&self) -> iced::widget::image::Handle {
+        self.handle.clone()
+    }
+
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// Its RGBA pixels, row by row.
+    pub fn pixels(&self) -> &[u8] {
+        match &self.handle {
+            iced::widget::image::Handle::Rgba { pixels, .. } => pixels,
+            _ => &[],
+        }
+    }
+
+    /// An owned copy as an image.
+    pub fn to_image(&self) -> RgbaImage {
+        RgbaImage::from_raw(self.width, self.height, self.pixels().to_vec())
+            .unwrap_or_else(|| RgbaImage::new(self.width, self.height))
+    }
 }
 
 /// One history move of a queued document step, applied with its composed
@@ -302,7 +347,7 @@ impl EditorState {
         if !apply_style_to_annotation(&mut next[idx], msg) {
             return false;
         }
-        self.history.push(next);
+        self.push_annotations(next);
         self.selected_annotation = Some(idx);
         self.flattened_cache = None;
         true
@@ -341,7 +386,7 @@ impl EditorState {
         let mut next = self.history.current().to_vec();
         next.push(annotation);
         self.selected_annotation = next.len().checked_sub(1);
-        self.history.push(next);
+        self.push_annotations(next);
         self.flattened_cache = None;
     }
 
@@ -355,7 +400,7 @@ impl EditorState {
         let mut next = self.history.current().to_vec();
         next.extend(annotations);
         self.selected_annotation = None;
-        self.history.push(next);
+        self.push_annotations(next);
         self.flattened_cache = None;
         n
     }
@@ -469,8 +514,21 @@ impl EditorState {
     }
 
     /// The cached flattened image of the present, shared (no copy).
-    pub fn flattened_shared(&self) -> Option<Arc<RgbaImage>> {
+    pub fn flattened_shared(&self) -> Option<Flattened> {
         self.flattened_cache.clone()
+    }
+
+    /// The flattened image of the present as a display handle sharing
+    /// the cached pixels, rendered here when there is none.
+    pub fn flattened_handle(&mut self) -> iced::widget::image::Handle {
+        if self.flattened_cache.is_none() {
+            let img = render(&self.base, self.history.current());
+            self.flattened_cache = Some(Flattened::new(img));
+        }
+        self.flattened_cache
+            .as_ref()
+            .map(Flattened::handle)
+            .expect("filled above")
     }
 
     /// Whether a snapshot preview (slider drag) is open.
@@ -499,6 +557,18 @@ impl EditorState {
         ops.iter()
             .all(|op| apply_op(&mut history, op))
             .then(|| history.snapshot().clone())
+    }
+
+    /// Whether undo and redo are possible once `ops` are applied (what the
+    /// toolbar shows while they are queued). `None` like [`Self::plan_ops`].
+    pub fn planned_undo_redo(&self, ops: &[DocOp]) -> Option<(bool, bool)> {
+        if self.preview_baseline.is_some() {
+            return None;
+        }
+        let mut history = self.history.clone();
+        ops.iter()
+            .all(|op| apply_op(&mut history, op))
+            .then(|| (history.can_undo(), history.can_redo()))
     }
 
     /// Apply `ops` (each one undo step, or one undo / redo) with the end
@@ -540,24 +610,36 @@ impl EditorState {
         if !Arc::ptr_eq(base, &self.base) || self.history.current() != annotations {
             return false;
         }
-        self.flattened_cache = Some(Arc::new(flat));
+        self.flattened_cache = Some(Flattened::new(flat));
         true
     }
 
     /// Every image this model holds (the base, the cached bases, the
     /// flattened images), shared: a caller can keep them across a change
     /// so the big ones it releases are freed elsewhere.
-    pub fn held_images(&self) -> Vec<Arc<RgbaImage>> {
-        std::iter::once(Arc::clone(&self.base))
-            .chain(self.bases.iter().map(|(_, b)| Arc::clone(b)))
-            .chain(self.flattened_cache.iter().cloned())
-            .chain(self.preview_baseline_flat.iter().cloned())
-            .collect()
+    pub fn held_images(&self) -> (Vec<Arc<RgbaImage>>, Vec<Flattened>) {
+        (
+            std::iter::once(Arc::clone(&self.base))
+                .chain(self.bases.iter().map(|(_, b)| Arc::clone(b)))
+                .collect(),
+            self.flattened_cache
+                .iter()
+                .chain(self.preview_baseline_flat.iter())
+                .cloned()
+                .collect(),
+        )
     }
 
     /// Whether [`Self::flatten`] would return a cached image (no render).
     pub fn has_flattened(&self) -> bool {
         self.flattened_cache.is_some()
+    }
+
+    /// New annotations on the same document as one undo step. The state
+    /// one redo away is gone, so its cached base is too.
+    fn push_annotations(&mut self, next: Vec<Annotation>) {
+        self.history.push(next);
+        self.trim_bases();
     }
 
     fn alloc_part_id(&mut self) -> PartId {
@@ -590,6 +672,7 @@ impl EditorState {
         let mut next = self.snapshot();
         next.doc.beautify = beautify;
         self.history.push_snapshot(next);
+        self.trim_bases();
         true
     }
 
@@ -846,7 +929,7 @@ impl EditorState {
         }
         self.trim_bases();
         self.clamp_selection();
-        self.flattened_cache = Some(Arc::new(flat));
+        self.flattened_cache = Some(Flattened::new(flat));
     }
 
     /// Move to `next` as one undo step; annotations follow their parts.
@@ -1027,7 +1110,7 @@ impl EditorState {
         }
         next.remove(idx);
         self.selected_annotation = None;
-        self.history.push(next);
+        self.push_annotations(next);
         self.flattened_cache = None;
         true
     }
@@ -1070,7 +1153,7 @@ impl EditorState {
             return false;
         }
         *existing = content;
-        self.history.push(next);
+        self.push_annotations(next);
         self.selected_annotation = Some(idx);
         self.flattened_cache = None;
         true
@@ -1084,7 +1167,7 @@ impl EditorState {
         if !set_annotation_color(&mut next[idx], color) {
             return false;
         }
-        self.history.push(next);
+        self.push_annotations(next);
         self.selected_annotation = Some(idx);
         self.flattened_cache = None;
         true
@@ -1098,7 +1181,7 @@ impl EditorState {
         if !set_annotation_width(&mut next[idx], width.clamp(0.5, 64.0)) {
             return false;
         }
-        self.history.push(next);
+        self.push_annotations(next);
         self.selected_annotation = Some(idx);
         self.flattened_cache = None;
         true
@@ -1122,7 +1205,7 @@ impl EditorState {
         // burst of nudges can't strand one entirely off-canvas where it
         // can no longer be selected. Crop is already clamped above.
         self.clamp_annotation_into_base(&mut next[idx]);
-        self.history.push(next);
+        self.push_annotations(next);
         self.selected_annotation = Some(idx);
         self.flattened_cache = None;
         true
@@ -1276,7 +1359,7 @@ impl EditorState {
             return false;
         }
         self.history.replace_present(baseline);
-        self.history.push(final_state);
+        self.push_annotations(final_state);
         self.clamp_selection();
         self.flattened_cache = None;
         true
@@ -1299,10 +1382,10 @@ impl EditorState {
     /// The cache is cleared on every state change.
     pub fn flatten(&mut self) -> RgbaImage {
         if let Some(img) = &self.flattened_cache {
-            return RgbaImage::clone(img);
+            return img.to_image();
         }
         let img = render(&self.base, self.history.current());
-        self.flattened_cache = Some(Arc::new(img.clone()));
+        self.flattened_cache = Some(Flattened::new(img.clone()));
         img
     }
 
@@ -3717,15 +3800,24 @@ mod tests {
             composes + 1,
             "the baseline's base was cached"
         );
-        assert!(Arc::ptr_eq(&s.flattened_shared().unwrap(), &kept));
+        assert_eq!(
+            s.flattened_shared().unwrap().handle().id(),
+            kept.handle().id()
+        );
         // A Beautify-only preview keeps the flattened image throughout.
         let baseline = s.snapshot();
         let mut next = baseline.clone();
         next.doc.beautify.padding = 20;
         s.preview_snapshot(next).unwrap();
-        assert!(Arc::ptr_eq(&s.flattened_shared().unwrap(), &kept));
+        assert_eq!(
+            s.flattened_shared().unwrap().handle().id(),
+            kept.handle().id()
+        );
         s.cancel_preview_snapshot(baseline);
-        assert!(Arc::ptr_eq(&s.flattened_shared().unwrap(), &kept));
+        assert_eq!(
+            s.flattened_shared().unwrap().handle().id(),
+            kept.handle().id()
+        );
     }
 
     #[test]
@@ -3758,5 +3850,28 @@ mod tests {
             assert!(*p.image == *q.image, "the same pixels");
         }
         assert_eq!(step.annotations, sync.annotations());
+    }
+
+    #[test]
+    fn a_new_edit_drops_the_cached_base_of_the_undone_state() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        s.rotate(true).unwrap();
+        let rotated = s.geometry().clone();
+        assert!(s.undo());
+        assert!(s.cached_base(&rotated).is_some(), "one redo away");
+        // An edit drops the redo stack: its base goes with it.
+        s.commit_annotation(block(0.0, 0.0));
+        assert!(!s.can_redo());
+        assert!(s.cached_base(&rotated).is_none());
+        assert!(s.bases.is_empty());
+    }
+
+    #[test]
+    fn the_planned_undo_and_redo_follow_queued_moves() {
+        let mut s = EditorState::new(px_grid(3, 2));
+        s.commit_annotation(block(0.0, 0.0));
+        assert_eq!(s.planned_undo_redo(&[]), Some((true, false)));
+        assert_eq!(s.planned_undo_redo(&[DocOp::Undo]), Some((false, true)));
+        assert_eq!(s.planned_undo_redo(&[DocOp::Undo, DocOp::Undo]), None);
     }
 }

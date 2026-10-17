@@ -1996,8 +1996,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let dimmed = |c: Color| Color { a: c.a * 0.45, ..c };
     let icon_color = |enabled: bool| if enabled { p.t2 } else { dimmed(p.t2) };
     let popover = ed.popover;
-    let can_undo = ed.model.can_undo();
-    let can_redo = ed.model.can_redo();
+    // Queued steps count: the buttons show where undo / redo will be.
+    let (can_undo, can_redo) = super::compose_jobs::can_undo_redo(ed);
 
     // --- Tool bar ---
     let mut tool_bar = row![].spacing(2).align_y(Alignment::Center);
@@ -2055,6 +2055,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     // A render still in flight leaves the previous one on screen: where
     // it sits in the present frame (same document, maybe another crop).
     let shown_part = shown_part_of_frame(ed, image_offset, (image_w, image_h));
+    // Edits not yet in that render: the canvas draws them over it.
+    let pending = ed.pending_overlay();
     let beautify = ed.model.beautify();
     let zoom = ed.zoom;
     let display_scale = ed.display_scale;
@@ -2184,6 +2186,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 Vec::new()
             },
             selected_preview: selected_preview.clone(),
+            pending: pending.clone(),
             shift_held: editor_shift_held,
             cancel_seq: drag_cancel_seq,
             style: ed.model.tool_style(),
@@ -5554,6 +5557,8 @@ pub(crate) fn shown_part_of_frame(
     {
         return None;
     }
+    // Document px → the shown image's px (a placeholder is scaled down).
+    let k = shown.scale;
     let x0 = shown.offset.0.max(offset.0);
     let y0 = shown.offset.1.max(offset.1);
     let x1 = (shown.offset.0 + shown.size.0 as f32).min(offset.0 + size.0 as f32);
@@ -5561,13 +5566,17 @@ pub(crate) fn shown_part_of_frame(
     if x1 - x0 < 1.0 || y1 - y0 < 1.0 {
         return Some(None);
     }
-    let rx = (x0 - shown.offset.0).round().max(0.0) as u32;
-    let ry = (y0 - shown.offset.1).round().max(0.0) as u32;
-    let rw = ((x1 - x0).round() as u32)
-        .min(shown.size.0.saturating_sub(rx))
+    let (iw, ih) = (
+        ((shown.size.0 as f32) * k).round() as u32,
+        ((shown.size.1 as f32) * k).round() as u32,
+    );
+    let rx = ((x0 - shown.offset.0) * k).round().max(0.0) as u32;
+    let ry = ((y0 - shown.offset.1) * k).round().max(0.0) as u32;
+    let rw = (((x1 - x0) * k).round() as u32)
+        .min(iw.saturating_sub(rx))
         .max(1);
-    let rh = ((y1 - y0).round() as u32)
-        .min(shown.size.1.saturating_sub(ry))
+    let rh = (((y1 - y0) * k).round() as u32)
+        .min(ih.saturating_sub(ry))
         .max(1);
     Some(Some(ShownPart {
         region: iced::Rectangle {
@@ -5577,6 +5586,6 @@ pub(crate) fn shown_part_of_frame(
             height: rh,
         },
         at: (x0 - offset.0, y0 - offset.1),
-        size: (rw as f32, rh as f32),
+        size: (x1 - x0, y1 - y0),
     }))
 }

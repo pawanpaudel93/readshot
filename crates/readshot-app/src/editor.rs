@@ -371,12 +371,12 @@ pub struct ComposeRequest {
 }
 
 /// A composed document: `base` is `next`'s geometry composed, and
-/// `flattened` is `render(base, next.annotations)` (also in `handle`).
+/// `flattened` is `render(base, next.annotations)`. The model takes the
+/// flattened pixels for both its cache and the display (no copy).
 pub struct ComposedDoc {
     pub next: readshot_ui::editor::Snapshot,
     pub base: std::sync::Arc<image::RgbaImage>,
     pub flattened: image::RgbaImage,
-    pub handle: iced::widget::image::Handle,
 }
 
 /// A compose result slot shared by the worker, its message and the
@@ -394,6 +394,9 @@ enum SlotState {
     Queued,
     /// The worker is composing.
     Running,
+    /// The worker is composing for a request that was replaced: it frees
+    /// its result itself.
+    Abandoned,
     /// The worker finished (`None`: it failed).
     Done(Option<ComposedDoc>),
     /// Taken, or claimed by the UI thread before the worker started.
@@ -430,7 +433,7 @@ impl ComposedOutput {
         let mut state = self.lock();
         match std::mem::replace(&mut *state, SlotState::Taken) {
             SlotState::Done(doc) => doc,
-            other @ (SlotState::Queued | SlotState::Running) => {
+            other @ (SlotState::Queued | SlotState::Running | SlotState::Abandoned) => {
                 // Not finished: leave it for whoever waits on it.
                 *state = other;
                 None
@@ -450,8 +453,32 @@ impl ComposedOutput {
             *state = SlotState::Running;
         }
         let doc = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).ok();
-        *self.lock() = SlotState::Done(doc);
+        let mut state = self.lock();
+        if matches!(*state, SlotState::Abandoned) {
+            *state = SlotState::Taken;
+            drop(state);
+            // Freed here, on the worker, never handed to the UI thread.
+            drop(doc);
+            return;
+        }
+        *state = SlotState::Done(doc);
+        drop(state);
         self.0.done.notify_all();
+    }
+
+    /// Its request was replaced: a worker not started yet never runs, a
+    /// running one frees its result itself, a finished result is
+    /// returned for freeing off the UI thread.
+    pub fn abandon(&self) -> Option<ComposedDoc> {
+        let mut state = self.lock();
+        match std::mem::replace(&mut *state, SlotState::Taken) {
+            SlotState::Running => {
+                *state = SlotState::Abandoned;
+                None
+            }
+            SlotState::Done(doc) => doc,
+            SlotState::Queued | SlotState::Abandoned | SlotState::Taken => None,
+        }
     }
 
     /// The UI thread needs the result now: a worker not started yet is
@@ -470,6 +497,10 @@ impl ComposedOutput {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                 }
                 SlotState::Done(doc) => return doc,
+                other @ SlotState::Abandoned => {
+                    *state = other;
+                    return None;
+                }
                 SlotState::Queued | SlotState::Taken => return None,
             }
         }
@@ -492,6 +523,9 @@ pub struct ShownImage {
     pub annotations: Option<Vec<Annotation>>,
     pub offset: (f32, f32),
     pub size: (u32, u32),
+    /// Image px per document px: 1 for a render, less for the scaled-down
+    /// placeholder a large editor opens with ([`placeholder_display`]).
+    pub scale: f32,
 }
 
 impl ShownImage {
@@ -502,17 +536,66 @@ impl ShownImage {
             annotations: Some(annotations),
             offset,
             size,
+            scale: 1.0,
         }
     }
 
-    /// Whether this is `annotations` rendered over `base`.
+    /// Whether this is `annotations` rendered over `base` (a placeholder
+    /// never is).
     pub fn shows(
         &self,
         base: &std::sync::Arc<image::RgbaImage>,
         annotations: &[Annotation],
     ) -> bool {
-        std::sync::Arc::ptr_eq(&self.base, base) && self.annotations.as_deref() == Some(annotations)
+        self.scale == 1.0
+            && std::sync::Arc::ptr_eq(&self.base, base)
+            && self.annotations.as_deref() == Some(annotations)
     }
+}
+
+/// Longest side of the placeholder a large editor opens with.
+pub const PLACEHOLDER_MAX_SIDE: u32 = 1600;
+
+/// What a large editor shows until its first render lands: the base
+/// scaled down (nearest pixel, so a few ms whatever the size) with no
+/// annotations; the canvas draws them over it
+/// ([`EditorSession::pending_overlay`]). Never an output: outputs and
+/// History use the model.
+fn placeholder_display(
+    base: &std::sync::Arc<image::RgbaImage>,
+) -> (iced::widget::image::Handle, ShownImage) {
+    let (w, h) = base.dimensions();
+    let s = (PLACEHOLDER_MAX_SIDE as f32 / w.max(h).max(1) as f32).min(1.0);
+    let pw = ((w as f32 * s).round() as u32).clamp(1, w.max(1));
+    let ph = ((h as f32 * s).round() as u32).clamp(1, h.max(1));
+    let small = image::RgbaImage::from_fn(pw, ph, |x, y| {
+        let sx = (u64::from(x) * u64::from(w) / u64::from(pw)) as u32;
+        let sy = (u64::from(y) * u64::from(h) / u64::from(ph)) as u32;
+        *base.get_pixel(sx.min(w.saturating_sub(1)), sy.min(h.saturating_sub(1)))
+    });
+    let handle = iced::widget::image::Handle::from_rgba(pw, ph, small.into_raw());
+    let shown = ShownImage {
+        base: std::sync::Arc::clone(base),
+        annotations: Some(Vec::new()),
+        offset: (0.0, 0.0),
+        size: (w, h),
+        scale: pw as f32 / w.max(1) as f32,
+    };
+    (handle, shown)
+}
+
+/// The display an editor opens with: rendered here when small; on a
+/// large document a placeholder, the render following off the UI thread
+/// (the display starts dirty).
+fn initial_display(model: &mut Model) -> (iced::widget::image::Handle, ShownImage, bool) {
+    let (w, h) = model.geometry().size();
+    if u64::from(w) * u64::from(h) >= ASYNC_COMPOSE_MIN_PIXELS {
+        let (handle, shown) = placeholder_display(&model.shared_base());
+        return (handle, shown, true);
+    }
+    let handle = build_handle(model);
+    let shown = ShownImage::of(model.shared_base(), model.annotations().to_vec());
+    (handle, shown, false)
 }
 
 /// A display kept for a snapshot preview's baseline, restored by a
@@ -997,8 +1080,7 @@ impl EditorSession {
 
     pub fn new_with_display_scale(image: image::RgbaImage, display_scale: f32) -> Self {
         let mut model = Model::new(image);
-        let image_handle = build_handle(&mut model);
-        let shown = ShownImage::of(model.shared_base(), model.annotations().to_vec());
+        let (image_handle, shown, display_dirty) = initial_display(&mut model);
         let output_checkpoint = EditorOutputCheckpoint(model.snapshot());
         Self {
             model,
@@ -1039,7 +1121,7 @@ impl EditorSession {
             async_compose_min_pixels: ASYNC_COMPOSE_MIN_PIXELS,
             recognition_owed: false,
             shown,
-            display_dirty: false,
+            display_dirty,
             crop_drag_uncropped: false,
             display_without: None,
             kept_display: None,
@@ -1076,8 +1158,7 @@ impl EditorSession {
     ) -> Self {
         let next_pin_number = next_pin_number_after(&record.annotation_model);
         let mut model = Model::with_annotations(image, record.annotation_model.clone());
-        let image_handle = build_handle(&mut model);
-        let shown = ShownImage::of(model.shared_base(), model.annotations().to_vec());
+        let (image_handle, shown, display_dirty) = initial_display(&mut model);
         let output_checkpoint = EditorOutputCheckpoint(model.snapshot());
         let history_geometry_base = record.geometry_id.clone();
         Self {
@@ -1119,7 +1200,7 @@ impl EditorSession {
             async_compose_min_pixels: ASYNC_COMPOSE_MIN_PIXELS,
             recognition_owed: false,
             shown,
-            display_dirty: false,
+            display_dirty,
             crop_drag_uncropped: false,
             display_without: None,
             kept_display: None,
@@ -1413,6 +1494,35 @@ impl EditorSession {
         u64::from(w) * u64::from(h) >= self.async_compose_min_pixels
     }
 
+    /// The annotations the display wants but the image on screen doesn't
+    /// have yet (its render is in flight), for the canvas to draw over it.
+    /// Crops are left out: the view cuts the image to the frame.
+    pub fn pending_overlay(&self) -> Vec<Annotation> {
+        let base = self.model.shared_base();
+        let Some(shown) = self.shown.annotations.as_ref() else {
+            return Vec::new();
+        };
+        if !std::sync::Arc::ptr_eq(&self.shown.base, &base) {
+            return Vec::new();
+        }
+        let wanted = self.wanted_display();
+        if wanted == *shown {
+            return Vec::new();
+        }
+        let mut unmatched: Vec<&Annotation> = shown.iter().collect();
+        wanted
+            .into_iter()
+            .filter(|a| !matches!(a, Annotation::Crop { .. }))
+            .filter(|a| match unmatched.iter().position(|s| *s == a) {
+                Some(i) => {
+                    unmatched.swap_remove(i);
+                    false
+                }
+                None => true,
+            })
+            .collect()
+    }
+
     /// The annotations the display should show rendered: the present's,
     /// without its crops while a crop is dragged on a large document.
     pub fn wanted_display(&self) -> Vec<Annotation> {
@@ -1484,6 +1594,7 @@ impl EditorSession {
             annotations: None,
             offset: ((x0 as u32) as f32, (y0 as u32) as f32),
             size: (w, h),
+            scale: 1.0,
         };
         self.display_dirty = false;
     }
@@ -1541,11 +1652,8 @@ fn next_pin_number_after(annotations: &[Annotation]) -> u32 {
 }
 
 fn build_handle(model: &mut Model) -> iced::widget::image::Handle {
-    // `flatten` already returns an owned copy of the cached image —
-    // hand its buffer to the handle instead of cloning it again.
-    let img = model.flatten();
-    let (w, h) = (img.width(), img.height());
-    iced::widget::image::Handle::from_rgba(w, h, img.into_raw())
+    // Shares the model's cached pixels: one copy for display and output.
+    model.flattened_handle()
 }
 
 #[cfg(test)]
@@ -1778,7 +1886,6 @@ mod tests {
         let flattened = image::RgbaImage::new(w, 1);
         ComposedDoc {
             next: readshot_ui::editor::Snapshot::default(),
-            handle: iced::widget::image::Handle::from_rgba(w, 1, flattened.clone().into_raw()),
             base,
             flattened,
         }
