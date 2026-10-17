@@ -1835,6 +1835,8 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                     if was_actual {
                         ed.zoom = ed.actual_size_zoom();
                     }
+                    // The stage relaid out without a scroll event.
+                    return view::pin_stage_offset(ed);
                 }
             }
             Task::none()
@@ -1907,7 +1909,11 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             if docked_overlay {
                 state.set_editor_panel_open(true);
             }
-            Task::none()
+            // The stage relaid out without a scroll event.
+            match state.editor.as_ref() {
+                Some(ed) if ed.window_id == Some(window) => view::pin_stage_offset(ed),
+                _ => Task::none(),
+            }
         }
         // Only redraws the recognizing skeleton.
         Message::EditorPanelTick => Task::none(),
@@ -3906,6 +3912,34 @@ mod tests {
             Annotation::Rectangle { line_width, .. } => assert_eq!(*line_width, 2.0),
             other => panic!("expected rectangle, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn zoom_and_relayout_pin_the_stage_to_the_recorded_offset() {
+        // No scroll event follows a zoom or a window resize: each pins the
+        // stage scrollable to the offset the editor records, so where a
+        // new magnifier bubble goes matches what is on screen.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        let window = iced::window::Id::unique();
+        ed.window_id = Some(window);
+        app.editor = Some(ed);
+        for msg in [
+            Message::EditorZoomIn,
+            Message::EditorZoomOut,
+            Message::EditorZoomActual,
+            Message::EditorZoomFit,
+            Message::EditorWindowResized(window, 900.0),
+        ] {
+            let task = update(&mut app, msg.clone());
+            assert!(task.units() > 0, "{msg:?} pins the stage offset");
+        }
+        // Another window's resize does not touch this stage.
+        let task = update(
+            &mut app,
+            Message::EditorWindowResized(iced::window::Id::unique(), 900.0),
+        );
+        assert_eq!(task.units(), 0);
     }
 
     #[test]

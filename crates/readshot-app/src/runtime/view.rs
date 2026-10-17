@@ -2120,6 +2120,15 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         if !(needs_horizontal_scroll || needs_vertical_scroll) {
             // No scrollable this frame: one shown later starts at 0, 0.
             stage_offset.set((0.0, 0.0));
+        } else {
+            // What this frame shows (a zoom or relayout without a scroll
+            // event clamps it); `pin_stage_offset` holds the scrollable
+            // to it.
+            stage_offset.set(clamp_stage_offset(
+                stage_offset.get(),
+                (content_w, content_h),
+                (available.width, available.height),
+            ));
         }
         let viewport = stage_viewport_in_document(StageViewport {
             offset: stage_offset.get(),
@@ -2337,6 +2346,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 (false, false) => unreachable!("scroll layer only wraps overflowing content"),
             };
             scrollable(content)
+                .id(iced::widget::Id::new(EDITOR_STAGE_ID))
                 .direction(scroll_direction)
                 .on_scroll(|v| {
                     let o = v.absolute_offset();
@@ -5323,6 +5333,40 @@ pub(crate) struct StageViewport {
     pub image_offset: (f32, f32),
 }
 
+/// The stage scrollable's id: zoom and relayout pin its offset to the
+/// one the editor records ([`pin_stage_offset`]).
+pub(crate) const EDITOR_STAGE_ID: &str = "editor-stage";
+
+/// `offset` clamped as the stage scrollable clamps it for `content` in an
+/// `available` stage.
+pub(crate) fn clamp_stage_offset(
+    offset: (f32, f32),
+    content: (f32, f32),
+    available: (f32, f32),
+) -> (f32, f32) {
+    (
+        offset.0.clamp(0.0, (content.0 - available.0).max(0.0)),
+        offset.1.clamp(0.0, (content.1 - available.1).max(0.0)),
+    )
+}
+
+/// After a zoom or relayout (no scroll event): set the stage scrollable to
+/// the offset the editor recorded (clamped to what was on screen by the
+/// last `view`). The scrollable otherwise keeps an older, larger offset it
+/// had clamped away and shows it again once the content grows, while the
+/// recorded offset (where a new magnifier bubble may go) still says what
+/// the last scroll event said.
+pub(crate) fn pin_stage_offset(ed: &EditorSession) -> Task<Message> {
+    let (x, y) = ed.stage_offset.get();
+    iced::widget::operation::scroll_to(
+        iced::widget::Id::new(EDITOR_STAGE_ID),
+        iced::widget::operation::AbsoluteOffset {
+            x: Some(x),
+            y: Some(y),
+        },
+    )
+}
+
 /// The part of the document the stage shows (document px): the stage
 /// rect at the scroll offset (clamped as the scrollable clamps it), mapped
 /// through the image's place in the content; the canvas cuts it to the
@@ -5331,14 +5375,7 @@ pub(crate) fn stage_viewport_in_document(v: StageViewport) -> Option<readshot_co
     if !(v.scale.is_finite() && v.scale > 0.0) {
         return None;
     }
-    let ox = v
-        .offset
-        .0
-        .clamp(0.0, (v.content.0 - v.available.0).max(0.0));
-    let oy = v
-        .offset
-        .1
-        .clamp(0.0, (v.content.1 - v.available.1).max(0.0));
+    let (ox, oy) = clamp_stage_offset(v.offset, v.content, v.available);
     // The image's top-left in content px.
     let ix = (v.content.0 - v.output.0) * 0.5 + v.pad.0;
     let iy = (v.content.1 - v.output.1) * 0.5 + v.pad.1;
@@ -5402,6 +5439,38 @@ mod tests {
             stage_viewport_in_document(fit),
             Some(RectLike::new(-1000.0, -1000.0, 4000.0, 3000.0))
         );
+    }
+
+    #[test]
+    fn a_zoom_without_a_scroll_event_keeps_the_viewport_on_screen() {
+        use super::{clamp_stage_offset, stage_viewport_in_document, StageViewport};
+        use readshot_core::RectLike;
+        // Scrolled to the far corner of a 2000 × 1000 image at 2× ...
+        let at = |offset, scale: f32| StageViewport {
+            offset,
+            available: (800.0, 600.0),
+            content: (2000.0 * scale, 1000.0 * scale),
+            output: (2000.0 * scale, 1000.0 * scale),
+            pad: (0.0, 0.0),
+            scale,
+            image_offset: (0.0, 0.0),
+        };
+        let far = (3200.0, 1400.0);
+        assert_eq!(
+            stage_viewport_in_document(at(far, 2.0)),
+            Some(RectLike::new(1600.0, 700.0, 400.0, 300.0))
+        );
+        // ... then zoomed out to 0.5×: the stage shows the clamped offset,
+        // which the view records (and the zoom pins the scrollable to).
+        let recorded = clamp_stage_offset(far, (1000.0, 500.0), (800.0, 600.0));
+        assert_eq!(recorded, (200.0, 0.0));
+        let shown = stage_viewport_in_document(at(recorded, 0.5)).unwrap();
+        assert_eq!(shown, RectLike::new(400.0, 0.0, 1600.0, 1200.0));
+        // Zoomed back in, the viewport (where a new bubble may go) is the
+        // part of the image the pinned scrollable shows, inside the image.
+        let back = stage_viewport_in_document(at(recorded, 2.0)).unwrap();
+        assert_eq!(back, RectLike::new(100.0, 0.0, 400.0, 300.0));
+        assert!(back.x + back.width <= 2000.0 && back.y + back.height <= 1000.0);
     }
 
     #[test]
