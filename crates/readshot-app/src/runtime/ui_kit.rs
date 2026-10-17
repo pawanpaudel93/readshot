@@ -156,8 +156,8 @@ pub(crate) fn icon_button_style(
 
 /// Colour of an icon button's canvas glyph. The glyph is a canvas, so
 /// the button's `text_color` never reaches it; this mirrors the style:
-/// selected draws in `acc_text`, hover brightens (t2 -> t1, selected
-/// toward t1), disabled at most 45 % alpha (callers that already dimmed
+/// selected draws in `acc_text`, hover brightens (any non-accent glyph
+/// to t1, selected toward t1), disabled at most 45 % alpha (callers that already dimmed
 /// stay as they are).
 pub(crate) fn icon_button_glyph_color(
     p: &Palette,
@@ -170,10 +170,12 @@ pub(crate) fn icon_button_glyph_color(
     if enabled && hovered {
         if selected {
             mix(p.acc_text, p.t1, 0.25)
-        } else if color == p.t2 {
-            p.t1
-        } else {
+        } else if color == p.acc || color == p.acc_text {
             base
+        } else {
+            // Any neutral glyph (t2, t3, …) brightens to t1, as the
+            // button's hover text colour does.
+            p.t1
         }
     } else if enabled {
         base
@@ -323,17 +325,41 @@ pub(crate) fn key_chip_on_primary<'a>(label: impl text::IntoFragment<'a>) -> Ele
 
 /// Key chip that follows the theme (legends, footers, hints).
 pub(crate) fn key_chip<'a>(label: impl text::IntoFragment<'a>) -> Element<'a, Message> {
-    container(text(label).size(TYPE_MICRO).style(text_t2))
-        .padding([3, 6])
-        .style(|theme| container::Style {
-            background: Some(palette_for(theme).kbd_bg.into()),
-            border: Border {
-                radius: R_CHIP.into(),
-                ..Border::default()
-            },
-            ..container::Style::default()
-        })
-        .into()
+    key_chip_enabled(label, true)
+}
+
+/// (background, text) of a theme key chip; a disabled row's chip dims
+/// with it so it does not advertise a key that does nothing.
+pub(crate) fn key_chip_colors(p: &Palette, enabled: bool) -> (Color, Color) {
+    if enabled {
+        (p.kbd_bg, p.t2)
+    } else {
+        (dim(p.kbd_bg, 0.45), dim(p.t2, 0.45))
+    }
+}
+
+/// [`key_chip`] that dims when `enabled` is false.
+pub(crate) fn key_chip_enabled<'a>(
+    label: impl text::IntoFragment<'a>,
+    enabled: bool,
+) -> Element<'a, Message> {
+    container(
+        text(label)
+            .size(TYPE_MICRO)
+            .style(move |theme| text::Style {
+                color: Some(key_chip_colors(palette_for(theme), enabled).1),
+            }),
+    )
+    .padding([3, 6])
+    .style(move |theme| container::Style {
+        background: Some(key_chip_colors(palette_for(theme), enabled).0.into()),
+        border: Border {
+            radius: R_CHIP.into(),
+            ..Border::default()
+        },
+        ..container::Style::default()
+    })
+    .into()
 }
 
 /// Every icon-only control goes through this: name + optional key chip,
@@ -656,11 +682,40 @@ mod tests {
         assert_eq!((sel_off.r, sel_off.a), (p.acc_text.r, 0.45));
         // Hover follows the style's text colour; a disabled button ignores it.
         assert_eq!(icon_button_glyph_color(p, p.t2, false, true, true), p.t1);
+        // Any neutral glyph brightens (the Remove-preset ✕ is t3); an
+        // accent glyph keeps its colour.
+        assert_eq!(icon_button_glyph_color(p, p.t3, false, true, true), p.t1);
+        assert_eq!(
+            icon_button_glyph_color(p, p.acc_text, false, true, true),
+            p.acc_text
+        );
         assert_ne!(
             icon_button_glyph_color(p, p.t2, true, true, true),
             p.acc_text
         );
         assert!(icon_button_glyph_color(p, p.t2, false, false, true).a <= 0.45);
+    }
+
+    #[test]
+    fn a_disabled_key_chip_dims() {
+        for p in [&DARK, &LIGHT] {
+            assert_eq!(key_chip_colors(p, true), (p.kbd_bg, p.t2));
+            let (bg, fg) = key_chip_colors(p, false);
+            assert!(fg.a <= 0.5 && bg.a < p.kbd_bg.a);
+        }
+    }
+
+    /// Outlined Danger (Settings Reset / Uninstall, History Clear All)
+    /// keeps its red label at AA in every state that is not disabled.
+    #[test]
+    fn outlined_danger_label_stays_readable_on_hover_and_press() {
+        for t in [dark(), light()] {
+            for s in [Status::Active, Status::Hovered, Status::Pressed] {
+                let st = button_style(&t, s, ButtonKind::Danger);
+                let r = contrast_ratio(st.text_color, bg(&st));
+                assert!(r >= 4.5, "{s:?}: {r:.2}:1");
+            }
+        }
     }
 
     #[test]

@@ -57,7 +57,7 @@ pub(crate) const DARK: Palette = Palette {
     border_subtle: Color::from_rgba(1.0, 1.0, 1.0, 0.06),
     border: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
     t1: Color::from_rgb8(0xED, 0xED, 0xED),
-    t2: Color::from_rgb8(0xB4, 0xB4, 0xB4),
+    t2: Color::from_rgb8(0xC8, 0xC8, 0xC8),
     t3: Color::from_rgb8(0x93, 0x93, 0x93),
     acc: Color::from_rgb8(0x14, 0xB8, 0xA6),
     acc_tint: Color::from_rgba(0.078, 0.722, 0.651, 0.14),
@@ -66,7 +66,7 @@ pub(crate) const DARK: Palette = Palette {
     pri_fg: Color::from_rgb8(0x0F, 0x0F, 0x0F),
     ok: Color::from_rgb8(0x3D, 0xD6, 0x8C),
     warn: Color::from_rgb8(0xF5, 0xA5, 0x24),
-    danger: Color::from_rgb8(0xFF, 0x63, 0x69),
+    danger: Color::from_rgb8(0xFF, 0x70, 0x76),
     danger_fg: Color::from_rgb8(0x0F, 0x0F, 0x0F),
     float: Color::from_rgba(0.110, 0.110, 0.118, 0.96),
     float_border: Color::from_rgba(1.0, 1.0, 1.0, 0.10),
@@ -89,8 +89,8 @@ pub(crate) const LIGHT: Palette = Palette {
     border_subtle: Color::from_rgba(0.0, 0.0, 0.0, 0.06),
     border: Color::from_rgba(0.0, 0.0, 0.0, 0.11),
     t1: Color::from_rgb8(0x17, 0x17, 0x17),
-    t2: Color::from_rgb8(0x52, 0x52, 0x5B),
-    t3: Color::from_rgb8(0x63, 0x63, 0x6B),
+    t2: Color::from_rgb8(0x40, 0x40, 0x48),
+    t3: Color::from_rgb8(0x66, 0x66, 0x6E),
     acc: Color::from_rgb8(0x0D, 0x94, 0x88),
     acc_tint: Color::from_rgba(0.051, 0.580, 0.533, 0.12),
     acc_text: Color::from_rgb8(0x0F, 0x76, 0x6E),
@@ -242,6 +242,22 @@ mod tests {
                     assert!(r >= 4.5, "danger on {bg:?} is {r:.2}:1");
                 }
             }
+        }
+    }
+
+    /// The three text levels stay apart: t1 > t2 > t3 by a visible step
+    /// (t2 vs t3 at least 1.8:1, t1 vs t2 at least 1.4:1) in both themes.
+    #[test]
+    fn text_levels_keep_their_hierarchy() {
+        for p in both() {
+            let (t1, t2, t3) = (over(p.t1, p.bg), over(p.t2, p.bg), over(p.t3, p.bg));
+            let r23 = contrast_ratio(t2, t3);
+            let r12 = contrast_ratio(t1, t2);
+            assert!(r23 >= 1.8, "t2 vs t3 is {r23:.2}:1");
+            assert!(r12 >= 1.4, "t1 vs t2 is {r12:.2}:1");
+            // Each level is further from the background than the next.
+            assert!(contrast_ratio(t1, p.bg) > contrast_ratio(t2, p.bg));
+            assert!(contrast_ratio(t2, p.bg) > contrast_ratio(t3, p.bg));
         }
     }
 

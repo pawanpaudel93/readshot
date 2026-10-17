@@ -245,7 +245,7 @@ pub(crate) fn image_menu_row<'a>(
     .align_y(Alignment::Center);
     r = r.push(Space::new().width(Length::Fill));
     if let Some(k) = key {
-        r = r.push(key_chip(k));
+        r = r.push(key_chip_enabled(k, msg.is_some()));
     }
     bar_button(
         r.width(Length::Fill).into(),
