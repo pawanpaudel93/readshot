@@ -168,7 +168,10 @@ fn m_selects_the_magnifier_only_when_not_typing() {
 fn editor_selected_hint_explains_the_magnifier_handles() {
     assert_eq!(
         editor_selected_hint("Magnifier", false),
-        "Selected Magnifier — drag the bubble to move it · drag the centre to change what it shows · drag the ring to resize · ⌫ removes"
+        format!(
+            "Magnifier selected. Drag the bubble to move it, the center to change what it shows, \
+             or the ring to resize it. {DELETE_KEY} removes it."
+        )
     );
 }
 
@@ -176,16 +179,50 @@ fn editor_selected_hint_explains_the_magnifier_handles() {
 fn editor_selected_hint_special_cases_crop_and_text() {
     assert_eq!(
         editor_selected_hint("Crop", false),
-        "Selected Crop — drag frame or handles · arrows nudge · Delete restores full image"
+        format!(
+            "Crop selected. Drag the frame or its handles; arrows nudge. {DELETE_KEY} restores the full image."
+        )
     );
     assert_eq!(
         editor_selected_hint("Text", true),
-        "Selected Text — edit inline · color/size apply here · arrows nudge · ⌫ removes"
+        format!(
+            "Text selected. Edit it in place; color and size apply to it. Arrows nudge, {DELETE_KEY} removes it."
+        )
     );
     assert_eq!(
         editor_selected_hint("Rectangle", false),
-        "Selected Rectangle — drag to move · arrows nudge · handles resize · drag elsewhere to draw"
+        format!(
+            "Rectangle selected. Drag to move it, arrows nudge, handles resize. {DELETE_KEY} removes it."
+        )
     );
+}
+
+/// Every hint is a sentence (capital first, full stop last), names the
+/// delete key one way, and never shows ⌘ off macOS.
+#[test]
+fn every_hint_is_a_sentence_with_one_name_per_key() {
+    let mut hints: Vec<String> = readshot_ui::editor::toolbar::TOOL_GROUPS
+        .iter()
+        .flat_map(|g| g.iter())
+        .map(|t| editor_compact_hint(*t))
+        .collect();
+    for (kind, editable) in [
+        ("Magnifier", false),
+        ("Crop", false),
+        ("Text", true),
+        ("Arrow", false),
+    ] {
+        hints.push(editor_selected_hint(kind, editable));
+    }
+    for h in &hints {
+        assert!(h.ends_with('.'), "{h}");
+        assert!(h.chars().next().unwrap().is_uppercase(), "{h}");
+        assert!(!h.contains('·') && !h.contains(" — "), "{h}");
+        assert!(!h.contains("Enter") && !h.contains("centre"), "{h}");
+        if !cfg!(target_os = "macos") {
+            assert!(!h.contains('⌘') && !h.contains('⌫'), "{h}");
+        }
+    }
 }
 
 #[test]
@@ -434,7 +471,7 @@ fn history_clear_all_removes_records_and_resets_browser_state() {
         .history_status
         .as_deref()
         .unwrap_or("")
-        .starts_with("Cleared "));
+        .starts_with("Deleted "));
 }
 
 #[test]
@@ -825,6 +862,11 @@ fn a_redacted_capture_says_its_text_is_hidden_not_pending() {
         app.history_status.as_deref(),
         Some(history_ops::HIDDEN_TEXT_NOTE)
     );
+    // A notice, not a success.
+    assert_eq!(
+        status_toast_kind(history_ops::HIDDEN_TEXT_NOTE),
+        ToastKind::Info
+    );
     let _ = update(&mut app, Message::HistoryCopyText(plain.id));
     assert_eq!(
         app.history_status.as_deref(),
@@ -850,4 +892,33 @@ fn delete_prompts_say_the_deletion_is_permanent() {
         history_count_room(caption),
         caption.chars().count() as f32 * crate::runtime::TYPE_CAPTION * 0.6 + 16.0
     );
+}
+
+#[test]
+fn counts_use_whole_singular_and_plural_words() {
+    assert_eq!(counted(1, "capture", "captures"), "1 capture");
+    assert_eq!(counted(0, "capture", "captures"), "0 captures");
+    assert_eq!(counted(12, "frame", "frames"), "12 frames");
+    assert_eq!(
+        crate::runtime::view::scroll_discard_prompt(1),
+        format!(
+            "Press Discard or {} to throw away 1 frame, or keep going.",
+            crate::runtime::platform_key("⇧esc", "Shift+Esc")
+        )
+    );
+}
+
+#[test]
+fn the_compact_scroll_footer_keeps_both_labels_whole() {
+    use crate::runtime::view::scroll_keep_going_label;
+    assert_eq!(scroll_keep_going_label(240.0), "Resume");
+    assert_eq!(scroll_keep_going_label(360.0), "Keep Going");
+    // 240 px window: 204 px of footer split 1:1 leaves ≈ 70 px inside
+    // each button; "Resume" (6 × ≈ 8 px semibold) fits, "Keep Going" not.
+    assert!("Resume".len() as f32 * 8.0 <= 70.0);
+}
+
+#[test]
+fn every_size_readout_reads_the_same_way() {
+    assert_eq!(size_px(1200, 800), "1200 × 800 px");
 }

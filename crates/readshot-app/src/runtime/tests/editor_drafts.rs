@@ -285,7 +285,7 @@ fn editor_delete_selected_dismisses_pending_text_edit() {
     assert_eq!(ed.model.selected_annotation(), None);
     assert_eq!(
         ed.status.as_deref(),
-        Some("Deleted annotation. ⌘Z to undo.")
+        Some(format!("Deleted annotation. {UNDO_HINT}").as_str())
     );
 }
 
@@ -433,7 +433,10 @@ fn editor_undo_commits_then_undoes_new_pending_text() {
         Annotation::Rectangle { .. }
     ));
     assert!(ed.model.can_redo());
-    assert_eq!(ed.status.as_deref(), Some("Undid edit. ⇧⌘Z to redo."));
+    assert_eq!(
+        ed.status.as_deref(),
+        Some(format!("Undid edit. {REDO_HINT}").as_str())
+    );
 }
 
 #[test]
@@ -532,7 +535,10 @@ fn editor_redo_with_pending_text_commits_new_branch_and_clears_redo() {
         other => panic!("expected text annotation, got {other:?}"),
     }
     assert!(!ed.model.can_redo());
-    assert_eq!(ed.status.as_deref(), Some("Added text. ⌘Z to undo."));
+    assert_eq!(
+        ed.status.as_deref(),
+        Some(format!("Added text. {UNDO_HINT}").as_str())
+    );
 }
 
 #[test]
@@ -1514,4 +1520,64 @@ fn editor_escape_keeps_canvas_cancellation_when_already_handled() {
     );
 
     assert!(matches!(cancel, Some(Message::EditorTextCancel)));
+}
+
+/// The per-tool and per-selection how-to lines the options bar displaced
+/// are reachable again: a notice when a tool is chosen, a guide while a
+/// clicked selection lasts. Neither covers an error.
+#[test]
+fn tool_and_selection_hints_reach_the_status_line() {
+    use readshot_ui::editor::ToolState as T;
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+    ed.model.commit_annotation(Annotation::Rectangle {
+        rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+        color: Rgba::OPAQUE_BLACK,
+        line_width: 2.0,
+        style: Default::default(),
+    });
+    ed.model.select_index(None);
+    app.editor = Some(ed);
+
+    let _ = update(
+        &mut app,
+        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(T::Magnifier)),
+    );
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(
+        ed.status.as_deref(),
+        Some(editor_compact_hint(T::Magnifier).as_str())
+    );
+    assert_eq!(ed.status_tone(), crate::editor::StatusTone::Info);
+
+    // An error stays put.
+    app.editor
+        .as_mut()
+        .unwrap()
+        .set_status("Couldn't save the image. Try again.");
+    let _ = update(
+        &mut app,
+        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(T::Crop)),
+    );
+    assert_eq!(
+        app.editor.as_ref().unwrap().status.as_deref(),
+        Some("Couldn't save the image. Try again.")
+    );
+
+    // A clicked selection explains itself while it lasts.
+    let ed = app.editor.as_mut().unwrap();
+    ed.status = None;
+    ed.model.set_tool(T::Select);
+    let _ = update(
+        &mut app,
+        Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
+            5.0, 5.0,
+        ))),
+    );
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(
+        ed.status.as_deref(),
+        Some(editor_selected_hint("Rectangle", false).as_str())
+    );
+    assert_eq!(ed.key_guide_live(), Some(true));
 }

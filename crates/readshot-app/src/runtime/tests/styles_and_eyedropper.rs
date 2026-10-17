@@ -700,7 +700,7 @@ fn eyedropper_pick_on_a_selection_keeps_the_undo_hint() {
     pick(&mut app, 3.5, 4.5);
     assert_eq!(
         app.editor.as_ref().unwrap().status.as_deref(),
-        Some("Picked #4F46E5. ⌘Z to undo.")
+        Some(format!("Picked #4F46E5. {UNDO_HINT}").as_str())
     );
     // Without a selection there is nothing to undo.
     let mut app = build_app(Arc::new(FakePermissions::granted()));

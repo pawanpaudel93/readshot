@@ -371,23 +371,86 @@ pub(crate) fn tooltip_with_key<'a>(
     key: Option<&'static str>,
     position: tooltip::Position,
 ) -> Element<'a, Message> {
+    tooltip_with_hint(content, name, key, None, position)
+}
+
+/// Widest a tooltip's how-to line runs before it wraps.
+pub(crate) const TOOLTIP_HINT_MAX_W: f32 = 240.0;
+
+/// [`tooltip_with_key`] plus an optional how-to line under the name (the
+/// tool bar's per-tool hints).
+pub(crate) fn tooltip_with_hint<'a>(
+    content: impl Into<Element<'a, Message>>,
+    name: impl Into<String>,
+    key: Option<&'static str>,
+    hint: Option<String>,
+    position: tooltip::Position,
+) -> Element<'a, Message> {
     let mut r = row![text(name.into()).size(TYPE_CAPTION)]
         .spacing(SP2)
         .align_y(Alignment::Center);
     if let Some(k) = key {
         r = r.push(key_chip_on_dark(k));
     }
-    let tip = container(r).padding([5, 8]).style(tooltip_style);
+    let body: Element<'a, Message> = match hint {
+        Some(h) => iced::widget::column![
+            r,
+            container(
+                text(h)
+                    .size(TYPE_CAPTION)
+                    .wrapping(iced::widget::text::Wrapping::Word)
+            )
+            .max_width(TOOLTIP_HINT_MAX_W),
+        ]
+        .spacing(SP1)
+        .into(),
+        None => r.into(),
+    };
+    let tip = container(body).padding([5, 8]).style(tooltip_style);
     tooltip::Tooltip::new(content.into(), tip, position)
         .gap(SP2)
         .delay(TOOLTIP_DELAY)
         .into()
 }
 
+/// The fixed width of a mono readout whose widest value is `widest` at
+/// `size`: exact for JetBrains Mono, plus a pixel either side so rounding
+/// never wraps or clips it. A changing value then never moves its
+/// neighbours (a slider track mid-drag, a centred bar).
+pub(crate) fn mono_readout_width(widest: &str, size: f32) -> f32 {
+    widest.chars().count() as f32 * size * MONO_ADVANCE + 2.0
+}
+
+/// A right-aligned mono readout with room for `widest`: the digits and
+/// unit hold their place as the value changes.
+pub(crate) fn mono_readout<'a>(value: String, widest: &str) -> iced::widget::Text<'a> {
+    text(value)
+        .font(crate::runtime::mono_font())
+        .size(TYPE_CAPTION)
+        .width(Length::Fixed(mono_readout_width(widest, TYPE_CAPTION)))
+        .align_x(iced::alignment::Horizontal::Right)
+        .wrapping(iced::widget::text::Wrapping::None)
+}
+
+/// A pixel size as every readout writes it: "1200 × 800 px".
+pub(crate) fn size_px(w: impl std::fmt::Display, h: impl std::fmt::Display) -> String {
+    format!("{w} × {h} px")
+}
+
+/// "1 capture" / "3 captures": a count with the whole singular or plural
+/// word, never a suffix pasted on, so each form can be translated.
+pub(crate) fn counted(n: usize, one: &str, many: &str) -> String {
+    if n == 1 {
+        format!("1 {one}")
+    } else {
+        format!("{n} {many}")
+    }
+}
+
 /// A key label for this platform: the macOS glyph form (`mac`), or the
 /// Ctrl form (`other`) elsewhere. Every new key chip and tooltip goes
 /// through it so Windows and Linux never advertise a ⌘ chord.
-pub(crate) fn platform_key(mac: &'static str, other: &'static str) -> &'static str {
+pub(crate) const fn platform_key(mac: &'static str, other: &'static str) -> &'static str {
     if cfg!(target_os = "macos") {
         mac
     } else {
@@ -559,6 +622,22 @@ pub(crate) fn icon_button<'a>(
     size: f32,
     position: tooltip::Position,
 ) -> Element<'a, Message> {
+    icon_button_hinted(glyph, color, name, key, None, msg, selected, size, position)
+}
+
+/// [`icon_button`] whose tooltip also carries a how-to line.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn icon_button_hinted<'a>(
+    glyph: crate::icons::AppIcon,
+    color: Color,
+    name: &'static str,
+    key: Option<&'static str>,
+    hint: Option<String>,
+    msg: Option<Message>,
+    selected: bool,
+    size: f32,
+    position: tooltip::Position,
+) -> Element<'a, Message> {
     let enabled = msg.is_some();
     let mut b = button(crate::icons::button_icon(
         glyph, color, ICON_SIZE, selected, enabled,
@@ -570,7 +649,7 @@ pub(crate) fn icon_button<'a>(
     if let Some(m) = msg {
         b = b.on_press(m);
     }
-    tooltip_with_key(b, name, key, position)
+    tooltip_with_hint(b, name, key, hint, position)
 }
 
 pub(crate) fn empty_state<'a>(

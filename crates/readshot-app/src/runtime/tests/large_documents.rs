@@ -1195,7 +1195,10 @@ fn a_large_rotate_composes_off_thread_and_lands_as_one_undo_step() {
     assert_eq!(ed.image_size(), (20, 40));
     assert_eq!(ed.model.undo_depth(), depth + 1, "one undo step");
     assert_ne!(handle_id(ed), shown);
-    assert_eq!(ed.status.as_deref(), Some("Rotated right. ⌘Z to undo."));
+    assert_eq!(
+        ed.status.as_deref(),
+        Some(format!("Rotated right. {UNDO_HINT}").as_str())
+    );
     let mut sync = sync_editor();
     assert!(sync.model.rotate(true).unwrap());
     assert_eq!(ed.model.annotations(), sync.model.annotations());
@@ -1309,7 +1312,10 @@ fn a_large_undo_and_redo_across_a_rotate_swap_the_cached_bases_in() {
     assert_eq!(ed.image_size(), (40, 20));
     assert_eq!(ed.model.undo_depth(), depth);
     assert!(Arc::ptr_eq(&ed.model.shared_base(), &original));
-    assert_eq!(ed.status.as_deref(), Some("Undid edit. ⇧⌘Z to redo."));
+    assert_eq!(
+        ed.status.as_deref(),
+        Some(format!("Undid edit. {REDO_HINT}").as_str())
+    );
     let mut sync = sync_editor();
     assert!(editor_output_image(ed) == editor_output_image(&mut sync));
     let _ = update(&mut app, redo_msg());
@@ -1412,7 +1418,10 @@ fn a_large_added_part_lands_as_one_undo_step_with_its_bake() {
     let ed = app.editor.as_mut().unwrap();
     assert_eq!(ed.model.part_ids().len(), 2);
     assert_eq!(ed.model.undo_depth(), depth + 1, "one undo step");
-    assert_eq!(ed.status.as_deref(), Some("Added image below. ⌘Z to undo."));
+    assert_eq!(
+        ed.status.as_deref(),
+        Some(format!("Added image below. {UNDO_HINT}").as_str())
+    );
     let baked = ed.model.part_ids()[0];
     assert!(ed.text_panel.bake_sources.contains_key(&baked));
     assert!(

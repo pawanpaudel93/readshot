@@ -32,7 +32,7 @@ fn add_capture_below_hides_the_editor_and_appends_the_capture() {
     assert_eq!(ed.image_size(), (64, 48));
     assert_eq!(
         ed.status.as_deref(),
-        Some("Added capture below. ⌘Z to undo.")
+        Some(format!("Added capture below. {UNDO_HINT}").as_str())
     );
     assert!(app.combine_capture.is_none());
     assert!(app.pending_intent.is_none());

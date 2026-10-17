@@ -80,7 +80,7 @@ pub(crate) fn scroll_region_view(state: &App) -> Element<'_, Message> {
             // Size badge in physical pixels, inside the top-left corner.
             let phys_w = ((self.w * self.scale).round() as i32).max(0);
             let phys_h = ((self.h * self.scale).round() as i32).max(0);
-            let label = format!("{phys_w} × {phys_h}");
+            let label = size_px(phys_w, phys_h);
             let badge_w = 16.0 + label.chars().count() as f32 * 7.0;
             let badge_h = 22.0;
             let inset = 6.0;
@@ -184,16 +184,29 @@ pub(crate) fn scroll_discard_label(window_w: f32, frame_count: usize) -> String 
     if window_w < SCROLL_DISCARD_SHORT_BELOW {
         "Discard".to_string()
     } else {
-        let plural = if frame_count == 1 { "" } else { "s" };
-        format!("Discard {frame_count} Frame{plural}")
+        format!("Discard {}", counted(frame_count, "Frame", "Frames"))
+    }
+}
+
+/// The armed footer's "go on" button: "Keep Going" (semibold 13 px,
+/// ≈ 75 px) overflows half the 240 px footer's ≈ 70 px, so the compact
+/// window says "Resume".
+pub(crate) fn scroll_keep_going_label(window_w: f32) -> &'static str {
+    if scroll_hud_compact(window_w) {
+        "Resume"
+    } else {
+        "Keep Going"
     }
 }
 
 /// The armed Cancel caption. It stays until answered, so it names both
 /// answers and no time limit.
 pub(crate) fn scroll_discard_prompt(frame_count: usize) -> String {
-    let plural = if frame_count == 1 { "" } else { "s" };
-    format!("Press Cancel again to discard {frame_count} frame{plural}, or Keep Going.")
+    format!(
+        "Press Discard or {} to throw away {}, or keep going.",
+        platform_key("⇧esc", "Shift+Esc"),
+        counted(frame_count, "frame", "frames")
+    )
 }
 
 /// Key chip on the Stop & Stitch button. Hidden while Waiting (the
@@ -333,7 +346,7 @@ fn scroll_live_stage<'a>(
 }
 
 /// Stitching / limit: the whole page zoomed to fit, dimmed, with a
-/// static "Joining N frames" pill (no spinner animation, so nothing to
+/// static "Stitching N frames" pill (no spinner animation, so nothing to
 /// freeze under Reduce Motion).
 fn scroll_stitching_stage<'a>(
     handle: Option<iced::widget::image::Handle>,
@@ -355,10 +368,13 @@ fn scroll_stitching_stage<'a>(
     let pill = container(
         row![
             ring,
-            text(format!("Joining {frame_count} frames"))
-                .size(TYPE_BODY)
-                .color(DARK.t1)
-                .wrapping(iced::widget::text::Wrapping::None),
+            text(format!(
+                "Stitching {}",
+                counted(frame_count, "frame", "frames")
+            ))
+            .size(TYPE_BODY)
+            .color(DARK.t1)
+            .wrapping(iced::widget::text::Wrapping::None),
         ]
         .spacing(10)
         .align_y(Alignment::Center),
@@ -545,7 +561,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
             crate::icons::AppIcon::Close,
             DARK.t2,
             "Cancel",
-            Some("⇧esc"),
+            Some(platform_key("⇧esc", "Shift+Esc")),
             (!stopping).then_some(Message::ScrollCaptureCancelRequested),
             false,
             ICON_BTN,
@@ -581,7 +597,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
             crate::icons::AppIcon::Scroll,
             &DARK,
             "Scroll the page to start",
-            "Each new part of the page appears here, joined to the last.",
+            "Each new part of the page appears here, stitched to the last.",
             None,
         ))
         .padding(16)
@@ -703,7 +719,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
                     1,
                 ),
                 scroll_hud_button(
-                    "Keep Going".to_string(),
+                    scroll_keep_going_label(window_w).to_string(),
                     ButtonKind::Primary,
                     Some(Message::ScrollCaptureKeepGoing),
                     None,
@@ -731,7 +747,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
                         2,
                     ),
                     "Cancel and Discard",
-                    Some("⇧esc"),
+                    Some(platform_key("⇧esc", "Shift+Esc")),
                     Position::Top,
                 ),
                 scroll_hud_button(
@@ -1478,7 +1494,7 @@ fn history_split<'a>(
             .wrapping(text::Wrapping::None)
             .into(),
         };
-        let sub = text(format!("{} × {}", r.width_px, r.height_px))
+        let sub = text(size_px(r.width_px, r.height_px))
             .font(mono_font())
             .size(TYPE_MICRO)
             .style(text_t3)
@@ -1680,13 +1696,10 @@ pub(crate) fn history_selected_panel<'a>(
             .font(semibold())
             .style(text_t1),
         Space::new().width(Length::Fill),
-        text(format!(
-            "{stamp} · {words} word{}",
-            if words == 1 { "" } else { "s" }
-        ))
-        .size(TYPE_CAPTION)
-        .style(text_t3)
-        .wrapping(text::Wrapping::None),
+        text(format!("{stamp} · {}", counted(words, "word", "words")))
+            .size(TYPE_CAPTION)
+            .style(text_t3)
+            .wrapping(text::Wrapping::None),
     ]
     .spacing(SP2)
     .align_y(Alignment::Center);
@@ -2192,11 +2205,12 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             } else {
                 p.t2
             };
-            let btn = icon_button(
+            let btn = icon_button_hinted(
                 AppIcon::Tool(t),
                 color,
                 label,
                 Some(key),
+                Some(editor_compact_hint(t)),
                 (!busy).then_some(Message::EditorToolbar(
                     readshot_ui::ToolbarMessage::SelectTool(t),
                 )),
@@ -2438,7 +2452,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 // the default (newline). Clicking a button also commits
                 // / cancels (below).
                 iced::widget::text_editor(content)
-                    .placeholder("Type text… (⌘↵ to commit, esc to cancel)")
+                    .placeholder(TEXT_PLACEHOLDER)
                     .on_action(Message::EditorTextAction)
                     .key_binding(editor_text_key_binding)
                     .padding(8)
@@ -2460,23 +2474,23 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             };
             let commit_label = editor_text_commit_label(pending.edit_index.is_some());
             let mut commit = button(text(commit_label).size(TYPE_CAPTION))
-                .padding([7, 10])
+                .padding([SP2, SP3])
                 .style(|theme, status| action_button_style(theme, status, ActionKind::Primary));
             if !busy {
                 commit = commit.on_press(Message::EditorTextCommit);
             }
             let mut cancel = button(text("Cancel").size(TYPE_CAPTION))
-                .padding([7, 10])
+                .padding([SP2, SP3])
                 .style(|theme, status| action_button_style(theme, status, ActionKind::Secondary));
             if !busy {
                 cancel = cancel.on_press(Message::EditorTextCancel);
             }
             let editor = container(
                 row![input, commit, cancel]
-                    .spacing(6)
+                    .spacing(SP2)
                     .align_y(Alignment::Center),
             )
-            .padding(6)
+            .padding(SP2)
             .width(Length::Fixed(geom.width))
             .style(inline_text_box_style);
             let inline_layer = container(column![
@@ -2577,16 +2591,22 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         let mut title = row![
             text("Capture").size(TYPE_BODY).style(text_t2),
             // The label takes the slack and clips, so a long size never
-            // pushes the buttons (or Fit) off the row.
-            container(
-                text(size_label.clone())
-                    .font(mono)
-                    .size(TYPE_CAPTION)
-                    .style(text_t3)
-                    .wrapping(iced::widget::text::Wrapping::None),
-            )
-            .width(Length::Fill)
-            .clip(true),
+            // pushes the buttons (or Fit) off the row; its tooltip always
+            // has the whole value.
+            tooltip_with_key(
+                container(
+                    text(size_label.clone())
+                        .font(mono)
+                        .size(TYPE_CAPTION)
+                        .style(text_t3)
+                        .wrapping(iced::widget::text::Wrapping::None),
+                )
+                .width(Length::Fill)
+                .clip(true),
+                size_label.clone(),
+                None,
+                Position::Bottom,
+            ),
         ];
         title = title.push(tooltip_with_key(
             bar_button(
@@ -2595,7 +2615,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                     text("Image").size(ButtonSize::Sm.text_size()),
                     crate::icons::icon(AppIcon::Chevron, p.t3, 13.0),
                 ]
-                .spacing(6)
+                .spacing(SP1)
                 .align_y(Alignment::Center)
                 .into(),
                 if image_menu_open {
@@ -2631,9 +2651,8 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 display_scale,
                 busy,
                 p,
-                mono,
             ))
-            .spacing(10)
+            .spacing(SP2)
             .align_y(Alignment::Center)
             .padding(iced::Padding {
                 left: TITLEBAR_INSET_LEFT,
@@ -2664,7 +2683,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     // --- Options bar under the tool bar (falls back to the hint line) ---
     let options_layer: Element<'_, Message> = if ed.eyedropper.is_some() {
         container(
-            text("Click the image to pick a color · esc cancels")
+            text("Click the image to pick a color, or press esc to cancel.")
                 .size(TYPE_CAPTION)
                 .style(text_t2),
         )
@@ -2693,7 +2712,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 let hint_str = if let Some(kind) = ed.model.selected_kind_label() {
                     editor_selected_hint(kind, ed.model.selected_text_edit().is_some())
                 } else {
-                    editor_compact_hint(active_tool).to_string()
+                    editor_compact_hint(active_tool)
                 };
                 container(text(hint_str).size(TYPE_CAPTION).style(text_t2))
                     .width(Length::Fill)
@@ -2830,7 +2849,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             (!busy).then_some(Message::EditorCopyImageRequested),
         ),
         "Copy Image",
-        Some("⌘C"),
+        Some(COPY_IMAGE_KEY),
         Position::Top,
     );
     let action_bar = row![
@@ -2838,7 +2857,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             AppIcon::Undo,
             icon_color(undo_enabled),
             "Undo",
-            Some("⌘Z"),
+            Some(UNDO_KEY),
             undo_enabled.then_some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
             false,
             ICON_BTN,
@@ -2848,7 +2867,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             AppIcon::Redo,
             icon_color(redo_enabled),
             "Redo",
-            Some("⇧⌘Z"),
+            Some(REDO_KEY),
             redo_enabled.then_some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo)),
             false,
             ICON_BTN,
@@ -2859,7 +2878,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             AppIcon::Pin,
             icon_color(!busy),
             "Pin",
-            Some("⌘P"),
+            Some(PIN_KEY),
             (!busy).then_some(Message::EditorPinRequested),
             false,
             ICON_BTN,
@@ -2869,7 +2888,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             AppIcon::Save,
             icon_color(!busy),
             "Save",
-            Some("⌘S"),
+            Some(SAVE_KEY),
             (!busy).then_some(Message::EditorSaveRequested),
             false,
             ICON_BTN,
@@ -2879,7 +2898,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             AppIcon::ScanText,
             icon_color(!busy),
             "Copy Text",
-            Some("⇧⌘C"),
+            Some(COPY_TEXT_KEY),
             (!busy).then_some(Message::EditorCopyTextRequested),
             false,
             ICON_BTN,
@@ -2891,7 +2910,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             AppIcon::Close,
             icon_color(!busy),
             "Discard",
-            Some("⌘W"),
+            Some(CLOSE_KEY),
             (!busy).then_some(Message::EditorDiscardRequested),
             false,
             ICON_BTN,
@@ -3043,7 +3062,7 @@ pub(crate) fn toast_action_parts(
     match action {
         A::UndoRedaction { .. } => (
             "Undo",
-            Some("⌘Z"),
+            Some(UNDO_KEY),
             Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
         ),
         A::RetryRecognition => ("Retry", None, Message::EditorTextRecognize),
@@ -3083,14 +3102,19 @@ pub(crate) fn editor_toast_kind(
 }
 
 /// Toast kind for a settled status line (History, Welcome, editor):
-/// failures are Error; "No …", "… not found" and "… cancelled" are
-/// neutral notices (Info) rather than successes; the rest are Ok.
+/// failures are Error; "No …", "Text hidden…", "… not found" and
+/// "… cancelled" are neutral notices (Info) rather than successes; the
+/// rest are Ok.
 pub(crate) fn status_toast_kind(status: &str) -> ToastKind {
     if crate::editor::status_str_is_error(status) {
         return ToastKind::Error;
     }
     let lower = status.to_lowercase();
-    if lower.starts_with("no ") || lower.contains("not found") || lower.contains("cancelled") {
+    if lower.starts_with("no ")
+        || lower.starts_with("text hidden")
+        || lower.contains("not found")
+        || lower.contains("cancelled")
+    {
         ToastKind::Info
     } else {
         ToastKind::Ok
@@ -3105,7 +3129,6 @@ fn editor_zoom_segment(
     display_scale: f32,
     busy: bool,
     p: &'static Palette,
-    mono: iced::Font,
 ) -> Element<'static, Message> {
     use crate::icons::AppIcon;
     use iced::widget::tooltip::Position;
@@ -3133,26 +3156,30 @@ fn editor_zoom_segment(
             AppIcon::Minus,
             icon_color(can_zoom_out),
             "Zoom Out",
-            Some("⌘−"),
+            Some(ZOOM_OUT_KEY),
             can_zoom_out.then_some(Message::EditorZoomOut),
             false,
             ICON_BTN_SM,
             Position::Bottom,
         ),
-        text(format!(
-            "{:.0}%",
-            shown_scale * display_scale.max(f32::EPSILON) * 100.0
-        ))
-        .font(mono)
-        .size(TYPE_CAPTION)
-        .style(text_t2)
-        .width(Length::Fixed(48.0))
-        .align_x(iced::alignment::Horizontal::Center),
+        // Right-aligned in a box sized for the widest zoom (4× on a 2×
+        // display), so the % sign holds its place as the value changes.
+        container(
+            mono_readout(
+                format!(
+                    "{:.0}%",
+                    shown_scale * display_scale.max(f32::EPSILON) * 100.0
+                ),
+                "800%",
+            )
+            .style(text_t2),
+        )
+        .padding([0.0, SP1]),
         icon_button(
             AppIcon::Plus,
             icon_color(can_zoom_in),
             "Zoom In",
-            Some("⌘="),
+            Some(ZOOM_IN_KEY),
             can_zoom_in.then_some(Message::EditorZoomIn),
             false,
             ICON_BTN_SM,
@@ -3167,7 +3194,7 @@ fn editor_zoom_segment(
                 (!busy).then_some(Message::EditorZoomActual),
             ),
             "Actual Pixels",
-            Some("⌘0"),
+            Some(ZOOM_ACTUAL_KEY),
             Position::Bottom,
         ),
         tooltip_with_key(
@@ -3301,7 +3328,7 @@ pub(crate) fn editor_size_label(ed: &crate::editor::EditorSession) -> String {
     let (w, h) = ed.effective_image_size();
     let s = ed.model.beautify();
     match readshot_core::beautify::output_geometry(w, h, &s) {
-        Some(g) if !s.is_identity() => format!("{w} × {h} px → {} × {} px", g.width, g.height),
+        Some(g) if !s.is_identity() => format!("{w} × {h} → {} × {} px", g.width, g.height),
         _ => format!("{w} × {h} px"),
     }
 }
@@ -4085,24 +4112,28 @@ pub(crate) fn scroll_key_message(
     }
 }
 
-pub(crate) fn editor_compact_hint(tool: readshot_ui::editor::ToolState) -> &'static str {
+/// Each tool's how-to (spec §3.2's per-tool hint): a sentence ending in a
+/// full stop, keys named as in chips (`⌫`, `↵`, `esc`; the Ctrl form off
+/// macOS). Shown in the tool's tooltip, under the tool bar when there is
+/// no options bar, and as a notice when the tool is chosen.
+pub(crate) fn editor_compact_hint(tool: readshot_ui::editor::ToolState) -> String {
     use readshot_ui::editor::ToolState as T;
     match tool {
-        T::Select => "Click to select · drag to move · ⌫ removes",
-        T::Rectangle => "Drag to draw a rectangle.",
-        T::Ellipse => "Drag to draw an ellipse.",
-        T::Line => "Drag start to end.",
-        T::Arrow => "Drag base to target.",
-        T::Pen => "Drag to free-draw.",
-        T::Highlighter => "Drag over text.",
-        T::Text => "Click, type, Enter.",
-        T::Blur => "Drag a region to blur.",
-        T::Pixelate => "Drag a region to pixelate.",
-        T::Spotlight => "Drag an area to spotlight; the rest dims.",
-        T::NumberedPin => "Click to drop a number.",
-        T::Stamp => "Click to place a stamp.",
-        T::Magnifier => "Drag out the area to magnify.",
-        T::Crop => "Drag the region to keep.",
+        T::Select => format!("Click to select, drag to move. {DELETE_KEY} removes the selection."),
+        T::Rectangle => "Drag to draw a rectangle.".into(),
+        T::Ellipse => "Drag to draw an ellipse.".into(),
+        T::Line => "Drag from start to end.".into(),
+        T::Arrow => "Drag from the base to the target.".into(),
+        T::Pen => "Drag to draw freehand.".into(),
+        T::Highlighter => "Drag over text to highlight it.".into(),
+        T::Text => format!("Click, type, then press {COMMIT_TEXT_KEY}."),
+        T::Blur => "Drag over an area to blur it.".into(),
+        T::Pixelate => "Drag over an area to pixelate it.".into(),
+        T::Spotlight => "Drag an area to spotlight; the rest dims.".into(),
+        T::NumberedPin => "Click to drop the next number.".into(),
+        T::Stamp => "Click to place a stamp.".into(),
+        T::Magnifier => "Drag out the area to magnify.".into(),
+        T::Crop => "Drag the area to keep.".into(),
     }
 }
 
@@ -4354,6 +4385,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             .align_y(Alignment::Center),
         )
         .height(Length::Fixed(BTN_MD))
+        .width(Length::Fixed(crate::overlay::OVERLAY_EDIT_W))
         .padding([0, 12])
         .style(|t, s| button_style(t, s, ButtonKind::Primary))
         .on_press(sel(CaptureIntent::Editor)),
@@ -4367,7 +4399,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             AppIcon::Copy,
             fg,
             "Copy Image",
-            Some("\u{2318}C"),
+            Some(COPY_IMAGE_KEY),
             Some(sel(CaptureIntent::CopyToClipboard)),
             false,
             ICON_BTN,
@@ -4377,7 +4409,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             AppIcon::ScanText,
             fg,
             "Copy Text",
-            Some("\u{21e7}\u{2318}C"),
+            Some(COPY_TEXT_KEY),
             Some(sel(CaptureIntent::CopyTextDirect)),
             false,
             ICON_BTN,
@@ -4387,7 +4419,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             AppIcon::Save,
             fg,
             "Save",
-            Some("\u{2318}S"),
+            Some(SAVE_KEY),
             Some(sel(CaptureIntent::SaveDirect)),
             false,
             ICON_BTN,
@@ -4397,7 +4429,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             AppIcon::Pin,
             fg,
             "Pin",
-            Some("\u{2318}P"),
+            Some(PIN_KEY),
             Some(sel(CaptureIntent::Pin)),
             false,
             ICON_BTN,
@@ -4407,7 +4439,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             AppIcon::Scroll,
             fg,
             "Scrolling Capture",
-            Some(platform_key("\u{2318}R", "Ctrl+R")),
+            Some(SCROLL_CAPTURE_KEY),
             Some(sel(CaptureIntent::ScrollCapture)),
             false,
             ICON_BTN,
@@ -4425,9 +4457,14 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             tip_pos
         ),
     ]
-    .spacing(2)
+    .spacing(crate::overlay::OVERLAY_TOOLBAR_SPACING)
     .align_y(Alignment::Center);
-    let bar = container(buttons).padding(4).style(floating_bar_style);
+    // Drawn at the size placement assumes (`toolbar_rect`).
+    let bar = container(buttons)
+        .padding(crate::overlay::OVERLAY_TOOLBAR_PAD)
+        .width(Length::Fixed(crate::overlay::OVERLAY_TOOLBAR_WIDTH))
+        .height(Length::Fixed(crate::overlay::OVERLAY_TOOLBAR_HEIGHT))
+        .style(floating_bar_style);
 
     // Right edge follows the selection (clamped on screen) -- see
     // `toolbar_rect`.
@@ -4471,7 +4508,15 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     };
 
     // --- Sidebar -------------------------------------------------------
-    const PANE_KEYS: [&str; 7] = ["⌘1", "⌘2", "⌘3", "⌘4", "⌘5", "⌘6", "⌘7"];
+    const PANE_KEYS: [&str; 7] = [
+        platform_key("⌘1", "Ctrl+1"),
+        platform_key("⌘2", "Ctrl+2"),
+        platform_key("⌘3", "Ctrl+3"),
+        platform_key("⌘4", "Ctrl+4"),
+        platform_key("⌘5", "Ctrl+5"),
+        platform_key("⌘6", "Ctrl+6"),
+        platform_key("⌘7", "Ctrl+7"),
+    ];
     let mut nav = column![].spacing(1).padding([4, 8]);
     for (pane, key) in SettingsPane::ALL.into_iter().zip(PANE_KEYS) {
         let selected = pane == state.settings_pane;
@@ -4531,16 +4576,14 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     let footer = column![
         row![
             key_chip("Tab"),
-            text("Move between controls")
-                .size(TYPE_CAPTION)
-                .style(text_t3)
+            text("Next control").size(TYPE_CAPTION).style(text_t3)
         ]
         .spacing(SP2)
         .align_y(Alignment::Center),
         row![
             key_chip("esc"),
             text("/").size(TYPE_CAPTION).style(text_t3),
-            key_chip("⌘W"),
+            key_chip(CLOSE_KEY),
             text("Close").size(TYPE_CAPTION).style(text_t3)
         ]
         .spacing(SP2)
@@ -4996,7 +5039,7 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
             .text_size(TYPE_BODY)
             .padding([7, 10]),
             "Next Retention Option",
-            Some("⌘R"),
+            Some(platform_key("⌘R", "Ctrl+R")),
             Position::Top,
         ),
         settings_lit(state, crate::app::SettingsFocus::Retention),
@@ -5123,7 +5166,7 @@ fn settings_ocr_pane(state: &App) -> Vec<Element<'_, Message>> {
             .text_size(TYPE_BODY)
             .padding([7, 10]),
             "Next OCR Engine",
-            Some("⌘E"),
+            Some(platform_key("⌘E", "Ctrl+E")),
             Position::Top,
         ),
         settings_lit(state, crate::app::SettingsFocus::OcrEngine),
@@ -5170,7 +5213,7 @@ fn settings_export_pane(state: &App) -> Vec<Element<'_, Message>> {
             .text_size(TYPE_BODY)
             .padding([7, 10]),
             "Next Format",
-            Some("⌘F"),
+            Some(platform_key("⌘F", "Ctrl+F")),
             Position::Top,
         ),
         settings_lit(state, crate::app::SettingsFocus::Format),
@@ -5197,7 +5240,7 @@ fn settings_diagnostics_pane(state: &App) -> Vec<Element<'_, Message>> {
             toggler(state.preferences.debug_logging)
                 .on_toggle(|v| Message::Settings(SettingsMessage::SetDebugLogging(v))),
             "Toggle Debug Logging",
-            Some("⌘D"),
+            Some(platform_key("⌘D", "Ctrl+D")),
             Position::Top,
         ),
         settings_lit(state, crate::app::SettingsFocus::DebugLogging),
@@ -5222,7 +5265,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
             toggler(state.preferences.launch_at_login)
                 .on_toggle(|v| Message::Settings(SettingsMessage::SetLaunchAtLogin(v))),
             "Toggle Open at Login",
-            Some("⌘L"),
+            Some(platform_key("⌘L", "Ctrl+L")),
             Position::Top,
         ),
         settings_lit(state, F::LaunchAtLogin),
@@ -5243,7 +5286,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                             .style(|t, s| action_button_style(t, s, ActionKind::Danger))
                             .on_press(Message::SettingsResetAllConfirmed),
                         "Confirm Reset",
-                        Some("⇧⌘R"),
+                        Some(platform_key("⇧⌘R", "Ctrl+Shift+R")),
                         Position::Top,
                     ),
                     settings_lit(state, F::ResetConfirm)
@@ -5276,7 +5319,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                         .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
                         .on_press(Message::SettingsResetAllRequested),
                     "Reset All Settings",
-                    Some("⇧⌘R"),
+                    Some(platform_key("⇧⌘R", "Ctrl+Shift+R")),
                     Position::Top,
                 ),
                 settings_lit(state, F::ResetAll),
@@ -5304,7 +5347,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                         .style(|t, s| action_button_style(t, s, ActionKind::Danger))
                         .on_press(Message::SettingsUninstallConfirmed),
                     "Confirm Uninstall",
-                    Some("⇧⌘U"),
+                    Some(platform_key("⇧⌘U", "Ctrl+Shift+U")),
                     Position::Top,
                 ),
                 settings_lit(state, F::UninstallConfirm)
@@ -5336,7 +5379,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                         .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
                         .on_press(Message::SettingsUninstallRequested),
                     "Uninstall Readshot",
-                    Some("⇧⌘U"),
+                    Some(platform_key("⇧⌘U", "Ctrl+Shift+U")),
                     Position::Top,
                 ),
                 settings_lit(state, F::Uninstall),
@@ -6264,7 +6307,7 @@ mod tests {
     fn toast_actions_name_their_key() {
         use crate::editor::EditorToastAction as A;
         let (label, key, msg) = super::toast_action_parts(A::UndoRedaction { undo_depth: 0 });
-        assert_eq!((label, key), ("Undo", Some("⌘Z")));
+        assert_eq!((label, key), ("Undo", Some(crate::runtime::UNDO_KEY)));
         assert!(matches!(
             msg,
             crate::app::Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)

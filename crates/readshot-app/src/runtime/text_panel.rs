@@ -583,7 +583,7 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
         Message::EditorCopyLinesDone(result) => {
             if let Some(ed) = state.editor.as_mut() {
                 ed.set_status(match result {
-                    Ok(n) => format!("Copied {n} line{}.", if n == 1 { "" } else { "s" }),
+                    Ok(n) => format!("Copied {}.", counted(n, "line", "lines")),
                     Err(e) => {
                         tracing::warn!(target: "readshot::editor", "copy lines failed: {e}");
                         super::history_ops::friendly_string_error_with(
@@ -726,7 +726,7 @@ pub(crate) fn redact_state(ed: &EditorSession) -> RedactState {
 }
 
 fn items(n: usize) -> String {
-    format!("{n} item{}", if n == 1 { "" } else { "s" })
+    counted(n, "item", "items")
 }
 
 /// Toast text after a redaction of `n` items with `missed` that couldn't
@@ -736,8 +736,8 @@ pub(crate) fn redact_status(n: usize, missed: usize) -> String {
     match (n, missed) {
         (0, 0) => "No sensitive items left to redact.".to_string(),
         (0, m) => format!(
-            "Couldn't locate {m} sensitive item{}. Cover {pronoun} by hand.",
-            if m == 1 { "" } else { "s" }
+            "Couldn't locate {}. Cover {pronoun} by hand.",
+            counted(m, "sensitive item", "sensitive items")
         ),
         (n, 0) => format!("Redacted {}.", items(n)),
         (n, m) => format!(
@@ -1051,11 +1051,25 @@ pub(crate) fn redact_card_title(pending: usize, unlocatable: usize, weak: usize)
     match (pending + unlocatable, weak) {
         (0, 0) => "All detected items redacted".to_string(),
         (0, _) => "All detected items blurred or pixelated".to_string(),
-        (n, _) => format!("{n} sensitive item{}", if n == 1 { "" } else { "s" }),
+        (n, _) => counted(n, "sensitive item", "sensitive items"),
     }
 }
 
 /// Card note for items covered only by a Blur or Pixelate.
+/// Size of the Text tab's safety and redaction notes: full sentences,
+/// so the readable caption size, never Micro (spec §2.2 keeps 11 px for
+/// key chips and labels).
+pub(crate) const REDACT_NOTE_SIZE: f32 = TYPE_CAPTION;
+
+/// The note for matches that can't be placed on the image.
+pub(crate) fn unlocatable_note(m: usize) -> String {
+    if m == 1 {
+        "1 item couldn't be located on the image. Cover it by hand.".to_string()
+    } else {
+        format!("{m} items couldn't be located on the image. Cover them by hand.")
+    }
+}
+
 pub(crate) fn weak_note(weak: usize, style: RedactStyle) -> String {
     let (lead, verb) = if weak == 1 {
         ("1 item is".to_string(), "it")
@@ -1117,7 +1131,7 @@ fn redact_card<'a>(
         ),
         lit(F::TextRedactAll),
     );
-    let mut chips = row![].spacing(6);
+    let mut chips = row![].spacing(SP2);
     for (kind, count) in summary(pending.iter().map(|(m, _)| m)) {
         chips = chips.push(
             container(text(kind.chip(count)).size(TYPE_MICRO).style(text_t2))
@@ -1128,7 +1142,7 @@ fn redact_card<'a>(
     let mut body = column![
         head,
         row![picker, redact_all]
-            .spacing(6)
+            .spacing(SP2)
             .align_y(Alignment::Center),
     ]
     .spacing(SP2);
@@ -1137,7 +1151,7 @@ fn redact_card<'a>(
             text(
                 "Pixelate and blur are weaker than a solid block: text can sometimes be recovered.",
             )
-            .size(TYPE_MICRO)
+            .size(REDACT_NOTE_SIZE)
             .style(text_t2),
         );
     }
@@ -1147,20 +1161,16 @@ fn redact_card<'a>(
     if !rs.weak.is_empty() {
         body = body.push(
             text(weak_note(rs.weak.len(), ed.text_panel.redact_style))
-                .size(TYPE_MICRO)
+                .size(REDACT_NOTE_SIZE)
                 .style(text_t2),
         );
     }
     if !unlocatable.is_empty() {
         let m = unlocatable.len();
         body = body.push(
-            text(format!(
-                "{m} item{} couldn't be located on the image. Cover {} by hand.",
-                if m == 1 { "" } else { "s" },
-                if m == 1 { "it" } else { "them" },
-            ))
-            .size(TYPE_MICRO)
-            .style(text_t2),
+            text(unlocatable_note(m))
+                .size(REDACT_NOTE_SIZE)
+                .style(text_t2),
         );
     }
     Some(
@@ -1197,6 +1207,11 @@ pub(crate) fn line_row_style(theme: &Theme, selected: bool, hovered: bool) -> co
     }
 }
 
+/// Room kept free at the end of a line row while its Redact button
+/// shows: the Xs button ("Redact" at 11 px ≈ 36 px, plus 2 × 8 px
+/// padding) and its 4 px inset, with a margin for wider fonts.
+pub(crate) const REDACT_BUTTON_ROOM: f32 = 64.0;
+
 /// One recognized line: hover outlines it on the image, click selects
 /// (⇧ range, ⌘ toggle). `marks` (char ranges) are underlined;
 /// `redacted` spans (already covered on the image) are muted and the
@@ -1232,7 +1247,7 @@ fn line_row<'a>(
     let mut inner = row![iced::widget::rich_text(spans)
         .size(TYPE_CAPTION)
         .width(Length::Fill)]
-    .spacing(6)
+    .spacing(SP2)
     .align_y(Alignment::Center);
     if !redacted.is_empty() && !redact_button {
         inner = inner.push(tooltip_with_key(
@@ -1244,8 +1259,22 @@ fn line_row<'a>(
             iced::widget::tooltip::Position::Top,
         ));
     }
+    // The Redact button sits over the row's trailing edge; the text keeps
+    // clear of it (it wraps before the button), so the button never hides
+    // the match being checked. Reserving room, rather than putting the
+    // taller button in the row, keeps the row's height on hover.
+    let right = if redact_button {
+        8.0 + REDACT_BUTTON_ROOM
+    } else {
+        8.0
+    };
     let content = container(inner)
-        .padding([6, 8])
+        .padding(iced::Padding {
+            top: 6.0,
+            bottom: 6.0,
+            left: 8.0,
+            right,
+        })
         .width(Length::Fill)
         .style(move |theme: &Theme| line_row_style(theme, selected, hovered));
     let body: Element<'a, Message> = if redact_button {
@@ -1294,7 +1323,7 @@ fn lines_view<'a>(
             .font(semibold())
             .style(text_t1),
         Space::new().width(Length::Fill),
-        text(format!("{count} line{}", if count == 1 { "" } else { "s" }))
+        text(counted(count, "line", "lines"))
             .size(TYPE_CAPTION)
             .style(text_t3),
     ]
@@ -1345,7 +1374,7 @@ fn lines_view<'a>(
     if !doc.positioned {
         col = col.push(
             text("This platform's text recognition doesn't report where lines are, so hover-to-locate and smart redact are off.")
-                .size(TYPE_MICRO)
+                .size(REDACT_NOTE_SIZE)
                 .style(text_t3),
         );
     }
@@ -1373,7 +1402,7 @@ fn lines_view<'a>(
     let copy_all = bar_button(
         row![
             text("Copy All").size(ButtonSize::Sm.text_size()),
-            key_chip("⇧⌘C"),
+            key_chip(COPY_TEXT_KEY),
         ]
         .spacing(6)
         .align_y(Alignment::Center)
@@ -1604,6 +1633,25 @@ mod tests {
             "All detected items blurred or pixelated"
         );
         assert_eq!(redact_card_title(2, 0, 2), "2 sensitive items");
+    }
+
+    #[test]
+    fn redaction_notes_are_readable_and_clear_the_redact_button() {
+        const { assert!(REDACT_NOTE_SIZE >= TYPE_CAPTION && REDACT_NOTE_SIZE > TYPE_MICRO) };
+        // "Redact" at Xs (11 px, ≈ 0.6 em a glyph) plus its padding and
+        // inset fits the room the text keeps free.
+        let button = "Redact".len() as f32 * ButtonSize::Xs.text_size() * 0.6
+            + 2.0 * ButtonSize::Xs.padding_x()
+            + 4.0;
+        assert!(REDACT_BUTTON_ROOM >= button, "{button}");
+        assert_eq!(
+            unlocatable_note(1),
+            "1 item couldn't be located on the image. Cover it by hand."
+        );
+        assert_eq!(
+            unlocatable_note(3),
+            "3 items couldn't be located on the image. Cover them by hand."
+        );
     }
 
     #[test]

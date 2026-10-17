@@ -865,7 +865,7 @@ fn only_problems_are_notified() {
     assert!(capture_status_is_problem(
         "No previous region to retake. Capture a region first, then use Retake Last Region."
     ));
-    assert!(!capture_status_is_problem("Scroll capture cancelled."));
+    assert!(!capture_status_is_problem("Scrolling capture cancelled."));
     assert!(!capture_status_is_problem("Copied image to clipboard."));
 }
 

@@ -50,7 +50,10 @@ fn rotate_moves_annotations_with_the_image_and_undoes() {
         }
         other => panic!("{other:?}"),
     }
-    assert_eq!(ed.status.as_deref(), Some("Rotated right. ⌘Z to undo."));
+    assert_eq!(
+        ed.status.as_deref(),
+        Some(format!("Rotated right. {UNDO_HINT}").as_str())
+    );
     let _ = update(
         &mut app,
         Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),

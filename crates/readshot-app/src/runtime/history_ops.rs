@@ -286,8 +286,8 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             state.history_search.clear();
             state.history_selected_id = None;
             state.history_status = Some(format!(
-                "Cleared {n} capture{}.",
-                if n == 1 { "" } else { "s" }
+                "Deleted {} permanently.",
+                counted(n, "capture", "captures")
             ));
             Task::none()
         }
@@ -418,10 +418,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 Ok(text) if text.is_empty() => "No OCR text on this capture yet.".into(),
                 Ok(text) => {
                     let n = text.chars().count();
-                    format!(
-                        "Copied {n} character{} of text.",
-                        if n == 1 { "" } else { "s" }
-                    )
+                    format!("Copied {} of text.", counted(n, "character", "characters"))
                 }
                 Err(e) => {
                     tracing::warn!(target: "readshot::history", "copy text failed: {e}");
@@ -450,8 +447,8 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
         Message::HistoryCopyVisibleTextDone(result) => {
             state.history_status = Some(match result {
                 Ok(count) => format!(
-                    "Copied OCR text from {count} capture{}.",
-                    if count == 1 { "" } else { "s" }
+                    "Copied OCR text from {}.",
+                    counted(count, "capture", "captures")
                 ),
                 Err(e) => {
                     tracing::warn!(target: "readshot::history", "copy visible text failed: {e}");

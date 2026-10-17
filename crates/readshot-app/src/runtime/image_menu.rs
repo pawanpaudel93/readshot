@@ -133,7 +133,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
             match ed.model.rotate(clockwise) {
                 Ok(true) => {
                     let dir = if clockwise { "right" } else { "left" };
-                    changed(ed, &coord, format!("Rotated {dir}. ⌘Z to undo."));
+                    changed(ed, &coord, format!("Rotated {dir}. {UNDO_HINT}"));
                 }
                 Ok(false) => {}
                 Err(e) => ed.set_status(geometry_error_status("rotate", cropped, e)),
@@ -154,7 +154,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
                         FlipAxis::Horizontal => "horizontally",
                         FlipAxis::Vertical => "vertically",
                     };
-                    changed(ed, &coord, format!("Flipped {what}. ⌘Z to undo."));
+                    changed(ed, &coord, format!("Flipped {what}. {UNDO_HINT}"));
                 }
                 Ok(false) => {}
                 Err(e) => ed.set_status(geometry_error_status("flip", cropped, e)),
@@ -248,7 +248,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
             match ed.model.scale_by(sx, sy) {
                 Ok(true) => {
                     close_editor_popover(ed);
-                    changed(ed, &coord, format!("Resized to {w} × {h} px. ⌘Z to undo."));
+                    changed(ed, &coord, format!("Resized to {w} × {h} px. {UNDO_HINT}"));
                 }
                 Ok(false) => {
                     close_editor_popover(ed);
@@ -433,13 +433,10 @@ fn layout_section<'a>(ed: &'a EditorSession) -> Element<'a, Message> {
                 .step(1.0)
                 .on_release(Message::EditorSnapshotSliderCommit)
                 .width(Length::Fill),
-                text(format!("{gap} px"))
-                    .font(mono_font())
-                    .size(TYPE_CAPTION)
-                    .style(text_t2),
+                mono_readout(format!("{gap} px"), &format!("{MAX_GAP} px")).style(text_t2),
             ]
-            .spacing(8)
-            .padding([0, 4])
+            .spacing(SP2)
+            .padding([0.0, SP1])
             .align_y(Alignment::Center),
             lit(F::MenuGap)
         ),
@@ -453,8 +450,8 @@ fn layout_section<'a>(ed: &'a EditorSession) -> Element<'a, Message> {
                     (!ed.busy).then_some(Message::EditorLayoutAlign(a))
                 }),
             ]
-            .spacing(8)
-            .padding([0, 4])
+            .spacing(SP2)
+            .padding([0.0, SP1])
             .align_y(Alignment::Center),
             lit(F::MenuAlign)
         ),

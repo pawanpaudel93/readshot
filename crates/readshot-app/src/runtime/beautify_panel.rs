@@ -20,7 +20,7 @@ use crate::icons::AppIcon;
 fn set(ed: &mut EditorSession, s: readshot_core::beautify::BeautifySettings, what: &str) {
     if ed.model.set_beautify(s) {
         ed.clear_discard_confirmation();
-        ed.set_status(format!("{what}. ⌘Z to undo."));
+        ed.set_status(format!("{what}. {UNDO_HINT}"));
     }
 }
 

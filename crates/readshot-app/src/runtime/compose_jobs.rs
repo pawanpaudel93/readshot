@@ -1339,32 +1339,32 @@ fn landed_status(ed: &EditorSession, kind: ComposeKind) -> String {
     match kind {
         ComposeKind::Resize { .. } => {
             let (w, h) = ed.effective_image_size();
-            format!("Resized to {w} × {h} px. ⌘Z to undo.")
+            format!("Resized to {w} × {h} px. {UNDO_HINT}")
         }
         ComposeKind::Align(align) => {
-            format!("Aligned to {}. ⌘Z to undo.", align.label().to_lowercase())
+            format!("Aligned to {}. {UNDO_HINT}", align.label().to_lowercase())
         }
-        ComposeKind::Gap(gap) => format!("Gap set to {gap} px. ⌘Z to undo."),
+        ComposeKind::Gap(gap) => format!("Gap set to {gap} px. {UNDO_HINT}"),
         ComposeKind::Rotate { clockwise } => {
             let dir = if clockwise { "right" } else { "left" };
-            format!("Rotated {dir}. ⌘Z to undo.")
+            format!("Rotated {dir}. {UNDO_HINT}")
         }
         ComposeKind::Flip(axis) => {
             let what = match axis {
                 FlipAxis::Horizontal => "horizontally",
                 FlipAxis::Vertical => "vertically",
             };
-            format!("Flipped {what}. ⌘Z to undo.")
+            format!("Flipped {what}. {UNDO_HINT}")
         }
         ComposeKind::AddPart { join, what } => {
             let side = match join {
                 Join::Below => "below",
                 Join::Beside => "beside",
             };
-            format!("Added {what} {side}. ⌘Z to undo.")
+            format!("Added {what} {side}. {UNDO_HINT}")
         }
-        ComposeKind::Undo => "Undid edit. ⇧⌘Z to redo.".to_string(),
-        ComposeKind::Redo => "Redid edit. ⌘Z to undo.".to_string(),
+        ComposeKind::Undo => format!("Undid edit. {REDO_HINT}"),
+        ComposeKind::Redo => format!("Redid edit. {UNDO_HINT}"),
         ComposeKind::GapPreview(_) | ComposeKind::Flatten => String::new(),
     }
 }

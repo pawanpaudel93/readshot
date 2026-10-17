@@ -74,6 +74,8 @@ mod beautify_preview;
 pub(crate) use beautify_preview::*;
 mod key_focus;
 pub(crate) use key_focus::*;
+mod keys;
+pub(crate) use keys::*;
 
 /// Initial URL action set from `main.rs` before `iced::daemon` starts.
 /// `start()` consumes this and feeds an extra `Message::UrlActionReceived`
@@ -2221,10 +2223,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                 Ok(text) if text.is_empty() => "No text recognized.".into(),
                 Ok(text) => {
                     let n = text.chars().count();
-                    format!(
-                        "Copied {n} character{} of text.",
-                        if n == 1 { "" } else { "s" }
-                    )
+                    format!("Copied {} of text.", counted(n, "character", "characters"))
                 }
                 Err(e) => {
                     tracing::warn!(target: "readshot::overlay", "copy text failed: {e}");

@@ -872,7 +872,12 @@ fn title_shows_the_output_size_when_beautified() {
     let mut ed = crate::editor::EditorSession::new(solid(100, 50));
     assert_eq!(editor_size_label(&ed), "100 × 50 px");
     ed.model.set_beautify(BuiltinPreset::Minimal.settings());
-    assert_eq!(editor_size_label(&ed), "100 × 50 px → 148 × 98 px");
+    assert_eq!(editor_size_label(&ed), "100 × 50 → 148 × 98 px");
+    // A tall beautified capture's label fits the ≈ 232 px the title row
+    // leaves at the 720 px minimum (12 px mono, 0.6 em a glyph); a longer
+    // one clips, and its tooltip carries the whole value.
+    let tall = "1440 × 12000 → 1600 × 12160 px";
+    assert!(tall.chars().count() as f32 * crate::runtime::TYPE_CAPTION * 0.6 <= 232.0);
 }
 
 #[test]

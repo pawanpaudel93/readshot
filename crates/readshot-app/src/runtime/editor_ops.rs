@@ -25,32 +25,44 @@ pub(crate) fn handle_commit_annotation(
     if cropped {
         let (w, h) = ed.effective_image_size();
         ed.set_info(format!(
-            "Crop selected at {w} × {h}px. Drag handles to adjust; Delete or ⌘Z cancels."
+            "Crop selected at {w} × {h} px. Drag the handles to adjust; {DELETE_KEY} or {UNDO_KEY} cancels."
         ));
     }
 }
 
+/// How to work the selected annotation: sentences, keys named as in
+/// chips. Shown as a guide while the selection lasts (pointer or Tab).
 pub(crate) fn editor_selected_hint(kind: &str, text_editable: bool) -> String {
     match (kind, text_editable) {
-        ("Magnifier", _) => {
-            "Selected Magnifier — drag the bubble to move it · drag the centre to change what it shows · drag the ring to resize · ⌫ removes"
-                .to_string()
-        }
-        ("Crop", _) => {
-            "Selected Crop — drag frame or handles · arrows nudge · Delete restores full image"
-                .to_string()
-        }
-        (_, true) => {
-            format!(
-                "Selected {kind} — edit inline · color/size apply here · arrows nudge · ⌫ removes"
-            )
-        }
-        _ => {
-            format!(
-                "Selected {kind} — drag to move · arrows nudge · handles resize · drag elsewhere to draw"
-            )
-        }
+        ("Magnifier", _) => format!(
+            "Magnifier selected. Drag the bubble to move it, the center to change what it shows, \
+             or the ring to resize it. {DELETE_KEY} removes it."
+        ),
+        ("Crop", _) => format!(
+            "Crop selected. Drag the frame or its handles; arrows nudge. {DELETE_KEY} restores the full image."
+        ),
+        (_, true) => format!(
+            "{kind} selected. Edit it in place; color and size apply to it. Arrows nudge, {DELETE_KEY} removes it."
+        ),
+        _ => format!(
+            "{kind} selected. Drag to move it, arrows nudge, handles resize. {DELETE_KEY} removes it."
+        ),
     }
+}
+
+/// Whether a how-to notice may take the status line: never over an
+/// error, a warning, an armed Discard, a job in progress, or a live
+/// crop or focus-zone guide.
+pub(crate) fn hint_may_show(ed: &crate::editor::EditorSession) -> bool {
+    use crate::editor::KeyGuide;
+    let live_guide = ed.key_guide_live() == Some(true)
+        && !matches!(ed.key_guide, Some((_, KeyGuide::Selection)));
+    !(ed.status_is_error()
+        || ed.status_is_warning()
+        || ed.visible_toast_action().is_some()
+        || ed.discard_pending_at.is_some()
+        || ed.status_is_in_progress()
+        || live_guide)
 }
 
 /// Returns whether the color was applied to a selection (an undo step).
@@ -63,7 +75,7 @@ pub(crate) fn apply_editor_color(
     ed.model.set_color(color);
     if ed.model.apply_color_to_selected(color) {
         ed.refresh_image();
-        ed.set_status("Updated selected annotation color. ⌘Z to undo.");
+        ed.set_status(format!("Updated selected annotation color. {UNDO_HINT}"));
         sync_editor_history(ed, coord);
         return true;
     }
@@ -79,7 +91,7 @@ pub(crate) fn apply_editor_line_width(
     ed.model.set_line_width(width);
     if ed.model.apply_line_width_to_selected(width) {
         ed.refresh_image();
-        ed.set_status("Updated selected annotation size. ⌘Z to undo.");
+        ed.set_status(format!("Updated selected annotation size. {UNDO_HINT}"));
         sync_editor_history(ed, coord);
     }
 }
@@ -108,7 +120,7 @@ pub(crate) fn apply_editor_style(
     ed.model.set_style(msg);
     if ed.model.apply_style_to_selected(msg) {
         ed.refresh_image();
-        ed.set_status("Updated selected annotation. ⌘Z to undo.");
+        ed.set_status(format!("Updated selected annotation. {UNDO_HINT}"));
         sync_editor_history(ed, coord);
     }
 }
@@ -172,7 +184,7 @@ pub(crate) fn apply_crop_draft(
         .commit_annotation(readshot_core::Annotation::Crop { rect });
     ed.refresh_image();
     let (w, h) = ed.effective_image_size();
-    ed.set_status(format!("Cropped to {w} × {h} px. ⌘Z to undo."));
+    ed.set_status(format!("Cropped to {w} × {h} px. {UNDO_HINT}"));
     sync_editor_history(ed, coord);
     true
 }
@@ -194,7 +206,7 @@ pub(crate) fn commit_pending_editor_text(
     if let Some(edit_index) = pending.edit_index {
         if ed.model.replace_text_at(edit_index, trimmed.to_string()) {
             ed.refresh_image();
-            ed.set_status("Updated text. ⌘Z to undo.");
+            ed.set_status(format!("Updated text. {UNDO_HINT}"));
             sync_editor_history(ed, coord);
             return true;
         }
@@ -212,7 +224,7 @@ pub(crate) fn commit_pending_editor_text(
     };
     ed.model.commit_annotation(annotation);
     ed.refresh_image();
-    ed.set_status("Added text. ⌘Z to undo.");
+    ed.set_status(format!("Added text. {UNDO_HINT}"));
     sync_editor_history(ed, coord);
     true
 }
@@ -783,7 +795,7 @@ fn cycle_selection_by_tab(state: &mut App, step: i32) -> Task<Message> {
     if let Some(kind) = ed.model.selected_kind_label() {
         ed.set_guide(
             format!(
-                "{kind} selected ({} of {n}). Arrows move it, ⌫ removes it, esc deselects.",
+                "{kind} selected ({} of {n}). Arrows move it, {DELETE_KEY} removes it, esc deselects.",
                 next + 1
             ),
             crate::editor::KeyGuide::Selection,
@@ -1048,7 +1060,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         let ratio = ed.model.effective_style().crop_aspect.ratio();
                         ed.crop_draft = Some(keyboard_crop_draft(visible_frame(ed), ratio));
                         ed.set_guide(
-                            "Arrows move the crop, ⌥ + arrows resize it (⇧ for 10 px). ↵ crops, esc cancels.",
+                            format!(
+                                "Arrows move the crop, {OPTION_KEY} + arrows resize it ({SHIFT_KEY} for 10 px). ↵ crops, esc cancels."
+                            ),
                             crate::editor::KeyGuide::CropDraft,
                         );
                     }
@@ -1219,9 +1233,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 if ed.model.set_beautify(preset.settings()) {
                     ed.set_status(match preset {
                         readshot_core::beautify::BuiltinPreset::None => {
-                            "Frame removed. ⌘Z to undo.".to_string()
+                            format!("Frame removed. {UNDO_HINT}")
                         }
-                        p => format!("Frame set to {}. ⌘Z to undo.", p.label()),
+                        p => format!("Frame set to {}. {UNDO_HINT}", p.label()),
                     });
                 }
             }
@@ -1282,9 +1296,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 ed.set_status(match result {
                     Ok(text) if text.is_empty() => "No text recognized.".into(),
                     Ok(text) => format!(
-                        "Copied {} character{} of text.",
-                        text.chars().count(),
-                        if text.chars().count() == 1 { "" } else { "s" },
+                        "Copied {} of text.",
+                        counted(text.chars().count(), "character", "characters")
                     ),
                     Err(e) => {
                         tracing::warn!(target: "readshot::editor", "copy text failed: {e}");
@@ -1387,7 +1400,17 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     if t != readshot_ui::editor::ToolState::Text {
                         commit_pending_editor_text(ed, &state.coordinator);
                     }
+                    let changed = ed.model.active_tool() != t;
                     ed.model.set_tool(t);
+                    // The tool's how-to, now that the options bar has
+                    // taken the old hint line (spec §3.2): a notice when
+                    // the tool is chosen. Select keeps its hint line.
+                    if changed
+                        && !super::editor_options::visible_option_controls(ed).is_empty()
+                        && hint_may_show(ed)
+                    {
+                        ed.set_info(super::view::editor_compact_hint(t));
+                    }
                     // macOS prewarms the emoji cache at startup (main).
                     // Elsewhere the cache reads a large font file, so it is
                     // built off the UI thread the first time Stamp is
@@ -1441,7 +1464,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     }
                     if ed.model.undo() {
                         ed.refresh_image();
-                        ed.set_status("Undid edit. ⇧⌘Z to redo.");
+                        ed.set_status(format!("Undid edit. {REDO_HINT}"));
                         sync_editor_history(ed, &state.coordinator);
                     }
                 }
@@ -1457,7 +1480,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     }
                     if ed.model.redo() {
                         ed.refresh_image();
-                        ed.set_status("Redid edit. ⌘Z to undo.");
+                        ed.set_status(format!("Redid edit. {UNDO_HINT}"));
                         sync_editor_history(ed, &state.coordinator);
                     }
                 }
@@ -1505,7 +1528,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if let Some(baseline) = ed.width_drag_baseline.take() {
                 if ed.model.commit_preview_from_baseline(baseline) {
                     ed.refresh_image();
-                    ed.set_status("Updated selected annotation size. ⌘Z to undo.");
+                    ed.set_status(format!("Updated selected annotation size. {UNDO_HINT}"));
                     sync_editor_history(ed, &state.coordinator);
                 } else {
                     ed.refresh_image();
@@ -1603,7 +1626,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // Release keeps the new tool style; only the selection needs
             // turning into one undo step.
             if commit_style_drag(ed, &state.coordinator) {
-                ed.set_status("Updated selected annotation. ⌘Z to undo.");
+                ed.set_status(format!("Updated selected annotation. {UNDO_HINT}"));
             }
             Task::none()
         }
@@ -1651,7 +1674,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                                     let undoable =
                                         apply_editor_color(ed, &state.coordinator, color);
                                     ed.set_status(if undoable {
-                                        format!("Picked {}. ⌘Z to undo.", color.to_hex())
+                                        format!("Picked {}. {UNDO_HINT}", color.to_hex())
                                     } else {
                                         format!("Picked {}.", color.to_hex())
                                     });
@@ -1671,7 +1694,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                                     if ed.model.set_beautify(s) {
                                         ed.clear_discard_confirmation();
                                         ed.set_status(format!(
-                                            "Background set to {}. ⌘Z to undo.",
+                                            "Background set to {}. {UNDO_HINT}",
                                             color.to_hex()
                                         ));
                                     }
@@ -1740,7 +1763,24 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                             moved: false,
                             kind: crate::editor::MoveDragKind::Resize(handle),
                         });
-                    } else if let Some(selected_index) = ed.model.select_at_scaled(p, scale) {
+                    } else if let Some(selected_index) = {
+                        let before = ed.model.selected_annotation();
+                        let picked = ed.model.select_at_scaled(p, scale);
+                        // A new selection explains itself while it lasts
+                        // (as a Tab selection does).
+                        if picked.is_some() && picked != before && hint_may_show(ed) {
+                            if let Some(kind) = ed.model.selected_kind_label() {
+                                ed.set_guide(
+                                    editor_selected_hint(
+                                        kind,
+                                        ed.model.selected_text_edit().is_some(),
+                                    ),
+                                    crate::editor::KeyGuide::Selection,
+                                );
+                            }
+                        }
+                        picked
+                    } {
                         // A press on an unselected magnifier's bubble,
                         // source centre or rim grabs that part on this
                         // first drag too, as the second drag would; only
@@ -1840,7 +1880,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         crate::editor::MoveDragKind::Move => "Moved",
                         crate::editor::MoveDragKind::Resize(_) => "Resized",
                     };
-                    ed.set_status(format!("{verb} annotation. ⌘Z to undo."));
+                    ed.set_status(format!("{verb} annotation. {UNDO_HINT}"));
                     sync_editor_history(ed, &state.coordinator);
                 }
                 readshot_ui::CanvasMessage::RequestText(p) => {
@@ -1964,7 +2004,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }
             if ed.model.delete_selected_annotation() {
                 ed.refresh_image();
-                ed.set_status("Deleted annotation. ⌘Z to undo.");
+                ed.set_status(format!("Deleted annotation. {UNDO_HINT}"));
                 sync_editor_history(ed, &state.coordinator);
             }
             Task::none()

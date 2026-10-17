@@ -120,7 +120,7 @@ impl CropAspect {
             Self::Free => "Free",
             Self::Wide => "16:9",
             Self::Standard => "4:3",
-            Self::Square => "1:1",
+            Self::Square => "Square",
         }
     }
 
@@ -416,6 +416,13 @@ pub fn apply_style_to_annotation(annotation: &mut Annotation, msg: StyleMessage)
 mod tests {
     use super::*;
     use readshot_core::{RectLike, Rgba};
+
+    #[test]
+    fn crop_presets_do_not_reuse_the_zoom_label() {
+        // "1:1" is the title row's Actual Pixels button, shown alongside.
+        assert!(CropAspect::ALL.iter().all(|a| a.label() != "1:1"));
+        assert_eq!(CropAspect::Square.label(), "Square");
+    }
 
     #[test]
     fn step_from_px_moves_relative_to_the_actual_size() {

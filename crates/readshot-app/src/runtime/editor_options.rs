@@ -126,6 +126,7 @@ fn option_control<'a>(
             style.corner_radius,
             1.0,
             format!("{:.0}", style.corner_radius),
+            &format!("{:.0}", readshot_ui::editor::style::MAX_CORNER_RADIUS),
             busy,
             StyleMessage::CornerRadius,
         ),
@@ -184,6 +185,7 @@ fn option_control<'a>(
             style.dim,
             0.05,
             format!("{:.0}%", style.dim * 100.0),
+            &format!("{:.0}%", readshot_ui::editor::style::MAX_DIM * 100.0),
             busy,
             StyleMessage::Dim,
         ),
@@ -409,17 +411,19 @@ pub(crate) fn icon_segment<'a, T: Copy + PartialEq>(
 
 /// Caption + compact slider + mono readout. Drags preview on the
 /// selection; release commits one undo step.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn labeled_slider<'a>(
     label: &'static str,
     range: RangeInclusive<f32>,
     value: f32,
     step: f32,
     readout: String,
+    widest: &str,
     busy: bool,
     make: fn(f32) -> StyleMessage,
 ) -> Element<'a, Message> {
     let mut r = row![text(label).size(TYPE_CAPTION).style(text_t3)]
-        .spacing(6)
+        .spacing(SP2)
         .align_y(Alignment::Center);
     if !busy {
         r = r.push(
@@ -429,13 +433,18 @@ pub(crate) fn labeled_slider<'a>(
                 .width(Length::Fixed(72.0)),
         );
     }
-    r.push(
-        text(readout)
-            .font(mono_font())
-            .size(TYPE_CAPTION)
-            .style(text_t2),
+    // The bar is centred: a readout that changed width would re-centre
+    // it and move the slider under the pointer.
+    r.push(mono_readout(readout, widest).style(text_t2)).into()
+}
+
+/// The widest line width the Width button can show (half steps up to
+/// the maximum), so its label never changes the bar's width.
+pub(crate) fn widest_line_width_label() -> String {
+    format!(
+        "{} px",
+        line_width_label(readshot_ui::editor::toolbar::MAX_LINE_WIDTH - 0.5)
     )
-    .into()
 }
 
 /// Color popover (spec §3.5): 12 presets, the Recent row (last 6
@@ -635,11 +644,12 @@ fn width_button<'a>(line_width: f32, open: bool, busy: bool) -> Element<'a, Mess
                 },
                 ..Default::default()
             }),
-            text(format!("{} px", line_width_label(line_width)))
-                .font(mono_font())
-                .size(TYPE_CAPTION),
+            mono_readout(
+                format!("{} px", line_width_label(line_width)),
+                &widest_line_width_label(),
+            ),
         ]
-        .spacing(6)
+        .spacing(SP2)
         .align_y(Alignment::Center)
         .into(),
         open,
@@ -651,6 +661,33 @@ fn width_button<'a>(line_width: f32, open: bool, busy: bool) -> Element<'a, Mess
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every value a readout can show fits the width reserved for its
+    /// widest one, so dragging never resizes it (or moves the bar).
+    #[test]
+    fn readouts_reserve_room_for_their_widest_value() {
+        let fits = |shown: String, widest: &str| {
+            mono_readout_width(&shown, TYPE_CAPTION) <= mono_readout_width(widest, TYPE_CAPTION)
+        };
+        let max_gap = readshot_core::document::MAX_GAP;
+        for gap in 0..=max_gap {
+            assert!(fits(format!("{gap} px"), &format!("{max_gap} px")));
+        }
+        let max_r = readshot_ui::editor::style::MAX_CORNER_RADIUS;
+        for r in 0..=max_r as u32 {
+            assert!(fits(format!("{r}"), &format!("{max_r:.0}")));
+        }
+        let widest = widest_line_width_label();
+        let mut w = readshot_ui::editor::toolbar::MIN_LINE_WIDTH;
+        while w <= readshot_ui::editor::toolbar::MAX_LINE_WIDTH {
+            assert!(fits(format!("{} px", line_width_label(w)), &widest), "{w}");
+            w += 0.5;
+        }
+        for pct in [5, 25, 100, 400, 800] {
+            assert!(fits(format!("{pct}%"), "800%"));
+        }
+        assert_eq!(mono_readout_width("40 px", 12.0), 5.0 * 12.0 * 0.6 + 2.0);
+    }
 
     fn blank_session() -> crate::editor::EditorSession {
         crate::editor::EditorSession::new(image::RgbaImage::from_pixel(

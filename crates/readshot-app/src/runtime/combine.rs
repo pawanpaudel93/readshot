@@ -83,7 +83,7 @@ fn append(
                 Join::Below => "below",
                 Join::Beside => "beside",
             };
-            ed.set_status(format!("Added {what} {side}. ⌘Z to undo."));
+            ed.set_status(format!("Added {what} {side}. {UNDO_HINT}"));
             // Rebuilds the word boxes for the new frame (no document while
             // the new part is unrecognized) and rewrites History.
             sync_editor_history(ed, &coord);
@@ -664,7 +664,7 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
                     ed.refresh_image();
                     ed.clear_eyedropper_loupe();
                     ed.set_status(format!(
-                        "Aligned to {}. ⌘Z to undo.",
+                        "Aligned to {}. {UNDO_HINT}",
                         align.label().to_lowercase()
                     ));
                     sync_editor_history(ed, &coord);

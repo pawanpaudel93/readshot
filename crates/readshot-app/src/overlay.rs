@@ -316,6 +316,29 @@ const MONO_ADVANCE: f32 = 0.6;
 const HINT_TEXT_W: f32 = HINT_TEXT_SIZE * MONO_ADVANCE;
 const HINT_KEY_W: f32 = HINT_KEY_SIZE * MONO_ADVANCE;
 
+/// Platform key labels in the hint pill (spec §2.1 rule 4 on macOS; the
+/// Shift / Alt words elsewhere).
+pub(crate) const SHIFT_CHIP: &str = crate::runtime::platform_key("⇧", "Shift");
+pub(crate) const RESIZE_CHIP: &str = crate::runtime::platform_key("⌥←→↑↓", "Alt+←→↑↓");
+
+/// Glyphs JetBrains Mono lacks (checked against its cmap): they come from
+/// a fallback font whose advance can reach a full em, so they are
+/// counted as one em, not 0.6.
+const MONO_FALLBACK_GLYPHS: &[char] = &['↵'];
+
+/// A chip label's width in mono advances, allowing for fallback glyphs.
+fn key_advances(k: &str) -> f32 {
+    k.chars()
+        .map(|c| {
+            if MONO_FALLBACK_GLYPHS.contains(&c) {
+                1.0 / MONO_ADVANCE
+            } else {
+                1.0
+            }
+        })
+        .sum()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HintSeg {
     Text(&'static str),
@@ -335,9 +358,9 @@ pub(crate) fn hint_segments(cli_interactive: bool, too_small: bool) -> Vec<HintS
         ]
     } else if cli_interactive {
         vec![
-            Text("Drag to capture"),
+            Text("Drag to select"),
             Muted("Release to capture"),
-            Key("⇧"),
+            Key(SHIFT_CHIP),
             Muted("Square"),
             Key("esc"),
             Muted("Cancel"),
@@ -345,7 +368,7 @@ pub(crate) fn hint_segments(cli_interactive: bool, too_small: bool) -> Vec<HintS
     } else {
         vec![
             Text("Drag to select an area"),
-            Key("⇧"),
+            Key(SHIFT_CHIP),
             Muted("Square"),
             Key("↵"),
             Muted("Full screen"),
@@ -363,7 +386,7 @@ pub(crate) fn selection_hint_segments() -> Vec<HintSeg> {
         Text("Edit"),
         Key("←→↑↓"),
         Muted("Move"),
-        Key("⌥←→↑↓"),
+        Key(RESIZE_CHIP),
         Muted("Resize"),
         Key("esc"),
         Muted("Cancel"),
@@ -378,7 +401,7 @@ const HINT_TOP: f32 = 40.0;
 fn seg_width(s: &HintSeg) -> f32 {
     match s {
         HintSeg::Text(t) | HintSeg::Muted(t) => t.chars().count() as f32 * HINT_TEXT_W,
-        HintSeg::Key(k) => k.chars().count().max(2) as f32 * HINT_KEY_W + HINT_KEY_PAD,
+        HintSeg::Key(k) => key_advances(k).max(2.0) * HINT_KEY_W + HINT_KEY_PAD,
     }
 }
 
@@ -533,13 +556,27 @@ fn size_badge_origin(
     (x, y)
 }
 
-/// Estimated size of the floating action bar (`runtime/view.rs`
-/// `overlay_toolbar_layer`). Used for edge-aware placement without
-/// measuring real layout. Edit (~74) + 6 icon buttons (32) + separator
-/// + gaps + padding.
-pub(crate) const OVERLAY_TOOLBAR_HEIGHT: f32 = 42.0;
+/// Size of the floating action bar (`runtime/view.rs`
+/// `overlay_toolbar_layer`), derived from what it is built of; the bar is
+/// drawn at exactly this size, so placement and the size badge's
+/// collision check can't drift from it.
+pub(crate) const OVERLAY_TOOLBAR_PAD: f32 = 4.0;
+pub(crate) const OVERLAY_TOOLBAR_SPACING: f32 = 2.0;
+/// The Edit button: icon 15 + 7 gap + "Edit" (≈ 26 at 13 px) + 2 × 12
+/// padding, rounded up.
+pub(crate) const OVERLAY_EDIT_W: f32 = 76.0;
+/// Copy Image, Copy Text, Save, Pin, Scrolling Capture and Cancel.
+pub(crate) const OVERLAY_ICON_BUTTONS: usize = 6;
+/// The separator before Cancel: 1 px line + 2 × 4 px padding.
+pub(crate) const OVERLAY_SEP_W: f32 = 9.0;
+pub(crate) const OVERLAY_TOOLBAR_HEIGHT: f32 = crate::runtime::ICON_BTN + 2.0 * OVERLAY_TOOLBAR_PAD;
 pub(crate) const OVERLAY_TOOLBAR_GAP: f32 = 10.0;
-pub(crate) const OVERLAY_TOOLBAR_WIDTH: f32 = 312.0;
+pub(crate) const OVERLAY_TOOLBAR_WIDTH: f32 = 2.0 * OVERLAY_TOOLBAR_PAD
+    + OVERLAY_EDIT_W
+    + OVERLAY_ICON_BUTTONS as f32 * crate::runtime::ICON_BTN
+    + OVERLAY_SEP_W
+    // Edit, the icon buttons and the separator: one gap between each.
+    + (OVERLAY_ICON_BUTTONS + 1) as f32 * OVERLAY_TOOLBAR_SPACING;
 
 /// Keyboard shortcuts the overlay handles. Intents need a selection;
 /// with none, an arrow (or ⌥ + arrow) starts a centred one, so a region
@@ -1037,7 +1074,7 @@ impl Program<Message> for OverlayProgram {
             // the hot path stays just vector strokes.
             let phys_w = ((rect.width * self.scale).round() as i32).max(0);
             let phys_h = ((rect.height * self.scale).round() as i32).max(0);
-            let label = format!("{phys_w} × {phys_h}");
+            let label = crate::runtime::size_px(phys_w, phys_h);
             let badge_w = 16.0 + label.chars().count() as f32 * 7.0;
             let badge_h = 22.0;
             let (bx, by) = size_badge_origin_clear_of_toolbar(bounds, rect, badge_w, badge_h);
@@ -1257,9 +1294,26 @@ mod tests {
     }
 
     #[test]
+    fn the_toolbar_size_is_the_sum_of_its_parts() {
+        // 2 × 4 padding + Edit 76 + 6 × 32 + separator 9 + 7 × 2 gaps.
+        assert_eq!(OVERLAY_TOOLBAR_WIDTH, 8.0 + 76.0 + 192.0 + 9.0 + 14.0);
+        assert_eq!(OVERLAY_TOOLBAR_HEIGHT, 40.0);
+    }
+
+    #[test]
+    fn a_fallback_glyph_chip_is_sized_for_a_full_em() {
+        // ↵ is not in JetBrains Mono: its chip allows a whole em.
+        assert!(key_advances("↵") * HINT_KEY_W >= HINT_KEY_SIZE);
+        assert_eq!(key_advances("esc"), 3.0);
+        // The CLI hint no longer says "capture" twice.
+        let cli = hint_segments(true, false);
+        assert_eq!(cli[0], HintSeg::Text("Drag to select"));
+    }
+
+    #[test]
     fn a_selection_hint_names_its_keys() {
         let segs = selection_hint_segments();
-        for k in ["↵", "←→↑↓", "⌥←→↑↓", "esc"] {
+        for k in ["↵", "←→↑↓", RESIZE_CHIP, "esc"] {
             assert!(segs.contains(&HintSeg::Key(k)), "{k}");
         }
         // It fits a narrow display by dropping pairs, never esc.
@@ -1278,7 +1332,7 @@ mod tests {
         }
         let normal = hint_segments(false, false);
         assert!(normal.contains(&HintSeg::Key("↵")));
-        assert!(normal.contains(&HintSeg::Key("⇧")));
+        assert!(normal.contains(&HintSeg::Key(SHIFT_CHIP)));
     }
 
     #[test]

@@ -1381,7 +1381,7 @@ fn preview_drag_label(
     let b = canvas_to_image(cursor, bounds, image_size, display_scale).unwrap_or(cursor);
     let width = (a.x - b.x).abs().round().max(1.0) as u32;
     let height = (a.y - b.y).abs().round().max(1.0) as u32;
-    Some(format!("{label_prefix}{width} × {height}px"))
+    Some(format!("{label_prefix}{width} × {height} px"))
 }
 
 impl EditorCanvas {
@@ -1461,8 +1461,15 @@ fn draw_loupe(frame: &mut Frame, bounds: Rectangle, anchor: Point, loupe: &Loupe
     }
 }
 
+/// The badge's width: 7 px of padding each side around the label in the
+/// mono face (0.6 em a glyph at `CANVAS_BADGE_TEXT`), so long labels keep
+/// the same right padding as the left.
+fn preview_badge_width(label: &str) -> f32 {
+    14.0 + label.chars().count() as f32 * CANVAS_BADGE_TEXT * 0.6
+}
+
 fn draw_preview_badge(frame: &mut Frame, bounds: Rectangle, rect: Rectangle, label: String) {
-    let badge_w = 14.0 + label.chars().count() as f32 * 7.0;
+    let badge_w = preview_badge_width(&label);
     let badge_h = 20.0;
     let pad = 6.0;
     let mut x = rect.x + rect.width - badge_w;
@@ -2400,6 +2407,14 @@ mod tests {
     use super::*;
     use iced::widget::canvas::Program;
 
+    #[test]
+    fn a_long_preview_badge_keeps_even_padding() {
+        let label = "Spotlight 12000 × 12000 px";
+        let text_w = label.chars().count() as f32 * CANVAS_BADGE_TEXT * 0.6;
+        let w = super::preview_badge_width(label);
+        assert!((w - text_w - 14.0).abs() < 1e-3, "{w} vs {text_w}");
+    }
+
     fn pt(x: f32, y: f32) -> Point {
         Point::new(x, y)
     }
@@ -2839,7 +2854,7 @@ mod tests {
                 (800, 400),
                 None,
             ),
-            Some("Crop 400 × 200px".into())
+            Some("Crop 400 × 200 px".into())
         );
         assert_eq!(
             preview_drag_label(
