@@ -73,6 +73,99 @@ where
     }))
 }
 
+/// Prefix of the frame id of a scrub's stored image when that image is a
+/// crop of the document (`readshot-app`'s `cropped_frame_id`), under the
+/// current rule for the text a cropped record may keep (v3: only words
+/// whose boxes lie wholly inside the crop). The prefix names the rule, so
+/// a record written under an older one is recognised on load and
+/// migrated ([`migrate_legacy_record`]).
+pub const CROP_FRAME_ID_PREFIX: &str = "crop3:";
+
+/// Prefix of the crop frame ids written before [`CROP_FRAME_ID_PREFIX`]
+/// (std `DefaultHasher`, then FNV-1a under rules v1–v3). Their hashes
+/// can't tell the rule apart, so every one of them is migrated.
+const LEGACY_CROP_FRAME_ID_PREFIX: &str = "crop:";
+
+/// Whether `id` is a crop frame id of the current rule.
+pub fn is_crop_frame_id(id: &str) -> bool {
+    id.starts_with(CROP_FRAME_ID_PREFIX)
+}
+
+/// Bring a record written by an older build up to the current rules, in
+/// place. `true` when anything changed (the sidecar must be rewritten).
+/// Idempotent: a migrated record is never changed again.
+///
+/// - **A crop frame id of an older rule** (`crop:…`). Its text may hold
+///   words from the cut-away area, or partial tokens cut by the edge: the
+///   text is dropped (fail closed) and the id moves to
+///   [`CROP_FRAME_ID_PREFIX`] (same hash, so it is still this record's own
+///   frame). The stored PNG is the redacted crop, and its stored
+///   redactions are in its px, so recognizing it again and masking with
+///   them ([`HistoryStore::record_recognized_text`], see
+///   [`needs_stored_recognition`]) gives text under the current rule.
+/// - **A scrub cropped before crop frame ids existed.** Such a record kept
+///   the original frame's id (usually none), its redactions in the
+///   uncropped document's px and the text of the whole document, while
+///   its PNG and size are the crop's. When a stored redaction lies wholly
+///   outside the stored image, the redactions can't be in its px (an
+///   editor redaction always touches the image): the text is dropped and
+///   so are the misplaced redactions, so nothing is ever masked with them
+///   (text then stays absent: fail closed). A record whose redactions all
+///   touch its image can't be told apart from an uncropped scrub — no
+///   stored field keeps the uncropped size or the crop's origin, and the
+///   sidecar size is the PNG's — so it is left as is.
+pub fn migrate_legacy_record(record: &mut CaptureRecord) -> bool {
+    let mut changed = false;
+    let legacy_crop = record
+        .geometry_id
+        .as_deref()
+        .and_then(|id| id.strip_prefix(LEGACY_CROP_FRAME_ID_PREFIX))
+        .map(str::to_owned);
+    if let Some(hash) = legacy_crop {
+        record.geometry_id = Some(format!("{CROP_FRAME_ID_PREFIX}{hash}"));
+        record.ocr_text = None;
+        changed = true;
+    }
+    let (w, h) = (record.width_px as f32, record.height_px as f32);
+    let misplaced = record.redacted
+        && record.redactions.iter().any(|a| match a {
+            Annotation::Rectangle { rect, .. }
+            | Annotation::Blur { rect, .. }
+            | Annotation::Pixelate { rect, .. } => {
+                let (x0, x1) = (
+                    rect.x.min(rect.x + rect.width),
+                    rect.x.max(rect.x + rect.width),
+                );
+                let (y0, y1) = (
+                    rect.y.min(rect.y + rect.height),
+                    rect.y.max(rect.y + rect.height),
+                );
+                // NaN compares false everywhere: treated as misplaced.
+                !(x1 > 0.0 && y1 > 0.0 && x0 < w && y0 < h)
+            }
+            _ => false,
+        });
+    if misplaced {
+        record.redactions.clear();
+        record.ocr_text = None;
+        changed = true;
+    }
+    changed
+}
+
+/// A scrubbed record whose text is unknown but can be recovered from its
+/// stored image: recognize the stored (redacted) PNG and store the text
+/// masked with the record's stored redactions
+/// ([`HistoryStore::record_recognized_text`]). Not while a scrub is
+/// pending (no image on disk), and never without stored redactions (the
+/// text could not be masked: it stays absent).
+pub fn needs_stored_recognition(record: &CaptureRecord) -> bool {
+    record.redacted
+        && !record.scrub_pending
+        && record.ocr_text.is_none()
+        && crate::scrub::has_redaction(&record.redactions)
+}
+
 /// One captured screenshot with metadata. The PNG bytes themselves live
 /// alongside the sidecar JSON, not inside the record.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -287,6 +380,20 @@ pub trait HistoryStore: Send + Sync {
     ) -> Result<(), HistoryError> {
         let _ = (record, doc, fill_unredacted);
         Ok(())
+    }
+    /// The stored sidecar of `record` (as [`Self::list`] serves it:
+    /// migrated, see [`migrate_legacy_record`]); `None` when it doesn't
+    /// exist or can't be read.
+    fn stored_record(&self, record: &CaptureRecord) -> Option<CaptureRecord> {
+        let _ = record;
+        None
+    }
+    /// The stored PNG bytes of `record`.
+    fn read_png(&self, record: &CaptureRecord) -> Result<Vec<u8>, HistoryError> {
+        let _ = record;
+        Err(HistoryError::Io(
+            "this history store can't read images".into(),
+        ))
     }
     /// Whether `record` exists (its sidecar is on disk).
     fn contains(&self, record: &CaptureRecord) -> bool {
@@ -589,6 +696,32 @@ impl FsHistoryStore {
             .and_then(|stored| stored.ocr_text)
     }
 
+    /// Persist [`migrate_legacy_record`] for `record`: under the index
+    /// lock, the sidecar is read again (a writer may have changed it since
+    /// it was listed), migrated and written back. Returns the record to
+    /// serve, `None` when it is gone. If the lock or the write fails, the
+    /// migrated record is still returned (it is migrated again next time):
+    /// the old text is never served.
+    fn migrate_on_disk(&self, migrated: &CaptureRecord) -> Option<CaptureRecord> {
+        let Ok(_guard) = self.lock_index() else {
+            return Some(migrated.clone());
+        };
+        if !self.root.join(Self::json_path(migrated)).exists() {
+            return None;
+        }
+        let mut stored = self.read_sidecar(migrated)?;
+        if migrate_legacy_record(&mut stored) {
+            if let Err(e) = self.write_sidecar(&stored) {
+                tracing::warn!(
+                    target: crate::log::cat::HISTORY,
+                    "couldn't persist the migration of history record {}: {e}",
+                    stored.id
+                );
+            }
+        }
+        Some(stored)
+    }
+
     /// [`HistoryStore::begin_scrub`] with the index lock held.
     fn begin_scrub_locked(&self, record: &CaptureRecord) -> Result<bool, HistoryError> {
         if !self.root.join(Self::json_path(record)).exists() {
@@ -813,7 +946,15 @@ impl HistoryStore for FsHistoryStore {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            if let Ok(record) = serde_json::from_str::<CaptureRecord>(&content) {
+            if let Ok(mut record) = serde_json::from_str::<CaptureRecord>(&content) {
+                // Written by an older build: migrated before it is
+                // served, so its old text never leaves this function.
+                if migrate_legacy_record(&mut record) {
+                    match self.migrate_on_disk(&record) {
+                        Some(stored) => record = stored,
+                        None => continue, // deleted meanwhile
+                    }
+                }
                 // A record whose scrub is pending has no image on disk
                 // (text-only until it lands); there is nothing to backfill.
                 self.backfill_thumbnail_from_png_path(&record, &png_abs);
@@ -1010,6 +1151,18 @@ impl HistoryStore for FsHistoryStore {
 
     fn contains(&self, record: &CaptureRecord) -> bool {
         self.root.join(Self::json_path(record)).exists()
+    }
+
+    fn stored_record(&self, record: &CaptureRecord) -> Option<CaptureRecord> {
+        let mut stored = self.read_sidecar(record)?;
+        if migrate_legacy_record(&mut stored) {
+            return self.migrate_on_disk(&stored);
+        }
+        Some(stored)
+    }
+
+    fn read_png(&self, record: &CaptureRecord) -> Result<Vec<u8>, HistoryError> {
+        Ok(fs::read(self.root.join(Self::png_path(record)))?)
     }
 
     fn delete(&self, id: Uuid) -> Result<(), HistoryError> {
@@ -2000,5 +2153,138 @@ mod tests {
         same.ocr_text = Some("t".into());
         s.update(&same).unwrap();
         assert_eq!(s.list().unwrap()[0].ocr_text.as_deref(), Some("t"));
+    }
+
+    /// A sidecar as an older build wrote it: `r` saved with a real 20 × 20
+    /// PNG, then its JSON replaced by `edit` applied to the record's JSON.
+    fn legacy_sidecar(
+        s: &FsHistoryStore,
+        edit: impl FnOnce(&mut serde_json::Value),
+    ) -> CaptureRecord {
+        let mut r = CaptureRecord::new(Utc::now(), 20, 20, "d");
+        r.redacted = true;
+        r.redactions = vec![Annotation::Pixelate {
+            rect: crate::RectLike::new(10.0, 2.0, 6.0, 4.0),
+            block_size: 4.0,
+        }];
+        s.save(&r, &valid_png(20, 20)).unwrap();
+        let mut json = serde_json::to_value(&r).unwrap();
+        edit(&mut json);
+        std::fs::write(
+            s.root().join(FsHistoryStore::json_path(&r)),
+            serde_json::to_string_pretty(&json).unwrap(),
+        )
+        .unwrap();
+        r
+    }
+
+    fn sidecar_text(s: &FsHistoryStore, r: &CaptureRecord) -> String {
+        std::fs::read_to_string(s.root().join(FsHistoryStore::json_path(r))).unwrap()
+    }
+
+    #[test]
+    fn older_crop_frame_ids_of_every_era_lose_their_text_on_load_once() {
+        // DefaultHasher era, FNV-1a v1/v2 and the first v3 build all wrote
+        // `crop:` + 16 hex digits; the text may hold cut-away words.
+        for (era, id) in [
+            ("DefaultHasher", "crop:9f3c2a1b0e7d6c54"),
+            ("fnv v1", "crop:73d1ba24128a984d"),
+            ("fnv v2", "crop:0aa1b2c3d4e5f607"),
+            ("fnv v3, unprefixed", "crop:3268992da8e9215b"),
+        ] {
+            let (_dir, s) = store();
+            let r = legacy_sidecar(&s, |j| {
+                j["geometry_id"] = id.into();
+                j["ocr_text"] = "outside-word ████ partial-tok".into();
+            });
+            let listed = s.list().unwrap().remove(0);
+            assert_eq!(listed.ocr_text, None, "{era}");
+            let hash = id.strip_prefix("crop:").unwrap();
+            assert_eq!(
+                listed.geometry_id,
+                Some(format!("{CROP_FRAME_ID_PREFIX}{hash}")),
+                "{era}"
+            );
+            // Persisted: the old text is gone from disk too.
+            let on_disk = sidecar_text(&s, &r);
+            assert!(!on_disk.contains("outside-word"), "{era}: {on_disk}");
+            // Everything else is kept, and the record now waits for its
+            // stored image to be recognized again.
+            assert!(listed.redacted && listed.redactions.len() == 1, "{era}");
+            assert!(needs_stored_recognition(&listed), "{era}");
+            // Idempotent: text recognized afterwards is never dropped again.
+            let doc = TextDocument::from_plain("fresh");
+            s.record_recognized_text(&listed, &doc, false).unwrap();
+            let again = s.list().unwrap().remove(0);
+            assert_eq!(again.ocr_text.as_deref(), Some("fresh"), "{era}");
+            assert_eq!(again.geometry_id, listed.geometry_id, "{era}");
+            assert_eq!(s.list().unwrap().remove(0), again, "{era}");
+        }
+    }
+
+    #[test]
+    fn current_crop_frame_ids_and_other_frames_are_not_migrated() {
+        for id in [
+            Some("crop3:3268992da8e9215b"),
+            Some("5b1d:parts=0Below;rot=1"),
+            None,
+        ] {
+            let (_dir, s) = store();
+            let r = legacy_sidecar(&s, |j| {
+                if let Some(id) = id {
+                    j["geometry_id"] = id.into();
+                }
+                j["ocr_text"] = "kept ████".into();
+            });
+            let before = sidecar_text(&s, &r);
+            let listed = s.list().unwrap().remove(0);
+            assert_eq!(listed.ocr_text.as_deref(), Some("kept ████"), "{id:?}");
+            assert_eq!(listed.geometry_id.as_deref(), id);
+            assert_eq!(sidecar_text(&s, &r), before, "{id:?}: not rewritten");
+        }
+    }
+
+    #[test]
+    fn a_scrub_cropped_before_crop_ids_existed_is_detected_by_its_misplaced_redactions() {
+        // A 40 × 20 capture cropped to x 20–40: the stored PNG and size are
+        // 20 × 20, but the redaction stayed in uncropped px (x 30–36),
+        // wholly outside the stored image, and the text is the whole
+        // document's.
+        let (_dir, s) = store();
+        let r = legacy_sidecar(&s, |j| {
+            j["redactions"] = serde_json::to_value(vec![Annotation::Pixelate {
+                rect: crate::RectLike::new(30.0, 2.0, 6.0, 4.0),
+                block_size: 4.0,
+            }])
+            .unwrap();
+            j["ocr_text"] = "left-of-crop ████".into();
+        });
+        let listed = s.list().unwrap().remove(0);
+        assert_eq!(listed.ocr_text, None);
+        assert!(listed.redactions.is_empty(), "never mask with them");
+        assert!(listed.redacted, "still a scrub");
+        assert!(
+            !needs_stored_recognition(&listed),
+            "no redactions to mask with"
+        );
+        assert!(!sidecar_text(&s, &r).contains("left-of-crop"));
+        // Text recognized later can't be masked: it is never stored.
+        s.record_recognized_text(&listed, &TextDocument::from_plain("x"), true)
+            .unwrap();
+        assert_eq!(s.list().unwrap().remove(0).ocr_text, None);
+    }
+
+    #[test]
+    fn stored_record_serves_the_migrated_sidecar() {
+        let (_dir, s) = store();
+        let r = legacy_sidecar(&s, |j| {
+            j["geometry_id"] = "crop:0011223344556677".into();
+            j["ocr_text"] = "old".into();
+        });
+        let stored = s.stored_record(&r).unwrap();
+        assert_eq!(stored.ocr_text, None);
+        assert!(stored.geometry_id.as_deref().is_some_and(is_crop_frame_id));
+        assert!(!sidecar_text(&s, &r).contains("\"old\""));
+        assert_eq!(s.read_png(&r).unwrap(), valid_png(20, 20));
     }
 }

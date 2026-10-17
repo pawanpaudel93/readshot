@@ -1294,6 +1294,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_cropped_record_of_an_older_rule_is_never_served_or_found_by_its_old_text() {
+        let root = unique_history_root();
+        let store = FsHistoryStore::new(&root);
+        let mut r = record(
+            "00000000-0000-0000-0000-000000000010",
+            "2026-02-01T00:00:00Z",
+            4,
+            4,
+            "d",
+            Some("cutaway-word ████"),
+        );
+        r.redacted = true;
+        r.geometry_id = Some("crop:9f3c2a1b0e7d6c54".into());
+        store.save(&r, b"png").unwrap();
+        let s = McpServer::with_history_root(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_text("hello mcp")),
+            Arc::new(store),
+            root,
+        );
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"recent_captures","arguments":{"limit":1}}}"#,
+        )
+        .await;
+        let capture = &resp["result"]["structuredContent"]["captures"][0];
+        assert!(capture["ocr_text"].is_null(), "{capture}");
+        let resp = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"search_captures","arguments":{"query":"cutaway"}}}"#,
+        )
+        .await;
+        assert!(!resp.to_string().contains("cutaway-word"), "{resp}");
+        assert_eq!(
+            resp["result"]["structuredContent"]["captures"]
+                .as_array()
+                .map(Vec::len),
+            Some(0),
+            "{resp}"
+        );
+    }
+
+    #[tokio::test]
     async fn tools_call_search_captures_matches_ocr_text_case_insensitively() {
         let s = server_with_history(vec![
             record(

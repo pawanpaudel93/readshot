@@ -61,6 +61,11 @@ pub struct CaptureCoordinator {
     history_update_tx: Option<std::sync::mpsc::Sender<HistoryUpdate>>,
     /// See [`Scrubs`].
     scrubs: Arc<Scrubs>,
+    /// Stored states (frame and redactions) of records whose stored image
+    /// [`Self::recognize_stored_history`] already tried, so each is
+    /// recognized at most once per run.
+    stored_recognitions:
+        Arc<std::sync::Mutex<std::collections::HashMap<readshot_core::Uuid, SecuredScrub>>>,
 }
 
 /// Message for the background history writer thread.
@@ -158,6 +163,10 @@ fn secured_key(record: &CaptureRecord) -> SecuredScrub {
 /// changes when the text a cropped record may keep changes (v3: only
 /// words whose boxes lie wholly inside the crop), so text stored under an older
 /// rule is never kept by a later scrub (`HistoryStore::begin_scrub`).
+/// The rule is also named by the id's prefix
+/// ([`readshot_core::history::CROP_FRAME_ID_PREFIX`]), so a record of an
+/// older rule is recognised and migrated when History loads
+/// ([`readshot_core::history::migrate_legacy_record`]).
 pub(crate) fn cropped_frame_id(
     frame: Option<&str>,
     crop: readshot_core::render::OutputCrop,
@@ -175,7 +184,11 @@ pub(crate) fn cropped_frame_id(
     for v in [crop.x.to_bits(), crop.y.to_bits(), crop.width, crop.height] {
         h.write(&v.to_le_bytes());
     }
-    format!("crop:{:016x}", h.finish())
+    format!(
+        "{}{:016x}",
+        readshot_core::history::CROP_FRAME_ID_PREFIX,
+        h.finish()
+    )
 }
 
 fn next_rewrite_seq() -> u64 {
@@ -514,6 +527,7 @@ impl CaptureCoordinator {
             history,
             history_update_tx,
             scrubs,
+            stored_recognitions: Arc::default(),
         }
     }
 
@@ -791,6 +805,76 @@ impl CaptureCoordinator {
         }
     }
 
+    /// Recognize `record`'s **stored** image again and store the text
+    /// masked with its stored redactions, when History holds no text for
+    /// it but can ([`readshot_core::history::needs_stored_recognition`]):
+    /// a cropped record migrated on load (its old text was dropped), or a
+    /// scrub whose text had to be dropped because the redactions already
+    /// in its image were unknown. The stored image is the redacted (and
+    /// cropped) output, and History masks the text with the stored
+    /// redactions, in the stored image's frame
+    /// ([`HistoryStore::record_recognized_text`], as for a History record
+    /// reopened in the editor). Each stored state (frame and redactions)
+    /// is tried once per run. `Ok(true)` when recognition ran and its text
+    /// was handed to History.
+    pub async fn recognize_stored_history(
+        &self,
+        record: &CaptureRecord,
+        languages: Vec<String>,
+    ) -> Result<bool, String> {
+        use readshot_core::history::needs_stored_recognition;
+        let Some(store) = self.history.clone() else {
+            return Ok(false);
+        };
+        let probe = record.clone();
+        let st = Arc::clone(&store);
+        let stored = tokio::task::spawn_blocking(move || st.stored_record(&probe))
+            .await
+            .map_err(|e| e.to_string())?;
+        let Some(stored) = stored.filter(needs_stored_recognition) else {
+            return Ok(false);
+        };
+        if !self.claim_stored_recognition(&stored) {
+            return Ok(false);
+        }
+        let (st, at) = (Arc::clone(&store), stored.clone());
+        let image = tokio::task::spawn_blocking(move || -> Result<RgbaImage, String> {
+            let png = st.read_png(&at).map_err(|e| e.to_string())?;
+            image::load_from_memory(&png)
+                .map(|img| img.to_rgba8())
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        let doc = self
+            .recognise_document(OCRRequest {
+                image,
+                languages,
+                use_language_correction: true,
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        // Masked with the redactions stored *now*, and dropped if the
+        // record moved to another frame meanwhile.
+        tokio::task::spawn_blocking(move || store.record_recognized_text(&stored, &doc, false))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
+    /// `true` the first time `stored`'s state is claimed for
+    /// [`Self::recognize_stored_history`].
+    fn claim_stored_recognition(&self, stored: &CaptureRecord) -> bool {
+        let key = secured_key(stored);
+        let mut tried = lock(&self.stored_recognitions);
+        if tried.get(&stored.id) == Some(&key) {
+            return false;
+        }
+        tried.insert(stored.id, key);
+        true
+    }
+
     /// Block until every history update queued before this call has
     /// been written. Bounded wait so a wedged disk can't hang the
     /// caller. Used on shutdown so a quit straight after an annotation
@@ -1011,10 +1095,10 @@ mod tests {
             height: 20,
         };
         // Persisted ids: these must never change between builds.
-        assert_eq!(cropped_frame_id(None, crop), "crop:3268992da8e9215b");
+        assert_eq!(cropped_frame_id(None, crop), "crop3:3268992da8e9215b");
         assert_eq!(
             cropped_frame_id(Some("frame-a"), crop),
-            "crop:0289caee4b31ebee"
+            "crop3:0289caee4b31ebee"
         );
         assert_ne!(
             cropped_frame_id(Some("frame-a"), crop),

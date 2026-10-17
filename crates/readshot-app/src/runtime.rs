@@ -435,8 +435,13 @@ pub fn start() -> (App, Task<Message>) {
     // not, so the app just appears in the menu bar at every boot
     // instead of popping a window in the user's face.
     let initial_url_action = take_initial_url_action();
-    let mut tasks: Vec<Task<Message>> =
-        vec![iced::system::theme().map(Message::SystemThemeChanged)];
+    let mut tasks: Vec<Task<Message>> = vec![
+        iced::system::theme().map(Message::SystemThemeChanged),
+        history_sweep_task(
+            app.coordinator.clone(),
+            app.preferences.ocr_languages.clone(),
+        ),
+    ];
     let needs_welcome_window = needs_welcome_window_on_boot(
         app.welcome,
         initial_url_action.is_some(),
@@ -2752,6 +2757,77 @@ fn history_list_task(coord: CaptureCoordinator) -> Task<Message> {
         },
         Message::HistoryListLoaded,
     )
+}
+
+/// Recognize the stored image of each of `records` again, storing its
+/// text masked with the record's stored redactions when History holds
+/// none ([`CaptureCoordinator::recognize_stored_history`], which checks
+/// the record as stored now), one after another. Then an open History
+/// window refreshes (`HistoryRecordPersisted`). Callers that list
+/// History pass only records that [`readshot_core::history::needs_stored_recognition`].
+pub(crate) fn stored_recognition_task(
+    coord: CaptureCoordinator,
+    records: Vec<readshot_core::CaptureRecord>,
+    languages: Vec<String>,
+) -> Task<Message> {
+    if records.is_empty() {
+        return Task::none();
+    }
+    Task::perform(
+        async move {
+            let mut any = false;
+            for record in &records {
+                match coord
+                    .recognize_stored_history(record, languages.clone())
+                    .await
+                {
+                    Ok(done) => any |= done,
+                    Err(e) => tracing::warn!(
+                        target: "readshot::history",
+                        "recognizing a stored History image failed: {e}"
+                    ),
+                }
+            }
+            Ok(any)
+        },
+        Message::HistoryRecordPersisted,
+    )
+}
+
+/// The History records [`stored_recognition_task`] should recognize.
+pub(crate) fn stored_recognition_due(
+    records: &[readshot_core::CaptureRecord],
+) -> Vec<readshot_core::CaptureRecord> {
+    records
+        .iter()
+        .filter(|r| readshot_core::history::needs_stored_recognition(r))
+        .cloned()
+        .collect()
+}
+
+/// At launch: load History once — which migrates records written by
+/// older builds ([`readshot_core::history::migrate_legacy_record`])
+/// before anything can serve their old text — then recognize the stored
+/// images of the records left without text ([`stored_recognition_task`]).
+fn history_sweep_task(coord: CaptureCoordinator, languages: Vec<String>) -> Task<Message> {
+    let lister = coord.clone();
+    Task::perform(
+        async move {
+            match tokio::task::spawn_blocking(move || lister.history_list()).await {
+                Ok(Ok(records)) => stored_recognition_due(&records),
+                Ok(Err(e)) => {
+                    tracing::warn!(target: "readshot::history", "history sweep failed: {e}");
+                    Vec::new()
+                }
+                Err(e) => {
+                    tracing::warn!(target: "readshot::history", "history sweep worker: {e}");
+                    Vec::new()
+                }
+            }
+        },
+        std::convert::identity,
+    )
+    .then(move |due| stored_recognition_task(coord.clone(), due, languages.clone()))
 }
 
 fn editor_output_image(ed: &mut EditorSession) -> image::RgbaImage {
@@ -11573,6 +11649,85 @@ mod tests {
 
     fn hidden_word() -> String {
         ["sec", "ret"].concat()
+    }
+
+    fn ocr_line(
+        text: &str,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) -> readshot_core::ocr_layout::RecognizedLine {
+        readshot_core::ocr_layout::RecognizedLine {
+            text: text.into(),
+            x,
+            y,
+            w,
+            h,
+            words: Vec::new(),
+        }
+    }
+
+    /// An app whose OCR reads `lines` (normalized boxes) in any image.
+    fn build_app_reading(
+        history: Arc<dyn HistoryStore>,
+        lines: Vec<readshot_core::ocr_layout::RecognizedLine>,
+    ) -> App {
+        let perms = Arc::new(FakePermissions::granted());
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_lines(lines)),
+            perms.clone(),
+            Some(history),
+        );
+        App::new(coord, perms, Preferences::default())
+    }
+
+    #[tokio::test]
+    async fn a_cropped_record_of_an_older_rule_drops_its_text_on_load_and_recovers_it_from_the_stored_crop(
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        // OCR of the stored crop (20 × 20) reads "kept" and the weakly
+        // pixelated word at x 10–16, y 2–6 (the stored redaction).
+        let app = build_app_reading(
+            store.clone(),
+            vec![
+                ocr_line("kept", 0.0, 0.5, 0.4, 0.2),
+                ocr_line(&hidden_word(), 0.5, 0.1, 0.3, 0.2),
+            ],
+        );
+        let record = cropped_weak_pixelate_scrub(&store, &app);
+        // Rewrite the sidecar as an older build left it: an unprefixed crop
+        // id and text holding a word from the cut-away area.
+        let path = store
+            .root()
+            .join(readshot_core::FsHistoryStore::json_path(&record));
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        json["geometry_id"] = "crop:73d1ba24128a984d".into();
+        json["ocr_text"] = "cutaway ██████".into();
+        std::fs::write(&path, json.to_string()).unwrap();
+        // History (and so MCP) never serves the old text.
+        let listed = app.coordinator.history_list().unwrap();
+        assert_eq!(listed[0].ocr_text, None);
+        assert_eq!(
+            listed[0].geometry_id.as_deref(),
+            Some("crop3:73d1ba24128a984d")
+        );
+        let due = stored_recognition_due(&listed);
+        assert_eq!(due.len(), 1);
+        assert!(app
+            .coordinator
+            .recognize_stored_history(&due[0], Vec::new())
+            .await
+            .unwrap());
+        let text = stored_record(&store, record.id).ocr_text.unwrap();
+        assert!(text.contains("kept"), "{text}");
+        assert!(!text.contains("cutaway"), "{text}");
+        assert!(!text.contains(&hidden_word()), "{text}");
+        // Migrated once: nothing is due any more.
+        assert!(stored_recognition_due(&app.coordinator.history_list().unwrap()).is_empty());
     }
 
     #[test]
