@@ -26,7 +26,7 @@ find it later by searching the text inside the screenshot.
 - Annotation editor with shapes (filled, dashed, rounded), curved and
   hand-drawn arrows, pen, highlighter, multi-line text (sizes, pill,
   bold), blur, pixelate, spotlight, stamps, numbered pins, magnifier, crop
-  (free or 16:9 / 4:3 / 1:1), undo, and redo.
+  (free, 16:9, 4:3 or square), undo, and redo.
   Hold Shift for squares, circles, and 45° lines.
 - An **Image** menu to resize, rotate, and flip a capture, or combine it
   with another capture or an image file.
@@ -37,7 +37,9 @@ find it later by searching the text inside the screenshot.
 - Offline OCR via Apple Vision with layout-aware copied text and a
   choice of recognition languages.
 - Searchable capture history with open, reveal, copy, pin, and delete
-  actions.
+  actions. Deleting is permanent (not the Trash). A redacted capture whose
+  redactions can't all be accounted for keeps no text; History says
+  "Text hidden" for it.
 - Pin captures as always-on-top reference windows.
 - In-app updates via "Check for Updates…" in the menu bar.
 - Clean uninstall from Settings, `readshot uninstall`, or the installer
@@ -67,8 +69,9 @@ preferences).
 
 ## Usage
 
-Launch Readshot from Applications, then use the menu-bar icon or the
-default hotkey:
+Launch Readshot from Applications, then click the menu-bar icon to
+capture (right-click it for the menu; on Linux it always opens the menu),
+or press the default shortcut:
 
 ```text
 Command + Shift + X
@@ -122,13 +125,13 @@ See [docs/CLI.md](docs/CLI.md) for the complete command reference.
 Inside the GUI, keyboard shortcuts cover the main workflows:
 
 - **Capture overlay:** drag to select a region, or press an arrow key to
-  start a centred one; `Enter` captures the full display; `esc` cancels.
+  start a centred one; `↵` captures the full display; `esc` cancels.
   With a selection: `⌘C` / `⇧⌘C` / `⌘S` / `⌘P` / `⌘R` copy image / copy
   text / save / pin / start a scrolling capture, the arrow keys nudge it and
   `⌥` + arrow keys resize it from its bottom-right corner (`⇧` ×10).
 - **Editor tools:** `V` select, `R` rectangle, `O` ellipse, `L` line,
   `A` arrow, `P` pen, `H` highlighter, `T` text, `B` blur, `X` pixelate,
-  `S` spotlight, `N` numbered pin, `E` stamp, `M` magnifier (drag over what to enlarge; drag the bubble anywhere), `C` crop (Free / 16:9 / 4:3 / 1:1 in the options bar; `↵` applies,
+  `S` spotlight, `N` numbered pin, `E` stamp, `M` magnifier (drag over what to enlarge; drag the bubble anywhere), `C` crop (Free / 16:9 / 4:3 / Square in the options bar; `↵` applies,
   `esc` cancels). `I` picks a color
   from the image (eyedropper). Arrow keys nudge the selection (hold `⇧` for
   larger steps), `⌫` removes it, `esc` deselects (during a drag, `esc`
@@ -164,10 +167,10 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   Color popover applies a typed hex (as `↵` does) and returns to the bar;
   `esc` cancels it.
 - **History window:** `↑` / `↓` move between captures (moving past the
-  last one shown loads more), `Enter` opens the selected one, `⌘C` copies
+  last one shown loads more), `↵` opens the selected one, `⌘C` copies
   its image and `⇧⌘C` its text, `⌘P` pins it, `⌥⌘R` reveals it in Finder,
   `⌘⌫` deletes it, `⌥⇧⌘C` copies the text of every visible capture,
-  `⇧⌘⌫` clears all (press twice to confirm), `⌘F` focuses the search, and
+  `⇧⌘⌫` clears all (press twice to confirm; both deletions are permanent), `⌘F` focuses the search, and
   `esc` cancels an armed prompt or clears the search. On Windows and Linux,
   Reveal is `Ctrl+Shift+R` and Copy Visible Text is `Ctrl+Shift+A`.
 - **Settings window:** `⌘1`–`⌘7` switch panes; `esc` / `⌘W` close; `⌘L`
@@ -177,19 +180,19 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   Each shortcut also brings up the pane its setting lives on, and the pane
   title says what changed. `Tab` / `⇧Tab` move a focus ring through the
   pane's controls (buttons, pickers, checkboxes, the filename field), `Space`
-  or `Enter` presses the focused one and `←` / `→` change a picker. `esc`
+  or `↵` presses the focused one and `←` / `→` change a picker. `esc`
   steps back one level: out of the filename field, then off the ring, then
   closes the window.
 - **Scrolling-capture window:** `esc` stops and stitches the session;
-  `⇧esc` or `⌘.` discards it (press twice to confirm, or click Keep Going
-  to carry on capturing; the confirmation waits for your answer). While a
+  `⇧esc` or `⌘.` discards it (press twice to confirm, or click Keep Going,
+  Resume in a narrow window, to carry on capturing; the confirmation waits for your answer). While a
   session runs, `esc` and `⇧esc` work from any app, so you don't have to
   click the window first. This reserves `esc` and `⇧esc` system-wide for
   the length of the session: other apps don't receive them until it stops
   or is discarded.
 - **Pinned windows:** `esc` / `⌘W` close, `L` lock, `-` / `+` adjust opacity,
   arrow keys move the window by 1 pixel (hold `⇧` for 10).
-- **Welcome screen:** `Enter` triggers the primary action (Allow / Open System
+- **Welcome screen:** `↵` triggers the primary action (Allow / Open System
   Settings / Capture); `⌘R` restarts Readshot and `⇧⌘R` resets the Screen
   Recording permission when those buttons are shown.
 
