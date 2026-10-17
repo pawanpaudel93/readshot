@@ -152,10 +152,18 @@ impl Flattened {
         }
     }
 
-    /// An owned copy as an image.
-    pub fn to_image(&self) -> RgbaImage {
+    /// An owned copy as an image. Its pixels always match its size (it is
+    /// only built by [`Self::new`]); were they ever not to, this is `None`
+    /// so the caller renders again, never a blank image passed off as the
+    /// document.
+    pub fn to_image(&self) -> Option<RgbaImage> {
+        let img = self.try_image();
+        debug_assert!(img.is_some(), "flattened pixels do not match its size");
+        img
+    }
+
+    fn try_image(&self) -> Option<RgbaImage> {
         RgbaImage::from_raw(self.width, self.height, self.pixels().to_vec())
-            .unwrap_or_else(|| RgbaImage::new(self.width, self.height))
     }
 }
 
@@ -1397,8 +1405,8 @@ impl EditorState {
     /// cached so successive views during a single state don't re-render.
     /// The cache is cleared on every state change.
     pub fn flatten(&mut self) -> RgbaImage {
-        if let Some(img) = &self.flattened_cache {
-            return img.to_image();
+        if let Some(img) = self.flattened_cache.as_ref().and_then(Flattened::to_image) {
+            return img;
         }
         let img = self.render_present();
         self.flattened_cache = Some(Flattened::new(img.clone()));
@@ -2095,6 +2103,33 @@ mod tests {
     use image::Rgba as ImgRgba;
     use readshot_core::render::text_pill_rect;
     use readshot_core::{PointLike, RectLike};
+
+    fn mismatched_flat() -> Flattened {
+        Flattened {
+            handle: iced::widget::image::Handle::from_rgba(2, 2, vec![0u8; 16]),
+            width: 4,
+            height: 4,
+        }
+    }
+
+    #[test]
+    fn a_flattened_image_whose_pixels_do_not_fit_is_none_never_blank() {
+        // Before, this came back as a blank 4x4 image passed off as the
+        // document.
+        assert_eq!(mismatched_flat().try_image(), None);
+        let ok = Flattened::new(RgbaImage::from_pixel(3, 2, ImgRgba([9, 8, 7, 255])));
+        assert_eq!(
+            ok.to_image(),
+            Some(RgbaImage::from_pixel(3, 2, ImgRgba([9, 8, 7, 255])))
+        );
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "flattened pixels do not match its size")]
+    fn a_mismatched_flattened_image_trips_the_debug_assertion() {
+        let _ = mismatched_flat().to_image();
+    }
 
     fn magnifier() -> Annotation {
         Annotation::Magnifier {
