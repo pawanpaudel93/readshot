@@ -464,3 +464,45 @@ fn command_digit_in_settings_window_switches_pane() {
     );
     assert_eq!(app.settings_pane, SettingsPane::Files);
 }
+
+/// The platform's command key (⌘, or Ctrl off macOS) drives every
+/// History chord: Ctrl itself must not be refused as an "extra" key off
+/// macOS (it was, so Ctrl+F / Ctrl+C / Ctrl+Backspace did nothing).
+#[test]
+fn history_command_chords_work_with_the_platform_command_key() {
+    use iced::keyboard::{key::Named, Key, Modifiers};
+    let w = iced::window::Id::unique();
+    let f = Key::Character("f".into());
+    assert!(matches!(
+        history_key_message(w, &f, command_modifiers(), true),
+        Some(Message::HistoryKeyboardShortcut(
+            _,
+            HistoryKeyboardAction::FocusSearch
+        ))
+    ));
+    assert!(matches!(
+        history_key_message(w, &Key::Named(Named::Backspace), command_modifiers(), true),
+        Some(Message::HistoryKeyboardShortcut(
+            _,
+            HistoryKeyboardAction::Delete
+        ))
+    ));
+    // The other command-ish key on top (⌃ on macOS, the logo key
+    // elsewhere) is not the chord.
+    let mut extra = command_modifiers();
+    extra.insert(if cfg!(target_os = "macos") {
+        Modifiers::CTRL
+    } else {
+        Modifiers::LOGO
+    });
+    assert!(history_key_message(w, &f, extra, true).is_none());
+    assert!(history_key_message(w, &Key::Character("c".into()), extra, true).is_none());
+    // ⌦ alone deletes; with the command key it is not a delete chord.
+    assert!(matches!(
+        history_key_message(w, &Key::Named(Named::Delete), Modifiers::empty(), true),
+        Some(Message::HistoryKeyboardShortcut(
+            _,
+            HistoryKeyboardAction::Delete
+        ))
+    ));
+}

@@ -877,11 +877,13 @@ pub(crate) fn history_key_message(
             Message::HistoryCapturedShortcut(window, a)
         })
     };
-    // ⌘F focuses the search field, wherever focus is.
+    // ⌘F focuses the search field, wherever focus is. (Off macOS
+    // `command()` is Ctrl itself, so the extra modifier to refuse is
+    // the logo key, not Ctrl: `extra_command_modifier`.)
     if modifiers.command()
         && !modifiers.shift()
         && !modifiers.alt()
-        && !modifiers.control()
+        && !extra_command_modifier(modifiers)
         && matches!(key, Key::Character(c) if c.eq_ignore_ascii_case("f"))
     {
         return action(HistoryKeyboardAction::FocusSearch);
@@ -915,7 +917,7 @@ pub(crate) fn history_key_message(
         }
     }
     // ⌘C copies the image, ⇧⌘C the text.
-    if modifiers.command() && !modifiers.alt() && !modifiers.control() {
+    if modifiers.command() && !modifiers.alt() && !extra_command_modifier(modifiers) {
         if let Key::Character(c) = key {
             if c.eq_ignore_ascii_case("c") {
                 return chord(if modifiers.shift() {
@@ -926,10 +928,13 @@ pub(crate) fn history_key_message(
             }
         }
     }
-    // Delete: ⌦ or ⌘⌫ (Move to Trash). Plain ⌫ is never bound.
-    if !modifiers.alt() && !modifiers.control() && !modifiers.shift() {
+    // Delete: ⌦ or ⌘⌫ (Ctrl+Backspace elsewhere); deletion is permanent.
+    // Plain ⌫ is never bound.
+    if !modifiers.alt() && !extra_command_modifier(modifiers) && !modifiers.shift() {
         match key {
-            Key::Named(Named::Delete) => return chord(HistoryKeyboardAction::Delete),
+            Key::Named(Named::Delete) if !modifiers.command() => {
+                return chord(HistoryKeyboardAction::Delete)
+            }
             Key::Named(Named::Backspace) if modifiers.command() => {
                 return chord(HistoryKeyboardAction::Delete)
             }
