@@ -1798,7 +1798,7 @@ pub(crate) fn magnifier_bubble_grab(
 
 /// Whether `point` is on a magnifier's leader line (within the hit
 /// tolerance for the display `scale`).
-fn magnifier_leader_hit(annotation: &Annotation, point: PointLike, scale: f32) -> bool {
+pub(crate) fn magnifier_leader_hit(annotation: &Annotation, point: PointLike, scale: f32) -> bool {
     let Annotation::Magnifier {
         source,
         radius,

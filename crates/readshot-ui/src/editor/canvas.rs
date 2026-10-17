@@ -33,7 +33,7 @@ use readshot_core::{
 
 use super::state::{
     annotation_bounds, annotation_hit_test, hit_tolerance_base, magnifier_bubble_grab,
-    ResizeHandle, HANDLE_HIT_RADIUS_SCREEN,
+    magnifier_leader_hit, ResizeHandle, HANDLE_HIT_RADIUS_SCREEN,
 };
 use super::style::ToolStyle;
 use super::tool_state::ToolState;
@@ -426,7 +426,12 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 let base = PointLike::new(image_point.x, image_point.y);
                 let scale = display_scale_for_bounds(bounds, self.image_size, self.display_scale)
                     .unwrap_or(1.0);
-                let pressed_selected_handle = self.selected_handle_at(base, scale).is_some();
+                // The selected annotation's handles, and the selected
+                // magnifier's bubble and leader, are grabbed with any tool
+                // (with the Magnifier tool too: a press there moves that
+                // magnifier rather than starting a new one).
+                let pressed_selected_handle = self.selected_handle_at(base, scale).is_some()
+                    || self.on_selected_magnifier_leader(base, scale);
                 if self.active_tool == ToolState::Select || pressed_selected_handle {
                     *state = DrawState::Selecting { last: base };
                     return Some(
@@ -1107,6 +1112,11 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
             if let Some(handle) = self.selected_handle_at(base, scale) {
                 return resize_handle_cursor(handle);
             }
+            // A press on the selected magnifier's leader moves it whole,
+            // whatever the tool.
+            if self.on_selected_magnifier_leader(base, scale) {
+                return iced::mouse::Interaction::Move;
+            }
             // Hovering the selected annotation's body offers a move
             // affordance, mirroring the handle cursors above. Hit-test the
             // real geometry (same rule as `select_at`) so the cursor only
@@ -1173,6 +1183,13 @@ impl EditorCanvas {
     /// Hit-test the selected annotation's handles. `scale` is the
     /// canvas→base display scale so the grab radius is a constant number
     /// of screen pixels at any zoom.
+    /// Whether `point` is on the selected magnifier's leader line.
+    fn on_selected_magnifier_leader(&self, point: PointLike, scale: f32) -> bool {
+        self.selected_annotation
+            .as_ref()
+            .is_some_and(|a| magnifier_leader_hit(a, point, scale))
+    }
+
     fn selected_handle_at(&self, point: PointLike, scale: f32) -> Option<ResizeHandle> {
         let radius = hit_tolerance_base(HANDLE_HIT_RADIUS_SCREEN, scale);
         // Nearest handle wins, so Bend stays grabbable on short curved
@@ -2947,6 +2964,92 @@ mod tests {
         assert_eq!(
             canvas.selected_handle_at(PointLike::new(150.0, 80.0), 2.0),
             None
+        );
+    }
+
+    #[test]
+    fn a_press_on_the_selected_magnifiers_leader_moves_it_with_the_magnifier_tool() {
+        let magnifier = Annotation::Magnifier {
+            source: PointLike::new(20.0, 20.0),
+            radius: 10.0,
+            bubble: PointLike::new(150.0, 60.0),
+            zoom: 2.0,
+            shape: readshot_core::MagnifierShape::Circle,
+            color: CoreRgba::OPAQUE_BLACK,
+        };
+        let (a, b) = readshot_core::magnifier::leader_endpoints(
+            PointLike::new(20.0, 20.0),
+            10.0,
+            PointLike::new(150.0, 60.0),
+            readshot_core::magnifier::bubble_radius(10.0, 2.0),
+        )
+        .expect("a leader");
+        let mid = PointLike::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        // Base → canvas: 200 + 2x, 200 + 2y (200 × 100 image at 2×).
+        let at = Cursor::Available(Point::new(200.0 + 2.0 * mid.x, 200.0 + 2.0 * mid.y));
+        let with_tool = |tool| EditorCanvas {
+            active_tool: tool,
+            selected_annotation: Some(magnifier.clone()),
+            ..test_canvas()
+        };
+        let selected = with_tool(ToolState::Magnifier);
+        let mut state = DrawState::Idle;
+        let (message, _, _) = selected
+            .update(
+                &mut state,
+                &Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)),
+                bounds,
+                at,
+            )
+            .expect("a leader press publishes")
+            .into_inner();
+        // Before, this started a new magnifier (DragStarted).
+        assert_eq!(message, Some(CanvasMessage::SelectPressed(mid)));
+        assert_eq!(state, DrawState::Selecting { last: mid });
+        // The move cursor shows over it, whatever the tool.
+        for tool in [
+            ToolState::Magnifier,
+            ToolState::Rectangle,
+            ToolState::Select,
+        ] {
+            let canvas = with_tool(tool);
+            assert_eq!(
+                canvas.mouse_interaction(&DrawState::Idle, bounds, at),
+                iced::mouse::Interaction::Move,
+                "{tool:?}"
+            );
+        }
+        // And over the selected bubble.
+        let in_bubble = Cursor::Available(Point::new(200.0 + 2.0 * 160.0, 200.0 + 2.0 * 60.0));
+        assert_eq!(
+            selected.mouse_interaction(&DrawState::Idle, bounds, in_bubble),
+            iced::mouse::Interaction::Move
+        );
+        // Not selected: the leader is click-through, and the tool draws.
+        let unselected = EditorCanvas {
+            active_tool: ToolState::Magnifier,
+            ..test_canvas()
+        };
+        let mut state = DrawState::Idle;
+        let (message, _, _) = unselected
+            .update(
+                &mut state,
+                &Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)),
+                bounds,
+                at,
+            )
+            .expect("a press publishes")
+            .into_inner();
+        assert_eq!(message, Some(CanvasMessage::DragStarted));
+        assert_eq!(
+            unselected.mouse_interaction(&DrawState::Idle, bounds, at),
+            iced::mouse::Interaction::Crosshair
         );
     }
 
