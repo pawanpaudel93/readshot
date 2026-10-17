@@ -98,11 +98,17 @@ pub(crate) fn scroll_region_view(state: &App) -> Element<'_, Message> {
                 iced::Size::new(badge_w, badge_h),
                 6.0.into(),
             );
-            frame.fill(&badge_path, Color::from_rgba8(28, 28, 30, 0.90));
+            frame.fill(
+                &badge_path,
+                Color {
+                    a: 0.90,
+                    ..DARK.float
+                },
+            );
             frame.fill_text(CanvasText {
                 content: label,
                 position: iced::Point::new(bx + 8.0, by + 4.0),
-                color: Color::from_rgb8(0xED, 0xED, 0xED),
+                color: DARK.t1,
                 size: iced::Pixels(11.5),
                 font: mono_font(),
                 ..Default::default()

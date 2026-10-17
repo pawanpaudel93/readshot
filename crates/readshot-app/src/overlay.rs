@@ -255,6 +255,25 @@ fn crosshair_point(state: &OverlayState, cursor: Option<Point>) -> Option<Point>
     }
 }
 
+/// Overlay chrome is always dark, so it reads the DARK tokens directly.
+use crate::runtime::DARK;
+
+/// Crosshair halo: the OS cursor is hidden over the veil, so this is the
+/// only pointer indicator and must reach 3:1 on a light screen (WCAG
+/// 1.4.11). The spec softens only the core (35 % white).
+pub(crate) const CROSSHAIR_HALO: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.72);
+pub(crate) const CROSSHAIR_HALO_WIDTH: f32 = 2.4;
+pub(crate) const CROSSHAIR_CORE: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.35);
+/// Outline of the white resize handles: 3:1 against light content.
+pub(crate) const HANDLE_OUTLINE: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.8);
+/// The veil dimming the screen outside the selection.
+pub(crate) const VEIL: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.5);
+/// Fill of the hint pill and size badge: the floating-bar token.
+const CHROME_FILL: Color = Color {
+    a: 0.90,
+    ..DARK.float
+};
+
 fn draw_crosshair(frame: &mut Frame<Renderer>, bounds: Rectangle, point: Point) {
     let left = 0.0;
     let right = bounds.width.max(0.0);
@@ -278,14 +297,12 @@ fn draw_crosshair(frame: &mut Frame<Renderer>, bounds: Rectangle, point: Point) 
         frame.stroke(
             &path,
             Stroke::default()
-                .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.35))
-                .with_width(2.0),
+                .with_color(CROSSHAIR_HALO)
+                .with_width(CROSSHAIR_HALO_WIDTH),
         );
         frame.stroke(
             &path,
-            Stroke::default()
-                .with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.35))
-                .with_width(1.0),
+            Stroke::default().with_color(CROSSHAIR_CORE).with_width(1.0),
         );
     }
 }
@@ -397,11 +414,11 @@ fn draw_overlay_hint(
         iced::Size::new(box_w, HINT_H),
         (HINT_H / 2.0).into(),
     );
-    frame.fill(&pill, Color::from_rgba8(28, 28, 30, 0.90));
+    frame.fill(&pill, CHROME_FILL);
     frame.stroke(
         &pill,
         Stroke::default()
-            .with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.10))
+            .with_color(DARK.float_border)
             .with_width(1.0),
     );
 
@@ -413,9 +430,9 @@ fn draw_overlay_hint(
         match seg {
             HintSeg::Text(t) | HintSeg::Muted(t) => {
                 let color = if matches!(seg, HintSeg::Text(_)) {
-                    Color::from_rgb8(0xED, 0xED, 0xED)
+                    DARK.t1
                 } else {
-                    Color::from_rgb8(0xA1, 0xA1, 0xAA)
+                    DARK.t2
                 };
                 frame.fill_text(CanvasText {
                     content: (*t).to_string(),
@@ -434,11 +451,11 @@ fn draw_overlay_hint(
                     iced::Size::new(w, chip_h),
                     5.0.into(),
                 );
-                frame.fill(&chip, Color::from_rgba(1.0, 1.0, 1.0, 0.08));
+                frame.fill(&chip, DARK.kbd_bg);
                 frame.fill_text(CanvasText {
                     content: (*k).to_string(),
                     position: Point::new(x + w / 2.0, mid_y),
-                    color: Color::from_rgb8(0xB4, 0xB4, 0xB4),
+                    color: DARK.t2,
                     size: iced::Pixels(HINT_KEY_SIZE),
                     font,
                     align_x: iced::alignment::Horizontal::Center.into(),
@@ -889,10 +906,7 @@ impl Program<Message> for OverlayProgram {
 
         let Some(rect) = current_rect else {
             let veil = state.veil_cache.draw(renderer, bounds.size(), |frame| {
-                frame.fill(
-                    &Path::rectangle(Point::ORIGIN, bounds.size()),
-                    Color::from_rgba(0.0, 0.0, 0.0, 0.5),
-                );
+                frame.fill(&Path::rectangle(Point::ORIGIN, bounds.size()), VEIL);
             });
             if let Some(point) = crosshair_point(state, cursor_point) {
                 draw_crosshair(&mut frame, bounds, point);
@@ -910,7 +924,7 @@ impl Program<Message> for OverlayProgram {
         veil_frame.fill(
             &veil_path,
             Fill {
-                style: Color::from_rgba(0.0, 0.0, 0.0, 0.5).into(),
+                style: VEIL.into(),
                 rule: iced::widget::canvas::fill::Rule::EvenOdd,
             },
         );
@@ -945,17 +959,17 @@ impl Program<Message> for OverlayProgram {
                 iced::Size::new(badge_w, badge_h),
                 6.0.into(),
             );
-            frame.fill(&badge_path, Color::from_rgba8(28, 28, 30, 0.90));
+            frame.fill(&badge_path, CHROME_FILL);
             frame.stroke(
                 &badge_path,
                 Stroke::default()
-                    .with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.10))
+                    .with_color(DARK.float_border)
                     .with_width(1.0),
             );
             frame.fill_text(CanvasText {
                 content: label,
                 position: Point::new(bx + 8.0, by + 4.0),
-                color: Color::from_rgb8(0xED, 0xED, 0xED),
+                color: DARK.t1,
                 size: iced::Pixels(11.5),
                 font: iced::Font::with_name(readshot_core::render::FONT_FAMILY),
                 ..Default::default()
@@ -972,9 +986,7 @@ impl Program<Message> for OverlayProgram {
                 frame.fill(&p, Color::WHITE);
                 frame.stroke(
                     &p,
-                    Stroke::default()
-                        .with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.35))
-                        .with_width(1.0),
+                    Stroke::default().with_color(HANDLE_OUTLINE).with_width(1.0),
                 );
             }
         }
@@ -1548,5 +1560,40 @@ mod tests {
         assert!(rect_contains(r, Point::new(30.0, 30.0)));
         assert!(rect_contains(r, Point::new(20.0, 20.0)));
         assert!(!rect_contains(r, Point::new(9.9, 20.0)));
+    }
+
+    /// The crosshair is the only pointer indicator over the veil. On
+    /// every screen tone one of its two edges must reach 3:1: the dark
+    /// halo against the veiled screen, or the white core against the
+    /// halo it sits on.
+    #[test]
+    fn crosshair_reads_on_light_and_dark_screens() {
+        use crate::runtime::{contrast_ratio, over};
+        for screen in [
+            Color::WHITE,
+            Color::from_rgb(0.75, 0.75, 0.75),
+            Color::from_rgb(0.5, 0.5, 0.5),
+            Color::from_rgb(0.25, 0.25, 0.25),
+            Color::BLACK,
+        ] {
+            let veiled = over(VEIL, screen);
+            let halo = over(CROSSHAIR_HALO, veiled);
+            let outer = contrast_ratio(halo, veiled);
+            let inner = contrast_ratio(CROSSHAIR_CORE, halo);
+            assert!(
+                outer.max(inner) >= 3.0,
+                "{screen:?}: halo {outer:.2}:1, core {inner:.2}:1"
+            );
+        }
+        // On a white screen the halo alone carries it (the base did).
+        let veiled_white = over(VEIL, Color::WHITE);
+        assert!(contrast_ratio(CROSSHAIR_HALO, veiled_white) >= 3.0);
+        assert!(CROSSHAIR_HALO_WIDTH > 2.0);
+    }
+
+    #[test]
+    fn resize_handle_outline_reads_on_white_content() {
+        let r = crate::runtime::contrast_ratio(HANDLE_OUTLINE, Color::WHITE);
+        assert!(r >= 3.0, "{r:.2}:1");
     }
 }
