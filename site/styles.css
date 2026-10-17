@@ -181,8 +181,7 @@ h1 {
   /* The rem minimum grows with the reader's default font size; at a
      larger default and 320px a long word like "Screenshots" can be
      wider than the column. Break it rather than let the body's
-     overflow-x clip it. */
-  hyphens: auto;
+     overflow-x clip it (hyphenated only on narrow screens, below). */
   overflow-wrap: break-word;
   margin: 0 0 22px;
   text-wrap: balance;
@@ -970,6 +969,11 @@ footer a {
 }
 
 @media (max-width: 480px) {
+  /* Where a display word can outgrow the column, hyphenate the break. */
+  h1 {
+    hyphens: auto;
+  }
+
   .shell {
     width: min(100% - 32px, 1040px);
   }

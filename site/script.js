@@ -13,6 +13,22 @@ const announce = (message) => {
   });
 };
 
+// Name the copy shortcut the reader's keyboard has, or none on a
+// touch-only device.
+const copyFailureMessage = (subject) => {
+  const touchOnly =
+    window.matchMedia("(pointer: coarse)").matches &&
+    !window.matchMedia("(any-pointer: fine)").matches;
+  if (touchOnly) {
+    return `Couldn’t copy. Select the ${subject} and copy it.`;
+  }
+  const platform = navigator.userAgentData?.platform || navigator.platform || "";
+  const isMac = /mac/i.test(platform);
+  return isMac
+    ? `Couldn’t copy. Select the ${subject} and press ⌘C.`
+    : `Couldn’t copy. Select the ${subject} and press Ctrl+C.`;
+};
+
 copyButtons.forEach((copyButton) => {
   const title = copyButton.dataset.copyTitle ?? "Copy";
   let resetTimer;
@@ -44,9 +60,10 @@ copyButtons.forEach((copyButton) => {
     } catch {
       // The clipboard API is blocked in some contexts. Say so where the
       // reader is looking, and name the manual way to copy.
-      const failure =
-        copyButton.dataset.copyError ?? "Couldn’t copy. Select the text and press ⌘C.";
+      const failure = copyFailureMessage(copyButton.dataset.copySubject ?? "text");
       copyButton.classList.remove("is-copied");
+      copyButton.setAttribute("aria-label", title);
+      copyButton.setAttribute("title", title);
       copyButton.classList.add("is-failed");
       if (!errorMessage) {
         errorMessage = document.createElement("p");
