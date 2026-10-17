@@ -1,0 +1,771 @@
+//! Capture to disk, CLI, hotkeys, preferences, boot and settings.
+
+use super::*;
+
+#[test]
+fn pick_primary_prefers_primary_then_first() {
+    let primary = DisplayInfo {
+        id: "p".into(),
+        bounds: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 100.0, 100.0).unwrap(),
+        scale: 1.0,
+        name: "main".into(),
+        is_primary: true,
+    };
+    let secondary = DisplayInfo {
+        id: "s".into(),
+        bounds: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 100.0, 100.0).unwrap(),
+        scale: 1.0,
+        name: "side".into(),
+        is_primary: false,
+    };
+    assert_eq!(
+        pick_primary(&[secondary.clone(), primary.clone()])
+            .unwrap()
+            .id,
+        "p"
+    );
+    assert_eq!(
+        pick_primary(std::slice::from_ref(&secondary)).unwrap().id,
+        "s"
+    );
+    assert!(pick_primary(&[]).is_none());
+}
+
+#[tokio::test]
+async fn capture_request_to_dir_writes_png() {
+    let perms = Arc::new(FakePermissions::granted());
+    let coord = CaptureCoordinator::new(
+        Arc::new(FakeCapturer::new()),
+        Arc::new(FakeOcrEngine::with_text("hi")),
+        perms,
+        None,
+    );
+    let dir = tempfile::TempDir::new().unwrap();
+    let req = CaptureRequest {
+        display_id: "fake-0".into(),
+        rect: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 256.0, 256.0).unwrap(),
+        scale: 1.0,
+        hide_cursor: true,
+    };
+    let path = capture_request_to_dir(coord, req, dir.path())
+        .await
+        .unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    assert!(path.starts_with(dir.path()));
+}
+
+#[tokio::test]
+async fn capture_request_to_dir_preserves_physical_pixel_dimensions() {
+    struct HiDpiCapturer;
+
+    #[async_trait]
+    impl Capturer for HiDpiCapturer {
+        async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
+            Ok(vec![DisplayInfo {
+                id: "retina".into(),
+                bounds: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 128.0, 128.0).unwrap(),
+                scale: 2.0,
+                name: "Retina".into(),
+                is_primary: true,
+            }])
+        }
+
+        async fn capture_region(
+            &self,
+            req: CaptureRequest,
+        ) -> Result<image::RgbaImage, CaptureError> {
+            let w = (req.rect.width() * req.scale).round() as u32;
+            let h = (req.rect.height() * req.scale).round() as u32;
+            Ok(solid(w, h))
+        }
+    }
+
+    let perms = Arc::new(FakePermissions::granted());
+    let coord = CaptureCoordinator::new(
+        Arc::new(HiDpiCapturer),
+        Arc::new(FakeOcrEngine::with_text("hi")),
+        perms,
+        None,
+    );
+    let dir = tempfile::TempDir::new().unwrap();
+
+    let img = capture_region_to_image(
+        coord,
+        "retina".into(),
+        readshot_core::geom::Rect::from_xywh(0.0, 0.0, 128.0, 128.0).unwrap(),
+        true,
+    )
+    .await
+    .unwrap();
+    let path = save_to_dir(&img, dir.path()).unwrap();
+
+    let saved = image::open(&path).unwrap();
+    assert_eq!(saved.width(), 256);
+    assert_eq!(saved.height(), 256);
+}
+
+#[tokio::test]
+async fn capture_region_to_image_forwards_cursor_visibility() {
+    struct CursorFlagCapturer {
+        seen_hide_cursor: Arc<Mutex<Option<bool>>>,
+    }
+
+    #[async_trait]
+    impl Capturer for CursorFlagCapturer {
+        async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
+            Ok(vec![DisplayInfo {
+                id: "primary".into(),
+                bounds: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 64.0, 64.0).unwrap(),
+                scale: 1.0,
+                name: "Primary".into(),
+                is_primary: true,
+            }])
+        }
+
+        async fn capture_region(
+            &self,
+            req: CaptureRequest,
+        ) -> Result<image::RgbaImage, CaptureError> {
+            *self.seen_hide_cursor.lock().unwrap() = Some(req.hide_cursor);
+            Ok(solid(64, 64))
+        }
+    }
+
+    let seen_hide_cursor = Arc::new(Mutex::new(None));
+    let perms = Arc::new(FakePermissions::granted());
+    let coord = CaptureCoordinator::new(
+        Arc::new(CursorFlagCapturer {
+            seen_hide_cursor: Arc::clone(&seen_hide_cursor),
+        }),
+        Arc::new(FakeOcrEngine::with_text("hi")),
+        perms,
+        None,
+    );
+
+    capture_region_to_image(
+        coord,
+        "primary".into(),
+        readshot_core::geom::Rect::from_xywh(0.0, 0.0, 32.0, 32.0).unwrap(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(*seen_hide_cursor.lock().unwrap(), Some(false));
+}
+
+#[tokio::test]
+async fn capture_region_with_known_scale_skips_display_listing() {
+    struct KnownScaleCapturer {
+        seen_scale: Arc<Mutex<Option<f32>>>,
+    }
+
+    #[async_trait]
+    impl Capturer for KnownScaleCapturer {
+        async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
+            panic!("known-scale capture should not list displays");
+        }
+
+        async fn capture_region(
+            &self,
+            req: CaptureRequest,
+        ) -> Result<image::RgbaImage, CaptureError> {
+            *self.seen_scale.lock().unwrap() = Some(req.scale);
+            Ok(solid(64, 64))
+        }
+    }
+
+    let seen_scale = Arc::new(Mutex::new(None));
+    let perms = Arc::new(FakePermissions::granted());
+    let coord = CaptureCoordinator::new(
+        Arc::new(KnownScaleCapturer {
+            seen_scale: Arc::clone(&seen_scale),
+        }),
+        Arc::new(FakeOcrEngine::with_text("hi")),
+        perms,
+        None,
+    );
+
+    capture_region_to_image_with_scale(
+        coord,
+        "secondary".into(),
+        readshot_core::geom::Rect::from_xywh(0.0, 0.0, 32.0, 32.0).unwrap(),
+        2.0,
+        true,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(*seen_scale.lock().unwrap(), Some(2.0));
+}
+
+#[tokio::test]
+async fn cli_interactive_write_removes_existing_tmp_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let output = dir.path().join("capture.png");
+    let tmp = dir.path().join("capture.png.tmp");
+    std::fs::write(&tmp, b"stale").unwrap();
+
+    write_cli_interactive_capture(solid(8, 8), output.clone())
+        .await
+        .unwrap();
+
+    assert!(output.exists());
+    assert!(!tmp.exists());
+    let saved = image::open(output).unwrap();
+    assert_eq!(saved.width(), 8);
+    assert_eq!(saved.height(), 8);
+}
+
+#[test]
+fn pretty_hotkey_renders_macos_glyphs() {
+    assert_eq!(pretty_hotkey("cmd+shift+x"), "\u{21E7}\u{2318}X");
+    // Apple order ⌃⌥⇧⌘: control then alt here.
+    assert_eq!(pretty_hotkey("ctrl+alt+y"), "\u{2303}\u{2325}Y");
+    assert_eq!(pretty_hotkey("CMD+Shift+Z"), "\u{21E7}\u{2318}Z");
+}
+
+#[test]
+fn pretty_hotkey_falls_back_to_input_when_unparseable() {
+    // Empty stays empty; nonsense single-token is preserved.
+    assert_eq!(pretty_hotkey(""), "");
+    assert_eq!(pretty_hotkey("???"), "???");
+}
+
+#[test]
+fn register_hotkey_actions_keeps_fixed_hotkeys_when_capture_hotkey_is_invalid() {
+    let prefs = Preferences {
+        capture_hotkey: "not a hotkey at all".into(),
+        ..Preferences::default()
+    };
+    let HotkeyActions {
+        actions,
+        capture_registered,
+        ..
+    } = register_hotkey_actions(&prefs, |_| Ok(()));
+
+    assert!(!capture_registered);
+    assert!(actions.values().any(|a| *a == GlobalHotkeyAction::History));
+    assert!(actions.values().any(|a| *a == GlobalHotkeyAction::Settings));
+    assert!(!actions.values().any(|a| *a == GlobalHotkeyAction::Capture));
+}
+
+#[test]
+fn register_hotkey_actions_keeps_fixed_hotkeys_when_capture_registration_fails() {
+    let calls = std::cell::Cell::new(0);
+    let prefs = Preferences {
+        capture_hotkey: "ctrl+shift+x".into(),
+        ..Preferences::default()
+    };
+    // Capture is registered first; the first call fails so capture is
+    // dropped, and the two later fixed registrations succeed.
+    let HotkeyActions {
+        actions,
+        capture_registered,
+        failed_fixed,
+    } = register_hotkey_actions(&prefs, |_| {
+        calls.set(calls.get() + 1);
+        if calls.get() == 1 {
+            Err("already owned".into())
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(!capture_registered);
+    assert!(failed_fixed.is_empty());
+    assert!(actions.values().any(|a| *a == GlobalHotkeyAction::History));
+    assert!(actions.values().any(|a| *a == GlobalHotkeyAction::Settings));
+    assert!(!actions.values().any(|a| *a == GlobalHotkeyAction::Capture));
+}
+
+#[test]
+fn register_hotkey_actions_rejects_capture_chord_that_conflicts_with_fixed() {
+    // A capture chord equal to the reserved Settings hotkey must not
+    // be registered (and must not clobber the fixed one).
+    let prefs = Preferences {
+        capture_hotkey: settings_hotkey().into(),
+        ..Preferences::default()
+    };
+    let attempts = std::cell::Cell::new(0);
+    let HotkeyActions {
+        actions,
+        capture_registered,
+        failed_fixed,
+    } = register_hotkey_actions(&prefs, |_| {
+        attempts.set(attempts.get() + 1);
+        Ok(())
+    });
+
+    assert!(!capture_registered, "conflicting capture must not register");
+    assert!(!actions.values().any(|a| *a == GlobalHotkeyAction::Capture));
+    assert!(actions.values().any(|a| *a == GlobalHotkeyAction::Settings));
+    assert!(actions.values().any(|a| *a == GlobalHotkeyAction::History));
+    assert!(failed_fixed.is_empty());
+    // Only the two fixed hotkeys were ever handed to the OS.
+    assert_eq!(attempts.get(), 2);
+    assert_eq!(capture_hotkey_conflict(settings_hotkey()), Some("Settings"));
+}
+
+#[test]
+fn register_hotkey_actions_reports_failed_fixed_hotkeys() {
+    let prefs = Preferences {
+        capture_hotkey: "ctrl+shift+x".into(),
+        ..Preferences::default()
+    };
+    // Fail every registration: capture drops, and both fixed hotkeys
+    // are reported as failures.
+    let HotkeyActions {
+        capture_registered,
+        failed_fixed,
+        ..
+    } = register_hotkey_actions(&prefs, |_| Err("denied".into()));
+
+    assert!(!capture_registered);
+    assert_eq!(failed_fixed, vec!["History", "Settings"]);
+}
+
+#[test]
+fn ocr_request_uses_preferred_languages_from_preferences() {
+    let prefs = Preferences {
+        ocr_languages: vec!["ja-JP".into(), "en-US".into()],
+        ..Preferences::default()
+    };
+    let img = image::RgbaImage::new(1, 1);
+
+    let req = ocr_request_for_image(img, &prefs);
+
+    assert_eq!(req.languages, vec!["ja-JP", "en-US"]);
+    assert!(req.use_language_correction);
+}
+
+#[test]
+fn ocr_request_keeps_empty_languages_for_automatic_detection() {
+    let prefs = Preferences::default();
+    let img = image::RgbaImage::new(1, 1);
+
+    let req = ocr_request_for_image(img, &prefs);
+
+    assert!(req.languages.is_empty());
+}
+
+#[test]
+fn default_save_filename_expands_template_as_png() {
+    let when = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+
+    let filename = default_save_filename("Capture {YYYY}-{timestamp}", when);
+
+    assert_eq!(filename, "Capture 2023-1700000000.png");
+}
+
+#[test]
+fn editor_output_image_bakes_annotations_and_selected_frame() {
+    let mut ed = crate::editor::EditorSession::new(solid(32, 32));
+    ed.model.commit_annotation(Annotation::Rectangle {
+        rect: RectLike::new(6.0, 6.0, 20.0, 20.0),
+        color: Rgba::new(1.0, 0.0, 0.0, 1.0),
+        line_width: 4.0,
+        style: Default::default(),
+    });
+    ed.model
+        .set_beautify(readshot_core::beautify::BuiltinPreset::Minimal.settings());
+
+    let output = editor_output_image(&mut ed);
+
+    assert_eq!((output.width(), output.height()), (80, 80));
+    assert_eq!(*output.get_pixel(0, 0), image::Rgba([255, 255, 255, 255]));
+    let annotated = *output.get_pixel(24 + 6, 24 + 6);
+    assert!(
+        annotated[0] > 180 && annotated[1] < 80 && annotated[2] < 80,
+        "expected visible red annotation pixel, got {annotated:?}"
+    );
+}
+
+#[test]
+fn preferred_save_seed_uses_recent_directory_before_saved_preference() {
+    let prefs = Preferences {
+        save_folder: PathBuf::from("/configured"),
+        ..Preferences::default()
+    };
+    let last = Some(PathBuf::from("/recent"));
+
+    let seed = preferred_save_seed_dir(&prefs, &last);
+
+    assert_eq!(seed, Some(PathBuf::from("/recent")));
+}
+
+#[test]
+fn preferred_save_seed_falls_back_to_configured_folder() {
+    let prefs = Preferences {
+        save_folder: PathBuf::from("/configured"),
+        ..Preferences::default()
+    };
+
+    let seed = preferred_save_seed_dir(&prefs, &None);
+
+    assert_eq!(seed, Some(PathBuf::from("/configured")));
+}
+
+#[test]
+fn preferred_save_seed_ignores_empty_configured_folder() {
+    let prefs = Preferences::default();
+
+    let seed = preferred_save_seed_dir(&prefs, &None);
+
+    assert_eq!(seed, None);
+}
+
+#[test]
+fn settings_save_folder_to_open_prefers_configured_folder() {
+    let prefs = Preferences {
+        save_folder: PathBuf::from("/configured"),
+        ..Preferences::default()
+    };
+
+    assert_eq!(
+        settings_save_folder_to_open(&prefs),
+        PathBuf::from("/configured")
+    );
+}
+
+#[test]
+fn shortcut_recorder_requires_a_modifier() {
+    let shortcut = shortcut_string_from_keypress(
+        &iced::keyboard::Key::Character("x".into()),
+        iced::keyboard::Modifiers::default(),
+    );
+
+    assert_eq!(shortcut, None);
+}
+
+#[test]
+fn shortcut_recorder_formats_command_shift_character() {
+    let mut modifiers = iced::keyboard::Modifiers::default();
+    modifiers.insert(iced::keyboard::Modifiers::SHIFT);
+    modifiers.insert(iced::keyboard::Modifiers::LOGO);
+
+    let shortcut =
+        shortcut_string_from_keypress(&iced::keyboard::Key::Character("X".into()), modifiers);
+
+    assert_eq!(shortcut.as_deref(), Some("cmd+shift+x"));
+}
+
+#[test]
+fn shortcut_recorder_cancels_on_plain_escape_only() {
+    let escape = iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape);
+    assert!(shortcut_cancelled_by_keypress(
+        &escape,
+        iced::keyboard::Modifiers::default()
+    ));
+
+    let mut modifiers = iced::keyboard::Modifiers::default();
+    modifiers.insert(iced::keyboard::Modifiers::SHIFT);
+    assert!(!shortcut_cancelled_by_keypress(&escape, modifiers));
+}
+
+#[test]
+fn app_window_shortcuts_open_history_and_settings() {
+    let mut modifiers = iced::keyboard::Modifiers::default();
+    modifiers.insert(iced::keyboard::Modifiers::COMMAND);
+
+    assert!(matches!(
+        app_window_shortcut_message(iced::keyboard::Key::Character("y".into()), modifiers),
+        Some(Message::OpenHistoryRequested)
+    ));
+    assert!(matches!(
+        app_window_shortcut_message(iced::keyboard::Key::Character(",".into()), modifiers),
+        Some(Message::OpenSettingsRequested)
+    ));
+}
+
+#[test]
+fn app_window_shortcuts_ignore_extra_modifiers() {
+    let mut modifiers = iced::keyboard::Modifiers::default();
+    modifiers.insert(iced::keyboard::Modifiers::COMMAND);
+    modifiers.insert(iced::keyboard::Modifiers::SHIFT);
+
+    assert!(
+        app_window_shortcut_message(iced::keyboard::Key::Character("y".into()), modifiers)
+            .is_none()
+    );
+}
+
+#[test]
+fn global_hotkey_action_ignores_release_events() {
+    let mut actions = HashMap::new();
+    actions.insert(7, GlobalHotkeyAction::History);
+    let event = GlobalHotKeyEvent {
+        id: 7,
+        state: HotKeyState::Released,
+    };
+
+    assert_eq!(global_hotkey_action(&event, &actions), None);
+}
+
+#[test]
+fn global_hotkey_action_maps_pressed_ids() {
+    let mut actions = HashMap::new();
+    actions.insert(7, GlobalHotkeyAction::Settings);
+    let event = GlobalHotKeyEvent {
+        id: 7,
+        state: HotKeyState::Pressed,
+    };
+
+    assert_eq!(
+        global_hotkey_action(&event, &actions),
+        Some(GlobalHotkeyAction::Settings)
+    );
+}
+
+#[test]
+fn hotkey_tick_no_events_is_noop() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    // No manager registered → tick does nothing meaningful.
+    let _ = update(&mut app, Message::HotkeyTick);
+    assert!(!app.capture_in_flight);
+}
+
+#[test]
+fn url_tick_drains_delivered_url_actions() {
+    let _lock = crate::url_events::lock_for_tests();
+    crate::url_events::clear_for_tests();
+    crate::url_events::deliver_url_string("readshot://new").unwrap();
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+
+    let _ = update(&mut app, Message::UrlTick);
+
+    assert_eq!(crate::url_events::drain_actions(), Vec::new());
+}
+
+#[test]
+fn load_preferences_first_launch_when_path_is_none() {
+    let prefs = load_preferences(None);
+    // First-launch override: history on (Last50) so the wedge
+    // works the first time the user takes a screenshot.
+    assert_eq!(
+        prefs.history_retention,
+        readshot_core::HistoryRetention::Last50,
+    );
+    assert_eq!(prefs.capture_hotkey, default_capture_hotkey());
+    assert!(!prefs.onboarding_completed);
+}
+
+#[test]
+fn load_preferences_first_launch_when_file_missing() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("preferences.toml");
+    assert!(!path.exists());
+    let prefs = load_preferences(Some(&path));
+    assert_eq!(
+        prefs.history_retention,
+        readshot_core::HistoryRetention::Last50,
+    );
+    assert!(!prefs.onboarding_completed);
+}
+
+#[test]
+fn load_preferences_round_trips_an_existing_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("preferences.toml");
+    // User explicitly turned history off — that must win over the
+    // first-launch override.
+    let on_disk = Preferences {
+        history_retention: readshot_core::HistoryRetention::Off,
+        capture_hotkey: "ctrl+alt+9".into(),
+        ..Preferences::default()
+    };
+    on_disk.save(&path).unwrap();
+
+    let loaded = load_preferences(Some(&path));
+    assert_eq!(
+        loaded.history_retention,
+        readshot_core::HistoryRetention::Off,
+    );
+    assert_eq!(loaded.capture_hotkey, "ctrl+alt+9");
+}
+
+#[test]
+fn load_preferences_migrates_existing_users_as_onboarded() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("preferences.toml");
+    std::fs::write(
+        &path,
+        "schema_version = 2\ncapture_hotkey = \"ctrl+alt+9\"\n",
+    )
+    .unwrap();
+
+    let loaded = load_preferences(Some(&path));
+
+    assert!(loaded.onboarding_completed);
+    assert_eq!(loaded.capture_hotkey, "ctrl+alt+9");
+}
+
+#[test]
+fn boot_opens_ready_window_for_manual_granted_launch() {
+    assert!(needs_welcome_window_on_boot(
+        WelcomeState::Granted,
+        false,
+        false
+    ));
+}
+
+#[test]
+fn boot_skips_ready_window_for_login_launch_when_granted() {
+    // The whole point of the fix: a login launch settles into the
+    // menu bar instead of popping the ready window every boot.
+    assert!(!needs_welcome_window_on_boot(
+        WelcomeState::Granted,
+        false,
+        true
+    ));
+}
+
+#[test]
+fn boot_still_opens_permission_window_for_login_launch_when_blocked() {
+    // Permission still missing → the gate must show even at login,
+    // otherwise the user has no way to grant access.
+    assert!(needs_welcome_window_on_boot(
+        WelcomeState::Pending,
+        false,
+        true
+    ));
+}
+
+#[test]
+fn boot_skips_ready_window_for_url_launch_when_granted() {
+    assert!(!needs_welcome_window_on_boot(
+        WelcomeState::Granted,
+        true,
+        false
+    ));
+}
+
+#[test]
+fn boot_still_opens_permission_window_for_url_launch_when_blocked() {
+    assert!(needs_welcome_window_on_boot(
+        WelcomeState::Pending,
+        true,
+        false
+    ));
+}
+
+#[test]
+fn load_preferences_falls_back_when_file_is_corrupt() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("preferences.toml");
+    std::fs::write(&path, "this is not [valid toml").unwrap();
+    let prefs = load_preferences(Some(&path));
+    // Corrupt file → first-launch defaults rather than a panic.
+    assert_eq!(
+        prefs.history_retention,
+        readshot_core::HistoryRetention::Last50,
+    );
+}
+
+#[test]
+fn update_settings_hotkey_change_persists_value_when_reregister_fails() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    assert!(app.hotkey_manager.is_none());
+    // Garbage input — register_default_hotkey can't parse it,
+    // capture re-registration fails, but the user's preference
+    // still gets saved in-memory so they can fix the typo and try
+    // again. Fixed app hotkeys may still be registered.
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMessage::SetCaptureHotkey("not-a-real-chord".into())),
+    );
+    assert_eq!(app.preferences.capture_hotkey, "not-a-real-chord");
+    assert!(!app.capture_hotkey_registered);
+    assert_eq!(
+        app.settings_hotkey_error.as_deref(),
+        Some("That shortcut could not be read."),
+    );
+}
+
+#[test]
+fn update_settings_non_hotkey_does_not_re_register() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    // Non-hotkey settings (e.g. debug logging) must NOT churn the
+    // hotkey registration — that path only fires for hotkey
+    // changes specifically.
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMessage::SetDebugLogging(true)),
+    );
+    assert!(app.preferences.debug_logging);
+    // Manager stays None because we never tried to register, and
+    // the test build had nothing registered to begin with.
+    assert!(app.hotkey_manager.is_none());
+}
+
+#[test]
+fn window_closed_clears_settings_window_id() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let id = iced::window::Id::unique();
+    app.windows.register(id, WindowKind::Settings);
+    app.settings_window_id = Some(id);
+    app.settings_recording_hotkey = true;
+    app.settings_hotkey_error = Some("bad shortcut".into());
+    let _ = update(&mut app, Message::WindowClosed(id));
+    assert!(app.settings_window_id.is_none());
+    assert!(!app.settings_recording_hotkey);
+    assert!(app.settings_hotkey_error.is_none());
+    assert!(app.windows.kind(id).is_none());
+}
+
+#[test]
+fn window_closed_clears_editor_session() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let id = iced::window::Id::unique();
+    let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+    ed.window_id = Some(id);
+    app.windows.register(id, WindowKind::Editor);
+    app.editor = Some(ed);
+
+    let _ = update(&mut app, Message::WindowClosed(id));
+
+    assert!(app.editor.is_none());
+    assert!(app.windows.kind(id).is_none());
+}
+
+#[test]
+fn window_closed_commits_pending_history_text_before_dropping_editor() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(FsHistoryStore::new(dir.path().join("history")));
+    let record =
+        readshot_core::CaptureRecord::new(chrono::Utc::now(), 100, 100, "primary".to_string());
+    store.save(&record, b"png").unwrap();
+
+    let history: Arc<dyn HistoryStore> = store.clone();
+    let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), history);
+    let id = iced::window::Id::unique();
+    let mut ed = crate::editor::EditorSession::from_history(solid(100, 100), record);
+    ed.window_id = Some(id);
+    ed.pending_text = Some(crate::editor::PendingText {
+        origin: PointLike::new(12.0, 18.0),
+        content: "window close draft".into(),
+        edit_index: None,
+    });
+    app.windows.register(id, WindowKind::Editor);
+    app.editor = Some(ed);
+
+    let _ = update(&mut app, Message::WindowClosed(id));
+
+    assert!(app.editor.is_none());
+    assert!(app.windows.kind(id).is_none());
+    // The sidecar write runs on the coordinator's background
+    // writer; wait for it before reading the store.
+    app.coordinator.flush_history_updates();
+    let from_disk = store.list().unwrap();
+    assert_eq!(from_disk[0].annotation_model.len(), 1);
+    match &from_disk[0].annotation_model[0] {
+        Annotation::Text {
+            content, origin, ..
+        } => {
+            assert_eq!(content, "window close draft");
+            assert_eq!(*origin, PointLike::new(12.0, 18.0));
+        }
+        other => panic!("expected text annotation, got {other:?}"),
+    }
+}
