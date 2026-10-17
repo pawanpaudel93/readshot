@@ -111,20 +111,31 @@ pub fn is_crop_frame_id(id: &str) -> bool {
 ///   outside the stored image, the redactions can't be in its px (an
 ///   editor redaction always touches the image): the text is dropped and
 ///   so are the misplaced redactions, so nothing is ever masked with them
-///   (text then stays absent: fail closed). A record whose redactions all
-///   touch its image can't be told apart from an uncropped scrub — no
-///   stored field keeps the uncropped size or the crop's origin, and the
-///   sidecar size is the PNG's — so it is left as is. Only checked for
-///   records of that era (no current crop id, list not known complete):
-///   current writers clip redactions to the stored image.
+///   (text then stays absent: fail closed). A redaction "touches" the
+///   image when it covers some of its area ([`crate::scrub::touches_image`]:
+///   one only along an edge, or with no area, does not). A record whose
+///   redactions all touch its image can't be told apart from an uncropped
+///   scrub — no stored field keeps the uncropped size or the crop's
+///   origin, and the sidecar size is the PNG's — so it is left as is.
+///   Checked for every record that may be of that era: no current crop
+///   id and a list not known complete. That includes records the current
+///   build wrote with an unknown list (a scrub over an unknown one), which
+///   can't be told apart from legacy ones; the check never fires for
+///   them, because current writers store only redactions that touch the
+///   stored image ([`crate::scrub::redactions_in_image`],
+///   [`crate::scrub::redactions_in_crop`]: clipped, the zero-area and
+///   edge-only ones dropped) and their text is already absent (unknown
+///   list).
 /// - **A redacted record whose redaction list isn't known complete**
 ///   ([`CaptureRecord::redactions_complete`]; every record written before
 ///   the flag): its text is dropped ([`text_allowed`]).
 pub fn migrate_legacy_record(record: &mut CaptureRecord) -> bool {
     let mut changed = false;
-    // Written before crop ids named their rule and before redaction
-    // lists were known complete: the era a crop could leave redactions
-    // in another frame's px. Current writers clip them to the image.
+    // May have been written before crop ids named their rule and before
+    // redaction lists were known complete: the era a crop could leave
+    // redactions in another frame's px. A current write with an unknown
+    // list is included (indistinguishable) but never misplaced: current
+    // writers keep only redactions that touch the stored image.
     let legacy_era =
         !record.redactions_complete && !record.geometry_id.as_deref().is_some_and(is_crop_frame_id);
     let legacy_crop = record
@@ -144,16 +155,9 @@ pub fn migrate_legacy_record(record: &mut CaptureRecord) -> bool {
             Annotation::Rectangle { rect, .. }
             | Annotation::Blur { rect, .. }
             | Annotation::Pixelate { rect, .. } => {
-                let (x0, x1) = (
-                    rect.x.min(rect.x + rect.width),
-                    rect.x.max(rect.x + rect.width),
-                );
-                let (y0, y1) = (
-                    rect.y.min(rect.y + rect.height),
-                    rect.y.max(rect.y + rect.height),
-                );
-                // NaN compares false everywhere: treated as misplaced.
-                !(x1 > 0.0 && y1 > 0.0 && x0 < w && y0 < h)
+                // The test current writers clip to: never true of a
+                // redaction they stored. A NaN never touches.
+                !crate::scrub::touches_image(*rect, w, h)
             }
             _ => false,
         });
@@ -2314,6 +2318,36 @@ mod tests {
             s.list().unwrap()[0].ocr_text.as_deref(),
             Some("████ visible")
         );
+    }
+
+    #[test]
+    fn a_current_write_with_an_unknown_list_is_never_taken_for_misplaced() {
+        // A 40 × 20 scrub over an unknown list, written by the current
+        // build: its redactions clipped to the image, one of them only
+        // meeting the right edge (x 40–45) before clipping.
+        let px = |rect| Annotation::Pixelate {
+            rect,
+            block_size: 4.0,
+        };
+        let stored = crate::scrub::redactions_in_image(
+            &[
+                px(crate::RectLike::new(40.0, 2.0, 5.0, 4.0)),
+                px(crate::RectLike::new(2.0, 20.0, 5.0, 4.0)),
+                px(crate::RectLike::new(35.0, 2.0, 10.0, 4.0)),
+            ],
+            40,
+            20,
+        );
+        assert_eq!(stored, vec![px(crate::RectLike::new(35.0, 2.0, 5.0, 4.0))]);
+        let mut r = CaptureRecord::new(Utc::now(), 40, 20, "d");
+        r.redacted = true;
+        r.redactions = stored.clone();
+        assert!(!migrate_legacy_record(&mut r), "nothing to migrate");
+        assert_eq!(r.redactions, stored, "kept");
+        // An edge-only rect (as stored by an older writer) is misplaced.
+        r.redactions = vec![px(crate::RectLike::new(40.0, 2.0, 5.0, 4.0))];
+        assert!(migrate_legacy_record(&mut r));
+        assert!(r.redactions.is_empty());
     }
 
     #[test]

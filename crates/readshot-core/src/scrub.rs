@@ -95,10 +95,13 @@ pub fn redactions_in_crop(
 }
 
 /// `redactions` clipped to a `width × height` image, dropping any left
-/// with no area: what a scrub that bakes no Crop stores, so a stored
-/// redaction never lies outside the stored image. Only redactions
-/// ([`is_redaction`]) are kept.
+/// with no area (zero-area rects, and rects that only touch the image
+/// along an edge or at a corner, `x == width` say): what a scrub that
+/// bakes no Crop stores, so every stored redaction covers some of the
+/// stored image ([`touches_image`], the test History's legacy check
+/// applies). Only redactions ([`is_redaction`]) are kept.
 pub fn redactions_in_image(redactions: &[Annotation], width: u32, height: u32) -> Vec<Annotation> {
+    let (w, h) = (width as f32, height as f32);
     redactions_in_crop(
         redactions,
         crate::render::OutputCrop {
@@ -108,6 +111,28 @@ pub fn redactions_in_image(redactions: &[Annotation], width: u32, height: u32) -
             height,
         },
     )
+    .into_iter()
+    .filter(|a| redaction_rect_of(a).is_some_and(|r| touches_image(r, w, h)))
+    .collect()
+}
+
+/// Whether `r` (either size may be negative) covers some area of a
+/// `w × h` image: a rect that only meets it along an edge or at a
+/// corner, has no area, or holds a NaN does not.
+pub fn touches_image(r: RectLike, w: f32, h: f32) -> bool {
+    let (x0, x1) = (r.x.min(r.x + r.width), r.x.max(r.x + r.width));
+    let (y0, y1) = (r.y.min(r.y + r.height), r.y.max(r.y + r.height));
+    // NaN compares false everywhere: never touches.
+    x0.max(0.0) < x1.min(w) && y0.max(0.0) < y1.min(h) && x0 < w && y0 < h && x1 > 0.0 && y1 > 0.0
+}
+
+fn redaction_rect_of(a: &Annotation) -> Option<RectLike> {
+    match a {
+        Annotation::Rectangle { rect, .. }
+        | Annotation::Blur { rect, .. }
+        | Annotation::Pixelate { rect, .. } => Some(*rect),
+        _ => None,
+    }
 }
 
 /// `r` (base px) moved into the pixels of an output cropped to `crop`
@@ -543,6 +568,42 @@ mod tests {
     use super::*;
     use crate::annotation::{Rgba, ShapeStyle};
     use crate::text_lines::WordRect;
+
+    #[test]
+    fn redactions_in_image_drop_zero_area_and_edge_only_rects() {
+        let px = |rect| Annotation::Pixelate {
+            rect,
+            block_size: 4.0,
+        };
+        let inside = px(RectLike::new(2.0, 2.0, 6.0, 4.0));
+        let out = redactions_in_image(
+            &[
+                // Only meets the right edge, the bottom edge, a corner.
+                px(RectLike::new(40.0, 2.0, 5.0, 4.0)),
+                solid(RectLike::new(2.0, 20.0, 5.0, 4.0)),
+                px(RectLike::new(40.0, 20.0, 3.0, 3.0)),
+                // Meets the left edge from outside (negative size).
+                px(RectLike::new(0.0, 2.0, -5.0, 4.0)),
+                // No area.
+                px(RectLike::new(10.0, 5.0, 0.0, 4.0)),
+                px(RectLike::new(10.0, 5.0, 4.0, 0.0)),
+                inside.clone(),
+            ],
+            40,
+            20,
+        );
+        assert_eq!(out, vec![inside]);
+        for (r, touches) in [
+            (RectLike::new(40.0, 2.0, 5.0, 4.0), false),
+            (RectLike::new(39.5, 2.0, 5.0, 4.0), true),
+            (RectLike::new(10.0, 5.0, 0.0, 4.0), false),
+            (RectLike::new(f32::NAN, 5.0, 4.0, 4.0), false),
+            (RectLike::new(5.0, 5.0, f32::NAN, 4.0), false),
+            (RectLike::new(45.0, 2.0, -10.0, 4.0), true),
+        ] {
+            assert_eq!(touches_image(r, 40.0, 20.0), touches, "{r:?}");
+        }
+    }
 
     fn solid(rect: RectLike) -> Annotation {
         Annotation::Rectangle {
