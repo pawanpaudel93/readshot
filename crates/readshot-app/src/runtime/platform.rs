@@ -97,7 +97,7 @@ pub(crate) fn show_about_panel() {
     unsafe {
         let app: *mut AnyObject = msg_send![class, sharedApplication];
         if let Some(app) = app.as_ref() {
-            let _: () = msg_send![app, activateIgnoringOtherApps: true];
+            activate_app(app);
             let _: () = msg_send![app, orderFrontStandardAboutPanel: Option::<&AnyObject>::None];
         }
     }
@@ -105,6 +105,28 @@ pub(crate) fn show_about_panel() {
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn show_about_panel() {}
+
+/// Bring Readshot to the front: `-[NSApplication activate]`, the macOS 14
+/// API (Readshot's minimum), falling back to the deprecated
+/// `activateIgnoringOtherApps:` only if a runtime lacks it.
+///
+/// # Safety
+/// `app` must be the shared `NSApplication`, and this must run on the
+/// main thread.
+#[cfg(target_os = "macos")]
+pub(crate) unsafe fn activate_app(app: &objc2::runtime::AnyObject) {
+    use objc2::{msg_send, sel};
+    // SAFETY: per this function's contract; `respondsToSelector:` is safe
+    // on any object, and each branch sends only the selector it checked.
+    unsafe {
+        let modern: bool = msg_send![app, respondsToSelector: sel!(activate)];
+        if modern {
+            let _: () = msg_send![app, activate];
+        } else {
+            let _: () = msg_send![app, activateIgnoringOtherApps: true];
+        }
+    }
+}
 
 /// The OS light/dark appearance. macOS reads
 /// `NSApplication.effectiveAppearance.name` (contains "Dark" in dark

@@ -149,7 +149,7 @@ mod platform {
         unsafe {
             let app: *mut AnyObject = msg_send![class, sharedApplication];
             if let Some(app) = app.as_ref() {
-                let _: () = msg_send![app, activateIgnoringOtherApps: true];
+                crate::runtime::activate_app(app);
             }
         }
     }
