@@ -29,10 +29,11 @@ pub(super) fn on_save_requested(state: &mut App) -> Task<Message> {
     let session = ed.session_id;
     let seed = preferred_save_seed_dir(&state.preferences, &state.last_save_dir);
     let template = state.preferences.filename_template.clone();
+    let format = state.preferences.default_format;
     Task::perform(
         async move {
             let img = out.render_off_thread().await?;
-            save_image_via_picker(img, seed, template)
+            save_image_via_picker(img, seed, template, format)
                 .await
                 .map_err(|e| e.to_string())
         },

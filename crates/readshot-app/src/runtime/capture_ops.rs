@@ -66,7 +66,8 @@ pub(super) fn on_capture_full_primary(state: &mut App) -> Task<Message> {
     let coord = state.coordinator.clone();
     state.capture_in_flight = true;
     state.last_capture_status = None;
-    Task::perform(capture_primary_to_desktop(coord), |result| {
+    let format = state.preferences.default_format;
+    Task::perform(capture_primary_to_desktop(coord, format), |result| {
         Message::Capture(CaptureMsg::Saved(result.map_err(|e| e.to_string())))
     })
 }
@@ -537,7 +538,8 @@ pub(super) fn on_region_captured(
                 crate::app::CaptureIntent::SaveDirect => {
                     let seed = preferred_save_seed_dir(&state.preferences, &state.last_save_dir);
                     let template = state.preferences.filename_template.clone();
-                    Task::perform(save_image_via_picker(image, seed, template), |r| {
+                    let format = state.preferences.default_format;
+                    Task::perform(save_image_via_picker(image, seed, template, format), |r| {
                         Message::Capture(CaptureMsg::OverlaySaveDone(r.map_err(|e| e.to_string())))
                     })
                 }

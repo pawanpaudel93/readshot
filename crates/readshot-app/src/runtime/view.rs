@@ -4643,7 +4643,11 @@ fn settings_files_pane(state: &App) -> Vec<Element<'_, Message>> {
     } else {
         filename_template.clone()
     };
-    let preview_name = default_save_filename(&preview_template, chrono::Utc::now());
+    let preview_name = default_save_filename(
+        &preview_template,
+        chrono::Local::now(),
+        state.preferences.default_format,
+    );
     let filename_input = focus_ring(
         text_input("Screenshot {YYYY-MM-DD at HH.mm.ss}", &filename_template)
             .id(iced::widget::Id::new(settings_ops::SETTINGS_FILENAME_ID))

@@ -1253,7 +1253,10 @@ fn show_or_focus_welcome(state: &mut App) -> Task<Message> {
 /// Async helper: capture the primary display's full bounds and write
 /// the PNG to `~/Desktop/Readshot-<timestamp>.png`. Returns the saved
 /// path on success.
-async fn capture_primary_to_desktop(coord: CaptureCoordinator) -> Result<PathBuf, CaptureRunError> {
+async fn capture_primary_to_desktop(
+    coord: CaptureCoordinator,
+    format: readshot_core::ExportFormat,
+) -> Result<PathBuf, CaptureRunError> {
     let displays = coord.list_displays().await?;
     let primary = pick_primary(&displays).ok_or(CaptureRunError::NoDisplays)?;
     let req = CaptureRequest {
@@ -1262,15 +1265,16 @@ async fn capture_primary_to_desktop(coord: CaptureCoordinator) -> Result<PathBuf
         scale: primary.scale,
         hide_cursor: true,
     };
-    capture_request_to_desktop(coord, req).await
+    capture_request_to_desktop(coord, req, format).await
 }
 
 async fn capture_request_to_desktop(
     coord: CaptureCoordinator,
     req: CaptureRequest,
+    format: readshot_core::ExportFormat,
 ) -> Result<PathBuf, CaptureRunError> {
     let img = coord.capture_region(req).await?;
-    save_to_desktop(&img)
+    save_to_desktop(&img, format)
 }
 
 #[cfg(test)]
@@ -1280,7 +1284,7 @@ async fn capture_request_to_dir(
     dir: &Path,
 ) -> Result<PathBuf, CaptureRunError> {
     let img = coord.capture_region(req).await?;
-    save_to_dir(&img, dir)
+    save_to_dir(&img, dir, readshot_core::ExportFormat::Png)
 }
 
 async fn capture_region_to_image(
@@ -1625,37 +1629,54 @@ fn history_record_for_capture(
     ))
 }
 
-fn save_to_desktop(img: &image::RgbaImage) -> Result<PathBuf, CaptureRunError> {
+fn save_to_desktop(
+    img: &image::RgbaImage,
+    format: readshot_core::ExportFormat,
+) -> Result<PathBuf, CaptureRunError> {
     let dir = directories::UserDirs::new()
         .and_then(|d| d.desktop_dir().map(PathBuf::from))
         .unwrap_or_else(std::env::temp_dir);
-    save_to_dir(img, &dir)
+    save_to_dir(img, &dir, format)
 }
 
-fn save_to_dir(img: &image::RgbaImage, dir: &Path) -> Result<PathBuf, CaptureRunError> {
+fn save_to_dir(
+    img: &image::RgbaImage,
+    dir: &Path,
+    format: readshot_core::ExportFormat,
+) -> Result<PathBuf, CaptureRunError> {
     let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string();
-    let path = dir.join(format!("Readshot-{stamp}.png"));
-    readshot_core::save_png(img, &path)?;
+    let path = dir.join(format!("Readshot-{stamp}.{}", format.extension()));
+    readshot_core::export::save(img, &path, format)?;
     Ok(path)
 }
 
 /// Open a native file-save dialog seeded at `seed_dir` (or
 /// `~/Desktop` if `None` / not a directory) with a timestamped
-/// default filename, then write the PNG to whatever the user
-/// picks. Returns `Ok(Some(path))` on success, `Ok(None)` when
-/// the user cancels.
+/// default filename in Settings › Default format, then write the
+/// image to whatever the user picks. Returns `Ok(Some(path))` on
+/// success, `Ok(None)` when the user cancels.
 async fn save_image_via_picker(
     img: image::RgbaImage,
     seed_dir: Option<PathBuf>,
     filename_template: String,
+    format: readshot_core::ExportFormat,
 ) -> Result<Option<PathBuf>, CaptureRunError> {
-    let default_name = default_save_filename(&filename_template, chrono::Utc::now());
+    let default_name = default_save_filename(&filename_template, chrono::Local::now(), format);
     let initial_dir = seed_dir
         .filter(|p| p.is_dir())
         .or_else(|| directories::UserDirs::new().and_then(|d| d.desktop_dir().map(PathBuf::from)))
         .unwrap_or_else(std::env::temp_dir);
-    let handle = rfd::AsyncFileDialog::new()
-        .add_filter("PNG image", &["png"])
+    // The default format's filter first, so the dialog starts on it;
+    // the others stay choosable.
+    let mut dialog = rfd::AsyncFileDialog::new();
+    for f in std::iter::once(format).chain(
+        readshot_core::ExportFormat::ALL
+            .into_iter()
+            .filter(|f| *f != format),
+    ) {
+        dialog = dialog.add_filter(format!("{f} image"), f.extensions());
+    }
+    let handle = dialog
         .set_directory(&initial_dir)
         .set_file_name(&default_name)
         .save_file()
@@ -1663,17 +1684,42 @@ async fn save_image_via_picker(
     let Some(handle) = handle else {
         return Ok(None);
     };
-    let mut path = handle.path().to_path_buf();
-    // Force a `.png` extension — rfd doesn't always append the
-    // filter's extension on macOS when the user types a bare name.
-    if path
+    write_picked_save(&img, handle.path().to_path_buf(), format).map(Some)
+}
+
+/// Write a save-dialog result: in the format its extension names, or
+/// with the default format's extension added when it names none (rfd
+/// doesn't always append the filter's extension on macOS when the user
+/// types a bare name).
+fn write_picked_save(
+    img: &image::RgbaImage,
+    picked: PathBuf,
+    default: readshot_core::ExportFormat,
+) -> Result<PathBuf, CaptureRunError> {
+    let (path, format) = resolve_save_path(picked, default);
+    readshot_core::export::save(img, &path, format)?;
+    Ok(path)
+}
+
+/// The path and format a picked save path is written as. A known image
+/// extension (any case) is the user's choice and is kept. Anything else
+/// keeps the whole name, dots included ("… at 10.20.30" has none of its
+/// own), and gains the default format's extension.
+fn resolve_save_path(
+    picked: PathBuf,
+    default: readshot_core::ExportFormat,
+) -> (PathBuf, readshot_core::ExportFormat) {
+    if let Some(format) = picked
         .extension()
-        .is_none_or(|e| !e.eq_ignore_ascii_case("png"))
+        .and_then(|e| e.to_str())
+        .and_then(readshot_core::ExportFormat::from_extension)
     {
-        path.set_extension("png");
+        return (picked, format);
     }
-    readshot_core::save_png(&img, &path)?;
-    Ok(Some(path))
+    let mut name = picked.into_os_string();
+    name.push(".");
+    name.push(default.extension());
+    (PathBuf::from(name), default)
 }
 
 async fn pick_settings_save_folder() -> Result<Option<PathBuf>, CaptureRunError> {
@@ -1713,9 +1759,20 @@ fn preferred_save_seed_dir(
         .or_else(|| (!prefs.save_folder.as_os_str().is_empty()).then(|| prefs.save_folder.clone()))
 }
 
-fn default_save_filename(template: &str, when: chrono::DateTime<chrono::Utc>) -> String {
+/// The save dialog's suggested name: the template expanded in `when`'s
+/// zone (callers pass local time, so the name shows the wall-clock time
+/// of the save) plus the default format's extension.
+fn default_save_filename<Tz: chrono::TimeZone>(
+    template: &str,
+    when: chrono::DateTime<Tz>,
+    format: readshot_core::ExportFormat,
+) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
     let mut filename = readshot_core::expand_filename_template(template, when);
-    filename.push_str(".png");
+    filename.push('.');
+    filename.push_str(format.extension());
     filename
 }
 

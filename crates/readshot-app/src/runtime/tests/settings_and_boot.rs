@@ -98,7 +98,7 @@ async fn capture_request_to_dir_preserves_physical_pixel_dimensions() {
     )
     .await
     .unwrap();
-    let path = save_to_dir(&img, dir.path()).unwrap();
+    let path = save_to_dir(&img, dir.path(), readshot_core::ExportFormat::Png).unwrap();
 
     let saved = image::open(&path).unwrap();
     assert_eq!(saved.width(), 256);
@@ -363,9 +363,97 @@ fn ocr_request_keeps_empty_languages_for_automatic_detection() {
 fn default_save_filename_expands_template_as_png() {
     let when = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
 
-    let filename = default_save_filename("Capture {YYYY}-{timestamp}", when);
+    let filename = default_save_filename(
+        "Capture {YYYY}-{timestamp}",
+        when,
+        readshot_core::ExportFormat::Png,
+    );
 
     assert_eq!(filename, "Capture 2023-1700000000.png");
+}
+
+#[test]
+fn default_save_filename_takes_the_default_format_extension() {
+    let when = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    for (format, ext) in [
+        (readshot_core::ExportFormat::Png, "png"),
+        (readshot_core::ExportFormat::Jpeg, "jpg"),
+        (readshot_core::ExportFormat::Webp, "webp"),
+    ] {
+        assert_eq!(
+            default_save_filename("Shot", when, format),
+            format!("Shot.{ext}")
+        );
+    }
+}
+
+#[test]
+fn default_save_filename_is_local_wall_clock_time() {
+    // 2023-11-14 22:13:20 UTC is 2023-11-15 03:58:20 at UTC+05:45.
+    let utc = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let nepal = chrono::FixedOffset::east_opt(5 * 3600 + 45 * 60).unwrap();
+    assert_eq!(
+        default_save_filename(
+            "Screenshot {YYYY-MM-DD at HH.mm.ss}",
+            utc.with_timezone(&nepal),
+            readshot_core::ExportFormat::Png,
+        ),
+        "Screenshot 2023-11-15 at 03.58.20.png"
+    );
+}
+
+#[test]
+fn a_picked_save_path_keeps_a_known_extension_and_gains_the_default_otherwise() {
+    use readshot_core::ExportFormat as F;
+    let jpeg = F::Jpeg;
+    // No extension (dots inside the name are not one): the default's.
+    assert_eq!(
+        resolve_save_path(PathBuf::from("/t/Screenshot at 10.20.30"), jpeg),
+        (PathBuf::from("/t/Screenshot at 10.20.30.jpg"), F::Jpeg)
+    );
+    // A typed extension of another format is the user's choice.
+    assert_eq!(
+        resolve_save_path(PathBuf::from("/t/a.PNG"), jpeg),
+        (PathBuf::from("/t/a.PNG"), F::Png)
+    );
+    assert_eq!(
+        resolve_save_path(PathBuf::from("/t/a.jpeg"), F::Webp),
+        (PathBuf::from("/t/a.jpeg"), F::Jpeg)
+    );
+    // An unknown extension stays in the name; the default's is added.
+    assert_eq!(
+        resolve_save_path(PathBuf::from("/t/a.txt"), F::Webp),
+        (PathBuf::from("/t/a.txt.webp"), F::Webp)
+    );
+}
+
+#[test]
+fn a_picked_save_writes_the_resolved_format() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = write_picked_save(
+        &solid(8, 8),
+        dir.path().join("shot"),
+        readshot_core::ExportFormat::Webp,
+    )
+    .unwrap();
+    assert_eq!(path, dir.path().join("shot.webp"));
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(
+        image::guess_format(&bytes).unwrap(),
+        image::ImageFormat::WebP
+    );
+}
+
+#[test]
+fn quick_save_to_a_folder_uses_the_default_format() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = save_to_dir(&solid(8, 8), dir.path(), readshot_core::ExportFormat::Jpeg).unwrap();
+    assert_eq!(path.extension().unwrap(), "jpg");
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(
+        image::guess_format(&bytes).unwrap(),
+        image::ImageFormat::Jpeg
+    );
 }
 
 #[test]

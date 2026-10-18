@@ -2,8 +2,9 @@
 //!
 //! Users configure a template like `Screenshot {YYYY-MM-DD at HH.mm.ss}`
 //! in [`Preferences::filename_template`](crate::preferences::Preferences::filename_template).
-//! [`expand`] substitutes the supported tokens against a [`DateTime<Utc>`]
-//! and sanitises the result so the output is safe to use as a file name on
+//! [`expand`] substitutes the supported tokens against a [`DateTime`] in
+//! any time zone (the app passes local time, so a name reads as the
+//! wall-clock time of the capture) and sanitises the result so the output is safe to use as a file name on
 //! all three target OSes.
 //!
 //! ## Supported tokens
@@ -31,11 +32,15 @@
 //! disallows trailing dots in filenames). Empty results fall back to the
 //! literal `"Screenshot"`.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone};
 
-/// Expand a template against a UTC instant and produce a filesystem-safe
-/// filename **base** (no extension — the caller appends).
-pub fn expand(template: &str, when: DateTime<Utc>) -> String {
+/// Expand a template against an instant, formatted in `when`'s own time
+/// zone, and produce a filesystem-safe filename **base** (no extension:
+/// the caller appends). `{timestamp}` is the zone-independent Unix time.
+pub fn expand<Tz: TimeZone>(template: &str, when: DateTime<Tz>) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
     if template.is_empty() {
         return "Screenshot".to_string();
     }
@@ -80,7 +85,7 @@ fn sanitise(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use chrono::{FixedOffset, Utc};
 
     fn epoch() -> DateTime<Utc> {
         Utc.timestamp_opt(0, 0).unwrap()
@@ -122,6 +127,28 @@ mod tests {
         // {ext} is intentionally not a known token — callers may add
         // extensions themselves.
         assert_eq!(expand("foo.{ext}", epoch()), "foo.{ext}");
+    }
+
+    #[test]
+    fn date_and_time_are_the_wall_clock_of_the_given_zone() {
+        // 2026-04-25 14:30:45 UTC is 20:15:45 in UTC+05:45 (Kathmandu).
+        let nepal = FixedOffset::east_opt(5 * 3600 + 45 * 60).unwrap();
+        let local = fixed_2026().with_timezone(&nepal);
+        assert_eq!(
+            expand("Screenshot {YYYY-MM-DD at HH.mm.ss}", local),
+            "Screenshot 2026-04-25 at 20.15.45"
+        );
+        // A zone west of UTC can land on the previous day.
+        let west = FixedOffset::west_opt(16 * 3600).unwrap();
+        assert_eq!(
+            expand("{YYYY-MM-DD}", fixed_2026().with_timezone(&west)),
+            "2026-04-24"
+        );
+        // Unix time is the same instant in every zone.
+        assert_eq!(
+            expand("{timestamp}", local),
+            fixed_2026().timestamp().to_string()
+        );
     }
 
     #[test]
