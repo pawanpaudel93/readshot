@@ -462,8 +462,6 @@ pub(crate) fn scroll_hud_view(state: &App) -> Element<'_, Message> {
 }
 
 fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
-    use iced::widget::mouse_area;
-    use iced::widget::tooltip::Position;
     let Some(session) = state.scroll_session.as_ref() else {
         return container(Space::new())
             .width(Length::Fill)
@@ -480,6 +478,42 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
     } else {
         session.frames.len()
     };
+
+    let header = scroll_hud_header(state, session, hud, compact);
+    let stage = scroll_hud_stage(session, hud, frame_count);
+    let footer = scroll_hud_footer(state, session, hud, compact, window_w, frame_count);
+
+    container(
+        column![header, stage, footer]
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(|_| container::Style {
+        background: Some(DARK.float.into()),
+        border: iced::Border {
+            color: DARK.float_border,
+            width: 1.0,
+            radius: R_WINDOW.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+/// The scrolling-capture window's header: dot, title, elapsed time and
+/// Cancel. It doubles as the window's drag handle.
+fn scroll_hud_header<'a>(
+    state: &'a App,
+    session: &'a crate::app::ScrollSession,
+    hud: ScrollHudState,
+    compact: bool,
+) -> Element<'a, Message> {
+    use iced::widget::mouse_area;
+    use iced::widget::tooltip::Position;
+
+    let stopping = session.stopping;
     let elapsed_secs = session.started_at.elapsed().as_secs_f32();
 
     // ---- Header: dot, title, elapsed, close. Doubles as drag handle.
@@ -581,7 +615,16 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
     )
     .on_press(Message::Scroll(ScrollMsg::HudDragRequested))
     .interaction(iced::mouse::Interaction::Grab);
+    header.into()
+}
 
+/// The scrolling-capture window's stage: the stitched page while
+/// recording, zoomed to fit while stitching, or the empty state.
+fn scroll_hud_stage(
+    session: &crate::app::ScrollSession,
+    hud: ScrollHudState,
+    frame_count: usize,
+) -> Element<'_, Message> {
     // ---- Stage: the image.
     let stage_content: Element<'_, Message> = match (hud, session.preview_handle.clone()) {
         (ScrollHudState::Stitching | ScrollHudState::Limit, handle) => {
@@ -623,6 +666,20 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
     .padding([0, 10])
     .width(Length::Fill)
     .height(Length::Fill);
+    stage.into()
+}
+
+/// The scrolling-capture window's footer: frame count, output size, the
+/// limit bar and the buttons for the state.
+fn scroll_hud_footer<'a>(
+    state: &'a App,
+    session: &'a crate::app::ScrollSession,
+    hud: ScrollHudState,
+    compact: bool,
+    window_w: f32,
+    frame_count: usize,
+) -> Element<'a, Message> {
+    use iced::widget::tooltip::Position;
 
     // ---- Footer: count, output size, limit bar, buttons.
     let limit = hud == ScrollHudState::Limit;
@@ -770,24 +827,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
             left: 14.0,
         })
         .width(Length::Fill);
-
-    container(
-        column![header, stage, footer]
-            .width(Length::Fill)
-            .height(Length::Fill),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .style(|_| container::Style {
-        background: Some(DARK.float.into()),
-        border: iced::Border {
-            color: DARK.float_border,
-            width: 1.0,
-            radius: R_WINDOW.into(),
-        },
-        ..Default::default()
-    })
-    .into()
+    footer.into()
 }
 
 /// A command block: monospace text on the `raised` surface, radius 8,
