@@ -40,93 +40,99 @@ pub(crate) fn editor_key_message(
     let cmd = modifiers.command();
     // ⌃Tab / F6 walk the keyboard focus zones, even from a text field.
     if let Some(forward) = zone_cycle_key(&key, modifiers) {
-        return Some(Message::EditorFocusZoneCycle(forward));
+        return Some(Message::Editor(EditorMsg::FocusZoneCycle(forward)));
     }
     // ⌥⌘P / ⌥⌘I / ⌥⌘T / ⌥⌘B on macOS; Ctrl+Shift+P / R / T / B elsewhere,
     // where Ctrl+Alt is AltGr on many layouts and a desktop chord
     // (Ctrl+Alt+T opens a terminal on GNOME and KDE).
     if editor_alt_chord(&key, modifiers, "p") {
-        return Some(Message::EditorPanelToggled);
+        return Some(Message::Editor(EditorMsg::PanelToggled));
     }
     if editor_alt_chord(&key, modifiers, RESIZE_LETTER) {
-        return Some(Message::EditorResizeOpen);
+        return Some(Message::Editor(EditorMsg::ResizeOpen));
     }
     // The new chords never fire while a text field has the caret
     // (`status_ignored` false): a field's own ⇧⌘V pastes, and must not
     // also flip the image.
     if status_ignored && editor_alt_chord(&key, modifiers, "t") {
-        return Some(Message::EditorPanelTabKey(crate::editor::PanelTab::Text));
+        return Some(Message::Editor(EditorMsg::PanelTabKey(
+            crate::editor::PanelTab::Text,
+        )));
     }
     if status_ignored && editor_alt_chord(&key, modifiers, "b") {
-        return Some(Message::EditorPanelTabKey(
+        return Some(Message::Editor(EditorMsg::PanelTabKey(
             crate::editor::PanelTab::Beautify,
-        ));
+        )));
     }
     match (&key, cmd, modifiers.shift()) {
         (Key::Character(c), true, true)
             if status_ignored && !modifiers.alt() && c.eq_ignore_ascii_case("i") =>
         {
-            return Some(Message::EditorImageMenuKey);
+            return Some(Message::Editor(EditorMsg::ImageMenuKey));
         }
         (Key::Character(c), true, true)
             if status_ignored && !modifiers.alt() && c.eq_ignore_ascii_case("h") =>
         {
-            return Some(Message::EditorFlip(
+            return Some(Message::Editor(EditorMsg::Flip(
                 readshot_core::document::FlipAxis::Horizontal,
-            ));
+            )));
         }
         (Key::Character(c), true, true)
             if status_ignored && !modifiers.alt() && c.eq_ignore_ascii_case("v") =>
         {
-            return Some(Message::EditorFlip(
+            return Some(Message::Editor(EditorMsg::Flip(
                 readshot_core::document::FlipAxis::Vertical,
-            ));
+            )));
         }
         (Key::Character(c), true, false) if c.eq_ignore_ascii_case("z") => {
-            return Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
+            return Some(Message::Editor(EditorMsg::Toolbar(
+                readshot_ui::ToolbarMessage::Undo,
+            )));
         }
         (Key::Character(c), true, true) if c.eq_ignore_ascii_case("z") => {
-            return Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo));
+            return Some(Message::Editor(EditorMsg::Toolbar(
+                readshot_ui::ToolbarMessage::Redo,
+            )));
         }
         (Key::Character(c), true, false) if status_ignored && c.eq_ignore_ascii_case("c") => {
-            return Some(Message::EditorCopyImageRequested);
+            return Some(Message::Editor(EditorMsg::CopyImageRequested));
         }
         (Key::Character(c), true, true) if status_ignored && c.eq_ignore_ascii_case("c") => {
-            return Some(Message::EditorCopyTextRequested);
+            return Some(Message::Editor(EditorMsg::CopyTextRequested));
         }
         (Key::Character(c), true, false) if status_ignored && c.eq_ignore_ascii_case("p") => {
-            return Some(Message::EditorPinRequested);
+            return Some(Message::Editor(EditorMsg::PinRequested));
         }
         (Key::Character(c), true, false) if c.eq_ignore_ascii_case("s") => {
-            return Some(Message::EditorSaveRequested);
+            return Some(Message::Editor(EditorMsg::SaveRequested));
         }
         (Key::Character(c), true, false) if c.eq_ignore_ascii_case("w") => {
-            return Some(Message::EditorDiscardRequested);
+            return Some(Message::Editor(EditorMsg::DiscardRequested));
         }
         (Key::Character(c), true, false) if status_ignored && !modifiers.alt() && c == "[" => {
-            return Some(Message::EditorRotate { clockwise: false });
+            return Some(Message::Editor(EditorMsg::Rotate { clockwise: false }));
         }
         (Key::Character(c), true, false) if status_ignored && !modifiers.alt() && c == "]" => {
-            return Some(Message::EditorRotate { clockwise: true });
+            return Some(Message::Editor(EditorMsg::Rotate { clockwise: true }));
         }
         (Key::Character(c), true, _) if c == "+" || c == "=" => {
-            return Some(Message::EditorZoomIn);
+            return Some(Message::Editor(EditorMsg::ZoomIn));
         }
         (Key::Character(c), true, false) if c == "-" => {
-            return Some(Message::EditorZoomOut);
+            return Some(Message::Editor(EditorMsg::ZoomOut));
         }
         (Key::Character(c), true, false) if c == "0" => {
-            return Some(Message::EditorZoomActual);
+            return Some(Message::Editor(EditorMsg::ZoomActual));
         }
         (Key::Named(Named::Escape), _, _) if status_ignored => {
-            return Some(Message::EditorDiscardRequested);
+            return Some(Message::Editor(EditorMsg::DiscardRequested));
         }
         // The annotation canvas captures every Escape (publishing
         // `Cancelled` for any live drag), so this is a real Esc press.
         // EditorTextCancel is its single cancel action: it closes an open
         // popover, else exits the eyedropper, else drops the crop draft, else cancels the text draft,
         // else clears the selection.
-        (Key::Named(Named::Escape), _, _) => return Some(Message::EditorTextCancel),
+        (Key::Named(Named::Escape), _, _) => return Some(Message::Editor(EditorMsg::TextCancel)),
         _ => {}
     }
 
@@ -135,10 +141,18 @@ pub(crate) fn editor_key_message(
     if status_ignored && modifiers.alt() && !cmd && !modifiers.control() {
         let step = if modifiers.shift() { 10.0 } else { 1.0 };
         match key {
-            Key::Named(Named::ArrowLeft) => return Some(Message::EditorResizeByKeys(-step, 0.0)),
-            Key::Named(Named::ArrowRight) => return Some(Message::EditorResizeByKeys(step, 0.0)),
-            Key::Named(Named::ArrowUp) => return Some(Message::EditorResizeByKeys(0.0, -step)),
-            Key::Named(Named::ArrowDown) => return Some(Message::EditorResizeByKeys(0.0, step)),
+            Key::Named(Named::ArrowLeft) => {
+                return Some(Message::Editor(EditorMsg::ResizeByKeys(-step, 0.0)))
+            }
+            Key::Named(Named::ArrowRight) => {
+                return Some(Message::Editor(EditorMsg::ResizeByKeys(step, 0.0)))
+            }
+            Key::Named(Named::ArrowUp) => {
+                return Some(Message::Editor(EditorMsg::ResizeByKeys(0.0, -step)))
+            }
+            Key::Named(Named::ArrowDown) => {
+                return Some(Message::Editor(EditorMsg::ResizeByKeys(0.0, step)))
+            }
             _ => {}
         }
     }
@@ -146,58 +160,56 @@ pub(crate) fn editor_key_message(
         // Tab / ⇧Tab walk the annotations, so a keyboard user can select
         // one (and then move, resize or delete it) without a click.
         if matches!(key, Key::Named(Named::Tab)) {
-            return Some(Message::EditorCycleSelection(if modifiers.shift() {
-                -1
-            } else {
-                1
-            }));
+            return Some(Message::Editor(EditorMsg::CycleSelection(
+                if modifiers.shift() { -1 } else { 1 },
+            )));
         }
         if matches!(
             key,
             Key::Named(Named::Delete) | Key::Named(Named::Backspace)
         ) {
-            return Some(Message::EditorDeleteSelected);
+            return Some(Message::Editor(EditorMsg::DeleteSelected));
         }
         if matches!(key, Key::Named(Named::Enter)) {
-            return Some(Message::EditorEditSelectedText);
+            return Some(Message::Editor(EditorMsg::EditSelectedText));
         }
         // Arrow keys nudge the selected annotation a pixel at a time
         // (Shift = 10px for coarse positioning). The runtime no-ops when
         // nothing is selected, so this is safe to emit unconditionally.
         let nudge_step = if modifiers.shift() { 10.0 } else { 1.0 };
         if matches!(key, Key::Named(Named::ArrowLeft)) {
-            return Some(Message::EditorNudgeSelected(-nudge_step, 0.0));
+            return Some(Message::Editor(EditorMsg::NudgeSelected(-nudge_step, 0.0)));
         }
         if matches!(key, Key::Named(Named::ArrowRight)) {
-            return Some(Message::EditorNudgeSelected(nudge_step, 0.0));
+            return Some(Message::Editor(EditorMsg::NudgeSelected(nudge_step, 0.0)));
         }
         if matches!(key, Key::Named(Named::ArrowUp)) {
-            return Some(Message::EditorNudgeSelected(0.0, -nudge_step));
+            return Some(Message::Editor(EditorMsg::NudgeSelected(0.0, -nudge_step)));
         }
         if matches!(key, Key::Named(Named::ArrowDown)) {
-            return Some(Message::EditorNudgeSelected(0.0, nudge_step));
+            return Some(Message::Editor(EditorMsg::NudgeSelected(0.0, nudge_step)));
         }
         if let Key::Character(c) = &key {
             if c.eq_ignore_ascii_case("i") {
-                return Some(Message::EditorEyedropperToggled);
+                return Some(Message::Editor(EditorMsg::EyedropperToggled));
             }
             if let Some(t) = tool_for_key(c.as_str()) {
-                return Some(Message::EditorToolbar(
+                return Some(Message::Editor(EditorMsg::Toolbar(
                     readshot_ui::ToolbarMessage::SelectTool(t),
-                ));
+                )));
             }
             if let Some(n) = c.chars().next().and_then(|ch| ch.to_digit(10)) {
                 if (1..=9).contains(&n) {
-                    return Some(Message::EditorToolbar(
+                    return Some(Message::Editor(EditorMsg::Toolbar(
                         readshot_ui::ToolbarMessage::SetLineWidth(n as f32),
-                    ));
+                    )));
                 }
             }
             match c.as_str() {
-                "[" => return Some(Message::EditorWidthBump(-1.0)),
-                "]" => return Some(Message::EditorWidthBump(1.0)),
-                "," => return Some(Message::EditorColorCycle(-1)),
-                "." => return Some(Message::EditorColorCycle(1)),
+                "[" => return Some(Message::Editor(EditorMsg::WidthBump(-1.0))),
+                "]" => return Some(Message::Editor(EditorMsg::WidthBump(1.0))),
+                "," => return Some(Message::Editor(EditorMsg::ColorCycle(-1))),
+                "." => return Some(Message::Editor(EditorMsg::ColorCycle(1))),
                 _ => {}
             }
         }

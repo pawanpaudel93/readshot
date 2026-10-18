@@ -419,9 +419,9 @@ fn a_beautify_canvas_over_the_limits_is_refused_not_rendered() {
     assert!(editor_output_image(app.editor.as_mut().unwrap()).is_err());
 
     for (message, verb) in [
-        (Message::EditorSaveRequested, "save"),
-        (Message::EditorCopyImageRequested, "copy"),
-        (Message::EditorPinRequested, "pin"),
+        (Message::Editor(EditorMsg::SaveRequested), "save"),
+        (Message::Editor(EditorMsg::CopyImageRequested), "copy"),
+        (Message::Editor(EditorMsg::PinRequested), "pin"),
     ] {
         let _ = update(&mut app, message);
         let ed = app.editor.as_ref().expect("the editor stays open");
@@ -958,20 +958,20 @@ fn a_beautified_pin_renders_off_the_ui_thread() {
     ed.model
         .set_beautify(readshot_core::beautify::BuiltinPreset::Minimal.settings());
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorPinRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::PinRequested));
     assert!(app.editor.is_none(), "the editor closed");
     assert!(app.pins.is_empty(), "no pin until the render lands");
     let _ = update(
         &mut app,
-        Message::EditorPinRendered {
+        Message::Editor(EditorMsg::PinRendered {
             result: Ok(solid(80, 80)),
             display_bounds: None,
-        },
+        }),
     );
     assert_eq!(app.pins.len(), 1);
 
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
-    let _ = update(&mut app, Message::EditorPinRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::PinRequested));
     assert_eq!(app.pins.len(), 1, "no Beautify: the pin opens at once");
 }

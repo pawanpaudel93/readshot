@@ -15,7 +15,7 @@ fn keyboard_width_bump_updates_selected_annotation() {
     assert_eq!(ed.model.select_at(PointLike::new(5.0, 5.0)), Some(0));
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorWidthBump(3.0));
+    let _ = update(&mut app, Message::Editor(EditorMsg::WidthBump(3.0)));
 
     // Steps from the selection's own width (2), which the options
     // bar's Width control shows, not the tool width (3).
@@ -44,15 +44,15 @@ fn dragging_inside_an_unselected_bubble_moves_only_the_bubble() {
     // 30 px from the bubble centre: inside the bubble, off its handle.
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
-            110.0, 40.0,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::SelectPressed(PointLike::new(110.0, 40.0)),
+        )),
     );
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::SelectDragged(PointLike::new(
-            100.0, 50.0,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::SelectDragged(PointLike::new(100.0, 50.0)),
+        )),
     );
     let ed = app.editor.as_ref().unwrap();
     match &ed.model.annotations()[0] {

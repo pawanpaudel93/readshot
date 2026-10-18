@@ -216,7 +216,10 @@ fn opening_a_closed_editors_record_waits_for_its_writes() {
     let (_dir, store, mut app, record) = history_app();
     let a = edit_record(&mut app, &record);
     store.hold();
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
     let _ = update(&mut app, Message::Window(WindowMsg::Closed(a)));
     assert!(app.editor.is_none() && app.retiring_editors.is_empty());
 
@@ -258,7 +261,10 @@ fn a_second_open_click_joins_the_waiting_open() {
     let (_dir, store, mut app, record) = history_app();
     edit_record(&mut app, &record);
     store.hold();
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
     let _ = update(
         &mut app,
         Message::History(HistoryMsg::OpenInEditor(record.id)),
@@ -299,7 +305,10 @@ fn a_new_capture_during_the_wait_cancels_the_open() {
     let (_dir, store, mut app, record) = history_app();
     edit_record(&mut app, &record);
     store.hold();
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
     let _ = update(
         &mut app,
         Message::History(HistoryMsg::OpenInEditor(record.id)),
@@ -472,7 +481,7 @@ impl Interleaving {
             2 => {
                 self.log.push("rotate");
                 if self.editor_of_record().is_some() {
-                    self.send(Message::EditorRotate { clockwise: true });
+                    self.send(Message::Editor(EditorMsg::Rotate { clockwise: true }));
                 }
             }
             3 => {
@@ -487,7 +496,9 @@ impl Interleaving {
             4 => {
                 self.log.push("undo");
                 if self.editor_of_record().is_some() {
-                    self.send(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
+                    self.send(Message::Editor(EditorMsg::Toolbar(
+                        readshot_ui::ToolbarMessage::Undo,
+                    )));
                 }
             }
             5 => {
@@ -696,7 +707,7 @@ fn an_undone_redaction_whose_writes_failed_still_opens_with_its_image() {
     super::super::editor_ops::sync_editor_history(a, &coord);
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
     );
     let _ = update(
         &mut app,

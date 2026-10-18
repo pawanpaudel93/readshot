@@ -4,7 +4,7 @@
 
 use super::*;
 
-/// `Message::PinWindowReady`.
+/// `EditorMsg::PinWindowReady`.
 pub(super) fn on_pin_window_ready(
     state: &mut App,
     id: iced::window::Id,
@@ -21,7 +21,7 @@ pub(super) fn on_pin_window_ready(
     Task::none()
 }
 
-/// `Message::PinClosePressed`.
+/// `EditorMsg::PinClosePressed`.
 pub(super) fn on_pin_close_pressed(state: &mut App, id: iced::window::Id) -> Task<Message> {
     state.windows.forget(id);
     state.pins.remove(&id);
@@ -31,7 +31,7 @@ pub(super) fn on_pin_close_pressed(state: &mut App, id: iced::window::Id) -> Tas
     window::close(id)
 }
 
-/// `Message::PinKeyPressed`.
+/// `EditorMsg::PinKeyPressed`.
 pub(super) fn on_pin_key_pressed(
     state: &mut App,
     window: iced::window::Id,
@@ -46,15 +46,25 @@ pub(super) fn on_pin_key_pressed(
         return Task::none();
     };
     match pin_key_action(&key, modifiers) {
-        Some(PinKeyAction::Close) => update(state, Message::PinClosePressed(window)),
-        Some(PinKeyAction::ToggleLock) => update(state, Message::PinLockToggled(window)),
+        Some(PinKeyAction::Close) => {
+            update(state, Message::Editor(EditorMsg::PinClosePressed(window)))
+        }
+        Some(PinKeyAction::ToggleLock) => {
+            update(state, Message::Editor(EditorMsg::PinLockToggled(window)))
+        }
         Some(PinKeyAction::OpacityUp) => {
             let next = (opacity + PIN_OPACITY_STEP).clamp(PIN_OPACITY_MIN, PIN_OPACITY_MAX);
-            update(state, Message::PinOpacityChanged(window, next))
+            update(
+                state,
+                Message::Editor(EditorMsg::PinOpacityChanged(window, next)),
+            )
         }
         Some(PinKeyAction::OpacityDown) => {
             let next = (opacity - PIN_OPACITY_STEP).clamp(PIN_OPACITY_MIN, PIN_OPACITY_MAX);
-            update(state, Message::PinOpacityChanged(window, next))
+            update(
+                state,
+                Message::Editor(EditorMsg::PinOpacityChanged(window, next)),
+            )
         }
         Some(PinKeyAction::Nudge(dx, dy)) => {
             // iced exposes no relative move; read the current
@@ -66,13 +76,13 @@ pub(super) fn on_pin_key_pressed(
     }
 }
 
-/// `Message::PinHovered(id, true)`.
+/// `EditorMsg::PinHovered(id, true)`.
 pub(super) fn on_pin_hovered(state: &mut App, id: iced::window::Id) -> Task<Message> {
     state.hovered_pin = Some(id);
     Task::none()
 }
 
-/// `Message::PinHovered(id, false)`.
+/// `EditorMsg::PinHovered(id, false)`.
 pub(super) fn on_pin_unhovered(state: &mut App, id: iced::window::Id) -> Task<Message> {
     if state.hovered_pin == Some(id) {
         state.hovered_pin = None;
@@ -80,7 +90,7 @@ pub(super) fn on_pin_unhovered(state: &mut App, id: iced::window::Id) -> Task<Me
     Task::none()
 }
 
-/// `Message::PinOpacityChanged`.
+/// `EditorMsg::PinOpacityChanged`.
 pub(super) fn on_pin_opacity_changed(
     state: &mut App,
     id: iced::window::Id,
@@ -92,7 +102,7 @@ pub(super) fn on_pin_opacity_changed(
     Task::none()
 }
 
-/// `Message::PinLockToggled`.
+/// `EditorMsg::PinLockToggled`.
 pub(super) fn on_pin_lock_toggled(state: &mut App, id: iced::window::Id) -> Task<Message> {
     if let Some(pin) = state.pins.get_mut(&id) {
         pin.locked = !pin.locked;
@@ -100,7 +110,7 @@ pub(super) fn on_pin_lock_toggled(state: &mut App, id: iced::window::Id) -> Task
     Task::none()
 }
 
-/// `Message::EditorPinRendered`: a beautified pin's image is ready.
+/// `EditorMsg::PinRendered`: a beautified pin's image is ready.
 pub(super) fn on_pin_rendered(
     state: &mut App,
     result: Result<image::RgbaImage, String>,

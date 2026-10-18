@@ -188,7 +188,9 @@ pub(super) fn on_pin_ready(
             state
                 .pins
                 .insert(wid, crate::app::PinState::new(handle.clone()));
-            open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone()))
+            open_task.map(move |opened| {
+                Message::Editor(EditorMsg::PinWindowReady(opened, handle.clone()))
+            })
         }
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::HISTORY, "pin failed: {e}");

@@ -5,7 +5,7 @@
 
 use super::*;
 
-/// `Message::EditorEditSelectedText`: ↵ on a selection or crop draft.
+/// `EditorMsg::EditSelectedText`: ↵ on a selection or crop draft.
 pub(super) fn on_edit_selected_text(state: &mut App) -> Task<Message> {
     // ↵ applies an open crop draft, unless a text field has focus
     // or a text draft is being typed (those own Enter).
@@ -17,7 +17,7 @@ pub(super) fn on_edit_selected_text(state: &mut App) -> Task<Message> {
                 Some(crate::editor::EditorPopover::Color | crate::editor::EditorPopover::Resize)
             )
     }) {
-        return handle_editor_message(state, Message::EditorCropApply);
+        return handle_editor_message(state, EditorMsg::CropApply);
     }
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
@@ -37,7 +37,7 @@ pub(super) fn on_edit_selected_text(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorDeleteSelected`.
+/// `EditorMsg::DeleteSelected`.
 pub(super) fn on_delete_selected(state: &mut App) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
@@ -68,7 +68,7 @@ pub(super) fn on_delete_selected(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorTextChanged`.
+/// `EditorMsg::TextChanged`.
 pub(super) fn on_text_changed(state: &mut App, content: String) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         if ed.busy {
@@ -88,7 +88,7 @@ pub(super) fn on_text_changed(state: &mut App, content: String) -> Task<Message>
     Task::none()
 }
 
-/// `Message::EditorTextAction`.
+/// `EditorMsg::TextAction`.
 pub(super) fn on_text_action(
     state: &mut App,
     action: iced::widget::text_editor::Action,
@@ -112,7 +112,7 @@ pub(super) fn on_text_action(
     Task::none()
 }
 
-/// `Message::EditorTextCommit`.
+/// `EditorMsg::TextCommit`.
 pub(super) fn on_text_commit(state: &mut App) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
@@ -124,7 +124,7 @@ pub(super) fn on_text_commit(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorCropApply`.
+/// `EditorMsg::CropApply`.
 pub(super) fn on_crop_apply(state: &mut App) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
@@ -140,7 +140,7 @@ pub(super) fn on_crop_apply(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorTextCancel`: one step of the Escape chain.
+/// `EditorMsg::TextCancel`: one step of the Escape chain.
 pub(super) fn on_text_cancel(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         if close_editor_popover(ed) {
@@ -189,7 +189,7 @@ pub(super) fn on_text_cancel(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorCropCancel`.
+/// `EditorMsg::CropCancel`.
 pub(super) fn on_crop_cancel(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         ed.crop_draft = None;

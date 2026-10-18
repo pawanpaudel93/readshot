@@ -89,7 +89,7 @@ fn option_control<'a>(
 ) -> Element<'a, Message> {
     use OptionControl as O;
     let busy = ed.busy;
-    let send = move |m: StyleMessage| (!busy).then_some(Message::EditorStyle(m));
+    let send = move |m: StyleMessage| (!busy).then_some(Message::Editor(EditorMsg::Style(m)));
     match control {
         O::Color => color_button(
             ed.model.effective_color(),
@@ -203,7 +203,7 @@ fn option_control<'a>(
                 .into(),
                 ButtonKind::Ghost,
                 ButtonSize::Xs,
-                (!busy).then_some(Message::EditorCropCancel),
+                (!busy).then_some(Message::Editor(EditorMsg::CropCancel)),
             ),
             bar_button(
                 row![
@@ -215,7 +215,7 @@ fn option_control<'a>(
                 .into(),
                 ButtonKind::Secondary,
                 ButtonSize::Xs,
-                (!busy).then_some(Message::EditorCropApply),
+                (!busy).then_some(Message::Editor(EditorMsg::CropApply)),
             ),
         ]
         .spacing(SP1)
@@ -238,7 +238,7 @@ fn option_control<'a>(
                 .padding(0)
                 .style(move |t, s| icon_button_style(t, s, selected));
                 if !busy {
-                    b = b.on_press(Message::EditorStyle(StyleMessage::Stamp(kind)));
+                    b = b.on_press(Message::Editor(EditorMsg::Style(StyleMessage::Stamp(kind))));
                 }
                 r = r.push(tooltip_with_key(b, kind.label(), None, Position::Bottom));
             }
@@ -425,10 +425,12 @@ pub(crate) fn labeled_slider<'a>(
         .align_y(Alignment::Center);
     if !busy {
         r = r.push(
-            iced::widget::slider(range, value, move |v| Message::EditorStylePreview(make(v)))
-                .step(step)
-                .on_release(Message::EditorStyleCommit)
-                .width(Length::Fixed(72.0)),
+            iced::widget::slider(range, value, move |v| {
+                Message::Editor(EditorMsg::StylePreview(make(v)))
+            })
+            .step(step)
+            .on_release(Message::Editor(EditorMsg::StyleCommit))
+            .width(Length::Fixed(72.0)),
         );
     }
     // The bar is centred: a readout that changed width would re-centre
@@ -475,7 +477,7 @@ pub(crate) fn color_popover<'a>(
                     },
                     "Eyedropper",
                     Some("I"),
-                    (!busy).then_some(Message::EditorEyedropperToggled),
+                    (!busy).then_some(Message::Editor(EditorMsg::EyedropperToggled)),
                     false,
                     22.0,
                     Position::Bottom,
@@ -514,8 +516,8 @@ pub(crate) fn color_popover<'a>(
         .style(text_input_style);
     if !busy {
         field = field
-            .on_input(Message::EditorHexChanged)
-            .on_submit(Message::EditorHexSubmitted);
+            .on_input(|a| Message::Editor(EditorMsg::HexChanged(a)))
+            .on_submit(Message::Editor(EditorMsg::HexSubmitted));
     }
     let hex_row = row![
         container(
@@ -579,9 +581,9 @@ fn swatch_row<'a>(
             }
         });
         if !busy {
-            b = b.on_press(Message::EditorToolbar(
+            b = b.on_press(Message::Editor(EditorMsg::Toolbar(
                 readshot_ui::ToolbarMessage::SelectColor(swatch),
-            ));
+            )));
         }
         r = r.push(tooltip_with_key(b, swatch.to_hex(), None, Position::Bottom));
     }
@@ -621,7 +623,9 @@ fn color_button<'a>(color: Rgba, open: bool, busy: bool) -> Element<'a, Message>
         .padding(0)
         .style(move |t, s| icon_button_style(t, s, open));
     if !busy {
-        b = b.on_press(Message::EditorPopoverToggled(EditorPopover::Color));
+        b = b.on_press(Message::Editor(EditorMsg::PopoverToggled(
+            EditorPopover::Color,
+        )));
     }
     tooltip_with_key(b, "Color", Some(", ."), Position::Bottom)
 }
@@ -651,7 +655,9 @@ fn width_button<'a>(line_width: f32, open: bool, busy: bool) -> Element<'a, Mess
         .align_y(Alignment::Center)
         .into(),
         open,
-        (!busy).then_some(Message::EditorPopoverToggled(EditorPopover::Width)),
+        (!busy).then_some(Message::Editor(EditorMsg::PopoverToggled(
+            EditorPopover::Width,
+        ))),
     );
     tooltip_with_key(b, "Line Width", Some("[ ]"), Position::Bottom)
 }

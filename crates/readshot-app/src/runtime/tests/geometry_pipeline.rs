@@ -76,7 +76,7 @@ fn twins_of(editor: fn() -> crate::editor::EditorSession) -> (App, App) {
         ed.async_compose_min_pixels = async_compose_min_pixels;
         ed.refresh_image();
         app.editor = Some(ed);
-        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
         app
     };
     let sync = make(u64::MAX);
@@ -95,13 +95,13 @@ fn step_both(sync: &mut App, async_: &mut App, what: &str, messages: &[Message])
             .as_ref()
             .is_some_and(|ed| ed.eyedropper.is_none())
         {
-            let _ = update(app, Message::EditorEyedropperToggled);
+            let _ = update(app, Message::Editor(EditorMsg::EyedropperToggled));
         }
         let _ = update(
             app,
-            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(
-                3.5, 4.5,
-            ))),
+            Message::Editor(EditorMsg::Canvas(
+                readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(3.5, 4.5)),
+            )),
         );
         if let Some(ed) = app.editor.as_mut() {
             ed.arm_discard_prompt(std::time::Instant::now());
@@ -145,9 +145,9 @@ fn same_document(a: &readshot_ui::editor::Snapshot, b: &readshot_ui::editor::Sna
 
 fn resize_to(width: &str) -> Vec<Message> {
     vec![
-        Message::EditorResizeOpen,
-        Message::EditorResizeWidthChanged(width.into()),
-        Message::EditorResizeApply,
+        Message::Editor(EditorMsg::ResizeOpen),
+        Message::Editor(EditorMsg::ResizeWidthChanged(width.into())),
+        Message::Editor(EditorMsg::ResizeApply),
     ]
 }
 
@@ -155,31 +155,40 @@ fn resize_to(width: &str) -> Vec<Message> {
 fn sync_and_async_steps_land_in_the_same_editor_state() {
     let (mut sync, mut async_) = twin_apps();
     let steps: Vec<(&str, Vec<Message>)> = vec![
-        ("rotate", vec![Message::EditorRotate { clockwise: true }]),
-        ("flip", vec![Message::EditorFlip(FlipAxis::Horizontal)]),
+        (
+            "rotate",
+            vec![Message::Editor(EditorMsg::Rotate { clockwise: true })],
+        ),
+        (
+            "flip",
+            vec![Message::Editor(EditorMsg::Flip(FlipAxis::Horizontal))],
+        ),
         ("resize", resize_to("40")),
         (
             "crop",
             vec![
-                Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+                Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
                     readshot_ui::editor::ToolState::Crop,
-                )),
-                Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
-                    Annotation::Crop {
+                ))),
+                Message::Editor(EditorMsg::Canvas(
+                    readshot_ui::CanvasMessage::CommitAnnotation(Annotation::Crop {
                         rect: RectLike::new(2.0, 2.0, 30.0, 40.0),
-                    },
+                    }),
                 )),
-                Message::EditorCropApply,
+                Message::Editor(EditorMsg::CropApply),
             ],
         ),
         (
             "add a capture (bakes the turned document)",
             vec![
-                Message::EditorCombineCaptureRequested(Join::Below),
+                Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
                 Message::Capture(CaptureMsg::RegionCaptured(Ok(ramp(24, 12)))),
             ],
         ),
-        ("align", vec![Message::EditorLayoutAlign(Align::Center)]),
+        (
+            "align",
+            vec![Message::Editor(EditorMsg::LayoutAlign(Align::Center))],
+        ),
         ("undo", vec![undo_msg()]),
         ("undo again", vec![undo_msg()]),
         ("undo a third time", vec![undo_msg()]),
@@ -187,7 +196,7 @@ fn sync_and_async_steps_land_in_the_same_editor_state() {
         ("redo again", vec![redo_msg()]),
         (
             "rotate left",
-            vec![Message::EditorRotate { clockwise: false }],
+            vec![Message::Editor(EditorMsg::Rotate { clockwise: false })],
         ),
         ("undo the rotate", vec![undo_msg()]),
     ];
@@ -203,7 +212,7 @@ fn a_sync_undo_clears_the_loupe_as_a_landed_async_one_does() {
         &mut sync,
         &mut async_,
         "rotate",
-        &[Message::EditorRotate { clockwise: true }],
+        &[Message::Editor(EditorMsg::Rotate { clockwise: true })],
     );
     step_both(&mut sync, &mut async_, "undo", &[undo_msg()]);
     let ed = sync.editor.as_ref().unwrap();
@@ -222,7 +231,7 @@ fn a_sync_added_part_is_recognized_through_the_owed_flag_as_a_queued_one_is() {
         &mut async_,
         "add a capture",
         &[
-            Message::EditorCombineCaptureRequested(Join::Below),
+            Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
             Message::Capture(CaptureMsg::RegionCaptured(Ok(ramp(24, 12)))),
         ],
     );
@@ -245,8 +254,8 @@ fn a_kept_gap_lands_as_a_step_whether_or_not_it_composed_off_thread() {
         &mut async_,
         "gap drag released",
         &[
-            Message::EditorLayoutGapPreview(10),
-            Message::EditorSnapshotSliderCommit,
+            Message::Editor(EditorMsg::LayoutGapPreview(10)),
+            Message::Editor(EditorMsg::SnapshotSliderCommit),
         ],
     );
     let ed = sync.editor.as_ref().unwrap();
@@ -273,13 +282,13 @@ fn step_both_unlanded(sync: &mut App, async_: &mut App, what: &str, messages: &[
             .as_ref()
             .is_some_and(|ed| ed.eyedropper.is_none())
         {
-            let _ = update(app, Message::EditorEyedropperToggled);
+            let _ = update(app, Message::Editor(EditorMsg::EyedropperToggled));
         }
         let _ = update(
             app,
-            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(
-                3.5, 4.5,
-            ))),
+            Message::Editor(EditorMsg::Canvas(
+                readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(3.5, 4.5)),
+            )),
         );
         if let Some(ed) = app.editor.as_mut() {
             ed.set_status(crate::editor::StatusTone::Progress, IN_FLIGHT);
@@ -321,7 +330,7 @@ fn steps_that_change_nothing_leave_work_in_flight_on_the_status_line() {
         &mut sync,
         &mut async_,
         "align to the current alignment",
-        &[Message::EditorLayoutAlign(Align::Start)],
+        &[Message::Editor(EditorMsg::LayoutAlign(Align::Start))],
     );
     let ed = sync.editor.as_ref().unwrap();
     assert_eq!(ed.status_text(), Some(IN_FLIGHT));
@@ -338,7 +347,7 @@ fn a_refused_step_reports_the_same_refusal_on_both_paths() {
         &mut async_,
         "add a capture that is too wide",
         &[
-            Message::EditorCombineCaptureRequested(Join::Below),
+            Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
             Message::Capture(CaptureMsg::RegionCaptured(Ok(ramp(wide, 1)))),
         ],
     );

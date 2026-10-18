@@ -543,7 +543,9 @@ pub(super) fn on_region_captured(
                     state
                         .pins
                         .insert(id, crate::app::PinState::new(handle.clone()));
-                    open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone()))
+                    open_task.map(move |opened| {
+                        Message::Editor(EditorMsg::PinWindowReady(opened, handle.clone()))
+                    })
                 }
                 crate::app::CaptureIntent::CliInteractive => {
                     let Some(output) = state.cli_interactive_output.take() else {

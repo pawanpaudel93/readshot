@@ -46,12 +46,12 @@ fn editor_app(ed: crate::editor::EditorSession) -> (App, iced::window::Id) {
 fn press(app: &mut App, id: iced::window::Id, key: Key, m: Modifiers) {
     let _ = update(
         app,
-        Message::EditorKeyPressed {
+        Message::Editor(EditorMsg::KeyPressed {
             window: id,
             key,
             modifiers: m,
             status_ignored: true,
-        },
+        }),
     );
 }
 
@@ -59,12 +59,12 @@ fn press(app: &mut App, id: iced::window::Id, key: Key, m: Modifiers) {
 fn press_captured(app: &mut App, id: iced::window::Id, key: Key, m: Modifiers) {
     let _ = update(
         app,
-        Message::EditorKeyPressed {
+        Message::Editor(EditorMsg::KeyPressed {
             window: id,
             key,
             modifiers: m,
             status_ignored: false,
-        },
+        }),
     );
 }
 
@@ -96,93 +96,97 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
         (
             ch("c"),
             mods(true, false, false, false),
-            "EditorCopyImageRequested",
+            "Editor(CopyImageRequested)",
         ),
         (
             ch("c"),
             mods(true, true, false, false),
-            "EditorCopyTextRequested",
+            "Editor(CopyTextRequested)",
         ),
         (
             ch("p"),
             mods(true, false, false, false),
-            "EditorPinRequested",
+            "Editor(PinRequested)",
         ),
-        (ch("p"), editor_alt_modifiers(), "EditorPanelToggled"),
+        (ch("p"), editor_alt_modifiers(), "Editor(PanelToggled)"),
         (
             ch("s"),
             mods(true, false, false, false),
-            "EditorSaveRequested",
+            "Editor(SaveRequested)",
         ),
         (
             ch("w"),
             mods(true, false, false, false),
-            "EditorDiscardRequested",
+            "Editor(DiscardRequested)",
         ),
         (
             ch(RESIZE_LETTER),
             editor_alt_modifiers(),
-            "EditorResizeOpen",
+            "Editor(ResizeOpen)",
         ),
         (ch("["), mods(true, false, false, false), "clockwise: false"),
         (ch("]"), mods(true, false, false, false), "clockwise: true"),
-        (ch("="), mods(true, false, false, false), "EditorZoomIn"),
-        (ch("-"), mods(true, false, false, false), "EditorZoomOut"),
-        (ch("0"), mods(true, false, false, false), "EditorZoomActual"),
-        (ch("i"), plain(), "EditorEyedropperToggled"),
+        (ch("="), mods(true, false, false, false), "Editor(ZoomIn)"),
+        (ch("-"), mods(true, false, false, false), "Editor(ZoomOut)"),
+        (
+            ch("0"),
+            mods(true, false, false, false),
+            "Editor(ZoomActual)",
+        ),
+        (ch("i"), plain(), "Editor(EyedropperToggled)"),
         (ch("c"), plain(), "SelectTool(Crop)"),
-        (ch("["), plain(), "EditorWidthBump(-1.0)"),
-        (ch(","), plain(), "EditorColorCycle(-1)"),
+        (ch("["), plain(), "Editor(WidthBump(-1.0))"),
+        (ch(","), plain(), "Editor(ColorCycle(-1))"),
         (
             named(Named::ArrowLeft),
             plain(),
-            "EditorNudgeSelected(-1.0, 0.0)",
+            "Editor(NudgeSelected(-1.0, 0.0))",
         ),
-        (named(Named::Enter), plain(), "EditorEditSelectedText"),
-        (named(Named::Backspace), plain(), "EditorDeleteSelected"),
+        (named(Named::Enter), plain(), "Editor(EditSelectedText)"),
+        (named(Named::Backspace), plain(), "Editor(DeleteSelected)"),
         // New chords.
         (
             ch("i"),
             mods(true, true, false, false),
-            "EditorImageMenuKey",
+            "Editor(ImageMenuKey)",
         ),
         (
             ch("h"),
             mods(true, true, false, false),
-            "EditorFlip(Horizontal)",
+            "Editor(Flip(Horizontal))",
         ),
         (
             ch("v"),
             mods(true, true, false, false),
-            "EditorFlip(Vertical)",
+            "Editor(Flip(Vertical))",
         ),
-        (ch("t"), editor_alt_modifiers(), "EditorPanelTabKey(Text)"),
+        (ch("t"), editor_alt_modifiers(), "Editor(PanelTabKey(Text))"),
         (
             ch("b"),
             editor_alt_modifiers(),
-            "EditorPanelTabKey(Beautify)",
+            "Editor(PanelTabKey(Beautify))",
         ),
-        (named(Named::Tab), plain(), "EditorCycleSelection(1)"),
+        (named(Named::Tab), plain(), "Editor(CycleSelection(1))"),
         (
             named(Named::Tab),
             mods(false, true, false, false),
-            "EditorCycleSelection(-1)",
+            "Editor(CycleSelection(-1))",
         ),
-        (named(Named::F6), plain(), "EditorFocusZoneCycle(true)"),
+        (named(Named::F6), plain(), "Editor(FocusZoneCycle(true))"),
         (
             named(Named::F6),
             mods(false, true, false, false),
-            "EditorFocusZoneCycle(false)",
+            "Editor(FocusZoneCycle(false))",
         ),
         (
             named(Named::ArrowRight),
             mods(false, false, true, false),
-            "EditorResizeByKeys(1.0, 0.0)",
+            "Editor(ResizeByKeys(1.0, 0.0))",
         ),
         (
             named(Named::ArrowDown),
             mods(false, true, true, false),
-            "EditorResizeByKeys(0.0, 10.0)",
+            "Editor(ResizeByKeys(0.0, 10.0))",
         ),
     ];
     for (i, (k, m, _)) in rows.iter().enumerate() {
@@ -213,7 +217,7 @@ fn control_tab_walks_the_focus_zones() {
     // It works from a text field too (the subscription sees it either way).
     assert!(matches!(
         editor_key_message(named(Named::Tab), ctrl, false),
-        Some(Message::EditorFocusZoneCycle(true))
+        Some(Message::Editor(EditorMsg::FocusZoneCycle(true)))
     ));
 }
 
@@ -362,7 +366,7 @@ fn a_pointer_opened_image_menu_takes_the_arrow_keys() {
     let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
     let _ = update(
         &mut app,
-        Message::EditorPopoverToggled(EditorPopover::Image),
+        Message::Editor(EditorMsg::PopoverToggled(EditorPopover::Image)),
     );
     assert_eq!(focus(&app), None);
     press(&mut app, id, named(Named::ArrowDown), plain());
@@ -790,7 +794,7 @@ fn new_chords_stay_out_of_text_fields() {
     let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
     let _ = update(
         &mut app,
-        Message::EditorPopoverToggled(EditorPopover::Color),
+        Message::Editor(EditorMsg::PopoverToggled(EditorPopover::Color)),
     );
     press_captured(&mut app, id, ch("v"), mods(true, true, false, false));
     assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), 0);
@@ -844,16 +848,16 @@ fn tab_does_not_cycle_while_a_popover_or_hex_draft_is_open() {
     let mut app = two_rects_first_selected();
     let _ = update(
         &mut app,
-        Message::EditorPopoverToggled(EditorPopover::Image),
+        Message::Editor(EditorMsg::PopoverToggled(EditorPopover::Image)),
     );
-    let _ = update(&mut app, Message::EditorCycleSelection(1));
+    let _ = update(&mut app, Message::Editor(EditorMsg::CycleSelection(1)));
     assert_eq!(
         app.editor.as_ref().unwrap().model.selected_annotation(),
         Some(0)
     );
-    let _ = update(&mut app, Message::EditorPopoverClosed);
+    let _ = update(&mut app, Message::Editor(EditorMsg::PopoverClosed));
     app.editor.as_mut().unwrap().beautify_hex_draft = Some("#12".into());
-    let _ = update(&mut app, Message::EditorCycleSelection(1));
+    let _ = update(&mut app, Message::Editor(EditorMsg::CycleSelection(1)));
     assert_eq!(
         app.editor.as_ref().unwrap().model.selected_annotation(),
         Some(0)
@@ -871,7 +875,9 @@ fn a_swatch_returns_the_focus_to_the_color_control() {
     press(&mut app, id, named(Named::Enter), plain());
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectColor(Rgba::OPAQUE_BLACK)),
+        Message::Editor(EditorMsg::Toolbar(
+            readshot_ui::ToolbarMessage::SelectColor(Rgba::OPAQUE_BLACK),
+        )),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.popover, None);
@@ -896,13 +902,13 @@ fn key_guides_stay_while_their_draft_lasts() {
             std::time::Instant::now() - std::time::Duration::from_secs(60);
     };
     age(&mut app);
-    let _ = update(&mut app, Message::EditorStatusTick);
+    let _ = update(&mut app, Message::Editor(EditorMsg::StatusTick));
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.status.is_some(), "the crop guide outlives the 4 s toast");
     assert!(!crate::editor::status_tick_needed(ed));
     // esc as the running editor delivers it (the canvas captures it).
     press_captured(&mut app, id, named(Named::Escape), plain());
-    let _ = update(&mut app, Message::EditorStatusTick);
+    let _ = update(&mut app, Message::Editor(EditorMsg::StatusTick));
     assert!(
         app.editor.as_ref().unwrap().status.is_none(),
         "it goes with the draft"
@@ -911,7 +917,7 @@ fn key_guides_stay_while_their_draft_lasts() {
     press(&mut app, id, ch("r"), plain());
     press(&mut app, id, named(Named::F6), plain());
     age(&mut app);
-    let _ = update(&mut app, Message::EditorStatusTick);
+    let _ = update(&mut app, Message::Editor(EditorMsg::StatusTick));
     assert!(app.editor.as_ref().unwrap().status.is_some());
 }
 
@@ -928,7 +934,7 @@ fn beautify_shown(app: &mut App) {
 fn a_canvas_tab_checks_the_beautify_hex_field_first() {
     let mut app = two_rects_first_selected();
     beautify_shown(&mut app);
-    let _ = update(&mut app, Message::EditorCycleSelection(1));
+    let _ = update(&mut app, Message::Editor(EditorMsg::CycleSelection(1)));
     assert_eq!(
         app.editor.as_ref().unwrap().model.selected_annotation(),
         Some(0),
@@ -937,10 +943,10 @@ fn a_canvas_tab_checks_the_beautify_hex_field_first() {
     // The field has the caret: Tab only leaves it.
     let _ = update(
         &mut app,
-        Message::EditorTabResolved {
+        Message::Editor(EditorMsg::TabResolved {
             step: 1,
             field_focused: true,
-        },
+        }),
     );
     assert_eq!(
         app.editor.as_ref().unwrap().model.selected_annotation(),
@@ -949,10 +955,10 @@ fn a_canvas_tab_checks_the_beautify_hex_field_first() {
     // It doesn't: the selection moves.
     let _ = update(
         &mut app,
-        Message::EditorTabResolved {
+        Message::Editor(EditorMsg::TabResolved {
             step: 1,
             field_focused: false,
-        },
+        }),
     );
     assert_eq!(
         app.editor.as_ref().unwrap().model.selected_annotation(),
@@ -961,7 +967,7 @@ fn a_canvas_tab_checks_the_beautify_hex_field_first() {
     // Without the Beautify tab on screen there is nothing to ask.
     app.preferences.editor_panel_tab = PanelTab::Text.id().to_string();
     assert!(!beautify_hex_on_screen(&app));
-    let _ = update(&mut app, Message::EditorCycleSelection(1));
+    let _ = update(&mut app, Message::Editor(EditorMsg::CycleSelection(1)));
     assert_eq!(
         app.editor.as_ref().unwrap().model.selected_annotation(),
         Some(0)
@@ -985,7 +991,10 @@ fn tab_applies_a_typed_hex_and_esc_still_cancels() {
     let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
     open_color(&mut app, id);
     let color_focus = app.editor.as_ref().unwrap().key_focus_return;
-    let _ = update(&mut app, Message::EditorHexChanged("#ff0000".into()));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::HexChanged("#ff0000".into())),
+    );
     press(&mut app, id, named(Named::Tab), plain());
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.popover, None);
@@ -994,7 +1003,10 @@ fn tab_applies_a_typed_hex_and_esc_still_cancels() {
     // Invalid: the popover stays, with the existing message.
     let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
     open_color(&mut app, id);
-    let _ = update(&mut app, Message::EditorHexChanged("#12".into()));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::HexChanged("#12".into())),
+    );
     press(&mut app, id, named(Named::Tab), plain());
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.popover, Some(EditorPopover::Color));
@@ -1006,7 +1018,10 @@ fn tab_applies_a_typed_hex_and_esc_still_cancels() {
     let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
     open_color(&mut app, id);
     let before = app.editor.as_ref().unwrap().model.effective_color();
-    let _ = update(&mut app, Message::EditorHexChanged("#ff0000".into()));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::HexChanged("#ff0000".into())),
+    );
     press_captured(&mut app, id, named(Named::Escape), plain());
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.popover, None);
@@ -1032,7 +1047,10 @@ fn undo_and_up_down_in_a_hex_field_leave_the_document_alone() {
     let id = iced::window::Id::unique();
     app.editor.as_mut().unwrap().window_id = Some(id);
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
-    let _ = update(&mut app, Message::EditorBeautifyHexChanged("#12".into()));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::BeautifyHexChanged("#12".into())),
+    );
     let _ = update(&mut app, key_press(id, z.clone(), true));
     let _ = update(&mut app, key_press(id, down.clone(), false));
     assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth);
@@ -1053,18 +1071,20 @@ fn undo_and_up_down_in_a_hex_field_leave_the_document_alone() {
     assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth);
     let _ = update(&mut app, key_press(id, down, false));
     assert_eq!(first_rect_y(&app), 0.0);
-    let undo = Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
-    let nudge = Box::new(Message::EditorNudgeSelected(0.0, 1.0));
+    let undo = Box::new(Message::Editor(EditorMsg::Toolbar(
+        readshot_ui::ToolbarMessage::Undo,
+    )));
+    let nudge = Box::new(Message::Editor(EditorMsg::NudgeSelected(0.0, 1.0)));
     // The field has the caret: the keys are its own.
     for message in [undo.clone(), nudge.clone()] {
         let sid = app.editor.as_ref().unwrap().session_id;
         let _ = update(
             &mut app,
-            Message::EditorFieldKeyResolved {
+            Message::Editor(EditorMsg::FieldKeyResolved {
                 session: sid,
                 message,
                 field_focused: true,
-            },
+            }),
         );
     }
     assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth);
@@ -1073,21 +1093,21 @@ fn undo_and_up_down_in_a_hex_field_leave_the_document_alone() {
     let sid = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::EditorFieldKeyResolved {
+        Message::Editor(EditorMsg::FieldKeyResolved {
             session: sid,
             message: nudge,
             field_focused: false,
-        },
+        }),
     );
     assert_eq!(first_rect_y(&app), 1.0, "nudged");
     let sid = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::EditorFieldKeyResolved {
+        Message::Editor(EditorMsg::FieldKeyResolved {
             session: sid,
             message: undo,
             field_focused: false,
-        },
+        }),
     );
     assert_eq!(first_rect_y(&app), 0.0, "the nudge undone");
 }
@@ -1108,11 +1128,13 @@ fn keys_after_a_field_checked_undo_wait_their_turn() {
     let sid = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::EditorFieldKeyResolved {
+        Message::Editor(EditorMsg::FieldKeyResolved {
             session: sid,
-            message: Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
+            message: Box::new(Message::Editor(EditorMsg::Toolbar(
+                readshot_ui::ToolbarMessage::Undo,
+            ))),
             field_focused: false,
-        },
+        }),
     );
     // Undo removed the second rect; then ⌫ deleted the selected first one.
     assert_eq!(count(&app), 0);
@@ -1135,11 +1157,13 @@ fn queued_field_keys_pass_the_field_guards_when_they_run() {
     let sid = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::EditorFieldKeyResolved {
+        Message::Editor(EditorMsg::FieldKeyResolved {
             session: sid,
-            message: Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
+            message: Box::new(Message::Editor(EditorMsg::Toolbar(
+                readshot_ui::ToolbarMessage::Undo,
+            ))),
             field_focused: false,
-        },
+        }),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.undo_depth(), depth, "no undo under the popover");
@@ -1160,11 +1184,13 @@ fn a_field_check_answer_for_another_editor_is_dropped() {
     let sid = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::EditorFieldKeyResolved {
+        Message::Editor(EditorMsg::FieldKeyResolved {
             session: sid.wrapping_add(1000),
-            message: Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
+            message: Box::new(Message::Editor(EditorMsg::Toolbar(
+                readshot_ui::ToolbarMessage::Undo,
+            ))),
             field_focused: false,
-        },
+        }),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.undo_depth(), depth);
@@ -1185,11 +1211,13 @@ fn a_queued_c_still_opens_the_keyboard_crop_draft() {
     let sid = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::EditorFieldKeyResolved {
+        Message::Editor(EditorMsg::FieldKeyResolved {
             session: sid,
-            message: Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
+            message: Box::new(Message::Editor(EditorMsg::Toolbar(
+                readshot_ui::ToolbarMessage::Undo,
+            ))),
             field_focused: false,
-        },
+        }),
     );
     assert!(
         app.editor.as_ref().unwrap().crop_draft.is_some(),

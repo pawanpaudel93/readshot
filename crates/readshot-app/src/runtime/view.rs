@@ -1976,9 +1976,9 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 label,
                 Some(key),
                 Some(editor_compact_hint(t)),
-                (!busy).then_some(Message::EditorToolbar(
+                (!busy).then_some(Message::Editor(EditorMsg::Toolbar(
                     readshot_ui::ToolbarMessage::SelectTool(t),
-                )),
+                ))),
                 selected,
                 ICON_BTN,
                 Position::Bottom,
@@ -2182,7 +2182,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             .width(Length::Fixed(displayed_w))
             .height(Length::Fixed(displayed_h))
             .into();
-        let canvas: Element<'_, Message> = canvas.map(Message::EditorCanvas);
+        let canvas: Element<'_, Message> = canvas.map(|a| Message::Editor(EditorMsg::Canvas(a)));
         let canvas_layer = container(canvas)
             .width(Length::Fixed(displayed_w))
             .height(Length::Fixed(displayed_h));
@@ -2218,7 +2218,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 // / cancels (below).
                 iced::widget::text_editor(content)
                     .placeholder(TEXT_PLACEHOLDER)
-                    .on_action(Message::EditorTextAction)
+                    .on_action(|a| Message::Editor(EditorMsg::TextAction(a)))
                     .key_binding(editor_text_key_binding)
                     .padding(8)
                     .size(TYPE_BODY)
@@ -2242,13 +2242,13 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .padding([SP2, SP3])
                 .style(|theme, status| action_button_style(theme, status, ActionKind::Primary));
             if !busy {
-                commit = commit.on_press(Message::EditorTextCommit);
+                commit = commit.on_press(Message::Editor(EditorMsg::TextCommit));
             }
             let mut cancel = button(text("Cancel").size(TYPE_CAPTION))
                 .padding([SP2, SP3])
                 .style(|theme, status| action_button_style(theme, status, ActionKind::Secondary));
             if !busy {
-                cancel = cancel.on_press(Message::EditorTextCancel);
+                cancel = cancel.on_press(Message::Editor(EditorMsg::TextCancel));
             }
             let editor = container(
                 row![input, commit, cancel]
@@ -2389,7 +2389,9 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                     ButtonKind::Ghost
                 },
                 ButtonSize::Sm,
-                (!busy).then_some(Message::EditorPopoverToggled(EditorPopover::Image)),
+                (!busy).then_some(Message::Editor(EditorMsg::PopoverToggled(
+                    EditorPopover::Image,
+                ))),
             ),
             "Image: Resize, Rotate, Flip",
             Some(super::key_focus::key_label(
@@ -2403,7 +2405,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 p.t2,
                 "Show Panel",
                 Some(super::key_focus::key_label(super::key_focus::KEY_PANEL)),
-                Some(Message::EditorPanelToggled),
+                Some(Message::Editor(EditorMsg::PanelToggled)),
                 false,
                 ICON_BTN_SM,
                 Position::Bottom,
@@ -2515,13 +2517,13 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                         text("Keep Editing").size(ButtonSize::Sm.text_size()).into(),
                         ButtonKind::Secondary,
                         ButtonSize::Sm,
-                        Some(Message::EditorDiscardDisarmed),
+                        Some(Message::Editor(EditorMsg::DiscardDisarmed)),
                     ),
                     bar_button(
                         text("Discard").size(ButtonSize::Sm.text_size()).into(),
                         ButtonKind::DangerSolid,
                         ButtonSize::Sm,
-                        Some(Message::EditorDiscardRequested),
+                        Some(Message::Editor(EditorMsg::DiscardRequested)),
                     ),
                 ]
                 .spacing(SP2)
@@ -2549,7 +2551,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                     p.t2,
                     "Dismiss",
                     None,
-                    Some(Message::EditorStatusDismissed),
+                    Some(Message::Editor(EditorMsg::StatusDismissed)),
                     false,
                     ICON_BTN_XS,
                     Position::Top,
@@ -2562,7 +2564,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 p.t2,
                 "Dismiss",
                 None,
-                Some(Message::EditorStatusDismissed),
+                Some(Message::Editor(EditorMsg::StatusDismissed)),
                 false,
                 ICON_BTN_XS,
                 Position::Top,
@@ -2599,7 +2601,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             .into(),
             ButtonKind::Primary,
             ButtonSize::Md,
-            (!busy).then_some(Message::EditorCopyImageRequested),
+            (!busy).then_some(Message::Editor(EditorMsg::CopyImageRequested)),
         ),
         "Copy Image",
         Some(COPY_IMAGE_KEY),
@@ -2611,7 +2613,9 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             icon_color(undo_enabled),
             "Undo",
             Some(UNDO_KEY),
-            undo_enabled.then_some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
+            undo_enabled.then_some(Message::Editor(EditorMsg::Toolbar(
+                readshot_ui::ToolbarMessage::Undo
+            ))),
             false,
             ICON_BTN,
             Position::Top,
@@ -2621,7 +2625,9 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             icon_color(redo_enabled),
             "Redo",
             Some(REDO_KEY),
-            redo_enabled.then_some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo)),
+            redo_enabled.then_some(Message::Editor(EditorMsg::Toolbar(
+                readshot_ui::ToolbarMessage::Redo
+            ))),
             false,
             ICON_BTN,
             Position::Top,
@@ -2632,7 +2638,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             icon_color(!busy),
             "Pin",
             Some(PIN_KEY),
-            (!busy).then_some(Message::EditorPinRequested),
+            (!busy).then_some(Message::Editor(EditorMsg::PinRequested)),
             false,
             ICON_BTN,
             Position::Top,
@@ -2642,7 +2648,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             icon_color(!busy),
             "Save",
             Some(SAVE_KEY),
-            (!busy).then_some(Message::EditorSaveRequested),
+            (!busy).then_some(Message::Editor(EditorMsg::SaveRequested)),
             false,
             ICON_BTN,
             Position::Top,
@@ -2652,7 +2658,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             icon_color(!busy),
             "Copy Text",
             Some(COPY_TEXT_KEY),
-            (!busy).then_some(Message::EditorCopyTextRequested),
+            (!busy).then_some(Message::Editor(EditorMsg::CopyTextRequested)),
             false,
             ICON_BTN,
             Position::Top,
@@ -2666,7 +2672,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             icon_color(!busy),
             "Discard",
             Some(CLOSE_KEY),
-            (!busy).then_some(Message::EditorDiscardRequested),
+            (!busy).then_some(Message::Editor(EditorMsg::DiscardRequested)),
             false,
             ICON_BTN,
             Position::Top,
@@ -2699,7 +2705,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     if let Some(which) = popover {
         layers.push(
             mouse_area(IcedSpace::new().width(Length::Fill).height(Length::Fill))
-                .on_press(Message::EditorPopoverClosed)
+                .on_press(Message::Editor(EditorMsg::PopoverClosed))
                 .interaction(iced::mouse::Interaction::Idle)
                 .into(),
         );
@@ -2769,10 +2775,13 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             // While a popover is open, a click on the panel closes it, as
             // a click on the canvas does.
             let panel: Element<'_, Message> = if ed.popover.is_some() {
-                container(stack![panel, scrim(Message::EditorPopoverClosed)])
-                    .width(Length::Fixed(PANEL_WIDTH))
-                    .height(Length::Fill)
-                    .into()
+                container(stack![
+                    panel,
+                    scrim(Message::Editor(EditorMsg::PopoverClosed))
+                ])
+                .width(Length::Fixed(PANEL_WIDTH))
+                .height(Length::Fill)
+                .into()
             } else {
                 panel
             };
@@ -2783,7 +2792,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         }
         PanelMode::Overlay => stack![
             canvas_area,
-            scrim(Message::EditorPanelOverlayDismissed),
+            scrim(Message::Editor(EditorMsg::PanelOverlayDismissed)),
             container(opaque(side_panel(state, ed, p, true)))
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -2845,7 +2854,7 @@ fn editor_zoom_segment(
             icon_color(can_zoom_out),
             "Zoom Out",
             Some(ZOOM_OUT_KEY),
-            can_zoom_out.then_some(Message::EditorZoomOut),
+            can_zoom_out.then_some(Message::Editor(EditorMsg::ZoomOut)),
             false,
             ICON_BTN_SM,
             Position::Bottom,
@@ -2868,7 +2877,7 @@ fn editor_zoom_segment(
             icon_color(can_zoom_in),
             "Zoom In",
             Some(ZOOM_IN_KEY),
-            can_zoom_in.then_some(Message::EditorZoomIn),
+            can_zoom_in.then_some(Message::Editor(EditorMsg::ZoomIn)),
             false,
             ICON_BTN_SM,
             Position::Bottom,
@@ -2879,7 +2888,7 @@ fn editor_zoom_segment(
                 text("1:1").size(ButtonSize::Xs.text_size()).into(),
                 selected_kind(zoom.is_actual_size_for_display_scale(display_scale)),
                 ButtonSize::Xs,
-                (!busy).then_some(Message::EditorZoomActual),
+                (!busy).then_some(Message::Editor(EditorMsg::ZoomActual)),
             ),
             "Actual Pixels",
             Some(ZOOM_ACTUAL_KEY),
@@ -2890,7 +2899,7 @@ fn editor_zoom_segment(
                 text("Fit").size(ButtonSize::Xs.text_size()).into(),
                 selected_kind(zoom.is_fit()),
                 ButtonSize::Xs,
-                (!busy).then_some(Message::EditorZoomFit),
+                (!busy).then_some(Message::Editor(EditorMsg::ZoomFit)),
             ),
             "Fit to View",
             None,
@@ -2955,13 +2964,11 @@ fn width_popover<'a>(
     let control: Element<'a, Message> = if busy {
         passive_line_width_control_sized(line_width, W)
     } else {
-        iced::widget::slider(
-            MIN_LINE_WIDTH..=MAX_LINE_WIDTH,
-            line_width,
-            Message::EditorLineWidthPreview,
-        )
+        iced::widget::slider(MIN_LINE_WIDTH..=MAX_LINE_WIDTH, line_width, |a| {
+            Message::Editor(EditorMsg::LineWidthPreview(a))
+        })
         .step(0.5_f32)
-        .on_release(Message::EditorLineWidthCommit)
+        .on_release(Message::Editor(EditorMsg::LineWidthCommit))
         .width(Length::Fixed(W))
         .into()
     };
@@ -3094,12 +3101,12 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
     // the audit flagged the previous "double-click closes" as a
     // landmine because pin-positioning involves a lot of accidental
     // double-clicks. Close is the hover bar's close button or esc / ⌘W.
-    let drag_area = mouse_area(img).on_double_click(Message::PinLockToggled(id));
+    let drag_area = mouse_area(img).on_double_click(Message::Editor(EditorMsg::PinLockToggled(id)));
     let drag_layer: Element<'_, Message> = if locked {
         drag_area.into()
     } else {
         drag_area
-            .on_press(Message::PinDragRequested(id))
+            .on_press(Message::Editor(EditorMsg::PinDragRequested(id)))
             .interaction(iced::mouse::Interaction::Grab)
             .into()
     };
@@ -3119,7 +3126,7 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
             DARK.t1,
             lock_name,
             Some("L"),
-            Some(Message::PinLockToggled(id)),
+            Some(Message::Editor(EditorMsg::PinLockToggled(id))),
             locked,
             ICON_BTN_SM,
             pos,
@@ -3153,16 +3160,16 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
             DARK.t1,
             "Close",
             Some(ESC_KEY),
-            Some(Message::PinClosePressed(id)),
+            Some(Message::Editor(EditorMsg::PinClosePressed(id))),
             false,
             ICON_BTN_SM,
             pos,
         );
         let step = |delta: f32| {
-            Message::PinOpacityChanged(
+            Message::Editor(EditorMsg::PinOpacityChanged(
                 id,
                 (opacity + delta).clamp(PIN_OPACITY_MIN, PIN_OPACITY_MAX),
-            )
+            ))
         };
         let bar: Element<'_, Message> =
             if !pin_hover_controls(locked, available.width).contains(&PinControl::Opacity) {
@@ -3229,8 +3236,8 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
             .width(Length::Fill)
             .height(Length::Fill),
     )
-    .on_enter(Message::PinHovered(id, true))
-    .on_exit(Message::PinHovered(id, false))
+    .on_enter(Message::Editor(EditorMsg::PinHovered(id, true)))
+    .on_exit(Message::Editor(EditorMsg::PinHovered(id, false)))
     .into()
 }
 
@@ -3466,7 +3473,7 @@ pub(crate) fn editor_text_key_binding(
     use iced::widget::text_editor::Binding;
 
     if matches!(key_press.key, Key::Named(Named::Enter)) && key_press.modifiers.command() {
-        return Some(Binding::Custom(Message::EditorTextCommit));
+        return Some(Binding::Custom(Message::Editor(EditorMsg::TextCommit)));
     }
     // Let Escape through uncaptured: the canvas captures it and the
     // keyboard subscription turns it into the one EditorTextCancel for this
@@ -5579,11 +5586,16 @@ mod tests {
         assert_eq!((label, key), ("Undo", Some(crate::runtime::UNDO_KEY)));
         assert!(matches!(
             msg,
-            crate::app::Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)
+            crate::app::Message::Editor(crate::app::EditorMsg::Toolbar(
+                readshot_ui::ToolbarMessage::Undo
+            ))
         ));
         let (label, _, msg) = super::toast_action_parts(A::RetryRecognition);
         assert_eq!(label, "Retry");
-        assert!(matches!(msg, crate::app::Message::EditorTextRecognize));
+        assert!(matches!(
+            msg,
+            crate::app::Message::Editor(crate::app::EditorMsg::TextRecognize)
+        ));
     }
 }
 

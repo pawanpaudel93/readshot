@@ -932,9 +932,9 @@ fn retake_last_region_without_previous_region_sets_status() {
 fn pin_hover_tracks_the_window() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let id = iced::window::Id::unique();
-    let _ = update(&mut app, Message::PinHovered(id, true));
+    let _ = update(&mut app, Message::Editor(EditorMsg::PinHovered(id, true)));
     assert_eq!(app.hovered_pin, Some(id));
-    let _ = update(&mut app, Message::PinHovered(id, false));
+    let _ = update(&mut app, Message::Editor(EditorMsg::PinHovered(id, false)));
     assert_eq!(app.hovered_pin, None);
 }
 
@@ -942,8 +942,8 @@ fn pin_hover_tracks_the_window() {
 fn pin_hover_exit_of_another_pin_keeps_current() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let (a, b) = (iced::window::Id::unique(), iced::window::Id::unique());
-    let _ = update(&mut app, Message::PinHovered(a, true));
-    let _ = update(&mut app, Message::PinHovered(b, false));
+    let _ = update(&mut app, Message::Editor(EditorMsg::PinHovered(a, true)));
+    let _ = update(&mut app, Message::Editor(EditorMsg::PinHovered(b, false)));
     assert_eq!(app.hovered_pin, Some(a));
 }
 
@@ -960,7 +960,10 @@ fn pin_opacity_message_updates_pin_state() {
         },
     );
 
-    let _ = update(&mut app, Message::PinOpacityChanged(id, 0.4));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::PinOpacityChanged(id, 0.4)),
+    );
 
     assert_eq!(app.pins.get(&id).unwrap().opacity, 0.4);
 }

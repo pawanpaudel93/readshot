@@ -12,7 +12,7 @@ fn add_capture_below_hides_the_editor_and_appends_the_capture() {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     assert!(
         matches!(app.combine_capture, Some(crate::app::CombineCapture { session: s, join: Join::Below, selected: false }) if s == session)
@@ -41,7 +41,7 @@ fn add_capture_below_hides_the_editor_and_appends_the_capture() {
     assert!(app.pending_intent.is_none());
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
     );
     assert_eq!(app.editor.as_ref().unwrap().model.part_ids().len(), 1);
 }
@@ -53,7 +53,7 @@ fn a_failed_or_cancelled_combine_capture_restores_the_editor_unchanged() {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Beside),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Beside)),
     );
     let _ = update(
         &mut app,
@@ -68,7 +68,7 @@ fn a_failed_or_cancelled_combine_capture_restores_the_editor_unchanged() {
     assert!(app.combine_capture.is_none());
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Beside),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Beside)),
     );
     let _ = update(&mut app, Message::Capture(CaptureMsg::OverlayCancelled));
     assert!(app.combine_capture.is_none());
@@ -83,26 +83,26 @@ fn a_file_image_is_added_below_and_a_stale_session_is_ignored() {
     let img = Arc::new(solid(10, 5));
     let _ = update(
         &mut app,
-        Message::EditorPartLoaded {
+        Message::Editor(EditorMsg::PartLoaded {
             session: session + 1000,
             result: Ok(Some(Arc::clone(&img))),
-        },
+        }),
     );
     assert_eq!(app.editor.as_ref().unwrap().model.part_ids().len(), 1);
     let _ = update(
         &mut app,
-        Message::EditorPartLoaded {
+        Message::Editor(EditorMsg::PartLoaded {
             session,
             result: Ok(Some(img)),
-        },
+        }),
     );
     assert_eq!(app.editor.as_ref().unwrap().image_size(), (10, 15));
     let _ = update(
         &mut app,
-        Message::EditorPartLoaded {
+        Message::Editor(EditorMsg::PartLoaded {
             session,
             result: Ok(None),
-        },
+        }),
     );
     assert_eq!(
         app.editor.as_ref().unwrap().model.part_ids().len(),
@@ -120,13 +120,16 @@ fn gap_slider_is_one_undo_step_and_alignment_moves_parts() {
     app.editor = Some(ed);
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
     for g in [4, 8, 12] {
-        let _ = update(&mut app, Message::EditorLayoutGapPreview(g));
+        let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(g)));
     }
-    let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
+    let _ = update(&mut app, Message::Editor(EditorMsg::SnapshotSliderCommit));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.image_size(), (40, 32));
     assert_eq!(ed.model.undo_depth(), depth + 1);
-    let _ = update(&mut app, Message::EditorLayoutAlign(Align::End));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::LayoutAlign(Align::End)),
+    );
     let g = app.editor.as_ref().unwrap().model.geometry().clone();
     assert_eq!(g.layout().placements[1].x, 20);
 }
@@ -140,7 +143,7 @@ fn an_oversized_addition_is_refused() {
     )));
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     let _ = update(
         &mut app,
@@ -163,10 +166,13 @@ fn combining_a_rotated_document_maps_its_text_through_the_bake() {
         Arc::new(positioned_doc("first", RectLike::new(2.0, 4.0, 10.0, 3.0))),
     );
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     let _ = update(
         &mut app,
@@ -196,10 +202,13 @@ fn a_bake_before_recognition_recognizes_the_source_part_upright() {
     app.preferences.editor_panel_open = true;
     app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
     let session = app.editor.as_ref().unwrap().session_id;
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     let _ = update(
         &mut app,
@@ -214,11 +223,11 @@ fn a_bake_before_recognition_recognizes_the_source_part_upright() {
     );
     let _ = update(
         &mut app,
-        Message::EditorTextRecognized {
+        Message::Editor(EditorMsg::TextRecognized {
             session,
             part: ORIGINAL_PART,
             result: Ok(positioned_doc("first", RectLike::new(2.0, 4.0, 10.0, 3.0))),
-        },
+        }),
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.text_panel.part_docs.contains_key(&ids[0]));
@@ -246,7 +255,7 @@ async fn a_combined_record_stores_no_text_until_every_part_is_recognized() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     let _ = update(
         &mut app,
@@ -265,11 +274,11 @@ async fn a_combined_record_stores_no_text_until_every_part_is_recognized() {
     for (part, text) in [(ids[0], "first"), (ids[1], "second")] {
         let _ = update(
             &mut app,
-            Message::EditorTextRecognized {
+            Message::Editor(EditorMsg::TextRecognized {
                 session,
                 part,
                 result: Ok(readshot_core::text_lines::TextDocument::from_plain(text)),
-            },
+            }),
         );
     }
     app.coordinator.flush_history_updates();
@@ -306,7 +315,7 @@ async fn a_combined_scrubbed_record_keeps_no_partial_text() {
     ));
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     let _ = update(
         &mut app,
@@ -333,7 +342,7 @@ fn a_combine_capture_for_a_replaced_editor_is_dropped() {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     // Another editor took over while the overlay was up.
     app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
@@ -356,7 +365,7 @@ fn an_overwritten_intent_still_returns_the_capture_to_the_editor() {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     // A tray click meanwhile sets another intent.
     app.pending_intent = Some(crate::app::CaptureIntent::Editor);
@@ -402,7 +411,7 @@ fn no_display_or_a_retake_never_strands_a_combine_capture() {
     );
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     let _ = update(
         &mut app,
@@ -422,7 +431,7 @@ fn no_display_or_a_retake_never_strands_a_combine_capture() {
     );
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     let _ = update(&mut app, Message::Capture(CaptureMsg::OpenOverlayRequested));
     let _ = update(
@@ -448,7 +457,7 @@ fn an_overlay_that_cannot_open_gives_the_editor_back() {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     // Another capture started before the chained overlay request ran.
     app.capture_in_flight = true;
@@ -474,7 +483,7 @@ fn an_overlay_refused_for_the_welcome_gives_the_editor_back() {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     app.welcome = crate::welcome::WelcomeState::Pending;
     let _ = update(&mut app, Message::Capture(CaptureMsg::OpenOverlayRequested));
@@ -489,7 +498,7 @@ fn an_overlay_closed_by_the_os_gives_the_editor_back() {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     app.overlay_opening = false;
     let (a, b) = (window::Id::unique(), window::Id::unique());
@@ -509,7 +518,7 @@ fn closing_the_overlays_after_a_selection_keeps_the_combine_capture() {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     let id = window::Id::unique();
     app.windows.register(id, WindowKind::Overlay);
@@ -584,13 +593,16 @@ fn only_regular_files_are_read() {
 #[test]
 fn a_bake_source_no_state_can_reach_is_released() {
     use readshot_core::document::Join;
-    let undo = || Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo);
+    let undo = || Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo));
     let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     let _ = update(
         &mut app,
@@ -612,7 +624,10 @@ fn a_bake_source_no_state_can_reach_is_released() {
     );
     // A new edit truncates the redo stack: nothing reaches the baked
     // part, so its source (a whole earlier document) is released.
-    let _ = update(&mut app, Message::EditorRotate { clockwise: false });
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Rotate { clockwise: false }),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert!(!ed.model.can_redo());
     assert!(ed.text_panel.bake_sources.is_empty(), "source kept");
@@ -625,10 +640,13 @@ fn a_bake_of_a_bake_keeps_the_inner_source() {
     let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
     for _ in 0..2 {
-        let _ = update(&mut app, Message::EditorRotate { clockwise: true });
         let _ = update(
             &mut app,
-            Message::EditorCombineCaptureRequested(Join::Below),
+            Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        );
+        let _ = update(
+            &mut app,
+            Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
         );
         let _ = update(
             &mut app,
@@ -651,10 +669,13 @@ fn a_baked_part_is_never_recognized_in_its_own_pixels() {
     let mut app = build_app_with_positions(Arc::new(FakePermissions::granted()));
     app.preferences.editor_panel_open = true;
     app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     let _ = update(
         &mut app,
@@ -702,10 +723,13 @@ async fn a_scrubbed_record_keeps_its_redactions_through_a_bake() {
         img,
         record.clone(),
     ));
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     let _ = update(
         &mut app,
@@ -743,7 +767,7 @@ fn an_overlay_request_during_the_combine_capture_never_replaces_the_editor() {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::EditorCombineCaptureRequested(Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
     );
     app.overlay_opening = false;
     let id = window::Id::unique();
@@ -947,13 +971,13 @@ fn a_file_that_fails_to_load_leaves_the_editor_unchanged() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::EditorPartLoaded {
+        Message::Editor(EditorMsg::PartLoaded {
             session,
             result: Err(
                 "that file isn’t an image Readshot can read. Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file."
                     .into(),
             ),
-        },
+        }),
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(!ed.busy);

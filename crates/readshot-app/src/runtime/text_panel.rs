@@ -259,10 +259,12 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
                 None => result,
             }
         },
-        move |result| Message::EditorTextRecognized {
-            session,
-            part: part_id,
-            result,
+        move |result| {
+            Message::Editor(EditorMsg::TextRecognized {
+                session,
+                part: part_id,
+                result,
+            })
         },
     )
 }
@@ -390,27 +392,27 @@ pub(crate) fn seed_text_from_history(ed: &mut EditorSession, engine_reports_posi
     refresh_text_for_geometry(ed);
 }
 
-pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Task<Message> {
+pub(crate) fn handle_text_panel_message(state: &mut App, message: EditorMsg) -> Task<Message> {
     match message {
-        Message::EditorTextRecognize => {
+        EditorMsg::TextRecognize => {
             if let Some(ed) = state.editor.as_mut() {
                 ed.text_panel.user_requested = true;
             }
             request_text_recognition(state)
         }
-        Message::EditorTextRecognized {
+        EditorMsg::TextRecognized {
             session,
             part,
             result,
         } => on_text_recognized(state, session, part, result),
-        Message::EditorPanelToggled => on_panel_toggled(state),
-        Message::EditorPanelOverlayDismissed => {
+        EditorMsg::PanelToggled => on_panel_toggled(state),
+        EditorMsg::PanelOverlayDismissed => {
             if let Some(ed) = state.editor.as_mut() {
                 close_panel_overlay(ed);
             }
             Task::none()
         }
-        Message::EditorPanelTabSelected(tab) => {
+        EditorMsg::PanelTabSelected(tab) => {
             state.set_editor_panel_tab(tab);
             // The Beautify tab opens showing the current background.
             if tab == crate::editor::PanelTab::Beautify {
@@ -420,7 +422,7 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
             }
             Task::none()
         }
-        Message::EditorOpenTextSettings => {
+        EditorMsg::OpenTextSettings => {
             let _ = update(
                 state,
                 Message::Settings(SettingsMsg::PaneSelected(
@@ -429,24 +431,22 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
             );
             update(state, Message::Settings(SettingsMsg::OpenRequested))
         }
-        Message::EditorTextLineClicked(index) => on_text_line_clicked(state, index),
-        Message::EditorCopyLines => on_copy_lines(state),
-        Message::EditorCopyLinesDone(result) => on_copy_lines_done(state, result),
-        Message::EditorRemoveLineBreaksToggled(on) => {
+        EditorMsg::TextLineClicked(index) => on_text_line_clicked(state, index),
+        EditorMsg::CopyLines => on_copy_lines(state),
+        EditorMsg::CopyLinesDone(result) => on_copy_lines_done(state, result),
+        EditorMsg::RemoveLineBreaksToggled(on) => {
             state.set_copy_remove_line_breaks(on);
             Task::none()
         }
-        Message::EditorRedactStyleChanged(style) => {
+        EditorMsg::RedactStyleChanged(style) => {
             if let Some(ed) = state.editor.as_mut() {
                 ed.text_panel.redact_style = style;
             }
             Task::none()
         }
-        Message::EditorRedactAll => redact(state, None),
-        Message::EditorRedactLine(index) => redact(state, Some(index)),
-        Message::EditorHistoryWritten { session, result } => {
-            on_history_written(state, session, result)
-        }
+        EditorMsg::RedactAll => redact(state, None),
+        EditorMsg::RedactLine(index) => redact(state, Some(index)),
+        EditorMsg::HistoryWritten { session, result } => on_history_written(state, session, result),
         other => unreachable!("non-text-panel message routed to the text panel handler: {other:?}"),
     }
 }
@@ -869,7 +869,7 @@ pub(crate) fn text_tab<'a>(
                     text("Try Again").size(ButtonSize::Sm.text_size()).into(),
                     ButtonKind::Secondary,
                     ButtonSize::Sm,
-                    Some(Message::EditorTextRecognize),
+                    Some(Message::Editor(EditorMsg::TextRecognize)),
                 ),
                 lit(F::TextRetry),
             )),
@@ -884,7 +884,7 @@ pub(crate) fn text_tab<'a>(
                     text("Open Settings").size(ButtonSize::Sm.text_size()).into(),
                     ButtonKind::Secondary,
                     ButtonSize::Sm,
-                    Some(Message::EditorOpenTextSettings),
+                    Some(Message::Editor(EditorMsg::OpenTextSettings)),
                 ),
                 lit(F::TextOpenSettings),
             )),
@@ -1032,7 +1032,7 @@ fn redact_card<'a>(
         pick_list(
             &RedactStyle::ALL[..],
             Some(ed.text_panel.redact_style),
-            Message::EditorRedactStyleChanged,
+            |a| Message::Editor(EditorMsg::RedactStyleChanged(a)),
         )
         .text_size(TYPE_CAPTION)
         .padding([4, 8])
@@ -1044,7 +1044,7 @@ fn redact_card<'a>(
             text("Redact All").size(ButtonSize::Sm.text_size()).into(),
             ButtonKind::Secondary,
             ButtonSize::Sm,
-            (!ed.busy && n > 0).then_some(Message::EditorRedactAll),
+            (!ed.busy && n > 0).then_some(Message::Editor(EditorMsg::RedactAll)),
         ),
         lit(F::TextRedactAll),
     );
@@ -1202,7 +1202,7 @@ fn line_row<'a>(
                     text("Redact").size(ButtonSize::Xs.text_size()).into(),
                     ButtonKind::Secondary,
                     ButtonSize::Xs,
-                    Some(Message::EditorRedactLine(index)),
+                    Some(Message::Editor(EditorMsg::RedactLine(index))),
                 ),
                 "Redact This Line",
                 Some("R"),
@@ -1220,7 +1220,7 @@ fn line_row<'a>(
     mouse_area(body)
         .on_enter(Message::Window(WindowMsg::EditorTextLineHovered(index)))
         .on_exit(Message::Window(WindowMsg::EditorTextLineUnhovered(index)))
-        .on_press(Message::EditorTextLineClicked(index))
+        .on_press(Message::Editor(EditorMsg::TextLineClicked(index)))
         .interaction(iced::mouse::Interaction::Pointer)
         .into()
 }
@@ -1300,7 +1300,7 @@ fn lines_view<'a>(
             .label("Remove line breaks when copying")
             .text_size(TYPE_CAPTION)
             .size(16.0)
-            .on_toggle(Message::EditorRemoveLineBreaksToggled),
+            .on_toggle(|a| Message::Editor(EditorMsg::RemoveLineBreaksToggled(a))),
         lit(F::TextLineBreaks),
     );
     let n = tp.selected.len();
@@ -1311,7 +1311,7 @@ fn lines_view<'a>(
                 .into(),
             ButtonKind::Secondary,
             ButtonSize::Sm,
-            (n > 0).then_some(Message::EditorCopyLines),
+            (n > 0).then_some(Message::Editor(EditorMsg::CopyLines)),
         )
         .width(Length::Fill),
         lit(F::TextCopyLines),
@@ -1326,7 +1326,7 @@ fn lines_view<'a>(
         .into(),
         ButtonKind::Secondary,
         ButtonSize::Sm,
-        (!ed.busy).then_some(Message::EditorCopyTextRequested),
+        (!ed.busy).then_some(Message::Editor(EditorMsg::CopyTextRequested)),
     )
     .width(Length::Fill);
     let copy_all = focus_ring(copy_all, lit(F::TextCopyAll));
@@ -1410,7 +1410,7 @@ pub(crate) fn snap_highlight_annotation(
     }
 }
 
-/// `Message::EditorTextRecognized`: a part's recognition is back.
+/// `EditorMsg::TextRecognized`: a part's recognition is back.
 fn on_text_recognized(
     state: &mut App,
     session: u64,
@@ -1486,7 +1486,7 @@ fn on_text_recognized(
     Task::none()
 }
 
-/// `Message::EditorPanelToggled`.
+/// `EditorMsg::PanelToggled`.
 fn on_panel_toggled(state: &mut App) -> Task<Message> {
     let Some(narrow) = state
         .editor
@@ -1535,7 +1535,7 @@ fn on_panel_toggled(state: &mut App) -> Task<Message> {
     }
 }
 
-/// `Message::EditorTextLineClicked`.
+/// `EditorMsg::TextLineClicked`.
 fn on_text_line_clicked(state: &mut App, index: usize) -> Task<Message> {
     let (shift, command) = (state.editor_shift_held, state.editor_command_held);
     if let Some(ed) = state.editor.as_mut() {
@@ -1551,7 +1551,7 @@ fn on_text_line_clicked(state: &mut App, index: usize) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorCopyLines`.
+/// `EditorMsg::CopyLines`.
 fn on_copy_lines(state: &mut App) -> Task<Message> {
     let remove_breaks = state.preferences.editor_copy_remove_line_breaks;
     let Some(ed) = state.editor.as_mut() else {
@@ -1573,11 +1573,13 @@ fn on_copy_lines(state: &mut App) -> Task<Message> {
     let n = indices.len();
     ed.set_status(StatusTone::Progress, "Copying text…");
     Task::perform(copy_cached_text(text), move |r| {
-        Message::EditorCopyLinesDone(r.map(|_| n).map_err(|e| e.to_string()))
+        Message::Editor(EditorMsg::CopyLinesDone(
+            r.map(|_| n).map_err(|e| e.to_string()),
+        ))
     })
 }
 
-/// `Message::EditorCopyLinesDone`.
+/// `EditorMsg::CopyLinesDone`.
 fn on_copy_lines_done(state: &mut App, result: Result<usize, String>) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         let (tone, status) = match result {
@@ -1602,7 +1604,7 @@ fn on_copy_lines_done(state: &mut App, result: Result<usize, String>) -> Task<Me
     Task::none()
 }
 
-/// `Message::EditorHistoryWritten`: an editor History write finished.
+/// `EditorMsg::HistoryWritten`: an editor History write finished.
 fn on_history_written(
     state: &mut App,
     session: u64,

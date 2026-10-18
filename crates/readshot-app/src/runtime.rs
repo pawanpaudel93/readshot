@@ -356,8 +356,8 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 }
 
 use crate::app::{
-    App, AppMsg, CaptureMsg, GlobalHotkeyAction, HistoryKeyboardAction, HistoryMsg, Message,
-    ScrollMsg, SettingsMsg, TickMsg, WelcomeMsg, WindowKind, WindowMsg,
+    App, AppMsg, CaptureMsg, EditorMsg, GlobalHotkeyAction, HistoryKeyboardAction, HistoryMsg,
+    Message, ScrollMsg, SettingsMsg, TickMsg, WelcomeMsg, WindowKind, WindowMsg,
 };
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
@@ -703,7 +703,8 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // Only runs while there's actually something to dismiss so
         // the editor doesn't burn CPU on idle windows.
         subs.push(
-            iced::time::every(Duration::from_millis(1000)).map(|_| Message::EditorStatusTick),
+            iced::time::every(Duration::from_millis(1000))
+                .map(|_| Message::Editor(EditorMsg::StatusTick)),
         );
     }
     if !state.reduce_motion
@@ -743,12 +744,12 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                 )));
             }
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                return Some(Message::EditorKeyPressed {
+                return Some(Message::Editor(EditorMsg::KeyPressed {
                     window,
                     key,
                     modifiers,
                     status_ignored: status == Status::Ignored,
-                });
+                }));
             }
             None
         }));
@@ -865,11 +866,11 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         subs.push(iced::event::listen_with(|event, _status, window| {
             use iced::keyboard::Event as KbEvent;
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                return Some(Message::PinKeyPressed {
+                return Some(Message::Editor(EditorMsg::PinKeyPressed {
                     window,
                     key,
                     modifiers,
-                });
+                }));
             }
             None
         }));
@@ -1185,7 +1186,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             Task::batch([task, editor_ops::history_write_followups(state)])
         }
         Message::Window(msg) => window_ops::handle_window_message(state, msg),
-        msg @ editor_messages!() => window_ops::route_editor_message(state, msg),
+        Message::Editor(msg) => window_ops::route_editor_message(state, msg),
 
         Message::NoOp => Task::none(),
 
@@ -1461,7 +1462,7 @@ fn persist_history_task(
 /// Body of [`persist_history_task`], separate so tests can drive it.
 ///
 /// Messages:
-/// * [`Message::EditorTextRecognized`] when `editor_session` is set, the
+/// * [`EditorMsg::TextRecognized`] when `editor_session` is set, the
 ///   moment OCR resolves (not after the slower PNG encode / save): the
 ///   same OCR feeds that editor's Text panel (one OCR per capture),
 ///   errors included so the editor never stays Recognizing. Engines map
@@ -1503,11 +1504,11 @@ async fn persist_history(
                     Err(e) => Err(e.to_string()),
                 };
                 let _ = output
-                    .send(Message::EditorTextRecognized {
+                    .send(Message::Editor(EditorMsg::TextRecognized {
                         session,
                         part: readshot_core::document::ORIGINAL_PART,
                         result,
-                    })
+                    }))
                     .await;
             }
             doc

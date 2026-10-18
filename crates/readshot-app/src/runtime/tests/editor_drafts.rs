@@ -17,19 +17,19 @@ fn editor_select_drag_cancel_restores_baseline_without_undo_step() {
 
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
-            5.0, 5.0,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::SelectPressed(PointLike::new(5.0, 5.0)),
+        )),
     );
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::SelectDragged(PointLike::new(
-            12.0, 14.0,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::SelectDragged(PointLike::new(12.0, 14.0)),
+        )),
     );
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::Cancelled),
+        Message::Editor(EditorMsg::Canvas(readshot_ui::CanvasMessage::Cancelled)),
     );
 
     let ed = app.editor.as_ref().unwrap();
@@ -59,19 +59,21 @@ fn editor_select_subpixel_drag_release_does_not_mutate_annotation() {
 
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
-            5.0, 5.0,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::SelectPressed(PointLike::new(5.0, 5.0)),
+        )),
     );
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::SelectDragged(PointLike::new(
-            5.25, 5.25,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::SelectDragged(PointLike::new(5.25, 5.25)),
+        )),
     );
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::SelectReleased),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::SelectReleased,
+        )),
     );
 
     let ed = app.editor.as_ref().unwrap();
@@ -100,9 +102,9 @@ fn editor_tool_change_commits_pending_text_when_leaving_text_tool() {
 
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
             readshot_ui::editor::ToolState::Rectangle,
-        )),
+        ))),
     );
 
     let ed = app.editor.as_ref().unwrap();
@@ -138,9 +140,9 @@ fn editor_tool_change_dismisses_empty_pending_text_without_undo_step() {
 
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
             readshot_ui::editor::ToolState::Rectangle,
-        )),
+        ))),
     );
 
     let ed = app.editor.as_ref().unwrap();
@@ -167,8 +169,8 @@ fn editor_requesting_new_text_commits_existing_non_empty_draft() {
 
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::RequestText(PointLike::new(
-            24.0, 25.0,
+        Message::Editor(EditorMsg::Canvas(readshot_ui::CanvasMessage::RequestText(
+            PointLike::new(24.0, 25.0),
         ))),
     );
 
@@ -203,8 +205,8 @@ fn editor_requesting_new_text_dismisses_empty_draft_without_undo_step() {
 
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::RequestText(PointLike::new(
-            24.0, 25.0,
+        Message::Editor(EditorMsg::Canvas(readshot_ui::CanvasMessage::RequestText(
+            PointLike::new(24.0, 25.0),
         ))),
     );
 
@@ -243,7 +245,7 @@ fn editor_text_commit_updates_original_edit_index_even_if_selection_changes() {
     assert_eq!(ed.model.select_at(PointLike::new(45.0, 45.0)), Some(1));
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorTextCommit);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCommit));
 
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.pending_text.is_none());
@@ -277,7 +279,7 @@ fn editor_delete_selected_dismisses_pending_text_edit() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorDeleteSelected);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DeleteSelected));
 
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.pending_text.is_none());
@@ -314,7 +316,10 @@ fn editor_nudge_is_suppressed_while_editing_text() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorNudgeSelected(0.0, 5.0));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::NudgeSelected(0.0, 5.0)),
+    );
 
     let ed = app.editor.as_ref().unwrap();
     match &ed.model.annotations()[0] {
@@ -338,7 +343,7 @@ fn editor_delete_without_selection_keeps_new_pending_text() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorDeleteSelected);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DeleteSelected));
 
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.pending_text.is_some());
@@ -366,7 +371,7 @@ fn editor_cancel_existing_text_edit_keeps_annotation_selected() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
 
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.pending_text.is_none());
@@ -395,7 +400,7 @@ fn editor_cancel_new_text_draft_clears_selection() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
 
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.pending_text.is_none());
@@ -422,7 +427,7 @@ fn editor_undo_commits_then_undoes_new_pending_text() {
 
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
     );
 
     let ed = app.editor.as_ref().unwrap();
@@ -468,12 +473,12 @@ fn cmd_z_with_a_text_draft_open_keeps_the_draft() {
         for status_ignored in [true, false] {
             let _ = update(
                 &mut app,
-                Message::EditorKeyPressed {
+                Message::Editor(EditorMsg::KeyPressed {
                     window: id,
                     key: iced::keyboard::Key::Character("z".into()),
                     modifiers,
                     status_ignored,
-                },
+                }),
             );
         }
     }
@@ -515,7 +520,7 @@ fn editor_redo_with_pending_text_commits_new_branch_and_clears_redo() {
 
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Redo)),
     );
 
     let ed = app.editor.as_ref().unwrap();
@@ -554,9 +559,9 @@ fn editor_select_press_commits_non_empty_pending_text() {
 
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
-            30.0, 30.0,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::SelectPressed(PointLike::new(30.0, 30.0)),
+        )),
     );
 
     let ed = app.editor.as_ref().unwrap();
@@ -587,9 +592,9 @@ fn editor_select_press_dismisses_empty_pending_text_without_undo_step() {
 
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
-            30.0, 30.0,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::SelectPressed(PointLike::new(30.0, 30.0)),
+        )),
     );
 
     let ed = app.editor.as_ref().unwrap();
@@ -612,12 +617,12 @@ fn editor_tool_change_cancels_line_width_preview_without_undo_step() {
     let undo_depth = ed.model.undo_depth();
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
+    let _ = update(&mut app, Message::Editor(EditorMsg::LineWidthPreview(10.0)));
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
             readshot_ui::editor::ToolState::Arrow,
-        )),
+        ))),
     );
 
     let ed = app.editor.as_ref().unwrap();
@@ -643,12 +648,12 @@ fn editor_select_press_cancels_line_width_preview_without_committing() {
     let undo_depth = ed.model.undo_depth();
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
+    let _ = update(&mut app, Message::Editor(EditorMsg::LineWidthPreview(10.0)));
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
-            30.0, 30.0,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::SelectPressed(PointLike::new(30.0, 30.0)),
+        )),
     );
 
     let ed = app.editor.as_ref().unwrap();
@@ -674,8 +679,11 @@ fn editor_frame_change_cancels_line_width_preview_without_committing() {
     let undo_depth = ed.model.undo_depth();
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
-    let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Soft));
+    let _ = update(&mut app, Message::Editor(EditorMsg::LineWidthPreview(10.0)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::BeautifyPreset(BuiltinPreset::Soft)),
+    );
 
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.beautify(), BuiltinPreset::Soft.settings());
@@ -701,8 +709,8 @@ fn editor_save_cancels_line_width_preview_before_output() {
     let undo_depth = ed.model.undo_depth();
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
-    let _ = update(&mut app, Message::EditorSaveRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::LineWidthPreview(10.0)));
+    let _ = update(&mut app, Message::Editor(EditorMsg::SaveRequested));
 
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.busy);
@@ -725,7 +733,7 @@ fn editor_save_commits_pending_text_before_output() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorSaveRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::SaveRequested));
 
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.pending_text.is_none());
@@ -753,7 +761,7 @@ fn editor_save_dismisses_empty_pending_text_without_undo_step() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorSaveRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::SaveRequested));
 
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.pending_text.is_none());
@@ -780,10 +788,10 @@ fn editor_successful_save_marks_current_output_clean_but_keeps_undo() {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::EditorSaved {
+        Message::Editor(EditorMsg::Saved {
             session,
             result: Ok(Some(saved_path)),
-        },
+        }),
     );
 
     let ed = app.editor.as_ref().unwrap();
@@ -791,7 +799,7 @@ fn editor_successful_save_marks_current_output_clean_but_keeps_undo() {
     assert!(ed.model.can_undo());
     assert!(!editor_has_unsaved_work(ed));
 
-    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
 
     assert!(app.editor.is_none());
 }
@@ -812,10 +820,10 @@ fn editor_successful_copy_image_marks_current_output_clean() {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::EditorCopyImageDone {
+        Message::Editor(EditorMsg::CopyImageDone {
             session,
             result: Ok(()),
-        },
+        }),
     );
 
     let ed = app.editor.as_ref().unwrap();
@@ -838,19 +846,19 @@ fn editor_cancelled_or_failed_output_keeps_unsaved_work_dirty() {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::EditorSaved {
+        Message::Editor(EditorMsg::Saved {
             session,
             result: Ok(None),
-        },
+        }),
     );
     assert!(editor_has_unsaved_work(app.editor.as_ref().unwrap()));
 
     let _ = update(
         &mut app,
-        Message::EditorCopyImageDone {
+        Message::Editor(EditorMsg::CopyImageDone {
             session,
             result: Err("clipboard unavailable".into()),
-        },
+        }),
     );
     assert!(editor_has_unsaved_work(app.editor.as_ref().unwrap()));
 }
@@ -876,18 +884,18 @@ fn an_output_result_from_a_replaced_editor_leaves_the_new_one_alone() {
     app.editor = Some(ed);
     let dir = tempfile::tempdir().unwrap();
     for message in [
-        Message::EditorSaved {
+        Message::Editor(EditorMsg::Saved {
             session: old_session,
             result: Ok(Some(dir.path().join("old.png"))),
-        },
-        Message::EditorCopyImageDone {
+        }),
+        Message::Editor(EditorMsg::CopyImageDone {
             session: old_session,
             result: Ok(()),
-        },
-        Message::EditorCopyTextDone {
+        }),
+        Message::Editor(EditorMsg::CopyTextDone {
             session: old_session,
             result: Ok("old text".into()),
-        },
+        }),
     ] {
         let _ = update(&mut app, message);
         let ed = app.editor.as_ref().unwrap();
@@ -908,7 +916,7 @@ fn editor_discard_requires_confirmation_for_non_empty_pending_text() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
 
     let ed = app.editor.as_ref().expect("first discard should only arm");
     assert!(ed.discard_armed());
@@ -917,7 +925,7 @@ fn editor_discard_requires_confirmation_for_non_empty_pending_text() {
         Some("Unsaved edits. Press Discard again to close without saving.")
     );
 
-    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
 
     assert!(app.editor.is_none());
 }
@@ -944,7 +952,7 @@ fn editor_text_action_supports_multi_line_and_commits_newline() {
         Action::Edit(Edit::Insert('c')),
         Action::Edit(Edit::Insert('d')),
     ] {
-        let _ = update(&mut app, Message::EditorTextAction(action));
+        let _ = update(&mut app, Message::Editor(EditorMsg::TextAction(action)));
     }
 
     let pending = app
@@ -958,7 +966,7 @@ fn editor_text_action_supports_multi_line_and_commits_newline() {
 
     // Commit builds a multi-line Annotation::Text and tears down the
     // inline editor's backing store.
-    let _ = update(&mut app, Message::EditorTextCommit);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCommit));
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.pending_text.is_none());
     assert!(ed.text_edit_content.is_none());
@@ -1058,7 +1066,7 @@ fn editor_discard_treats_empty_pending_text_as_clean() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
 
     assert!(app.editor.is_none());
 }
@@ -1083,7 +1091,7 @@ fn editor_discard_treats_unchanged_text_edit_as_clean() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
 
     assert!(app.editor.is_none());
 }
@@ -1108,7 +1116,7 @@ fn editor_discard_requires_confirmation_for_changed_text_edit() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
 
     let ed = app.editor.as_ref().expect("first discard should only arm");
     assert!(ed.discard_armed());
@@ -1125,7 +1133,7 @@ fn editor_discard_requires_confirmation_for_selected_frame() {
     ed.model.set_beautify(BuiltinPreset::Soft.settings());
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
 
     let ed = app.editor.as_ref().expect("first discard should only arm");
     assert!(ed.discard_armed());
@@ -1147,13 +1155,16 @@ fn editor_discard_confirmation_resets_after_frame_change() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
     assert!(app.editor.as_ref().unwrap().discard_armed());
 
-    let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Soft));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::BeautifyPreset(BuiltinPreset::Soft)),
+    );
     assert!(!app.editor.as_ref().unwrap().discard_armed());
 
-    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
 
     let ed = app.editor.as_ref().expect("discard should re-arm");
     assert!(ed.discard_armed());
@@ -1171,23 +1182,23 @@ fn editor_discard_confirmation_resets_after_annotation_change() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
     assert!(app.editor.as_ref().unwrap().discard_armed());
 
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
-            Annotation::Rectangle {
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::CommitAnnotation(Annotation::Rectangle {
                 rect: RectLike::new(30.0, 30.0, 12.0, 12.0),
                 color: Rgba::OPAQUE_BLACK,
                 line_width: 2.0,
                 style: Default::default(),
-            },
+            }),
         )),
     );
     assert!(!app.editor.as_ref().unwrap().discard_armed());
 
-    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
 
     let ed = app.editor.as_ref().expect("discard should re-arm");
     assert!(ed.discard_armed());
@@ -1212,9 +1223,9 @@ fn editor_busy_ignores_export_reentry_without_committing_pending_text() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorSaveRequested);
-    let _ = update(&mut app, Message::EditorCopyImageRequested);
-    let _ = update(&mut app, Message::EditorCopyTextRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::SaveRequested));
+    let _ = update(&mut app, Message::Editor(EditorMsg::CopyImageRequested));
+    let _ = update(&mut app, Message::Editor(EditorMsg::CopyTextRequested));
 
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.busy);
@@ -1238,21 +1249,21 @@ fn editor_busy_ignores_canvas_toolbar_and_zoom_mutations() {
 
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
             readshot_ui::editor::ToolState::Arrow,
-        )),
+        ))),
     );
-    let _ = update(&mut app, Message::EditorWidthBump(3.0));
-    let _ = update(&mut app, Message::EditorZoomIn);
+    let _ = update(&mut app, Message::Editor(EditorMsg::WidthBump(3.0)));
+    let _ = update(&mut app, Message::Editor(EditorMsg::ZoomIn));
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
-            Annotation::Rectangle {
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::CommitAnnotation(Annotation::Rectangle {
                 rect: RectLike::new(30.0, 30.0, 10.0, 10.0),
                 color: Rgba::OPAQUE_BLACK,
                 line_width: 4.0,
                 style: Default::default(),
-            },
+            }),
         )),
     );
 
@@ -1280,7 +1291,7 @@ fn editor_keyboard_zoom_is_display_scale_aware() {
 
     // In Fit mode both start from the scale the stage rendered at.
     app.editor.as_ref().unwrap().render_scale.set(0.5);
-    let _ = update(&mut app, Message::EditorZoomIn);
+    let _ = update(&mut app, Message::Editor(EditorMsg::ZoomIn));
     let after_in = app.editor.as_ref().unwrap().zoom;
     assert_eq!(
         after_in,
@@ -1293,8 +1304,8 @@ fn editor_keyboard_zoom_is_display_scale_aware() {
         "keyboard zoom-in must not use the hardcoded 1.0 ladder on HiDPI"
     );
 
-    let _ = update(&mut app, Message::EditorZoomActual);
-    let _ = update(&mut app, Message::EditorZoomOut);
+    let _ = update(&mut app, Message::Editor(EditorMsg::ZoomActual));
+    let _ = update(&mut app, Message::Editor(EditorMsg::ZoomOut));
     let after_out = app.editor.as_ref().unwrap().zoom;
     let expected_out = crate::editor::EditorZoom::actual_size(2.0).zoom_out_from_display_scale(2.0);
     assert_eq!(
@@ -1322,23 +1333,23 @@ fn editor_key_events_ignore_non_editor_windows() {
     let delete = iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete);
     let _ = update(
         &mut app,
-        Message::EditorKeyPressed {
+        Message::Editor(EditorMsg::KeyPressed {
             window: other_id,
             key: delete.clone(),
             modifiers: iced::keyboard::Modifiers::empty(),
             status_ignored: true,
-        },
+        }),
     );
     assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 1);
 
     let _ = update(
         &mut app,
-        Message::EditorKeyPressed {
+        Message::Editor(EditorMsg::KeyPressed {
             window: editor_id,
             key: delete,
             modifiers: iced::keyboard::Modifiers::empty(),
             status_ignored: true,
-        },
+        }),
     );
     assert!(app.editor.as_ref().unwrap().model.annotations().is_empty());
 }
@@ -1366,12 +1377,12 @@ fn escape_cancels_live_canvas_drag_before_discarding() {
     let escape = iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape);
     let _ = update(
         &mut app,
-        Message::EditorKeyPressed {
+        Message::Editor(EditorMsg::KeyPressed {
             window: editor_id,
             key: escape.clone(),
             modifiers: iced::keyboard::Modifiers::empty(),
             status_ignored: true,
-        },
+        }),
     );
 
     // Escape cancelled the drag (seq bumped, flag cleared) and did NOT
@@ -1384,12 +1395,12 @@ fn escape_cancels_live_canvas_drag_before_discarding() {
     // discard shortcut (two-stage: first arms the confirmation).
     let _ = update(
         &mut app,
-        Message::EditorKeyPressed {
+        Message::Editor(EditorMsg::KeyPressed {
             window: editor_id,
             key: escape,
             modifiers: iced::keyboard::Modifiers::empty(),
             status_ignored: true,
-        },
+        }),
     );
     let ed = app
         .editor
@@ -1410,14 +1421,17 @@ fn editor_advertised_copy_shortcuts_map_to_copy_messages() {
 
     assert!(matches!(
         copy_image,
-        Some(Message::EditorCopyImageRequested)
+        Some(Message::Editor(EditorMsg::CopyImageRequested))
     ));
 
     let mut cmd_shift = cmd;
     cmd_shift.insert(iced::keyboard::Modifiers::SHIFT);
     let copy_text = editor_key_message(iced::keyboard::Key::Character("c".into()), cmd_shift, true);
 
-    assert!(matches!(copy_text, Some(Message::EditorCopyTextRequested)));
+    assert!(matches!(
+        copy_text,
+        Some(Message::Editor(EditorMsg::CopyTextRequested))
+    ));
 }
 
 #[test]
@@ -1436,7 +1450,10 @@ fn editor_advertised_pin_shortcut_maps_to_pin_message() {
         true,
     );
 
-    assert!(matches!(pin, Some(Message::EditorPinRequested)));
+    assert!(matches!(
+        pin,
+        Some(Message::Editor(EditorMsg::PinRequested))
+    ));
 }
 
 #[test]
@@ -1451,9 +1468,9 @@ fn editor_advertised_tool_shortcuts_map_to_their_tools() {
         );
         assert!(matches!(
             message,
-            Some(Message::EditorToolbar(
+            Some(Message::Editor(EditorMsg::Toolbar(
                 readshot_ui::ToolbarMessage::SelectTool(mapped)
-            )) if mapped == tool
+            ))) if mapped == tool
         ));
     }
 }
@@ -1467,9 +1484,9 @@ fn e_selects_the_stamp_tool() {
     );
     assert!(matches!(
         msg,
-        Some(Message::EditorToolbar(
+        Some(Message::Editor(EditorMsg::Toolbar(
             readshot_ui::ToolbarMessage::SelectTool(readshot_ui::editor::ToolState::Stamp)
-        ))
+        )))
     ));
 }
 
@@ -1479,9 +1496,9 @@ fn selecting_a_new_tool_marks_it_seen() {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
             readshot_ui::editor::ToolState::Spotlight,
-        )),
+        ))),
     );
     assert_eq!(
         app.preferences.editor_tools_seen,
@@ -1500,7 +1517,9 @@ fn selecting_an_old_tool_records_nothing() {
     ] {
         let _ = update(
             &mut app,
-            Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(tool)),
+            Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
+                tool,
+            ))),
         );
     }
     assert!(app.preferences.editor_tools_seen.is_empty());
@@ -1512,12 +1531,12 @@ fn spotlight_drag_commits_an_undoable_spotlight() {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
-            Annotation::Spotlight {
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::CommitAnnotation(Annotation::Spotlight {
                 rect: RectLike::new(8.0, 8.0, 20.0, 20.0),
                 shape: readshot_core::SpotlightShape::Rectangle,
                 dim: 0.55,
-            },
+            }),
         )),
     );
     let ed = app.editor.as_ref().unwrap();
@@ -1531,7 +1550,9 @@ fn editor_existing_command_shortcuts_stay_mapped() {
     let undo = editor_key_message(iced::keyboard::Key::Character("z".into()), cmd, false);
     assert!(matches!(
         undo,
-        Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo))
+        Some(Message::Editor(EditorMsg::Toolbar(
+            readshot_ui::ToolbarMessage::Undo
+        )))
     ));
 
     let mut cmd_shift = cmd;
@@ -1539,19 +1560,27 @@ fn editor_existing_command_shortcuts_stay_mapped() {
     let redo = editor_key_message(iced::keyboard::Key::Character("z".into()), cmd_shift, false);
     assert!(matches!(
         redo,
-        Some(Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo))
+        Some(Message::Editor(EditorMsg::Toolbar(
+            readshot_ui::ToolbarMessage::Redo
+        )))
     ));
 
     let save = editor_key_message(iced::keyboard::Key::Character("s".into()), cmd, false);
-    assert!(matches!(save, Some(Message::EditorSaveRequested)));
+    assert!(matches!(
+        save,
+        Some(Message::Editor(EditorMsg::SaveRequested))
+    ));
 
     let mut cmd_shift = cmd;
     cmd_shift.insert(iced::keyboard::Modifiers::SHIFT);
     let zoom_in = editor_key_message(iced::keyboard::Key::Character("=".into()), cmd_shift, false);
-    assert!(matches!(zoom_in, Some(Message::EditorZoomIn)));
+    assert!(matches!(zoom_in, Some(Message::Editor(EditorMsg::ZoomIn))));
 
     let close = editor_key_message(iced::keyboard::Key::Character("w".into()), cmd, false);
-    assert!(matches!(close, Some(Message::EditorDiscardRequested)));
+    assert!(matches!(
+        close,
+        Some(Message::Editor(EditorMsg::DiscardRequested))
+    ));
 }
 
 #[test]
@@ -1560,7 +1589,7 @@ fn editor_arrow_keys_nudge_selection_with_shift_coarsening() {
 
     fn nudge(key: Named, mods: Modifiers, status_ignored: bool) -> (f32, f32) {
         match editor_key_message(Key::Named(key), mods, status_ignored) {
-            Some(Message::EditorNudgeSelected(dx, dy)) => (dx, dy),
+            Some(Message::Editor(EditorMsg::NudgeSelected(dx, dy))) => (dx, dy),
             other => panic!("expected nudge, got {other:?}"),
         }
     }
@@ -1584,7 +1613,10 @@ fn editor_escape_maps_to_discard_when_not_handled_by_canvas() {
         true,
     );
 
-    assert!(matches!(discard, Some(Message::EditorDiscardRequested)));
+    assert!(matches!(
+        discard,
+        Some(Message::Editor(EditorMsg::DiscardRequested))
+    ));
 }
 
 #[test]
@@ -1597,7 +1629,10 @@ fn editor_escape_keeps_canvas_cancellation_when_already_handled() {
         false,
     );
 
-    assert!(matches!(cancel, Some(Message::EditorTextCancel)));
+    assert!(matches!(
+        cancel,
+        Some(Message::Editor(EditorMsg::TextCancel))
+    ));
 }
 
 /// The per-tool and per-selection how-to lines the options bar displaced
@@ -1619,7 +1654,9 @@ fn tool_and_selection_hints_reach_the_status_line() {
 
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(T::Magnifier)),
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
+            T::Magnifier,
+        ))),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
@@ -1635,7 +1672,9 @@ fn tool_and_selection_hints_reach_the_status_line() {
     );
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(T::Crop)),
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
+            T::Crop,
+        ))),
     );
     assert_eq!(
         app.editor.as_ref().unwrap().status_text(),
@@ -1648,9 +1687,9 @@ fn tool_and_selection_hints_reach_the_status_line() {
     ed.model.set_tool(T::Select);
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::SelectPressed(PointLike::new(
-            5.0, 5.0,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::SelectPressed(PointLike::new(5.0, 5.0)),
+        )),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(

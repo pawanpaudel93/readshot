@@ -45,7 +45,7 @@ fn drag_padding(app: &mut App, values: &[u32]) {
     for (i, v) in values.iter().enumerate() {
         let _ = update(
             app,
-            Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(*v)),
+            Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(*v))),
         );
         if i == 0 {
             assert_eq!(
@@ -59,7 +59,7 @@ fn drag_padding(app: &mut App, values: &[u32]) {
             );
         }
     }
-    let _ = update(app, Message::EditorSnapshotSliderCommit);
+    let _ = update(app, Message::Editor(EditorMsg::SnapshotSliderCommit));
     let _ = update(
         app,
         Message::Window(WindowMsg::EditorPointerButton(false, None)),
@@ -78,7 +78,9 @@ fn editor_with_draft_and_color_popover(app: &mut App) -> iced::window::Id {
     app.editor = Some(ed);
     let _ = update(
         app,
-        Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        Message::Editor(EditorMsg::PopoverToggled(
+            crate::editor::EditorPopover::Color,
+        )),
     );
     id
 }
@@ -91,16 +93,16 @@ fn press_escape(app: &mut App, id: iced::window::Id) {
     assert!(editor_text_key_binding(escape_key_press()).is_none());
     let _ = update(
         app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::Escaped),
+        Message::Editor(EditorMsg::Canvas(readshot_ui::CanvasMessage::Escaped)),
     );
     let _ = update(
         app,
-        Message::EditorKeyPressed {
+        Message::Editor(EditorMsg::KeyPressed {
             window: id,
             key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
             modifiers: iced::keyboard::Modifiers::empty(),
             status_ignored: false,
-        },
+        }),
     );
 }
 
@@ -242,7 +244,7 @@ fn select_drag(app: &mut App, from: (f32, f32), to: (f32, f32)) {
         readshot_ui::CanvasMessage::SelectDragged(PointLike::new(to.0, to.1)),
         readshot_ui::CanvasMessage::SelectReleased,
     ] {
-        let _ = update(app, Message::EditorCanvas(msg));
+        let _ = update(app, Message::Editor(EditorMsg::Canvas(msg)));
     }
 }
 
@@ -327,12 +329,12 @@ fn app_with_text(size: f32) -> App {
 }
 
 fn pick(app: &mut App, x: f32, y: f32) {
-    let _ = update(app, Message::EditorEyedropperToggled);
+    let _ = update(app, Message::Editor(EditorMsg::EyedropperToggled));
     let _ = update(
         app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
-            x, y,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(x, y)),
+        )),
     );
 }
 
@@ -383,15 +385,15 @@ fn sample_doc() -> readshot_core::text_lines::TextDocument {
 /// An editor whose Text panel finished recognizing `sample_doc()`.
 fn ready_editor(app: &mut App) {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
-    let _ = update(app, Message::EditorTextRecognize);
+    let _ = update(app, Message::Editor(EditorMsg::TextRecognize));
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         app,
-        Message::EditorTextRecognized {
+        Message::Editor(EditorMsg::TextRecognized {
             session,
             part: 0,
             result: Ok(sample_doc()),
-        },
+        }),
     );
 }
 
@@ -417,9 +419,9 @@ fn build_app_with_positions(perms: Arc<FakePermissions>) -> App {
 fn select_highlighter(app: &mut App) {
     let _ = update(
         app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
             readshot_ui::editor::ToolState::Highlighter,
-        )),
+        ))),
     );
 }
 
@@ -497,11 +499,11 @@ fn scrub_app(save: bool) -> (tempfile::TempDir, Arc<FsHistoryStore>, App) {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::EditorTextRecognized {
+        Message::Editor(EditorMsg::TextRecognized {
             session,
             part: 0,
             result: Ok(sample_doc()),
-        },
+        }),
     );
     (dir, store, app)
 }
@@ -538,10 +540,12 @@ fn positional_scrub_app(text: &str) -> (tempfile::TempDir, Arc<FsHistoryStore>, 
 fn draw_solid_block(app: &mut App) {
     let _ = update(
         app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
-            readshot_core::redact::redaction_annotation(
-                RectLike::new(6.0, 6.0, 40.0, 8.0),
-                readshot_core::redact::RedactStyle::Solid,
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::CommitAnnotation(
+                readshot_core::redact::redaction_annotation(
+                    RectLike::new(6.0, 6.0, 40.0, 8.0),
+                    readshot_core::redact::RedactStyle::Solid,
+                ),
             ),
         )),
     );
@@ -694,11 +698,11 @@ fn recognized(
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         app,
-        Message::EditorTextRecognized {
+        Message::Editor(EditorMsg::TextRecognized {
             session,
             part,
             result: Ok(doc),
-        },
+        }),
     );
 }
 
@@ -814,14 +818,14 @@ fn finish_compose(app: &App) -> Message {
 }
 
 fn compose_result(session: u64, job: &crate::editor::ComposeRequest) -> Message {
-    Message::EditorComposed {
+    Message::Editor(EditorMsg::Composed {
         session,
         seq: job.seq,
         output: crate::editor::ComposedOutput::new(Some(super::compose_jobs::compose_with(
             job.next.clone(),
             job.base.clone(),
         ))),
-    }
+    })
 }
 
 /// Run every compose the editor is waiting on, as their workers
@@ -855,13 +859,16 @@ fn rect_at(x: f32) -> Vec<readshot_core::Annotation> {
 }
 
 fn apply_resize_width(app: &mut App, width: &str) {
-    let _ = update(app, Message::EditorResizeOpen);
-    let _ = update(app, Message::EditorResizeWidthChanged(width.into()));
-    let _ = update(app, Message::EditorResizeApply);
+    let _ = update(app, Message::Editor(EditorMsg::ResizeOpen));
+    let _ = update(
+        app,
+        Message::Editor(EditorMsg::ResizeWidthChanged(width.into())),
+    );
+    let _ = update(app, Message::Editor(EditorMsg::ResizeApply));
 }
 
 fn undo_msg() -> Message {
-    Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)
+    Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo))
 }
 
 /// History-backed 40×20 editor with a Blur redaction at (4, 4, 10, 10).
@@ -913,7 +920,7 @@ fn gap_drag_composing(app: &mut App) -> (usize, u64) {
     app.editor = Some(async_compose(two_part_editor()));
     let ed = app.editor.as_ref().unwrap();
     let (depth, session) = (ed.model.undo_depth(), ed.session_id);
-    let _ = update(app, Message::EditorLayoutGapPreview(10));
+    let _ = update(app, Message::Editor(EditorMsg::LayoutGapPreview(10)));
     assert!(matches!(
         app.editor
             .as_ref()
@@ -972,7 +979,9 @@ fn start_add_capture(app: &mut App) {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
     let _ = update(
         app,
-        Message::EditorCombineCaptureRequested(readshot_core::document::Join::Below),
+        Message::Editor(EditorMsg::CombineCaptureRequested(
+            readshot_core::document::Join::Below,
+        )),
     );
     assert!(app.combine_capture.is_some(), "Add Capture started");
 }
@@ -1070,7 +1079,7 @@ fn sync_editor() -> crate::editor::EditorSession {
 }
 
 fn redo_msg() -> Message {
-    Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo)
+    Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Redo))
 }
 
 fn job_kind(app: &App) -> Option<crate::editor::ComposeKind> {
@@ -1093,7 +1102,7 @@ fn composes(app: &App) -> (u64, u64) {
 // ===== D1 fix round 1 =====
 
 fn key_press(window: iced::window::Id, key: iced::keyboard::Key, cmd: bool) -> Message {
-    Message::EditorKeyPressed {
+    Message::Editor(EditorMsg::KeyPressed {
         window,
         key,
         modifiers: if cmd {
@@ -1102,7 +1111,7 @@ fn key_press(window: iced::window::Id, key: iced::keyboard::Key, cmd: bool) -> M
             iced::keyboard::Modifiers::default()
         },
         status_ignored: true,
-    }
+    })
 }
 
 /// A magnifier over (7, 6) whose 2× bubble sits at (30, 10).

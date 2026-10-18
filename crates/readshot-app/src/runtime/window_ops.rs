@@ -52,7 +52,7 @@ pub(super) fn on_window_close_requested(state: &mut App, id: iced::window::Id) -
         .and_then(|ed| ed.window_id)
         .is_some_and(|editor_id| editor_id == id);
     if is_editor {
-        return update(state, Message::EditorDiscardRequested);
+        return update(state, Message::Editor(EditorMsg::DiscardRequested));
     }
     Task::none()
 }
@@ -220,7 +220,7 @@ pub(super) fn on_editor_window_resized(
 
 /// An editor message: settle what it needs, run the editor handler,
 /// then the History follow-ups.
-pub(super) fn route_editor_message(state: &mut App, msg: Message) -> Task<Message> {
+pub(super) fn route_editor_message(state: &mut App, msg: EditorMsg) -> Task<Message> {
     // Images the message lets go of are freed off the UI thread.
     let held = state.editor.as_ref().map(compose_jobs::hold);
     // The frame the canvas computed this message's points in: the

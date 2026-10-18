@@ -14,10 +14,14 @@ pub(crate) fn toast_action_parts(
         A::UndoRedaction { .. } => (
             "Undo",
             Some(UNDO_KEY),
-            Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+            Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
         ),
-        A::RetryRecognition => ("Retry", None, Message::EditorTextRecognize),
-        A::RestorePreset => ("Undo", None, Message::EditorBeautifyRestorePreset),
+        A::RetryRecognition => ("Retry", None, Message::Editor(EditorMsg::TextRecognize)),
+        A::RestorePreset => (
+            "Undo",
+            None,
+            Message::Editor(EditorMsg::BeautifyRestorePreset),
+        ),
     }
 }
 

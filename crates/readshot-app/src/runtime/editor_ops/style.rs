@@ -5,7 +5,7 @@
 
 use super::*;
 
-/// `Message::EditorBeautifyPreset`: a built-in frame preset.
+/// `EditorMsg::BeautifyPreset`: a built-in frame preset.
 pub(super) fn on_beautify_preset(
     state: &mut App,
     preset: readshot_core::beautify::BuiltinPreset,
@@ -33,7 +33,7 @@ pub(super) fn on_beautify_preset(
     Task::none()
 }
 
-/// `Message::EditorSnapshotSliderCommit`: a Beautify or gap slider released.
+/// `EditorMsg::SnapshotSliderCommit`: a Beautify or gap slider released.
 pub(super) fn on_snapshot_slider_commit(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         // Release ends the drag: a cancelled one commits nothing.
@@ -43,7 +43,7 @@ pub(super) fn on_snapshot_slider_commit(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorToolbar`: tool, color, width, Undo and Redo.
+/// `EditorMsg::Toolbar`: tool, color, width, Undo and Redo.
 pub(super) fn on_toolbar(state: &mut App, msg: readshot_ui::ToolbarMessage) -> Task<Message> {
     let selected_tool = match msg {
         readshot_ui::ToolbarMessage::SelectTool(t) => Some(t),
@@ -161,7 +161,7 @@ pub(super) fn on_toolbar(state: &mut App, msg: readshot_ui::ToolbarMessage) -> T
     Task::none()
 }
 
-/// `Message::EditorLineWidthPreview`.
+/// `EditorMsg::LineWidthPreview`.
 pub(super) fn on_line_width_preview(state: &mut App, width: f32) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
@@ -173,7 +173,7 @@ pub(super) fn on_line_width_preview(state: &mut App, width: f32) -> Task<Message
     Task::none()
 }
 
-/// `Message::EditorLineWidthCommit`.
+/// `EditorMsg::LineWidthCommit`.
 pub(super) fn on_line_width_commit(state: &mut App) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
@@ -195,7 +195,7 @@ pub(super) fn on_line_width_commit(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorStyle`.
+/// `EditorMsg::Style`.
 pub(super) fn on_style(state: &mut App, msg: readshot_ui::editor::StyleMessage) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
@@ -218,7 +218,7 @@ pub(super) fn on_style(state: &mut App, msg: readshot_ui::editor::StyleMessage) 
     Task::none()
 }
 
-/// `Message::EditorStylePreview`.
+/// `EditorMsg::StylePreview`.
 pub(super) fn on_style_preview(
     state: &mut App,
     msg: readshot_ui::editor::StyleMessage,
@@ -233,7 +233,7 @@ pub(super) fn on_style_preview(
     Task::none()
 }
 
-/// `Message::EditorHexChanged`: keep only what a hex color may hold.
+/// `EditorMsg::HexChanged`: keep only what a hex color may hold.
 pub(super) fn on_hex_changed(state: &mut App, raw: String) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         ed.hex_draft = raw
@@ -249,7 +249,7 @@ pub(super) fn on_hex_changed(state: &mut App, raw: String) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorEyedropperToggled`.
+/// `EditorMsg::EyedropperToggled`.
 pub(super) fn on_eyedropper_toggled(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         // A held drag (shape, freehand or Select move/resize)
@@ -266,7 +266,7 @@ pub(super) fn on_eyedropper_toggled(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorHexSubmitted`.
+/// `EditorMsg::HexSubmitted`.
 pub(super) fn on_hex_submitted(state: &mut App) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
@@ -287,7 +287,7 @@ pub(super) fn on_hex_submitted(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorStyleCommit`: a style slider released.
+/// `EditorMsg::StyleCommit`: a style slider released.
 pub(super) fn on_style_commit(state: &mut App) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();

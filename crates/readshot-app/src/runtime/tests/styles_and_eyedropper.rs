@@ -16,9 +16,9 @@ fn style_message_restyles_the_selected_rectangle_as_one_undo_step() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::EditorStyle(readshot_ui::editor::StyleMessage::Fill(
+        Message::Editor(EditorMsg::Style(readshot_ui::editor::StyleMessage::Fill(
             readshot_core::FillMode::Filled,
-        )),
+        ))),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.undo_depth(), depth + 1);
@@ -32,13 +32,13 @@ fn style_message_restyles_the_selected_rectangle_as_one_undo_step() {
 #[test]
 fn output_commits_the_text_draft_after_dropping_a_lingering_width_preview() {
     for request in [
-        Message::EditorCopyImageRequested,
-        Message::EditorSaveRequested,
-        Message::EditorCopyTextRequested,
+        Message::Editor(EditorMsg::CopyImageRequested),
+        Message::Editor(EditorMsg::SaveRequested),
+        Message::Editor(EditorMsg::CopyTextRequested),
     ] {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         app.editor = Some(editor_with_selected_rect());
-        let _ = update(&mut app, Message::EditorLineWidthPreview(10.0));
+        let _ = update(&mut app, Message::Editor(EditorMsg::LineWidthPreview(10.0)));
         app.editor.as_mut().unwrap().pending_text = Some(crate::editor::PendingText {
             origin: PointLike::new(50.0, 50.0),
             content: "typed".into(),
@@ -61,8 +61,8 @@ fn output_commits_the_text_draft_after_dropping_a_lingering_width_preview() {
 fn output_keeps_a_lingering_style_preview_as_one_undo_step() {
     use readshot_ui::editor::StyleMessage;
     for request in [
-        Message::EditorCopyImageRequested,
-        Message::EditorSaveRequested,
+        Message::Editor(EditorMsg::CopyImageRequested),
+        Message::Editor(EditorMsg::SaveRequested),
     ] {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         app.editor = Some(editor_with_selected_rect());
@@ -70,7 +70,7 @@ fn output_keeps_a_lingering_style_preview_as_one_undo_step() {
         // Arrow keys on the slider: previews, never a release.
         let _ = update(
             &mut app,
-            Message::EditorStylePreview(StyleMessage::CornerRadius(12.0)),
+            Message::Editor(EditorMsg::StylePreview(StyleMessage::CornerRadius(12.0))),
         );
         let _ = update(&mut app, request.clone());
         let ed = app.editor.as_ref().unwrap();
@@ -102,17 +102,17 @@ fn style_slider_preview_commits_once_and_esc_cancels_it() {
     for r in [4.0, 8.0, 12.0] {
         let _ = update(
             &mut app,
-            Message::EditorStylePreview(StyleMessage::CornerRadius(r)),
+            Message::Editor(EditorMsg::StylePreview(StyleMessage::CornerRadius(r))),
         );
     }
-    let _ = update(&mut app, Message::EditorStyleCommit);
+    let _ = update(&mut app, Message::Editor(EditorMsg::StyleCommit));
     assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth + 1);
 
     let _ = update(
         &mut app,
-        Message::EditorStylePreview(StyleMessage::CornerRadius(20.0)),
+        Message::Editor(EditorMsg::StylePreview(StyleMessage::CornerRadius(20.0))),
     );
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.style_drag_baseline.is_none());
     assert_eq!(ed.model.undo_depth(), depth + 1);
@@ -130,7 +130,7 @@ fn undo_during_a_held_style_drag_cancels_only_the_drag() {
     let tick = |app: &mut App, r: f32| {
         let _ = update(
             app,
-            Message::EditorStylePreview(StyleMessage::CornerRadius(r)),
+            Message::Editor(EditorMsg::StylePreview(StyleMessage::CornerRadius(r))),
         );
     };
     tick(&mut app, 6.0);
@@ -141,10 +141,10 @@ fn undo_during_a_held_style_drag_cancels_only_the_drag() {
     );
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
     );
     tick(&mut app, 8.0);
-    let _ = update(&mut app, Message::EditorStyleCommit);
+    let _ = update(&mut app, Message::Editor(EditorMsg::StyleCommit));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
         ed.model.annotations().len(),
@@ -159,7 +159,7 @@ fn undo_during_a_held_style_drag_cancels_only_the_drag() {
     assert!(!ed.style_drag_cancelled);
     // The next drag works again.
     tick(&mut app, 10.0);
-    let _ = update(&mut app, Message::EditorStyleCommit);
+    let _ = update(&mut app, Message::Editor(EditorMsg::StyleCommit));
     assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth + 1);
 }
 
@@ -170,19 +170,19 @@ fn esc_during_a_held_style_drag_ignores_the_remaining_ticks() {
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
     let _ = update(
         &mut app,
-        Message::EditorStylePreview(StyleMessage::CornerRadius(6.0)),
+        Message::Editor(EditorMsg::StylePreview(StyleMessage::CornerRadius(6.0))),
     );
     // The mouse is down: this is a held slider drag.
     let _ = update(
         &mut app,
         Message::Window(WindowMsg::EditorPointerButton(true, None)),
     );
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     let _ = update(
         &mut app,
-        Message::EditorStylePreview(StyleMessage::CornerRadius(9.0)),
+        Message::Editor(EditorMsg::StylePreview(StyleMessage::CornerRadius(9.0))),
     );
-    let _ = update(&mut app, Message::EditorStyleCommit);
+    let _ = update(&mut app, Message::Editor(EditorMsg::StyleCommit));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.undo_depth(), depth);
     assert!(matches!(
@@ -199,17 +199,17 @@ fn a_hex_background_clears_a_stale_cancelled_drag_flag() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::EditorBeautifyHexChanged("#102030".into()),
+        Message::Editor(EditorMsg::BeautifyHexChanged("#102030".into())),
     );
-    let _ = update(&mut app, Message::EditorBeautifyHexSubmitted);
+    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifyHexSubmitted));
     assert!(!app.editor.as_ref().unwrap().snapshot_drag_cancelled);
     app.editor.as_mut().unwrap().snapshot_drag_cancelled = true;
-    let _ = update(&mut app, Message::EditorBeautifyPickBackground);
+    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifyPickBackground));
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
-            2.0, 2.0,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(2.0, 2.0)),
+        )),
     );
     assert!(!app.editor.as_ref().unwrap().snapshot_drag_cancelled);
 }
@@ -221,7 +221,7 @@ fn cancelled_slider_restores_the_tool_style_without_a_selection() {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
     let _ = update(
         &mut app,
-        Message::EditorStylePreview(StyleMessage::CornerRadius(20.0)),
+        Message::Editor(EditorMsg::StylePreview(StyleMessage::CornerRadius(20.0))),
     );
     assert_eq!(
         app.editor
@@ -232,17 +232,17 @@ fn cancelled_slider_restores_the_tool_style_without_a_selection() {
             .corner_radius,
         20.0
     );
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.tool_style().corner_radius, 0.0);
     assert!(ed.style_drag_baseline.is_none());
     // The cancelled drag's release ends it; the next drag keeps its value.
-    let _ = update(&mut app, Message::EditorStyleCommit);
+    let _ = update(&mut app, Message::Editor(EditorMsg::StyleCommit));
     let _ = update(
         &mut app,
-        Message::EditorStylePreview(StyleMessage::CornerRadius(8.0)),
+        Message::Editor(EditorMsg::StylePreview(StyleMessage::CornerRadius(8.0))),
     );
-    let _ = update(&mut app, Message::EditorStyleCommit);
+    let _ = update(&mut app, Message::Editor(EditorMsg::StyleCommit));
     assert_eq!(
         app.editor
             .as_ref()
@@ -271,10 +271,10 @@ fn bracket_keys_step_selected_text_through_sizes() {
         Annotation::Text { size, .. } => *size,
         other => panic!("{other:?}"),
     };
-    let _ = update(&mut app, Message::EditorWidthBump(1.0));
+    let _ = update(&mut app, Message::Editor(EditorMsg::WidthBump(1.0)));
     assert_eq!(size(&app), 36.0);
-    let _ = update(&mut app, Message::EditorWidthBump(-1.0));
-    let _ = update(&mut app, Message::EditorWidthBump(-1.0));
+    let _ = update(&mut app, Message::Editor(EditorMsg::WidthBump(-1.0)));
+    let _ = update(&mut app, Message::Editor(EditorMsg::WidthBump(-1.0)));
     assert_eq!(size(&app), 16.0);
 }
 
@@ -285,17 +285,23 @@ fn new_text_uses_the_text_style() {
     app.editor = Some(crate::editor::EditorSession::new(solid(200, 200)));
     let _ = update(
         &mut app,
-        Message::EditorStyle(StyleMessage::TextSize(TextSize::L)),
+        Message::Editor(EditorMsg::Style(StyleMessage::TextSize(TextSize::L))),
     );
-    let _ = update(&mut app, Message::EditorStyle(StyleMessage::TextPill(true)));
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::RequestText(PointLike::new(
-            20.0, 60.0,
+        Message::Editor(EditorMsg::Style(StyleMessage::TextPill(true))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Canvas(readshot_ui::CanvasMessage::RequestText(
+            PointLike::new(20.0, 60.0),
         ))),
     );
-    let _ = update(&mut app, Message::EditorTextChanged("Hi".into()));
-    let _ = update(&mut app, Message::EditorTextCommit);
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextChanged("Hi".into())),
+    );
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCommit));
     let ed = app.editor.as_ref().unwrap();
     assert!(matches!(
         ed.model.annotations().last(),
@@ -319,7 +325,7 @@ fn bracket_keys_step_legacy_text_relative_to_its_size() {
     ] {
         let mut app = app_with_text(start);
         let before = depth(&app);
-        let _ = update(&mut app, Message::EditorWidthBump(delta));
+        let _ = update(&mut app, Message::Editor(EditorMsg::WidthBump(delta)));
         assert_eq!(size(&app), want, "{start} {delta}");
         let pushed = if want == start { 0 } else { 1 };
         assert_eq!(depth(&app), before + pushed, "{start} {delta}");
@@ -334,13 +340,13 @@ fn bracket_keys_with_the_text_tool_step_the_text_size() {
     ed.model.set_tool(ToolState::Text);
     let width = ed.model.current_line_width();
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorWidthBump(1.0));
+    let _ = update(&mut app, Message::Editor(EditorMsg::WidthBump(1.0)));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.tool_style().text_size, TextSize::L);
     assert_eq!(ed.model.current_line_width(), width);
-    let _ = update(&mut app, Message::EditorWidthBump(-1.0));
-    let _ = update(&mut app, Message::EditorWidthBump(-1.0));
-    let _ = update(&mut app, Message::EditorWidthBump(-1.0));
+    let _ = update(&mut app, Message::Editor(EditorMsg::WidthBump(-1.0)));
+    let _ = update(&mut app, Message::Editor(EditorMsg::WidthBump(-1.0)));
+    let _ = update(&mut app, Message::Editor(EditorMsg::WidthBump(-1.0)));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.tool_style().text_size, TextSize::S);
     assert_eq!(ed.model.current_line_width(), width);
@@ -358,7 +364,7 @@ fn bracket_keys_bump_a_selected_shape_from_its_own_width() {
         style: Default::default(),
     });
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorWidthBump(1.0));
+    let _ = update(&mut app, Message::Editor(EditorMsg::WidthBump(1.0)));
     assert!(matches!(
         &app.editor.as_ref().unwrap().model.annotations()[0],
         Annotation::Rectangle { line_width, .. } if *line_width == 9.0
@@ -379,9 +385,9 @@ fn esc_during_a_slider_drag_only_cancels_the_drag() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::EditorStylePreview(StyleMessage::CornerRadius(20.0)),
+        Message::Editor(EditorMsg::StylePreview(StyleMessage::CornerRadius(20.0))),
     );
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.style_drag_baseline.is_none());
     assert_eq!(ed.model.selected_annotation(), Some(0));
@@ -390,7 +396,7 @@ fn esc_during_a_slider_drag_only_cancels_the_drag() {
         Annotation::Rectangle { style, .. } if style.corner_radius == 0.0
     ));
     // The next Esc clears the selection as before.
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     assert_eq!(
         app.editor.as_ref().unwrap().model.selected_annotation(),
         None
@@ -405,8 +411,8 @@ fn one_real_escape_during_a_slider_preview_is_one_step() {
     use readshot_core::beautify::BeautifyEdit;
     use readshot_ui::editor::StyleMessage;
     let previews = [
-        Message::EditorStylePreview(StyleMessage::CornerRadius(20.0)),
-        Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(40)),
+        Message::Editor(EditorMsg::StylePreview(StyleMessage::CornerRadius(20.0))),
+        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(40))),
     ];
     for preview in previews {
         let label = format!("{preview:?}");
@@ -460,7 +466,7 @@ fn one_real_escape_during_a_slider_preview_is_one_step() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(40)),
+        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(40))),
     );
     press_escape(&mut app, id);
     let ed = app.editor.as_ref().unwrap();
@@ -491,11 +497,11 @@ fn a_cancel_without_escape_never_swallows_the_next_escape() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::EditorStylePreview(StyleMessage::CornerRadius(20.0)),
+        Message::Editor(EditorMsg::StylePreview(StyleMessage::CornerRadius(20.0))),
     );
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::Cancelled),
+        Message::Editor(EditorMsg::Canvas(readshot_ui::CanvasMessage::Cancelled)),
     );
     assert_eq!(app.editor.as_ref().unwrap().escape_ended_drag, None);
     press_escape(&mut app, id);
@@ -513,13 +519,19 @@ fn i_toggles_the_eyedropper_but_not_while_typing() {
         iced::keyboard::Modifiers::empty(),
         true,
     );
-    assert!(matches!(toggled, Some(Message::EditorEyedropperToggled)));
+    assert!(matches!(
+        toggled,
+        Some(Message::Editor(EditorMsg::EyedropperToggled))
+    ));
     let upper = editor_key_message(
         iced::keyboard::Key::Character("I".into()),
         iced::keyboard::Modifiers::SHIFT,
         true,
     );
-    assert!(matches!(upper, Some(Message::EditorEyedropperToggled)));
+    assert!(matches!(
+        upper,
+        Some(Message::Editor(EditorMsg::EyedropperToggled))
+    ));
     // A focused text field captures the key (status not ignored):
     // tool letters and I do nothing while typing.
     for key in ["i", "s", "e", "v", "r"] {
@@ -550,12 +562,12 @@ fn eyedropper_pick_samples_the_source_image_and_exits() {
     });
     ed.model.clear_selection();
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorEyedropperToggled);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(
-            3.5, 4.5,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(3.5, 4.5)),
+        )),
     );
     let loupe = app
         .editor
@@ -575,9 +587,9 @@ fn eyedropper_pick_samples_the_source_image_and_exits() {
     );
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
-            3.5, 4.5,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(3.5, 4.5)),
+        )),
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.eyedropper.is_none());
@@ -601,12 +613,12 @@ fn eyedropper_pick_recolors_the_selection_as_one_undo_step() {
         style: Default::default(),
     });
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorEyedropperToggled);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
-            3.5, 4.5,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(3.5, 4.5)),
+        )),
     );
     let color_of = |app: &App| match &app.editor.as_ref().unwrap().model.annotations()[0] {
         Annotation::Rectangle { color, .. } => color.to_hex(),
@@ -615,7 +627,7 @@ fn eyedropper_pick_recolors_the_selection_as_one_undo_step() {
     assert_eq!(color_of(&app), "#4F46E5");
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
     );
     assert_eq!(color_of(&app), "#FF0000");
 }
@@ -632,12 +644,12 @@ fn eyedropper_pick_of_a_preset_does_not_join_recent() {
         image::Rgba([to8(preset.r), to8(preset.g), to8(preset.b), 255]),
     );
     app.editor = Some(crate::editor::EditorSession::new(img));
-    let _ = update(&mut app, Message::EditorEyedropperToggled);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
-            3.5, 4.5,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(3.5, 4.5)),
+        )),
     );
     assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
     assert!(app.preferences.editor_recent_colors.is_empty());
@@ -647,16 +659,18 @@ fn eyedropper_pick_of_a_preset_does_not_join_recent() {
 fn esc_closes_the_popover_then_the_eyedropper() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
-    let _ = update(&mut app, Message::EditorEyedropperToggled);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
     let _ = update(
         &mut app,
-        Message::EditorPopoverToggled(crate::editor::EditorPopover::Width),
+        Message::Editor(EditorMsg::PopoverToggled(
+            crate::editor::EditorPopover::Width,
+        )),
     );
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.popover, None);
     assert!(ed.eyedropper.is_some(), "first esc only closes the popover");
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
 }
 
@@ -671,8 +685,8 @@ fn esc_exits_the_eyedropper_before_clearing_the_selection() {
         style: Default::default(),
     });
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorEyedropperToggled);
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.eyedropper.is_none());
     assert_eq!(ed.model.selected_annotation(), Some(0));
@@ -684,13 +698,15 @@ fn eyedropper_button_closes_the_color_popover() {
     app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
     let _ = update(
         &mut app,
-        Message::EditorPopoverToggled(crate::editor::EditorPopover::Color),
+        Message::Editor(EditorMsg::PopoverToggled(
+            crate::editor::EditorPopover::Color,
+        )),
     );
-    let _ = update(&mut app, Message::EditorEyedropperToggled);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.popover, None);
     assert!(ed.eyedropper.is_some());
-    let _ = update(&mut app, Message::EditorEyedropperToggled);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
     assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
 }
 
@@ -698,12 +714,12 @@ fn eyedropper_button_closes_the_color_popover() {
 fn choosing_a_tool_exits_the_eyedropper() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
-    let _ = update(&mut app, Message::EditorEyedropperToggled);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
             readshot_ui::editor::ToolState::Rectangle,
-        )),
+        ))),
     );
     assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
 }
@@ -726,13 +742,12 @@ fn eyedropper_pick_matches_the_pixel_shown_after_a_fractional_crop() {
     assert_eq!(ed.crop_offset(), (10.0, 3.0));
     let (ox, oy) = ed.crop_offset();
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorEyedropperToggled);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(
-            0.5 + ox,
-            0.5 + oy,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(0.5 + ox, 0.5 + oy)),
+        )),
     );
     let loupe = app
         .editor
@@ -751,10 +766,9 @@ fn eyedropper_pick_matches_the_pixel_shown_after_a_fractional_crop() {
     );
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
-            0.5 + ox,
-            0.5 + oy,
-        ))),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(0.5 + ox, 0.5 + oy)),
+        )),
     );
     assert_eq!(
         app.editor.as_ref().unwrap().model.current_color().to_hex(),
@@ -777,19 +791,19 @@ fn eyedropper_pick_matches_the_pixel_shown_after_a_fractional_crop() {
 #[test]
 fn zoom_clears_the_eyedropper_loupe() {
     for zoom in [
-        Message::EditorZoomIn,
-        Message::EditorZoomOut,
-        Message::EditorZoomActual,
-        Message::EditorZoomFit,
+        Message::Editor(EditorMsg::ZoomIn),
+        Message::Editor(EditorMsg::ZoomOut),
+        Message::Editor(EditorMsg::ZoomActual),
+        Message::Editor(EditorMsg::ZoomFit),
     ] {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
-        let _ = update(&mut app, Message::EditorEyedropperToggled);
+        let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
         let _ = update(
             &mut app,
-            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(
-                3.5, 4.5,
-            ))),
+            Message::Editor(EditorMsg::Canvas(
+                readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(3.5, 4.5)),
+            )),
         );
         let label = format!("{zoom:?}");
         let _ = update(&mut app, zoom);
@@ -838,9 +852,11 @@ fn eyedropper_pick_on_a_selection_keeps_the_undo_hint() {
 fn rotate_flip_and_resize_wait_for_a_held_canvas_drag() {
     for held_move in [false, true] {
         for msg in [
-            Message::EditorRotate { clockwise: true },
-            Message::EditorFlip(readshot_core::document::FlipAxis::Horizontal),
-            Message::EditorResizeOpen,
+            Message::Editor(EditorMsg::Rotate { clockwise: true }),
+            Message::Editor(EditorMsg::Flip(
+                readshot_core::document::FlipAxis::Horizontal,
+            )),
+            Message::Editor(EditorMsg::ResizeOpen),
         ] {
             let mut app = build_app(Arc::new(FakePermissions::granted()));
             let mut ed = crate::editor::EditorSession::new(solid(16, 8));
@@ -868,7 +884,10 @@ fn rotate_flip_and_resize_wait_for_a_held_canvas_drag() {
     // Released: the rotation applies.
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(16, 8)));
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
     assert!(!app.editor.as_ref().unwrap().model.geometry().is_original());
 }
 
@@ -878,7 +897,7 @@ fn i_is_ignored_during_a_canvas_drag() {
     let mut ed = crate::editor::EditorSession::new(solid(16, 16));
     ed.canvas_drag_active = true;
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorEyedropperToggled);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
     assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
 }
 
@@ -894,6 +913,6 @@ fn i_is_ignored_during_a_select_move_drag() {
         kind: crate::editor::MoveDragKind::Move,
     });
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorEyedropperToggled);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EyedropperToggled));
     assert!(app.editor.as_ref().unwrap().eyedropper.is_none());
 }

@@ -4,7 +4,7 @@
 
 use super::*;
 
-/// `Message::EditorCanvas`: an event from the annotation canvas.
+/// `EditorMsg::Canvas`: an event from the annotation canvas.
 pub(super) fn on_canvas(state: &mut App, msg: readshot_ui::CanvasMessage) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();

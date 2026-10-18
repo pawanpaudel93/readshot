@@ -56,7 +56,7 @@ fn editor_backspace_and_forward_delete_both_remove_selection() {
     for named in [Named::Backspace, Named::Delete] {
         let m = editor_key_message(Key::Named(named), Modifiers::empty(), true);
         assert!(
-            matches!(m, Some(Message::EditorDeleteSelected)),
+            matches!(m, Some(Message::Editor(EditorMsg::DeleteSelected))),
             "{named:?}"
         );
         // While a text field is editing (event captured) neither fires.

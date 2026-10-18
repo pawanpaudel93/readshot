@@ -312,10 +312,12 @@ pub(crate) fn launch(ed: &mut EditorSession) -> Task<Message> {
             tracing::warn!(target: readshot_core::log::cat::EDITOR, "compose worker: {e}");
         }
     };
-    Task::perform(work, move |()| Message::EditorComposed {
-        session,
-        seq,
-        output: output.clone(),
+    Task::perform(work, move |()| {
+        Message::Editor(EditorMsg::Composed {
+            session,
+            seq,
+            output: output.clone(),
+        })
     })
 }
 
@@ -573,7 +575,7 @@ pub(crate) fn cancel_gap_compose(ed: &mut EditorSession) {
     ed.gap_commit_on_land = false;
 }
 
-/// `Message::EditorComposed`.
+/// `EditorMsg::Composed`.
 pub(crate) fn handle_composed(
     state: &mut App,
     session: u64,
@@ -794,64 +796,66 @@ fn interaction_open(ed: &EditorSession) -> bool {
 /// as `(steps, gap)`. Everything else settles the pending work first
 /// ([`settle_before`]), so a landing never meets an open drag, draft,
 /// output or file picker.
-fn may_wait(message: &Message) -> (bool, bool) {
+fn may_wait(message: &EditorMsg) -> (bool, bool) {
     use readshot_ui::CanvasMessage;
     match message {
         // A key the Beautify hex field was asked about: the field's own
         // key does nothing; otherwise it is the key's message (Undo or Redo
         // queue behind pending steps, `chains_onto_steps`), and settles
         // as that message would.
-        Message::EditorFieldKeyResolved {
+        EditorMsg::FieldKeyResolved {
             message,
             field_focused,
             ..
         } => {
             if *field_focused {
                 (true, true)
-            } else {
+            } else if let Message::Editor(message) = &**message {
                 may_wait(message)
+            } else {
+                (false, false)
             }
         }
         // A key press settles nothing itself: the message it maps to is
         // dispatched (and settles) on its own; one that maps to nothing,
         // like a bare modifier, only updates held-key state.
-        Message::EditorKeyPressed { .. }
-        | Message::EditorComposed { .. }
-        | Message::EditorStatusTick
-        | Message::EditorStatusDismissed
-        | Message::EditorWindowReady(..)
-        | Message::EditorSaved { .. }
-        | Message::EditorCopyImageDone { .. }
-        | Message::EditorCopyTextDone { .. }
-        | Message::EditorCopyLinesDone(..)
-        | Message::EditorHistoryWritten { .. }
-        | Message::EditorTextRecognized { .. }
-        | Message::EditorCanvas(CanvasMessage::EyedropperHover(_))
-        | Message::EditorZoomIn
-        | Message::EditorZoomOut
-        | Message::EditorZoomActual
-        | Message::EditorZoomFit
-        | Message::EditorPanelTabSelected(..)
-        | Message::EditorResizeWidthChanged(..)
-        | Message::EditorResizeHeightChanged(..)
-        | Message::EditorResizeUnitChanged(..)
-        | Message::EditorResizeLockToggled(..)
-        | Message::EditorDiscardDisarmed
+        EditorMsg::KeyPressed { .. }
+        | EditorMsg::Composed { .. }
+        | EditorMsg::StatusTick
+        | EditorMsg::StatusDismissed
+        | EditorMsg::WindowReady(..)
+        | EditorMsg::Saved { .. }
+        | EditorMsg::CopyImageDone { .. }
+        | EditorMsg::CopyTextDone { .. }
+        | EditorMsg::CopyLinesDone(..)
+        | EditorMsg::HistoryWritten { .. }
+        | EditorMsg::TextRecognized { .. }
+        | EditorMsg::Canvas(CanvasMessage::EyedropperHover(_))
+        | EditorMsg::ZoomIn
+        | EditorMsg::ZoomOut
+        | EditorMsg::ZoomActual
+        | EditorMsg::ZoomFit
+        | EditorMsg::PanelTabSelected(..)
+        | EditorMsg::ResizeWidthChanged(..)
+        | EditorMsg::ResizeHeightChanged(..)
+        | EditorMsg::ResizeUnitChanged(..)
+        | EditorMsg::ResizeLockToggled(..)
+        | EditorMsg::DiscardDisarmed
         // Discarding (or arming it) needs no pixels: a step still
         // composing is abandoned with the editor, never composed here.
-        | Message::EditorDiscardRequested
-        | Message::EditorPinRendered { .. }
-        | Message::PinWindowReady(..)
-        | Message::PinClosePressed(..)
-        | Message::PinDragRequested(..)
-        | Message::PinOpacityChanged(..)
-        | Message::PinLockToggled(..)
-        | Message::PinHovered(..)
-        | Message::PinKeyPressed { .. } => (true, true),
+        | EditorMsg::DiscardRequested
+        | EditorMsg::PinRendered { .. }
+        | EditorMsg::PinWindowReady(..)
+        | EditorMsg::PinClosePressed(..)
+        | EditorMsg::PinDragRequested(..)
+        | EditorMsg::PinOpacityChanged(..)
+        | EditorMsg::PinLockToggled(..)
+        | EditorMsg::PinHovered(..)
+        | EditorMsg::PinKeyPressed { .. } => (true, true),
         // The gap slider's own ticks and release drive its compose.
-        Message::EditorLayoutGapPreview(..)
-        | Message::EditorLayoutGapFlush { .. }
-        | Message::EditorSnapshotSliderCommit => (false, true),
+        EditorMsg::LayoutGapPreview(..)
+        | EditorMsg::LayoutGapFlush { .. }
+        | EditorMsg::SnapshotSliderCommit => (false, true),
         _ => (false, false),
     }
 }
@@ -859,15 +863,15 @@ fn may_wait(message: &Message) -> (bool, bool) {
 /// Rotate, flip, undo and redo (by button or key) queue behind pending
 /// history steps instead of settling them: they only need the state the
 /// steps lead to, never the pixels or the frame on screen.
-fn chains_onto_steps(message: &Message) -> bool {
-    if let Message::EditorFieldKeyResolved { message, .. } = message {
-        return chains_onto_steps(message);
+fn chains_onto_steps(message: &EditorMsg) -> bool {
+    if let EditorMsg::FieldKeyResolved { message, .. } = message {
+        return matches!(&**message, Message::Editor(m) if chains_onto_steps(m));
     }
     matches!(
         message,
-        Message::EditorRotate { .. }
-            | Message::EditorFlip(..)
-            | Message::EditorToolbar(
+        EditorMsg::Rotate { .. }
+            | EditorMsg::Flip(..)
+            | EditorMsg::Toolbar(
                 readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
             )
     )
@@ -885,7 +889,7 @@ fn chains_onto_steps(message: &Message) -> bool {
 /// the dispatcher then maps a canvas position in `message`, computed
 /// against the frame the last view showed, into the present one
 /// ([`points_into_the_shown_image`]).
-pub(crate) fn settle_before(state: &mut App, message: &Message) {
+pub(crate) fn settle_before(state: &mut App, message: &EditorMsg) {
     let (mut steps_may_wait, gap_may_wait) = may_wait(message);
     let coord = state.coordinator.clone();
     let Some(ed) = state.editor.as_mut() else {
@@ -915,11 +919,11 @@ pub(crate) fn settle_before(state: &mut App, message: &Message) {
 /// included — so it is mapped into the new frame when that is exact
 /// ([`remap_stale_press`]), else the message is dropped
 /// ([`drop_stale_press`]) and the user presses again on the new image.
-pub(crate) fn points_into_the_shown_image(message: &Message) -> bool {
+pub(crate) fn points_into_the_shown_image(message: &EditorMsg) -> bool {
     use readshot_ui::CanvasMessage;
     matches!(
         message,
-        Message::EditorCanvas(
+        EditorMsg::Canvas(
             CanvasMessage::SelectPressed(_)
                 | CanvasMessage::DragStarted
                 | CanvasMessage::CommitAnnotation(_)
@@ -944,13 +948,13 @@ pub(crate) fn points_into_the_shown_image(message: &Message) -> bool {
 pub(crate) fn remap_stale_press(
     ed: &mut EditorSession,
     old: &Arc<readshot_core::document::DocGeometry>,
-    message: Message,
-) -> Option<Message> {
+    message: EditorMsg,
+) -> Option<EditorMsg> {
     use readshot_core::document::{frame_map_at, map_annotation, map_point};
     use readshot_ui::CanvasMessage;
     let new = Arc::clone(ed.model.geometry());
     let remapped = match &message {
-        Message::EditorCanvas(CanvasMessage::SelectPressed(p)) => {
+        EditorMsg::Canvas(CanvasMessage::SelectPressed(p)) => {
             frame_map_at(old, &new, *p).map(|m| {
                 let len = m.length_scale();
                 let shown_scale = ed.render_scale.get();
@@ -965,19 +969,20 @@ pub(crate) fn remap_stale_press(
                     },
                     view_seq: ed.canvas_view_seq.get(),
                 });
-                Message::EditorCanvas(CanvasMessage::SelectPressed(m.apply(*p)))
+                EditorMsg::Canvas(CanvasMessage::SelectPressed(m.apply(*p)))
             })
         }
-        Message::EditorCanvas(CanvasMessage::RequestText(p)) => {
-            map_point(old, &new, *p).map(|q| Message::EditorCanvas(CanvasMessage::RequestText(q)))
+        EditorMsg::Canvas(CanvasMessage::RequestText(p)) => {
+            map_point(old, &new, *p).map(|q| EditorMsg::Canvas(CanvasMessage::RequestText(q)))
         }
-        Message::EditorCanvas(CanvasMessage::EyedropperPick(p)) => map_point(old, &new, *p)
-            .map(|q| Message::EditorCanvas(CanvasMessage::EyedropperPick(q))),
-        Message::EditorCanvas(CanvasMessage::CommitAnnotation(
+        EditorMsg::Canvas(CanvasMessage::EyedropperPick(p)) => {
+            map_point(old, &new, *p).map(|q| EditorMsg::Canvas(CanvasMessage::EyedropperPick(q)))
+        }
+        EditorMsg::Canvas(CanvasMessage::CommitAnnotation(
             a @ (readshot_core::Annotation::NumberedPin { .. }
             | readshot_core::Annotation::Stamp { .. }),
         )) => frame_map_at(old, &new, readshot_core::document::annotation_anchor(a))
-            .map(|m| Message::EditorCanvas(CanvasMessage::CommitAnnotation(map_annotation(a, &m)))),
+            .map(|m| EditorMsg::Canvas(CanvasMessage::CommitAnnotation(map_annotation(a, &m)))),
         _ => None,
     };
     if remapped.is_none() {
@@ -991,7 +996,10 @@ pub(crate) fn remap_stale_press(
 /// mapped with the press's own map, so the move's delta is in one frame
 /// (even over another part, or a gutter). Once a view is built, points
 /// are in the present frame and pass as they are.
-pub(crate) fn remap_same_batch_drag(ed: &mut EditorSession, message: Message) -> Option<Message> {
+pub(crate) fn remap_same_batch_drag(
+    ed: &mut EditorSession,
+    message: EditorMsg,
+) -> Option<EditorMsg> {
     use readshot_ui::CanvasMessage;
     let Some(r) = ed.press_remap.as_ref() else {
         return Some(message);
@@ -1001,7 +1009,7 @@ pub(crate) fn remap_same_batch_drag(ed: &mut EditorSession, message: Message) ->
         return Some(message);
     }
     match message {
-        Message::EditorCanvas(CanvasMessage::SelectDragged(p)) => Some(Message::EditorCanvas(
+        EditorMsg::Canvas(CanvasMessage::SelectDragged(p)) => Some(EditorMsg::Canvas(
             CanvasMessage::SelectDragged(r.map.apply(p)),
         )),
         other => Some(other),
@@ -1014,8 +1022,8 @@ pub(crate) fn remap_same_batch_drag(ed: &mut EditorSession, message: Message) ->
 /// and marked dropped, so a commit of it that still arrives is refused
 /// ([`EditorSession::drag_started_in`]). A Select press opens no move
 /// drag, so its drags and release do nothing.
-pub(crate) fn drop_stale_press(ed: &mut EditorSession, message: &Message) {
-    if let Message::EditorCanvas(readshot_ui::CanvasMessage::DragStarted) = message {
+pub(crate) fn drop_stale_press(ed: &mut EditorSession, message: &EditorMsg) {
+    if let EditorMsg::Canvas(readshot_ui::CanvasMessage::DragStarted) = message {
         ed.canvas_drag_active = false;
         ed.drag_cancel_seq = ed.drag_cancel_seq.wrapping_add(1);
         ed.drag_started_in = Some(crate::editor::CanvasDragFrame::Dropped);

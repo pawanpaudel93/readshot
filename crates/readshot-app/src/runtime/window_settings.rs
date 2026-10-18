@@ -205,7 +205,7 @@ pub(crate) fn open_editor_window_replacing(
     }
     let (id, open_task) = window::open(editor_window_settings(display_bounds));
     register_window(state, id, WindowKind::Editor);
-    tasks.push(open_task.map(Message::EditorWindowReady));
+    tasks.push(open_task.map(|a| Message::Editor(EditorMsg::WindowReady(a))));
     Task::batch(tasks)
 }
 

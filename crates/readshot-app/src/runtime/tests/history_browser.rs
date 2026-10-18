@@ -157,9 +157,9 @@ fn m_selects_the_magnifier_only_when_not_typing() {
     use iced::keyboard::{Key, Modifiers};
     assert!(matches!(
         editor_key_message(Key::Character("m".into()), Modifiers::empty(), true),
-        Some(Message::EditorToolbar(
+        Some(Message::Editor(EditorMsg::Toolbar(
             readshot_ui::ToolbarMessage::SelectTool(readshot_ui::editor::ToolState::Magnifier)
-        ))
+        )))
     ));
     assert!(editor_key_message(Key::Character("m".into()), Modifiers::empty(), false).is_none());
 }
@@ -447,7 +447,9 @@ fn history_backed_editor_commit_updates_record_annotations() {
     };
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(annotation)),
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::CommitAnnotation(annotation),
+        )),
     );
 
     // The sidecar write runs on the coordinator's background

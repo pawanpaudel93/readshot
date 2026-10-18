@@ -399,7 +399,7 @@ pub(crate) fn handle_focus_key(
         // invalid one keeps the popover open and says why). Esc stays
         // cancel.
         if ed.popover == Some(EditorPopover::Color) && color_hex_pending(ed) {
-            let task = update(state, Message::EditorHexSubmitted);
+            let task = update(state, Message::Editor(EditorMsg::HexSubmitted));
             let ed = state.editor.as_ref()?;
             if ed.popover.is_some() {
                 return Some(task);
@@ -530,10 +530,10 @@ pub(crate) fn handle_focus_key(
                     ed.text_panel.anchor = Some(i);
                 }
             }
-            update(state, Message::EditorCopyLines)
+            update(state, Message::Editor(EditorMsg::CopyLines))
         }
         FocusKey::LineRedact => match state.editor.as_ref()?.text_panel.cursor {
-            Some(i) => update(state, Message::EditorRedactLine(i)),
+            Some(i) => update(state, Message::Editor(EditorMsg::RedactLine(i))),
             None => Task::none(),
         },
         FocusKey::Leave => unreachable!("handled above"),
@@ -574,14 +574,18 @@ fn activate(state: &mut App, focus: KeyFocus, pos: usize) -> Task<Message> {
     };
     let busy = ed.busy;
     let msg: Option<Message> = match focus.item {
-        F::MenuResize => Some(Message::EditorResizeOpen),
-        F::MenuRotateLeft => Some(Message::EditorRotate { clockwise: false }),
-        F::MenuRotateRight => Some(Message::EditorRotate { clockwise: true }),
-        F::MenuFlipH => Some(Message::EditorFlip(FlipAxis::Horizontal)),
-        F::MenuFlipV => Some(Message::EditorFlip(FlipAxis::Vertical)),
-        F::MenuAddBelow => Some(Message::EditorCombineCaptureRequested(Join::Below)),
-        F::MenuAddBeside => Some(Message::EditorCombineCaptureRequested(Join::Beside)),
-        F::MenuAddImage => Some(Message::EditorAddImageFromFile),
+        F::MenuResize => Some(Message::Editor(EditorMsg::ResizeOpen)),
+        F::MenuRotateLeft => Some(Message::Editor(EditorMsg::Rotate { clockwise: false })),
+        F::MenuRotateRight => Some(Message::Editor(EditorMsg::Rotate { clockwise: true })),
+        F::MenuFlipH => Some(Message::Editor(EditorMsg::Flip(FlipAxis::Horizontal))),
+        F::MenuFlipV => Some(Message::Editor(EditorMsg::Flip(FlipAxis::Vertical))),
+        F::MenuAddBelow => Some(Message::Editor(EditorMsg::CombineCaptureRequested(
+            Join::Below,
+        ))),
+        F::MenuAddBeside => Some(Message::Editor(EditorMsg::CombineCaptureRequested(
+            Join::Beside,
+        ))),
+        F::MenuAddImage => Some(Message::Editor(EditorMsg::AddImageFromFile)),
         F::Option(OptionControl::Color) | F::Option(OptionControl::Width) => {
             let which = if focus.item == F::Option(OptionControl::Color) {
                 EditorPopover::Color
@@ -591,7 +595,7 @@ fn activate(state: &mut App, focus: KeyFocus, pos: usize) -> Task<Message> {
             if busy {
                 return Task::none();
             }
-            let task = update(state, Message::EditorPopoverToggled(which));
+            let task = update(state, Message::Editor(EditorMsg::PopoverToggled(which)));
             let Some(ed) = state.editor.as_mut() else {
                 return task;
             };
@@ -606,27 +610,29 @@ fn activate(state: &mut App, focus: KeyFocus, pos: usize) -> Task<Message> {
             }
             return task;
         }
-        F::Option(OptionControl::CropApply) => Some(Message::EditorCropApply),
+        F::Option(OptionControl::CropApply) => Some(Message::Editor(EditorMsg::CropApply)),
         F::PanelTabs => {
             let current = PanelTab::from_id(&state.preferences.editor_panel_tab);
-            Some(Message::EditorPanelTabSelected(other_tab(current)))
+            Some(Message::Editor(EditorMsg::PanelTabSelected(other_tab(
+                current,
+            ))))
         }
-        F::BeautifyPreset(p) => Some(Message::EditorBeautifyPreset(p)),
-        F::BeautifySaved(i) => Some(Message::EditorBeautifySavedPresetApplied(i)),
-        F::BeautifyRemoveSaved(i) => Some(Message::EditorBeautifyDeletePreset(i)),
+        F::BeautifyPreset(p) => Some(Message::Editor(EditorMsg::BeautifyPreset(p))),
+        F::BeautifySaved(i) => Some(Message::Editor(EditorMsg::BeautifySavedPresetApplied(i))),
+        F::BeautifyRemoveSaved(i) => Some(Message::Editor(EditorMsg::BeautifyDeletePreset(i))),
         F::BeautifyHex => return focus_field(BEAUTIFY_HEX_ID),
-        F::BeautifyPick => Some(Message::EditorBeautifyPickBackground),
-        F::BeautifySave => Some(Message::EditorBeautifySavePreset),
-        F::TextRetry => Some(Message::EditorTextRecognize),
-        F::TextOpenSettings => Some(Message::EditorOpenTextSettings),
-        F::TextRedactAll => Some(Message::EditorRedactAll),
-        F::TextCopyLines => Some(Message::EditorCopyLines),
-        F::TextCopyAll => Some(Message::EditorCopyTextRequested),
+        F::BeautifyPick => Some(Message::Editor(EditorMsg::BeautifyPickBackground)),
+        F::BeautifySave => Some(Message::Editor(EditorMsg::BeautifySavePreset)),
+        F::TextRetry => Some(Message::Editor(EditorMsg::TextRecognize)),
+        F::TextOpenSettings => Some(Message::Editor(EditorMsg::OpenTextSettings)),
+        F::TextRedactAll => Some(Message::Editor(EditorMsg::RedactAll)),
+        F::TextCopyLines => Some(Message::Editor(EditorMsg::CopyLines)),
+        F::TextCopyAll => Some(Message::Editor(EditorMsg::CopyTextRequested)),
         F::ResizeWidth | F::ResizeHeight => {
             return field_id(focus.item).map_or_else(Task::none, focus_field)
         }
-        F::ResizeCancel => Some(Message::EditorPopoverClosed),
-        F::ResizeApply => Some(Message::EditorResizeApply),
+        F::ResizeCancel => Some(Message::Editor(EditorMsg::PopoverClosed)),
+        F::ResizeApply => Some(Message::Editor(EditorMsg::ResizeApply)),
         // Values: Space / ↵ step them forward, as → does.
         other => {
             return match adjust_message(state, other, 1) {
@@ -719,14 +725,14 @@ fn adjust_message(state: &App, item: FocusItem, step: i32) -> Option<Vec<Message
     }
     let dir = step.signum();
     let style = ed.model.effective_style();
-    let s = |m: StyleMessage| Some(vec![Message::EditorStyle(m)]);
-    let b = |e: BeautifyEdit| Some(vec![Message::EditorBeautifyEdit(e)]);
+    let s = |m: StyleMessage| Some(vec![Message::Editor(EditorMsg::Style(m))]);
+    let b = |e: BeautifyEdit| Some(vec![Message::Editor(EditorMsg::BeautifyEdit(e))]);
     match item {
         F::MenuGap => Some(gap_messages(state, step)),
         F::MenuAlign => align_message(state, dir).map(|m| vec![m]),
         F::Option(c) => match c {
-            OptionControl::Color => Some(vec![Message::EditorColorCycle(dir)]),
-            OptionControl::Width => Some(vec![Message::EditorWidthBump(dir as f32)]),
+            OptionControl::Color => Some(vec![Message::Editor(EditorMsg::ColorCycle(dir))]),
+            OptionControl::Width => Some(vec![Message::Editor(EditorMsg::WidthBump(dir as f32))]),
             OptionControl::Fill => s(StyleMessage::Fill(cycle(&FILLS, style.fill, dir))),
             OptionControl::Dash => s(StyleMessage::Dashed(!style.dashed)),
             OptionControl::CornerRadius => s(StyleMessage::CornerRadius(
@@ -780,7 +786,9 @@ fn adjust_message(state: &App, item: FocusItem, step: i32) -> Option<Vec<Message
         },
         F::PanelTabs => {
             let current = PanelTab::from_id(&state.preferences.editor_panel_tab);
-            Some(vec![Message::EditorPanelTabSelected(other_tab(current))])
+            Some(vec![Message::Editor(EditorMsg::PanelTabSelected(
+                other_tab(current),
+            ))])
         }
         F::BeautifyBackground => {
             let all = beautify_backgrounds();
@@ -814,25 +822,25 @@ fn adjust_message(state: &App, item: FocusItem, step: i32) -> Option<Vec<Message
             dir,
         ))),
         F::BeautifyBalance => b(BeautifyEdit::Balance(!ed.model.beautify().balance)),
-        F::TextRedactStyle => Some(vec![Message::EditorRedactStyleChanged(cycle(
+        F::TextRedactStyle => Some(vec![Message::Editor(EditorMsg::RedactStyleChanged(cycle(
             &readshot_core::redact::RedactStyle::ALL,
             ed.text_panel.redact_style,
             dir,
-        ))]),
-        F::TextLineBreaks => Some(vec![Message::EditorRemoveLineBreaksToggled(
+        )))]),
+        F::TextLineBreaks => Some(vec![Message::Editor(EditorMsg::RemoveLineBreaksToggled(
             !state.preferences.editor_copy_remove_line_breaks,
-        )]),
+        ))]),
         F::ResizeUnit => {
             let d = ed.resize_draft.as_ref()?;
             let next = match d.unit {
                 crate::editor::ResizeUnit::Pixels => crate::editor::ResizeUnit::Percent,
                 crate::editor::ResizeUnit::Percent => crate::editor::ResizeUnit::Pixels,
             };
-            Some(vec![Message::EditorResizeUnitChanged(next)])
+            Some(vec![Message::Editor(EditorMsg::ResizeUnitChanged(next))])
         }
         F::ResizeLock => {
             let d = ed.resize_draft.as_ref()?;
-            Some(vec![Message::EditorResizeLockToggled(!d.lock)])
+            Some(vec![Message::Editor(EditorMsg::ResizeLockToggled(!d.lock))])
         }
         _ => None,
     }
@@ -854,8 +862,8 @@ fn gap_messages(state: &App, step: i32) -> Vec<Message> {
         return Vec::new();
     }
     vec![
-        Message::EditorLayoutGapPreview(next),
-        Message::EditorSnapshotSliderCommit,
+        Message::Editor(EditorMsg::LayoutGapPreview(next)),
+        Message::Editor(EditorMsg::SnapshotSliderCommit),
     ]
 }
 
@@ -865,7 +873,11 @@ fn align_message(state: &App, dir: i32) -> Option<Message> {
     if ed.busy || g.parts.len() < 2 {
         return None;
     }
-    Some(Message::EditorLayoutAlign(cycle(&Align::ALL, g.align, dir)))
+    Some(Message::Editor(EditorMsg::LayoutAlign(cycle(
+        &Align::ALL,
+        g.align,
+        dir,
+    ))))
 }
 
 /// The status shown when the keyboard enters a zone: how to work it and
@@ -885,9 +897,9 @@ pub(crate) fn zone_hint(zone: FocusZone) -> String {
 
 /// The editor's focus messages (`EditorImageMenuKey`, `EditorPanelTabKey`,
 /// `EditorFocusZoneCycle`).
-pub(crate) fn handle_focus_message(state: &mut App, message: Message) -> Task<Message> {
+pub(crate) fn handle_focus_message(state: &mut App, message: EditorMsg) -> Task<Message> {
     match message {
-        Message::EditorImageMenuKey => {
+        EditorMsg::ImageMenuKey => {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
@@ -909,16 +921,19 @@ pub(crate) fn handle_focus_message(state: &mut App, message: Message) -> Task<Me
             );
             unfocus_text_fields()
         }
-        Message::EditorPanelTabKey(tab) => {
+        EditorMsg::PanelTabKey(tab) => {
             let Some(ed) = state.editor.as_ref() else {
                 return Task::none();
             };
             let mode = editor_panel_mode(state, ed);
             let mut tasks = Vec::new();
             if matches!(mode, PanelMode::Hidden | PanelMode::Collapsed) {
-                tasks.push(update(state, Message::EditorPanelToggled));
+                tasks.push(update(state, Message::Editor(EditorMsg::PanelToggled)));
             }
-            tasks.push(update(state, Message::EditorPanelTabSelected(tab)));
+            tasks.push(update(
+                state,
+                Message::Editor(EditorMsg::PanelTabSelected(tab)),
+            ));
             if let Some(ed) = state.editor.as_mut() {
                 close_editor_popover(ed);
                 set_focus(
@@ -932,7 +947,7 @@ pub(crate) fn handle_focus_message(state: &mut App, message: Message) -> Task<Me
             tasks.push(unfocus_text_fields());
             Task::batch(tasks)
         }
-        Message::EditorFocusZoneCycle(forward) => {
+        EditorMsg::FocusZoneCycle(forward) => {
             let Some(ed) = state.editor.as_ref() else {
                 return Task::none();
             };

@@ -232,6 +232,9 @@ impl SettingsPane {
 /// or background task funnels through this enum.
 #[derive(Clone, Debug)]
 pub enum Message {
+    /// Editor and pin window messages (`runtime::editor_ops`, through
+    /// `window_ops::route_editor_message`).
+    Editor(EditorMsg),
     /// History browser and History persistence messages (`runtime::history_ops`).
     History(HistoryMsg),
     /// Settings and command-line setup window messages (`runtime::settings_ops`).
@@ -252,74 +255,82 @@ pub enum Message {
     /// App-level messages: the screen-recording permission, quit, restart
     /// and reopen (`runtime::app_ops`).
     App(AppMsg),
-    EditorCanvas(CanvasMessage),
-    EditorToolbar(ToolbarMessage),
-    /// Slow tick (~1 s) that fires while the editor is open AND the
-    /// status pill is showing a dismissable message. Purely drives a
-    /// re-render so the view fn can re-check the status's age
-    /// (`Status::set_at`) and hide the toast once it ages out.
-    EditorStatusTick,
     /// No-op message used purely to consume mouse presses on the
     /// pin window's controls row so they don't fall through to the
     /// underlying drag layer and turn an opacity-slider drag into a
     /// window move.
     NoOp,
+}
+
+/// Editor and pin window messages. Each one settles pending history steps
+/// as it needs, clears the canvas geometry cache and syncs History
+/// (`runtime::window_ops::route_editor_message`), then is handled by
+/// `runtime::editor_ops::handle_editor_message`.
+#[derive(Clone, Debug)]
+pub enum EditorMsg {
+    Canvas(CanvasMessage),
+    Toolbar(ToolbarMessage),
+    /// Slow tick (~1 s) that fires while the editor is open AND the
+    /// status pill is showing a dismissable message. Purely drives a
+    /// re-render so the view fn can re-check the status's age
+    /// (`Status::set_at`) and hide the toast once it ages out.
+    StatusTick,
     /// First view callback for the editor window — used to record
     /// the `window::Id` so Discard can close the right one.
-    EditorWindowReady(iced::window::Id),
+    WindowReady(iced::window::Id),
     /// User clicked Save in the editor.
-    EditorSaveRequested,
+    SaveRequested,
     /// Save task completed for the editor `session` it started in.
     /// `Ok(Some(path))` = written to disk; `Ok(None)` = the user
     /// cancelled the file picker.
-    EditorSaved {
+    Saved {
         session: u64,
         result: Result<Option<std::path::PathBuf>, String>,
     },
     /// User clicked Copy (image to clipboard).
-    EditorCopyImageRequested,
+    CopyImageRequested,
     /// Image-copy task completed for the editor `session`.
-    EditorCopyImageDone {
+    CopyImageDone {
         session: u64,
         result: Result<(), String>,
     },
     /// User selected a presentation frame for image outputs.
     /// A built-in Beautify preset was chosen (Frame popover; Beautify tab).
-    EditorBeautifyPreset(readshot_core::beautify::BuiltinPreset),
+    BeautifyPreset(readshot_core::beautify::BuiltinPreset),
     /// A saved Beautify preset (by list index) was chosen.
-    EditorBeautifySavedPresetApplied(usize),
+    BeautifySavedPresetApplied(usize),
     /// A discrete Beautify control changed (swatch, canvas size, toggle).
-    EditorBeautifyEdit(readshot_core::beautify::BeautifyEdit),
+    BeautifyEdit(readshot_core::beautify::BeautifyEdit),
     /// A Beautify slider moved: live preview, no undo step yet.
-    EditorBeautifySliderPreview(readshot_core::beautify::BeautifyEdit),
+    BeautifySliderPreview(readshot_core::beautify::BeautifyEdit),
     /// A snapshot slider (Beautify, combine gap) was released: commit
     /// the preview as one undo step.
-    EditorSnapshotSliderCommit,
+    SnapshotSliderCommit,
     /// Save the current Beautify settings as a named preset.
-    EditorBeautifySavePreset,
+    BeautifySavePreset,
     /// Remove a saved Beautify preset (by list index).
-    EditorBeautifyDeletePreset(usize),
+    BeautifyDeletePreset(usize),
     /// Undo in the "Removed …" toast: put the removed preset back.
-    EditorBeautifyRestorePreset,
+    BeautifyRestorePreset,
     /// The Beautify background hex field was edited.
-    EditorBeautifyHexChanged(String),
+    BeautifyHexChanged(String),
     /// The Beautify background hex field was submitted.
-    EditorBeautifyHexSubmitted,
+    BeautifyHexSubmitted,
     /// Start the eyedropper to pick Beautify's background color.
-    EditorBeautifyPickBackground,
+    BeautifyPickBackground,
     /// User clicked Copy Text (run OCR + clipboard).
-    EditorCopyTextRequested,
+    CopyTextRequested,
     /// OCR + clipboard write completed for the editor `session`.
-    EditorCopyTextDone {
+    CopyTextDone {
         session: u64,
         result: Result<String, String>,
     },
     /// Start (or retry) recognizing the editor's base image for the Text
     /// panel. No-op while recognizing or once ready.
-    EditorTextRecognize,
+    TextRecognize,
     /// Text-panel recognition of part `part` (in that part's pixels)
     /// finished for editor session `session`.
-    EditorTextRecognized {
+    TextRecognized {
         session: u64,
         part: readshot_core::document::PartId,
         result: Result<readshot_core::text_lines::TextDocument, String>,
@@ -327,52 +338,52 @@ pub enum Message {
     /// The newest History rewrite (scrub after a redaction, or restore)
     /// queued by editor session `session` finished. `None` when a newer
     /// rewrite of the same record superseded it before it ran.
-    EditorHistoryWritten {
+    HistoryWritten {
         session: u64,
         result: Option<crate::coordinator::HistoryRewriteResult>,
     },
     /// Show / hide the editor side panel (⌥⌘P; Ctrl+Shift+P off macOS; or
     /// the panel buttons). In
     /// narrow windows this opens / closes the temporary overlay instead.
-    EditorPanelToggled,
+    PanelToggled,
     /// A side-panel tab was chosen.
-    EditorPanelTabSelected(crate::editor::PanelTab),
+    PanelTabSelected(crate::editor::PanelTab),
     /// Click outside the narrow-window overlay panel.
-    EditorPanelOverlayDismissed,
+    PanelOverlayDismissed,
     /// "Open Settings" on the Text tab's no-text state.
-    EditorOpenTextSettings,
+    OpenTextSettings,
     /// Click on Text-panel line `index` (⇧ range, ⌘ toggle).
-    EditorTextLineClicked(usize),
+    TextLineClicked(usize),
     /// Copy the selected Text-panel lines.
-    EditorCopyLines,
+    CopyLines,
     /// Copy N Lines finished: `Ok(n)` lines copied.
-    EditorCopyLinesDone(Result<usize, String>),
+    CopyLinesDone(Result<usize, String>),
     /// "Remove line breaks when copying" toggled.
-    EditorRemoveLineBreaksToggled(bool),
+    RemoveLineBreaksToggled(bool),
     /// Smart-redact style (Solid block / Pixelate / Blur).
-    EditorRedactStyleChanged(readshot_core::redact::RedactStyle),
+    RedactStyleChanged(readshot_core::redact::RedactStyle),
     /// Redact every pending sensitive item as one undo step.
-    EditorRedactAll,
+    RedactAll,
     /// Redact the pending sensitive items in Text-panel line `index`.
-    EditorRedactLine(usize),
+    RedactLine(usize),
     /// User clicked Discard. Closes the editor window.
-    EditorDiscardRequested,
+    DiscardRequested,
     /// "Keep Editing" on the armed-discard toast: back out of Discard.
-    EditorDiscardDisarmed,
+    DiscardDisarmed,
     /// Dismiss the editor status toast (the × on error toasts).
-    EditorStatusDismissed,
+    StatusDismissed,
     /// Open the given editor popover, or close it when it is already open.
-    EditorPopoverToggled(crate::editor::EditorPopover),
+    PopoverToggled(crate::editor::EditorPopover),
     /// Close whichever editor popover is open (click outside / Esc).
-    EditorPopoverClosed,
+    PopoverClosed,
     /// User clicked Pin in the editor — flatten the current state,
     /// open a borderless always-on-top "pin" window with that
     /// image, and close the editor.
-    EditorPinRequested,
+    PinRequested,
     /// A pin's beautified image, rendered off the UI thread after Pin
     /// closed the editor; opens the pin window (`display_bounds`: the
     /// editor's source display, for placing it).
-    EditorPinRendered {
+    PinRendered {
         result: Result<image::RgbaImage, String>,
         display_bounds: Option<(f32, f32, f32, f32)>,
     },
@@ -404,41 +415,41 @@ pub enum Message {
     /// negative shrinks). Triggered by `[` / `]` keyboard
     /// shortcuts; the runtime resolves the new width against the
     /// current model state and clamps to the published range.
-    EditorWidthBump(f32),
+    WidthBump(f32),
     /// Rotate the document a quarter turn (⌘] right, ⌘[ left).
-    EditorRotate {
+    Rotate {
         clockwise: bool,
     },
-    EditorFlip(readshot_core::document::FlipAxis),
+    Flip(readshot_core::document::FlipAxis),
     /// Open the Resize dialog (⌥⌘I; Ctrl+Shift+R off macOS; or
     /// Image › Resize…).
-    EditorResizeOpen,
-    EditorResizeWidthChanged(String),
-    EditorResizeHeightChanged(String),
-    EditorResizeUnitChanged(crate::editor::ResizeUnit),
-    EditorResizeLockToggled(bool),
-    EditorResizeApply,
+    ResizeOpen,
+    ResizeWidthChanged(String),
+    ResizeHeightChanged(String),
+    ResizeUnitChanged(crate::editor::ResizeUnit),
+    ResizeLockToggled(bool),
+    ResizeApply,
     /// Image › Add Capture Below… / Beside…
-    EditorCombineCaptureRequested(readshot_core::document::Join),
+    CombineCaptureRequested(readshot_core::document::Join),
     /// Image › Add Image from File…
-    EditorAddImageFromFile,
+    AddImageFromFile,
     /// A picked file decoded (`Ok(None)` = the picker was cancelled).
-    EditorPartLoaded {
+    PartLoaded {
         session: u64,
         result: Result<Option<std::sync::Arc<image::RgbaImage>>, String>,
     },
     /// Image › Layout gap slider (preview; release commits).
-    EditorLayoutGapPreview(u32),
+    LayoutGapPreview(u32),
     /// A coalesced gap slider value is due (trailing edge of the
     /// preview throttle).
-    EditorLayoutGapFlush {
+    LayoutGapFlush {
         session: u64,
     },
-    EditorLayoutAlign(readshot_core::document::Align),
+    LayoutAlign(readshot_core::document::Align),
     /// An off-thread document compose (large resize, alignment or gap
     /// preview) finished; applied only when `seq` is still the newest
     /// request of `session` and nothing moved meanwhile.
-    EditorComposed {
+    Composed {
         session: u64,
         seq: u64,
         output: crate::editor::ComposedOutput,
@@ -447,54 +458,54 @@ pub enum Message {
     /// next swatch in `PALETTE`, `-1` to the previous; the runtime
     /// wraps via `rem_euclid` so the cycle is endless. Triggered by
     /// `,` / `.` keyboard shortcuts.
-    EditorColorCycle(i32),
+    ColorCycle(i32),
     /// Zoom editor preview in one step.
-    EditorZoomIn,
+    ZoomIn,
     /// Zoom editor preview out one step.
-    EditorZoomOut,
+    ZoomOut,
     /// Reset editor preview to exact image pixels.
-    EditorZoomActual,
+    ZoomActual,
     /// Reset editor preview to fit-down mode.
-    EditorZoomFit,
+    ZoomFit,
     /// Text-tool inline input — content typed by the user. Empty
     /// means the input is cleared.
-    EditorTextChanged(String),
+    TextChanged(String),
     /// An edit action from the inline multi-line text editor widget.
     /// The handler applies it to the backing `text_editor::Content` and
     /// mirrors the result into `PendingText::content`.
-    EditorTextAction(iced::widget::text_editor::Action),
+    TextAction(iced::widget::text_editor::Action),
     /// User pressed Enter / clicked Commit on the text input. Builds
     /// an `Annotation::Text` from the pending state and commits it.
-    EditorTextCommit,
+    TextCommit,
     /// User pressed Escape / clicked Cancel on the text input. Drops
     /// the pending state without committing.
-    EditorTextCancel,
+    TextCancel,
     /// Commit the pending crop (Apply ↵).
-    EditorCropApply,
+    CropApply,
     /// Drop the pending crop (Cancel / esc).
-    EditorCropCancel,
+    CropCancel,
     /// Delete the currently selected editor annotation, if any.
-    EditorDeleteSelected,
+    DeleteSelected,
     /// Nudge the selected annotation by `(dx, dy)` base-image pixels via
     /// the arrow keys (Shift = larger step). Each press is one undo step.
-    EditorNudgeSelected(f32, f32),
+    NudgeSelected(f32, f32),
     /// Edit the selected text annotation, if one is selected.
-    EditorEditSelectedText,
+    EditSelectedText,
     /// ⇧⌘I: open (or close) the Image menu with its first row focused.
-    EditorImageMenuKey,
+    ImageMenuKey,
     /// ⌥⌘T / ⌥⌘B (Ctrl+Shift+T / B off macOS): show the side panel on
     /// that tab, its tabs focused.
-    EditorPanelTabKey(crate::editor::PanelTab),
+    PanelTabKey(crate::editor::PanelTab),
     /// ⌃Tab / F6 (`true`) or ⌃⇧Tab / ⇧F6: move the keyboard focus to the
     /// next (previous) zone: canvas → options bar → side panel.
-    EditorFocusZoneCycle(bool),
+    FocusZoneCycle(bool),
     /// Tab / ⇧Tab on the canvas: select the next (`1`) or previous (`-1`)
     /// annotation, so arrows, ⌫ and ↵ reach it without a click.
-    EditorCycleSelection(i32),
+    CycleSelection(i32),
     /// The answer to a canvas Tab's check of the Beautify hex field: with
     /// the field focused, Tab only leaves it; otherwise the selection
     /// moves by `step`.
-    EditorTabResolved {
+    TabResolved {
         step: i32,
         field_focused: bool,
     },
@@ -502,7 +513,7 @@ pub enum Message {
     /// Beautify hex field: with the field focused the key is the field's
     /// (iced's text_input has no undo and ignores Up/Down, so they reach
     /// the editor) and does nothing; otherwise `message` runs.
-    EditorFieldKeyResolved {
+    FieldKeyResolved {
         /// The editor that asked; an answer for another is dropped.
         session: u64,
         message: Box<Message>,
@@ -510,35 +521,35 @@ pub enum Message {
     },
     /// ⌥ + arrow: grow or shrink the crop draft or the selection from
     /// its bottom-right edge; a selected magnifier moves only its bubble.
-    EditorResizeByKeys(f32, f32),
+    ResizeByKeys(f32, f32),
     /// Keyboard event observed while an editor exists. Runtime filters
     /// it to the live editor window before acting.
-    EditorKeyPressed {
+    KeyPressed {
         window: iced::window::Id,
         key: iced::keyboard::Key,
         modifiers: iced::keyboard::Modifiers,
         status_ignored: bool,
     },
     /// Preview selected-annotation width while the toolbar slider is dragged.
-    EditorLineWidthPreview(f32),
+    LineWidthPreview(f32),
     /// Commit the toolbar slider's selected-annotation width preview.
-    EditorLineWidthCommit,
+    LineWidthCommit,
     /// An options-bar change (fill, dashes, curve, heads, text size…).
     /// Applies to the next annotation and, when it fits, to the selected
     /// one as one undo step.
-    EditorStyle(readshot_ui::editor::StyleMessage),
+    Style(readshot_ui::editor::StyleMessage),
     /// Slider preview of an options-bar change on the selection (no
     /// history until `EditorStyleCommit`).
-    EditorStylePreview(readshot_ui::editor::StyleMessage),
+    StylePreview(readshot_ui::editor::StyleMessage),
     /// Commit the options-bar slider preview as one undo step.
-    EditorStyleCommit,
+    StyleCommit,
     /// The color popover's hex field changed.
-    EditorHexChanged(String),
+    HexChanged(String),
     /// Enter in the hex field: apply the color if it parses.
-    EditorHexSubmitted,
+    HexSubmitted,
     /// Turn the eyedropper on or off (I, or the button in the color
     /// popover). While on, a click on the image picks its color.
-    EditorEyedropperToggled,
+    EyedropperToggled,
 }
 
 /// History browser messages, and the completions of History writes made

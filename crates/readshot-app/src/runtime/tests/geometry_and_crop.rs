@@ -8,11 +8,11 @@ fn rotate_and_resize_keys_map_only_when_not_typing() {
     let cmd = command_modifiers();
     assert!(matches!(
         editor_key_message(Key::Character("[".into()), cmd, true),
-        Some(Message::EditorRotate { clockwise: false })
+        Some(Message::Editor(EditorMsg::Rotate { clockwise: false }))
     ));
     assert!(matches!(
         editor_key_message(Key::Character("]".into()), cmd, true),
-        Some(Message::EditorRotate { clockwise: true })
+        Some(Message::Editor(EditorMsg::Rotate { clockwise: true }))
     ));
     assert!(editor_key_message(Key::Character("]".into()), cmd, false).is_none());
     assert!(matches!(
@@ -21,16 +21,16 @@ fn rotate_and_resize_keys_map_only_when_not_typing() {
             editor_alt_modifiers(),
             true
         ),
-        Some(Message::EditorResizeOpen)
+        Some(Message::Editor(EditorMsg::ResizeOpen))
     ));
     // Plain [ / ] still bump the width; plain I is still the eyedropper.
     assert!(matches!(
         editor_key_message(Key::Character("[".into()), Modifiers::empty(), true),
-        Some(Message::EditorWidthBump(_))
+        Some(Message::Editor(EditorMsg::WidthBump(_)))
     ));
     assert!(matches!(
         editor_key_message(Key::Character("i".into()), Modifiers::empty(), true),
-        Some(Message::EditorEyedropperToggled)
+        Some(Message::Editor(EditorMsg::EyedropperToggled))
     ));
 }
 
@@ -45,7 +45,10 @@ fn rotate_moves_annotations_with_the_image_and_undoes() {
         style: Default::default(),
     });
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.image_size(), (20, 30));
     match &ed.model.annotations()[0] {
@@ -60,7 +63,7 @@ fn rotate_moves_annotations_with_the_image_and_undoes() {
     );
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
     );
     assert_eq!(app.editor.as_ref().unwrap().image_size(), (30, 20));
 }
@@ -174,19 +177,25 @@ fn resize_draft_lock_follows_the_original_aspect() {
 fn resize_apply_scales_the_document_and_refuses_oversize() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(40, 20)));
-    let _ = update(&mut app, Message::EditorResizeOpen);
+    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
     assert_eq!(
         app.editor.as_ref().unwrap().popover,
         Some(crate::editor::EditorPopover::Resize)
     );
-    let _ = update(&mut app, Message::EditorResizeWidthChanged("20".into()));
-    let _ = update(&mut app, Message::EditorResizeApply);
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::ResizeWidthChanged("20".into())),
+    );
+    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeApply));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.effective_image_size(), (20, 10));
     assert_eq!(ed.popover, None);
-    let _ = update(&mut app, Message::EditorResizeOpen);
-    let _ = update(&mut app, Message::EditorResizeWidthChanged("70000".into()));
-    let _ = update(&mut app, Message::EditorResizeApply);
+    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::ResizeWidthChanged("70000".into())),
+    );
+    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeApply));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.effective_image_size(), (20, 10), "unchanged");
     assert!(ed.status_text().unwrap().starts_with("Couldn’t resize"));
@@ -198,13 +207,17 @@ fn flip_mirrors_and_escape_closes_the_image_menu() {
     app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
     let _ = update(
         &mut app,
-        Message::EditorPopoverToggled(crate::editor::EditorPopover::Image),
+        Message::Editor(EditorMsg::PopoverToggled(
+            crate::editor::EditorPopover::Image,
+        )),
     );
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     assert_eq!(app.editor.as_ref().unwrap().popover, None);
     let _ = update(
         &mut app,
-        Message::EditorFlip(readshot_core::document::FlipAxis::Horizontal),
+        Message::Editor(EditorMsg::Flip(
+            readshot_core::document::FlipAxis::Horizontal,
+        )),
     );
     assert!(
         app.editor
@@ -221,9 +234,9 @@ fn flip_mirrors_and_escape_closes_the_image_menu() {
 fn escape_closes_the_resize_dialog_and_drops_its_draft() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
-    let _ = update(&mut app, Message::EditorResizeOpen);
+    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
     assert!(app.editor.as_ref().unwrap().resize_draft.is_some());
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.popover, None);
     assert!(ed.resize_draft.is_none());
@@ -374,16 +387,19 @@ fn rotating_a_redacted_capture_keeps_boxes_and_history_in_one_frame_through_undo
         assert!(text.contains(shown), "neighbour stays readable: {text}");
         assert_eq!(stored.geometry_id.is_some(), rotated);
     };
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
     check(&app, true);
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
     );
     check(&app, false);
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo),
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Redo)),
     );
     check(&app, true);
 }
@@ -403,9 +419,12 @@ fn rotate_drops_an_open_slider_preview_even_with_a_text_draft() {
     let start = app.editor.as_ref().unwrap().model.beautify().padding;
     let _ = update(
         &mut app,
-        Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
+        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(150))),
     );
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
     let ed = app.editor.as_mut().unwrap();
     assert_eq!(ed.model.beautify().padding, start, "preview dropped");
     assert!(ed.snapshot_drag_baseline.is_none());
@@ -430,9 +449,9 @@ fn copy_commits_an_open_slider_preview_and_the_text_draft() {
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
     let _ = update(
         &mut app,
-        Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(25)),
+        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(25))),
     );
-    let _ = update(&mut app, Message::EditorCopyImageRequested);
+    let _ = update(&mut app, Message::Editor(EditorMsg::CopyImageRequested));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.beautify().padding, 25, "output keeps the preview");
     assert_eq!(ed.model.undo_depth(), depth + 2, "preview and text");
@@ -453,17 +472,17 @@ fn cmd_z_is_ignored_while_the_resize_dialog_is_open() {
         style: Default::default(),
     });
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorResizeOpen);
+    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
     let cmd = iced::keyboard::Modifiers::COMMAND;
     for mods in [cmd, cmd | iced::keyboard::Modifiers::SHIFT] {
         let _ = update(
             &mut app,
-            Message::EditorKeyPressed {
+            Message::Editor(EditorMsg::KeyPressed {
                 window: id,
                 key: iced::keyboard::Key::Character("z".into()),
                 modifiers: mods,
                 status_ignored: false,
-            },
+            }),
         );
         assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 1);
     }
@@ -473,9 +492,12 @@ fn cmd_z_is_ignored_while_the_resize_dialog_is_open() {
 fn reopening_resize_while_it_is_open_keeps_the_typed_draft() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(40, 20)));
-    let _ = update(&mut app, Message::EditorResizeOpen);
-    let _ = update(&mut app, Message::EditorResizeWidthChanged("12".into()));
-    let _ = update(&mut app, Message::EditorResizeOpen);
+    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::ResizeWidthChanged("12".into())),
+    );
+    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.resize_draft.as_ref().unwrap().width, "12");
     assert_eq!(ed.popover, Some(crate::editor::EditorPopover::Resize));
@@ -490,9 +512,12 @@ fn resizing_a_cropped_image_reports_the_exact_size() {
     });
     assert_eq!(ed.effective_image_size(), (101, 77));
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorResizeOpen);
-    let _ = update(&mut app, Message::EditorResizeWidthChanged("999".into()));
-    let _ = update(&mut app, Message::EditorResizeApply);
+    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::ResizeWidthChanged("999".into())),
+    );
+    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeApply));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.effective_image_size(), (999, 762));
 }
@@ -507,8 +532,8 @@ fn crop_drag_makes_a_draft_enter_applies_and_esc_cancels() {
         .model
         .set_tool(readshot_ui::editor::ToolState::Crop);
     let crop = |r| {
-        Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
-            Annotation::Crop { rect: r },
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::CommitAnnotation(Annotation::Crop { rect: r }),
         ))
     };
     let _ = update(&mut app, crop(RectLike::new(10.0, 10.0, 40.0, 30.0)));
@@ -517,11 +542,11 @@ fn crop_drag_makes_a_draft_enter_applies_and_esc_cancels() {
     assert_eq!(ed.model.undo_depth(), 0, "a draft is not an edit");
     assert_eq!(ed.effective_image_size(), (100, 80));
     // esc cancels only the draft.
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     assert_eq!(app.editor.as_ref().unwrap().crop_draft, None);
     let _ = update(&mut app, crop(RectLike::new(0.0, 0.0, 50.0, 40.0)));
     // ↵ arrives as EditorEditSelectedText (status_ignored Enter).
-    let _ = update(&mut app, Message::EditorEditSelectedText);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EditSelectedText));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.crop_draft, None);
     assert_eq!(ed.effective_image_size(), (50, 40));
@@ -534,22 +559,24 @@ fn choosing_an_aspect_refits_the_draft_and_switching_tools_drops_it() {
     app.editor = Some(crate::editor::EditorSession::new(solid(100, 80)));
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
             readshot_ui::editor::ToolState::Crop,
-        )),
+        ))),
     );
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
-            Annotation::Crop {
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::CommitAnnotation(Annotation::Crop {
                 rect: RectLike::new(0.0, 0.0, 80.0, 40.0),
-            },
+            }),
         )),
     );
     let _ = update(
         &mut app,
-        Message::EditorStyle(readshot_ui::editor::style::StyleMessage::CropAspect(
-            readshot_ui::editor::style::CropAspect::Square,
+        Message::Editor(EditorMsg::Style(
+            readshot_ui::editor::style::StyleMessage::CropAspect(
+                readshot_ui::editor::style::CropAspect::Square,
+            ),
         )),
     );
     assert_eq!(
@@ -560,9 +587,9 @@ fn choosing_an_aspect_refits_the_draft_and_switching_tools_drops_it() {
         .contains(&readshot_ui::editor::style::OptionControl::CropApply));
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
             readshot_ui::editor::ToolState::Select,
-        )),
+        ))),
     );
     assert_eq!(app.editor.as_ref().unwrap().crop_draft, None);
 }
@@ -570,11 +597,11 @@ fn choosing_an_aspect_refits_the_draft_and_switching_tools_drops_it() {
 #[test]
 fn esc_drops_the_crop_draft_before_the_selection() {
     let mut app = crop_app_with_rect_selected();
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.crop_draft, None);
     assert_eq!(ed.model.selected_annotation(), Some(0), "one esc, one step");
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     assert_eq!(
         app.editor.as_ref().unwrap().model.selected_annotation(),
         None
@@ -591,20 +618,20 @@ fn esc_during_a_crop_re_drag_cancels_the_drag_then_the_draft() {
     let draft = ed.crop_draft;
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::DragStarted),
+        Message::Editor(EditorMsg::Canvas(readshot_ui::CanvasMessage::DragStarted)),
     );
     let esc = |app: &mut App, canvas: readshot_ui::CanvasMessage| {
         // The canvas handles Escape first, then the key subscription
         // sees it captured.
-        let _ = update(app, Message::EditorCanvas(canvas));
+        let _ = update(app, Message::Editor(EditorMsg::Canvas(canvas)));
         let _ = update(
             app,
-            Message::EditorKeyPressed {
+            Message::Editor(EditorMsg::KeyPressed {
                 window: id,
                 key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
                 modifiers: iced::keyboard::Modifiers::empty(),
                 status_ignored: false,
-            },
+            }),
         );
     };
     esc(&mut app, readshot_ui::CanvasMessage::DragEscaped);
@@ -629,16 +656,16 @@ fn esc_during_a_crop_re_drag_is_one_step_whichever_message_comes_first() {
     let key = |app: &mut App, named| {
         let _ = update(
             app,
-            Message::EditorKeyPressed {
+            Message::Editor(EditorMsg::KeyPressed {
                 window: id,
                 key: iced::keyboard::Key::Named(named),
                 modifiers: iced::keyboard::Modifiers::empty(),
                 status_ignored: false,
-            },
+            }),
         );
     };
     let canvas = |app: &mut App, m| {
-        let _ = update(app, Message::EditorCanvas(m));
+        let _ = update(app, Message::Editor(EditorMsg::Canvas(m)));
     };
     use iced::keyboard::key::Named;
     use readshot_ui::CanvasMessage;
@@ -693,17 +720,17 @@ fn esc_during_any_canvas_drag_ends_only_the_drag_in_either_order() {
         let id = iced::window::Id::unique();
         app.editor.as_mut().unwrap().window_id = Some(id);
         let esc = |app: &mut App, canvas: CanvasMessage| {
-            let key = Message::EditorKeyPressed {
+            let key = Message::Editor(EditorMsg::KeyPressed {
                 window: id,
                 key: iced::keyboard::Key::Named(Named::Escape),
                 modifiers: iced::keyboard::Modifiers::empty(),
                 status_ignored: false,
-            };
+            });
             if key_first {
                 let _ = update(app, key);
-                let _ = update(app, Message::EditorCanvas(canvas));
+                let _ = update(app, Message::Editor(EditorMsg::Canvas(canvas)));
             } else {
-                let _ = update(app, Message::EditorCanvas(canvas));
+                let _ = update(app, Message::Editor(EditorMsg::Canvas(canvas)));
                 let _ = update(app, key);
             }
         };
@@ -718,7 +745,10 @@ fn esc_during_any_canvas_drag_ends_only_the_drag_in_either_order() {
             content: "typing".into(),
             edit_index: None,
         });
-        let _ = update(&mut app, Message::EditorCanvas(CanvasMessage::DragStarted));
+        let _ = update(
+            &mut app,
+            Message::Editor(EditorMsg::Canvas(CanvasMessage::DragStarted)),
+        );
         esc(&mut app, CanvasMessage::DragEscaped);
         let ed = app.editor.as_ref().unwrap();
         assert!(!ed.canvas_drag_in_progress(), "key first: {key_first}");
@@ -737,11 +767,15 @@ fn esc_during_any_canvas_drag_ends_only_the_drag_in_either_order() {
             .set_tool(readshot_ui::editor::ToolState::Select);
         let _ = update(
             &mut app,
-            Message::EditorCanvas(CanvasMessage::SelectPressed(PointLike::new(5.0, 5.0))),
+            Message::Editor(EditorMsg::Canvas(CanvasMessage::SelectPressed(
+                PointLike::new(5.0, 5.0),
+            ))),
         );
         let _ = update(
             &mut app,
-            Message::EditorCanvas(CanvasMessage::SelectDragged(PointLike::new(15.0, 15.0))),
+            Message::Editor(EditorMsg::Canvas(CanvasMessage::SelectDragged(
+                PointLike::new(15.0, 15.0),
+            ))),
         );
         assert_ne!(app.editor.as_ref().unwrap().model.annotations()[0], rect0);
         esc(&mut app, CanvasMessage::DragEscaped);
@@ -770,7 +804,7 @@ fn esc_exits_the_eyedropper_before_the_crop_draft() {
         loupe: None,
         target: Default::default(),
     });
-    let _ = update(&mut app, Message::EditorTextCancel);
+    let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.eyedropper.is_none());
     assert!(ed.crop_draft.is_some());
@@ -785,7 +819,7 @@ fn undo_and_redo_only_cancel_an_open_crop_draft() {
         } else {
             readshot_ui::ToolbarMessage::Undo
         };
-        let _ = update(&mut app, Message::EditorToolbar(msg));
+        let _ = update(&mut app, Message::Editor(EditorMsg::Toolbar(msg)));
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.crop_draft, None);
         assert_eq!(ed.model.undo_depth(), 1, "history must not move");
@@ -800,7 +834,7 @@ fn enter_does_not_apply_a_crop_while_a_text_draft_is_open() {
         content: "typing".into(),
         edit_index: None,
     });
-    let _ = update(&mut app, Message::EditorEditSelectedText);
+    let _ = update(&mut app, Message::Editor(EditorMsg::EditSelectedText));
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.crop_draft.is_some());
     assert_eq!(ed.effective_image_size(), (100, 80));
@@ -809,13 +843,13 @@ fn enter_does_not_apply_a_crop_while_a_text_draft_is_open() {
 #[test]
 fn applying_a_crop_is_one_undo_step() {
     let mut app = crop_app_with_rect_selected();
-    let _ = update(&mut app, Message::EditorCropApply);
+    let _ = update(&mut app, Message::Editor(EditorMsg::CropApply));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.undo_depth(), 2);
     assert_eq!(ed.effective_image_size(), (40, 30));
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.effective_image_size(), (100, 80));
@@ -828,16 +862,16 @@ fn a_crop_released_after_switching_tools_leaves_no_draft() {
     app.editor = Some(crate::editor::EditorSession::new(solid(100, 80)));
     let _ = update(
         &mut app,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
             readshot_ui::editor::ToolState::Rectangle,
-        )),
+        ))),
     );
     let _ = update(
         &mut app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
-            Annotation::Crop {
+        Message::Editor(EditorMsg::Canvas(
+            readshot_ui::CanvasMessage::CommitAnnotation(Annotation::Crop {
                 rect: RectLike::new(0.0, 0.0, 50.0, 40.0),
-            },
+            }),
         )),
     );
     let ed = app.editor.as_ref().unwrap();
@@ -855,9 +889,9 @@ fn copy_and_save_apply_an_open_crop_draft_first() {
         let _ = update(
             &mut app,
             if save {
-                Message::EditorSaveRequested
+                Message::Editor(EditorMsg::SaveRequested)
             } else {
-                Message::EditorCopyImageRequested
+                Message::Editor(EditorMsg::CopyImageRequested)
             },
         );
         let ed = app.editor.as_ref().unwrap();
@@ -873,7 +907,10 @@ fn an_image_menu_action_drops_the_crop_draft() {
     let mut ed = crate::editor::EditorSession::new(solid(100, 80));
     ed.crop_draft = Some(RectLike::new(0.0, 0.0, 50.0, 40.0));
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+    );
     assert_eq!(app.editor.as_ref().unwrap().crop_draft, None);
 }
 
@@ -889,8 +926,10 @@ fn an_aspect_change_with_a_draft_leaves_a_selected_committed_crop_alone() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::EditorStyle(readshot_ui::editor::style::StyleMessage::CropAspect(
-            readshot_ui::editor::style::CropAspect::Square,
+        Message::Editor(EditorMsg::Style(
+            readshot_ui::editor::style::StyleMessage::CropAspect(
+                readshot_ui::editor::style::CropAspect::Square,
+            ),
         )),
     );
     let ed = app.editor.as_ref().unwrap();
@@ -913,7 +952,7 @@ fn enter_does_not_apply_a_crop_while_a_field_popover_is_open() {
         ed.crop_draft = Some(RectLike::new(0.0, 0.0, 50.0, 40.0));
         ed.popover = Some(popover);
         app.editor = Some(ed);
-        let _ = update(&mut app, Message::EditorEditSelectedText);
+        let _ = update(&mut app, Message::Editor(EditorMsg::EditSelectedText));
         let ed = app.editor.as_ref().unwrap();
         assert!(ed.crop_draft.is_some(), "{popover:?}");
         assert_eq!(ed.effective_image_size(), (100, 80));

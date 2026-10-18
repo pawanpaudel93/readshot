@@ -63,10 +63,10 @@ pub(crate) fn editor_selected_hint(kind: &str, text_editable: bool) -> String {
 fn is_field_key(message: &Message) -> bool {
     matches!(
         message,
-        Message::EditorToolbar(
+        Message::Editor(EditorMsg::Toolbar(
             readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
-        )
-    ) || matches!(message, Message::EditorNudgeSelected(dx, _) if *dx == 0.0)
+        ))
+    ) || matches!(message, Message::Editor(EditorMsg::NudgeSelected(dx, _)) if *dx == 0.0)
 }
 
 /// The focus query's answer for a canvas Tab: the field's own answer, or
@@ -516,7 +516,7 @@ pub(crate) fn sync_editor_history(
 /// Everything is queued on the coordinator's ordered background writer
 /// (the writes fsync, and this runs on every commit/undo/redo); rapid
 /// rewrites coalesce to the newest. A rewrite's outcome comes back as
-/// `Message::EditorHistoryWritten` via [`history_write_followups`].
+/// `EditorMsg::HistoryWritten` via [`history_write_followups`].
 pub(crate) fn write_editor_history(
     ed: &mut crate::editor::EditorSession,
     coord: &CaptureCoordinator,
@@ -786,9 +786,11 @@ pub(crate) fn history_write_followups(state: &mut App) -> Task<Message> {
     let wrote = ed.history_write.is_some();
     if let Some(rx) = ed.history_write.take() {
         let session = ed.session_id;
-        tasks.push(Task::perform(rx, move |r| Message::EditorHistoryWritten {
-            session,
-            result: r.ok(),
+        tasks.push(Task::perform(rx, move |r| {
+            Message::Editor(EditorMsg::HistoryWritten {
+                session,
+                result: r.ok(),
+            })
         }));
     }
     // Idle: never recognized. Failed: retried whenever a scrub is
@@ -972,13 +974,10 @@ pub(crate) fn resize_crop_draft(
     readshot_core::RectLike::new(draft.x, draft.y, w, h)
 }
 
-/// Every editor message arm, extracted from `runtime::update` so the
-/// top-level dispatcher stays navigable. Covers the
-/// editor session, its keyboard/canvas/toolbar flow, and the pin
-/// windows it spawns. Routed from `update`'s
-/// grouped arm; the trailing `unreachable!` only fires if a
-/// non-editor message is mis-routed here.
-pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<Message> {
+/// Every [`EditorMsg`]: the editor session, its keyboard/canvas/toolbar
+/// flow, and the pin windows it spawns. `update` hands each
+/// `Message::Editor` here through `window_ops::route_editor_message`.
+pub(crate) fn handle_editor_message(state: &mut App, message: EditorMsg) -> Task<Message> {
     // An editor message is the only thing that can change what the
     // annotation canvas paints, so invalidate its geometry cache here.
     // The high-frequency background ticks (hotkey / tray / url drains)
@@ -991,158 +990,159 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         ed.canvas_cache.clear();
     }
     match message {
-        Message::EditorKeyPressed {
+        EditorMsg::KeyPressed {
             window,
             key,
             modifiers,
             status_ignored,
         } => keyboard::on_key_pressed(state, window, key, modifiers, status_ignored),
-        Message::EditorStatusTick => chrome::on_status_tick(state),
-        Message::EditorPopoverToggled(which) => chrome::on_popover_toggled(state, which),
-        Message::EditorPopoverClosed => chrome::on_popover_closed(state),
-        Message::EditorWindowReady(id) => chrome::on_window_ready(state, id),
+        EditorMsg::StatusTick => chrome::on_status_tick(state),
+        EditorMsg::PopoverToggled(which) => chrome::on_popover_toggled(state, which),
+        EditorMsg::PopoverClosed => chrome::on_popover_closed(state),
+        EditorMsg::WindowReady(id) => chrome::on_window_ready(state, id),
 
-        Message::EditorSaveRequested => output::on_save_requested(state),
-        Message::EditorSaved { session, result } => output::on_saved(state, session, result),
+        EditorMsg::SaveRequested => output::on_save_requested(state),
+        EditorMsg::Saved { session, result } => output::on_saved(state, session, result),
 
-        Message::EditorCopyImageRequested => output::on_copy_image_requested(state),
-        Message::EditorCopyImageDone { session, result } => {
+        EditorMsg::CopyImageRequested => output::on_copy_image_requested(state),
+        EditorMsg::CopyImageDone { session, result } => {
             output::on_copy_image_done(state, session, result)
         }
 
-        Message::EditorBeautifyPreset(preset) => style::on_beautify_preset(state, preset),
+        EditorMsg::BeautifyPreset(preset) => style::on_beautify_preset(state, preset),
 
-        Message::EditorSnapshotSliderCommit => style::on_snapshot_slider_commit(state),
+        EditorMsg::SnapshotSliderCommit => style::on_snapshot_slider_commit(state),
 
-        Message::EditorCopyTextRequested => output::on_copy_text_requested(state),
-        Message::EditorCopyTextDone { session, result } => {
+        EditorMsg::CopyTextRequested => output::on_copy_text_requested(state),
+        EditorMsg::CopyTextDone { session, result } => {
             output::on_copy_text_done(state, session, result)
         }
 
-        Message::EditorDiscardDisarmed => chrome::on_discard_disarmed(state),
-        Message::EditorStatusDismissed => chrome::on_status_dismissed(state),
+        EditorMsg::DiscardDisarmed => chrome::on_discard_disarmed(state),
+        EditorMsg::StatusDismissed => chrome::on_status_dismissed(state),
 
-        Message::EditorDiscardRequested => output::on_discard_requested(state),
+        EditorMsg::DiscardRequested => output::on_discard_requested(state),
 
         // Toolbar selections — tool / colour / line-width changes
         // and undo/redo. Tool/colour/width changes don't need a
         // re-render (annotations haven't changed), but undo/redo do.
-        Message::EditorToolbar(msg) => style::on_toolbar(state, msg),
+        EditorMsg::Toolbar(msg) => style::on_toolbar(state, msg),
 
-        Message::EditorLineWidthPreview(width) => style::on_line_width_preview(state, width),
+        EditorMsg::LineWidthPreview(width) => style::on_line_width_preview(state, width),
 
-        Message::EditorLineWidthCommit => style::on_line_width_commit(state),
+        EditorMsg::LineWidthCommit => style::on_line_width_commit(state),
 
-        Message::EditorStyle(msg) => style::on_style(state, msg),
-        Message::EditorStylePreview(msg) => style::on_style_preview(state, msg),
-        Message::EditorHexChanged(raw) => style::on_hex_changed(state, raw),
-        Message::EditorEyedropperToggled => style::on_eyedropper_toggled(state),
-        Message::EditorHexSubmitted => style::on_hex_submitted(state),
-        Message::EditorStyleCommit => style::on_style_commit(state),
+        EditorMsg::Style(msg) => style::on_style(state, msg),
+        EditorMsg::StylePreview(msg) => style::on_style_preview(state, msg),
+        EditorMsg::HexChanged(raw) => style::on_hex_changed(state, raw),
+        EditorMsg::EyedropperToggled => style::on_eyedropper_toggled(state),
+        EditorMsg::HexSubmitted => style::on_hex_submitted(state),
+        EditorMsg::StyleCommit => style::on_style_commit(state),
 
         // Canvas events — mostly drag previews (which don't need
         // their own state mutation in this cut; the canvas's internal
         // DrawState already drives the live painting) and one-shot
         // commits which mutate the model.
-        Message::EditorCanvas(msg) => canvas::on_canvas(state, msg),
+        EditorMsg::Canvas(msg) => canvas::on_canvas(state, msg),
 
-        Message::EditorEditSelectedText => text_edit::on_edit_selected_text(state),
+        EditorMsg::EditSelectedText => text_edit::on_edit_selected_text(state),
 
-        Message::EditorDeleteSelected => text_edit::on_delete_selected(state),
+        EditorMsg::DeleteSelected => text_edit::on_delete_selected(state),
 
-        Message::EditorNudgeSelected(dx, dy) => keyboard::on_nudge_selected(state, dx, dy),
+        EditorMsg::NudgeSelected(dx, dy) => keyboard::on_nudge_selected(state, dx, dy),
 
-        Message::EditorTextChanged(content) => text_edit::on_text_changed(state, content),
-        Message::EditorTextAction(action) => text_edit::on_text_action(state, action),
-        Message::EditorTextCommit => text_edit::on_text_commit(state),
-        Message::EditorCropApply => text_edit::on_crop_apply(state),
-        Message::EditorCropCancel => text_edit::on_crop_cancel(state),
-        Message::EditorTextCancel => text_edit::on_text_cancel(state),
-        Message::EditorWidthBump(delta) => keyboard::on_width_bump(state, delta),
-        Message::EditorColorCycle(dir) => keyboard::on_color_cycle(state, dir),
-        Message::EditorZoomIn => chrome::on_zoom_in(state),
-        Message::EditorZoomOut => chrome::on_zoom_out(state),
-        Message::EditorZoomActual => chrome::on_zoom_actual(state),
-        Message::EditorZoomFit => chrome::on_zoom_fit(state),
+        EditorMsg::TextChanged(content) => text_edit::on_text_changed(state, content),
+        EditorMsg::TextAction(action) => text_edit::on_text_action(state, action),
+        EditorMsg::TextCommit => text_edit::on_text_commit(state),
+        EditorMsg::CropApply => text_edit::on_crop_apply(state),
+        EditorMsg::CropCancel => text_edit::on_crop_cancel(state),
+        EditorMsg::TextCancel => text_edit::on_text_cancel(state),
+        EditorMsg::WidthBump(delta) => keyboard::on_width_bump(state, delta),
+        EditorMsg::ColorCycle(dir) => keyboard::on_color_cycle(state, dir),
+        EditorMsg::ZoomIn => chrome::on_zoom_in(state),
+        EditorMsg::ZoomOut => chrome::on_zoom_out(state),
+        EditorMsg::ZoomActual => chrome::on_zoom_actual(state),
+        EditorMsg::ZoomFit => chrome::on_zoom_fit(state),
 
-        Message::EditorPinRequested => output::on_pin_requested(state),
-        Message::EditorPinRendered {
+        EditorMsg::PinRequested => output::on_pin_requested(state),
+        EditorMsg::PinRendered {
             result,
             display_bounds,
         } => pins::on_pin_rendered(state, result, display_bounds),
-        Message::PinWindowReady(id, handle) => pins::on_pin_window_ready(state, id, handle),
-        Message::PinClosePressed(id) => pins::on_pin_close_pressed(state, id),
-        Message::PinHovered(id, true) => pins::on_pin_hovered(state, id),
-        Message::PinHovered(id, false) => pins::on_pin_unhovered(state, id),
-        Message::PinDragRequested(id) => window::drag(id),
-        Message::PinOpacityChanged(id, opacity) => pins::on_pin_opacity_changed(state, id, opacity),
-        Message::PinLockToggled(id) => pins::on_pin_lock_toggled(state, id),
-        Message::PinKeyPressed {
+        EditorMsg::PinWindowReady(id, handle) => pins::on_pin_window_ready(state, id, handle),
+        EditorMsg::PinClosePressed(id) => pins::on_pin_close_pressed(state, id),
+        EditorMsg::PinHovered(id, true) => pins::on_pin_hovered(state, id),
+        EditorMsg::PinHovered(id, false) => pins::on_pin_unhovered(state, id),
+        EditorMsg::PinDragRequested(id) => window::drag(id),
+        EditorMsg::PinOpacityChanged(id, opacity) => {
+            pins::on_pin_opacity_changed(state, id, opacity)
+        }
+        EditorMsg::PinLockToggled(id) => pins::on_pin_lock_toggled(state, id),
+        EditorMsg::PinKeyPressed {
             window,
             key,
             modifiers,
         } => pins::on_pin_key_pressed(state, window, key, modifiers),
-        msg @ (Message::EditorTextRecognize
-        | Message::EditorTextRecognized { .. }
-        | Message::EditorPanelToggled
-        | Message::EditorPanelTabSelected(..)
-        | Message::EditorPanelOverlayDismissed
-        | Message::EditorOpenTextSettings
-        | Message::EditorTextLineClicked(..)
-        | Message::EditorCopyLines
-        | Message::EditorCopyLinesDone(..)
-        | Message::EditorRemoveLineBreaksToggled(..)
-        | Message::EditorRedactStyleChanged(..)
-        | Message::EditorRedactAll
-        | Message::EditorRedactLine(..)
-        | Message::EditorHistoryWritten { .. }) => {
+        msg @ (EditorMsg::TextRecognize
+        | EditorMsg::TextRecognized { .. }
+        | EditorMsg::PanelToggled
+        | EditorMsg::PanelTabSelected(..)
+        | EditorMsg::PanelOverlayDismissed
+        | EditorMsg::OpenTextSettings
+        | EditorMsg::TextLineClicked(..)
+        | EditorMsg::CopyLines
+        | EditorMsg::CopyLinesDone(..)
+        | EditorMsg::RemoveLineBreaksToggled(..)
+        | EditorMsg::RedactStyleChanged(..)
+        | EditorMsg::RedactAll
+        | EditorMsg::RedactLine(..)
+        | EditorMsg::HistoryWritten { .. }) => {
             super::text_panel::handle_text_panel_message(state, msg)
         }
-        msg @ (Message::EditorBeautifySavedPresetApplied(..)
-        | Message::EditorBeautifyEdit(..)
-        | Message::EditorBeautifySliderPreview(..)
-        | Message::EditorBeautifySavePreset
-        | Message::EditorBeautifyDeletePreset(..)
-        | Message::EditorBeautifyRestorePreset
-        | Message::EditorBeautifyHexChanged(..)
-        | Message::EditorBeautifyHexSubmitted
-        | Message::EditorBeautifyPickBackground) => {
+        msg @ (EditorMsg::BeautifySavedPresetApplied(..)
+        | EditorMsg::BeautifyEdit(..)
+        | EditorMsg::BeautifySliderPreview(..)
+        | EditorMsg::BeautifySavePreset
+        | EditorMsg::BeautifyDeletePreset(..)
+        | EditorMsg::BeautifyRestorePreset
+        | EditorMsg::BeautifyHexChanged(..)
+        | EditorMsg::BeautifyHexSubmitted
+        | EditorMsg::BeautifyPickBackground) => {
             super::beautify_panel::handle_beautify_message(state, msg)
         }
-        msg @ (Message::EditorRotate { .. }
-        | Message::EditorFlip(..)
-        | Message::EditorResizeOpen
-        | Message::EditorResizeWidthChanged(..)
-        | Message::EditorResizeHeightChanged(..)
-        | Message::EditorResizeUnitChanged(..)
-        | Message::EditorResizeLockToggled(..)
-        | Message::EditorResizeApply) => super::image_menu::handle_image_message(state, msg),
-        msg @ (Message::EditorCombineCaptureRequested(..)
-        | Message::EditorAddImageFromFile
-        | Message::EditorPartLoaded { .. }
-        | Message::EditorLayoutGapPreview(..)
-        | Message::EditorLayoutGapFlush { .. }
-        | Message::EditorLayoutAlign(..)) => super::combine::handle_combine_message(state, msg),
-        Message::EditorComposed {
+        msg @ (EditorMsg::Rotate { .. }
+        | EditorMsg::Flip(..)
+        | EditorMsg::ResizeOpen
+        | EditorMsg::ResizeWidthChanged(..)
+        | EditorMsg::ResizeHeightChanged(..)
+        | EditorMsg::ResizeUnitChanged(..)
+        | EditorMsg::ResizeLockToggled(..)
+        | EditorMsg::ResizeApply) => super::image_menu::handle_image_message(state, msg),
+        msg @ (EditorMsg::CombineCaptureRequested(..)
+        | EditorMsg::AddImageFromFile
+        | EditorMsg::PartLoaded { .. }
+        | EditorMsg::LayoutGapPreview(..)
+        | EditorMsg::LayoutGapFlush { .. }
+        | EditorMsg::LayoutAlign(..)) => super::combine::handle_combine_message(state, msg),
+        EditorMsg::Composed {
             session,
             seq,
             output,
         } => super::compose_jobs::handle_composed(state, session, seq, output),
-        msg @ (Message::EditorImageMenuKey
-        | Message::EditorPanelTabKey(..)
-        | Message::EditorFocusZoneCycle(..)) => super::key_focus::handle_focus_message(state, msg),
-        Message::EditorCycleSelection(step) => keyboard::on_cycle_selection(state, step),
-        Message::EditorFieldKeyResolved {
+        msg @ (EditorMsg::ImageMenuKey
+        | EditorMsg::PanelTabKey(..)
+        | EditorMsg::FocusZoneCycle(..)) => super::key_focus::handle_focus_message(state, msg),
+        EditorMsg::CycleSelection(step) => keyboard::on_cycle_selection(state, step),
+        EditorMsg::FieldKeyResolved {
             session,
             message,
             field_focused,
         } => keyboard::on_field_key_resolved(state, session, message, field_focused),
-        Message::EditorTabResolved {
+        EditorMsg::TabResolved {
             step,
             field_focused,
         } => keyboard::on_tab_resolved(state, step, field_focused),
-        Message::EditorResizeByKeys(dx, dy) => keyboard::on_resize_by_keys(state, dx, dy),
-        other => unreachable!("non-editor message routed to the editor handler: {other:?}"),
+        EditorMsg::ResizeByKeys(dx, dy) => keyboard::on_resize_by_keys(state, dx, dy),
     }
 }
 
@@ -1199,7 +1199,7 @@ fn open_pin_window(
     state
         .pins
         .insert(id, crate::app::PinState::new(handle.clone()));
-    open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone()))
+    open_task.map(move |opened| Message::Editor(EditorMsg::PinWindowReady(opened, handle.clone())))
 }
 
 /// Ask iced whether the Beautify hex field has the caret before `key`
@@ -1210,10 +1210,12 @@ fn ask_hex_field(session: u64, key: Message) -> Task<Message> {
     let message = Box::new(key);
     iced::widget::operation::is_focused(iced::widget::Id::new(super::key_focus::BEAUTIFY_HEX_ID))
         .collect()
-        .map(move |answers| Message::EditorFieldKeyResolved {
-            session,
-            message: message.clone(),
-            field_focused: tab_field_focused(&answers),
+        .map(move |answers| {
+            Message::Editor(EditorMsg::FieldKeyResolved {
+                session,
+                message: message.clone(),
+                field_focused: tab_field_focused(&answers),
+            })
         })
 }
 
@@ -1234,9 +1236,9 @@ fn field_owns_keys(state: &App) -> bool {
 fn is_crop_key(message: &Message) -> bool {
     matches!(
         message,
-        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+        Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::SelectTool(
             readshot_ui::editor::ToolState::Crop
-        ))
+        )))
     )
 }
 

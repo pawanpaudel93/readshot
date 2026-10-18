@@ -118,7 +118,7 @@ pub(crate) fn geometry_refused_status(
     }
 }
 
-pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Message> {
+pub(crate) fn handle_image_message(state: &mut App, message: EditorMsg) -> Task<Message> {
     let coord = state.coordinator.clone();
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
@@ -131,16 +131,16 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
     // in the wrong place. ⌘[ / ⌘] / ⌥⌘I wait for the release.
     let geometry_change = matches!(
         message,
-        Message::EditorRotate { .. }
-            | Message::EditorFlip(_)
-            | Message::EditorResizeOpen
-            | Message::EditorResizeApply
+        EditorMsg::Rotate { .. }
+            | EditorMsg::Flip(_)
+            | EditorMsg::ResizeOpen
+            | EditorMsg::ResizeApply
     );
     if geometry_change && (ed.canvas_drag_active || ed.move_drag.is_some()) {
         return Task::none();
     }
     match message {
-        Message::EditorRotate { clockwise } => {
+        EditorMsg::Rotate { clockwise } => {
             prepare(ed, &coord);
             let kind = ComposeKind::Rotate { clockwise };
             if let Some(task) =
@@ -150,7 +150,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
             }
             super::compose_jobs::apply_step_now(ed, &coord, kind, None);
         }
-        Message::EditorFlip(axis) => {
+        EditorMsg::Flip(axis) => {
             prepare(ed, &coord);
             let kind = ComposeKind::Flip(axis);
             if let Some(task) =
@@ -160,7 +160,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
             }
             super::compose_jobs::apply_step_now(ed, &coord, kind, None);
         }
-        Message::EditorResizeOpen => {
+        EditorMsg::ResizeOpen => {
             // Already open (⌥⌘I while typing in a field): keep the draft.
             if ed.popover == Some(EditorPopover::Resize) {
                 return Task::none();
@@ -181,27 +181,27 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
                 super::key_focus::RESIZE_WIDTH_ID,
             ));
         }
-        Message::EditorResizeWidthChanged(v) => {
+        EditorMsg::ResizeWidthChanged(v) => {
             if let Some(d) = ed.resize_draft.as_mut() {
                 d.set_width(&resize_field_text(&v));
             }
         }
-        Message::EditorResizeHeightChanged(v) => {
+        EditorMsg::ResizeHeightChanged(v) => {
             if let Some(d) = ed.resize_draft.as_mut() {
                 d.set_height(&resize_field_text(&v));
             }
         }
-        Message::EditorResizeUnitChanged(u) => {
+        EditorMsg::ResizeUnitChanged(u) => {
             if let Some(d) = ed.resize_draft.as_mut() {
                 d.set_unit(u);
             }
         }
-        Message::EditorResizeLockToggled(on) => {
+        EditorMsg::ResizeLockToggled(on) => {
             if let Some(d) = ed.resize_draft.as_mut() {
                 d.set_lock(on);
             }
         }
-        Message::EditorResizeApply => {
+        EditorMsg::ResizeApply => {
             let Some(d) = ed.resize_draft.clone() else {
                 return Task::none();
             };
@@ -327,7 +327,7 @@ pub(crate) fn image_popover<'a>(
             AppIcon::Resize,
             "Resize…",
             Some(super::key_focus::key_label(super::key_focus::KEY_RESIZE)),
-            on(Message::EditorResizeOpen),
+            on(Message::Editor(EditorMsg::ResizeOpen)),
             lit(F::MenuResize),
             p
         ),
@@ -335,7 +335,7 @@ pub(crate) fn image_popover<'a>(
             AppIcon::RotateLeft,
             "Rotate Left",
             Some(ROTATE_LEFT_KEY),
-            on(Message::EditorRotate { clockwise: false }),
+            on(Message::Editor(EditorMsg::Rotate { clockwise: false })),
             lit(F::MenuRotateLeft),
             p
         ),
@@ -343,7 +343,7 @@ pub(crate) fn image_popover<'a>(
             AppIcon::RotateRight,
             "Rotate Right",
             Some(ROTATE_RIGHT_KEY),
-            on(Message::EditorRotate { clockwise: true }),
+            on(Message::Editor(EditorMsg::Rotate { clockwise: true })),
             lit(F::MenuRotateRight),
             p
         ),
@@ -351,7 +351,7 @@ pub(crate) fn image_popover<'a>(
             AppIcon::FlipH,
             "Flip Horizontal",
             Some(k(super::key_focus::KEY_FLIP_H)),
-            on(Message::EditorFlip(FlipAxis::Horizontal)),
+            on(Message::Editor(EditorMsg::Flip(FlipAxis::Horizontal))),
             lit(F::MenuFlipH),
             p
         ),
@@ -359,7 +359,7 @@ pub(crate) fn image_popover<'a>(
             AppIcon::FlipV,
             "Flip Vertical",
             Some(k(super::key_focus::KEY_FLIP_V)),
-            on(Message::EditorFlip(FlipAxis::Vertical)),
+            on(Message::Editor(EditorMsg::Flip(FlipAxis::Vertical))),
             lit(F::MenuFlipV),
             p
         ),
@@ -368,7 +368,9 @@ pub(crate) fn image_popover<'a>(
             AppIcon::AddBelow,
             "Add Capture Below…",
             None,
-            on(Message::EditorCombineCaptureRequested(Join::Below)),
+            on(Message::Editor(EditorMsg::CombineCaptureRequested(
+                Join::Below
+            ))),
             lit(F::MenuAddBelow),
             p
         ),
@@ -376,7 +378,9 @@ pub(crate) fn image_popover<'a>(
             AppIcon::AddBeside,
             "Add Capture Beside…",
             None,
-            on(Message::EditorCombineCaptureRequested(Join::Beside)),
+            on(Message::Editor(EditorMsg::CombineCaptureRequested(
+                Join::Beside
+            ))),
             lit(F::MenuAddBeside),
             p
         ),
@@ -384,7 +388,7 @@ pub(crate) fn image_popover<'a>(
             AppIcon::Image,
             "Add Image from File…",
             None,
-            on(Message::EditorAddImageFromFile),
+            on(Message::Editor(EditorMsg::AddImageFromFile)),
             lit(F::MenuAddImage),
             p
         ),
@@ -420,10 +424,10 @@ fn layout_section<'a>(ed: &'a EditorSession) -> Element<'a, Message> {
                     .style(text_t2)
                     .width(Length::Fixed(52.0)),
                 iced::widget::slider(0.0..=MAX_GAP as f32, gap as f32, |v| {
-                    Message::EditorLayoutGapPreview(v.round() as u32)
+                    Message::Editor(EditorMsg::LayoutGapPreview(v.round() as u32))
                 })
                 .step(1.0_f32)
-                .on_release(Message::EditorSnapshotSliderCommit)
+                .on_release(Message::Editor(EditorMsg::SnapshotSliderCommit))
                 .width(Length::Fill),
                 mono_readout(format!("{gap}\u{a0}px"), &format!("{MAX_GAP}\u{a0}px"))
                     .style(text_t2),
@@ -440,7 +444,7 @@ fn layout_section<'a>(ed: &'a EditorSession) -> Element<'a, Message> {
                     .style(text_t2)
                     .width(Length::Fixed(52.0)),
                 text_segment(&Align::ALL.map(|a| (a.label(), a)), g.align, |a| {
-                    (!ed.busy).then_some(Message::EditorLayoutAlign(a))
+                    (!ed.busy).then_some(Message::Editor(EditorMsg::LayoutAlign(a)))
                 }),
             ]
             .spacing(SP2)
@@ -467,7 +471,7 @@ pub(crate) fn resize_popover<'a>(
         text_input("", value)
             .id(iced::widget::Id::new(id))
             .on_input(on)
-            .on_submit(Message::EditorResizeApply)
+            .on_submit(Message::Editor(EditorMsg::ResizeApply))
             .style(text_input_style)
             .size(TYPE_BODY)
             .width(Length::Fixed(84.0))
@@ -477,7 +481,7 @@ pub(crate) fn resize_popover<'a>(
             text_segment(
                 &[("px", ResizeUnit::Pixels), ("%", ResizeUnit::Percent)],
                 d.unit,
-                |u| Some(Message::EditorResizeUnitChanged(u)),
+                |u| Some(Message::Editor(EditorMsg::ResizeUnitChanged(u))),
             ),
             "Unit",
             Some(RESIZE_UNIT_KEY),
@@ -506,11 +510,9 @@ pub(crate) fn resize_popover<'a>(
                 .style(text_t2)
                 .width(Length::Fixed(52.0)),
             focus_ring(
-                field(
-                    &d.width,
-                    super::key_focus::RESIZE_WIDTH_ID,
-                    Message::EditorResizeWidthChanged
-                ),
+                field(&d.width, super::key_focus::RESIZE_WIDTH_ID, |a| {
+                    Message::Editor(EditorMsg::ResizeWidthChanged(a))
+                }),
                 lit(F::ResizeWidth)
             ),
             unit
@@ -523,11 +525,9 @@ pub(crate) fn resize_popover<'a>(
                 .style(text_t2)
                 .width(Length::Fixed(52.0)),
             focus_ring(
-                field(
-                    &d.height,
-                    super::key_focus::RESIZE_HEIGHT_ID,
-                    Message::EditorResizeHeightChanged
-                ),
+                field(&d.height, super::key_focus::RESIZE_HEIGHT_ID, |a| {
+                    Message::Editor(EditorMsg::ResizeHeightChanged(a))
+                }),
                 lit(F::ResizeHeight)
             )
         ]
@@ -538,7 +538,7 @@ pub(crate) fn resize_popover<'a>(
                 toggler(d.lock)
                     .label("Lock aspect ratio")
                     .text_size(TYPE_CAPTION)
-                    .on_toggle(Message::EditorResizeLockToggled),
+                    .on_toggle(|a| Message::Editor(EditorMsg::ResizeLockToggled(a))),
                 "Lock Aspect Ratio",
                 Some(RESIZE_LOCK_KEY),
                 iced::widget::tooltip::Position::Bottom,
@@ -556,7 +556,7 @@ pub(crate) fn resize_popover<'a>(
                     text("Cancel").size(ButtonSize::Sm.text_size()).into(),
                     ButtonKind::Ghost,
                     ButtonSize::Sm,
-                    Some(Message::EditorPopoverClosed)
+                    Some(Message::Editor(EditorMsg::PopoverClosed))
                 ),
                 lit(F::ResizeCancel)
             ),
@@ -565,7 +565,8 @@ pub(crate) fn resize_popover<'a>(
                     text("Resize").size(ButtonSize::Sm.text_size()).into(),
                     ButtonKind::Secondary,
                     ButtonSize::Sm,
-                    (!ed.busy && d.target().is_some()).then_some(Message::EditorResizeApply),
+                    (!ed.busy && d.target().is_some())
+                        .then_some(Message::Editor(EditorMsg::ResizeApply)),
                 ),
                 lit(F::ResizeApply)
             ),

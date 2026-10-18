@@ -5,7 +5,7 @@
 
 use super::*;
 
-/// `Message::EditorKeyPressed`: a key the editor window saw.
+/// `EditorMsg::KeyPressed`: a key the editor window saw.
 pub(super) fn on_key_pressed(
     state: &mut App,
     window: iced::window::Id,
@@ -128,7 +128,7 @@ pub(super) fn on_key_pressed(
     task
 }
 
-/// `Message::EditorNudgeSelected`: arrows move the selection or crop draft.
+/// `EditorMsg::NudgeSelected`: arrows move the selection or crop draft.
 pub(super) fn on_nudge_selected(state: &mut App, dx: f32, dy: f32) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
@@ -162,7 +162,7 @@ pub(super) fn on_nudge_selected(state: &mut App, dx: f32, dy: f32) -> Task<Messa
     Task::none()
 }
 
-/// `Message::EditorWidthBump`: `[` / `]`.
+/// `EditorMsg::WidthBump`: `[` / `]`.
 pub(super) fn on_width_bump(state: &mut App, delta: f32) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         if ed.busy {
@@ -187,7 +187,7 @@ pub(super) fn on_width_bump(state: &mut App, delta: f32) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorColorCycle`: `,` / `.`.
+/// `EditorMsg::ColorCycle`: `,` / `.`.
 pub(super) fn on_color_cycle(state: &mut App, dir: i32) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         if ed.busy {
@@ -206,7 +206,7 @@ pub(super) fn on_color_cycle(state: &mut App, dir: i32) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorCycleSelection`: Tab through the annotations.
+/// `EditorMsg::CycleSelection`: Tab through the annotations.
 pub(super) fn on_cycle_selection(state: &mut App, step: i32) -> Task<Message> {
     if !tab_may_cycle(state) {
         return Task::none();
@@ -223,15 +223,17 @@ pub(super) fn on_cycle_selection(state: &mut App, step: i32) -> Task<Message> {
             crate::runtime::key_focus::BEAUTIFY_HEX_ID,
         ))
         .collect()
-        .map(move |answers| Message::EditorTabResolved {
-            step,
-            field_focused: tab_field_focused(&answers),
+        .map(move |answers| {
+            Message::Editor(EditorMsg::TabResolved {
+                step,
+                field_focused: tab_field_focused(&answers),
+            })
         });
     }
     cycle_selection_by_tab(state, step)
 }
 
-/// `Message::EditorFieldKeyResolved`: iced answered whether a field has the caret.
+/// `EditorMsg::FieldKeyResolved`: iced answered whether a field has the caret.
 pub(super) fn on_field_key_resolved(
     state: &mut App,
     session: u64,
@@ -283,7 +285,7 @@ pub(super) fn on_field_key_resolved(
     Task::batch(tasks)
 }
 
-/// `Message::EditorTabResolved`.
+/// `EditorMsg::TabResolved`.
 pub(super) fn on_tab_resolved(state: &mut App, step: i32, field_focused: bool) -> Task<Message> {
     if field_focused {
         // Tab leaves the field; the selection stays.
@@ -295,7 +297,7 @@ pub(super) fn on_tab_resolved(state: &mut App, step: i32, field_focused: bool) -
     cycle_selection_by_tab(state, step)
 }
 
-/// `Message::EditorResizeByKeys`: resize the selection or crop draft from the keyboard.
+/// `EditorMsg::ResizeByKeys`: resize the selection or crop draft from the keyboard.
 pub(super) fn on_resize_by_keys(state: &mut App, dx: f32, dy: f32) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();

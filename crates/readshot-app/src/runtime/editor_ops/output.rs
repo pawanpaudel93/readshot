@@ -4,7 +4,7 @@
 
 use super::*;
 
-/// `Message::EditorSaveRequested`: render the output and ask where to save it.
+/// `EditorMsg::SaveRequested`: render the output and ask where to save it.
 pub(super) fn on_save_requested(state: &mut App) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
@@ -36,11 +36,11 @@ pub(super) fn on_save_requested(state: &mut App) -> Task<Message> {
                 .await
                 .map_err(|e| e.to_string())
         },
-        move |result| Message::EditorSaved { session, result },
+        move |result| Message::Editor(EditorMsg::Saved { session, result }),
     )
 }
 
-/// `Message::EditorSaved`: the save picker's result.
+/// `EditorMsg::Saved`: the save picker's result.
 pub(super) fn on_saved(
     state: &mut App,
     session: u64,
@@ -82,7 +82,7 @@ pub(super) fn on_saved(
     Task::none()
 }
 
-/// `Message::EditorCopyImageRequested`.
+/// `EditorMsg::CopyImageRequested`.
 pub(super) fn on_copy_image_requested(state: &mut App) -> Task<Message> {
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
@@ -119,11 +119,11 @@ pub(super) fn on_copy_image_requested(state: &mut App) -> Task<Message> {
                 .await
                 .map_err(|e| e.to_string())
         },
-        move |result| Message::EditorCopyImageDone { session, result },
+        move |result| Message::Editor(EditorMsg::CopyImageDone { session, result }),
     )
 }
 
-/// `Message::EditorCopyImageDone`.
+/// `EditorMsg::CopyImageDone`.
 pub(super) fn on_copy_image_done(
     state: &mut App,
     session: u64,
@@ -154,7 +154,7 @@ pub(super) fn on_copy_image_done(
     Task::none()
 }
 
-/// `Message::EditorCopyTextRequested`: Copy All.
+/// `EditorMsg::CopyTextRequested`: Copy All.
 pub(super) fn on_copy_text_requested(state: &mut App) -> Task<Message> {
     let remove_breaks = state.preferences.editor_copy_remove_line_breaks;
     let Some(ed) = state.editor.as_mut() else {
@@ -197,9 +197,11 @@ pub(super) fn on_copy_text_requested(state: &mut App) -> Task<Message> {
         ed.set_status(StatusTone::Progress, "Copying text…");
         return Task::perform(
             crate::runtime::text_panel::copy_cached_text(text),
-            move |r| Message::EditorCopyTextDone {
-                session,
-                result: r.map_err(|e| e.to_string()),
+            move |r| {
+                Message::Editor(EditorMsg::CopyTextDone {
+                    session,
+                    result: r.map_err(|e| e.to_string()),
+                })
             },
         );
     }
@@ -209,14 +211,16 @@ pub(super) fn on_copy_text_requested(state: &mut App) -> Task<Message> {
     let prefs = state.preferences.clone();
     Task::perform(
         ocr_then_copy(coord, img, prefs, remove_breaks, mask),
-        move |r| Message::EditorCopyTextDone {
-            session,
-            result: r.map_err(|e| e.to_string()),
+        move |r| {
+            Message::Editor(EditorMsg::CopyTextDone {
+                session,
+                result: r.map_err(|e| e.to_string()),
+            })
         },
     )
 }
 
-/// `Message::EditorCopyTextDone`.
+/// `EditorMsg::CopyTextDone`.
 pub(super) fn on_copy_text_done(
     state: &mut App,
     session: u64,
@@ -253,7 +257,7 @@ pub(super) fn on_copy_text_done(
     Task::none()
 }
 
-/// `Message::EditorDiscardRequested`: the two-stage Discard.
+/// `EditorMsg::DiscardRequested`: the two-stage Discard.
 pub(super) fn on_discard_requested(state: &mut App) -> Task<Message> {
     if state.editor.as_ref().is_some_and(|ed| ed.busy) {
         return Task::none();
@@ -305,7 +309,7 @@ pub(super) fn on_discard_requested(state: &mut App) -> Task<Message> {
     }
 }
 
-/// `Message::EditorPinRequested`: the output opens as a pin and the editor closes.
+/// `EditorMsg::PinRequested`: the output opens as a pin and the editor closes.
 pub(super) fn on_pin_requested(state: &mut App) -> Task<Message> {
     // Snapshot the editor's currently-flattened image, open
     // a fresh pin window with that image, then close the
@@ -349,10 +353,10 @@ pub(super) fn on_pin_requested(state: &mut App) -> Task<Message> {
         // A beautified canvas (up to the pixel budget) is filled
         // off the UI thread; the pin opens when it is ready.
         tasks.push(Task::perform(out.render_off_thread(), move |result| {
-            Message::EditorPinRendered {
+            Message::Editor(EditorMsg::PinRendered {
                 result,
                 display_bounds,
-            }
+            })
         }));
     }
     Task::batch(tasks)

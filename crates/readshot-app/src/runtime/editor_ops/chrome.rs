@@ -4,7 +4,7 @@
 
 use super::*;
 
-/// `Message::EditorStatusTick`: expire a stale status pill or key guide.
+/// `EditorMsg::StatusTick`: expire a stale status pill or key guide.
 pub(super) fn on_status_tick(state: &mut App) -> Task<Message> {
     // Auto-dismiss stale, non-in-progress status pills *here* —
     // the authoritative place — so the `EditorStatusTick`
@@ -33,7 +33,7 @@ pub(super) fn on_status_tick(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorPopoverToggled`.
+/// `EditorMsg::PopoverToggled`.
 pub(super) fn on_popover_toggled(
     state: &mut App,
     which: crate::editor::EditorPopover,
@@ -52,7 +52,7 @@ pub(super) fn on_popover_toggled(
     Task::none()
 }
 
-/// `Message::EditorZoomIn`.
+/// `EditorMsg::ZoomIn`.
 pub(super) fn on_zoom_in(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         if ed.busy {
@@ -69,7 +69,7 @@ pub(super) fn on_zoom_in(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorZoomOut`.
+/// `EditorMsg::ZoomOut`.
 pub(super) fn on_zoom_out(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         if ed.busy {
@@ -83,7 +83,7 @@ pub(super) fn on_zoom_out(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorZoomActual`.
+/// `EditorMsg::ZoomActual`.
 pub(super) fn on_zoom_actual(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         if ed.busy {
@@ -96,7 +96,7 @@ pub(super) fn on_zoom_actual(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorZoomFit`.
+/// `EditorMsg::ZoomFit`.
 pub(super) fn on_zoom_fit(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         if ed.busy {
@@ -108,7 +108,7 @@ pub(super) fn on_zoom_fit(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorPopoverClosed`.
+/// `EditorMsg::PopoverClosed`.
 pub(super) fn on_popover_closed(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         close_editor_popover(ed);
@@ -116,7 +116,7 @@ pub(super) fn on_popover_closed(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorWindowReady`.
+/// `EditorMsg::WindowReady`.
 pub(super) fn on_window_ready(state: &mut App, id: iced::window::Id) -> Task<Message> {
     if let Some(ed) = &mut state.editor {
         ed.window_id = Some(id);
@@ -127,7 +127,7 @@ pub(super) fn on_window_ready(state: &mut App, id: iced::window::Id) -> Task<Mes
         .map(move |size| Message::Window(WindowMsg::EditorWindowResized(id, size.width)))
 }
 
-/// `Message::EditorDiscardDisarmed`: Keep Editing.
+/// `EditorMsg::DiscardDisarmed`: Keep Editing.
 pub(super) fn on_discard_disarmed(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         ed.clear_discard_confirmation();
@@ -136,7 +136,7 @@ pub(super) fn on_discard_disarmed(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::EditorStatusDismissed`.
+/// `EditorMsg::StatusDismissed`.
 pub(super) fn on_status_dismissed(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         ed.clear_status();
