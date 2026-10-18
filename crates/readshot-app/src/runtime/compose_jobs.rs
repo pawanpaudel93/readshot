@@ -813,6 +813,20 @@ fn interaction_open(ed: &EditorSession) -> bool {
 fn may_wait(message: &Message) -> (bool, bool) {
     use readshot_ui::CanvasMessage;
     match message {
+        // A key the Beautify hex field was asked about: the field's own
+        // key does nothing; otherwise it is the key's message (Undo or Redo
+        // queue behind pending steps, `chains_onto_steps`), and settles
+        // as that message would.
+        Message::EditorFieldKeyResolved {
+            message,
+            field_focused,
+        } => {
+            if *field_focused {
+                (true, true)
+            } else {
+                may_wait(message)
+            }
+        }
         // A key press settles nothing itself: the message it maps to is
         // dispatched (and settles) on its own; one that maps to nothing,
         // like a bare modifier, only updates held-key state.
@@ -860,6 +874,9 @@ fn may_wait(message: &Message) -> (bool, bool) {
 /// history steps instead of settling them: they only need the state the
 /// steps lead to, never the pixels or the frame on screen.
 fn chains_onto_steps(message: &Message) -> bool {
+    if let Message::EditorFieldKeyResolved { message, .. } = message {
+        return chains_onto_steps(message);
+    }
     matches!(
         message,
         Message::EditorRotate { .. }

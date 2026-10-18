@@ -2397,3 +2397,35 @@ fn a_retiring_editors_late_sync_never_unredacts_a_newer_scrub() {
     assert_eq!((stored.width_px, stored.height_px), (40, 20));
     assert!(app.retiring_editors.is_empty());
 }
+
+/// With the Beautify tab on screen, ⌘Z goes through the hex field check
+/// (`EditorFieldKeyResolved`). It still queues behind a pending large
+/// step, like a plain Undo: nothing composes on the UI thread.
+#[test]
+fn undo_through_the_hex_field_check_queues_behind_a_large_step() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    large_editor(&mut app);
+    let id = iced::window::Id::unique();
+    app.editor.as_mut().unwrap().window_id = Some(id);
+    app.preferences.editor_panel_tab = crate::editor::PanelTab::Beautify.id().to_string();
+    app.preferences.editor_panel_open = true;
+    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    let before = composes(&app);
+    let _ = update(
+        &mut app,
+        key_press(id, iced::keyboard::Key::Character("z".into()), true),
+    );
+    for field_focused in [true, false] {
+        let _ = update(
+            &mut app,
+            Message::EditorFieldKeyResolved {
+                message: Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
+                field_focused,
+            },
+        );
+    }
+    assert_eq!(composes(&app), before, "nothing composed on the UI thread");
+    finish_all(&mut app);
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.image_size(), (40, 20), "rotated, then undone");
+}
