@@ -454,6 +454,9 @@ fn on_settings(state: &mut App, submsg: SettingsMessage) -> Task<Message> {
 
 /// `SettingsMsg::OpenRequested`.
 fn on_open_settings(state: &mut App) -> Task<Message> {
+    // The user is back in the app: notifications they turned on again
+    // meanwhile end the off state, with or without a tray.
+    recheck_notifications_quietly();
     // Single-instance — focus the existing window if one is
     // already up.
     if let Some(id) = state.settings_window_id {

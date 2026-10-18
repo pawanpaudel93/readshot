@@ -12,7 +12,10 @@ pub(super) fn handle_app_message(state: &mut App, message: AppMsg) -> Task<Messa
         tick @ (AppMsg::PermissionTick | AppMsg::PermissionPollTick) => {
             on_permission_tick(state, tick)
         }
-        AppMsg::ReopenRequested => show_or_focus_welcome(state),
+        AppMsg::ReopenRequested => {
+            recheck_notifications_quietly();
+            show_or_focus_welcome(state)
+        }
         AppMsg::QuitRequested => quit_readshot(&state.coordinator),
         AppMsg::RestartRequested => on_restart_requested(),
         // GrantPermissionRequested: just trigger the macOS permission

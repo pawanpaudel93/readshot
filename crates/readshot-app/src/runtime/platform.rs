@@ -641,6 +641,35 @@ pub(crate) fn recheck_notifications_or_open_settings() {
     }
 }
 
+/// While Readshot's notifications are known to be off, ask (without
+/// opening anything) whether the user has turned them back on; if so the
+/// off state ends, as after an accepted post. The tray item does this on
+/// a click, but with no tray (it failed to install) nothing else would,
+/// and capture problems would go to the Welcome window for the rest of
+/// the run. Called when the user is back in the app: Launch Services
+/// reopening it, and Settings opening.
+pub(crate) fn recheck_notifications_quietly() {
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        if notifications_off() {
+            // SAFETY: the callback is a plain `extern "C"` function with
+            // the signature the shim declares; the shim takes no other
+            // pointer. Outside Readshot.app it asks nothing (returns 1).
+            let _ = unsafe { readshot_notify_check(Some(notification_quiet_check_callback)) };
+        }
+    }
+}
+
+/// [`recheck_notifications_quietly`]'s answer: 3 = on again; anything
+/// else leaves the off state as it is.
+#[cfg(all(target_os = "macos", not(test)))]
+extern "C" fn notification_quiet_check_callback(level: i32, _message: *const std::ffi::c_char) {
+    if level == 3 {
+        tracing::info!(target: readshot_core::log::cat::APP, "notifications are on again");
+        record_notifications_on();
+    }
+}
+
 /// Open System Settings › Notifications (macOS); a no-op elsewhere.
 pub(crate) fn open_notification_settings() {
     #[cfg(target_os = "macos")]
