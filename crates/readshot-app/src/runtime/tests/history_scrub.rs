@@ -1260,3 +1260,29 @@ fn copies_of_a_reopened_scrub_with_unknown_redactions_are_withheld() {
         .unwrap_or_default();
     assert!(status.starts_with("Text hidden"), "{status}");
 }
+
+#[test]
+fn copy_all_masks_a_magnifier_bubble_that_shows_a_redaction() {
+    use super::super::editor_ops::{copy_all_mask, CopyAllMask};
+    let mut ed = crate::editor::EditorSession::new(solid(200, 120));
+    ed.model
+        .commit_annotation(word_blur(RectLike::new(0.0, 0.0, 30.0, 10.0)));
+    // A magnifier over the blur, its bubble at (100, 60), radius 20.
+    ed.model.commit_annotation(Annotation::Magnifier {
+        source: PointLike::new(15.0, 5.0),
+        radius: 10.0,
+        bubble: PointLike::new(100.0, 60.0),
+        zoom: 2.0,
+        shape: Default::default(),
+        color: Rgba::OPAQUE_BLACK,
+    });
+    let CopyAllMask::Hide(hide) = copy_all_mask(&ed) else {
+        panic!("a redaction must be masked");
+    };
+    // Recognition of the output reads the magnified word in the bubble.
+    let doc = positioned_doc(&hidden_word(), RectLike::new(85.0, 55.0, 30.0, 10.0));
+    assert_eq!(
+        readshot_core::scrub::masked_text(&doc, &hide).as_deref(),
+        Some("██████")
+    );
+}

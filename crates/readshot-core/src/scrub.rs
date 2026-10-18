@@ -78,6 +78,55 @@ fn redaction_rects(annotations: &[Annotation]) -> Vec<RectLike> {
         .collect()
 }
 
+/// Margin (px) around a magnifier bubble's square that
+/// [`magnified_redactions`] also covers: the bubble's border and its
+/// anti-aliased edge.
+const BUBBLE_PAD: f32 = 2.0;
+
+/// Solid redactions over every magnifier bubble that shows something a
+/// redaction hides. A bubble copies the composed pixels around its source
+/// (the renderer draws magnifiers last), so a bubble whose source touches
+/// a Blur or Pixelate shows a magnified copy of that weakly hidden text,
+/// which recognition of the output can read. Magnifiers are taken in
+/// drawing order, and a bubble covered here counts as a redaction for the
+/// ones drawn after it (a bubble magnifying such a bubble). For masking
+/// recognized text of a rendered output, never for drawing.
+pub fn magnified_redactions(annotations: &[Annotation]) -> Vec<Annotation> {
+    let mut covers = redaction_rects(annotations);
+    let mut out = Vec::new();
+    for a in annotations {
+        let Annotation::Magnifier {
+            source,
+            radius,
+            bubble,
+            zoom,
+            ..
+        } = a
+        else {
+            continue;
+        };
+        let r = radius.abs();
+        let src = RectLike::new(source.x - r, source.y - r, 2.0 * r, 2.0 * r);
+        let shows_hidden = covers.iter().any(|c| {
+            let (w, h) = intersection(src, *c);
+            w > 0.0 && h > 0.0
+        }) || !src.x.is_finite()
+            || !src.y.is_finite()
+            || !r.is_finite();
+        if !shows_hidden {
+            continue;
+        }
+        let br = crate::magnifier::bubble_radius(r, *zoom) + BUBBLE_PAD;
+        let rect = RectLike::new(bubble.x - br, bubble.y - br, 2.0 * br, 2.0 * br);
+        covers.push(rect);
+        out.push(crate::redact::redaction_annotation(
+            rect,
+            crate::redact::RedactStyle::Solid,
+        ));
+    }
+    out
+}
+
 /// `redactions` (base px) moved into the pixels of an output cropped to
 /// `crop` ([`crate::render::output_crop`]): translated by minus the crop
 /// origin and clipped to the output, dropping any left with no area.
@@ -1267,5 +1316,44 @@ mod tests {
         let d = boxless_line();
         let elsewhere = solid(RectLike::new(10.0, 35.0, 100.0, 10.0));
         assert!(hidden_spans(&d, &[elsewhere]).unwrap().is_empty());
+    }
+
+    fn magnifier(source: (f32, f32), bubble: (f32, f32)) -> Annotation {
+        Annotation::Magnifier {
+            source: crate::PointLike::new(source.0, source.1),
+            radius: 10.0,
+            bubble: crate::PointLike::new(bubble.0, bubble.1),
+            zoom: 2.0,
+            shape: Default::default(),
+            color: Rgba::OPAQUE_BLACK,
+        }
+    }
+
+    #[test]
+    fn a_bubble_magnifying_a_redaction_is_covered() {
+        let blur = Annotation::Blur {
+            rect: RectLike::new(0.0, 0.0, 30.0, 10.0),
+            radius: 2.0,
+        };
+        // Source (15, 5) r 10 sits on the blur; bubble at (100, 100), r 20.
+        let over = magnifier((15.0, 5.0), (100.0, 100.0));
+        let out = magnified_redactions(&[blur.clone(), over.clone()]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].redaction_rect(),
+            Some(RectLike::new(78.0, 78.0, 44.0, 44.0))
+        );
+        // A word recognized inside the bubble is masked.
+        let d = one_box_line("Zx9Qw7", 85.0, 95.0);
+        let mut hide = vec![blur.clone(), over];
+        hide.extend(out);
+        assert_eq!(masked_text(&d, &hide).as_deref(), Some("██████"));
+        // A bubble of plain pixels is left alone.
+        let elsewhere = magnifier((200.0, 200.0), (300.0, 300.0));
+        assert!(magnified_redactions(&[blur.clone(), elsewhere]).is_empty());
+        // A bubble magnifying that bubble is covered too (drawing order).
+        let chained = magnifier((100.0, 100.0), (400.0, 400.0));
+        let first = magnifier((15.0, 5.0), (100.0, 100.0));
+        assert_eq!(magnified_redactions(&[blur, first, chained]).len(), 2);
     }
 }

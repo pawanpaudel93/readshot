@@ -2591,16 +2591,21 @@ pub(crate) enum CopyAllMask {
 /// How Copy All masks its recognition of the output: with every
 /// redaction drawn now **and**, for a reopened scrubbed record, the ones
 /// baked into its image ([`history_hide`]) — recognition can still read a
-/// word under a weak baked blur. Moved into the output's px (a Crop cuts
-/// it). [`CopyAllMask::Withhold`] when the baked-in ones are unknown.
+/// word under a weak baked blur — and every magnifier bubble that shows
+/// one ([`readshot_core::scrub::magnified_redactions`]). Moved into the
+/// output's px (a Crop cuts it). [`CopyAllMask::Withhold`] when the baked-in ones are unknown.
 pub(crate) fn copy_all_mask(ed: &crate::editor::EditorSession) -> CopyAllMask {
     let annotations = ed.model.annotations();
     if !source_scrubbed(ed) && !readshot_core::scrub::has_redaction(annotations) {
         return CopyAllMask::None;
     }
-    let Some(hide) = history_hide(ed) else {
+    let Some(mut hide) = history_hide(ed) else {
         return CopyAllMask::Withhold;
     };
+    // A magnifier bubble whose source shows a redaction shows a magnified
+    // copy of what it hides: its bubble is masked too.
+    let magnified = readshot_core::scrub::magnified_redactions(&hide);
+    hide.extend(magnified);
     let base = ed.model.base();
     CopyAllMask::Hide(
         match readshot_core::render::output_crop(base.width(), base.height(), annotations) {
