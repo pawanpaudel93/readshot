@@ -616,11 +616,10 @@ impl DocGeometry {
     /// the editor keeps the exact rects (so mapping never accumulates).
     pub fn cover_redactions(&self, anns: &[Annotation]) -> Vec<Annotation> {
         anns.iter()
-            .map(|a| match redaction_rect(a) {
-                Some(r) if crate::scrub::is_redaction(a) => {
-                    with_redaction_rect(a, self.redaction_cover(r))
-                }
-                _ => a.clone(),
+            .map(|a| {
+                a.redaction_rect()
+                    .and_then(|r| a.with_redaction_rect(self.redaction_cover(r)))
+                    .unwrap_or_else(|| a.clone())
             })
             .collect()
     }
@@ -940,26 +939,6 @@ pub fn map_annotation(a: &Annotation, m: &Affine) -> Annotation {
     out
 }
 
-fn redaction_rect(a: &Annotation) -> Option<RectLike> {
-    match a {
-        Annotation::Rectangle { rect, .. }
-        | Annotation::Blur { rect, .. }
-        | Annotation::Pixelate { rect, .. } => Some(*rect),
-        _ => None,
-    }
-}
-
-fn with_redaction_rect(a: &Annotation, r: RectLike) -> Annotation {
-    let mut out = a.clone();
-    if let Annotation::Rectangle { rect, .. }
-    | Annotation::Blur { rect, .. }
-    | Annotation::Pixelate { rect, .. } = &mut out
-    {
-        *rect = r;
-    }
-    out
-}
-
 fn intersect(a: RectLike, b: RectLike) -> Option<RectLike> {
     let (x0, y0) = (a.x.max(b.x), a.y.max(b.y));
     let x1 = (a.x + a.width).min(b.x + b.width);
@@ -1011,31 +990,29 @@ pub fn remap_annotations(
 ) -> Vec<Annotation> {
     let mut out = Vec::with_capacity(anns.len());
     for a in anns {
-        if crate::scrub::is_redaction(a) {
-            if let Some(r) = redaction_rect(a) {
-                let pieces: Vec<(PartId, RectLike)> = old
-                    .parts
-                    .iter()
-                    .filter_map(|p| Some((p.id, intersect(r, old.part_rect(p.id)?)?)))
-                    .collect();
-                if !pieces.is_empty() {
-                    // One overlapped part: its affine maps the whole rect.
-                    // Several: split along the parts. Only a redaction
-                    // entirely in a gutter falls to the center rule.
-                    let single = pieces.len() == 1;
-                    for (id, piece) in pieces {
-                        let moved = if single {
-                            a.clone()
-                        } else {
-                            with_redaction_rect(a, piece)
-                        };
-                        out.push(match part_map(old, new, id) {
-                            Some(m) if m != Affine::IDENTITY => map_annotation(&moved, &m),
-                            _ => moved,
-                        });
-                    }
-                    continue;
+        if let Some(r) = a.redaction_rect() {
+            let pieces: Vec<(PartId, RectLike)> = old
+                .parts
+                .iter()
+                .filter_map(|p| Some((p.id, intersect(r, old.part_rect(p.id)?)?)))
+                .collect();
+            if !pieces.is_empty() {
+                // One overlapped part: its affine maps the whole rect.
+                // Several: split along the parts. Only a redaction
+                // entirely in a gutter falls to the center rule.
+                let single = pieces.len() == 1;
+                for (id, piece) in pieces {
+                    let moved = if single {
+                        a.clone()
+                    } else {
+                        a.with_redaction_rect(piece).unwrap_or_else(|| a.clone())
+                    };
+                    out.push(match part_map(old, new, id) {
+                        Some(m) if m != Affine::IDENTITY => map_annotation(&moved, &m),
+                        _ => moved,
+                    });
                 }
+                continue;
             }
         }
         let m = old
@@ -1389,7 +1366,7 @@ mod tests {
     }
 
     fn redaction_rect_of(a: &Annotation) -> RectLike {
-        redaction_rect(a).expect("a redaction")
+        a.redaction_rect().expect("a redaction")
     }
 
     #[test]

@@ -662,9 +662,9 @@ pub(crate) fn coverage(rect: RectLike, annotations: &[readshot_core::Annotation]
             .iter()
             .any(|a| pred(a) && is_covered(rect, std::slice::from_ref(a)))
     };
-    if covered_by(|a| matches!(a, A::Rectangle { .. })) {
+    if covered_by(A::is_solid_redaction) {
         Coverage::Solid
-    } else if covered_by(|a| matches!(a, A::Blur { .. } | A::Pixelate { .. })) {
+    } else if covered_by(A::is_redaction) {
         Coverage::Weak
     } else {
         Coverage::None

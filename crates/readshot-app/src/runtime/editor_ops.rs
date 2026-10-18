@@ -1838,7 +1838,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                             let redaction = drag
                                 .baseline
                                 .get(drag.selected_index)
-                                .is_some_and(readshot_core::scrub::is_redaction);
+                                .is_some_and(readshot_core::Annotation::is_redaction);
                             if small && redaction {
                                 render_present = true;
                             } else if !drag.moved

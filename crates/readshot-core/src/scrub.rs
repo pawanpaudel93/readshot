@@ -25,7 +25,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use crate::annotation::{Annotation, FillMode};
+use crate::annotation::Annotation;
 use crate::geom::RectLike;
 use crate::text_lines::{TextDocument, TextLine};
 
@@ -38,16 +38,10 @@ const HIDDEN_FRACTION: f32 = 0.5;
 /// A hidden run: chars `span` of `TextDocument::lines[line]`.
 pub type HiddenSpan = (usize, Range<usize>);
 
-/// Whether `a` hides what is under it: an opaque, square-cornered filled
-/// rectangle (the Solid redaction shape), a Blur or a Pixelate.
+/// Whether `a` hides what is under it ([`Annotation::redaction_rect`]:
+/// an opaque, square-cornered filled rectangle, a Blur or a Pixelate).
 pub fn is_redaction(a: &Annotation) -> bool {
-    match a {
-        Annotation::Rectangle { color, style, .. } => {
-            style.fill == FillMode::Filled && style.corner_radius == 0.0 && color.a >= 1.0
-        }
-        Annotation::Blur { .. } | Annotation::Pixelate { .. } => true,
-        _ => false,
-    }
+    a.is_redaction()
 }
 
 /// Whether any annotation is a redaction ([`is_redaction`]).
@@ -58,13 +52,7 @@ pub fn has_redaction(annotations: &[Annotation]) -> bool {
 fn redaction_rects(annotations: &[Annotation]) -> Vec<RectLike> {
     annotations
         .iter()
-        .filter(|a| is_redaction(a))
-        .filter_map(|a| match a {
-            Annotation::Rectangle { rect, .. }
-            | Annotation::Blur { rect, .. }
-            | Annotation::Pixelate { rect, .. } => Some(*rect),
-            _ => None,
-        })
+        .filter_map(Annotation::redaction_rect)
         .collect()
 }
 
@@ -77,20 +65,9 @@ pub fn redactions_in_crop(
     redactions: &[Annotation],
     crop: crate::render::OutputCrop,
 ) -> Vec<Annotation> {
-    let clip = |r: RectLike| rect_in_crop(r, crop);
     redactions
         .iter()
-        .filter(|a| is_redaction(a))
-        .filter_map(|a| {
-            let mut out = a.clone();
-            match &mut out {
-                Annotation::Rectangle { rect, .. }
-                | Annotation::Blur { rect, .. }
-                | Annotation::Pixelate { rect, .. } => *rect = clip(*rect)?,
-                _ => return None,
-            }
-            Some(out)
-        })
+        .filter_map(|a| a.with_redaction_rect(rect_in_crop(a.redaction_rect()?, crop)?))
         .collect()
 }
 
@@ -112,7 +89,7 @@ pub fn redactions_in_image(redactions: &[Annotation], width: u32, height: u32) -
         },
     )
     .into_iter()
-    .filter(|a| redaction_rect_of(a).is_some_and(|r| touches_image(r, w, h)))
+    .filter(|a| a.redaction_rect().is_some_and(|r| touches_image(r, w, h)))
     .collect()
 }
 
@@ -124,15 +101,6 @@ pub fn touches_image(r: RectLike, w: f32, h: f32) -> bool {
     let (y0, y1) = (r.y.min(r.y + r.height), r.y.max(r.y + r.height));
     // NaN compares false everywhere: never touches.
     x0.max(0.0) < x1.min(w) && y0.max(0.0) < y1.min(h) && x0 < w && y0 < h && x1 > 0.0 && y1 > 0.0
-}
-
-fn redaction_rect_of(a: &Annotation) -> Option<RectLike> {
-    match a {
-        Annotation::Rectangle { rect, .. }
-        | Annotation::Blur { rect, .. }
-        | Annotation::Pixelate { rect, .. } => Some(*rect),
-        _ => None,
-    }
 }
 
 /// `r` (base px) moved into the pixels of an output cropped to `crop`
@@ -566,7 +534,7 @@ fn mask_document_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::annotation::{Rgba, ShapeStyle};
+    use crate::annotation::{FillMode, Rgba, ShapeStyle};
     use crate::text_lines::WordRect;
 
     #[test]

@@ -1930,7 +1930,7 @@ impl EditorSession {
             .annotations()
             .iter()
             .chain(dragged)
-            .filter(|a| readshot_core::scrub::is_redaction(a))
+            .filter(|a| a.is_redaction())
             .filter(|a| match unmatched.iter().position(|s| s == a) {
                 Some(i) => {
                     unmatched.swap_remove(i);
@@ -1938,12 +1938,7 @@ impl EditorSession {
                 }
                 None => true,
             })
-            .filter_map(|a| match a {
-                Annotation::Rectangle { rect, .. }
-                | Annotation::Blur { rect, .. }
-                | Annotation::Pixelate { rect, .. } => Some(geometry.redaction_cover(*rect)),
-                _ => None,
-            })
+            .filter_map(|a| Some(geometry.redaction_cover(a.redaction_rect()?)))
             .collect();
         if missing.is_empty() {
             return Vec::new();

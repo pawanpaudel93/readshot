@@ -658,11 +658,9 @@ impl CaptureCoordinator {
             // Redactions the caller says are already in `base` (a
             // reopened scrubbed record's, mapped into this frame), then
             // the ones baked now.
-            record.redactions.extend(
-                bake.iter()
-                    .filter(|a| readshot_core::scrub::is_redaction(a))
-                    .cloned(),
-            );
+            record
+                .redactions
+                .extend(bake.iter().filter(|a| a.is_redaction()).cloned());
         }
         // The stored image is `bake` rendered onto `base`: a baked Crop
         // makes it the crop. The record then describes that image, not the

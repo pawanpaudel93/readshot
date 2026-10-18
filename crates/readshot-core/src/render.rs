@@ -136,7 +136,7 @@ pub fn render(base: &RgbaImage, model: &[Annotation]) -> RgbaImage {
                 line_width,
                 style,
             } => {
-                if crate::scrub::is_redaction(ann) {
+                if ann.is_redaction() {
                     let r = redaction_output_rect(*rect, offset);
                     draw_rectangle(&mut pixmap, r, *color, *line_width, *style, (0.0, 0.0));
                 } else {

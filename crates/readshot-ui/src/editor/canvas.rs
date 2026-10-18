@@ -1506,26 +1506,15 @@ fn draw_preview_badge(frame: &mut Frame, bounds: Rectangle, rect: Rectangle, lab
 /// is never on screen while its render is in flight.
 const REDACTION_OVERLAY: Color = Color::from_rgb(0.33, 0.33, 0.35);
 
-/// An annotation drawn by the canvas over the image (a moving selection,
-/// or one whose render is in flight). A redaction covers its area
-/// opaquely (a solid redaction in its own color) unless its real effect
-/// is already in the image there; anything else is drawn as its preview.
 /// The opaque cover the canvas draws for a redaction: its rect and fill
 /// (a solid redaction's own color, else a neutral grey; never
 /// translucent). `None` for anything that isn't a redaction.
 fn redaction_cover(annotation: &Annotation) -> Option<(RectLike, Color)> {
-    if !readshot_core::scrub::is_redaction(annotation) {
-        return None;
-    }
-    match annotation {
-        Annotation::Rectangle { rect, color, .. } => {
-            Some((*rect, Color::from_rgb(color.r, color.g, color.b)))
-        }
-        Annotation::Blur { rect, .. } | Annotation::Pixelate { rect, .. } => {
-            Some((*rect, REDACTION_OVERLAY))
-        }
-        _ => None,
-    }
+    let rect = annotation.redaction_rect()?;
+    Some(match annotation {
+        Annotation::Rectangle { color, .. } => (rect, Color::from_rgb(color.r, color.g, color.b)),
+        _ => (rect, REDACTION_OVERLAY),
+    })
 }
 
 /// What the canvas fills a redaction's area with: its opaque cover,
@@ -1570,7 +1559,7 @@ fn draw_overlay_annotation(
     image_offset: (f32, f32),
     display_scale: Option<f32>,
 ) {
-    if readshot_core::scrub::is_redaction(annotation) {
+    if annotation.is_redaction() {
         let (Some((rect, _)), Some(fill)) = (
             redaction_cover(annotation),
             redaction_overlay_fill(annotation, rendered),

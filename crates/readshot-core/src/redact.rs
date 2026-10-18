@@ -734,26 +734,13 @@ fn contains(outer: RectLike, inner: RectLike) -> bool {
         && outer.y + outer.height >= inner.y + inner.height
 }
 
-/// Whether an existing redaction-like annotation already covers `rect`
-/// (an opaque square-cornered filled rectangle, a blur or a pixelate).
+/// Whether an existing redaction ([`Annotation::redaction_rect`]: an
+/// opaque square-cornered filled rectangle, a blur or a pixelate) already
+/// covers `rect`.
 pub fn is_covered(rect: RectLike, annotations: &[Annotation]) -> bool {
-    annotations.iter().any(|a| match a {
-        Annotation::Rectangle {
-            rect: r,
-            color,
-            style,
-            ..
-        } => {
-            style.fill == FillMode::Filled
-                && style.corner_radius == 0.0
-                && color.a >= 1.0
-                && contains(*r, rect)
-        }
-        Annotation::Blur { rect: r, .. } | Annotation::Pixelate { rect: r, .. } => {
-            contains(*r, rect)
-        }
-        _ => false,
-    })
+    annotations
+        .iter()
+        .any(|a| a.redaction_rect().is_some_and(|r| contains(r, rect)))
 }
 
 #[cfg(test)]

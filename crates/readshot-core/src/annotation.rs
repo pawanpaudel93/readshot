@@ -363,6 +363,57 @@ pub enum Annotation {
     },
 }
 
+/// The one definition of a redaction: what hides the pixels under it.
+/// Every site that asks "is this a redaction, and where" — text masking
+/// (`scrub`), smart-redact coverage (`redact::is_covered`), the
+/// document's cover and remap (`document`), the renderer, the editor
+/// canvas's opaque cover, the History bake — uses these, so a new
+/// redaction kind (or a change to what counts as a solid block) is made
+/// here once and they can never disagree.
+impl Annotation {
+    /// The rect this annotation hides, when it is a redaction: an opaque,
+    /// square-cornered filled rectangle (the Solid redaction), a Blur or a
+    /// Pixelate. `None` for anything else, a translucent, rounded or
+    /// outline-only rectangle included.
+    pub fn redaction_rect(&self) -> Option<RectLike> {
+        match self {
+            Annotation::Rectangle {
+                rect, color, style, ..
+            } => (style.fill == FillMode::Filled && style.corner_radius == 0.0 && color.a >= 1.0)
+                .then_some(*rect),
+            Annotation::Blur { rect, .. } | Annotation::Pixelate { rect, .. } => Some(*rect),
+            _ => None,
+        }
+    }
+
+    /// Whether this annotation is a redaction ([`Self::redaction_rect`]).
+    pub fn is_redaction(&self) -> bool {
+        self.redaction_rect().is_some()
+    }
+
+    /// A Solid redaction (an opaque block), as opposed to a Blur or
+    /// Pixelate, which some strengths leave partly legible.
+    pub fn is_solid_redaction(&self) -> bool {
+        matches!(self, Annotation::Rectangle { .. }) && self.is_redaction()
+    }
+
+    /// This redaction with its rect replaced by `r`; `None` when it isn't
+    /// a redaction.
+    pub fn with_redaction_rect(&self, r: RectLike) -> Option<Annotation> {
+        if !self.is_redaction() {
+            return None;
+        }
+        let mut out = self.clone();
+        if let Annotation::Rectangle { rect, .. }
+        | Annotation::Blur { rect, .. }
+        | Annotation::Pixelate { rect, .. } = &mut out
+        {
+            *rect = r;
+        }
+        Some(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,6 +428,46 @@ mod tests {
 
     fn red() -> Rgba {
         Rgba::new(1.0, 0.0, 0.0, 1.0)
+    }
+
+    #[test]
+    fn redaction_rect_is_the_one_redaction_predicate() {
+        let r = rect(1.0, 2.0, 3.0, 4.0);
+        let solid = Annotation::Rectangle {
+            rect: r,
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: ShapeStyle {
+                fill: FillMode::Filled,
+                ..ShapeStyle::default()
+            },
+        };
+        let blur = Annotation::Blur {
+            rect: r,
+            radius: 2.0,
+        };
+        let outline = Annotation::Rectangle {
+            rect: r,
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: ShapeStyle::default(),
+        };
+        assert_eq!(solid.redaction_rect(), Some(r));
+        assert!(solid.is_solid_redaction());
+        assert_eq!(blur.redaction_rect(), Some(r));
+        assert!(blur.is_redaction() && !blur.is_solid_redaction());
+        assert_eq!(outline.redaction_rect(), None);
+        assert!(!outline.is_solid_redaction());
+        let moved = rect(9.0, 9.0, 1.0, 1.0);
+        assert_eq!(
+            blur.with_redaction_rect(moved),
+            Some(Annotation::Blur {
+                rect: moved,
+                radius: 2.0
+            })
+        );
+        assert_eq!(outline.with_redaction_rect(moved), None);
+        assert_eq!(Annotation::Crop { rect: r }.redaction_rect(), None);
     }
 
     /// Every variant must round-trip through serde JSON without loss.
