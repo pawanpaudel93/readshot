@@ -118,34 +118,6 @@ pub(crate) fn geometry_refused_status(
     }
 }
 
-/// [`geometry_refused_status`] for the action named by its verb, as the
-/// status tests spell it.
-#[cfg(test)]
-pub(crate) fn geometry_error_status(action: &str, cropped: bool, e: GeometryError) -> String {
-    let kind = match action {
-        "resize" => ComposeKind::Resize {
-            width: 1,
-            height: 1,
-            sx: 1.0,
-            sy: 1.0,
-        },
-        "align" => ComposeKind::Align(Align::Start),
-        "change the gap" => ComposeKind::Gap(0),
-        "rotate" => ComposeKind::Rotate { clockwise: true },
-        "flip" => ComposeKind::Flip(FlipAxis::Horizontal),
-        "add the image" => ComposeKind::AddPart {
-            join: Join::Below,
-            what: "image",
-        },
-        "add the capture" => ComposeKind::AddPart {
-            join: Join::Below,
-            what: "capture",
-        },
-        other => panic!("no geometry change is called {other:?}"),
-    };
-    geometry_refused_status(kind, cropped, e)
-}
-
 pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Message> {
     let coord = state.coordinator.clone();
     let Some(ed) = state.editor.as_mut() else {

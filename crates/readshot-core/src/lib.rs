@@ -5,6 +5,10 @@
 //! other crate in the workspace either re-exports types from here or
 //! implements one of the traits declared elsewhere using these primitives.
 
+// No unsafe code here: platform FFI lives in readshot-app, -capture and
+// -ocr (AGENTS.md, "Things to avoid").
+#![forbid(unsafe_code)]
+
 pub mod annotation;
 pub mod arrowhead;
 pub mod beautify;

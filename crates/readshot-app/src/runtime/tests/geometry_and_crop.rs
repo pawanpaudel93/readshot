@@ -231,8 +231,9 @@ fn escape_closes_the_resize_dialog_and_drops_its_draft() {
 
 #[test]
 fn a_geometry_error_reaches_the_user_as_a_status() {
-    let s = geometry_error_status(
-        "rotate",
+    use crate::editor::ComposeKind;
+    let s = geometry_refused_status(
+        ComposeKind::Rotate { clockwise: true },
         true,
         readshot_core::document::GeometryError::TooLarge {
             width: 40000,
@@ -249,8 +250,8 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
         s.ends_with("Resize the image smaller, then try again."),
         "{s}"
     );
-    let s = geometry_error_status(
-        "flip",
+    let s = geometry_refused_status(
+        ComposeKind::Flip(readshot_core::document::FlipAxis::Horizontal),
         false,
         readshot_core::document::GeometryError::TooManyPixels { pixels: 9, max: 8 },
     );
@@ -260,16 +261,24 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
     );
     assert!(!s.contains("uncropped"), "{s}");
     // With a crop, the pixel limit is the uncropped image's too.
-    let s = geometry_error_status(
-        "resize",
+    let s = geometry_refused_status(
+        ComposeKind::Resize {
+            width: 1,
+            height: 1,
+            sx: 1.0,
+            sy: 1.0,
+        },
         true,
         readshot_core::document::GeometryError::TooManyPixels { pixels: 9, max: 8 },
     );
     assert!(s.starts_with("Couldn’t resize"), "{s}");
     assert!(s.contains("the uncropped image would be 9\u{a0}px"), "{s}");
     assert!(s.ends_with("Choose a smaller size."), "{s}");
-    let s = geometry_error_status(
-        "add the image",
+    let s = geometry_refused_status(
+        ComposeKind::AddPart {
+            join: readshot_core::document::Join::Below,
+            what: "image",
+        },
         false,
         readshot_core::document::GeometryError::TooManyPixels {
             pixels: 268_435_456,
@@ -280,8 +289,8 @@ fn a_geometry_error_reaches_the_user_as_a_status() {
         s,
         "Couldn’t add the image — the image would be 268,435,456\u{a0}px, over the 256,000,000\u{a0}px limit. Resize the image smaller first, then add it again."
     );
-    let s = geometry_error_status(
-        "align",
+    let s = geometry_refused_status(
+        ComposeKind::Align(readshot_core::document::Align::Start),
         false,
         readshot_core::document::GeometryError::Empty,
     );

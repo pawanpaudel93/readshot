@@ -8,6 +8,10 @@
 //! Agents launch this binary directly; see `docs/MCP.md` for the
 //! per-host configuration snippets (Claude Desktop, Cursor, OpenAI).
 
+// No unsafe code here: platform FFI lives in readshot-app, -capture and
+// -ocr (AGENTS.md, "Things to avoid").
+#![forbid(unsafe_code)]
+
 use std::sync::Arc;
 
 use readshot_capture::default_capturer;

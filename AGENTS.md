@@ -254,7 +254,9 @@ Over-masking is acceptable, under-masking never:
   `readshot-app` (`app_events`, `url_events`, `updater`, `uninstall`,
   `emoji_macos`, `runtime::platform`, `runtime::window_settings`). Every
   unsafe block carries a `// SAFETY:` comment saying why it is sound;
-  those three crates deny `clippy::undocumented_unsafe_blocks`.
+  those three crates (and the `readshot` binary) deny
+  `clippy::undocumented_unsafe_blocks`. `readshot-core`, `readshot-ui`
+  and `readshot-mcp` `forbid(unsafe_code)`.
 * Re-introducing `anyhow` as a public type.
 * Mocking the database / filesystem in integration tests where a
   `tempfile::TempDir` works (it does, and we use it everywhere).

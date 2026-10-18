@@ -12,6 +12,10 @@
 //! — useful for verifying the crate links and runs through to a
 //! controlled exit.
 
+// Unsafe is only for platform FFI, and each block says why it is
+// sound (AGENTS.md, "Things to avoid").
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use std::sync::Arc;
 
 use clap::Parser;

@@ -52,6 +52,10 @@
 //! as JSON-RPC errors with `code = -32001` (server error) and a
 //! human-readable `message` so the agent can prompt the user.
 
+// No unsafe code here: platform FFI lives in readshot-app, -capture and
+// -ocr (AGENTS.md, "Things to avoid").
+#![forbid(unsafe_code)]
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

@@ -8,6 +8,10 @@
 //! menu likewise lives in `readshot-app` (`crate::tray`); this crate's
 //! old `tray` module was a superseded duplicate and has been deleted.
 
+// No unsafe code here: platform FFI lives in readshot-app, -capture and
+// -ocr (AGENTS.md, "Things to avoid").
+#![forbid(unsafe_code)]
+
 pub mod editor;
 pub mod hotkey;
 pub mod settings;
