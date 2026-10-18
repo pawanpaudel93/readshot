@@ -4,7 +4,10 @@
 //! target from this module. The reasons:
 //!
 //! 1. **Filtering.** `RUST_LOG=np.com.pawanpaudel.readshot::ocr=debug` enables
-//!    OCR-only diagnostic logging without affecting capture or editor.
+//!    OCR-only diagnostic logging without affecting capture or editor, and
+//!    `RUST_LOG=np.com.pawanpaudel.readshot=debug` enables all of Readshot's.
+//!    (0.8.1 and earlier logged some events, the tray's among them, under
+//!    short `readshot::…` targets; a filter on those names no longer matches.)
 //! 2. **Audit visibility.** The CLI and MCP server log every silent capture
 //!    they perform; using a stable target makes those entries easy to grep
 //!    out of the user's local log file.

@@ -2,7 +2,7 @@
 
 use super::*;
 
-// ---- Task 9: combine ----
+// ---- Add Image and Add Capture (combine) ----
 
 #[test]
 fn add_capture_below_hides_the_editor_and_appends_the_capture() {

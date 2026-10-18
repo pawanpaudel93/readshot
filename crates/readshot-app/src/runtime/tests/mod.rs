@@ -926,7 +926,7 @@ const NO_DOC: PartBudget = PartBudget {
     gap: 0,
 };
 
-// ---- Task 9b: the combine's own selection flag ----
+// ---- The combine's own selection flag ----
 
 /// Run a scroll capture through its real start (an overlay selection
 /// with the scroll intent), then end its session as a stitch does.
