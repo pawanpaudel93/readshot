@@ -32,11 +32,11 @@ fn welcome_enter_triggers_card_primary_action() {
     let enter = Key::Named(Named::Enter);
     assert!(matches!(
         welcome_key_message(WelcomeState::Pending, false, &enter, Modifiers::empty()),
-        Some(Message::GrantPermissionRequested)
+        Some(Message::App(AppMsg::GrantPermissionRequested))
     ));
     assert!(matches!(
         welcome_key_message(WelcomeState::Denied, false, &enter, Modifiers::empty()),
-        Some(Message::OpenPermissionSettingsRequested)
+        Some(Message::App(AppMsg::OpenPermissionSettingsRequested))
     ));
     assert!(matches!(
         welcome_key_message(WelcomeState::Granted, false, &enter, Modifiers::empty()),

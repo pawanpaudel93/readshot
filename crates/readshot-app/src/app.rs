@@ -232,32 +232,12 @@ impl SettingsPane {
 /// or background task funnels through this enum.
 #[derive(Clone, Debug)]
 pub enum Message {
+    /// App-level messages: the screen-recording permission, quit, restart
+    /// and reopen (`runtime::app_ops`).
+    App(AppMsg),
     EditorCanvas(CanvasMessage),
     EditorToolbar(ToolbarMessage),
     Settings(SettingsMessage),
-    /// Permission-status poll fired on a timer.
-    PermissionPoll(crate::permissions::PermissionStatus),
-    /// Subscription tick — `runtime::update` reads the current status
-    /// and feeds it as `PermissionPoll`. Separate from the latter so
-    /// tests can drive `PermissionPoll` directly without faking the
-    /// timer.
-    PermissionTick,
-    /// Periodic poll tick. Uses the non-prompting status check so the
-    /// system permission alert isn't re-raised every interval.
-    PermissionPollTick,
-    /// User clicked "Grant" in the welcome window.
-    GrantPermissionRequested,
-    /// User clicked "Open Settings" in the denied state.
-    OpenPermissionSettingsRequested,
-    /// User clicked "Reset Permission": clear a stale grant left for an
-    /// older code signature, then ask again.
-    ResetPermissionRequested,
-    /// User clicked "Quit" — graceful exit so the next launch picks
-    /// up newly-granted TCC permissions.
-    QuitRequested,
-    /// User clicked "Restart" — relaunch the bundle so TCC's cached
-    /// Screen Recording grant becomes visible to the new process.
-    RestartRequested,
     /// User clicked "Capture primary display" in the welcome window.
     CaptureFullPrimaryRequested,
     /// 50 ms drain tick — runtime polls the global-hotkey receiver and
@@ -274,8 +254,6 @@ pub enum Message {
     UrlTick,
     /// 100 ms drain tick — runtime polls queued macOS app-reopen events.
     AppReopenTick,
-    /// Finder / Launch Services reopened the already-running app.
-    AppReopenRequested,
     /// User selected an item in the tray menu (or left-clicked the icon).
     TrayActionPerformed(crate::tray::TrayAction),
     /// User asked for a region capture (welcome button / tray menu).
@@ -910,6 +888,38 @@ pub enum Message {
     SystemThemeChanged(iced::theme::Mode),
     /// 1s tick; `update()` re-reads the OS appearance on the app thread.
     ThemePollTick,
+}
+
+/// App-level messages: the screen-recording permission, quit, restart
+/// and Launch Services reopening the running app. Handled by
+/// `runtime::app_ops::handle_app_message`.
+#[derive(Clone, Debug)]
+pub enum AppMsg {
+    /// Permission-status poll fired on a timer.
+    PermissionPoll(crate::permissions::PermissionStatus),
+    /// Subscription tick — `runtime::update` reads the current status
+    /// and feeds it as `PermissionPoll`. Separate from the latter so
+    /// tests can drive `PermissionPoll` directly without faking the
+    /// timer.
+    PermissionTick,
+    /// Periodic poll tick. Uses the non-prompting status check so the
+    /// system permission alert isn't re-raised every interval.
+    PermissionPollTick,
+    /// User clicked "Grant" in the welcome window.
+    GrantPermissionRequested,
+    /// User clicked "Open Settings" in the denied state.
+    OpenPermissionSettingsRequested,
+    /// User clicked "Reset Permission": clear a stale grant left for an
+    /// older code signature, then ask again.
+    ResetPermissionRequested,
+    /// User clicked "Quit" — graceful exit so the next launch picks
+    /// up newly-granted TCC permissions.
+    QuitRequested,
+    /// User clicked "Restart" — relaunch the bundle so TCC's cached
+    /// Screen Recording grant becomes visible to the new process.
+    RestartRequested,
+    /// Finder / Launch Services reopened the already-running app.
+    ReopenRequested,
 }
 
 /// Top-level application state.
@@ -1618,11 +1628,11 @@ impl App {
     /// this for the shared synchronous transitions.
     pub fn update_sync(&mut self, message: Message) -> bool {
         match message {
-            Message::PermissionPoll(status) => {
+            Message::App(AppMsg::PermissionPoll(status)) => {
                 self.permission_status = status;
                 self.welcome.observe(status)
             }
-            Message::GrantPermissionRequested => {
+            Message::App(AppMsg::GrantPermissionRequested) => {
                 // Clear any decision macOS still holds for an earlier,
                 // differently signed build first. Otherwise its stale row
                 // ("Failed to match existing code requirement") means no
@@ -1633,11 +1643,11 @@ impl App {
                 self.welcome = WelcomeState::AwaitingGrant;
                 true
             }
-            Message::OpenPermissionSettingsRequested => {
+            Message::App(AppMsg::OpenPermissionSettingsRequested) => {
                 self.permissions.open_settings();
                 false
             }
-            Message::ResetPermissionRequested => {
+            Message::App(AppMsg::ResetPermissionRequested) => {
                 self.permissions.reset();
                 self.permissions.request();
                 self.welcome = WelcomeState::AwaitingGrant;
@@ -1710,7 +1720,7 @@ mod tests {
     #[test]
     fn grant_request_invokes_permissions_and_advances_state() {
         let (mut app, perms) = build_app(Arc::new(FakePermissions::denied()));
-        let changed = app.update_sync(Message::GrantPermissionRequested);
+        let changed = app.update_sync(Message::App(AppMsg::GrantPermissionRequested));
         assert!(changed);
         assert_eq!(perms.request_calls.load(Ordering::SeqCst), 1);
         assert_eq!(app.welcome, WelcomeState::AwaitingGrant);
@@ -1721,9 +1731,11 @@ mod tests {
         let perms = Arc::new(FakePermissions::denied());
         let (mut app, _) = build_app(perms.clone());
         // User clicks "Grant", OS prompt fires, then poll sees the new state.
-        app.update_sync(Message::GrantPermissionRequested);
+        app.update_sync(Message::App(AppMsg::GrantPermissionRequested));
         perms.flip_to_granted();
-        let changed = app.update_sync(Message::PermissionPoll(PermissionStatus::Granted));
+        let changed = app.update_sync(Message::App(AppMsg::PermissionPoll(
+            PermissionStatus::Granted,
+        )));
         assert!(changed);
         assert!(!app.welcome.should_show());
     }
@@ -1736,9 +1748,11 @@ mod tests {
         let path = dir.path().join("preferences.toml");
         app.preferences_path = Some(path.clone());
 
-        app.update_sync(Message::GrantPermissionRequested);
+        app.update_sync(Message::App(AppMsg::GrantPermissionRequested));
         perms.flip_to_granted();
-        let changed = app.update_sync(Message::PermissionPoll(PermissionStatus::Granted));
+        let changed = app.update_sync(Message::App(AppMsg::PermissionPoll(
+            PermissionStatus::Granted,
+        )));
 
         assert!(changed);
         assert!(!app.preferences.onboarding_completed);
@@ -1814,7 +1828,7 @@ mod tests {
     #[test]
     fn allow_screen_recording_clears_stale_grant_before_asking() {
         let (mut app, perms) = build_app(Arc::new(FakePermissions::denied()));
-        app.update_sync(Message::GrantPermissionRequested);
+        app.update_sync(Message::App(AppMsg::GrantPermissionRequested));
         assert_eq!(perms.reset_calls.load(Ordering::SeqCst), 1);
         assert_eq!(perms.request_calls.load(Ordering::SeqCst), 1);
     }
@@ -1822,7 +1836,7 @@ mod tests {
     #[test]
     fn reset_permission_clears_stale_grant_and_asks_again() {
         let (mut app, perms) = build_app(Arc::new(FakePermissions::denied()));
-        let changed = app.update_sync(Message::ResetPermissionRequested);
+        let changed = app.update_sync(Message::App(AppMsg::ResetPermissionRequested));
         assert!(changed);
         assert_eq!(perms.reset_calls.load(Ordering::SeqCst), 1);
         assert_eq!(perms.request_calls.load(Ordering::SeqCst), 1);
@@ -1832,7 +1846,7 @@ mod tests {
     #[test]
     fn open_settings_request_invokes_permissions_no_state_change() {
         let (mut app, perms) = build_app(Arc::new(FakePermissions::denied()));
-        let changed = app.update_sync(Message::OpenPermissionSettingsRequested);
+        let changed = app.update_sync(Message::App(AppMsg::OpenPermissionSettingsRequested));
         assert!(!changed);
         assert_eq!(perms.open_settings_calls.load(Ordering::SeqCst), 1);
     }

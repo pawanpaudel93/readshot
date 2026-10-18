@@ -749,7 +749,7 @@ fn permission_tick_drives_welcome_state_machine() {
     assert!(app.welcome.should_show());
     // After the OS flips to granted, a tick clears welcome.
     perms.flip_to_granted();
-    let _ = update(&mut app, Message::PermissionTick);
+    let _ = update(&mut app, Message::App(AppMsg::PermissionTick));
     assert!(!app.welcome.should_show());
 }
 

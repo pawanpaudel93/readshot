@@ -383,15 +383,15 @@ fn welcome_restart_and_reset_permission_have_keys() {
     let shift = cmd | Modifiers::SHIFT;
     assert!(matches!(
         welcome_key_message(W::Denied, false, &r, cmd),
-        Some(Message::RestartRequested)
+        Some(Message::App(AppMsg::RestartRequested))
     ));
     assert!(matches!(
         welcome_key_message(W::AwaitingGrant, false, &r, shift),
-        Some(Message::ResetPermissionRequested)
+        Some(Message::App(AppMsg::ResetPermissionRequested))
     ));
     assert!(matches!(
         welcome_key_message(W::Pending, false, &r, shift),
-        Some(Message::ResetPermissionRequested)
+        Some(Message::App(AppMsg::ResetPermissionRequested))
     ));
     // Only while those buttons are on the card.
     assert!(welcome_key_message(W::Pending, false, &r, cmd).is_none());

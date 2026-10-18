@@ -4062,7 +4062,7 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
             button(text("Open System Settings").size(TYPE_BODY))
                 .padding([6, 12])
                 .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::OpenPermissionSettingsRequested),
+                .on_press(Message::App(AppMsg::OpenPermissionSettingsRequested)),
             lit_open,
         );
         // Recheck button forces a fresh permission poll so the user
@@ -4073,7 +4073,7 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
             button(text("Recheck").size(TYPE_BODY))
                 .padding([6, 12])
                 .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::PermissionTick),
+                .on_press(Message::App(AppMsg::PermissionTick)),
             lit_recheck,
         );
         // Clears a grant macOS still holds for an earlier, differently
@@ -4082,7 +4082,7 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
             button(text("Reset Permission").size(TYPE_BODY))
                 .padding([6, 12])
                 .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::ResetPermissionRequested),
+                .on_press(Message::App(AppMsg::ResetPermissionRequested)),
             lit_reset,
         );
         // Once access is granted there is nothing to recheck or reset.
@@ -4861,7 +4861,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                 ButtonSize::Lg,
                 Some(RETURN_KEY),
                 p,
-                Some(Message::GrantPermissionRequested),
+                Some(Message::App(AppMsg::GrantPermissionRequested)),
             ));
             actions = actions.push(welcome_reset_footer());
         }
@@ -4873,7 +4873,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                 ButtonSize::Lg,
                 Some(RETURN_KEY),
                 p,
-                Some(Message::OpenPermissionSettingsRequested),
+                Some(Message::App(AppMsg::OpenPermissionSettingsRequested)),
             ));
             actions = actions.push(tooltip_with_key(
                 welcome_button(
@@ -4883,7 +4883,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                     ButtonSize::Md,
                     None,
                     p,
-                    Some(Message::RestartRequested),
+                    Some(Message::App(AppMsg::RestartRequested)),
                 ),
                 "Restart Readshot",
                 Some(WELCOME_RESTART_KEY),
@@ -5063,7 +5063,7 @@ fn welcome_reset_footer<'a>() -> Element<'a, Message> {
             button(text("Reset Permission").size(TYPE_CAPTION))
                 .padding([2, 6])
                 .style(|t, s| button_style(t, s, ButtonKind::Ghost))
-                .on_press(Message::ResetPermissionRequested),
+                .on_press(Message::App(AppMsg::ResetPermissionRequested)),
             "Reset Permission",
             Some(WELCOME_RESET_PERMISSION_KEY),
             iced::widget::tooltip::Position::Top,

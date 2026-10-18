@@ -799,7 +799,7 @@ fn periodic_poll_notices_grant_without_probing() {
     let mut app = build_app(perms.clone());
     assert!(app.welcome.should_show());
     perms.flip_to_granted();
-    let _ = update(&mut app, Message::PermissionPollTick);
+    let _ = update(&mut app, Message::App(AppMsg::PermissionPollTick));
     assert_eq!(app.permission_status, PermissionStatus::Granted);
 }
 
@@ -816,7 +816,7 @@ fn url_capture_waits_for_permission_then_replays() {
     );
 
     perms.flip_to_granted();
-    let _ = update(&mut app, Message::PermissionTick);
+    let _ = update(&mut app, Message::App(AppMsg::PermissionTick));
 
     assert_eq!(app.pending_url_after_permission, None);
 }

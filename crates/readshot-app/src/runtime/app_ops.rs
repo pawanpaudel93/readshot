@@ -4,8 +4,41 @@
 
 use super::*;
 
-/// `Message::RestartRequested`.
-pub(super) fn on_restart_requested() -> Task<Message> {
+/// Every [`AppMsg`].
+pub(super) fn handle_app_message(state: &mut App, message: AppMsg) -> Task<Message> {
+    match message {
+        // Explicit checks (Recheck, after Allow) may probe; the periodic
+        // tick must not, or macOS re-raises its permission alert each time.
+        tick @ (AppMsg::PermissionTick | AppMsg::PermissionPollTick) => {
+            on_permission_tick(state, tick)
+        }
+        AppMsg::ReopenRequested => show_or_focus_welcome(state),
+        AppMsg::QuitRequested => quit_readshot(&state.coordinator),
+        AppMsg::RestartRequested => on_restart_requested(),
+        // GrantPermissionRequested: just trigger the macOS permission
+        // prompt by poking ScreenCaptureKit
+        // (`SCShareableContent::get()` runs inside `list_displays`).
+        // The OS prompt itself carries an "Open System Settings"
+        // button — letting macOS drive that flow avoids our app
+        // racing it with a second `open URL` call. The
+        // "Open Settings again" button in the AwaitingGrant state
+        // covers users whose prompt never appears (e.g. previously
+        // denied) by deep-linking directly.
+        AppMsg::GrantPermissionRequested => on_grant_permission(state),
+        // Clear the stale row, re-register this signature with macOS (the
+        // SCK probe inside `list_displays` does that), and open the pane
+        // so the user can switch Readshot on for this build.
+        AppMsg::ResetPermissionRequested => on_reset_permission(state),
+        // Synchronous transitions — reuse the existing handler.
+        msg @ (AppMsg::PermissionPoll(_) | AppMsg::OpenPermissionSettingsRequested) => {
+            state.update_sync(Message::App(msg));
+            Task::none()
+        }
+    }
+}
+
+/// `AppMsg::RestartRequested`.
+fn on_restart_requested() -> Task<Message> {
     // macOS Screen Recording's TCC grant is cached per-process
     // by `CGPreflightScreenCaptureAccess` — once a process has
     // seen "denied", it can't ever see "granted" without a
@@ -32,9 +65,9 @@ pub(super) fn on_restart_requested() -> Task<Message> {
     iced::exit()
 }
 
-/// `Message::GrantPermissionRequested`.
-pub(super) fn on_grant_permission(state: &mut App) -> Task<Message> {
-    state.update_sync(Message::GrantPermissionRequested);
+/// `AppMsg::GrantPermissionRequested`.
+fn on_grant_permission(state: &mut App) -> Task<Message> {
+    state.update_sync(Message::App(AppMsg::GrantPermissionRequested));
     let coord = state.coordinator.clone();
     Task::perform(
         async move {
@@ -42,26 +75,26 @@ pub(super) fn on_grant_permission(state: &mut App) -> Task<Message> {
             // macOS shows its prompt — that's what we want.
             let _ = coord.list_displays().await;
         },
-        |()| Message::PermissionTick,
+        |()| Message::App(AppMsg::PermissionTick),
     )
 }
 
-/// `Message::ResetPermissionRequested`.
-pub(super) fn on_reset_permission(state: &mut App) -> Task<Message> {
-    state.update_sync(Message::ResetPermissionRequested);
+/// `AppMsg::ResetPermissionRequested`.
+fn on_reset_permission(state: &mut App) -> Task<Message> {
+    state.update_sync(Message::App(AppMsg::ResetPermissionRequested));
     let coord = state.coordinator.clone();
     Task::perform(
         async move {
             let _ = coord.list_displays().await;
         },
-        |()| Message::OpenPermissionSettingsRequested,
+        |()| Message::App(AppMsg::OpenPermissionSettingsRequested),
     )
 }
 
-/// `Message::PermissionTick` and `Message::PermissionPollTick`: re-read
+/// `AppMsg::PermissionTick` and `AppMsg::PermissionPollTick`: re-read
 /// the permission and close the Welcome window once it is granted.
-pub(super) fn on_permission_tick(state: &mut App, tick: Message) -> Task<Message> {
-    let status = if matches!(tick, Message::PermissionPollTick) {
+fn on_permission_tick(state: &mut App, tick: AppMsg) -> Task<Message> {
+    let status = if matches!(tick, AppMsg::PermissionPollTick) {
         state.permissions.status_quiet()
     } else {
         state.permissions.status()
@@ -70,7 +103,7 @@ pub(super) fn on_permission_tick(state: &mut App, tick: Message) -> Task<Message
     let was_onboarding_completed = state.preferences.onboarding_completed;
     // Reuse the existing synchronous handler — it drives the
     // `WelcomeState` machine without touching iced state.
-    state.update_sync(Message::PermissionPoll(status));
+    state.update_sync(Message::App(AppMsg::PermissionPoll(status)));
     // If the permission gate just cleared for a user who has
     // not yet completed onboarding, keep the visible welcome
     // window open so it can redraw as the "You're all set"

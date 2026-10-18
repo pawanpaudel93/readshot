@@ -355,7 +355,7 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
     ]
 }
 
-use crate::app::{App, GlobalHotkeyAction, HistoryKeyboardAction, Message, WindowKind};
+use crate::app::{App, AppMsg, GlobalHotkeyAction, HistoryKeyboardAction, Message, WindowKind};
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
 use crate::welcome::WelcomeState;
@@ -592,7 +592,8 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // CPU. The TCC db is already cached in-process so each poll
         // is essentially a no-op syscall.
         subs.push(
-            iced::time::every(Duration::from_millis(500)).map(|_| Message::PermissionPollTick),
+            iced::time::every(Duration::from_millis(500))
+                .map(|_| Message::App(AppMsg::PermissionPollTick)),
         );
     }
     // These four drains poll OS-event sources (crossbeam channels /
@@ -1153,6 +1154,8 @@ pub(crate) fn surface_capture_problem(
 
 fn update_message(state: &mut App, message: Message) -> Task<Message> {
     match message {
+        Message::App(msg) => app_ops::handle_app_message(state, msg),
+
         Message::WelcomeWindowReady(id) => welcome_ops::on_welcome_window_ready(state, id),
 
         Message::WelcomeKeyPressed {
@@ -1160,12 +1163,6 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             key,
             modifiers,
         } => welcome_ops::on_welcome_key_pressed(state, window, key, modifiers),
-
-        // Explicit checks (Recheck, after Allow) may probe; the periodic
-        // tick must not, or macOS re-raises its permission alert each time.
-        tick @ (Message::PermissionTick | Message::PermissionPollTick) => {
-            app_ops::on_permission_tick(state, tick)
-        }
 
         Message::OverlayShiftChanged(held) => capture_ops::on_overlay_shift_changed(state, held),
 
@@ -1176,8 +1173,6 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         Message::UrlTick => tick_ops::on_url_tick(state),
 
         Message::AppReopenTick => tick_ops::on_app_reopen_tick(),
-
-        Message::AppReopenRequested => show_or_focus_welcome(state),
 
         Message::TrayActionPerformed(action) => tick_ops::on_tray_action(state, action),
 
@@ -1263,32 +1258,6 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         Message::ThemePollTick => tick_ops::on_theme_poll_tick(state),
         Message::SystemThemeChanged(mode) => tick_ops::on_system_theme_changed(state, mode),
         Message::UrlActionReceived(action) => tick_ops::on_url_action(state, action),
-
-        Message::QuitRequested => quit_readshot(&state.coordinator),
-
-        Message::RestartRequested => app_ops::on_restart_requested(),
-
-        // GrantPermissionRequested: just trigger the macOS permission
-        // prompt by poking ScreenCaptureKit
-        // (`SCShareableContent::get()` runs inside `list_displays`).
-        // The OS prompt itself carries an "Open System Settings"
-        // button — letting macOS drive that flow avoids our app
-        // racing it with a second `open URL` call. The
-        // "Open Settings again" button in the AwaitingGrant state
-        // covers users whose prompt never appears (e.g. previously
-        // denied) by deep-linking directly.
-        Message::GrantPermissionRequested => app_ops::on_grant_permission(state),
-
-        // Clear the stale row, re-register this signature with macOS (the
-        // SCK probe inside `list_displays` does that), and open the pane
-        // so the user can switch Readshot on for this build.
-        Message::ResetPermissionRequested => app_ops::on_reset_permission(state),
-
-        // Synchronous transitions — reuse the existing handler.
-        msg @ (Message::PermissionPoll(_) | Message::OpenPermissionSettingsRequested) => {
-            state.update_sync(msg);
-            Task::none()
-        }
 
         msg @ settings_messages!() => settings_ops::handle_settings_message(state, msg),
     }

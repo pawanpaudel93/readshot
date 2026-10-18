@@ -95,7 +95,7 @@ pub(super) fn on_app_reopen_tick() -> Task<Message> {
     if crate::app_events::take_reopen_requests() == 0 {
         Task::none()
     } else {
-        Task::done(Message::AppReopenRequested)
+        Task::done(Message::App(AppMsg::ReopenRequested))
     }
 }
 

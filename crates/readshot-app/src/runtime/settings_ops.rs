@@ -353,9 +353,9 @@ fn on_off(v: bool) -> &'static str {
 fn activate_settings_item(state: &mut App, item: SettingsFocus) -> Task<Message> {
     use SettingsFocus as F;
     let msg = match item {
-        F::PermissionRecheck => Message::PermissionTick,
-        F::PermissionReset => Message::ResetPermissionRequested,
-        F::PermissionOpen => Message::OpenPermissionSettingsRequested,
+        F::PermissionRecheck => Message::App(AppMsg::PermissionTick),
+        F::PermissionReset => Message::App(AppMsg::ResetPermissionRequested),
+        F::PermissionOpen => Message::App(AppMsg::OpenPermissionSettingsRequested),
         F::HotkeyRecord if state.settings_recording_hotkey => {
             Message::SettingsHotkeyRecordingCancelled
         }

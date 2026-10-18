@@ -376,9 +376,9 @@ pub(crate) fn welcome_primary_message(
     capture_in_flight: bool,
 ) -> Option<Message> {
     match welcome {
-        WelcomeState::Pending => Some(Message::GrantPermissionRequested),
+        WelcomeState::Pending => Some(Message::App(AppMsg::GrantPermissionRequested)),
         WelcomeState::AwaitingGrant | WelcomeState::Denied => {
-            Some(Message::OpenPermissionSettingsRequested)
+            Some(Message::App(AppMsg::OpenPermissionSettingsRequested))
         }
         WelcomeState::Granted => (!capture_in_flight).then_some(Message::OpenOverlayRequested),
     }
@@ -405,9 +405,9 @@ pub(crate) fn welcome_key_message(
         let blocked = matches!(welcome, WelcomeState::AwaitingGrant | WelcomeState::Denied);
         return if modifiers.shift() {
             (blocked || welcome == WelcomeState::Pending)
-                .then_some(Message::ResetPermissionRequested)
+                .then_some(Message::App(AppMsg::ResetPermissionRequested))
         } else {
-            blocked.then_some(Message::RestartRequested)
+            blocked.then_some(Message::App(AppMsg::RestartRequested))
         };
     }
     if modifiers.command() || modifiers.alt() || modifiers.control() || modifiers.shift() {
