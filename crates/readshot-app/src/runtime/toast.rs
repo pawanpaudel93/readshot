@@ -35,51 +35,14 @@ pub(crate) fn toast_is_dismissable(kind: ToastKind) -> bool {
     matches!(kind, ToastKind::Error | ToastKind::Warn)
 }
 
-/// Toast kind for the editor status line: the tone its writer chose.
-pub(crate) fn editor_toast_kind(tone: crate::editor::StatusTone) -> ToastKind {
+/// Toast kind for a status (the editor's, History's, the Welcome
+/// window's): the tone its writer chose.
+pub(crate) fn status_toast_kind(tone: crate::editor::StatusTone) -> ToastKind {
     use crate::editor::StatusTone;
     match tone {
         StatusTone::Success => ToastKind::Ok,
         StatusTone::Notice | StatusTone::Info | StatusTone::Progress => ToastKind::Info,
         StatusTone::Warning | StatusTone::DiscardPrompt => ToastKind::Warn,
         StatusTone::Error => ToastKind::Error,
-    }
-}
-
-/// The editor tone for a plain status string from outside the editor (a
-/// notification that could not be shown): the kind [`status_toast_kind`]
-/// gives it. One that reports work starting ("Checking for updates…") is
-/// a notice: the editor will never see that work end, so it must not
-/// wait for it.
-pub(crate) fn plain_status_tone(status: &str) -> crate::editor::StatusTone {
-    use crate::editor::StatusTone;
-    if status.ends_with('…') && !crate::editor::status_str_is_error(status) {
-        return StatusTone::Notice;
-    }
-    match status_toast_kind(status) {
-        ToastKind::Ok => StatusTone::Success,
-        ToastKind::Info => StatusTone::Notice,
-        ToastKind::Warn => StatusTone::Warning,
-        ToastKind::Error => StatusTone::Error,
-    }
-}
-
-/// Toast kind for a settled status line (History, Welcome, editor):
-/// failures are Error; "No …", "Text hidden…", "… not found" and
-/// "… cancelled" are neutral notices (Info) rather than successes; the
-/// rest are Ok.
-pub(crate) fn status_toast_kind(status: &str) -> ToastKind {
-    if crate::editor::status_str_is_error(status) {
-        return ToastKind::Error;
-    }
-    let lower = status.to_lowercase();
-    if lower.starts_with("no ")
-        || lower.starts_with("text hidden")
-        || lower.contains("not found")
-        || lower.contains("cancelled")
-    {
-        ToastKind::Info
-    } else {
-        ToastKind::Ok
     }
 }

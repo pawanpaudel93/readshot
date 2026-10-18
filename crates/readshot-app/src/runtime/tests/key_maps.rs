@@ -166,7 +166,7 @@ fn history_captured_shortcut_applies_only_for_empty_search() {
     app.history_search.clear();
     let _ = update(&mut app, captured(HistoryKeyboardAction::CopyImage));
     assert_eq!(
-        app.history_status.as_deref(),
+        app.history_status_text(),
         Some("No history capture selected.")
     );
 }

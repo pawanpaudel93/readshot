@@ -141,14 +141,20 @@ pub(super) fn on_keyboard_shortcut(
         HistoryKeyboardAction::CopyText => match state.history_selected_id {
             Some(id) => update(state, Message::History(HistoryMsg::CopyText(id))),
             None => {
-                state.history_status = Some("No history capture selected.".into());
+                state.history_status = Some(Status::new(
+                    StatusTone::Notice,
+                    "No history capture selected.",
+                ));
                 Task::none()
             }
         },
         HistoryKeyboardAction::CopyImage => match state.history_selected_id {
             Some(id) => update(state, Message::History(HistoryMsg::CopyImage(id))),
             None => {
-                state.history_status = Some("No history capture selected.".into());
+                state.history_status = Some(Status::new(
+                    StatusTone::Notice,
+                    "No history capture selected.",
+                ));
                 Task::none()
             }
         },
@@ -156,14 +162,20 @@ pub(super) fn on_keyboard_shortcut(
         HistoryKeyboardAction::Reveal => match state.history_selected_id {
             Some(id) => update(state, Message::History(HistoryMsg::Reveal(id))),
             None => {
-                state.history_status = Some("No history capture selected.".into());
+                state.history_status = Some(Status::new(
+                    StatusTone::Notice,
+                    "No history capture selected.",
+                ));
                 Task::none()
             }
         },
         HistoryKeyboardAction::Pin => match state.history_selected_id {
             Some(id) => update(state, Message::History(HistoryMsg::Pin(id))),
             None => {
-                state.history_status = Some("No history capture selected.".into());
+                state.history_status = Some(Status::new(
+                    StatusTone::Notice,
+                    "No history capture selected.",
+                ));
                 Task::none()
             }
         },
@@ -214,16 +226,19 @@ pub(super) fn on_clear_all_confirmed(state: &mut App) -> Task<Message> {
     state.history_delete_pending = None;
     if let Err(e) = state.coordinator.clear_history() {
         tracing::warn!(target: readshot_core::log::cat::HISTORY, "clear history failed: {e}");
-        state.history_status = Some(friendly_history_error("clear the history", &e));
+        state.history_status = Some(Status::new(
+            StatusTone::Error,
+            friendly_history_error("clear the history", &e),
+        ));
         return Task::none();
     }
     let n = state.history_records.len();
     state.history_records.clear();
     state.history_search.clear();
     state.history_selected_id = None;
-    state.history_status = Some(format!(
-        "Deleted {} permanently.",
-        counted(n, "capture", "captures")
+    state.history_status = Some(Status::new(
+        StatusTone::Success,
+        format!("Deleted {} permanently.", counted(n, "capture", "captures")),
     ));
     Task::none()
 }

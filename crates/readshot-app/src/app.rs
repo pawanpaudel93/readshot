@@ -1069,11 +1069,12 @@ pub struct App {
     /// `true` while a capture-and-save task is in flight; the welcome
     /// window's button is disabled in that state.
     pub capture_in_flight: bool,
-    /// Last toast text shown under the capture button. Cleared when
-    /// the user kicks off a new capture.
-    pub last_capture_status: Option<String>,
-    /// The last capture status raised as a system notification, so a
-    /// status is announced once however many nested updates see it.
+    /// Last toast shown under the capture button, with the tone its
+    /// writer chose. Cleared when the user kicks off a new capture.
+    pub last_capture_status: Option<crate::editor::Status>,
+    /// The text of the last capture status raised as a system
+    /// notification, so a status is announced once however many nested
+    /// updates see it.
     pub announced_capture_status: Option<String>,
     /// The user has been told (once, in the tray menu) that Readshot's
     /// notifications are off and how to turn them on.
@@ -1211,9 +1212,10 @@ pub struct App {
     /// is single-instance — opening it again focuses the existing
     /// window instead of spawning a duplicate.
     pub history_window_id: Option<iced::window::Id>,
-    /// Last error from a history list / load operation. Surfaced as
-    /// a toast inside the browser when set.
-    pub history_status: Option<String>,
+    /// The History browser's status (an outcome, a refusal, a failure),
+    /// with the tone its writer chose. Surfaced as a toast inside the
+    /// browser when set.
+    pub history_status: Option<crate::editor::Status>,
     /// A History record being opened whose earlier editor is still
     /// composing: its load starts once that editor has landed and queued
     /// its History sync (`history_ops::load_when_finished`). Edits are
@@ -1296,8 +1298,8 @@ pub struct App {
     pub history_clear_all_pending: bool,
     /// `window::Id` of the live command-line setup instructions window.
     pub cli_tools_window_id: Option<iced::window::Id>,
-    /// Copy-status text shown in the command-line setup window.
-    pub cli_tools_status: Option<String>,
+    /// Copy status shown in the command-line setup window.
+    pub cli_tools_status: Option<crate::editor::Status>,
     /// Active scrolling-capture session, if any. Holds the per-frame
     /// state (captured frames, no-motion counter, HUD window id) so
     /// the runtime can drive the capture loop, render the HUD, and
@@ -1541,6 +1543,21 @@ pub struct CombineCapture {
 }
 
 impl App {
+    /// The History browser's status text, if any.
+    pub fn history_status_text(&self) -> Option<&str> {
+        self.history_status.as_ref().map(|s| s.text.as_str())
+    }
+
+    /// The capture status text (the Welcome window's toast), if any.
+    pub fn last_capture_status_text(&self) -> Option<&str> {
+        self.last_capture_status.as_ref().map(|s| s.text.as_str())
+    }
+
+    /// The command-line setup window's copy status text, if any.
+    pub fn cli_tools_status_text(&self) -> Option<&str> {
+        self.cli_tools_status.as_ref().map(|s| s.text.as_str())
+    }
+
     /// Forget held ⌘/⇧. Called when an editor opens or closes: the
     /// key-up for a modifier released while no editor window had focus
     /// never arrives, and a stale flag would turn the next click into a

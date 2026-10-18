@@ -511,7 +511,10 @@ fn on_scroll_cancel(state: &mut App) -> Task<Message> {
     let Some(session) = state.scroll_session.take() else {
         return Task::none();
     };
-    state.last_capture_status = Some("Scrolling capture cancelled.".into());
+    state.last_capture_status = Some(Status::new(
+        StatusTone::Notice,
+        "Scrolling capture cancelled.",
+    ));
     close_scroll_windows(state, &session)
 }
 
@@ -530,7 +533,10 @@ fn on_scroll_stop(state: &mut App) -> Task<Message> {
         let Some(session) = state.scroll_session.take() else {
             return Task::none();
         };
-        state.last_capture_status = Some("Scrolling capture cancelled.".into());
+        state.last_capture_status = Some(Status::new(
+            StatusTone::Notice,
+            "Scrolling capture cancelled.",
+        ));
         return close_scroll_windows(state, &session);
     }
     session.stopping = true;
@@ -584,10 +590,13 @@ fn on_scroll_stitched(state: &mut App, result: Result<image::RgbaImage, String>)
             ])
         }
         Err(e) => {
-            state.last_capture_status = Some(super::history_ops::friendly_string_error_with(
-                "stitch the scrolling capture",
-                &e.to_string(),
-                Some(SCROLL_RETRY_HINT),
+            state.last_capture_status = Some(Status::new(
+                StatusTone::Error,
+                super::history_ops::friendly_string_error_with(
+                    "stitch the scrolling capture",
+                    &e.to_string(),
+                    Some(SCROLL_RETRY_HINT),
+                ),
             ));
             tracing::warn!(target: readshot_core::log::cat::CAPTURE, "stitch failed: {e}");
             close_hud

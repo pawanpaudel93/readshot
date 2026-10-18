@@ -1342,21 +1342,21 @@ fn editor_chrome_layers_clear_the_stage() {
 }
 
 #[test]
-fn editor_toast_kind_classifies_status() {
+fn status_toast_kind_classifies_status() {
     // "Couldn’t save — the folder is read-only."
-    assert_eq!(editor_toast_kind(Tone::Error), ToastKind::Error);
+    assert_eq!(status_toast_kind(Tone::Error), ToastKind::Error);
     // "Copied image"
-    assert_eq!(editor_toast_kind(Tone::Success), ToastKind::Ok);
+    assert_eq!(status_toast_kind(Tone::Success), ToastKind::Ok);
     // "Saving…"
-    assert_eq!(editor_toast_kind(Tone::Progress), ToastKind::Info);
+    assert_eq!(status_toast_kind(Tone::Progress), ToastKind::Info);
     // An armed Discard.
-    assert_eq!(editor_toast_kind(Tone::DiscardPrompt), ToastKind::Warn);
+    assert_eq!(status_toast_kind(Tone::DiscardPrompt), ToastKind::Warn);
     // A status set as a warning is never the success check, but an
     // error reads as an error.
     // "The image changed. Open Resize again."
-    assert_eq!(editor_toast_kind(Tone::Warning), ToastKind::Warn);
+    assert_eq!(status_toast_kind(Tone::Warning), ToastKind::Warn);
     // "Couldn’t locate 1 item."
-    assert_eq!(editor_toast_kind(Tone::Error), ToastKind::Error);
+    assert_eq!(status_toast_kind(Tone::Error), ToastKind::Error);
 }
 
 #[test]
@@ -1396,40 +1396,88 @@ fn a_partial_redaction_status_is_a_warning() {
         crate::editor::EditorToastAction::UndoRedaction { generation: 0 },
     );
     assert_eq!(
-        editor_toast_kind(ed.status_tone().unwrap()),
+        status_toast_kind(ed.status_tone().unwrap()),
         ToastKind::Warn
     );
 }
 
+/// History and capture statuses show as the kind of the tone their
+/// writer chose: notices as Info, failures as Error, outcomes as Ok,
+/// the same kinds the editor's statuses show.
 #[test]
 fn status_toast_kind_separates_notices_from_successes() {
-    for s in [
-        "Capture not found.",
-        "No history capture selected.",
-        "No OCR text on this capture yet.",
-        "No OCR text in the visible captures.",
-        "Scrolling capture cancelled.",
-    ] {
-        assert_eq!(status_toast_kind(s), ToastKind::Info, "{s:?}");
-    }
-    for s in [
-        "Couldn’t read the history — permission denied. Close History and open it again.",
-        "Couldn’t stitch the scrolling capture. Start the scrolling capture again.",
-        "Couldn’t start the scrolling capture — the selected area was lost. Start the scrolling capture again.",
-    ] {
-        assert_eq!(status_toast_kind(s), ToastKind::Error, "{s:?}");
-    }
-    for s in ["Saved to /tmp/x.png.", "Copied text."] {
-        assert_eq!(status_toast_kind(s), ToastKind::Ok, "{s:?}");
-    }
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.history_root = Some(std::path::PathBuf::from("/nonexistent"));
+    let kind = |app: &App| status_toast_kind(app.history_status.as_ref().unwrap().tone);
+    // "Capture not found."
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::Reveal(readshot_core::Uuid::new_v4())),
+    );
+    assert_eq!(app.history_status_text(), Some("Capture not found."));
+    assert_eq!(kind(&app), ToastKind::Info);
+    // "No history capture selected."
+    let _ = update(&mut app, Message::History(HistoryMsg::OpenSelected));
+    assert_eq!(
+        app.history_status_text(),
+        Some("No history capture selected.")
+    );
+    assert_eq!(kind(&app), ToastKind::Info);
+    // "No OCR text in the visible captures."
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::CopyVisibleTextRequested),
+    );
+    assert_eq!(
+        app.history_status_text(),
+        Some("No OCR text in the visible captures.")
+    );
+    assert_eq!(kind(&app), ToastKind::Info);
+    // "Couldn’t read the history — …"
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::ListLoaded(Err("permission denied".into()))),
+    );
+    assert!(app
+        .history_status_text()
+        .unwrap()
+        .starts_with("Couldn’t read the history"));
+    assert_eq!(kind(&app), ToastKind::Error);
+    // "Copied OCR text from …"
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::CopyVisibleTextDone(Ok(2))),
+    );
+    assert_eq!(
+        app.history_status_text(),
+        Some("Copied OCR text from 2 captures.")
+    );
+    assert_eq!(kind(&app), ToastKind::Ok);
+    // The capture statuses: "Saved to …" and "Save cancelled."
+    let capture_kind =
+        |app: &App| status_toast_kind(app.last_capture_status.as_ref().unwrap().tone);
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::OverlaySaveDone(Ok(Some("/tmp/x.png".into())))),
+    );
+    assert_eq!(capture_kind(&app), ToastKind::Ok);
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::OverlaySaveDone(Ok(None))),
+    );
+    assert_eq!(app.last_capture_status_text(), Some("Save cancelled."));
+    assert_eq!(capture_kind(&app), ToastKind::Info);
     // The editor's notices ("No text recognized.") show the same kind.
-    assert_eq!(editor_toast_kind(Tone::Notice), ToastKind::Info);
+    assert_eq!(status_toast_kind(Tone::Notice), ToastKind::Info);
 }
 
 #[test]
 fn history_status_dismissed_clears_history_status() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
-    app.history_status = Some("Couldn’t read history: denied".into());
+    app.history_status = Some(crate::editor::Status::new(
+        crate::editor::StatusTone::Error,
+        "Couldn’t read history: denied",
+    ));
     let _ = update(&mut app, Message::History(HistoryMsg::StatusDismissed));
     assert!(app.history_status.is_none());
 }
@@ -1452,14 +1500,14 @@ fn other_status_after_arming_disarms_discard() {
     ed.set_status(Tone::Progress, "Copying…");
     assert!(!ed.discard_armed());
     assert_ne!(
-        editor_toast_kind(ed.status_tone().unwrap()),
+        status_toast_kind(ed.status_tone().unwrap()),
         ToastKind::Warn
     );
     let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
     let ed = app.editor.as_mut().unwrap();
     ed.set_status(Tone::Error, "Couldn’t save — disk full.");
     assert_eq!(
-        editor_toast_kind(ed.status_tone().unwrap()),
+        status_toast_kind(ed.status_tone().unwrap()),
         ToastKind::Error
     );
 }
@@ -1523,7 +1571,7 @@ fn popover_closed_message_clears_any_open_popover() {
 fn instructions_toast_as_info_not_success() {
     assert_eq!(
         // "Press ↵ to crop, esc to cancel."
-        editor_toast_kind(Tone::Info),
+        status_toast_kind(Tone::Info),
         ToastKind::Info
     );
     // Drawing a crop draft sets its instruction as Info.

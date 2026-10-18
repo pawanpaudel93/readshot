@@ -144,7 +144,7 @@ pub(super) fn on_pin_rendered(
         Ok(img) => open_pin_window(state, img, display_bounds),
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::EDITOR, "pin render failed: {e}");
-            state.last_capture_status = Some(e);
+            state.last_capture_status = Some(Status::new(StatusTone::Error, e));
             Task::none()
         }
     }

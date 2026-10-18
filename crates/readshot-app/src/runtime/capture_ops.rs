@@ -145,10 +145,10 @@ pub(super) fn on_retake_last_region(state: &mut App) -> Task<Message> {
                 .map(|last| (display_id.clone(), *last))
         })
     else {
-        state.last_capture_status = Some(
-            "No previous region to retake. Capture a region first, then use Retake Last Region."
-                .into(),
-        );
+        state.last_capture_status = Some(Status::new(
+            StatusTone::Warning,
+            "No previous region to retake. Capture a region first, then use Retake Last Region.",
+        ));
         return Task::none();
     };
 
@@ -172,7 +172,10 @@ pub(super) fn on_displays_list_failed(state: &mut App, e: String) -> Task<Messag
     state.overlay_opening = false;
     clear_pending_capture_state(state);
     tracing::warn!(target: readshot_core::log::cat::CAPTURE, "could not list displays: {e}");
-    state.last_capture_status = Some(history_ops::friendly_capture_error(&e));
+    state.last_capture_status = Some(Status::new(
+        StatusTone::Error,
+        history_ops::friendly_capture_error(&e),
+    ));
     let restore = abort_combine_capture(state, Some(&combine_capture_failed_status(&e)));
     if state.cli_interactive_output.is_some() {
         Task::batch([
@@ -195,7 +198,10 @@ pub(super) fn on_displays_listed(
     if displays.is_empty() {
         clear_pending_capture_state(state);
         tracing::warn!(target: readshot_core::log::cat::CAPTURE, "no displays detected");
-        state.last_capture_status = Some("Couldn’t capture — no display was detected.".into());
+        state.last_capture_status = Some(Status::new(
+            StatusTone::Error,
+            "Couldn’t capture — no display was detected.",
+        ));
         let restore = abort_combine_capture(
             state,
             Some("Couldn’t add the capture — no display was detected."),
@@ -569,9 +575,12 @@ pub(super) fn on_region_captured(
                     // `last_regions` was populated by OverlaySelected just
                     // before this branch ran, so the lookup is safe.
                     let Some(last) = state.last_regions.get(&display_id).copied() else {
-                        state.last_capture_status = Some(format!(
-                            "Couldn’t start the scrolling capture — the selected area was lost. {}",
-                            scroll::SCROLL_RETRY_HINT
+                        state.last_capture_status = Some(Status::new(
+                            StatusTone::Error,
+                            format!(
+                                "Couldn’t start the scrolling capture — the selected area was lost. {}",
+                                scroll::SCROLL_RETRY_HINT
+                            ),
                         ));
                         return Task::batch([history_task]);
                     };
@@ -613,7 +622,10 @@ pub(super) fn on_region_captured(
         }
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::CAPTURE, "region capture failed: {e}");
-            state.last_capture_status = Some(history_ops::friendly_capture_error(&e));
+            state.last_capture_status = Some(Status::new(
+                StatusTone::Error,
+                history_ops::friendly_capture_error(&e),
+            ));
             if state.cli_interactive_output.is_some() {
                 Task::done(Message::Capture(CaptureMsg::CliInteractiveWritten(Err(e))))
             } else {
@@ -626,13 +638,16 @@ pub(super) fn on_region_captured(
 /// `CaptureMsg::OverlayCopyDone`.
 pub(super) fn on_overlay_copy_done(state: &mut App, result: Result<(), String>) -> Task<Message> {
     state.last_capture_status = Some(match result {
-        Ok(()) => "Copied image to clipboard.".into(),
+        Ok(()) => Status::new(StatusTone::Success, "Copied image to clipboard."),
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::CAPTURE, "copy image failed: {e}");
-            history_ops::friendly_string_error_with(
-                "copy to the clipboard",
-                &e,
-                Some(history_ops::RETRY_HINT),
+            Status::new(
+                StatusTone::Error,
+                history_ops::friendly_string_error_with(
+                    "copy to the clipboard",
+                    &e,
+                    Some(history_ops::RETRY_HINT),
+                ),
             )
         }
     });
@@ -650,14 +665,17 @@ pub(super) fn on_overlay_save_done(
         }
     }
     state.last_capture_status = Some(match result {
-        Ok(Some(p)) => format!("Saved to {}.", p.display()),
-        Ok(None) => "Save cancelled.".into(),
+        Ok(Some(p)) => Status::new(StatusTone::Success, format!("Saved to {}.", p.display())),
+        Ok(None) => Status::new(StatusTone::Notice, "Save cancelled."),
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::CAPTURE, "save failed: {e}");
-            history_ops::friendly_string_error_with(
-                "save the image",
-                &e,
-                Some(history_ops::SAVE_HINT),
+            Status::new(
+                StatusTone::Error,
+                history_ops::friendly_string_error_with(
+                    "save the image",
+                    &e,
+                    Some(history_ops::SAVE_HINT),
+                ),
             )
         }
     });
@@ -670,17 +688,25 @@ pub(super) fn on_overlay_copy_text_done(
     result: Result<String, String>,
 ) -> Task<Message> {
     state.last_capture_status = Some(match result {
-        Ok(text) if text.is_empty() => "No text recognized.".into(),
+        // Nothing was copied: a refusal, raised like the other capture
+        // problems when no window shows it.
+        Ok(text) if text.is_empty() => Status::new(StatusTone::Warning, "No text recognized."),
         Ok(text) => {
             let n = text.chars().count();
-            format!("Copied {} of text.", counted(n, "character", "characters"))
+            Status::new(
+                StatusTone::Success,
+                format!("Copied {} of text.", counted(n, "character", "characters")),
+            )
         }
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::CAPTURE, "copy text failed: {e}");
-            history_ops::friendly_string_error_with(
-                "copy the text",
-                &e,
-                Some(history_ops::RETRY_HINT),
+            Status::new(
+                StatusTone::Error,
+                history_ops::friendly_string_error_with(
+                    "copy the text",
+                    &e,
+                    Some(history_ops::RETRY_HINT),
+                ),
             )
         }
     });
@@ -708,10 +734,10 @@ pub(super) fn on_capture_saved(
 ) -> Task<Message> {
     state.capture_in_flight = false;
     state.last_capture_status = Some(match &result {
-        Ok(path) => format!("Saved to {}.", path.display()),
+        Ok(path) => Status::new(StatusTone::Success, format!("Saved to {}.", path.display())),
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::CAPTURE, "capture failed: {e}");
-            history_ops::friendly_capture_error(e)
+            Status::new(StatusTone::Error, history_ops::friendly_capture_error(e))
         }
     });
     Task::none()

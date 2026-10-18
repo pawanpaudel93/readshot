@@ -36,7 +36,7 @@ use readshot_capture::{display_local_bounds, CaptureRequest};
 use readshot_core::Preferences;
 use readshot_ui::SettingsMessage;
 
-use crate::editor::{EditorSession, StatusTone};
+use crate::editor::{EditorSession, Status, StatusTone};
 use crate::url_scheme::UrlAction;
 
 mod hotkeys;
@@ -1078,14 +1078,11 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
 }
 
 /// Whether a capture status reports a problem worth a notification:
-/// an error, or a refusal like "No previous region…". Successes and a
-/// cancel the user chose are not.
-pub(crate) fn capture_status_is_problem(status: &str) -> bool {
-    match status_toast_kind(status) {
-        ToastKind::Error => true,
-        ToastKind::Info => !status.to_lowercase().contains("cancelled"),
-        _ => false,
-    }
+/// an error, or a refusal like "No previous region…" (a warning).
+/// Successes, notices (a cancel the user chose) and work in flight are
+/// not.
+pub(crate) fn capture_status_is_problem(status: &Status) -> bool {
+    matches!(status.tone, StatusTone::Error | StatusTone::Warning)
 }
 
 /// How a capture problem no open window shows reaches the user.
@@ -1113,10 +1110,10 @@ fn announce_capture_status(state: &mut App) -> Task<Message> {
         state.announced_capture_status = None;
         return Task::none();
     };
-    if state.announced_capture_status.as_ref() == Some(&status) {
+    if state.announced_capture_status.as_ref() == Some(&status.text) {
         return Task::none();
     }
-    state.announced_capture_status = Some(status.clone());
+    state.announced_capture_status = Some(status.text.clone());
     let welcome_open = state.windows.kinds().any(|k| k == WindowKind::Welcome);
     if welcome_open || !capture_status_is_problem(&status) {
         return Task::none();
@@ -1163,14 +1160,14 @@ pub(crate) fn surface_undelivered_notices(
     for notice in notices {
         let off = notice.reason == NotShownReason::NotificationsOff;
         if let Some(editor) = state.editor.as_mut() {
-            // Only the notice's own words say what kind it is.
-            let tone = plain_status_tone(&notice.text);
+            // The tone its writer chose when it was posted.
+            let tone = notice.tone;
             if off {
                 editor.set_status(tone, format!("{} {NOTIFICATIONS_OFF_HINT}", notice.text));
             } else {
                 editor.set_status(tone, notice.text.clone());
             }
-        } else if state.last_capture_status.as_deref() == Some(notice.text.as_str()) {
+        } else if state.last_capture_status_text() == Some(notice.text.as_str()) {
             tasks.push(show_or_focus_welcome(state));
         }
         if off && !state.notifications_off_told {
@@ -1185,12 +1182,12 @@ pub(crate) fn surface_undelivered_notices(
 
 pub(crate) fn surface_capture_problem(
     state: &mut App,
-    status: &str,
+    status: &Status,
     route: CaptureProblemRoute,
 ) -> Task<Message> {
     match route {
         CaptureProblemRoute::Notification => {
-            notify_capture_problem(status);
+            notify_capture_problem(&status.text, status.tone);
             Task::none()
         }
         CaptureProblemRoute::WelcomeWindow => show_or_focus_welcome(state),

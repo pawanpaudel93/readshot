@@ -137,7 +137,10 @@ pub(super) fn on_window_closed(state: &mut App, id: iced::window::Id) -> Task<Me
                 state.windows.forget(sibling);
                 tasks.push(window::close(sibling));
             }
-            state.last_capture_status = Some("Scrolling capture cancelled.".into());
+            state.last_capture_status = Some(Status::new(
+                StatusTone::Notice,
+                "Scrolling capture cancelled.",
+            ));
             tasks.push(restore);
             return Task::batch(tasks);
         }

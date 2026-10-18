@@ -284,7 +284,7 @@ fn a_second_open_click_joins_the_waiting_open() {
     assert_eq!(second.units(), 0, "the second click started another open");
     assert!(app.editor.is_none(), "nothing opened yet");
     assert_eq!(
-        app.history_status.as_deref(),
+        app.history_status_text(),
         Some("Finishing your previous edits to this capture…")
     );
     store.release();
@@ -322,7 +322,10 @@ fn a_new_capture_during_the_wait_cancels_the_open() {
     let _ = super::super::window_settings::open_editor_window_replacing(&mut app, capture, None);
     let c = app.editor.as_ref().unwrap().session_id;
     assert_eq!(app.awaiting_reopen, None, "the open is cancelled");
-    let said = app.history_status.clone().unwrap_or_default();
+    let said = app
+        .history_status_text()
+        .map(str::to_owned)
+        .unwrap_or_default();
     assert!(said.contains("Didn’t open"), "{said:?}");
 
     store.release();
@@ -720,12 +723,10 @@ fn an_undone_redaction_whose_writes_failed_still_opens_with_its_image() {
         .unwrap();
     store.fail_next_commits(0);
     let _ = update(&mut app, msg);
-    let b = app.editor.as_ref().unwrap_or_else(|| {
-        panic!(
-            "the capture didn't open: {:?}",
-            app.history_status.as_deref()
-        )
-    });
+    let b = app
+        .editor
+        .as_ref()
+        .unwrap_or_else(|| panic!("the capture didn't open: {:?}", app.history_status_text()));
     assert!(b.source_record.as_ref().unwrap().redacted);
     app.coordinator.drain_history_writes();
     let stored = store.stored(record.id);
@@ -748,7 +749,7 @@ fn a_withheld_record_hands_out_no_image() {
         let task = update(&mut app, message);
         assert_eq!(task.units(), 0, "it read the image");
         assert_eq!(
-            app.history_status.as_deref(),
+            app.history_status_text(),
             Some(super::super::history_ops::actions::WITHHELD_NOTE)
         );
     }

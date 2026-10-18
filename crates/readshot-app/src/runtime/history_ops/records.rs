@@ -34,7 +34,12 @@ pub(super) fn on_record_save_failed(
         .filter(|ed| Some(ed.session_id) == session)
     {
         Some(ed) => ed.set_status(StatusTone::Error, history_save_failure(&error, true)),
-        None => state.last_capture_status = Some(history_save_failure(&error, false)),
+        None => {
+            state.last_capture_status = Some(Status::new(
+                StatusTone::Error,
+                history_save_failure(&error, false),
+            ))
+        }
     }
     Task::none()
 }
@@ -82,10 +87,9 @@ pub(super) fn on_list_loaded(
             state.history_records.clear();
             state.history_selected_id = None;
             tracing::warn!(target: readshot_core::log::cat::HISTORY, "history list failed: {e}");
-            state.history_status = Some(friendly_string_error_with(
-                "read the history",
-                &e,
-                Some(REOPEN_HISTORY_HINT),
+            state.history_status = Some(Status::new(
+                StatusTone::Error,
+                friendly_string_error_with("read the history", &e, Some(REOPEN_HISTORY_HINT)),
             ));
         }
     }
@@ -108,7 +112,11 @@ pub(super) fn on_reopened_after_sync(
             .take_if(|(id, _)| *id == record_id)
         {
             if unsaved.is_some() {
-                show_open_status(state, format!("{said}{}", not_saved(&unsaved)));
+                show_open_status(
+                    state,
+                    StatusTone::Warning,
+                    format!("{said}{}", not_saved(&unsaved)),
+                );
             }
         }
         return Task::none();
@@ -122,18 +130,21 @@ pub(super) fn on_reopened_after_sync(
     let loaded = match result {
         Ok(loaded) => loaded,
         Err(e) if e == REDACTION_NOT_SAVED => {
-            state.history_status = Some(format!(
+            state.history_status = Some(Status::new(StatusTone::Error, format!(
                         "Couldn’t open the capture yet — History couldn’t finish hiding its redaction{}. Its image is kept; open it again in a moment.",
                         unsaved.as_ref().map_or(String::new(), |r| format!(" ({r})"))
-                    ));
+                    )));
             return Task::none();
         }
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::HISTORY, "reopen failed: {e}");
-            state.history_status = Some(format!(
-                "{}{}",
-                friendly_string_error_with("open the capture", &e, Some(RETRY_HINT)),
-                not_saved(&unsaved)
+            state.history_status = Some(Status::new(
+                StatusTone::Error,
+                format!(
+                    "{}{}",
+                    friendly_string_error_with("open the capture", &e, Some(RETRY_HINT)),
+                    not_saved(&unsaved)
+                ),
             ));
             return Task::none();
         }

@@ -1242,21 +1242,6 @@ pub const DEFAULT_WINDOW_WIDTH: f32 = 1100.0;
 /// they're dismissed (the toast's close button) or replaced.
 pub const STATUS_AUTO_DISMISS: std::time::Duration = std::time::Duration::from_secs(4);
 
-/// A plain status string (History's, the Welcome window's capture
-/// line) is an error when it mentions "fail" or "error"
-/// (case-insensitive), or when it opens with the friendly "Couldn't …"
-/// failure phrasing. The editor's status carries its tone instead
-/// ([`StatusTone`]).
-pub fn status_str_is_error(s: &str) -> bool {
-    let lower = s.to_lowercase();
-    // Typographic or straight apostrophe: the app writes ’, text from
-    // elsewhere (a log, a test) may not.
-    lower.contains("fail")
-        || lower.contains("error")
-        || lower.starts_with("couldn’t")
-        || lower.starts_with("couldn't")
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EditorZoom {
     Fit,
@@ -2250,33 +2235,6 @@ mod tests {
             *px = image::Rgba([255, 255, 255, 255]);
         }
         img
-    }
-
-    #[test]
-    fn status_str_is_error_reads_failures_only() {
-        // In-progress lines are not errors.
-        for s in [
-            "Saving…",
-            "Choose a save location…",
-            "Copying…",
-            "Recognizing text…",
-        ] {
-            assert!(!status_str_is_error(s), "{s:?} should not be an error");
-        }
-        // Errors: kept on screen, error style. Includes the friendly
-        // "Couldn't …" phrasing the failure paths now produce, which
-        // carries neither "fail" nor "error".
-        for s in [
-            "Couldn’t save the image — the disk is full. Pick a different folder in Settings and try again.",
-            "Couldn’t copy the text — permission denied. Try again.",
-            "Unexpected error",
-        ] {
-            assert!(status_str_is_error(s), "{s:?} should be an error");
-        }
-        // Success / info: eligible for auto-dismiss, success style.
-        for s in ["Saved to ~/Desktop/shot.png", "Added text. ⌘Z to undo."] {
-            assert!(!status_str_is_error(s), "{s:?} should not be an error");
-        }
     }
 
     #[test]

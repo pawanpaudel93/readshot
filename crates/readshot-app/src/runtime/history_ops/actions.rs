@@ -13,12 +13,12 @@ fn served_image(state: &mut App, id: readshot_core::Uuid) -> Option<PathBuf> {
         .as_ref()
         .zip(state.history_records.iter().find(|r| r.id == id));
     let Some((root, record)) = found else {
-        state.history_status = Some("Capture not found.".into());
+        state.history_status = Some(Status::new(StatusTone::Notice, "Capture not found."));
         return None;
     };
     let path = history_png_path(root, record);
     if path.is_none() {
-        state.history_status = Some(WITHHELD_NOTE.into());
+        state.history_status = Some(Status::new(StatusTone::Warning, WITHHELD_NOTE));
     }
     path
 }
@@ -35,10 +35,9 @@ pub(super) fn on_reveal(state: &mut App, id: readshot_core::Uuid) -> Task<Messag
     };
     if let Err(e) = reveal_path(&path) {
         tracing::warn!(target: readshot_core::log::cat::HISTORY, "reveal failed: {e}");
-        state.history_status = Some(friendly_string_error_with(
-            "reveal the file",
-            &e.to_string(),
-            Some(RETRY_HINT),
+        state.history_status = Some(Status::new(
+            StatusTone::Error,
+            friendly_string_error_with("reveal the file", &e.to_string(), Some(RETRY_HINT)),
         ));
     }
     Task::none()
@@ -64,10 +63,13 @@ pub(super) fn on_copy_image(state: &mut App, id: readshot_core::Uuid) -> Task<Me
 /// `HistoryMsg::CopyImageDone`.
 pub(super) fn on_copy_image_done(state: &mut App, result: Result<(), String>) -> Task<Message> {
     state.history_status = Some(match result {
-        Ok(()) => "Copied image to clipboard.".into(),
+        Ok(()) => Status::new(StatusTone::Success, "Copied image to clipboard."),
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::HISTORY, "copy image failed: {e}");
-            friendly_string_error("copy the image to the clipboard", &e)
+            Status::new(
+                StatusTone::Error,
+                friendly_string_error("copy the image to the clipboard", &e),
+            )
         }
     });
     Task::none()
@@ -100,11 +102,14 @@ pub(super) fn on_copy_text(state: &mut App, id: readshot_core::Uuid) -> Task<Mes
                 .iter()
                 .find(|r| r.id == id)
                 .is_some_and(history_text_hidden);
-            state.history_status = Some(if hidden {
-                HIDDEN_TEXT_NOTE.into()
-            } else {
-                "No OCR text on this capture yet.".into()
-            });
+            state.history_status = Some(Status::new(
+                StatusTone::Notice,
+                if hidden {
+                    HIDDEN_TEXT_NOTE
+                } else {
+                    "No OCR text on this capture yet."
+                },
+            ));
             Task::none()
         }
     }
@@ -113,14 +118,22 @@ pub(super) fn on_copy_text(state: &mut App, id: readshot_core::Uuid) -> Task<Mes
 /// `HistoryMsg::CopyTextDone`.
 pub(super) fn on_copy_text_done(state: &mut App, result: Result<String, String>) -> Task<Message> {
     state.history_status = Some(match result {
-        Ok(text) if text.is_empty() => "No OCR text on this capture yet.".into(),
+        Ok(text) if text.is_empty() => {
+            Status::new(StatusTone::Notice, "No OCR text on this capture yet.")
+        }
         Ok(text) => {
             let n = text.chars().count();
-            format!("Copied {} of text.", counted(n, "character", "characters"))
+            Status::new(
+                StatusTone::Success,
+                format!("Copied {} of text.", counted(n, "character", "characters")),
+            )
         }
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::HISTORY, "copy text failed: {e}");
-            friendly_string_error_with("copy the text", &e, Some(RETRY_HINT))
+            Status::new(
+                StatusTone::Error,
+                friendly_string_error_with("copy the text", &e, Some(RETRY_HINT)),
+            )
         }
     });
     Task::none()
@@ -130,7 +143,10 @@ pub(super) fn on_copy_text_done(state: &mut App, result: Result<String, String>)
 pub(super) fn on_copy_visible_text(state: &mut App) -> Task<Message> {
     let text = visible_history_text(&state.history_records, &state.history_search);
     if text.trim().is_empty() {
-        state.history_status = Some("No OCR text in the visible captures.".into());
+        state.history_status = Some(Status::new(
+            StatusTone::Notice,
+            "No OCR text in the visible captures.",
+        ));
         return Task::none();
     }
     let count = visible_history_text_count(&state.history_records, &state.history_search);
@@ -151,13 +167,19 @@ pub(super) fn on_copy_visible_text_done(
     result: Result<usize, String>,
 ) -> Task<Message> {
     state.history_status = Some(match result {
-        Ok(count) => format!(
-            "Copied OCR text from {}.",
-            counted(count, "capture", "captures")
+        Ok(count) => Status::new(
+            StatusTone::Success,
+            format!(
+                "Copied OCR text from {}.",
+                counted(count, "capture", "captures")
+            ),
         ),
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::HISTORY, "copy visible text failed: {e}");
-            friendly_string_error_with("copy the visible text", &e, Some(RETRY_HINT))
+            Status::new(
+                StatusTone::Error,
+                friendly_string_error_with("copy the visible text", &e, Some(RETRY_HINT)),
+            )
         }
     });
     Task::none()
@@ -194,10 +216,9 @@ pub(super) fn on_pin_ready(
         }
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::HISTORY, "pin failed: {e}");
-            state.history_status = Some(friendly_string_error_with(
-                "pin the capture",
-                &e,
-                Some(RETRY_HINT),
+            state.history_status = Some(Status::new(
+                StatusTone::Error,
+                friendly_string_error_with("pin the capture", &e, Some(RETRY_HINT)),
             ));
             Task::none()
         }

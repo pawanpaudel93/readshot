@@ -356,7 +356,7 @@ fn history_copy_shortcut_requires_selected_capture() {
     );
 
     assert_eq!(
-        app.history_status.as_deref(),
+        app.history_status_text(),
         Some("No history capture selected.")
     );
 }
@@ -390,7 +390,7 @@ fn history_copy_completion_updates_history_status() {
     );
 
     assert_eq!(
-        app.history_status.as_deref(),
+        app.history_status_text(),
         Some("Copied image to clipboard.")
     );
 
@@ -400,7 +400,7 @@ fn history_copy_completion_updates_history_status() {
     );
 
     assert_eq!(
-        app.history_status.as_deref(),
+        app.history_status_text(),
         Some("Copied 5 characters of text.")
     );
 }
@@ -474,7 +474,10 @@ fn history_clear_all_removes_records_and_resets_browser_state() {
     let history: Arc<dyn HistoryStore> = store.clone();
     let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), history);
     app.history_records = vec![newer, older];
-    app.history_status = Some("stale".into());
+    app.history_status = Some(crate::editor::Status::new(
+        crate::editor::StatusTone::Notice,
+        "stale",
+    ));
 
     // First click arms the destructive prompt; records stay intact.
     let _ = update(&mut app, Message::History(HistoryMsg::ClearAllRequested));
@@ -492,8 +495,7 @@ fn history_clear_all_removes_records_and_resets_browser_state() {
     assert!(store.list().unwrap().is_empty());
     assert!(app.history_records.is_empty());
     assert!(app
-        .history_status
-        .as_deref()
+        .history_status_text()
         .unwrap_or("")
         .starts_with("Deleted "));
 }
@@ -723,7 +725,11 @@ fn notification_text_reaches_the_shim_verbatim_except_nuls() {
 fn a_notification_outside_an_app_bundle_is_a_safe_no_op() {
     // The test binary is not inside Readshot.app: the shim must post
     // nothing (UNUserNotificationCenter would raise without a bundle).
-    show_macos_notification("Readshot", "test notification");
+    show_macos_notification(
+        "Readshot",
+        "test notification",
+        crate::editor::StatusTone::Notice,
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -817,14 +823,17 @@ fn capture_request_marks_in_flight_and_clears_on_completion() {
         Message::Capture(CaptureMsg::Saved(Ok(PathBuf::from("/tmp/x.png")))),
     );
     assert!(!app.capture_in_flight);
-    let toast = app.last_capture_status.as_deref().unwrap();
+    let toast = app.last_capture_status_text().unwrap();
     assert!(toast.contains("/tmp/x.png"));
 }
 
 #[test]
 fn welcome_status_dismissed_clears_capture_status() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
-    app.last_capture_status = Some("Couldn’t save.".into());
+    app.last_capture_status = Some(crate::editor::Status::new(
+        crate::editor::StatusTone::Error,
+        "Couldn’t save.",
+    ));
     let _ = update(&mut app, Message::Welcome(WelcomeMsg::StatusDismissed));
     assert!(app.last_capture_status.is_none());
 }
@@ -837,7 +846,7 @@ fn capture_failure_message_lands_in_toast() {
         Message::Capture(CaptureMsg::Saved(Err("permission denied".into()))),
     );
     assert!(!app.capture_in_flight);
-    let toast = app.last_capture_status.as_deref().unwrap();
+    let toast = app.last_capture_status_text().unwrap();
     assert!(toast.contains("permission denied"));
 }
 
@@ -923,17 +932,17 @@ fn a_redacted_capture_says_its_text_is_hidden_not_pending() {
     app.history_records = vec![hidden, plain.clone()];
     let _ = update(&mut app, Message::History(HistoryMsg::CopyText(id)));
     assert_eq!(
-        app.history_status.as_deref(),
+        app.history_status_text(),
         Some(history_ops::HIDDEN_TEXT_NOTE)
     );
     // A notice, not a success.
     assert_eq!(
-        status_toast_kind(history_ops::HIDDEN_TEXT_NOTE),
+        status_toast_kind(app.history_status.as_ref().unwrap().tone),
         ToastKind::Info
     );
     let _ = update(&mut app, Message::History(HistoryMsg::CopyText(plain.id)));
     assert_eq!(
-        app.history_status.as_deref(),
+        app.history_status_text(),
         Some("No OCR text on this capture yet.")
     );
 }

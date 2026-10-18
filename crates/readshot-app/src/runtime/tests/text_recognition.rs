@@ -1467,7 +1467,7 @@ async fn a_history_save_that_fails_is_reported_never_as_success() {
     // Without that editor: the capture status says so.
     app.editor = None;
     let _ = update(&mut app, failed);
-    let status = app.last_capture_status.clone().unwrap();
+    let status = app.last_capture_status_text().map(str::to_owned).unwrap();
     assert!(status.contains("capture again"), "{status}");
 }
 

@@ -564,7 +564,7 @@ fn stop_with_no_frames_cancels_instead_of_failing() {
     assert!(app.scroll_session.is_none());
     assert_eq!(app.windows.kind(hud), None);
     assert_eq!(app.windows.kind(region), None);
-    let status = app.last_capture_status.as_deref().unwrap_or("");
+    let status = app.last_capture_status_text().unwrap_or("");
     assert!(!status.contains("failed"), "status: {status}");
 }
 
@@ -775,7 +775,7 @@ fn open_overlay_sets_opening_guard_until_display_list_completes() {
 
     assert!(!app.overlay_opening);
     assert_eq!(
-        app.last_capture_status.as_deref(),
+        app.last_capture_status_text(),
         Some("Couldn’t capture — no display was detected.")
     );
 }
@@ -805,7 +805,7 @@ fn overlay_display_list_error_clears_pending_capture_state() {
     assert!(app.pending_hide_cursor);
     // The raw backend error is logged, not leaked into the status —
     // the user sees friendly recovery text instead.
-    let status = app.last_capture_status.as_deref().unwrap();
+    let status = app.last_capture_status_text().unwrap();
     assert!(status.starts_with("Couldn’t capture"), "{status}");
     assert!(!status.contains("backend unavailable"), "{status}");
 }
@@ -923,7 +923,7 @@ fn retake_last_region_without_previous_region_sets_status() {
     );
 
     assert_eq!(
-        app.last_capture_status.as_deref(),
+        app.last_capture_status_text(),
         Some("No previous region to retake. Capture a region first, then use Retake Last Region.")
     );
 }
@@ -1001,7 +1001,10 @@ fn a_capture_problem_with_no_window_to_show_it_is_notified() {
         &mut app,
         Message::Capture(CaptureMsg::RetakeLastRegionRequested),
     );
-    let status = app.last_capture_status.clone().expect("a status");
+    let status = app
+        .last_capture_status_text()
+        .map(str::to_owned)
+        .expect("a status");
     if CAPTURE_PROBLEM_ROUTE == CaptureProblemRoute::Notification {
         assert_eq!(notices(), vec![status.clone()]);
     } else {
@@ -1014,7 +1017,11 @@ fn a_capture_problem_with_no_window_to_show_it_is_notified() {
     // Off macOS there is no notification path: the Welcome window, which
     // shows the status, opens instead.
     let mut other = build_app(Arc::new(FakePermissions::granted()));
-    let _ = surface_capture_problem(&mut other, &status, CaptureProblemRoute::WelcomeWindow);
+    let _ = surface_capture_problem(
+        &mut other,
+        app.last_capture_status.as_ref().unwrap(),
+        CaptureProblemRoute::WelcomeWindow,
+    );
     assert!(other.windows.kinds().any(|k| k == WindowKind::Welcome));
     // With the Welcome window open the status is shown there instead.
     CAPTURE_NOTICES.with(|n| n.borrow_mut().clear());
@@ -1028,16 +1035,43 @@ fn a_capture_problem_with_no_window_to_show_it_is_notified() {
     assert!(notices().is_empty());
 }
 
+/// A failure and a refusal are problems worth a notification; a cancel
+/// the user chose and a success are not. The handlers that write them
+/// pick those tones.
 #[test]
 fn only_problems_are_notified() {
-    assert!(capture_status_is_problem(
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let status = |app: &App| app.last_capture_status.clone().unwrap();
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::OverlayDisplaysListed(Ok(Vec::new()))),
+    );
+    assert_eq!(
+        status(&app).text,
         "Couldn’t capture — no display was detected."
-    ));
-    assert!(capture_status_is_problem(
+    );
+    assert!(capture_status_is_problem(&status(&app)));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RetakeLastRegionRequested),
+    );
+    assert_eq!(
+        status(&app).text,
         "No previous region to retake. Capture a region first, then use Retake Last Region."
-    ));
-    assert!(!capture_status_is_problem("Scrolling capture cancelled."));
-    assert!(!capture_status_is_problem("Copied image to clipboard."));
+    );
+    assert!(capture_status_is_problem(&status(&app)));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::OverlaySaveDone(Ok(None))),
+    );
+    assert_eq!(status(&app).text, "Save cancelled.");
+    assert!(!capture_status_is_problem(&status(&app)));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::OverlayCopyDone(Ok(()))),
+    );
+    assert_eq!(status(&app).text, "Copied image to clipboard.");
+    assert!(!capture_status_is_problem(&status(&app)));
 }
 
 /// A refused registration is not retried on every update, and only the
@@ -1092,6 +1126,7 @@ fn a_refused_notification_shows_in_the_editor_with_the_way_back() {
     record_undelivered(
         NotShownReason::NotificationsOff,
         "Couldn’t save the capture.",
+        crate::editor::StatusTone::Error,
     );
     let _ = update(&mut app, Message::Tick(TickMsg::Tray));
     let status = app
@@ -1118,13 +1153,20 @@ fn with_notifications_off_capture_problems_open_the_welcome_window() {
         &mut app,
         Message::Capture(CaptureMsg::RetakeLastRegionRequested),
     );
-    let status = app.last_capture_status.clone().expect("a status");
+    let status = app
+        .last_capture_status_text()
+        .map(str::to_owned)
+        .expect("a status");
     if CAPTURE_PROBLEM_ROUTE == CaptureProblemRoute::WelcomeWindow {
         // Off macOS capture problems open Welcome already.
         return;
     }
     assert!(!app.windows.kinds().any(|k| k == WindowKind::Welcome));
-    record_undelivered(NotShownReason::NotificationsOff, &status);
+    record_undelivered(
+        NotShownReason::NotificationsOff,
+        &status,
+        app.last_capture_status.as_ref().unwrap().tone,
+    );
     let _ = update(&mut app, Message::Tick(TickMsg::Tray));
     assert!(app.windows.kinds().any(|k| k == WindowKind::Welcome));
     assert!(notifications_off());
@@ -1137,7 +1179,11 @@ fn with_notifications_off_capture_problems_open_the_welcome_window() {
 fn an_unbundled_notification_shows_in_the_editor() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
-    record_undelivered(NotShownReason::NotBundled, "Checking for updates…");
+    record_undelivered(
+        NotShownReason::NotBundled,
+        "Checking for updates…",
+        crate::editor::StatusTone::Notice,
+    );
     let _ = update(&mut app, Message::Tick(TickMsg::Tray));
     let status = app
         .editor
@@ -1158,7 +1204,11 @@ fn an_unbundled_notification_shows_in_the_editor() {
 #[test]
 fn notifications_that_work_again_end_the_off_state() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
-    record_undelivered(NotShownReason::NotificationsOff, "Couldn’t capture.");
+    record_undelivered(
+        NotShownReason::NotificationsOff,
+        "Couldn’t capture.",
+        crate::editor::StatusTone::Error,
+    );
     let _ = update(&mut app, Message::Tick(TickMsg::Tray));
     assert!(app.notifications_off_told);
     assert!(notifications_off());
@@ -1168,7 +1218,11 @@ fn notifications_that_work_again_end_the_off_state() {
     assert!(!notifications_off());
     assert_eq!(capture_problem_route(), CAPTURE_PROBLEM_ROUTE);
     // Off again: said again.
-    record_undelivered(NotShownReason::NotificationsOff, "Couldn’t capture.");
+    record_undelivered(
+        NotShownReason::NotificationsOff,
+        "Couldn’t capture.",
+        crate::editor::StatusTone::Error,
+    );
     let _ = update(&mut app, Message::Tick(TickMsg::Tray));
     assert!(app.notifications_off_told);
 }
@@ -1183,6 +1237,7 @@ fn without_a_tray_undelivered_notices_still_reach_the_editor() {
     record_undelivered(
         NotShownReason::NotificationsOff,
         "Couldn’t save the capture.",
+        crate::editor::StatusTone::Error,
     );
     let _ = update(&mut app, Message::Tick(TickMsg::Url));
     let status = app
@@ -1202,7 +1257,11 @@ fn without_a_tray_undelivered_notices_still_reach_the_editor() {
 #[test]
 fn the_undelivered_queue_keeps_only_the_newest_notices() {
     for i in 0..MAX_UNDELIVERED + 10 {
-        record_undelivered(NotShownReason::NotBundled, &format!("notice {i}"));
+        record_undelivered(
+            NotShownReason::NotBundled,
+            &format!("notice {i}"),
+            crate::editor::StatusTone::Notice,
+        );
     }
     let kept = take_undelivered_notices();
     assert_eq!(kept.len(), MAX_UNDELIVERED);
@@ -1211,4 +1270,22 @@ fn the_undelivered_queue_keeps_only_the_newest_notices() {
         kept.last().unwrap().text,
         format!("notice {}", MAX_UNDELIVERED + 9)
     );
+}
+
+/// The notification center hands back only the body of a notification it
+/// refused: the in-app notice gets the tone the body was posted with, the
+/// newest one when the same body went out twice.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_refused_notification_keeps_the_tone_it_was_posted_with() {
+    use crate::editor::StatusTone;
+    remember_posted_tone("Couldn’t capture.", StatusTone::Error);
+    remember_posted_tone("No previous region to retake.", StatusTone::Warning);
+    remember_posted_tone("Couldn’t capture.", StatusTone::Warning);
+    assert_eq!(posted_tone("Couldn’t capture."), StatusTone::Warning);
+    assert_eq!(
+        posted_tone("No previous region to retake."),
+        StatusTone::Warning
+    );
+    assert_eq!(posted_tone("never posted"), StatusTone::Notice);
 }

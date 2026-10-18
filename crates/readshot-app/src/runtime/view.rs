@@ -886,7 +886,7 @@ fn cli_card<'a>(
 }
 
 pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
-    let status = state.cli_tools_status.as_deref().unwrap_or("");
+    let status = state.cli_tools_status_text().unwrap_or("");
 
     // --- Title row (transparent full-size title bar on macOS) ---
     let title_content = container(
@@ -1425,10 +1425,11 @@ pub(crate) const HISTORY_DELETE_WARNING: &str = "This deletes the image and its 
 /// List | detail split. The list keeps 340 px until the window is too
 /// narrow for a usable detail pane, then shrinks.
 fn history_status_toast(state: &App, p: &'static Palette) -> Option<Element<'static, Message>> {
-    let status = state.history_status.as_deref()?;
-    let kind = status_toast_kind(status);
-    // Errors stay until dismissed (History has no auto-expiry).
-    let action = (kind == ToastKind::Error).then(|| {
+    let status = state.history_status.as_ref()?;
+    let kind = status_toast_kind(status.tone);
+    // Errors and warnings stay until dismissed (History has no
+    // auto-expiry).
+    let action = toast_is_dismissable(kind).then(|| {
         icon_button(
             crate::icons::action::DISMISS,
             p.t2,
@@ -1440,7 +1441,7 @@ fn history_status_toast(state: &App, p: &'static Palette) -> Option<Element<'sta
             iced::widget::tooltip::Position::Top,
         )
     });
-    Some(toast(kind, status.to_string(), action))
+    Some(toast(kind, status.text.clone(), action))
 }
 
 fn history_split<'a>(
@@ -2751,7 +2752,7 @@ fn editor_toast_layer<'a>(
     };
     let discard_armed = ed.discard_armed();
     let toast_layer = shown_status.map(|status| {
-        let kind = editor_toast_kind(status.tone);
+        let kind = status_toast_kind(status.tone);
         let s = status.text.clone();
         let action: Option<Element<'_, Message>> = if discard_armed {
             Some(
@@ -5116,8 +5117,8 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
     }
 
     if let Some(s) = &state.last_capture_status {
-        let kind = status_toast_kind(s);
-        let action = (kind == ToastKind::Error).then(|| {
+        let kind = status_toast_kind(s.tone);
+        let action = toast_is_dismissable(kind).then(|| {
             icon_button(
                 crate::icons::action::DISMISS,
                 p.t2,
@@ -5129,7 +5130,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                 Position::Top,
             )
         });
-        col = col.push(toast(kind, s.clone(), action));
+        col = col.push(toast(kind, s.text.clone(), action));
     }
 
     let mut actions = column![]

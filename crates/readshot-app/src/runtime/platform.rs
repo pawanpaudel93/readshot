@@ -9,6 +9,7 @@ use iced::Task;
 use readshot_capture::DisplayInfo;
 
 use crate::app::Message;
+use crate::editor::StatusTone;
 
 pub(crate) fn cli_tools_setup_commands(shell: crate::cli_tools::Shell) -> String {
     crate::cli_tools::setup_commands(shell)
@@ -369,7 +370,7 @@ pub(crate) fn notify_running_in_menu_bar(hotkey: &str) {
         let body = format!(
             "Readshot is running in the menu bar. Press {hotkey} to capture, or click the icon."
         );
-        show_macos_notification("Readshot is ready", &body);
+        show_macos_notification("Readshot is ready", &body, StatusTone::Notice);
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -380,16 +381,19 @@ pub(crate) fn notify_running_in_menu_bar(hotkey: &str) {
 /// Raise a capture problem (a failed capture, save or copy, a retake
 /// with no region) that no open window shows (WCAG 4.1.3-style status:
 /// a hotkey or tray capture that fails must not fail silently).
-pub(crate) fn notify_capture_problem(body: &str) {
+pub(crate) fn notify_capture_problem(body: &str, tone: StatusTone) {
     #[cfg(test)]
-    CAPTURE_NOTICES.with(|n| n.borrow_mut().push(body.to_string()));
+    {
+        let _ = tone;
+        CAPTURE_NOTICES.with(|n| n.borrow_mut().push(body.to_string()));
+    }
     #[cfg(all(target_os = "macos", not(test)))]
     {
-        show_macos_notification("Readshot", body);
+        show_macos_notification("Readshot", body, tone);
     }
     #[cfg(not(any(target_os = "macos", test)))]
     {
-        let _ = body;
+        let _ = (body, tone);
     }
 }
 
@@ -402,7 +406,12 @@ thread_local! {
 pub(crate) fn notify_update_check_started() {
     #[cfg(target_os = "macos")]
     {
-        show_macos_notification("Readshot updates", "Checking for updates…");
+        // Work starting: the app never sees it end, so a notice.
+        show_macos_notification(
+            "Readshot updates",
+            "Checking for updates…",
+            StatusTone::Notice,
+        );
     }
 }
 
@@ -431,7 +440,11 @@ const UPDATE_SITE: &str = "readshot.pawanpaudel.com.np";
 pub(crate) fn notify_update_check_failed(e: &crate::updater::UpdaterError) {
     #[cfg(target_os = "macos")]
     {
-        show_macos_notification("Readshot updates", &update_check_failure_message(e));
+        show_macos_notification(
+            "Readshot updates",
+            &update_check_failure_message(e),
+            StatusTone::Error,
+        );
     }
     // No notification channel off macOS yet: the log is the record.
     #[cfg(not(target_os = "macos"))]
@@ -461,12 +474,17 @@ pub(crate) enum NotShownReason {
 pub(crate) struct UndeliveredNotice {
     pub(crate) reason: NotShownReason,
     pub(crate) text: String,
+    /// The tone its writer chose when posting it.
+    pub(crate) tone: StatusTone,
 }
 
 // Process-wide in the app; per test thread under `cfg(test)`, so one
 // test's refusal cannot reroute another test's capture problems.
 #[cfg(not(test))]
 static UNDELIVERED: std::sync::Mutex<Vec<UndeliveredNotice>> = std::sync::Mutex::new(Vec::new());
+#[cfg(all(target_os = "macos", not(test)))]
+static POSTED_TONES: std::sync::Mutex<Vec<(String, StatusTone)>> =
+    std::sync::Mutex::new(Vec::new());
 #[cfg(not(test))]
 static NOTIFICATIONS_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 #[cfg(test)]
@@ -486,6 +504,54 @@ fn with_undelivered<R>(f: impl FnOnce(&std::sync::Mutex<Vec<UndeliveredNotice>>)
     }
 }
 
+#[cfg(all(target_os = "macos", test))]
+thread_local! {
+    static POSTED_TONES: std::sync::Mutex<Vec<(String, StatusTone)>> = const { std::sync::Mutex::new(Vec::new()) };
+}
+
+#[cfg(target_os = "macos")]
+fn with_posted_tones<R>(f: impl FnOnce(&std::sync::Mutex<Vec<(String, StatusTone)>>) -> R) -> R {
+    #[cfg(not(test))]
+    {
+        f(&POSTED_TONES)
+    }
+    #[cfg(test)]
+    {
+        POSTED_TONES.with(f)
+    }
+}
+
+/// Remember the tone of a notification being posted: the notification
+/// center hands back only its body when it refuses it
+/// ([`posted_tone`]). The newest [`MAX_UNDELIVERED`] are kept.
+#[cfg(target_os = "macos")]
+pub(crate) fn remember_posted_tone(body: &str, tone: StatusTone) {
+    with_posted_tones(|tones| {
+        if let Ok(mut tones) = tones.lock() {
+            if tones.len() >= MAX_UNDELIVERED {
+                tones.remove(0);
+            }
+            tones.push((body.to_string(), tone));
+        }
+    });
+}
+
+/// The tone a notification with this body was posted with (the newest
+/// one); a notice when it is no longer known.
+#[cfg(target_os = "macos")]
+pub(crate) fn posted_tone(body: &str) -> StatusTone {
+    with_posted_tones(|tones| {
+        tones.lock().ok().and_then(|tones| {
+            tones
+                .iter()
+                .rev()
+                .find(|(b, _)| b == body)
+                .map(|(_, tone)| *tone)
+        })
+    })
+    .unwrap_or(StatusTone::Notice)
+}
+
 fn with_notifications_off<R>(f: impl FnOnce(&std::sync::atomic::AtomicBool) -> R) -> R {
     #[cfg(not(test))]
     {
@@ -502,11 +568,12 @@ fn with_notifications_off<R>(f: impl FnOnce(&std::sync::atomic::AtomicBool) -> R
 /// only worth showing while it is recent.
 pub(crate) const MAX_UNDELIVERED: usize = 16;
 
-/// Queue `text` for the runtime ([`take_undelivered_notices`]): the
-/// notification path learns about a denial asynchronously, off the main
-/// thread, so it cannot touch the app state itself.
+/// Queue `text`, with the `tone` it was posted with, for the runtime
+/// ([`take_undelivered_notices`]): the notification path learns about a
+/// denial asynchronously, off the main thread, so it cannot touch the app
+/// state itself.
 #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
-pub(crate) fn record_undelivered(reason: NotShownReason, text: &str) {
+pub(crate) fn record_undelivered(reason: NotShownReason, text: &str, tone: StatusTone) {
     if reason == NotShownReason::NotificationsOff {
         with_notifications_off(|off| off.store(true, std::sync::atomic::Ordering::Relaxed));
     }
@@ -518,6 +585,7 @@ pub(crate) fn record_undelivered(reason: NotShownReason, text: &str) {
             queue.push(UndeliveredNotice {
                 reason,
                 text: text.to_string(),
+                tone,
             });
         }
     });
@@ -601,7 +669,8 @@ pub(crate) fn open_notification_settings() {
 /// (`cargo run`, tests) posts nothing, and a user who turned Readshot's
 /// notifications off gets the text in the log instead.
 #[cfg(target_os = "macos")]
-pub(crate) fn show_macos_notification(title: &str, body: &str) {
+pub(crate) fn show_macos_notification(title: &str, body: &str, tone: StatusTone) {
+    remember_posted_tone(body, tone);
     let (title_c, body_c) = notification_c_strings(title, body);
     // SAFETY: both pointers are valid NUL-terminated strings that outlive
     // the call (the shim copies them before returning), and the callback
@@ -621,7 +690,7 @@ pub(crate) fn show_macos_notification(title: &str, body: &str) {
                 target: readshot_core::log::cat::APP,
                 "not running from Readshot.app, so no notification: {title} — {body}"
             );
-            record_undelivered(NotShownReason::NotBundled, body);
+            record_undelivered(NotShownReason::NotBundled, body, tone);
         }
         other => tracing::warn!(
             target: readshot_core::log::cat::APP,
@@ -655,7 +724,11 @@ extern "C" fn notification_log_callback(level: i32, message: *const std::ffi::c_
             target: readshot_core::log::cat::APP,
             "notifications are off for Readshot; not shown: {message}"
         );
-        record_undelivered(NotShownReason::NotificationsOff, &message);
+        record_undelivered(
+            NotShownReason::NotificationsOff,
+            &message,
+            posted_tone(&message),
+        );
     } else if level == 3 {
         record_notifications_on();
     } else if level == 0 {

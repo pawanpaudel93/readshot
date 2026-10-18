@@ -2703,7 +2703,7 @@ fn reopening_a_record_waits_for_its_composing_editor_and_keeps_a_redone_redactio
     assert!(app.editor.is_none(), "A closed; nothing opened yet");
     assert_eq!(app.pending_history_open, Some(record.id));
     assert_eq!(
-        app.history_status.as_deref(),
+        app.history_status_text(),
         Some("Finishing your previous edits to this capture…")
     );
     // A's composes land, one after another.
@@ -2750,7 +2750,10 @@ fn reopening_a_record_waits_for_its_composing_editor_and_keeps_a_redone_redactio
 #[test]
 fn a_reopen_whose_previous_write_failed_says_so() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
-    app.history_status = Some("Finishing your previous edits to this capture…".into());
+    app.history_status = Some(crate::editor::Status::new(
+        crate::editor::StatusTone::Progress,
+        "Finishing your previous edits to this capture…",
+    ));
     let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
     app.awaiting_reopen = Some(record.id);
     let _ = update(
@@ -2922,7 +2925,7 @@ fn a_reopen_waits_for_every_write_of_the_record_with_no_timeout() {
     assert!(app.editor.is_none());
     assert_eq!(app.awaiting_reopen, Some(record.id));
     assert_eq!(
-        app.history_status.as_deref(),
+        app.history_status_text(),
         Some("Finishing your previous edits to this capture…")
     );
     // What the reopen task runs, off the UI thread: it must not finish
@@ -3043,7 +3046,7 @@ fn a_deferred_open_is_cancelled_when_history_closed() {
         }),
     );
     assert!(app.editor.is_none());
-    let status = app.last_capture_status.clone().unwrap();
+    let status = app.last_capture_status_text().map(str::to_owned).unwrap();
     assert!(status.contains("History was closed"), "{status}");
     assert!(status.contains("the disk is full"), "{status}");
 }
@@ -3065,7 +3068,7 @@ fn a_failed_reopen_shows_why_and_what_wasnt_saved() {
         }),
     );
     assert!(app.editor.is_none());
-    let status = app.history_status.clone().unwrap();
+    let status = app.history_status_text().map(str::to_owned).unwrap();
     assert!(status.starts_with("Couldn’t open the capture"), "{status}");
     assert!(
         status.contains("weren’t all saved to History (the disk is full)"),

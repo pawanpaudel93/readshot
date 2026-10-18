@@ -47,14 +47,20 @@ pub(crate) fn handle_history_message(state: &mut App, message: HistoryMsg) -> Ta
         HistoryMsg::OpenSelected => match state.history_selected_id {
             Some(id) => update(state, Message::History(HistoryMsg::OpenInEditor(id))),
             None => {
-                state.history_status = Some("No history capture selected.".into());
+                state.history_status = Some(Status::new(
+                    StatusTone::Notice,
+                    "No history capture selected.",
+                ));
                 Task::none()
             }
         },
         HistoryMsg::DeleteSelected => match state.history_selected_id {
             Some(id) => update(state, Message::History(HistoryMsg::Delete(id))),
             None => {
-                state.history_status = Some("No history capture selected.".into());
+                state.history_status = Some(Status::new(
+                    StatusTone::Notice,
+                    "No history capture selected.",
+                ));
                 Task::none()
             }
         },
@@ -119,7 +125,10 @@ fn delete_history_record(state: &mut App, id: readshot_core::Uuid) -> Task<Messa
     state.history_delete_pending = None;
     if let Err(e) = state.coordinator.delete_history(id) {
         tracing::warn!(target: readshot_core::log::cat::HISTORY, "delete failed: {e}");
-        state.history_status = Some(friendly_history_error("delete this capture", &e));
+        state.history_status = Some(Status::new(
+            StatusTone::Error,
+            friendly_history_error("delete this capture", &e),
+        ));
         return Task::none();
     }
     // Reload the list so the deleted record disappears.
@@ -458,7 +467,10 @@ pub(crate) fn begin_history_open(
     state.history_open_note = note;
     state.cancelled_history_open = None;
     if waits {
-        state.history_status = Some("Finishing your previous edits to this capture…".into());
+        state.history_status = Some(Status::new(
+            StatusTone::Progress,
+            "Finishing your previous edits to this capture…",
+        ));
     }
     let mut tasks = Vec::new();
     if let Some(ed) = state.editor.take_if(|ed| editor_of(ed, id)) {
@@ -498,17 +510,32 @@ pub(crate) fn cancel_history_open(state: &mut App, why: &str) {
     state.pending_history_open = None;
     let said = format!("Didn’t open the capture: {why}.");
     let note = state.history_open_note.take();
-    show_open_status(state, format!("{said}{}", not_saved(&note)));
+    show_open_status(
+        state,
+        open_status_tone(&note),
+        format!("{said}{}", not_saved(&note)),
+    );
     state.cancelled_history_open = Some((id, said));
 }
 
 /// A status about a History open: in History when it is open, else the
 /// capture status (menu bar, notification).
-fn show_open_status(state: &mut App, message: String) {
+fn show_open_status(state: &mut App, tone: StatusTone, message: String) {
+    let status = Some(Status::new(tone, message));
     if state.history_window_id.is_some() {
-        state.history_status = Some(message);
+        state.history_status = status;
     } else {
-        state.last_capture_status = Some(message);
+        state.last_capture_status = status;
+    }
+}
+
+/// A cancelled open is a notice; one that also names edits that weren't
+/// saved to History is a warning.
+fn open_status_tone(unsaved: &Option<String>) -> StatusTone {
+    if unsaved.is_some() {
+        StatusTone::Warning
+    } else {
+        StatusTone::Notice
     }
 }
 

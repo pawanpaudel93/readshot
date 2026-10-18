@@ -676,16 +676,22 @@ fn on_cli_tools_copy_done(
     result: Result<(), String>,
 ) -> Task<Message> {
     state.cli_tools_status = Some(match result {
-        Ok(()) => format!(
-            "{} commands copied. Paste them into Terminal.",
-            shell.label()
+        Ok(()) => Status::new(
+            StatusTone::Success,
+            format!(
+                "{} commands copied. Paste them into Terminal.",
+                shell.label()
+            ),
         ),
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::PREFERENCES, "copy cli commands failed: {e}");
-            super::history_ops::friendly_string_error_with(
-                "copy the commands",
-                &e,
-                Some(super::history_ops::RETRY_HINT),
+            Status::new(
+                StatusTone::Error,
+                super::history_ops::friendly_string_error_with(
+                    "copy the commands",
+                    &e,
+                    Some(super::history_ops::RETRY_HINT),
+                ),
             )
         }
     });
