@@ -65,8 +65,10 @@ cargo fmt --all
 
 System dependencies on Linux (matched to `.github/workflows/test.yml`):
 `libxcb`, `libxkbcommon`, `wayland`, `dbus`, `fontconfig`,
-`libayatana-appindicator3-dev`, `gtk3`. macOS and Windows need no
-extra system packages beyond a stable Rust toolchain.
+`libayatana-appindicator3-dev`, `gtk3`, `libpipewire-0.3-dev`
+(newer than Ubuntu 22.04's 0.3.48; 24.04 works), `clang`/`libclang-dev`
+(bindgen) and `libxdo-dev`. macOS and Windows need no extra system
+packages beyond a stable Rust toolchain.
 
 ## House style for code changes
 
