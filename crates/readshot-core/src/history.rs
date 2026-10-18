@@ -1051,22 +1051,41 @@ impl HistoryStore for FsHistoryStore {
             && self
                 .read_sidecar(record)?
                 .is_some_and(|stored| stored.redacted);
+        let mut index = self.read_index()?;
+        // A new record whose save fails part-way leaves none of its files:
+        // the caller reports it as not saved, and an index rebuild must
+        // not bring it back.
+        let is_new = !index.records.iter().any(|entry| entry.id == record.id);
+        let undo_placed = |placed: bool| {
+            if placed && is_new {
+                for rel in [&rel_png, &rel_json, &Self::thumbnail_path(record)] {
+                    let _ = fs::remove_file(self.root.join(rel));
+                }
+            }
+        };
         if !keep_scrubbed {
-            self.place_staged(record, &staged)?;
-            self.write_sidecar(record)?;
+            let placed = self
+                .place_staged(record, &staged)
+                .and_then(|()| self.write_sidecar(record));
+            if let Err(e) = placed {
+                undo_placed(true);
+                return Err(e);
+            }
         }
         drop(staged);
 
-        let mut index = self.read_index()?;
         index.records.retain(|entry| entry.id != record.id);
         index.records.push(HistoryIndexEntry {
             id: record.id,
             captured_at: record.captured_at,
-            png_path: rel_png,
-            json_path: rel_json,
+            png_path: rel_png.clone(),
+            json_path: rel_json.clone(),
         });
         index.updated_at = Some(Utc::now());
-        self.write_index(&index)?;
+        if let Err(e) = self.write_index(&index) {
+            undo_placed(!keep_scrubbed);
+            return Err(e);
+        }
         Ok(())
     }
 
@@ -1482,6 +1501,37 @@ pub fn record_matches_query(record: &CaptureRecord, q: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A save that fails at the index write leaves none of its files
+    /// behind: the user is told the capture isn't in History, and an
+    /// index rebuild must not bring an (unredacted) image back.
+    #[cfg(unix)]
+    #[test]
+    fn a_save_whose_index_write_fails_leaves_no_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("h");
+        let store = FsHistoryStore::new(root.clone());
+        let png = crate::encode_png(&image::RgbaImage::new(4, 4)).unwrap();
+        let first = CaptureRecord::new(Utc::now(), 4, 4, "d");
+        store.save(&first, &png).unwrap();
+        let second = CaptureRecord::new(Utc::now(), 4, 4, "d");
+        // The root (where the index lives) refuses new files; the record's
+        // own folder still takes them.
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = store.save(&second, &png);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.is_err(), "the index write must fail in this setup");
+        for rel in [
+            FsHistoryStore::png_path(&second),
+            FsHistoryStore::json_path(&second),
+            FsHistoryStore::thumbnail_path(&second),
+        ] {
+            assert!(!root.join(&rel).exists(), "{} left behind", rel.display());
+        }
+        assert!(root.join(FsHistoryStore::png_path(&first)).exists());
+        assert_eq!(store.list().unwrap().len(), 1);
+    }
     use chrono::TimeZone;
     use tempfile::TempDir;
 
