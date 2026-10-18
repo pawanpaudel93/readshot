@@ -243,7 +243,40 @@ fn pretty_hotkey_falls_back_to_input_when_unparseable() {
 }
 
 #[test]
-fn register_hotkey_actions_keeps_fixed_hotkeys_when_capture_hotkey_is_invalid() {
+fn only_the_capture_chord_is_registered_system_wide() {
+    // History (⌘Y) and Settings (⌘,) are app shortcuts: registering them
+    // with the OS would take ⌘Y / ⌘, (Redo on Windows, every app's
+    // Preferences) away from every other app while Readshot runs.
+    let prefs = Preferences {
+        capture_hotkey: "ctrl+shift+x".into(),
+        ..Preferences::default()
+    };
+    let mut handed_to_os = Vec::new();
+    let HotkeyActions {
+        actions,
+        capture_registered,
+    } = register_hotkey_actions(&prefs, |h| {
+        handed_to_os.push(h);
+        Ok(())
+    });
+
+    assert!(capture_registered);
+    assert_eq!(handed_to_os.len(), 1);
+    assert_eq!(
+        actions.values().copied().collect::<Vec<_>>(),
+        vec![GlobalHotkeyAction::Capture]
+    );
+    for fixed in [history_hotkey(), settings_hotkey()] {
+        let id = readshot_ui::hotkey::parse(fixed)
+            .unwrap()
+            .to_global_hotkey()
+            .id();
+        assert!(!handed_to_os.iter().any(|h| h.id() == id), "{fixed}");
+    }
+}
+
+#[test]
+fn an_invalid_or_refused_capture_chord_registers_nothing() {
     let prefs = Preferences {
         capture_hotkey: "not a hotkey at all".into(),
         ..Preferences::default()
@@ -251,48 +284,25 @@ fn register_hotkey_actions_keeps_fixed_hotkeys_when_capture_hotkey_is_invalid() 
     let HotkeyActions {
         actions,
         capture_registered,
-        ..
     } = register_hotkey_actions(&prefs, |_| Ok(()));
-
     assert!(!capture_registered);
-    assert!(actions.values().any(|a| *a == GlobalHotkeyAction::History));
-    assert!(actions.values().any(|a| *a == GlobalHotkeyAction::Settings));
-    assert!(!actions.values().any(|a| *a == GlobalHotkeyAction::Capture));
-}
+    assert!(actions.is_empty());
 
-#[test]
-fn register_hotkey_actions_keeps_fixed_hotkeys_when_capture_registration_fails() {
-    let calls = std::cell::Cell::new(0);
     let prefs = Preferences {
         capture_hotkey: "ctrl+shift+x".into(),
         ..Preferences::default()
     };
-    // Capture is registered first; the first call fails so capture is
-    // dropped, and the two later fixed registrations succeed.
     let HotkeyActions {
         actions,
         capture_registered,
-        failed_fixed,
-    } = register_hotkey_actions(&prefs, |_| {
-        calls.set(calls.get() + 1);
-        if calls.get() == 1 {
-            Err("already owned".into())
-        } else {
-            Ok(())
-        }
-    });
-
+    } = register_hotkey_actions(&prefs, |_| Err("already owned".into()));
     assert!(!capture_registered);
-    assert!(failed_fixed.is_empty());
-    assert!(actions.values().any(|a| *a == GlobalHotkeyAction::History));
-    assert!(actions.values().any(|a| *a == GlobalHotkeyAction::Settings));
-    assert!(!actions.values().any(|a| *a == GlobalHotkeyAction::Capture));
+    assert!(actions.is_empty());
 }
 
 #[test]
-fn register_hotkey_actions_rejects_capture_chord_that_conflicts_with_fixed() {
-    // A capture chord equal to the reserved Settings hotkey must not
-    // be registered (and must not clobber the fixed one).
+fn a_capture_chord_equal_to_an_app_shortcut_is_refused() {
+    // ⌘, would capture from every window instead of opening Settings.
     let prefs = Preferences {
         capture_hotkey: settings_hotkey().into(),
         ..Preferences::default()
@@ -301,38 +311,16 @@ fn register_hotkey_actions_rejects_capture_chord_that_conflicts_with_fixed() {
     let HotkeyActions {
         actions,
         capture_registered,
-        failed_fixed,
     } = register_hotkey_actions(&prefs, |_| {
         attempts.set(attempts.get() + 1);
         Ok(())
     });
 
     assert!(!capture_registered, "conflicting capture must not register");
-    assert!(!actions.values().any(|a| *a == GlobalHotkeyAction::Capture));
-    assert!(actions.values().any(|a| *a == GlobalHotkeyAction::Settings));
-    assert!(actions.values().any(|a| *a == GlobalHotkeyAction::History));
-    assert!(failed_fixed.is_empty());
-    // Only the two fixed hotkeys were ever handed to the OS.
-    assert_eq!(attempts.get(), 2);
+    assert!(actions.is_empty());
+    assert_eq!(attempts.get(), 0);
     assert_eq!(capture_hotkey_conflict(settings_hotkey()), Some("Settings"));
-}
-
-#[test]
-fn register_hotkey_actions_reports_failed_fixed_hotkeys() {
-    let prefs = Preferences {
-        capture_hotkey: "ctrl+shift+x".into(),
-        ..Preferences::default()
-    };
-    // Fail every registration: capture drops, and both fixed hotkeys
-    // are reported as failures.
-    let HotkeyActions {
-        capture_registered,
-        failed_fixed,
-        ..
-    } = register_hotkey_actions(&prefs, |_| Err("denied".into()));
-
-    assert!(!capture_registered);
-    assert_eq!(failed_fixed, vec!["History", "Settings"]);
+    assert_eq!(capture_hotkey_conflict(history_hotkey()), Some("History"));
 }
 
 #[test]
@@ -685,7 +673,7 @@ fn app_window_shortcuts_ignore_extra_modifiers() {
 #[test]
 fn global_hotkey_action_ignores_release_events() {
     let mut actions = HashMap::new();
-    actions.insert(7, GlobalHotkeyAction::History);
+    actions.insert(7, GlobalHotkeyAction::Capture);
     let event = GlobalHotKeyEvent {
         id: 7,
         state: HotKeyState::Released,
@@ -697,7 +685,7 @@ fn global_hotkey_action_ignores_release_events() {
 #[test]
 fn global_hotkey_action_maps_pressed_ids() {
     let mut actions = HashMap::new();
-    actions.insert(7, GlobalHotkeyAction::Settings);
+    actions.insert(7, GlobalHotkeyAction::Capture);
     let event = GlobalHotKeyEvent {
         id: 7,
         state: HotKeyState::Pressed,
@@ -705,7 +693,7 @@ fn global_hotkey_action_maps_pressed_ids() {
 
     assert_eq!(
         global_hotkey_action(&event, &actions),
-        Some(GlobalHotkeyAction::Settings)
+        Some(GlobalHotkeyAction::Capture)
     );
 }
 
@@ -969,7 +957,6 @@ fn hotkey_problems_are_flagged_as_errors_not_help() {
     app.capture_hotkey_registered = true;
     app.settings_hotkey_error = None;
     app.settings_hotkey_status = None;
-    app.fixed_hotkey_failures.clear();
     assert!(!capture_hotkey_hint_is_error(&app));
     app.capture_hotkey_registered = false;
     assert!(capture_hotkey_hint_is_error(&app));
@@ -977,9 +964,6 @@ fn hotkey_problems_are_flagged_as_errors_not_help() {
     app.settings_hotkey_error = Some("reserved".into());
     assert!(capture_hotkey_hint_is_error(&app));
     app.settings_hotkey_error = None;
-    app.fixed_hotkey_failures.push("History");
-    assert!(capture_hotkey_hint_is_error(&app));
-    app.fixed_hotkey_failures.clear();
     app.settings_hotkey_status = Some("⇧⌘X is ready.".into());
     assert!(!capture_hotkey_hint_is_error(&app));
 }
@@ -1006,14 +990,6 @@ fn shortcut_hints_name_a_way_back_and_recording_says_it_once() {
     assert!(!hint.contains('`'), "{hint}");
     assert!(
         hint.ends_with("Press Record to choose a new one."),
-        "{hint}"
-    );
-    app.preferences.capture_hotkey = "cmd+shift+x".into();
-    app.capture_hotkey_registered = true;
-    app.fixed_hotkey_failures = vec!["History"];
-    let hint = crate::runtime::view::capture_hotkey_hint(&app);
-    assert!(
-        hint.ends_with("Quit that app, then restart Readshot."),
         "{hint}"
     );
 }

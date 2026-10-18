@@ -17,19 +17,13 @@ pub(crate) struct HotkeyRegistration {
     pub manager: GlobalHotKeyManager,
     pub actions: HashMap<u32, GlobalHotkeyAction>,
     pub capture_registered: bool,
-    /// Human names of any *fixed* hotkeys (History, Settings) that could
-    /// not be registered with the OS. Surfaced in the settings window so
-    /// a failure isn't silent.
-    pub failed_fixed: Vec<&'static str>,
 }
 
-/// Outcome of registering the full hotkey set: the id→action map, whether
-/// the user's capture chord was registered, and the names of any fixed
-/// hotkeys that failed to register.
+/// Outcome of registering the system-wide hotkeys: the id→action map and
+/// whether the user's capture chord was registered.
 pub(crate) struct HotkeyActions {
     pub actions: HashMap<u32, GlobalHotkeyAction>,
     pub capture_registered: bool,
-    pub failed_fixed: Vec<&'static str>,
 }
 
 /// Per-platform suggested default for `Preferences::capture_hotkey`.
@@ -201,7 +195,6 @@ pub(crate) fn register_default_hotkey(prefs: &Preferences) -> Option<HotkeyRegis
     let HotkeyActions {
         actions,
         capture_registered,
-        failed_fixed,
     } = register_hotkey_actions(prefs, |hotkey| {
         manager.register(hotkey).map_err(|e| e.to_string())
     });
@@ -212,11 +205,15 @@ pub(crate) fn register_default_hotkey(prefs: &Preferences) -> Option<HotkeyRegis
             manager,
             actions,
             capture_registered,
-            failed_fixed,
         })
     }
 }
 
+/// The History and Settings shortcuts. They are app shortcuts, handled
+/// only while a Readshot window has the keyboard
+/// (`app_window_shortcut_message`), never registered with the OS: a
+/// system-wide ⌘Y / ⌘, would take Redo and every app's Preferences away
+/// from other apps for as long as Readshot runs.
 #[cfg(target_os = "macos")]
 pub(crate) fn history_hotkey() -> &'static str {
     "cmd+y"
@@ -237,10 +234,11 @@ pub(crate) fn settings_hotkey() -> &'static str {
     "ctrl+comma"
 }
 
-/// If the capture chord collides with one of the fixed global hotkeys,
-/// return the human name of the reserved action it clashes with. Fixed
-/// hotkeys (History, Settings) always win, so a capture chord equal to
-/// one of them must be rejected rather than silently clobbering it.
+/// If the capture chord collides with one of the app shortcuts (History,
+/// Settings), return the human name of the action it clashes with. A
+/// system-wide capture chord equal to one of them would fire from inside
+/// Readshot's own windows too, so it is rejected rather than shadowing
+/// the app shortcut.
 pub(crate) fn capture_hotkey_conflict(capture: &str) -> Option<&'static str> {
     let spec = hotkey::parse(capture).ok()?;
     let clashes = |fixed: &str| hotkey::parse(fixed).map(|f| f == spec).unwrap_or(false);
@@ -301,57 +299,10 @@ where
             );
         }
     }
-    let mut failed_fixed = Vec::new();
-    if !register_fixed_global_hotkey(
-        &mut actions,
-        history_hotkey(),
-        GlobalHotkeyAction::History,
-        &mut register,
-    ) {
-        failed_fixed.push("History");
-    }
-    if !register_fixed_global_hotkey(
-        &mut actions,
-        settings_hotkey(),
-        GlobalHotkeyAction::Settings,
-        &mut register,
-    ) {
-        failed_fixed.push("Settings");
-    }
     HotkeyActions {
         actions,
         capture_registered,
-        failed_fixed,
     }
-}
-
-/// Register one fixed hotkey. Returns `true` on success, `false` if the
-/// string didn't parse or the OS refused the registration — the caller
-/// records failures so they can be surfaced to the user.
-pub(crate) fn register_fixed_global_hotkey<F>(
-    actions: &mut HashMap<u32, GlobalHotkeyAction>,
-    hotkey_string: &str,
-    action: GlobalHotkeyAction,
-    register: &mut F,
-) -> bool
-where
-    F: FnMut(HotKey) -> Result<(), String>,
-{
-    let Ok(spec) = hotkey::parse(hotkey_string) else {
-        tracing::warn!(target: readshot_core::log::cat::HOTKEY, "fixed hotkey `{hotkey_string}` did not parse");
-        return false;
-    };
-    let hotkey = spec.to_global_hotkey();
-    let id = hotkey.id();
-    if let Err(e) = register(hotkey) {
-        tracing::warn!(
-            target: readshot_core::log::cat::HOTKEY,
-            "failed to register fixed hotkey `{hotkey_string}`: {e}",
-        );
-        return false;
-    }
-    actions.insert(id, action);
-    true
 }
 
 /// Which scroll-capture esc chords are global hotkeys right now:
@@ -460,12 +411,10 @@ pub(crate) fn refresh_hotkey_registration(state: &mut App) {
     state.scroll_escape_hotkeys.clear();
     state.scroll_escape_tried = false;
     state.capture_hotkey_registered = false;
-    state.fixed_hotkey_failures = Vec::new();
     if let Some(registration) = register_default_hotkey(&state.preferences) {
         state.hotkey_manager = Some(registration.manager);
         state.hotkey_actions = registration.actions;
         state.capture_hotkey_registered = registration.capture_registered;
-        state.fixed_hotkey_failures = registration.failed_fixed;
     }
 }
 

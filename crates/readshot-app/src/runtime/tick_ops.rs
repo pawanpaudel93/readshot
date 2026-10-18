@@ -30,16 +30,12 @@ pub(super) fn on_hotkey_tick(state: &mut App) -> Task<Message> {
     // repeated presses into one action per tick so a mashed
     // hotkey doesn't stack pending windows/captures.
     let mut capture = false;
-    let mut history = false;
-    let mut settings = false;
     let mut scroll_stop = false;
     let mut scroll_discard = false;
     let receiver = GlobalHotKeyEvent::receiver();
     while let Ok(event) = receiver.try_recv() {
         match global_hotkey_action(&event, &state.hotkey_actions) {
             Some(GlobalHotkeyAction::Capture) => capture = true,
-            Some(GlobalHotkeyAction::History) => history = true,
-            Some(GlobalHotkeyAction::Settings) => settings = true,
             Some(GlobalHotkeyAction::ScrollStop) => scroll_stop = true,
             Some(GlobalHotkeyAction::ScrollDiscard) => scroll_discard = true,
             None => {}
@@ -50,15 +46,6 @@ pub(super) fn on_hotkey_tick(state: &mut App) -> Task<Message> {
     }
     if scroll_stop {
         return update(state, Message::Scroll(ScrollMsg::StopRequested));
-    }
-    if settings {
-        return update(state, Message::Settings(SettingsMsg::OpenRequested));
-    }
-    if history {
-        if state.welcome.should_show() {
-            return show_or_focus_welcome(state);
-        }
-        return update(state, Message::History(HistoryMsg::OpenRequested));
     }
     if capture {
         if state.welcome.should_show() {

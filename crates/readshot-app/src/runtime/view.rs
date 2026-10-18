@@ -4410,7 +4410,6 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
 pub(crate) fn capture_hotkey_hint_is_error(state: &App) -> bool {
     let chord = &state.preferences.capture_hotkey;
     state.settings_hotkey_error.is_some()
-        || !state.fixed_hotkey_failures.is_empty()
         || (!state.settings_recording_hotkey
             && state.settings_hotkey_status.is_none()
             && (readshot_ui::hotkey::parse(chord).is_err()
@@ -4448,24 +4447,6 @@ pub(crate) fn capture_hotkey_hint(state: &App) -> String {
     } else {
         String::new()
     };
-    // A fixed hotkey (History / Settings) that couldn't be registered is
-    // surfaced here so the failure isn't silent.
-    if !state.fixed_hotkey_failures.is_empty() {
-        let names = state.fixed_hotkey_failures.join(" and ");
-        let plural = if state.fixed_hotkey_failures.len() > 1 {
-            "shortcuts"
-        } else {
-            "shortcut"
-        };
-        let warning = format!(
-            "Another app may be using the {names} {plural}. Quit that app, then restart Readshot."
-        );
-        hotkey_hint = if hotkey_hint.is_empty() {
-            warning
-        } else {
-            format!("{hotkey_hint}  {warning}")
-        };
-    }
     if hotkey_hint.is_empty() {
         hotkey_hint = "Opens the capture overlay from any app.".to_string();
     }

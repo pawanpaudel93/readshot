@@ -433,7 +433,6 @@ pub fn start() -> (App, Task<Message>) {
         app.hotkey_manager = Some(registration.manager);
         app.hotkey_actions = registration.actions;
         app.capture_hotkey_registered = registration.capture_registered;
-        app.fixed_hotkey_failures = registration.failed_fixed;
     }
     if app.preferences.launch_at_login {
         if let Err(e) = crate::startup::set_launch_at_login(true) {

@@ -98,8 +98,6 @@ pub enum HistoryKeyboardAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GlobalHotkeyAction {
     Capture,
-    History,
-    Settings,
     /// esc while a scrolling capture runs: Stop & Stitch, from any app.
     ScrollStop,
     /// ⇧esc while a scrolling capture runs: discard (arms, then confirms).
@@ -1097,10 +1095,6 @@ pub struct App {
     /// work when this is false, so this is tracked separately from
     /// `hotkey_manager`.
     pub capture_hotkey_registered: bool,
-    /// Human names of any fixed hotkeys (History, Settings) that failed
-    /// to register globally on the last attempt. Surfaced in the settings
-    /// window so the failure isn't silent.
-    pub fixed_hotkey_failures: Vec<&'static str>,
     /// Live tray-icon controller. Held to keep the icon visible.
     /// Tests and CLI invocations leave this `None`.
     pub tray: Option<crate::tray::TrayController>,
@@ -1589,7 +1583,6 @@ impl App {
             scroll_escape_hotkeys: Vec::new(),
             scroll_escape_tried: false,
             capture_hotkey_registered: false,
-            fixed_hotkey_failures: Vec::new(),
             tray: None,
             editor: None,
             retiring_editors: Vec::new(),
