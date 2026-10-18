@@ -140,6 +140,9 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   annotation; `⌥` + arrow keys resize the selection from its bottom-right
   corner (a selected magnifier moves only its bubble). Pressing `C` starts a
   crop area you can move with the arrow keys and size with `⌥` + arrows.
+  `1`–`9` set the line width, `[` / `]` make it one step thinner / thicker
+  (for text, the text size), `,` / `.` cycle through the colors, and `↵`
+  edits the selected text annotation.
 - **Editor actions:** `⌘C` copy image, `⇧⌘C` copy all text (the side panel's Text tab also copies selected lines), `⌘S` save,
   `⌘P` pin, `⌥⌘P` show or hide the side panel, `⌘Z` / `⇧⌘Z` undo and
   redo, `⌘[` / `⌘]` rotate left / right, `⇧⌘H` / `⇧⌘V` flip horizontally /
