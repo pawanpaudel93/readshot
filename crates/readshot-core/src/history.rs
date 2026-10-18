@@ -855,19 +855,44 @@ impl FsHistoryStore {
         if thumb_path.exists() {
             return;
         }
-        if let Some(read) = read_for_backfill(png_path) {
+        if let Some(read) = self.read_for_backfill(record, png_path) {
             self.place_backfill(record, png_path, read);
         }
     }
 
+    /// Step one of a thumbnail backfill: snapshot the record's sidecar and
+    /// the PNG's [`FileStamp`], then read and decode the PNG — the slow
+    /// part, without the index lock. `None` when the record is unreadable
+    /// or mid-scrub, or the PNG changed while it was read.
+    fn read_for_backfill(&self, record: &CaptureRecord, png_path: &Path) -> Option<Backfill> {
+        let sidecar = fs::read(self.root.join(Self::json_path(record))).ok()?;
+        let stored: CaptureRecord = serde_json::from_slice(&sidecar).ok()?;
+        if stored.scrub_pending {
+            return None;
+        }
+        let before = FileStamp::of(png_path)?;
+        let png = fs::read(png_path).ok()?;
+        if FileStamp::of(png_path)? != before {
+            return None;
+        }
+        let img = image::load_from_memory(&png).ok()?;
+        Some(Backfill {
+            sidecar,
+            png: before,
+            thumb: img
+                .thumbnail(THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT)
+                .to_rgba8(),
+        })
+    }
+
     /// Step two of [`Self::backfill_thumbnail_from_png_path`]: write the
     /// thumbnail decoded without the lock — only if it is still current.
-    /// Under the index lock (the one every scrub phase holds), re-check
-    /// that there is still no thumbnail, that the record is readable and
-    /// not mid-scrub, and that the PNG on disk is byte for byte the one
-    /// decoded. A scrub that removed or replaced the PNG in between makes
-    /// the result stale: it is discarded, never written from
-    /// pre-redaction pixels.
+    /// Under the index lock (the one every scrub phase holds) it re-checks,
+    /// cheaply, that there is still no thumbnail, that the sidecar is
+    /// byte for byte the one read before the decode (every scrub phase
+    /// rewrites it), and that the PNG's [`FileStamp`] is unchanged (a
+    /// scrub's rename always changes it). Anything else makes the result
+    /// stale: it is discarded, never written from pre-redaction pixels.
     fn place_backfill(&self, record: &CaptureRecord, png_path: &Path, read: Backfill) {
         let Ok(_guard) = self.lock_index() else {
             return;
@@ -876,11 +901,10 @@ impl FsHistoryStore {
         if abs_thumb.exists() {
             return;
         }
-        match self.read_sidecar(record) {
-            Ok(Some(stored)) if !stored.scrub_pending => {}
-            _ => return,
+        if fs::read(self.root.join(Self::json_path(record))).ok() != Some(read.sidecar) {
+            return;
         }
-        if fs::read(png_path).ok().as_deref() != Some(read.png.as_slice()) {
+        if FileStamp::of(png_path) != Some(read.png) {
             return;
         }
         let Some(bytes) = thumbnail_bytes(&read.thumb) else {
@@ -1324,28 +1348,52 @@ impl HistoryStore for FsHistoryStore {
     }
 }
 
-/// A thumbnail decoded for a backfill, with the PNG bytes it came from.
+/// A thumbnail decoded for a backfill, with what it was decoded from:
+/// the record's sidecar bytes and the PNG's stamp at the time.
 struct Backfill {
-    png: Vec<u8>,
+    sidecar: Vec<u8>,
+    png: FileStamp,
     thumb: image::RgbaImage,
+}
+
+/// What identifies a file's present contents without reading it: size,
+/// modification time and file identity (the inode on Unix, the creation
+/// time elsewhere). A rename of another file over it changes the
+/// identity; every History image write is such a rename.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    identity: FileIdentity,
+}
+
+#[cfg(unix)]
+type FileIdentity = (u64, u64);
+
+#[cfg(not(unix))]
+type FileIdentity = Option<std::time::SystemTime>;
+
+impl FileStamp {
+    fn of(path: &Path) -> Option<Self> {
+        let m = fs::metadata(path).ok()?;
+        #[cfg(unix)]
+        let identity = {
+            use std::os::unix::fs::MetadataExt;
+            (m.dev(), m.ino())
+        };
+        #[cfg(not(unix))]
+        let identity = m.created().ok();
+        Some(Self {
+            len: m.len(),
+            modified: m.modified().ok(),
+            identity,
+        })
+    }
 }
 
 /// `thumb` encoded as PNG.
 fn thumbnail_bytes(thumb: &image::RgbaImage) -> Option<Vec<u8>> {
     crate::encode_png(thumb).ok()
-}
-
-/// Step one of a thumbnail backfill: read and decode the PNG (slow, so
-/// without the index lock).
-fn read_for_backfill(png_path: &Path) -> Option<Backfill> {
-    let png = fs::read(png_path).ok()?;
-    let img = image::load_from_memory(&png).ok()?;
-    Some(Backfill {
-        thumb: img
-            .thumbnail(THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT)
-            .to_rgba8(),
-        png,
-    })
 }
 
 fn remove_if_exists(path: &Path) -> Result<(), HistoryError> {
@@ -1782,12 +1830,12 @@ mod tests {
         let png_path = s.root().join(FsHistoryStore::png_path(&r));
         let thumb_path = s.root().join(FsHistoryStore::thumbnail_path(&r));
         fs::remove_file(&thumb_path).unwrap();
-        let unredacted = read_for_backfill(&png_path).expect("decoded");
+        let unredacted = s.read_for_backfill(&r, &png_path).expect("decoded");
         let unredacted_thumb = unredacted.thumb.clone();
         // The scrub lands (its own thumbnail failed to encode).
         let (_, black) = black_png(8, 8);
         s.begin_scrub(&scrubbed_of(&r)).unwrap();
-        let mid = read_for_backfill(&png_path);
+        let mid = s.read_for_backfill(&r, &png_path);
         assert!(mid.is_none(), "no image on disk mid-scrub");
         s.rewrite(&scrubbed_of(&r), &black).unwrap();
         let _ = fs::remove_file(&thumb_path);
@@ -1806,6 +1854,30 @@ mod tests {
     }
 
     #[test]
+    fn a_backfill_decoded_before_any_scrub_phase_is_discarded() {
+        // A scrub that leaves the very same PNG bytes in place (its
+        // sidecar still changed) also makes the decoded result stale.
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        let png = valid_png(8, 8);
+        s.save(&r, &png).unwrap();
+        let png_path = s.root().join(FsHistoryStore::png_path(&r));
+        let thumb_path = s.root().join(FsHistoryStore::thumbnail_path(&r));
+        fs::remove_file(&thumb_path).unwrap();
+        let read = s.read_for_backfill(&r, &png_path).expect("decoded");
+        let mut scrubbed = scrubbed_of(&r);
+        scrubbed.ocr_text = Some("other".into());
+        s.rewrite(&scrubbed, &png).unwrap();
+        let _ = fs::remove_file(&thumb_path);
+        s.place_backfill(&r, &png_path, read);
+        assert!(!thumb_path.exists());
+        // Unchanged in between: it lands.
+        let read = s.read_for_backfill(&r, &png_path).expect("decoded");
+        s.place_backfill(&r, &png_path, read);
+        assert!(thumb_path.exists());
+    }
+
+    #[test]
     fn a_backfill_never_lands_on_a_pending_scrub() {
         let (_dir, s) = store();
         let r = record_at(Utc::now());
@@ -1813,7 +1885,7 @@ mod tests {
         let png_path = s.root().join(FsHistoryStore::png_path(&r));
         let thumb_path = s.root().join(FsHistoryStore::thumbnail_path(&r));
         fs::remove_file(&thumb_path).unwrap();
-        let unredacted = read_for_backfill(&png_path).expect("decoded");
+        let unredacted = s.read_for_backfill(&r, &png_path).expect("decoded");
         s.begin_scrub(&scrubbed_of(&r)).unwrap();
         s.place_backfill(&r, &png_path, unredacted);
         assert!(!thumb_path.exists());
