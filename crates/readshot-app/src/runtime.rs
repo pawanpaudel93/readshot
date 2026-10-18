@@ -149,12 +149,20 @@ pub(crate) fn theme_poll_needed(state: &App) -> bool {
     state.windows.kinds().any(follows_system_theme)
 }
 
-/// Register a newly opened window. A system-themed window re-reads the
-/// OS appearance here (in `update`, on the main thread) so it opens in
-/// the right mode even though the 1 Hz poll was idle until now.
+/// Whether the app reads the OS appearance itself (`os_theme_mode`, the
+/// 1 Hz poll). Only macOS can. Elsewhere iced is the source:
+/// `SystemThemeChanged` carries the desktop portal's colour scheme on
+/// Linux and the theme each new window reads from the system on Windows,
+/// so nothing may overwrite it with `os_theme_mode`'s fixed Dark.
+pub(crate) const READS_OS_THEME: bool = cfg!(target_os = "macos");
+
+/// Register a newly opened window. On macOS a system-themed window
+/// re-reads the OS appearance here (in `update`, on the main thread) so
+/// it opens in the right mode even though the 1 Hz poll was idle until
+/// now.
 pub(crate) fn register_window(state: &mut App, id: window::Id, kind: WindowKind) {
     state.windows.register(id, kind);
-    if follows_system_theme(kind) {
+    if READS_OS_THEME && follows_system_theme(kind) {
         state.theme_mode = os_theme_mode();
     }
 }
@@ -554,8 +562,9 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     // The map closure runs on the tokio executor, where `os_theme_mode`
     // (main-thread only) would always read Dark, so emit a bare tick and
     // read the OS appearance in `update()`.
-    // Only while a system-themed window is open (see `theme_poll_needed`).
-    if theme_poll_needed(state) {
+    // Only while a system-themed window is open (see `theme_poll_needed`),
+    // and only where the app can read the OS itself (`READS_OS_THEME`).
+    if READS_OS_THEME && theme_poll_needed(state) {
         subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::ThemePollTick));
     }
     if state.welcome.should_show() {
@@ -2291,7 +2300,13 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         Message::SystemThemeChanged(mode) => {
             state.theme_mode = match mode {
                 iced::theme::Mode::Light => ThemeMode::Light,
-                _ => ThemeMode::Dark,
+                iced::theme::Mode::Dark => ThemeMode::Dark,
+                // Off macOS `None` is "no news", not "dark": an X11 window
+                // has no theme of its own, and iced reports that as `None`
+                // every time one opens, which would wipe the portal's
+                // answer.
+                iced::theme::Mode::None if !READS_OS_THEME => state.theme_mode,
+                iced::theme::Mode::None => ThemeMode::Dark,
             };
             Task::none()
         }

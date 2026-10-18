@@ -68,9 +68,25 @@ fn system_theme_message_switches_mode() {
     assert_eq!(app.theme_mode, ThemeMode::Light);
     let _ = update(
         &mut app,
-        Message::SystemThemeChanged(iced::theme::Mode::None),
+        Message::SystemThemeChanged(iced::theme::Mode::Dark),
     );
     assert_eq!(app.theme_mode, ThemeMode::Dark);
+    let _ = update(
+        &mut app,
+        Message::SystemThemeChanged(iced::theme::Mode::Light),
+    );
+    let _ = update(
+        &mut app,
+        Message::SystemThemeChanged(iced::theme::Mode::None),
+    );
+    // macOS: no tone means dark. Elsewhere `None` is "no news" (an X11
+    // window opening), so the OS's last answer stands.
+    let after_none = if READS_OS_THEME {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    };
+    assert_eq!(app.theme_mode, after_none);
 }
 
 #[test]
@@ -103,6 +119,7 @@ fn theme_poll_runs_only_while_a_system_themed_window_is_open() {
     }
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn opening_a_system_themed_window_reads_the_os_mode() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
@@ -111,6 +128,20 @@ fn opening_a_system_themed_window_reads_the_os_mode() {
     // Off the main thread (tests) `os_theme_mode` reports Dark.
     assert_eq!(app.theme_mode, os_theme_mode());
     assert_eq!(app.theme_mode, ThemeMode::Dark);
+}
+
+/// Off macOS the app can't read the OS appearance, so opening a window
+/// keeps the mode iced last reported instead of forcing Dark.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn opening_a_window_keeps_the_reported_system_mode_off_macos() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let _ = update(
+        &mut app,
+        Message::SystemThemeChanged(iced::theme::Mode::Light),
+    );
+    let _ = update(&mut app, Message::OpenSettingsRequested);
+    assert_eq!(app.theme_mode, ThemeMode::Light);
 }
 
 #[cfg(debug_assertions)]
