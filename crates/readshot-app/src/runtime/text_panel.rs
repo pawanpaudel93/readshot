@@ -572,6 +572,9 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
                 return Task::none();
             }
             let Some(text) = copy_lines_text(ed, &indices, remove_breaks) else {
+                if ed.text_panel.document().is_some() {
+                    ed.set_status(COPY_TEXT_WITHHELD);
+                }
                 return Task::none();
             };
             let n = indices.len();
@@ -827,10 +830,17 @@ pub(crate) fn click_selection(
     }
 }
 
+/// Status when a copy is refused because its text can't be masked.
+pub(crate) const COPY_TEXT_WITHHELD: &str =
+    "Text hidden: Readshot can't tell which words the redactions cover, so nothing was copied.";
+
 /// Copy N Lines text: the lines at `indices` with every word a
-/// redaction hides masked (`█` per char), matching the exported image.
-/// `None` without recognized text, or when the text can't be masked (no
-/// positions while a redaction exists): withheld, never copied unmasked.
+/// redaction hides masked (`█` per char): the redactions drawn now and,
+/// for a reopened scrubbed record, the ones baked into its image
+/// ([`super::editor_ops::history_hide`]; recognition may read a word
+/// under a weak baked blur). `None` without recognized text, or when the
+/// text can't be masked (baked-in redactions unknown, or no positions
+/// while a redaction exists): withheld, never copied unmasked.
 pub(crate) fn copy_lines_text(
     ed: &EditorSession,
     indices: &[usize],
@@ -839,7 +849,8 @@ pub(crate) fn copy_lines_text(
     use readshot_core::scrub::{hidden_spans, mask_document};
     let doc = ed.text_panel.document()?;
     // Masked like the exported image: the redactions as drawn.
-    let spans = hidden_spans(doc, &ed.model.drawn_annotations())?;
+    let hide = super::editor_ops::history_hide(ed)?;
+    let spans = hidden_spans(doc, &hide)?;
     Some(if spans.is_empty() {
         readshot_core::text_lines::copy_lines(doc, indices, remove_breaks)
     } else {

@@ -1170,3 +1170,92 @@ fn without_positions_a_hand_drawn_redaction_withholds_the_text() {
         None
     );
 }
+
+/// A reopened scrub (its baked-in blur over [`hidden_word`] recorded)
+/// whose fresh recognition still reads the word under the weak blur.
+fn reopened_scrub_reading_its_hidden_word(
+    scrubbed: fn(
+        &readshot_core::FsHistoryStore,
+    ) -> (image::RgbaImage, readshot_core::CaptureRecord),
+) -> (tempfile::TempDir, App) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+    let mut app = build_app_with_positions_and_history(store.clone());
+    let (img, record) = scrubbed(&store);
+    app.editor = Some(crate::editor::EditorSession::from_history(img, record));
+    recognized(
+        &mut app,
+        readshot_core::document::ORIGINAL_PART,
+        positioned_doc(&hidden_word(), RectLike::new(2.0, 4.0, 10.0, 3.0)),
+    );
+    (dir, app)
+}
+
+#[test]
+fn copy_lines_on_a_reopened_scrub_masks_its_baked_in_redactions() {
+    let (_dir, mut app) = reopened_scrub_reading_its_hidden_word(reopened_scrubbed);
+    let ed = app.editor.as_ref().unwrap();
+    let text = super::super::text_panel::copy_lines_text(ed, &[0], false).unwrap();
+    assert_eq!(text, "█".repeat(6));
+    // Through the message too.
+    let _ = update(&mut app, Message::EditorTextLineClicked(0));
+    let _ = update(&mut app, Message::EditorCopyLines);
+    assert_eq!(
+        app.editor.as_ref().unwrap().status.as_deref(),
+        Some("Copying text…")
+    );
+}
+
+#[test]
+fn copy_all_on_a_reopened_scrub_masks_its_baked_in_redactions() {
+    use super::super::editor_ops::{copy_all_mask, CopyAllMask};
+    let (_dir, mut app) = reopened_scrub_reading_its_hidden_word(reopened_scrubbed);
+    let ed = app.editor.as_ref().unwrap();
+    // Never the panel's raw recognition: the output is recognized and
+    // masked with the inherited redaction.
+    let CopyAllMask::Hide(hide) = copy_all_mask(ed) else {
+        panic!("a reopened scrub must be masked");
+    };
+    let doc = positioned_doc(&hidden_word(), RectLike::new(2.0, 4.0, 10.0, 3.0));
+    assert_eq!(
+        readshot_core::scrub::masked_text(&doc, &hide).as_deref(),
+        Some("██████")
+    );
+    let _ = update(&mut app, Message::EditorCopyTextRequested);
+    assert_eq!(
+        app.editor.as_ref().unwrap().status.as_deref(),
+        Some("Recognizing text…")
+    );
+}
+
+#[test]
+fn copies_of_a_reopened_scrub_with_unknown_redactions_are_withheld() {
+    use super::super::editor_ops::{copy_all_mask, CopyAllMask};
+    let (_dir, mut app) = reopened_scrub_reading_its_hidden_word(scrubbed_without_redactions);
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(
+        super::super::text_panel::copy_lines_text(ed, &[0], false),
+        None
+    );
+    assert!(matches!(copy_all_mask(ed), CopyAllMask::Withhold));
+    let _ = update(&mut app, Message::EditorCopyTextRequested);
+    let status = app
+        .editor
+        .as_ref()
+        .unwrap()
+        .status
+        .clone()
+        .unwrap_or_default();
+    assert!(status.starts_with("Text hidden"), "{status}");
+    assert!(!app.editor.as_ref().unwrap().busy);
+    let _ = update(&mut app, Message::EditorTextLineClicked(0));
+    let _ = update(&mut app, Message::EditorCopyLines);
+    let status = app
+        .editor
+        .as_ref()
+        .unwrap()
+        .status
+        .clone()
+        .unwrap_or_default();
+    assert!(status.starts_with("Text hidden"), "{status}");
+}

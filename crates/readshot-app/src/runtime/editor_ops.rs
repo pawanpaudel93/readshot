@@ -1258,7 +1258,16 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // scribbled-over or cropped-away text never reaches the
             // clipboard. The pending draft was committed just above, so
             // it counts.
-            let neutral = readshot_core::redact::panel_text_matches_output(ed.model.annotations());
+            // Any redaction (drawn now, or baked into a reopened scrubbed
+            // record): the output is recognized and masked
+            // (`copy_all_mask`), or nothing is copied when it can't be.
+            let mask = copy_all_mask(ed);
+            if matches!(mask, CopyAllMask::Withhold) {
+                ed.set_status(super::text_panel::COPY_TEXT_WITHHELD);
+                return Task::none();
+            }
+            let neutral = matches!(mask, CopyAllMask::None)
+                && readshot_core::redact::panel_text_matches_output(ed.model.annotations());
             let cached = neutral
                 .then(|| ed.text_panel.document())
                 .flatten()
@@ -1274,7 +1283,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             let img = ed.model.flatten();
             let coord = state.coordinator.clone();
             let prefs = state.preferences.clone();
-            Task::perform(ocr_then_copy(coord, img, prefs, remove_breaks), |r| {
+            Task::perform(ocr_then_copy(coord, img, prefs, remove_breaks, mask), |r| {
                 Message::EditorCopyTextDone(r.map_err(|e| e.to_string()))
             })
         }
@@ -1282,6 +1291,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if let Some(ed) = state.editor.as_mut() {
                 ed.busy = false;
                 ed.set_status(match result {
+                    Err(e) if e == super::text_panel::COPY_TEXT_WITHHELD => e,
                     Ok(text) if text.is_empty() => "No text recognized.".into(),
                     Ok(text) => format!(
                         "Copied {} of text.",
@@ -2466,4 +2476,37 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         }
         other => unreachable!("non-editor message routed to the editor handler: {other:?}"),
     }
+}
+
+/// What Copy All may put on the clipboard.
+#[derive(Debug)]
+pub(crate) enum CopyAllMask {
+    /// No redaction anywhere: the text as recognized.
+    None,
+    /// Mask the words these redactions (output px) hide.
+    Hide(Vec<readshot_core::Annotation>),
+    /// Redactions that can't be placed: nothing may be copied.
+    Withhold,
+}
+
+/// How Copy All masks its recognition of the output: with every
+/// redaction drawn now **and**, for a reopened scrubbed record, the ones
+/// baked into its image ([`history_hide`]) — recognition can still read a
+/// word under a weak baked blur. Moved into the output's px (a Crop cuts
+/// it). [`CopyAllMask::Withhold`] when the baked-in ones are unknown.
+pub(crate) fn copy_all_mask(ed: &crate::editor::EditorSession) -> CopyAllMask {
+    let annotations = ed.model.annotations();
+    if !source_scrubbed(ed) && !readshot_core::scrub::has_redaction(annotations) {
+        return CopyAllMask::None;
+    }
+    let Some(hide) = history_hide(ed) else {
+        return CopyAllMask::Withhold;
+    };
+    let base = ed.model.base();
+    CopyAllMask::Hide(
+        match readshot_core::render::output_crop(base.width(), base.height(), annotations) {
+            Some(crop) => readshot_core::scrub::redactions_in_crop(&hide, crop),
+            None => hide.into_iter().filter(|a| a.is_redaction()).collect(),
+        },
+    )
 }

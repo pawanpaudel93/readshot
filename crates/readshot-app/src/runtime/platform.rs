@@ -28,6 +28,9 @@ pub(crate) enum OcrCopyError {
     Ocr(#[from] readshot_core::error::OCRError),
     #[error(transparent)]
     Clipboard(#[from] ClipboardError),
+    /// Redacted text that can't be masked: nothing was copied.
+    #[error("{}", super::text_panel::COPY_TEXT_WITHHELD)]
+    Withheld,
 }
 
 /// Whether the OS is set to reduce motion (macOS: System Settings →

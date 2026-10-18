@@ -1738,7 +1738,8 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                         crate::app::CaptureIntent::CopyTextDirect => {
                             let coord = state.coordinator.clone();
                             let prefs = state.preferences.clone();
-                            Task::perform(ocr_then_copy(coord, image, prefs, false), |r| {
+                            let mask = editor_ops::CopyAllMask::None;
+                            Task::perform(ocr_then_copy(coord, image, prefs, false, mask), |r| {
                                 Message::OverlayCopyTextDone(r.map_err(|e| e.to_string()))
                             })
                         }
@@ -2992,15 +2993,26 @@ async fn copy_text_to_clipboard(text: String) -> Result<(), ClipboardError> {
 /// Run the OCR engine on the captured image and copy the result to
 /// the clipboard. Returns the text (so the editor can show its size
 /// in the toast).
+///
+/// With redactions ([`editor_ops::CopyAllMask::Hide`]) every word they hide
+/// is masked; text that can't be masked (no word positions) is withheld
+/// ([`OcrCopyError::Withheld`]), never copied.
 async fn ocr_then_copy(
     coord: CaptureCoordinator,
     img: image::RgbaImage,
     preferences: Preferences,
     remove_breaks: bool,
+    mask: editor_ops::CopyAllMask,
 ) -> Result<String, OcrCopyError> {
-    let result = coord
-        .recognise(ocr_request_for_image(img, &preferences))
-        .await?;
+    let request = ocr_request_for_image(img, &preferences);
+    let result = match mask {
+        editor_ops::CopyAllMask::None => coord.recognise(request).await?,
+        editor_ops::CopyAllMask::Hide(hide) => {
+            let doc = coord.recognise_document(request).await?;
+            readshot_core::scrub::masked_text(&doc, &hide).ok_or(OcrCopyError::Withheld)?
+        }
+        editor_ops::CopyAllMask::Withhold => return Err(OcrCopyError::Withheld),
+    };
     let text = if remove_breaks {
         readshot_core::text_lines::remove_line_breaks(&result)
     } else {
