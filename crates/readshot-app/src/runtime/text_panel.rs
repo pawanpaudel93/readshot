@@ -403,129 +403,8 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
             session,
             part,
             result,
-        } => {
-            let panel_open = state.preferences.editor_panel_open;
-            let Some(ed) = state.editor.as_mut() else {
-                return Task::none();
-            };
-            if ed.session_id != session {
-                return Task::none();
-            }
-            // A late result for another part than the running request's
-            // (the capture's own OCR, say) leaves that request be: its
-            // state, and whether the user asked for it.
-            let other_running = matches!(
-                ed.text_panel.recognition,
-                TextRecognition::Recognizing { .. }
-            ) && ed.text_panel.recognizing_part.is_some_and(|p| p != part);
-            let user_requested =
-                !other_running && std::mem::take(&mut ed.text_panel.user_requested);
-            match result {
-                Ok(doc) => {
-                    ed.text_panel
-                        .part_docs
-                        .insert(part, std::sync::Arc::new(doc));
-                    if !other_running {
-                        ed.text_panel.recognizing_part = None;
-                        ed.text_panel.recognition = TextRecognition::Idle;
-                    }
-                    refresh_text_for_geometry(ed);
-                    // Redacted before the text was known, or History holds a
-                    // transformed/combined document whose text is missing:
-                    // write again, now with the full (masked) text.
-                    let ready = ed.text_panel.document().is_some();
-                    if ready && readshot_core::scrub::has_redaction(ed.model.annotations()) {
-                        write_editor_history(ed, &state.coordinator);
-                    } else if ready
-                        && !ed.model.geometry().is_original()
-                        && ed.source_record.is_some()
-                    {
-                        ed.history_frame_written = crate::editor::HistoryFrame::Unknown;
-                        write_editor_history(ed, &state.coordinator);
-                    }
-                    if !ready && !other_running {
-                        // Another part still needs recognition.
-                        if user_requested {
-                            ed.text_panel.user_requested = true;
-                        }
-                        return request_text_recognition(state);
-                    }
-                }
-                Err(e) if other_running => {
-                    tracing::warn!(
-                        target: readshot_core::log::cat::EDITOR,
-                        "text recognition of part {part} failed: {e}"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(target: readshot_core::log::cat::EDITOR, "text recognition failed: {e}");
-                    ed.text_panel.recognizing_part = None;
-                    ed.text_panel.recognition = TextRecognition::Failed(e.clone());
-                    // Don't clobber a Saving…/Copying… toast; the panel's
-                    // Try Again state still offers the retry. A background
-                    // OCR nobody is looking at (panel closed, not asked
-                    // for) fails quietly, as history OCR always did.
-                    if !ed.busy && (panel_open || user_requested) {
-                        ed.set_status_with_action(
-                            super::history_ops::friendly_string_error_with(
-                                "recognize the text",
-                                &e,
-                                None,
-                            ),
-                            EditorToastAction::RetryRecognition,
-                        );
-                    }
-                }
-            }
-            Task::none()
-        }
-        Message::EditorPanelToggled => {
-            let Some(narrow) = state
-                .editor
-                .as_ref()
-                .map(|ed| ed.window_width < PANEL_DOCK_MIN_WINDOW)
-            else {
-                return Task::none();
-            };
-            let opening = if narrow {
-                // Narrow windows: a temporary overlay; the remembered
-                // preference is untouched.
-                match state.editor.as_mut() {
-                    Some(ed) => {
-                        ed.panel_overlay_open = !ed.panel_overlay_open;
-                        ed.panel_overlay_open
-                    }
-                    None => false,
-                }
-            } else {
-                // Toggle what is shown: an overlay opened in a narrow
-                // window that was then widened shows docked, so it counts.
-                let shown = state.preferences.editor_panel_open
-                    || state
-                        .editor
-                        .as_ref()
-                        .is_some_and(|ed| ed.panel_overlay_open);
-                let open = !shown;
-                state.set_editor_panel_open(open);
-                if let Some(ed) = state.editor.as_mut() {
-                    ed.panel_overlay_open = false;
-                }
-                open
-            };
-            if let Some(ed) = state.editor.as_mut() {
-                ed.text_panel.hovered = None;
-                if opening {
-                    // The panel takes over; a popover left open over the
-                    // canvas would otherwise eat the next Esc.
-                    close_editor_popover(ed);
-                }
-            }
-            if opening {
-                request_text_recognition(state)
-            } else {
-                Task::none()
-            }
-        }
+        } => on_text_recognized(state, session, part, result),
+        Message::EditorPanelToggled => on_panel_toggled(state),
         Message::EditorPanelOverlayDismissed => {
             if let Some(ed) = state.editor.as_mut() {
                 close_panel_overlay(ed);
@@ -549,60 +428,9 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
             );
             update(state, Message::OpenSettingsRequested)
         }
-        Message::EditorTextLineClicked(index) => {
-            let (shift, command) = (state.editor_shift_held, state.editor_command_held);
-            if let Some(ed) = state.editor.as_mut() {
-                let in_range = ed
-                    .text_panel
-                    .document()
-                    .is_some_and(|d| index < d.lines.len());
-                if in_range {
-                    let tp = &mut ed.text_panel;
-                    click_selection(&mut tp.selected, &mut tp.anchor, index, shift, command);
-                }
-            }
-            Task::none()
-        }
-        Message::EditorCopyLines => {
-            let remove_breaks = state.preferences.editor_copy_remove_line_breaks;
-            let Some(ed) = state.editor.as_mut() else {
-                return Task::none();
-            };
-            if ed.busy {
-                return Task::none();
-            }
-            let indices: Vec<usize> = ed.text_panel.selected.iter().copied().collect();
-            if indices.is_empty() {
-                return Task::none();
-            }
-            let Some(text) = copy_lines_text(ed, &indices, remove_breaks) else {
-                if ed.text_panel.document().is_some() {
-                    ed.set_status(COPY_TEXT_WITHHELD);
-                }
-                return Task::none();
-            };
-            let n = indices.len();
-            ed.set_status("Copying text…");
-            Task::perform(copy_cached_text(text), move |r| {
-                Message::EditorCopyLinesDone(r.map(|_| n).map_err(|e| e.to_string()))
-            })
-        }
-        Message::EditorCopyLinesDone(result) => {
-            if let Some(ed) = state.editor.as_mut() {
-                ed.set_status(match result {
-                    Ok(n) => format!("Copied {}.", counted(n, "line", "lines")),
-                    Err(e) => {
-                        tracing::warn!(target: readshot_core::log::cat::EDITOR, "copy lines failed: {e}");
-                        super::history_ops::friendly_string_error_with(
-                            "copy the text",
-                            &e,
-                            Some(super::history_ops::RETRY_HINT),
-                        )
-                    }
-                });
-            }
-            Task::none()
-        }
+        Message::EditorTextLineClicked(index) => on_text_line_clicked(state, index),
+        Message::EditorCopyLines => on_copy_lines(state),
+        Message::EditorCopyLinesDone(result) => on_copy_lines_done(state, result),
         Message::EditorRemoveLineBreaksToggled(on) => {
             state.set_copy_remove_line_breaks(on);
             Task::none()
@@ -616,62 +444,7 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
         Message::EditorRedactAll => redact(state, None),
         Message::EditorRedactLine(index) => redact(state, Some(index)),
         Message::EditorHistoryWritten { session, result } => {
-            match result {
-                // Superseded by a newer rewrite, which reports instead.
-                None => Task::none(),
-                Some(Ok(())) => {
-                    // The record's image and text changed: an open
-                    // History window must show and search the new ones.
-                    if state.history_window_id.is_some() {
-                        history_list_task(state.coordinator.clone())
-                    } else {
-                        Task::none()
-                    }
-                }
-                Some(Err(crate::coordinator::HistoryRewriteError::RedactedElsewhere)) => {
-                    // History keeps the redacted record another window
-                    // made; this editor can never write it back unredacted.
-                    // It stops writing to it, and says how to keep its
-                    // own version.
-                    if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
-                        ed.source_record = None;
-                        ed.set_warning(format!(
-                            "History keeps the redacted version of this capture (it was redacted in another window), so this change wasn’t stored there. Press {} to save this version to a file.",
-                            super::keys::SAVE_KEY
-                        ));
-                    }
-                    Task::none()
-                }
-                Some(Err(crate::coordinator::HistoryRewriteError::Unreadable)) => {
-                    // Unknown on disk, so nothing was changed. Not final:
-                    // the next sync rewrites the whole record again.
-                    if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
-                        ed.history_scrubbed = true;
-                        ed.history_frame_written = crate::editor::HistoryFrame::Unknown;
-                        ed.set_warning(
-                            "Couldn’t read this capture’s History record, so it wasn’t changed. Readshot tries again with your next edit.",
-                        );
-                    }
-                    Task::none()
-                }
-                Some(Err(crate::coordinator::HistoryRewriteError::Failed(e))) => {
-                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "history rewrite failed: {e}");
-                    if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
-                        // What's on disk is unknown now: the next sync
-                        // rewrites the whole record again.
-                        ed.history_scrubbed = true;
-                        ed.history_frame_written = crate::editor::HistoryFrame::Unknown;
-                        if !ed.busy {
-                            ed.set_status(super::history_ops::friendly_string_error_with(
-                                "update this capture in History",
-                                &e,
-                                Some("Readshot will keep trying."),
-                            ));
-                        }
-                    }
-                    Task::none()
-                }
-            }
+            on_history_written(state, session, result)
         }
         other => unreachable!("non-text-panel message routed to the text panel handler: {other:?}"),
     }
@@ -1626,6 +1399,254 @@ pub(crate) fn snap_highlight_annotation(
             }
         }
         other => other,
+    }
+}
+
+/// `Message::EditorTextRecognized`: a part's recognition is back.
+fn on_text_recognized(
+    state: &mut App,
+    session: u64,
+    part: readshot_core::document::PartId,
+    result: Result<readshot_core::text_lines::TextDocument, String>,
+) -> Task<Message> {
+    let panel_open = state.preferences.editor_panel_open;
+    let Some(ed) = state.editor.as_mut() else {
+        return Task::none();
+    };
+    if ed.session_id != session {
+        return Task::none();
+    }
+    // A late result for another part than the running request's
+    // (the capture's own OCR, say) leaves that request be: its
+    // state, and whether the user asked for it.
+    let other_running = matches!(
+        ed.text_panel.recognition,
+        TextRecognition::Recognizing { .. }
+    ) && ed.text_panel.recognizing_part.is_some_and(|p| p != part);
+    let user_requested = !other_running && std::mem::take(&mut ed.text_panel.user_requested);
+    match result {
+        Ok(doc) => {
+            ed.text_panel
+                .part_docs
+                .insert(part, std::sync::Arc::new(doc));
+            if !other_running {
+                ed.text_panel.recognizing_part = None;
+                ed.text_panel.recognition = TextRecognition::Idle;
+            }
+            refresh_text_for_geometry(ed);
+            // Redacted before the text was known, or History holds a
+            // transformed/combined document whose text is missing:
+            // write again, now with the full (masked) text.
+            let ready = ed.text_panel.document().is_some();
+            if ready && readshot_core::scrub::has_redaction(ed.model.annotations()) {
+                write_editor_history(ed, &state.coordinator);
+            } else if ready && !ed.model.geometry().is_original() && ed.source_record.is_some() {
+                ed.history_frame_written = crate::editor::HistoryFrame::Unknown;
+                write_editor_history(ed, &state.coordinator);
+            }
+            if !ready && !other_running {
+                // Another part still needs recognition.
+                if user_requested {
+                    ed.text_panel.user_requested = true;
+                }
+                return request_text_recognition(state);
+            }
+        }
+        Err(e) if other_running => {
+            tracing::warn!(
+                target: readshot_core::log::cat::EDITOR,
+                "text recognition of part {part} failed: {e}"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(target: readshot_core::log::cat::EDITOR, "text recognition failed: {e}");
+            ed.text_panel.recognizing_part = None;
+            ed.text_panel.recognition = TextRecognition::Failed(e.clone());
+            // Don't clobber a Saving…/Copying… toast; the panel's
+            // Try Again state still offers the retry. A background
+            // OCR nobody is looking at (panel closed, not asked
+            // for) fails quietly, as history OCR always did.
+            if !ed.busy && (panel_open || user_requested) {
+                ed.set_status_with_action(
+                    super::history_ops::friendly_string_error_with("recognize the text", &e, None),
+                    EditorToastAction::RetryRecognition,
+                );
+            }
+        }
+    }
+    Task::none()
+}
+
+/// `Message::EditorPanelToggled`.
+fn on_panel_toggled(state: &mut App) -> Task<Message> {
+    let Some(narrow) = state
+        .editor
+        .as_ref()
+        .map(|ed| ed.window_width < PANEL_DOCK_MIN_WINDOW)
+    else {
+        return Task::none();
+    };
+    let opening = if narrow {
+        // Narrow windows: a temporary overlay; the remembered
+        // preference is untouched.
+        match state.editor.as_mut() {
+            Some(ed) => {
+                ed.panel_overlay_open = !ed.panel_overlay_open;
+                ed.panel_overlay_open
+            }
+            None => false,
+        }
+    } else {
+        // Toggle what is shown: an overlay opened in a narrow
+        // window that was then widened shows docked, so it counts.
+        let shown = state.preferences.editor_panel_open
+            || state
+                .editor
+                .as_ref()
+                .is_some_and(|ed| ed.panel_overlay_open);
+        let open = !shown;
+        state.set_editor_panel_open(open);
+        if let Some(ed) = state.editor.as_mut() {
+            ed.panel_overlay_open = false;
+        }
+        open
+    };
+    if let Some(ed) = state.editor.as_mut() {
+        ed.text_panel.hovered = None;
+        if opening {
+            // The panel takes over; a popover left open over the
+            // canvas would otherwise eat the next Esc.
+            close_editor_popover(ed);
+        }
+    }
+    if opening {
+        request_text_recognition(state)
+    } else {
+        Task::none()
+    }
+}
+
+/// `Message::EditorTextLineClicked`.
+fn on_text_line_clicked(state: &mut App, index: usize) -> Task<Message> {
+    let (shift, command) = (state.editor_shift_held, state.editor_command_held);
+    if let Some(ed) = state.editor.as_mut() {
+        let in_range = ed
+            .text_panel
+            .document()
+            .is_some_and(|d| index < d.lines.len());
+        if in_range {
+            let tp = &mut ed.text_panel;
+            click_selection(&mut tp.selected, &mut tp.anchor, index, shift, command);
+        }
+    }
+    Task::none()
+}
+
+/// `Message::EditorCopyLines`.
+fn on_copy_lines(state: &mut App) -> Task<Message> {
+    let remove_breaks = state.preferences.editor_copy_remove_line_breaks;
+    let Some(ed) = state.editor.as_mut() else {
+        return Task::none();
+    };
+    if ed.busy {
+        return Task::none();
+    }
+    let indices: Vec<usize> = ed.text_panel.selected.iter().copied().collect();
+    if indices.is_empty() {
+        return Task::none();
+    }
+    let Some(text) = copy_lines_text(ed, &indices, remove_breaks) else {
+        if ed.text_panel.document().is_some() {
+            ed.set_status(COPY_TEXT_WITHHELD);
+        }
+        return Task::none();
+    };
+    let n = indices.len();
+    ed.set_status("Copying text…");
+    Task::perform(copy_cached_text(text), move |r| {
+        Message::EditorCopyLinesDone(r.map(|_| n).map_err(|e| e.to_string()))
+    })
+}
+
+/// `Message::EditorCopyLinesDone`.
+fn on_copy_lines_done(state: &mut App, result: Result<usize, String>) -> Task<Message> {
+    if let Some(ed) = state.editor.as_mut() {
+        ed.set_status(match result {
+            Ok(n) => format!("Copied {}.", counted(n, "line", "lines")),
+            Err(e) => {
+                tracing::warn!(target: readshot_core::log::cat::EDITOR, "copy lines failed: {e}");
+                super::history_ops::friendly_string_error_with(
+                    "copy the text",
+                    &e,
+                    Some(super::history_ops::RETRY_HINT),
+                )
+            }
+        });
+    }
+    Task::none()
+}
+
+/// `Message::EditorHistoryWritten`: an editor History write finished.
+fn on_history_written(
+    state: &mut App,
+    session: u64,
+    result: Option<crate::coordinator::HistoryRewriteResult>,
+) -> Task<Message> {
+    match result {
+        // Superseded by a newer rewrite, which reports instead.
+        None => Task::none(),
+        Some(Ok(())) => {
+            // The record's image and text changed: an open
+            // History window must show and search the new ones.
+            if state.history_window_id.is_some() {
+                history_list_task(state.coordinator.clone())
+            } else {
+                Task::none()
+            }
+        }
+        Some(Err(crate::coordinator::HistoryRewriteError::RedactedElsewhere)) => {
+            // History keeps the redacted record another window
+            // made; this editor can never write it back unredacted.
+            // It stops writing to it, and says how to keep its
+            // own version.
+            if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
+                ed.source_record = None;
+                ed.set_warning(format!(
+                            "History keeps the redacted version of this capture (it was redacted in another window), so this change wasn’t stored there. Press {} to save this version to a file.",
+                            super::keys::SAVE_KEY
+                        ));
+            }
+            Task::none()
+        }
+        Some(Err(crate::coordinator::HistoryRewriteError::Unreadable)) => {
+            // Unknown on disk, so nothing was changed. Not final:
+            // the next sync rewrites the whole record again.
+            if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
+                ed.history_scrubbed = true;
+                ed.history_frame_written = crate::editor::HistoryFrame::Unknown;
+                ed.set_warning(
+                            "Couldn’t read this capture’s History record, so it wasn’t changed. Readshot tries again with your next edit.",
+                        );
+            }
+            Task::none()
+        }
+        Some(Err(crate::coordinator::HistoryRewriteError::Failed(e))) => {
+            tracing::warn!(target: readshot_core::log::cat::HISTORY, "history rewrite failed: {e}");
+            if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
+                // What's on disk is unknown now: the next sync
+                // rewrites the whole record again.
+                ed.history_scrubbed = true;
+                ed.history_frame_written = crate::editor::HistoryFrame::Unknown;
+                if !ed.busy {
+                    ed.set_status(super::history_ops::friendly_string_error_with(
+                        "update this capture in History",
+                        &e,
+                        Some("Readshot will keep trying."),
+                    ));
+                }
+            }
+            Task::none()
+        }
     }
 }
 

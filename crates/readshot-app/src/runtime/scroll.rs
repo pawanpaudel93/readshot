@@ -381,48 +381,9 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             }
         }
 
-        Message::ScrollCaptureTick => {
-            let Some(session) = state.scroll_session.as_mut() else {
-                return Task::none();
-            };
-            if session.stopping || session.capture_in_flight >= SCROLL_MAX_CONCURRENT_CAPTURES {
-                return Task::none();
-            }
-            if session.frames.len() >= SCROLL_MAX_FRAMES {
-                return Task::done(Message::ScrollCaptureStopRequested);
-            }
-            session.capture_in_flight += 1;
-            session.next_capture_seq = session.next_capture_seq.saturating_add(1);
-            let seq = session.next_capture_seq;
-            let coord = state.coordinator.clone();
-            let request = readshot_capture::CaptureRequest {
-                display_id: session.display_id.clone(),
-                rect: session.rect,
-                scale: session.scale,
-                hide_cursor: true,
-            };
-            Task::perform(
-                async move { coord.capture_region(request).await },
-                move |result| Message::ScrollCaptureFrame {
-                    seq,
-                    result: result.map_err(|e| e.to_string()),
-                },
-            )
-        }
+        Message::ScrollCaptureTick => on_scroll_tick(state),
 
-        Message::ScrollCaptureFrame { seq, result } => {
-            let Some(session) = state.scroll_session.as_mut() else {
-                return Task::none();
-            };
-            session.capture_in_flight = session.capture_in_flight.saturating_sub(1);
-            // A capture still in flight at Stop is dropped: it isn't in
-            // the stitch input, so it mustn't reach the preview either.
-            if session.stopping || seq < session.next_frame_seq_to_process {
-                return Task::none();
-            }
-            session.pending_frames.insert(seq, result);
-            drain_ready_scroll_frames(session)
-        }
+        Message::ScrollCaptureFrame { seq, result } => on_scroll_frame(state, seq, result),
 
         Message::ScrollFrameJudged {
             seq,
@@ -430,53 +391,9 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             moved,
             offset,
             rows,
-        } => {
-            let Some(session) = state.scroll_session.as_mut() else {
-                return Task::none();
-            };
-            // A verdict from a cancelled/replaced session is stale, and
-            // one landing after Stop is too (Stop clears the in-flight
-            // judge; `stopping` is checked explicitly as well).
-            if session.stopping || session.judge_in_flight != Some(seq) {
-                return Task::none();
-            }
-            session.judge_in_flight = None;
-            match image {
-                Some(image) if moved => accept_scroll_frame(session, image, rows, offset),
-                _ => session.no_motion_count += 1,
-            }
-            drain_ready_scroll_frames(session)
-        }
+        } => on_frame_judged(state, seq, image, moved, offset, rows),
 
-        Message::ScrollCaptureCancelRequested => {
-            // Two-click cancel guard. Discarding a session that
-            // already accumulated frames is destructive (the captured
-            // frames are dropped on the floor), so the first click
-            // arms the cancel and the window offers "Discard N Frames"
-            // + "Keep Going". A second click actually discards; Keep
-            // Going (or a new frame) disarms it. The prompt has no time
-            // limit (WCAG 2.2.1).
-            let Some(session) = state.scroll_session.as_mut() else {
-                return Task::none();
-            };
-            // The frames already belong to the stitch task — nothing
-            // left to discard, and the window shows "Stitching…".
-            if session.stopping {
-                return Task::none();
-            }
-            // Pristine sessions (only the first auto-captured frame)
-            // skip the confirm — nothing of value to lose.
-            let has_real_content = session.frames.len() > 1;
-            if has_real_content && !cancel_armed(session) {
-                session.cancel_armed_at = Some(std::time::Instant::now());
-                return Task::none();
-            }
-            let Some(session) = state.scroll_session.take() else {
-                return Task::none();
-            };
-            state.last_capture_status = Some("Scrolling capture cancelled.".into());
-            close_scroll_windows(state, &session)
-        }
+        Message::ScrollCaptureCancelRequested => on_scroll_cancel(state),
 
         Message::ScrollCaptureKeepGoing => {
             if let Some(session) = state.scroll_session.as_mut() {
@@ -485,87 +402,197 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             Task::none()
         }
 
-        Message::ScrollCaptureStopRequested => {
-            let Some(session) = state.scroll_session.as_mut() else {
-                return Task::none();
-            };
-            if session.stopping {
-                return Task::none();
-            }
-            // Nothing captured yet (still Waiting): there is nothing to
-            // stitch, so Stop / esc ends the session like Cancel rather
-            // than reporting a failed zero-frame stitch.
-            if session.frames.is_empty() && session.preview_handle.is_none() {
-                let Some(session) = state.scroll_session.take() else {
-                    return Task::none();
-                };
-                state.last_capture_status = Some("Scrolling capture cancelled.".into());
-                return close_scroll_windows(state, &session);
-            }
-            session.stopping = true;
-            session.cancel_armed_at = None;
-            session.stitch_frame_count = session.frames.len();
-            let frames = std::mem::take(&mut session.frames);
-            // Drop buffered captures and any outstanding verdict: they
-            // aren't part of the stitch and must not touch the preview.
-            session.pending_frames.clear();
-            session.judge_in_flight = None;
-            let region_id = session.region_window_id.take();
-            // Close only the region outline now. The scroll window stays
-            // open through the stitch so it can show "Stitching…" (and
-            // "limit reached"); `ScrollCaptureStitched` closes it.
-            let mut tasks: Vec<Task<Message>> = Vec::new();
-            if let Some(id) = region_id {
-                state.windows.forget(id);
-                tasks.push(window::close(id));
-            }
-            tasks.push(Task::perform(stitch_frames_async(frames), |r| {
-                Message::ScrollCaptureStitched(r.map_err(|e| e.to_string()))
-            }));
-            Task::batch(tasks)
-        }
+        Message::ScrollCaptureStopRequested => on_scroll_stop(state),
 
-        Message::ScrollCaptureStitched(result) => {
-            // No session means it was torn down while stitching (e.g.
-            // cancelled out-of-band): the result is stale, drop it.
-            let Some(session) = state.scroll_session.take() else {
-                tracing::debug!(target: readshot_core::log::cat::CAPTURE, "dropping stitch result: no session");
-                return Task::none();
-            };
-            let display_scale = session.scale;
-            let display_bounds = session.display_size;
-            // The scroll window stayed open through the stitch; close it
-            // now on both outcomes. Stop already closed the region
-            // outline, but close it too if it is somehow still live.
-            let close_hud = close_scroll_windows(state, &session);
-            match result {
-                Ok(image) => {
-                    let (w, h) = (image.width(), image.height());
-                    let mut ed =
-                        crate::editor::EditorSession::new_with_display_scale(image, display_scale);
-                    ed.set_status(format!(
-                        "Scrolling capture stitched into {w}\u{a0}×\u{a0}{h}\u{a0}px."
-                    ));
-                    Task::batch([
-                        close_hud,
-                        open_editor_window_replacing(state, ed, display_bounds),
-                    ])
-                }
-                Err(e) => {
-                    state.last_capture_status =
-                        Some(super::history_ops::friendly_string_error_with(
-                            "stitch the scrolling capture",
-                            &e.to_string(),
-                            Some(SCROLL_RETRY_HINT),
-                        ));
-                    tracing::warn!(target: readshot_core::log::cat::CAPTURE, "stitch failed: {e}");
-                    close_hud
-                }
-            }
-        }
+        Message::ScrollCaptureStitched(result) => on_scroll_stitched(state, result),
         other => unreachable!(
             "non-scroll-capture message routed to the scroll-capture handler: {other:?}"
         ),
+    }
+}
+
+/// `Message::ScrollCaptureTick`.
+fn on_scroll_tick(state: &mut App) -> Task<Message> {
+    let Some(session) = state.scroll_session.as_mut() else {
+        return Task::none();
+    };
+    if session.stopping || session.capture_in_flight >= SCROLL_MAX_CONCURRENT_CAPTURES {
+        return Task::none();
+    }
+    if session.frames.len() >= SCROLL_MAX_FRAMES {
+        return Task::done(Message::ScrollCaptureStopRequested);
+    }
+    session.capture_in_flight += 1;
+    session.next_capture_seq = session.next_capture_seq.saturating_add(1);
+    let seq = session.next_capture_seq;
+    let coord = state.coordinator.clone();
+    let request = readshot_capture::CaptureRequest {
+        display_id: session.display_id.clone(),
+        rect: session.rect,
+        scale: session.scale,
+        hide_cursor: true,
+    };
+    Task::perform(
+        async move { coord.capture_region(request).await },
+        move |result| Message::ScrollCaptureFrame {
+            seq,
+            result: result.map_err(|e| e.to_string()),
+        },
+    )
+}
+
+/// `Message::ScrollCaptureFrame`.
+fn on_scroll_frame(
+    state: &mut App,
+    seq: u64,
+    result: Result<image::RgbaImage, String>,
+) -> Task<Message> {
+    let Some(session) = state.scroll_session.as_mut() else {
+        return Task::none();
+    };
+    session.capture_in_flight = session.capture_in_flight.saturating_sub(1);
+    // A capture still in flight at Stop is dropped: it isn't in
+    // the stitch input, so it mustn't reach the preview either.
+    if session.stopping || seq < session.next_frame_seq_to_process {
+        return Task::none();
+    }
+    session.pending_frames.insert(seq, result);
+    drain_ready_scroll_frames(session)
+}
+
+/// `Message::ScrollFrameJudged`.
+fn on_frame_judged(
+    state: &mut App,
+    seq: u64,
+    image: Option<image::RgbaImage>,
+    moved: bool,
+    offset: Option<u32>,
+    rows: Option<image::RgbaImage>,
+) -> Task<Message> {
+    let Some(session) = state.scroll_session.as_mut() else {
+        return Task::none();
+    };
+    // A verdict from a cancelled/replaced session is stale, and
+    // one landing after Stop is too (Stop clears the in-flight
+    // judge; `stopping` is checked explicitly as well).
+    if session.stopping || session.judge_in_flight != Some(seq) {
+        return Task::none();
+    }
+    session.judge_in_flight = None;
+    match image {
+        Some(image) if moved => accept_scroll_frame(session, image, rows, offset),
+        _ => session.no_motion_count += 1,
+    }
+    drain_ready_scroll_frames(session)
+}
+
+/// `Message::ScrollCaptureCancelRequested`.
+fn on_scroll_cancel(state: &mut App) -> Task<Message> {
+    // Two-click cancel guard. Discarding a session that
+    // already accumulated frames is destructive (the captured
+    // frames are dropped on the floor), so the first click
+    // arms the cancel and the window offers "Discard N Frames"
+    // + "Keep Going". A second click actually discards; Keep
+    // Going (or a new frame) disarms it. The prompt has no time
+    // limit (WCAG 2.2.1).
+    let Some(session) = state.scroll_session.as_mut() else {
+        return Task::none();
+    };
+    // The frames already belong to the stitch task — nothing
+    // left to discard, and the window shows "Stitching…".
+    if session.stopping {
+        return Task::none();
+    }
+    // Pristine sessions (only the first auto-captured frame)
+    // skip the confirm — nothing of value to lose.
+    let has_real_content = session.frames.len() > 1;
+    if has_real_content && !cancel_armed(session) {
+        session.cancel_armed_at = Some(std::time::Instant::now());
+        return Task::none();
+    }
+    let Some(session) = state.scroll_session.take() else {
+        return Task::none();
+    };
+    state.last_capture_status = Some("Scrolling capture cancelled.".into());
+    close_scroll_windows(state, &session)
+}
+
+/// `Message::ScrollCaptureStopRequested`.
+fn on_scroll_stop(state: &mut App) -> Task<Message> {
+    let Some(session) = state.scroll_session.as_mut() else {
+        return Task::none();
+    };
+    if session.stopping {
+        return Task::none();
+    }
+    // Nothing captured yet (still Waiting): there is nothing to
+    // stitch, so Stop / esc ends the session like Cancel rather
+    // than reporting a failed zero-frame stitch.
+    if session.frames.is_empty() && session.preview_handle.is_none() {
+        let Some(session) = state.scroll_session.take() else {
+            return Task::none();
+        };
+        state.last_capture_status = Some("Scrolling capture cancelled.".into());
+        return close_scroll_windows(state, &session);
+    }
+    session.stopping = true;
+    session.cancel_armed_at = None;
+    session.stitch_frame_count = session.frames.len();
+    let frames = std::mem::take(&mut session.frames);
+    // Drop buffered captures and any outstanding verdict: they
+    // aren't part of the stitch and must not touch the preview.
+    session.pending_frames.clear();
+    session.judge_in_flight = None;
+    let region_id = session.region_window_id.take();
+    // Close only the region outline now. The scroll window stays
+    // open through the stitch so it can show "Stitching…" (and
+    // "limit reached"); `ScrollCaptureStitched` closes it.
+    let mut tasks: Vec<Task<Message>> = Vec::new();
+    if let Some(id) = region_id {
+        state.windows.forget(id);
+        tasks.push(window::close(id));
+    }
+    tasks.push(Task::perform(stitch_frames_async(frames), |r| {
+        Message::ScrollCaptureStitched(r.map_err(|e| e.to_string()))
+    }));
+    Task::batch(tasks)
+}
+
+/// `Message::ScrollCaptureStitched`.
+fn on_scroll_stitched(state: &mut App, result: Result<image::RgbaImage, String>) -> Task<Message> {
+    // No session means it was torn down while stitching (e.g.
+    // cancelled out-of-band): the result is stale, drop it.
+    let Some(session) = state.scroll_session.take() else {
+        tracing::debug!(target: readshot_core::log::cat::CAPTURE, "dropping stitch result: no session");
+        return Task::none();
+    };
+    let display_scale = session.scale;
+    let display_bounds = session.display_size;
+    // The scroll window stayed open through the stitch; close it
+    // now on both outcomes. Stop already closed the region
+    // outline, but close it too if it is somehow still live.
+    let close_hud = close_scroll_windows(state, &session);
+    match result {
+        Ok(image) => {
+            let (w, h) = (image.width(), image.height());
+            let mut ed = crate::editor::EditorSession::new_with_display_scale(image, display_scale);
+            ed.set_status(format!(
+                "Scrolling capture stitched into {w}\u{a0}×\u{a0}{h}\u{a0}px."
+            ));
+            Task::batch([
+                close_hud,
+                open_editor_window_replacing(state, ed, display_bounds),
+            ])
+        }
+        Err(e) => {
+            state.last_capture_status = Some(super::history_ops::friendly_string_error_with(
+                "stitch the scrolling capture",
+                &e.to_string(),
+                Some(SCROLL_RETRY_HINT),
+            ));
+            tracing::warn!(target: readshot_core::log::cat::CAPTURE, "stitch failed: {e}");
+            close_hud
+        }
     }
 }
 

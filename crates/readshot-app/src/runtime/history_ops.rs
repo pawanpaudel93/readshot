@@ -5,6 +5,10 @@
 
 use super::*;
 
+mod actions;
+mod browse;
+mod records;
+
 /// Every history message arm, extracted from `runtime::update` so the
 /// top-level dispatcher stays navigable. Routed from `update`'s
 /// grouped arm; the trailing `unreachable!` only fires if a
@@ -21,76 +25,10 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             session,
             record_id,
             error,
-        } => {
-            // The record will never exist: no editor writes to it any more,
-            // and nothing parked for its save (a frame rewrite, a scrub,
-            // each holding a document image) waits for it until quit.
-            state.coordinator.forget_unsaved_record(record_id);
-            for ed in state
-                .editor
-                .iter_mut()
-                .chain(state.retiring_editors.iter_mut())
-            {
-                if ed.source_record.as_ref().is_some_and(|r| r.id == record_id) {
-                    ed.source_record = None;
-                }
-            }
-            // Tell the user where they are looking: the editor opened for
-            // this capture, else the capture status (menu bar,
-            // notification).
-            match state
-                .editor
-                .as_mut()
-                .filter(|ed| Some(ed.session_id) == session)
-            {
-                Some(ed) => ed.set_warning(history_save_failure(&error, true)),
-                None => state.last_capture_status = Some(history_save_failure(&error, false)),
-            }
-            Task::none()
-        }
-        Message::HistoryRecordPersisted(result) => {
-            match result {
-                Ok(true) => {
-                    // OCR completed for the just-saved record. Refresh
-                    // the browser if it's open so the new text is
-                    // searchable / visible.
-                    if state.history_window_id.is_some() {
-                        return history_list_task(state.coordinator.clone());
-                    }
-                }
-                // `Ok(false)` = history off, or OCR failed/empty. The
-                // row (if any) already appeared via `HistoryRecordSaved`
-                // and its text won't change, so there's nothing to
-                // refresh here.
-                Ok(false) => {}
-                Err(e) => {
-                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "persist failed: {e}")
-                }
-            }
-            Task::none()
-        }
+        } => records::on_record_save_failed(state, session, record_id, error),
+        Message::HistoryRecordPersisted(result) => records::on_record_persisted(state, result),
 
-        Message::OpenHistoryRequested => {
-            // Single-instance — if the window already exists just
-            // refocus it and refresh the list.
-            if let Some(id) = state.history_window_id {
-                return Task::batch([
-                    window::gain_focus(id),
-                    focus_history_search(),
-                    history_list_task(state.coordinator.clone()),
-                ]);
-            }
-            let (id, open_task) = window::open(history_window_settings());
-            register_window(state, id, WindowKind::History);
-            state.history_window_id = Some(id);
-            state.history_status = None;
-            state.history_delete_pending = None;
-            state.history_page_limit = crate::app::HISTORY_PAGE_SIZE;
-            Task::batch([
-                open_task.map(Message::HistoryWindowReady),
-                history_list_task(state.coordinator.clone()),
-            ])
-        }
+        Message::OpenHistoryRequested => browse::on_open_history(state),
         Message::HistoryWindowReady(id) => {
             // Window settings already register at open-time; the
             // ready callback just records the id in case iced hands
@@ -99,108 +37,16 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             // Typing right away searches, like Spotlight or Finder.
             Task::batch([window::gain_focus(id), focus_history_search()])
         }
-        Message::HistoryListLoaded(result) => {
-            match result {
-                Ok(records) => {
-                    let previous = state.history_selected_id;
-                    state.history_records = records;
-                    state.history_selected_id = preferred_history_selection(
-                        &state.history_records,
-                        &state.history_search,
-                        previous,
-                    );
-                    state.history_status = None;
-                }
-                Err(e) => {
-                    state.history_records.clear();
-                    state.history_selected_id = None;
-                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "history list failed: {e}");
-                    state.history_status = Some(friendly_string_error_with(
-                        "read the history",
-                        &e,
-                        Some(REOPEN_HISTORY_HINT),
-                    ));
-                }
-            }
-            Task::none()
-        }
-        Message::HistoryClosed => {
-            let id = state.history_window_id.take();
-            state.history_records.clear();
-            super::history_images::trim_history_image_cache();
-            state.history_status = None;
-            // An open from it that is still waiting is cancelled.
-            cancel_history_open(state, "History was closed before it opened");
-            state.history_selected_id = None;
-            state.history_delete_pending = None;
-            state.history_page_limit = crate::app::HISTORY_PAGE_SIZE;
-            match id {
-                Some(id) => {
-                    state.windows.forget(id);
-                    window::close(id)
-                }
-                None => Task::none(),
-            }
-        }
+        Message::HistoryListLoaded(result) => records::on_list_loaded(state, result),
+        Message::HistoryClosed => browse::on_history_closed(state),
         Message::HistoryStatusDismissed => {
             state.history_status = None;
             Task::none()
         }
-        Message::HistorySearchChanged(q) => {
-            // A search change (Escape maps here too) cancels an armed
-            // delete and resets paging so the first page of the new
-            // result set is shown.
-            state.history_delete_pending = None;
-            state.history_page_limit = crate::app::HISTORY_PAGE_SIZE;
-            state.history_search = q;
-            state.history_selected_id = preferred_history_selection(
-                &state.history_records,
-                &state.history_search,
-                state.history_selected_id,
-            );
-            Task::none()
-        }
-        Message::HistorySelect(id) => {
-            if state.history_delete_pending != Some(id) {
-                state.history_delete_pending = None;
-            }
-            if history_record_visible(&state.history_records, &state.history_search, id) {
-                state.history_selected_id = Some(id);
-            }
-            Task::none()
-        }
-        Message::HistorySelectPrevious => {
-            state.history_delete_pending = None;
-            state.history_selected_id = adjacent_history_selection(
-                &state.history_records,
-                &state.history_search,
-                state.history_selected_id,
-                -1,
-            );
-            Task::none()
-        }
-        Message::HistorySelectNext => {
-            state.history_delete_pending = None;
-            state.history_selected_id = adjacent_history_selection(
-                &state.history_records,
-                &state.history_search,
-                state.history_selected_id,
-                1,
-            );
-            // ↓ past the last rendered row shows the next page, so Show
-            // More has a keyboard path and the selection stays on screen.
-            if let Some(id) = state.history_selected_id {
-                let at = visible_history_ids(&state.history_records, &state.history_search)
-                    .iter()
-                    .position(|v| *v == id);
-                if at.is_some_and(|i| i >= state.history_page_limit.max(1)) {
-                    state.history_page_limit = state
-                        .history_page_limit
-                        .saturating_add(crate::app::HISTORY_PAGE_SIZE);
-                }
-            }
-            Task::none()
-        }
+        Message::HistorySearchChanged(q) => browse::on_search_changed(state, q),
+        Message::HistorySelect(id) => browse::on_select(state, id),
+        Message::HistorySelectPrevious => browse::on_select_previous(state),
+        Message::HistorySelectNext => browse::on_select_next(state),
         Message::HistoryOpenSelected => match state.history_selected_id {
             Some(id) => update(state, Message::HistoryOpenInEditor(id)),
             None => {
@@ -223,110 +69,14 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             }
         }
         Message::HistoryKeyboardShortcut(window_id, action) => {
-            if state.history_window_id != Some(window_id) {
-                return Task::none();
-            }
-            match action {
-                // Moving through the list hands keyboard focus from the
-                // search field to the list, so ⌘C / ⌘⌫ / ⌦ reach History.
-                HistoryKeyboardAction::Previous => Task::batch([
-                    update(state, Message::HistorySelectPrevious),
-                    unfocus_history_search(),
-                ]),
-                HistoryKeyboardAction::Next => Task::batch([
-                    update(state, Message::HistorySelectNext),
-                    unfocus_history_search(),
-                ]),
-                HistoryKeyboardAction::Open => Task::batch([
-                    update(state, Message::HistoryOpenSelected),
-                    unfocus_history_search(),
-                ]),
-                HistoryKeyboardAction::Delete => update(state, Message::HistoryDeleteSelected),
-                HistoryKeyboardAction::CopyText => match state.history_selected_id {
-                    Some(id) => update(state, Message::HistoryCopyText(id)),
-                    None => {
-                        state.history_status = Some("No history capture selected.".into());
-                        Task::none()
-                    }
-                },
-                HistoryKeyboardAction::CopyImage => match state.history_selected_id {
-                    Some(id) => update(state, Message::HistoryCopyImage(id)),
-                    None => {
-                        state.history_status = Some("No history capture selected.".into());
-                        Task::none()
-                    }
-                },
-                HistoryKeyboardAction::FocusSearch => focus_history_search(),
-                HistoryKeyboardAction::Reveal => match state.history_selected_id {
-                    Some(id) => update(state, Message::HistoryReveal(id)),
-                    None => {
-                        state.history_status = Some("No history capture selected.".into());
-                        Task::none()
-                    }
-                },
-                HistoryKeyboardAction::Pin => match state.history_selected_id {
-                    Some(id) => update(state, Message::HistoryPin(id)),
-                    None => {
-                        state.history_status = Some("No history capture selected.".into());
-                        Task::none()
-                    }
-                },
-                HistoryKeyboardAction::CopyVisibleText => {
-                    update(state, Message::HistoryCopyVisibleTextRequested)
-                }
-                HistoryKeyboardAction::ClearAll => {
-                    if state.history_records.is_empty() {
-                        Task::none()
-                    } else if state.history_clear_all_pending {
-                        update(state, Message::HistoryClearAllConfirmed)
-                    } else {
-                        update(state, Message::HistoryClearAllRequested)
-                    }
-                }
-                // One esc, one step back: an armed prompt first, then the
-                // search.
-                HistoryKeyboardAction::Escape => {
-                    if state.history_clear_all_pending {
-                        update(state, Message::HistoryClearAllCancelled)
-                    } else if state.history_delete_pending.is_some() {
-                        update(state, Message::HistoryDeleteCancelled)
-                    } else {
-                        update(state, Message::HistorySearchChanged(String::new()))
-                    }
-                }
-            }
+            browse::on_keyboard_shortcut(state, window_id, action)
         }
-        Message::HistoryClearAllRequested => {
-            // First click arms the destructive prompt. The button
-            // flips to "Confirm Clear · Cancel" so the user has a
-            // visible second step before everything is wiped. Arming
-            // Clear All also cancels any pending single-row delete.
-            state.history_delete_pending = None;
-            state.history_clear_all_pending = true;
-            Task::none()
-        }
+        Message::HistoryClearAllRequested => browse::on_clear_all_requested(state),
         Message::HistoryClearAllCancelled => {
             state.history_clear_all_pending = false;
             Task::none()
         }
-        Message::HistoryClearAllConfirmed => {
-            state.history_clear_all_pending = false;
-            state.history_delete_pending = None;
-            if let Err(e) = state.coordinator.clear_history() {
-                tracing::warn!(target: readshot_core::log::cat::HISTORY, "clear history failed: {e}");
-                state.history_status = Some(friendly_history_error("clear the history", &e));
-                return Task::none();
-            }
-            let n = state.history_records.len();
-            state.history_records.clear();
-            state.history_search.clear();
-            state.history_selected_id = None;
-            state.history_status = Some(format!(
-                "Deleted {} permanently.",
-                counted(n, "capture", "captures")
-            ));
-            Task::none()
-        }
+        Message::HistoryClearAllConfirmed => browse::on_clear_all_confirmed(state),
         Message::HistoryOpenInEditor(id) => {
             state.history_delete_pending = None;
             open_history_record(state, id)
@@ -335,242 +85,19 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             record_id,
             result,
             unsaved,
-        } => {
-            if state.awaiting_reopen != Some(record_id) {
-                // Cancelled while it waited (said then): never open a
-                // window the user walked away from. Writes that failed are
-                // still named.
-                if let Some((_, said)) = state
-                    .cancelled_history_open
-                    .take_if(|(id, _)| *id == record_id)
-                {
-                    if unsaved.is_some() {
-                        show_open_status(state, format!("{said}{}", not_saved(&unsaved)));
-                    }
-                }
-                return Task::none();
-            }
-            state.awaiting_reopen = None;
-            state.history_status = None;
-            let unsaved = match (state.history_open_note.take(), unsaved) {
-                (Some(a), Some(b)) => Some(format!("{a}; {b}")),
-                (a, b) => a.or(b),
-            };
-            let loaded = match result {
-                Ok(loaded) => loaded,
-                Err(e) if e == REDACTION_NOT_SAVED => {
-                    state.history_status = Some(format!(
-                        "Couldn’t open the capture yet — History is still saving its redaction{}. Readshot keeps trying; open it again in a moment.",
-                        unsaved.as_ref().map_or(String::new(), |r| format!(" ({r})"))
-                    ));
-                    return Task::none();
-                }
-                Err(e) => {
-                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "reopen failed: {e}");
-                    state.history_status = Some(format!(
-                        "{}{}",
-                        friendly_string_error_with("open the capture", &e, Some(RETRY_HINT)),
-                        not_saved(&unsaved)
-                    ));
-                    return Task::none();
-                }
-            };
-            // The current editor (of another capture) has unsaved work:
-            // never replace it silently; ask first. Discard then opens the
-            // record again through the same path (nothing outstanding: no
-            // wait), never from this copy.
-            if let Some(ed) = state
-                .editor
-                .as_mut()
-                .filter(|ed| super::editor_ops::editor_has_unsaved_work(ed))
-            {
-                ed.arm_discard_prompt_then(
-                    "The capture from History is ready, but this window has unsaved edits. Press Discard to close them and open it, or keep editing.",
-                    crate::editor::AfterDiscard::Open(record_id, unsaved),
-                );
-                return Task::none();
-            }
-            open_reopened(state, loaded, unsaved)
-        }
-        Message::HistoryReveal(id) => {
-            state.history_delete_pending = None;
-            let Some(path) = state
-                .history_root
-                .as_ref()
-                .zip(state.history_records.iter().find(|r| r.id == id))
-                .map(|(root, r)| history_png_path(root, r))
-            else {
-                state.history_status = Some("Capture not found.".into());
-                return Task::none();
-            };
-            if let Err(e) = reveal_path(&path) {
-                tracing::warn!(target: readshot_core::log::cat::HISTORY, "reveal failed: {e}");
-                state.history_status = Some(friendly_string_error_with(
-                    "reveal the file",
-                    &e.to_string(),
-                    Some(RETRY_HINT),
-                ));
-            }
-            Task::none()
-        }
-        Message::HistoryCopyImage(id) => {
-            state.history_delete_pending = None;
-            let Some(path) = state
-                .history_root
-                .as_ref()
-                .zip(state.history_records.iter().find(|r| r.id == id))
-                .map(|(root, r)| history_png_path(root, r))
-            else {
-                state.history_status = Some("Capture not found.".into());
-                return Task::none();
-            };
-            Task::perform(
-                async move {
-                    let img = load_png_async(path).await.map_err(|e| e.to_string())?;
-                    copy_image_to_clipboard(img)
-                        .await
-                        .map_err(|e| e.to_string())
-                },
-                Message::HistoryCopyImageDone,
-            )
-        }
-        Message::HistoryCopyImageDone(result) => {
-            state.history_status = Some(match result {
-                Ok(()) => "Copied image to clipboard.".into(),
-                Err(e) => {
-                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "copy image failed: {e}");
-                    friendly_string_error("copy the image to the clipboard", &e)
-                }
-            });
-            Task::none()
-        }
-        Message::HistoryCopyText(id) => {
-            state.history_delete_pending = None;
-            match state
-                .history_records
-                .iter()
-                .find(|r| r.id == id)
-                .and_then(|r| r.ocr_text.as_ref())
-            {
-                Some(text) if !text.is_empty() => {
-                    let text = text.clone();
-                    Task::perform(
-                        async move {
-                            copy_text_to_clipboard(text.clone())
-                                .await
-                                .map_err(|e| e.to_string())?;
-                            Ok(text)
-                        },
-                        Message::HistoryCopyTextDone,
-                    )
-                }
-                _ => {
-                    let hidden = state
-                        .history_records
-                        .iter()
-                        .find(|r| r.id == id)
-                        .is_some_and(history_text_hidden);
-                    state.history_status = Some(if hidden {
-                        HIDDEN_TEXT_NOTE.into()
-                    } else {
-                        "No OCR text on this capture yet.".into()
-                    });
-                    Task::none()
-                }
-            }
-        }
-        Message::HistoryCopyTextDone(result) => {
-            state.history_status = Some(match result {
-                Ok(text) if text.is_empty() => "No OCR text on this capture yet.".into(),
-                Ok(text) => {
-                    let n = text.chars().count();
-                    format!("Copied {} of text.", counted(n, "character", "characters"))
-                }
-                Err(e) => {
-                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "copy text failed: {e}");
-                    friendly_string_error_with("copy the text", &e, Some(RETRY_HINT))
-                }
-            });
-            Task::none()
-        }
-        Message::HistoryCopyVisibleTextRequested => {
-            let text = visible_history_text(&state.history_records, &state.history_search);
-            if text.trim().is_empty() {
-                state.history_status = Some("No OCR text in the visible captures.".into());
-                return Task::none();
-            }
-            let count = visible_history_text_count(&state.history_records, &state.history_search);
-            Task::perform(
-                async move {
-                    copy_text_to_clipboard(text)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    Ok(count)
-                },
-                Message::HistoryCopyVisibleTextDone,
-            )
-        }
+        } => records::on_reopened_after_sync(state, record_id, result, unsaved),
+        Message::HistoryReveal(id) => actions::on_reveal(state, id),
+        Message::HistoryCopyImage(id) => actions::on_copy_image(state, id),
+        Message::HistoryCopyImageDone(result) => actions::on_copy_image_done(state, result),
+        Message::HistoryCopyText(id) => actions::on_copy_text(state, id),
+        Message::HistoryCopyTextDone(result) => actions::on_copy_text_done(state, result),
+        Message::HistoryCopyVisibleTextRequested => actions::on_copy_visible_text(state),
         Message::HistoryCopyVisibleTextDone(result) => {
-            state.history_status = Some(match result {
-                Ok(count) => format!(
-                    "Copied OCR text from {}.",
-                    counted(count, "capture", "captures")
-                ),
-                Err(e) => {
-                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "copy visible text failed: {e}");
-                    friendly_string_error_with("copy the visible text", &e, Some(RETRY_HINT))
-                }
-            });
-            Task::none()
+            actions::on_copy_visible_text_done(state, result)
         }
-        Message::HistoryPin(id) => {
-            state.history_delete_pending = None;
-            let Some(path) = state
-                .history_root
-                .as_ref()
-                .zip(state.history_records.iter().find(|r| r.id == id))
-                .map(|(root, r)| history_png_path(root, r))
-            else {
-                state.history_status = Some("Capture not found.".into());
-                return Task::none();
-            };
-            Task::perform(load_png_async(path), |r| {
-                Message::HistoryPinReady(r.map_err(|e| e.to_string()))
-            })
-        }
-        Message::HistoryPinReady(result) => match result {
-            Ok(image) => {
-                let size = (image.width(), image.height());
-                let handle = rgba_handle(image);
-                let (wid, open_task) = window::open(pin_window_settings(size, None));
-                state.windows.register(wid, WindowKind::Pin);
-                state
-                    .pins
-                    .insert(wid, crate::app::PinState::new(handle.clone()));
-                open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone()))
-            }
-            Err(e) => {
-                tracing::warn!(target: readshot_core::log::cat::HISTORY, "pin failed: {e}");
-                state.history_status = Some(friendly_string_error_with(
-                    "pin the capture",
-                    &e,
-                    Some(RETRY_HINT),
-                ));
-                Task::none()
-            }
-        },
-        Message::HistoryDelete(id) => {
-            // Two-stage guard, mirroring "Clear All": the first press
-            // arms the prompt (the row's button flips to "Confirm
-            // delete?"); a second press for the same id confirms. This
-            // also makes the Delete key confirm on a repeat press.
-            if state.history_delete_pending == Some(id) {
-                return delete_history_record(state, id);
-            }
-            state.history_clear_all_pending = false;
-            state.history_delete_pending = Some(id);
-            Task::none()
-        }
+        Message::HistoryPin(id) => actions::on_pin(state, id),
+        Message::HistoryPinReady(result) => actions::on_pin_ready(state, result),
+        Message::HistoryDelete(id) => actions::on_delete(state, id),
         Message::HistoryDeleteConfirmed(id) => delete_history_record(state, id),
         Message::HistoryDeleteCancelled => {
             state.history_delete_pending = None;
