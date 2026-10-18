@@ -267,15 +267,10 @@ pub enum AfterDiscard {
     /// Reopen this History record (its History-kept edits are written
     /// first; only what History doesn't keep is dropped).
     Reopen(readshot_core::Uuid),
-    /// Open this capture, loaded from History after a wait, with the
-    /// reason any earlier edits weren't saved.
-    Open(
-        Box<(
-            image::RgbaImage,
-            readshot_core::CaptureRecord,
-            Option<String>,
-        )>,
-    ),
+    /// Close this window, then open this History record (through the
+    /// one open path, so read fresh), saying why earlier edits weren't
+    /// saved, if any were not.
+    Open(readshot_core::Uuid, Option<String>),
 }
 
 /// Which message of an Escape that ended a canvas drag (or a slider

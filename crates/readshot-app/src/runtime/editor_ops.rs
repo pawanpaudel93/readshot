@@ -1429,7 +1429,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             if let Some(crate::editor::AfterDiscard::Reopen(record)) = after {
                 // Only what History doesn't keep is dropped: the editor's
                 // History edits are written before the record reopens.
-                return super::history_ops::begin_reopen(state, record);
+                return super::history_ops::begin_history_open(state, record, None);
             }
             let id = state.editor.as_ref().and_then(|e| e.window_id);
             // A step still queued or composing is abandoned with it.
@@ -1444,13 +1444,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 Task::none()
             };
             match after {
-                Some(crate::editor::AfterDiscard::Open(loaded)) => {
-                    let (image, record, unsaved) = *loaded;
-                    Task::batch([
-                        close,
-                        super::history_ops::open_reopened(state, (image, record), unsaved),
-                    ])
-                }
+                Some(crate::editor::AfterDiscard::Open(record, unsaved)) => Task::batch([
+                    close,
+                    super::history_ops::begin_history_open(state, record, unsaved),
+                ]),
                 _ => close,
             }
         }

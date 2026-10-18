@@ -204,10 +204,8 @@ fn reopening_from_history_without_positions_reuses_the_stored_text() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 64, 64, "fake-0");
     record.ocr_text = Some("one\ntwo".into());
-    let _ = update(
-        &mut app,
-        Message::HistoryOpenInEditorReady(Ok((solid(64, 64), record.clone()))),
-    );
+    let _ =
+        super::super::history_ops::open_reopened(&mut app, (solid(64, 64), record.clone()), None);
     let doc = app
         .editor
         .as_ref()
@@ -227,10 +225,7 @@ fn reopening_from_history_without_positions_reuses_the_stored_text() {
         None,
     );
     let mut app = App::new(coord, perms, Preferences::default());
-    let _ = update(
-        &mut app,
-        Message::HistoryOpenInEditorReady(Ok((solid(64, 64), record))),
-    );
+    let _ = super::super::history_ops::open_reopened(&mut app, (solid(64, 64), record), None);
     assert!(matches!(
         app.editor.as_ref().unwrap().text_panel.recognition,
         crate::editor::TextRecognition::Recognizing { .. }

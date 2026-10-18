@@ -184,6 +184,10 @@ pub(crate) fn open_editor_window_replacing(
     display_bounds: Option<(f32, f32, f32, f32)>,
 ) -> Task<Message> {
     let mut tasks: Vec<Task<Message>> = Vec::new();
+    // A History open still waiting would replace this editor when its
+    // wait ends: it is cancelled instead (the History open itself clears
+    // it before it gets here).
+    super::history_ops::cancel_history_open(state, "another capture opened in the editor first");
     if let Some(old_editor) = state.editor.take() {
         if let Some(old_id) = old_editor.window_id {
             state.windows.forget(old_id);

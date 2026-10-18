@@ -1129,6 +1129,8 @@ mod geometry_and_crop;
 mod geometry_pipeline;
 /// History browser, statuses, friendly errors and platform commands.
 mod history_browser;
+/// Opening a History record while writes to it are in flight.
+mod history_reopen;
 /// History scrub after a redaction (B10).
 mod history_scrub;
 /// Key maps of the scroll HUD, welcome, History, pins and Settings.

@@ -446,16 +446,13 @@ pub enum Message {
     /// Cancel the armed "Clear All" — returns the button to its
     /// idle state without touching any records.
     HistoryClearAllCancelled,
-    /// Per-row "Open" — load the PNG and reopen it as a history-backed
-    /// editor session. Annotation edits flow back into the JSON sidecar.
+    /// Open a History record in the editor (the row's Open, a
+    /// double-click, Enter): `history_ops::open_history_record`, the one
+    /// path that does. Annotation edits flow back into the JSON sidecar.
     HistoryOpenInEditor(readshot_core::Uuid),
-    /// Async PNG-decode finished for the row that asked to open in
-    /// editor. `Ok((image, record))` opens the editor; `Err` toasts
-    /// a status.
-    HistoryOpenInEditorReady(Result<(image::RgbaImage, readshot_core::CaptureRecord), String>),
-    /// A record reopened after an earlier editor of it finished: loaded
-    /// fresh from disk once that editor's History writes landed.
-    /// `unsaved` names a write of those edits that failed.
+    /// A History record to open, read fresh from disk once every History
+    /// write of it was done or cancelled (`history_ops::load_after_writes`).
+    /// `unsaved` names writes of earlier edits that failed.
     HistoryReopenedAfterSync {
         record_id: readshot_core::Uuid,
         result: Result<(image::RgbaImage, readshot_core::CaptureRecord), String>,
@@ -1073,14 +1070,22 @@ pub struct App {
     /// Last error from a history list / load operation. Surfaced as
     /// a toast inside the browser when set.
     pub history_status: Option<String>,
-    /// A History record the user asked to open while an earlier editor
-    /// of it was still composing: opened (from disk) once that editor has
-    /// landed and its History sync is written. Edits are never dropped.
+    /// A History record being opened whose earlier editor is still
+    /// composing: its load starts once that editor has landed and queued
+    /// its History sync (`history_ops::load_when_finished`). Edits are
+    /// never dropped.
     pub pending_history_open: Option<readshot_core::Uuid>,
-    /// The History record whose deferred open is under way (waiting for
-    /// editors, writes, or the load). Cleared when History closes or
-    /// another capture is opened: the open is then cancelled on arrival.
+    /// The History record whose open is under way (waiting for editors,
+    /// writes, or the load; `history_ops::open_history_record`). A second
+    /// open of it joins this one. Cleared when History closes or another
+    /// editor becomes current: the open is then cancelled, and says so.
     pub awaiting_reopen: Option<readshot_core::Uuid>,
+    /// Earlier edits that weren't saved to History, said when the record
+    /// `awaiting_reopen` opens.
+    pub history_open_note: Option<String>,
+    /// The last History open cancelled while it waited, and what was said
+    /// then (its failed writes are added when the wait ends).
+    pub cancelled_history_open: Option<(readshot_core::Uuid, String)>,
     /// Live search query in the history browser. Empty = show every
     /// record. Substring-matched (case-insensitive) against
     /// `ocr_text` and the formatted timestamp.
@@ -1454,6 +1459,8 @@ impl App {
             history_status: None,
             pending_history_open: None,
             awaiting_reopen: None,
+            history_open_note: None,
+            cancelled_history_open: None,
             history_search: String::new(),
             history_selected_id: None,
             history_delete_pending: None,

@@ -1920,7 +1920,6 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         | Message::HistoryClearAllCancelled
         | Message::HistoryClearAllConfirmed
         | Message::HistoryOpenInEditor(..)
-        | Message::HistoryOpenInEditorReady(..)
         | Message::HistoryReveal(..)
         | Message::HistoryCopyImage(..)
         | Message::HistoryCopyImageDone(..)
@@ -1989,9 +1988,9 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                 state.history_window_id = None;
                 state.history_records.clear();
                 history_images::trim_history_image_cache();
-                // A deferred open from it is cancelled (said on arrival).
-                state.awaiting_reopen = None;
                 state.history_status = None;
+                // An open from it that is still waiting is cancelled.
+                history_ops::cancel_history_open(state, "History was closed before it opened");
                 state.history_search.clear();
                 state.history_selected_id = None;
             }

@@ -1051,7 +1051,7 @@ pub(crate) fn retire_editor(state: &mut App, mut ed: EditorSession) -> Task<Mess
 /// Settle what is left (nothing composes now), sync History, drop. When
 /// the user asked to open this editor's record meanwhile and no other
 /// editor of it is still finishing, that open now goes ahead, from disk,
-/// once these writes land ([`super::history_ops::reopen_after_sync`]).
+/// once these writes land ([`super::history_ops::load_when_finished`]).
 fn finish_retiring(state: &mut App, mut ed: EditorSession) -> Task<Message> {
     let coord = state.coordinator.clone();
     settle_all(&mut ed, &coord);
@@ -1067,9 +1067,8 @@ fn finish_retiring(state: &mut App, mut ed: EditorSession) -> Task<Message> {
             .any(|ed| ed.source_record.as_ref().is_some_and(|r| r.id == id))
     };
     match record {
-        Some(id) if state.pending_history_open == Some(id) && !still_finishing(state, id) => {
-            state.pending_history_open = None;
-            super::history_ops::reopen_after_sync(state, id)
+        Some(id) if !still_finishing(state, id) => {
+            super::history_ops::load_when_finished(state, id)
         }
         _ => Task::none(),
     }

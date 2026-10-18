@@ -2363,12 +2363,11 @@ fn a_retiring_editors_late_sync_never_unredacts_a_newer_scrub() {
     let session_a = app.editor.as_ref().unwrap().session_id;
     let job_a = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
 
-    // Reopen the record from History while A's rotate composes.
+    // An editor of the record opens while A's rotate composes. (Every
+    // History open waits for A; this opens one without that wait, to test
+    // the coordinator's own guard.)
     let stored = store.list().unwrap().into_iter().next().unwrap();
-    let _ = update(
-        &mut app,
-        Message::HistoryOpenInEditorReady(Ok((img.clone(), stored))),
-    );
+    let _ = super::super::history_ops::open_reopened(&mut app, (img.clone(), stored), None);
     assert_eq!(app.retiring_editors.len(), 1, "A still finishes");
     let id_b = iced::window::Id::unique();
     {
@@ -2769,10 +2768,21 @@ fn a_deferred_open_asks_before_replacing_unsaved_work() {
     );
     assert!(ed.status.as_deref().unwrap().contains("Press Discard"));
     let _ = update(&mut app, Message::EditorDiscardRequested);
+    assert!(app.editor.is_none(), "C closed");
+    assert_eq!(app.windows.kind(c), None, "C's window closed");
+    // The record opens again through the one open path (read fresh).
+    assert_eq!(app.awaiting_reopen, Some(record.id));
+    let _ = update(
+        &mut app,
+        Message::HistoryReopenedAfterSync {
+            record_id: record.id,
+            result: Ok((ramp(40, 20), record.clone())),
+            unsaved: None,
+        },
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_ne!(ed.session_id, c_session);
     assert_eq!(ed.source_record.as_ref().map(|r| r.id), Some(record.id));
-    assert_eq!(app.windows.kind(c), None, "C's window closed");
 }
 
 /// History closed during the wait: the open is cancelled and the
