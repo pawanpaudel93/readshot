@@ -502,7 +502,7 @@ fn shortcut_recorder_requires_a_modifier() {
     assert_eq!(shortcut, None);
 }
 
-// LOGO is ⌘ only on macOS; off macOS `command()` is Ctrl.
+// LOGO is ⌘ on macOS (recorded "cmd"); off macOS see the tests below.
 #[cfg(target_os = "macos")]
 #[test]
 fn shortcut_recorder_formats_command_shift_character() {
@@ -514,6 +514,44 @@ fn shortcut_recorder_formats_command_shift_character() {
         shortcut_string_from_keypress(&iced::keyboard::Key::Character("X".into()), modifiers);
 
     assert_eq!(shortcut.as_deref(), Some("cmd+shift+x"));
+}
+
+/// The recorder saves exactly the keys pressed, on every OS: Ctrl is
+/// "ctrl" (never "cmd+ctrl", which registers Super+Ctrl), and the
+/// Windows / Super key is recorded and registered as itself.
+#[test]
+fn shortcut_recorder_saves_exactly_the_modifiers_pressed() {
+    use iced::keyboard::Modifiers as M;
+    let x = iced::keyboard::Key::Character("X".into());
+    let recorded = |m: M| shortcut_string_from_keypress(&x, m).unwrap();
+    let ctrl_shift = recorded(M::CTRL | M::SHIFT);
+    assert_eq!(ctrl_shift, "ctrl+shift+x");
+    let spec = readshot_ui::hotkey::parse(&ctrl_shift).unwrap();
+    assert!(spec.modifiers.control && spec.modifiers.shift);
+    assert!(!spec.modifiers.meta, "no Super/⌘ the user didn't press");
+    let logo = recorded(M::LOGO | M::SHIFT);
+    let spec = readshot_ui::hotkey::parse(&logo).unwrap();
+    assert!(spec.modifiers.meta && spec.modifiers.shift && !spec.modifiers.control);
+    assert_eq!(recorded(M::ALT | M::CTRL), "ctrl+alt+x");
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn shortcut_recorder_off_macos_records_ctrl_and_super_by_name() {
+    use iced::keyboard::Modifiers as M;
+    let x = iced::keyboard::Key::Character("X".into());
+    assert_eq!(
+        shortcut_string_from_keypress(&x, M::CTRL | M::SHIFT).as_deref(),
+        Some("ctrl+shift+x")
+    );
+    assert_eq!(
+        shortcut_string_from_keypress(&x, M::LOGO | M::SHIFT).as_deref(),
+        Some("super+shift+x")
+    );
+    assert_eq!(
+        shortcut_string_from_keypress(&x, M::LOGO | M::CTRL).as_deref(),
+        Some("super+ctrl+x")
+    );
 }
 
 #[test]

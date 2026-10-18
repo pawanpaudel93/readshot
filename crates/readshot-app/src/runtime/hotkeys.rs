@@ -519,17 +519,29 @@ pub(crate) fn extra_command_modifier(modifiers: iced::keyboard::Modifiers) -> bo
 pub(crate) fn extra_command_modifier(modifiers: iced::keyboard::Modifiers) -> bool {
     modifiers.logo()
 }
+/// The token for the logo key (⌘ on macOS, the Windows / Super key
+/// elsewhere); the parser maps both spellings to the same modifier.
+const LOGO_TOKEN: &str = if cfg!(target_os = "macos") {
+    "cmd"
+} else {
+    "super"
+};
+
+/// The shortcut string for a recorded key press: exactly the physical
+/// modifiers held. Not `Modifiers::command()`, which is Ctrl off macOS
+/// and would record Ctrl+Shift+X as "cmd+ctrl+shift+x", registering
+/// Super+Ctrl+Shift+X instead of the chord the user pressed.
 pub(crate) fn shortcut_string_from_keypress(
     key: &iced::keyboard::Key,
     modifiers: iced::keyboard::Modifiers,
 ) -> Option<String> {
-    if !(modifiers.command() || modifiers.control() || modifiers.alt() || modifiers.shift()) {
+    if !(modifiers.logo() || modifiers.control() || modifiers.alt() || modifiers.shift()) {
         return None;
     }
     let key = hotkey_token_for_key(key)?;
     let mut parts: Vec<&str> = Vec::new();
-    if modifiers.command() {
-        parts.push("cmd");
+    if modifiers.logo() {
+        parts.push(LOGO_TOKEN);
     }
     if modifiers.control() {
         parts.push("ctrl");
@@ -551,7 +563,7 @@ pub(crate) fn shortcut_cancelled_by_keypress(
     matches!(
         key,
         iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
-    ) && !modifiers.command()
+    ) && !modifiers.logo()
         && !modifiers.control()
         && !modifiers.alt()
         && !modifiers.shift()
