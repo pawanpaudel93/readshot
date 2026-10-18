@@ -2070,9 +2070,9 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorStatusTick
         | Message::EditorWindowReady(..)
         | Message::EditorSaveRequested
-        | Message::EditorSaved(..)
+        | Message::EditorSaved { .. }
         | Message::EditorCopyImageRequested
-        | Message::EditorCopyImageDone(..)
+        | Message::EditorCopyImageDone { .. }
         | Message::EditorBeautifyPreset(..)
         | Message::EditorBeautifySavedPresetApplied(..)
         | Message::EditorBeautifyEdit(..)
@@ -2085,7 +2085,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorBeautifyHexSubmitted
         | Message::EditorBeautifyPickBackground
         | Message::EditorCopyTextRequested
-        | Message::EditorCopyTextDone(..)
+        | Message::EditorCopyTextDone { .. }
         | Message::EditorDiscardRequested
         | Message::EditorDiscardDisarmed
         | Message::EditorStatusDismissed

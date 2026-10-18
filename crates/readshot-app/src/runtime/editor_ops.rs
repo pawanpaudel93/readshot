@@ -1172,6 +1172,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             };
             ed.busy = true;
             ed.set_status("Choose a save location…");
+            let session = ed.session_id;
             let seed = preferred_save_seed_dir(&state.preferences, &state.last_save_dir);
             let template = state.preferences.filename_template.clone();
             Task::perform(
@@ -1181,10 +1182,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         .await
                         .map_err(|e| e.to_string())
                 },
-                Message::EditorSaved,
+                move |result| Message::EditorSaved { session, result },
             )
         }
-        Message::EditorSaved(result) => {
+        Message::EditorSaved { session, result } => {
             // Remember the parent directory of any successful save —
             // next save's picker will seed itself there instead of
             // bouncing back to ~/Desktop.
@@ -1193,7 +1194,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     state.last_save_dir = Some(parent.to_path_buf());
                 }
             }
-            if let Some(ed) = state.editor.as_mut() {
+            // Only the editor that saved: another one opened meanwhile
+            // was never saved and must not be marked clean.
+            if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
                 ed.busy = false;
                 let saved = matches!(&result, Ok(Some(_)));
                 if saved {
@@ -1237,6 +1240,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             } else {
                 "Copying beautified image…".to_string()
             });
+            let session = ed.session_id;
             Task::perform(
                 async move {
                     let img = out.render_off_thread().await?;
@@ -1244,11 +1248,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         .await
                         .map_err(|e| e.to_string())
                 },
-                Message::EditorCopyImageDone,
+                move |result| Message::EditorCopyImageDone { session, result },
             )
         }
-        Message::EditorCopyImageDone(result) => {
-            if let Some(ed) = state.editor.as_mut() {
+        Message::EditorCopyImageDone { session, result } => {
+            if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
                 ed.busy = false;
                 let copied = result.is_ok();
                 if copied {
@@ -1333,22 +1337,30 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 .flatten()
                 .map(|doc| readshot_core::text_lines::copy_all(doc, remove_breaks));
             ed.busy = true;
+            let session = ed.session_id;
             if let Some(text) = cached {
                 ed.set_status("Copying text…");
-                return Task::perform(super::text_panel::copy_cached_text(text), |r| {
-                    Message::EditorCopyTextDone(r.map_err(|e| e.to_string()))
+                return Task::perform(super::text_panel::copy_cached_text(text), move |r| {
+                    Message::EditorCopyTextDone {
+                        session,
+                        result: r.map_err(|e| e.to_string()),
+                    }
                 });
             }
             ed.set_status("Recognizing text…");
             let img = ed.model.flatten();
             let coord = state.coordinator.clone();
             let prefs = state.preferences.clone();
-            Task::perform(ocr_then_copy(coord, img, prefs, remove_breaks, mask), |r| {
-                Message::EditorCopyTextDone(r.map_err(|e| e.to_string()))
-            })
+            Task::perform(
+                ocr_then_copy(coord, img, prefs, remove_breaks, mask),
+                move |r| Message::EditorCopyTextDone {
+                    session,
+                    result: r.map_err(|e| e.to_string()),
+                },
+            )
         }
-        Message::EditorCopyTextDone(result) => {
-            if let Some(ed) = state.editor.as_mut() {
+        Message::EditorCopyTextDone { session, result } => {
+            if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
                 ed.busy = false;
                 ed.set_status(match result {
                     Err(e) if e == super::text_panel::COPY_TEXT_WITHHELD => e,

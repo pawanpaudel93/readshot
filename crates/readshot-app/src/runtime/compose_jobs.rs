@@ -821,9 +821,9 @@ fn may_wait(message: &Message) -> (bool, bool) {
         | Message::EditorStatusTick
         | Message::EditorStatusDismissed
         | Message::EditorWindowReady(..)
-        | Message::EditorSaved(..)
-        | Message::EditorCopyImageDone(..)
-        | Message::EditorCopyTextDone(..)
+        | Message::EditorSaved { .. }
+        | Message::EditorCopyImageDone { .. }
+        | Message::EditorCopyTextDone { .. }
         | Message::EditorCopyLinesDone(..)
         | Message::EditorHistoryWritten { .. }
         | Message::EditorTextRecognized { .. }

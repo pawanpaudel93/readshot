@@ -500,14 +500,20 @@ pub enum Message {
     EditorWindowReady(iced::window::Id),
     /// User clicked Save in the editor.
     EditorSaveRequested,
-    /// Save task completed.
-    /// Save task completed. `Ok(Some(path))` = written to disk;
-    /// `Ok(None)` = the user cancelled the file picker.
-    EditorSaved(Result<Option<std::path::PathBuf>, String>),
+    /// Save task completed for the editor `session` it started in.
+    /// `Ok(Some(path))` = written to disk; `Ok(None)` = the user
+    /// cancelled the file picker.
+    EditorSaved {
+        session: u64,
+        result: Result<Option<std::path::PathBuf>, String>,
+    },
     /// User clicked Copy (image to clipboard).
     EditorCopyImageRequested,
-    /// Image-copy task completed.
-    EditorCopyImageDone(Result<(), String>),
+    /// Image-copy task completed for the editor `session`.
+    EditorCopyImageDone {
+        session: u64,
+        result: Result<(), String>,
+    },
     /// User selected a presentation frame for image outputs.
     /// A built-in Beautify preset was chosen (Frame popover; Beautify tab).
     EditorBeautifyPreset(readshot_core::beautify::BuiltinPreset),
@@ -534,8 +540,11 @@ pub enum Message {
     EditorBeautifyPickBackground,
     /// User clicked Copy Text (run OCR + clipboard).
     EditorCopyTextRequested,
-    /// OCR + clipboard write completed.
-    EditorCopyTextDone(Result<String, String>),
+    /// OCR + clipboard write completed for the editor `session`.
+    EditorCopyTextDone {
+        session: u64,
+        result: Result<String, String>,
+    },
     /// Start (or retry) recognizing the editor's base image for the Text
     /// panel. No-op while recognizing or once ready.
     EditorTextRecognize,

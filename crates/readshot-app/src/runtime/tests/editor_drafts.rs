@@ -777,7 +777,14 @@ fn editor_successful_save_marks_current_output_clean_but_keeps_undo() {
 
     let dir = tempfile::tempdir().unwrap();
     let saved_path = dir.path().join("saved.png");
-    let _ = update(&mut app, Message::EditorSaved(Ok(Some(saved_path))));
+    let session = app.editor.as_ref().unwrap().session_id;
+    let _ = update(
+        &mut app,
+        Message::EditorSaved {
+            session,
+            result: Ok(Some(saved_path)),
+        },
+    );
 
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.undo_depth(), undo_depth);
@@ -802,7 +809,14 @@ fn editor_successful_copy_image_marks_current_output_clean() {
     ed.model.set_beautify(BuiltinPreset::Dark.settings());
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorCopyImageDone(Ok(())));
+    let session = app.editor.as_ref().unwrap().session_id;
+    let _ = update(
+        &mut app,
+        Message::EditorCopyImageDone {
+            session,
+            result: Ok(()),
+        },
+    );
 
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.model.can_undo());
@@ -821,14 +835,66 @@ fn editor_cancelled_or_failed_output_keeps_unsaved_work_dirty() {
     });
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::EditorSaved(Ok(None)));
+    let session = app.editor.as_ref().unwrap().session_id;
+    let _ = update(
+        &mut app,
+        Message::EditorSaved {
+            session,
+            result: Ok(None),
+        },
+    );
     assert!(editor_has_unsaved_work(app.editor.as_ref().unwrap()));
 
     let _ = update(
         &mut app,
-        Message::EditorCopyImageDone(Err("clipboard unavailable".into())),
+        Message::EditorCopyImageDone {
+            session,
+            result: Err("clipboard unavailable".into()),
+        },
     );
     assert!(editor_has_unsaved_work(app.editor.as_ref().unwrap()));
+}
+
+/// A save or copy started in one editor and finishing after another
+/// replaced it never marks the new editor clean or busy-free, nor
+/// reports its result there.
+#[test]
+fn an_output_result_from_a_replaced_editor_leaves_the_new_one_alone() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let old = crate::editor::EditorSession::new(solid(64, 64));
+    let old_session = old.session_id;
+    let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+    assert_ne!(ed.session_id, old_session);
+    ed.model.commit_annotation(Annotation::Rectangle {
+        rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+        color: Rgba::OPAQUE_BLACK,
+        line_width: 2.0,
+        style: Default::default(),
+    });
+    ed.busy = true;
+    ed.set_status("Recognizing text…");
+    app.editor = Some(ed);
+    let dir = tempfile::tempdir().unwrap();
+    for message in [
+        Message::EditorSaved {
+            session: old_session,
+            result: Ok(Some(dir.path().join("old.png"))),
+        },
+        Message::EditorCopyImageDone {
+            session: old_session,
+            result: Ok(()),
+        },
+        Message::EditorCopyTextDone {
+            session: old_session,
+            result: Ok("old text".into()),
+        },
+    ] {
+        let _ = update(&mut app, message);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.busy, "the new editor's own job is still running");
+        assert!(editor_has_unsaved_work(ed), "never saved");
+        assert_eq!(ed.status.as_deref(), Some("Recognizing text…"));
+    }
 }
 
 #[test]
