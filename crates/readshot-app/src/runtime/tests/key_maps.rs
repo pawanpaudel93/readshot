@@ -40,7 +40,7 @@ fn welcome_enter_triggers_card_primary_action() {
     ));
     assert!(matches!(
         welcome_key_message(WelcomeState::Granted, false, &enter, Modifiers::empty()),
-        Some(Message::OpenOverlayRequested)
+        Some(Message::Capture(CaptureMsg::OpenOverlayRequested))
     ));
     // Capture is disabled (so Enter is a no-op) while one is running.
     assert!(welcome_key_message(WelcomeState::Granted, true, &enter, Modifiers::empty()).is_none());

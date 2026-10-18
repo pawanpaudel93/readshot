@@ -770,11 +770,11 @@ fn welcome_ready_marks_onboarding_completed_after_grant() {
 #[test]
 fn capture_request_marks_in_flight_and_clears_on_completion() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
-    let _ = update(&mut app, Message::CaptureFullPrimaryRequested);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::FullPrimaryRequested));
     assert!(app.capture_in_flight);
     let _ = update(
         &mut app,
-        Message::CaptureSaved(Ok(PathBuf::from("/tmp/x.png"))),
+        Message::Capture(CaptureMsg::Saved(Ok(PathBuf::from("/tmp/x.png")))),
     );
     assert!(!app.capture_in_flight);
     let toast = app.last_capture_status.as_deref().unwrap();
@@ -794,7 +794,7 @@ fn capture_failure_message_lands_in_toast() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let _ = update(
         &mut app,
-        Message::CaptureSaved(Err("permission denied".into())),
+        Message::Capture(CaptureMsg::Saved(Err("permission denied".into()))),
     );
     assert!(!app.capture_in_flight);
     let toast = app.last_capture_status.as_deref().unwrap();

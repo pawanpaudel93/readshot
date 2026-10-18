@@ -511,7 +511,9 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
                 None => Task::none(),
             };
             state.pending_intent = Some(CaptureIntent::CombineIntoEditor);
-            hide.chain(Task::done(Message::OpenOverlayRequested))
+            hide.chain(Task::done(Message::Capture(
+                CaptureMsg::OpenOverlayRequested,
+            )))
         }
         Message::EditorAddImageFromFile => {
             let coord = state.coordinator.clone();

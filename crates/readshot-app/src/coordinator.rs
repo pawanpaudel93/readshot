@@ -12,7 +12,7 @@
 //! 1. Permissions check — `pre_capture_gate()`.
 //! 2. List displays — `list_displays()`.
 //! 3. (User confirms a region in the overlay; the App receives a
-//!    `Message::OverlaySelected` carrying the display id, logical rect,
+//!    `CaptureMsg::OverlaySelected` carrying the display id, logical rect,
 //!    and scale.)
 //! 4. `capture_region(req)` — produces an `RgbaImage`.
 //! 5. (User edits in the editor; the App tracks `EditorState`.)

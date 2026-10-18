@@ -1273,7 +1273,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                         text("Capture").size(ButtonSize::Md.text_size()).into(),
                         ButtonKind::Primary,
                         ButtonSize::Md,
-                        Some(Message::OpenOverlayRequested),
+                        Some(Message::Capture(CaptureMsg::OpenOverlayRequested)),
                     )
                     .into(),
                 ),
@@ -1923,7 +1923,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                     text("Capture").size(ButtonSize::Md.text_size()).into(),
                     ButtonKind::Primary,
                     ButtonSize::Md,
-                    Some(Message::OpenOverlayRequested),
+                    Some(Message::Capture(CaptureMsg::OpenOverlayRequested)),
                 )
                 .into(),
             ),
@@ -3629,10 +3629,12 @@ pub(crate) fn overlay_toolbar_layer<'a>(
         tooltip::Position::Bottom
     };
     use crate::icons::AppIcon;
-    let sel = |intent| Message::OverlaySelected {
-        display_id: display_id.clone(),
-        rect: *rect,
-        intent,
+    let sel = |intent| {
+        Message::Capture(CaptureMsg::OverlaySelected {
+            display_id: display_id.clone(),
+            rect: *rect,
+            intent,
+        })
     };
     let fg = DARK.t2;
     let edit = tooltip_with_key(
@@ -3717,7 +3719,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             fg,
             "Cancel",
             Some(ESC_KEY),
-            Some(Message::OverlayCancelled),
+            Some(Message::Capture(CaptureMsg::OverlayCancelled)),
             false,
             ICON_BTN,
             tip_pos
@@ -4899,7 +4901,8 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                 ButtonSize::Lg,
                 (!state.capture_in_flight).then_some(RETURN_KEY),
                 p,
-                (!state.capture_in_flight).then_some(Message::OpenOverlayRequested),
+                (!state.capture_in_flight)
+                    .then_some(Message::Capture(CaptureMsg::OpenOverlayRequested)),
             ));
             actions = actions.push(
                 row![

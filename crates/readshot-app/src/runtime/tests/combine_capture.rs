@@ -25,7 +25,10 @@ fn add_capture_below_hides_the_editor_and_appends_the_capture() {
         overlay_auto_confirm_intent(&app),
         Some(crate::app::CaptureIntent::CombineIntoEditor)
     );
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(32, 16))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(32, 16)))),
+    );
     let ed = app.editor.as_ref().expect("same editor");
     assert_eq!(ed.session_id, session, "no new editor opened");
     assert_eq!(ed.model.part_ids().len(), 2);
@@ -54,7 +57,7 @@ fn a_failed_or_cancelled_combine_capture_restores_the_editor_unchanged() {
     );
     let _ = update(
         &mut app,
-        Message::RegionCaptureCompleted(Err("boom".into())),
+        Message::Capture(CaptureMsg::RegionCaptured(Err("boom".into()))),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.part_ids().len(), 1);
@@ -67,7 +70,7 @@ fn a_failed_or_cancelled_combine_capture_restores_the_editor_unchanged() {
         &mut app,
         Message::EditorCombineCaptureRequested(Join::Beside),
     );
-    let _ = update(&mut app, Message::OverlayCancelled);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OverlayCancelled));
     assert!(app.combine_capture.is_none());
     assert!(app.pending_intent.is_none());
 }
@@ -141,7 +144,9 @@ fn an_oversized_addition_is_refused() {
     );
     let _ = update(
         &mut app,
-        Message::RegionCaptureCompleted(Ok(image::RgbaImage::new(10, 5_000))),
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(image::RgbaImage::new(
+            10, 5_000,
+        )))),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.part_ids().len(), 1);
@@ -163,7 +168,10 @@ fn combining_a_rotated_document_maps_its_text_through_the_bake() {
         &mut app,
         Message::EditorCombineCaptureRequested(Join::Below),
     );
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(20, 10))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(20, 10)))),
+    );
     let ed = app.editor.as_ref().unwrap();
     let ids = ed.model.part_ids();
     assert_eq!(ids.len(), 2);
@@ -193,7 +201,10 @@ fn a_bake_before_recognition_recognizes_the_source_part_upright() {
         &mut app,
         Message::EditorCombineCaptureRequested(Join::Below),
     );
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(20, 10))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(20, 10)))),
+    );
     let ed = app.editor.as_ref().unwrap();
     let ids = ed.model.part_ids();
     assert_eq!(
@@ -237,7 +248,10 @@ async fn a_combined_record_stores_no_text_until_every_part_is_recognized() {
         &mut app,
         Message::EditorCombineCaptureRequested(Join::Below),
     );
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(8, 4))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(8, 4)))),
+    );
     app.coordinator.flush_history_updates();
     let stored = store
         .list()
@@ -294,7 +308,10 @@ async fn a_combined_scrubbed_record_keeps_no_partial_text() {
         &mut app,
         Message::EditorCombineCaptureRequested(Join::Below),
     );
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(8, 4))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(8, 4)))),
+    );
     app.coordinator.flush_history_updates();
     let stored = store
         .list()
@@ -321,7 +338,10 @@ fn a_combine_capture_for_a_replaced_editor_is_dropped() {
     // Another editor took over while the overlay was up.
     app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
     let other = app.editor.as_ref().unwrap().session_id;
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(32, 16))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(32, 16)))),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.session_id, other);
     assert_eq!(ed.model.part_ids().len(), 1, "nothing leaks into it");
@@ -346,18 +366,21 @@ fn an_overwritten_intent_still_returns_the_capture_to_the_editor() {
     );
     let _ = update(
         &mut app,
-        Message::OverlaySelected {
+        Message::Capture(CaptureMsg::OverlaySelected {
             display_id: Default::default(),
             rect: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 10.0, 10.0).unwrap(),
             intent: crate::app::CaptureIntent::Editor,
-        },
+        }),
     );
     assert_eq!(
         app.pending_intent,
         Some(crate::app::CaptureIntent::CombineIntoEditor)
     );
     let session = app.editor.as_ref().unwrap().session_id;
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 16))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(64, 16)))),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.session_id, session);
     assert_eq!(ed.model.part_ids().len(), 2);
@@ -381,10 +404,16 @@ fn no_display_or_a_retake_never_strands_a_combine_capture() {
         &mut app,
         Message::EditorCombineCaptureRequested(Join::Below),
     );
-    let _ = update(&mut app, Message::RetakeLastRegionRequested);
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RetakeLastRegionRequested),
+    );
     assert!(!app.capture_in_flight, "no retake while choosing a region");
-    let _ = update(&mut app, Message::OpenOverlayRequested);
-    let _ = update(&mut app, Message::OverlayDisplaysListed(Ok(Vec::new())));
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OpenOverlayRequested));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::OverlayDisplaysListed(Ok(Vec::new()))),
+    );
     assert!(app.combine_capture.is_none());
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
@@ -395,10 +424,12 @@ fn no_display_or_a_retake_never_strands_a_combine_capture() {
         &mut app,
         Message::EditorCombineCaptureRequested(Join::Below),
     );
-    let _ = update(&mut app, Message::OpenOverlayRequested);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OpenOverlayRequested));
     let _ = update(
         &mut app,
-        Message::OverlayDisplaysListed(Err("backend unavailable".into())),
+        Message::Capture(CaptureMsg::OverlayDisplaysListed(Err(
+            "backend unavailable".into(),
+        ))),
     );
     assert!(app.combine_capture.is_none());
     assert!(app
@@ -421,7 +452,7 @@ fn an_overlay_that_cannot_open_gives_the_editor_back() {
     );
     // Another capture started before the chained overlay request ran.
     app.capture_in_flight = true;
-    let _ = update(&mut app, Message::OpenOverlayRequested);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OpenOverlayRequested));
     assert!(app.combine_capture.is_none());
     assert!(
         app.pending_intent.is_none(),
@@ -446,7 +477,7 @@ fn an_overlay_refused_for_the_welcome_gives_the_editor_back() {
         Message::EditorCombineCaptureRequested(Join::Below),
     );
     app.welcome = crate::welcome::WelcomeState::Pending;
-    let _ = update(&mut app, Message::OpenOverlayRequested);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OpenOverlayRequested));
     assert!(app.combine_capture.is_none());
     assert!(app.pending_intent.is_none());
 }
@@ -484,16 +515,19 @@ fn closing_the_overlays_after_a_selection_keeps_the_combine_capture() {
     app.windows.register(id, WindowKind::Overlay);
     let _ = update(
         &mut app,
-        Message::OverlaySelected {
+        Message::Capture(CaptureMsg::OverlaySelected {
             display_id: Default::default(),
             rect: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 10.0, 10.0).unwrap(),
             intent: crate::app::CaptureIntent::CombineIntoEditor,
-        },
+        }),
     );
     // The close event lands before the capture request runs.
     let _ = update(&mut app, Message::WindowClosed(id));
     assert!(app.combine_capture.is_some());
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 16))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(64, 16)))),
+    );
     assert_eq!(app.editor.as_ref().unwrap().model.part_ids().len(), 2);
 }
 
@@ -558,7 +592,10 @@ fn a_bake_source_no_state_can_reach_is_released() {
         &mut app,
         Message::EditorCombineCaptureRequested(Join::Below),
     );
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(20, 10))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(20, 10)))),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.part_ids().len(), 2, "combined");
     assert_eq!(ed.text_panel.bake_sources.len(), 1, "baked");
@@ -593,7 +630,10 @@ fn a_bake_of_a_bake_keeps_the_inner_source() {
             &mut app,
             Message::EditorCombineCaptureRequested(Join::Below),
         );
-        let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(20, 10))));
+        let _ = update(
+            &mut app,
+            Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(20, 10)))),
+        );
     }
     let ed = app.editor.as_ref().unwrap();
     // The second bake's source holds the first baked part, whose own
@@ -616,7 +656,10 @@ fn a_baked_part_is_never_recognized_in_its_own_pixels() {
         &mut app,
         Message::EditorCombineCaptureRequested(Join::Below),
     );
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(20, 10))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(20, 10)))),
+    );
     let ed = app.editor.as_mut().unwrap();
     let ids = ed.model.part_ids();
     // The source can't be placed (say, its geometry lost the original):
@@ -664,7 +707,10 @@ async fn a_scrubbed_record_keeps_its_redactions_through_a_bake() {
         &mut app,
         Message::EditorCombineCaptureRequested(Join::Below),
     );
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(4, 4))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(4, 4)))),
+    );
     assert_ne!(
         app.editor.as_ref().unwrap().model.part_ids()[0],
         readshot_core::document::ORIGINAL_PART,
@@ -706,25 +752,28 @@ fn an_overlay_request_during_the_combine_capture_never_replaces_the_editor() {
     let rect = readshot_core::geom::Rect::from_xywh(0.0, 0.0, 10.0, 10.0).unwrap();
     let _ = update(
         &mut app,
-        Message::OverlaySelected {
+        Message::Capture(CaptureMsg::OverlaySelected {
             display_id: display_id.clone(),
             rect,
             intent: crate::app::CaptureIntent::CombineIntoEditor,
-        },
+        }),
     );
     let _ = update(
         &mut app,
-        Message::CaptureRegionRequested { display_id, rect },
+        Message::Capture(CaptureMsg::RegionRequested { display_id, rect }),
     );
     assert!(app.capture_in_flight);
     // A readshot:// NewCapture or History's Capture button meanwhile.
-    let _ = update(&mut app, Message::OpenOverlayRequested);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OpenOverlayRequested));
     assert!(app.combine_capture.is_some(), "the combine is in flight");
     assert_eq!(
         app.pending_intent,
         Some(crate::app::CaptureIntent::CombineIntoEditor)
     );
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 16))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(64, 16)))),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.session_id, session, "never a new editor");
     assert_eq!(ed.model.part_ids().len(), 2);
@@ -746,7 +795,7 @@ fn add_capture_after_a_scroll_capture_is_never_stranded() {
     let mut app = app_after_a_scroll_capture();
     start_add_capture(&mut app);
     app.welcome = crate::welcome::WelcomeState::Pending;
-    let _ = update(&mut app, Message::OpenOverlayRequested);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OpenOverlayRequested));
     assert!(app.combine_capture.is_none(), "welcome refusal restores");
     assert!(app.pending_intent.is_none());
 
@@ -763,7 +812,7 @@ fn add_capture_after_a_scroll_capture_is_never_stranded() {
     // The user cancels the overlay.
     let mut app = app_after_a_scroll_capture();
     start_add_capture(&mut app);
-    let _ = update(&mut app, Message::OverlayCancelled);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OverlayCancelled));
     assert!(app.combine_capture.is_none(), "cancel restores");
 }
 
@@ -775,7 +824,7 @@ fn a_combine_with_no_selection_restores_despite_a_stale_pending_display() {
     start_add_capture(&mut app);
     app.pending_display_id = Some("display-a".into());
     app.welcome = crate::welcome::WelcomeState::Pending;
-    let _ = update(&mut app, Message::OpenOverlayRequested);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OpenOverlayRequested));
     assert!(app.combine_capture.is_none(), "welcome refusal restores");
 
     let mut app = build_app(Arc::new(FakePermissions::granted()));
@@ -800,7 +849,7 @@ fn a_stray_cancel_after_a_combine_selection_keeps_the_capture() {
     app.pending_display_scale = Some(2.0);
     app.pending_hide_cursor = false;
     // A stray cancel leaves the in-flight capture's pending state be.
-    let _ = update(&mut app, Message::OverlayCancelled);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OverlayCancelled));
     assert!(app.combine_capture.is_some(), "cancel after selection");
     assert_eq!(app.pending_display_scale, Some(2.0));
     assert!(!app.pending_hide_cursor, "the show-cursor choice survives");
@@ -828,7 +877,7 @@ fn the_welcome_after_a_combine_selection_keeps_the_capture() {
     app.windows.forget(id);
     assert!(!app.capture_in_flight);
     app.welcome = crate::welcome::WelcomeState::Pending;
-    let _ = update(&mut app, Message::OpenOverlayRequested);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OpenOverlayRequested));
     assert!(app.combine_capture.is_some(), "welcome after selection");
     assert_the_combine_capture_lands(app, session);
 }
@@ -847,15 +896,15 @@ fn a_selected_combine_capture_that_fails_gives_the_editor_back() {
     start_add_capture(&mut app);
     let _ = update(
         &mut app,
-        Message::OverlaySelected {
+        Message::Capture(CaptureMsg::OverlaySelected {
             display_id: Default::default(),
             rect: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 10.0, 10.0).unwrap(),
             intent: crate::app::CaptureIntent::CombineIntoEditor,
-        },
+        }),
     );
     let _ = update(
         &mut app,
-        Message::RegionCaptureCompleted(Err("boom".into())),
+        Message::Capture(CaptureMsg::RegionCaptured(Err("boom".into()))),
     );
     assert!(app.combine_capture.is_none());
     let ed = app.editor.as_ref().unwrap();

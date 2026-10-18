@@ -49,7 +49,7 @@ pub(super) fn on_hotkey_tick(state: &mut App) -> Task<Message> {
             return show_or_focus_welcome(state);
         }
         if !state.capture_in_flight {
-            return update(state, Message::OpenOverlayRequested);
+            return update(state, Message::Capture(CaptureMsg::OpenOverlayRequested));
         }
     }
     Task::none()
@@ -112,7 +112,7 @@ pub(super) fn on_tray_action(state: &mut App, action: crate::tray::TrayAction) -
                 Task::none()
             } else {
                 state.pending_intent = Some(crate::app::CaptureIntent::Editor);
-                update(state, Message::OpenOverlayRequested)
+                update(state, Message::Capture(CaptureMsg::OpenOverlayRequested))
             }
         }
         crate::tray::TrayAction::ScrollCapture => {
@@ -129,12 +129,15 @@ pub(super) fn on_tray_action(state: &mut App, action: crate::tray::TrayAction) -
                 // to hunt for the Scrolling Capture button — the default
                 // matches the menu entry they clicked.
                 state.pending_intent = Some(crate::app::CaptureIntent::ScrollCapture);
-                update(state, Message::OpenOverlayRequested)
+                update(state, Message::Capture(CaptureMsg::OpenOverlayRequested))
             }
         }
         crate::tray::TrayAction::RetakeLastRegion => {
             state.pending_intent = Some(crate::app::CaptureIntent::Editor);
-            update(state, Message::RetakeLastRegionRequested)
+            update(
+                state,
+                Message::Capture(CaptureMsg::RetakeLastRegionRequested),
+            )
         }
         crate::tray::TrayAction::History => {
             if state.welcome.should_show() {
@@ -193,7 +196,7 @@ pub(super) fn on_url_action(state: &mut App, action: UrlAction) -> Task<Message>
                 state.pending_url_after_permission = Some(UrlAction::NewCapture);
                 return show_or_focus_welcome(state);
             }
-            update(state, Message::OpenOverlayRequested)
+            update(state, Message::Capture(CaptureMsg::OpenOverlayRequested))
         }
         UrlAction::Unknown(path) => {
             tracing::warn!(target: readshot_core::log::cat::URL, "ignoring unknown readshot:// path: {path}");

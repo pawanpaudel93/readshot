@@ -355,7 +355,9 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
     ]
 }
 
-use crate::app::{App, AppMsg, GlobalHotkeyAction, HistoryKeyboardAction, Message, WindowKind};
+use crate::app::{
+    App, AppMsg, CaptureMsg, GlobalHotkeyAction, HistoryKeyboardAction, Message, WindowKind,
+};
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
 use crate::welcome::WelcomeState;
@@ -414,11 +416,11 @@ pub fn start() -> (App, Task<Message>) {
 
     if cli_interactive_request.is_some() {
         let task = if app.welcome.should_show() {
-            Task::done(Message::CliInteractiveWritten(Err(
+            Task::done(Message::Capture(CaptureMsg::CliInteractiveWritten(Err(
                 "Screen Recording permission is required for interactive capture".into(),
-            )))
+            ))))
         } else {
-            Task::done(Message::OpenOverlayRequested)
+            Task::done(Message::Capture(CaptureMsg::OpenOverlayRequested))
         };
         return (app, task);
     }
@@ -673,9 +675,9 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             match event {
                 iced::Event::Keyboard(KbEvent::KeyPressed { modifiers, .. })
                 | iced::Event::Keyboard(KbEvent::KeyReleased { modifiers, .. })
-                | iced::Event::Keyboard(KbEvent::ModifiersChanged(modifiers)) => {
-                    Some(Message::OverlayShiftChanged(modifiers.shift()))
-                }
+                | iced::Event::Keyboard(KbEvent::ModifiersChanged(modifiers)) => Some(
+                    Message::Capture(CaptureMsg::OverlayShiftChanged(modifiers.shift())),
+                ),
                 _ => None,
             }
         }));
@@ -1163,8 +1165,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             key,
             modifiers,
         } => welcome_ops::on_welcome_key_pressed(state, window, key, modifiers),
-
-        Message::OverlayShiftChanged(held) => capture_ops::on_overlay_shift_changed(state, held),
+        Message::Capture(msg) => capture_ops::handle_capture_message(state, msg),
 
         Message::HotkeyTick => tick_ops::on_hotkey_tick(state),
 
@@ -1175,37 +1176,6 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         Message::AppReopenTick => tick_ops::on_app_reopen_tick(),
 
         Message::TrayActionPerformed(action) => tick_ops::on_tray_action(state, action),
-
-        Message::CaptureFullPrimaryRequested => capture_ops::on_capture_full_primary(state),
-
-        Message::OpenOverlayRequested => capture_ops::on_open_overlay(state),
-
-        Message::RetakeLastRegionRequested => capture_ops::on_retake_last_region(state),
-
-        Message::OverlayDisplaysListed(Err(e)) => capture_ops::on_displays_list_failed(state, e),
-        Message::OverlayDisplaysListed(Ok(displays)) => {
-            capture_ops::on_displays_listed(state, displays)
-        }
-
-        Message::OverlayWindowReady(id) => configure_overlay_window_after_open(id),
-
-        Message::OverlaySelected {
-            display_id,
-            rect,
-            intent,
-        } => capture_ops::on_overlay_selected(state, display_id, rect, intent),
-
-        Message::OverlaySelectionChanged { display_id, rect } => {
-            capture_ops::on_overlay_selection_changed(state, display_id, rect)
-        }
-
-        Message::OverlayCancelled => capture_ops::on_overlay_cancelled(state),
-
-        Message::CaptureRegionRequested { display_id, rect } => {
-            capture_ops::on_capture_region(state, display_id, rect)
-        }
-
-        Message::RegionCaptureCompleted(result) => capture_ops::on_region_captured(state, result),
 
         msg @ history_messages!() => {
             let task = history_ops::handle_history_message(state, msg);
@@ -1238,22 +1208,12 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         msg @ editor_messages!() => window_ops::route_editor_message(state, msg),
         // Bookkeeping only (no history, no settle): what the stage shows.
         Message::EditorStageScrolled(x, y) => window_ops::on_stage_scrolled(state, x, y),
-        Message::OverlayCopyDone(result) => capture_ops::on_overlay_copy_done(state, result),
-        Message::OverlaySaveDone(result) => capture_ops::on_overlay_save_done(state, result),
-        Message::OverlayCopyTextDone(result) => {
-            capture_ops::on_overlay_copy_text_done(state, result)
-        }
-        Message::CliInteractiveWritten(result) => {
-            capture_ops::on_cli_interactive_written(state, result)
-        }
 
         Message::NoOp => Task::none(),
 
         msg @ scroll_messages!() => scroll::handle_scroll_message(state, msg),
 
         Message::WelcomeStatusDismissed => welcome_ops::on_welcome_status_dismissed(state),
-
-        Message::CaptureSaved(result) => capture_ops::on_capture_saved(state, result),
 
         Message::ThemePollTick => tick_ops::on_theme_poll_tick(state),
         Message::SystemThemeChanged(mode) => tick_ops::on_system_theme_changed(state, mode),

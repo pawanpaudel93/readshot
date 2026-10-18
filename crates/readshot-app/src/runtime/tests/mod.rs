@@ -948,11 +948,11 @@ fn app_after_a_scroll_capture() -> App {
     app.pending_intent = Some(crate::app::CaptureIntent::ScrollCapture);
     let _ = update(
         &mut app,
-        Message::OverlaySelected {
+        Message::Capture(CaptureMsg::OverlaySelected {
             display_id: "display-a".into(),
             rect: readshot_core::geom::Rect::from_xywh(10.0, 10.0, 200.0, 100.0).unwrap(),
             intent: crate::app::CaptureIntent::ScrollCapture,
-        },
+        }),
     );
     let s = app.scroll_session.take().expect("scroll session started");
     for id in [s.hud_window_id, s.region_window_id].into_iter().flatten() {
@@ -983,11 +983,11 @@ fn app_with_a_selected_combine() -> (App, u64, window::Id) {
     app.windows.register(id, WindowKind::Overlay);
     let _ = update(
         &mut app,
-        Message::OverlaySelected {
+        Message::Capture(CaptureMsg::OverlaySelected {
             display_id: Default::default(),
             rect: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 10.0, 10.0).unwrap(),
             intent: crate::app::CaptureIntent::CombineIntoEditor,
-        },
+        }),
     );
     assert!(app.combine_capture.is_some_and(|cc| cc.selected));
     (app, session, id)
@@ -995,7 +995,10 @@ fn app_with_a_selected_combine() -> (App, u64, window::Id) {
 
 /// The in-flight capture still lands in the same editor.
 fn assert_the_combine_capture_lands(mut app: App, session: u64) {
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 16))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(64, 16)))),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.session_id, session);
     assert_eq!(ed.model.part_ids().len(), 2);

@@ -186,13 +186,19 @@ fn a_fresh_capture_with_history_shares_its_ocr_with_the_text_panel() {
     // Panel closed, so only the history OCR could mark it Recognizing.
     app.preferences.editor_panel_open = false;
     app.preferences.history_retention = readshot_core::HistoryRetention::Last50;
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 64))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(64, 64)))),
+    );
     assert!(matches!(
         app.editor.as_ref().unwrap().text_panel.recognition,
         crate::editor::TextRecognition::Recognizing { .. }
     ));
     app.preferences.history_retention = readshot_core::HistoryRetention::Off;
-    let _ = update(&mut app, Message::RegionCaptureCompleted(Ok(solid(64, 64))));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(64, 64)))),
+    );
     assert!(matches!(
         app.editor.as_ref().unwrap().text_panel.recognition,
         crate::editor::TextRecognition::Idle

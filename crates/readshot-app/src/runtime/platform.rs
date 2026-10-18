@@ -209,7 +209,7 @@ pub(crate) fn quit_readshot(coord: &crate::coordinator::CaptureCoordinator) -> T
 }
 
 /// Capture-flow error type, surfaced to the welcome window's toast
-/// region. Bridged through `Message::CaptureSaved` as a `String` so
+/// region. Bridged through `CaptureMsg::Saved` as a `String` so
 /// `Message: Clone + Debug` stays trivially derivable.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CaptureRunError {

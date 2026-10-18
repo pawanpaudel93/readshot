@@ -232,22 +232,18 @@ impl SettingsPane {
 /// or background task funnels through this enum.
 #[derive(Clone, Debug)]
 pub enum Message {
+    /// Capture messages: the overlay, region and full-display captures, and
+    /// what is done with a result outside the editor (`runtime::capture_ops`).
+    Capture(CaptureMsg),
     /// App-level messages: the screen-recording permission, quit, restart
     /// and reopen (`runtime::app_ops`).
     App(AppMsg),
     EditorCanvas(CanvasMessage),
     EditorToolbar(ToolbarMessage),
     Settings(SettingsMessage),
-    /// User clicked "Capture primary display" in the welcome window.
-    CaptureFullPrimaryRequested,
     /// 50 ms drain tick — runtime polls the global-hotkey receiver and
     /// emits a `CaptureFullPrimaryRequested` if any events arrived.
     HotkeyTick,
-    /// Shift modifier toggled while an overlay window is open. Drives
-    /// the "hold Shift = square selection" constraint; iced 0.14 does
-    /// not reliably route modifier changes to the canvas, so the runtime
-    /// listens globally and forwards the state into the overlay.
-    OverlayShiftChanged(bool),
     /// 100 ms drain tick — runtime polls the tray + menu event channels.
     TrayTick,
     /// 100 ms drain tick — runtime polls queued `readshot://` URL events.
@@ -256,53 +252,6 @@ pub enum Message {
     AppReopenTick,
     /// User selected an item in the tray menu (or left-clicked the icon).
     TrayActionPerformed(crate::tray::TrayAction),
-    /// User asked for a region capture (welcome button / tray menu).
-    OpenOverlayRequested,
-    /// User asked to repeat the most recent overlay selection.
-    RetakeLastRegionRequested,
-    /// First view of the overlay window — used by the runtime to
-    /// remember its `window::Id` mapping.
-    OverlayWindowReady(iced::window::Id),
-    /// User confirmed an overlay selection. `display_id` identifies
-    /// the monitor; `rect` is in display-local logical pixels;
-    /// `intent` decides what happens to the captured image
-    /// (open editor, copy to clipboard, save to disk, or pin).
-    OverlaySelected {
-        display_id: readshot_capture::DisplayId,
-        rect: readshot_core::geom::Rect,
-        intent: CaptureIntent,
-    },
-    /// Selection rect inside the overlay changed (committed or
-    /// during resize/move). Drives the floating action toolbar's
-    /// position. `None` means the selection was cleared.
-    OverlaySelectionChanged {
-        display_id: readshot_capture::DisplayId,
-        rect: Option<readshot_core::geom::Rect>,
-    },
-    /// User cancelled the overlay (ESC, sub-pixel click, etc.).
-    OverlayCancelled,
-    /// Async list_displays result that bootstraps the overlay flow:
-    /// the runtime opens one transparent overlay window per display.
-    OverlayDisplaysListed(Result<Vec<readshot_capture::DisplayInfo>, String>),
-    /// Internal: capture a region of the named display, save the
-    /// PNG, and toast the result. Emitted by the overlay flow.
-    CaptureRegionRequested {
-        display_id: readshot_capture::DisplayId,
-        rect: readshot_core::geom::Rect,
-    },
-    /// Direct (no-editor) clipboard-copy completion for an overlay
-    /// quick-action.
-    OverlayCopyDone(Result<(), String>),
-    /// Direct (no-editor) save-dialog completion for an overlay
-    /// quick-action. `Ok(Some(path))` = written; `Ok(None)` =
-    /// user cancelled the picker.
-    OverlaySaveDone(Result<Option<std::path::PathBuf>, String>),
-    /// Direct (no-editor) OCR-text-copy completion. Carries the
-    /// recognised text so the toast can report a character count.
-    OverlayCopyTextDone(Result<String, String>),
-    /// Hidden one-shot CLI interactive capture finished writing its
-    /// temp PNG. The runtime exits immediately afterward.
-    CliInteractiveWritten(Result<(), String>),
     /// Periodic tick driving the scrolling-capture frame loop. Fires
     /// from a 250 ms timer subscription while a session is active.
     ScrollCaptureTick,
@@ -485,10 +434,6 @@ pub enum Message {
     /// User clicked "Show More" in the history browser — reveal the
     /// next page of matching rows.
     HistoryShowMore,
-    /// Async region-capture finished — `Ok(image)` opens an editor
-    /// window with the captured pixels; `Err` toasts the failure on
-    /// the welcome window.
-    RegionCaptureCompleted(Result<image::RgbaImage, String>),
     /// First view callback for the editor window — used to record
     /// the `window::Id` so Discard can close the right one.
     EditorWindowReady(iced::window::Id),
@@ -798,9 +743,6 @@ pub enum Message {
     /// Turn the eyedropper on or off (I, or the button in the color
     /// popover). While on, a click on the image picks its color.
     EditorEyedropperToggled,
-    /// Background capture-and-save task finished. Carries the final
-    /// PNG path or a stringified error.
-    CaptureSaved(Result<PathBuf, String>),
     /// First native-window-ready callback after the welcome window is
     /// opened. Used by the runtime to focus the window after Launch
     /// Services reopens an LSUIElement app.
@@ -888,6 +830,74 @@ pub enum Message {
     SystemThemeChanged(iced::theme::Mode),
     /// 1s tick; `update()` re-reads the OS appearance on the app thread.
     ThemePollTick,
+}
+
+/// Capture messages: the region overlay, region and full-display
+/// captures, and the overlay quick actions done without an editor.
+/// Handled by `runtime::capture_ops::handle_capture_message`.
+#[derive(Clone, Debug)]
+pub enum CaptureMsg {
+    /// User clicked "Capture primary display" in the welcome window.
+    FullPrimaryRequested,
+    /// Shift modifier toggled while an overlay window is open. Drives
+    /// the "hold Shift = square selection" constraint; iced 0.14 does
+    /// not reliably route modifier changes to the canvas, so the runtime
+    /// listens globally and forwards the state into the overlay.
+    OverlayShiftChanged(bool),
+    /// User asked for a region capture (welcome button / tray menu).
+    OpenOverlayRequested,
+    /// User asked to repeat the most recent overlay selection.
+    RetakeLastRegionRequested,
+    /// First view of the overlay window — used by the runtime to
+    /// remember its `window::Id` mapping.
+    OverlayWindowReady(iced::window::Id),
+    /// User confirmed an overlay selection. `display_id` identifies
+    /// the monitor; `rect` is in display-local logical pixels;
+    /// `intent` decides what happens to the captured image
+    /// (open editor, copy to clipboard, save to disk, or pin).
+    OverlaySelected {
+        display_id: readshot_capture::DisplayId,
+        rect: readshot_core::geom::Rect,
+        intent: CaptureIntent,
+    },
+    /// Selection rect inside the overlay changed (committed or
+    /// during resize/move). Drives the floating action toolbar's
+    /// position. `None` means the selection was cleared.
+    OverlaySelectionChanged {
+        display_id: readshot_capture::DisplayId,
+        rect: Option<readshot_core::geom::Rect>,
+    },
+    /// User cancelled the overlay (ESC, sub-pixel click, etc.).
+    OverlayCancelled,
+    /// Async list_displays result that bootstraps the overlay flow:
+    /// the runtime opens one transparent overlay window per display.
+    OverlayDisplaysListed(Result<Vec<readshot_capture::DisplayInfo>, String>),
+    /// Internal: capture a region of the named display, save the
+    /// PNG, and toast the result. Emitted by the overlay flow.
+    RegionRequested {
+        display_id: readshot_capture::DisplayId,
+        rect: readshot_core::geom::Rect,
+    },
+    /// Direct (no-editor) clipboard-copy completion for an overlay
+    /// quick-action.
+    OverlayCopyDone(Result<(), String>),
+    /// Direct (no-editor) save-dialog completion for an overlay
+    /// quick-action. `Ok(Some(path))` = written; `Ok(None)` =
+    /// user cancelled the picker.
+    OverlaySaveDone(Result<Option<std::path::PathBuf>, String>),
+    /// Direct (no-editor) OCR-text-copy completion. Carries the
+    /// recognised text so the toast can report a character count.
+    OverlayCopyTextDone(Result<String, String>),
+    /// Hidden one-shot CLI interactive capture finished writing its
+    /// temp PNG. The runtime exits immediately afterward.
+    CliInteractiveWritten(Result<(), String>),
+    /// Async region-capture finished — `Ok(image)` opens an editor
+    /// window with the captured pixels; `Err` toasts the failure on
+    /// the welcome window.
+    RegionCaptured(Result<image::RgbaImage, String>),
+    /// Background capture-and-save task finished. Carries the final
+    /// PNG path or a stringified error.
+    Saved(Result<PathBuf, String>),
 }
 
 /// App-level messages: the screen-recording permission, quit, restart
@@ -982,7 +992,7 @@ pub struct App {
     /// One entry per monitor when the overlay flow is active; empty
     /// otherwise. The runtime uses this to look up the display id for
     /// a `view()` callback (so the canvas knows which display id to
-    /// stamp into `Message::OverlaySelected`) and to convert the
+    /// stamp into `CaptureMsg::OverlaySelected`) and to convert the
     /// returned rect back into a `CaptureRequest` with the right
     /// scale.
     pub overlay_displays: HashMap<iced::window::Id, OverlayDisplay>,
@@ -994,7 +1004,7 @@ pub struct App {
     pub theme_mode: crate::runtime::ThemeMode,
     /// Live overlay selections per display. Drives the floating
     /// action toolbar's position; populated by
-    /// [`Message::OverlaySelectionChanged`] from the canvas.
+    /// [`CaptureMsg::OverlaySelectionChanged`] from the canvas.
     pub overlay_selections: HashMap<readshot_capture::DisplayId, readshot_core::geom::Rect>,
     /// Most recent committed overlay selection per display. Used by
     /// the "Retake Last Region" flow to avoid re-drawing the same

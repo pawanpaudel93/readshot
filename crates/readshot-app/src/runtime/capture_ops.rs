@@ -5,7 +5,49 @@
 
 use super::*;
 
-/// `Message::OverlayShiftChanged`.
+/// Every [`CaptureMsg`].
+pub(super) fn handle_capture_message(state: &mut App, message: CaptureMsg) -> Task<Message> {
+    match message {
+        CaptureMsg::OverlayShiftChanged(held) => on_overlay_shift_changed(state, held),
+
+        CaptureMsg::FullPrimaryRequested => on_capture_full_primary(state),
+
+        CaptureMsg::OpenOverlayRequested => on_open_overlay(state),
+
+        CaptureMsg::RetakeLastRegionRequested => on_retake_last_region(state),
+
+        CaptureMsg::OverlayDisplaysListed(Err(e)) => on_displays_list_failed(state, e),
+        CaptureMsg::OverlayDisplaysListed(Ok(displays)) => on_displays_listed(state, displays),
+
+        CaptureMsg::OverlayWindowReady(id) => configure_overlay_window_after_open(id),
+
+        CaptureMsg::OverlaySelected {
+            display_id,
+            rect,
+            intent,
+        } => on_overlay_selected(state, display_id, rect, intent),
+
+        CaptureMsg::OverlaySelectionChanged { display_id, rect } => {
+            on_overlay_selection_changed(state, display_id, rect)
+        }
+
+        CaptureMsg::OverlayCancelled => on_overlay_cancelled(state),
+
+        CaptureMsg::RegionRequested { display_id, rect } => {
+            on_capture_region(state, display_id, rect)
+        }
+
+        CaptureMsg::RegionCaptured(result) => on_region_captured(state, result),
+        CaptureMsg::OverlayCopyDone(result) => on_overlay_copy_done(state, result),
+        CaptureMsg::OverlaySaveDone(result) => on_overlay_save_done(state, result),
+        CaptureMsg::OverlayCopyTextDone(result) => on_overlay_copy_text_done(state, result),
+        CaptureMsg::CliInteractiveWritten(result) => on_cli_interactive_written(state, result),
+
+        CaptureMsg::Saved(result) => on_capture_saved(state, result),
+    }
+}
+
+/// `CaptureMsg::OverlayShiftChanged`.
 pub(super) fn on_overlay_shift_changed(state: &mut App, held: bool) -> Task<Message> {
     // No-op when state didn't actually flip — keeps the redraw
     // path from firing on every key event.
@@ -19,17 +61,17 @@ pub(super) fn on_overlay_shift_changed(state: &mut App, held: bool) -> Task<Mess
     Task::none()
 }
 
-/// `Message::CaptureFullPrimaryRequested`.
+/// `CaptureMsg::FullPrimaryRequested`.
 pub(super) fn on_capture_full_primary(state: &mut App) -> Task<Message> {
     let coord = state.coordinator.clone();
     state.capture_in_flight = true;
     state.last_capture_status = None;
     Task::perform(capture_primary_to_desktop(coord), |result| {
-        Message::CaptureSaved(result.map_err(|e| e.to_string()))
+        Message::Capture(CaptureMsg::Saved(result.map_err(|e| e.to_string())))
     })
 }
 
-/// `Message::OpenOverlayRequested`.
+/// `CaptureMsg::OpenOverlayRequested`.
 pub(super) fn on_open_overlay(state: &mut App) -> Task<Message> {
     // An Add Capture whose overlay can't open gives its hidden
     // editor back at once: whenever this request opens nothing and
@@ -74,11 +116,13 @@ pub(super) fn on_open_overlay(state: &mut App) -> Task<Message> {
     state.reduce_motion = os_reduce_motion();
     state.overlay_opening = true;
     Task::perform(async move { coord.list_displays().await }, |result| {
-        Message::OverlayDisplaysListed(result.map_err(|e| e.to_string()))
+        Message::Capture(CaptureMsg::OverlayDisplaysListed(
+            result.map_err(|e| e.to_string()),
+        ))
     })
 }
 
-/// `Message::RetakeLastRegionRequested`.
+/// `CaptureMsg::RetakeLastRegionRequested`.
 pub(super) fn on_retake_last_region(state: &mut App) -> Task<Message> {
     if state.welcome.should_show() {
         return show_or_focus_welcome(state);
@@ -116,14 +160,14 @@ pub(super) fn on_retake_last_region(state: &mut App) -> Task<Message> {
     state.pending_display_bounds = last.display_bounds;
     update(
         state,
-        Message::CaptureRegionRequested {
+        Message::Capture(CaptureMsg::RegionRequested {
             display_id,
             rect: last.rect,
-        },
+        }),
     )
 }
 
-/// `Message::OverlayDisplaysListed(Err(..))`.
+/// `CaptureMsg::OverlayDisplaysListed(Err(..))`.
 pub(super) fn on_displays_list_failed(state: &mut App, e: String) -> Task<Message> {
     state.overlay_opening = false;
     clear_pending_capture_state(state);
@@ -133,8 +177,8 @@ pub(super) fn on_displays_list_failed(state: &mut App, e: String) -> Task<Messag
     if state.cli_interactive_output.is_some() {
         Task::batch([
             restore,
-            Task::done(Message::CliInteractiveWritten(Err(format!(
-                "could not list displays: {e}"
+            Task::done(Message::Capture(CaptureMsg::CliInteractiveWritten(Err(
+                format!("could not list displays: {e}"),
             )))),
         ])
     } else {
@@ -142,7 +186,7 @@ pub(super) fn on_displays_list_failed(state: &mut App, e: String) -> Task<Messag
     }
 }
 
-/// `Message::OverlayDisplaysListed(Ok(..))`: open one overlay per display.
+/// `CaptureMsg::OverlayDisplaysListed(Ok(..))`: open one overlay per display.
 pub(super) fn on_displays_listed(
     state: &mut App,
     displays: Vec<readshot_capture::DisplayInfo>,
@@ -159,9 +203,9 @@ pub(super) fn on_displays_listed(
         return if state.cli_interactive_output.is_some() {
             Task::batch([
                 restore,
-                Task::done(Message::CliInteractiveWritten(Err(
-                    "no displays detected".into()
-                ))),
+                Task::done(Message::Capture(CaptureMsg::CliInteractiveWritten(Err(
+                    "no displays detected".into(),
+                )))),
             ])
         } else {
             restore
@@ -194,12 +238,12 @@ pub(super) fn on_displays_listed(
                 height: d.bounds.height(),
             },
         );
-        tasks.push(open_task.map(Message::OverlayWindowReady));
+        tasks.push(open_task.map(|a| Message::Capture(CaptureMsg::OverlayWindowReady(a))));
     }
     Task::batch(tasks)
 }
 
-/// `Message::OverlaySelected`: a region was chosen.
+/// `CaptureMsg::OverlaySelected`: a region was chosen.
 pub(super) fn on_overlay_selected(
     state: &mut App,
     display_id: readshot_capture::DisplayId,
@@ -301,14 +345,14 @@ pub(super) fn on_overlay_selected(
         tasks.push(hud_open.map(Message::ScrollHudWindowReady));
         return Task::batch(tasks);
     }
-    tasks.push(Task::done(Message::CaptureRegionRequested {
+    tasks.push(Task::done(Message::Capture(CaptureMsg::RegionRequested {
         display_id,
         rect,
-    }));
+    })));
     Task::batch(tasks)
 }
 
-/// `Message::OverlaySelectionChanged`.
+/// `CaptureMsg::OverlaySelectionChanged`.
 pub(super) fn on_overlay_selection_changed(
     state: &mut App,
     display_id: readshot_capture::DisplayId,
@@ -325,7 +369,7 @@ pub(super) fn on_overlay_selection_changed(
     Task::none()
 }
 
-/// `Message::OverlayCancelled`.
+/// `CaptureMsg::OverlayCancelled`.
 pub(super) fn on_overlay_cancelled(state: &mut App) -> Task<Message> {
     state.overlay_selections.clear();
     state.overlay_opening = false;
@@ -350,7 +394,7 @@ pub(super) fn on_overlay_cancelled(state: &mut App) -> Task<Message> {
     )
 }
 
-/// `Message::CaptureRegionRequested`.
+/// `CaptureMsg::RegionRequested`.
 pub(super) fn on_capture_region(
     state: &mut App,
     display_id: readshot_capture::DisplayId,
@@ -373,11 +417,15 @@ pub(super) fn on_capture_region(
                 None => capture_region_to_image(coord, display_id, rect, hide_cursor).await,
             }
         },
-        |result| Message::RegionCaptureCompleted(result.map_err(|e| e.to_string())),
+        |result| {
+            Message::Capture(CaptureMsg::RegionCaptured(
+                result.map_err(|e| e.to_string()),
+            ))
+        },
     )
 }
 
-/// `Message::RegionCaptureCompleted`: act on the captured region.
+/// `CaptureMsg::RegionCaptured`: act on the captured region.
 pub(super) fn on_region_captured(
     state: &mut App,
     result: Result<image::RgbaImage, String>,
@@ -467,7 +515,7 @@ pub(super) fn on_region_captured(
                 }
                 crate::app::CaptureIntent::CopyToClipboard => {
                     Task::perform(copy_image_to_clipboard(image), |r| {
-                        Message::OverlayCopyDone(r.map_err(|e| e.to_string()))
+                        Message::Capture(CaptureMsg::OverlayCopyDone(r.map_err(|e| e.to_string())))
                     })
                 }
                 crate::app::CaptureIntent::CopyTextDirect => {
@@ -475,14 +523,16 @@ pub(super) fn on_region_captured(
                     let prefs = state.preferences.clone();
                     let mask = editor_ops::CopyAllMask::None;
                     Task::perform(ocr_then_copy(coord, image, prefs, false, mask), |r| {
-                        Message::OverlayCopyTextDone(r.map_err(|e| e.to_string()))
+                        Message::Capture(CaptureMsg::OverlayCopyTextDone(
+                            r.map_err(|e| e.to_string()),
+                        ))
                     })
                 }
                 crate::app::CaptureIntent::SaveDirect => {
                     let seed = preferred_save_seed_dir(&state.preferences, &state.last_save_dir);
                     let template = state.preferences.filename_template.clone();
                     Task::perform(save_image_via_picker(image, seed, template), |r| {
-                        Message::OverlaySaveDone(r.map_err(|e| e.to_string()))
+                        Message::Capture(CaptureMsg::OverlaySaveDone(r.map_err(|e| e.to_string())))
                     })
                 }
                 crate::app::CaptureIntent::Pin => {
@@ -497,12 +547,14 @@ pub(super) fn on_region_captured(
                 }
                 crate::app::CaptureIntent::CliInteractive => {
                     let Some(output) = state.cli_interactive_output.take() else {
-                        return Task::done(Message::CliInteractiveWritten(Err(
-                            "missing CLI interactive output path".into(),
+                        return Task::done(Message::Capture(CaptureMsg::CliInteractiveWritten(
+                            Err("missing CLI interactive output path".into()),
                         )));
                     };
                     Task::perform(write_cli_interactive_capture(image, output), |r| {
-                        Message::CliInteractiveWritten(r.map_err(|e| e.to_string()))
+                        Message::Capture(CaptureMsg::CliInteractiveWritten(
+                            r.map_err(|e| e.to_string()),
+                        ))
                     })
                 }
                 crate::app::CaptureIntent::CombineIntoEditor => {
@@ -559,7 +611,7 @@ pub(super) fn on_region_captured(
             tracing::warn!(target: readshot_core::log::cat::CAPTURE, "region capture failed: {e}");
             state.last_capture_status = Some(history_ops::friendly_capture_error(&e));
             if state.cli_interactive_output.is_some() {
-                Task::done(Message::CliInteractiveWritten(Err(e)))
+                Task::done(Message::Capture(CaptureMsg::CliInteractiveWritten(Err(e))))
             } else {
                 Task::none()
             }
@@ -567,7 +619,7 @@ pub(super) fn on_region_captured(
     }
 }
 
-/// `Message::OverlayCopyDone`.
+/// `CaptureMsg::OverlayCopyDone`.
 pub(super) fn on_overlay_copy_done(state: &mut App, result: Result<(), String>) -> Task<Message> {
     state.last_capture_status = Some(match result {
         Ok(()) => "Copied image to clipboard.".into(),
@@ -583,7 +635,7 @@ pub(super) fn on_overlay_copy_done(state: &mut App, result: Result<(), String>) 
     Task::none()
 }
 
-/// `Message::OverlaySaveDone`.
+/// `CaptureMsg::OverlaySaveDone`.
 pub(super) fn on_overlay_save_done(
     state: &mut App,
     result: Result<Option<std::path::PathBuf>, String>,
@@ -608,7 +660,7 @@ pub(super) fn on_overlay_save_done(
     Task::none()
 }
 
-/// `Message::OverlayCopyTextDone`.
+/// `CaptureMsg::OverlayCopyTextDone`.
 pub(super) fn on_overlay_copy_text_done(
     state: &mut App,
     result: Result<String, String>,
@@ -631,7 +683,7 @@ pub(super) fn on_overlay_copy_text_done(
     Task::none()
 }
 
-/// `Message::CliInteractiveWritten`.
+/// `CaptureMsg::CliInteractiveWritten`.
 pub(super) fn on_cli_interactive_written(
     state: &mut App,
     result: Result<(), String>,
@@ -645,7 +697,7 @@ pub(super) fn on_cli_interactive_written(
     iced::exit()
 }
 
-/// `Message::CaptureSaved`.
+/// `CaptureMsg::Saved`.
 pub(super) fn on_capture_saved(
     state: &mut App,
     result: Result<std::path::PathBuf, String>,

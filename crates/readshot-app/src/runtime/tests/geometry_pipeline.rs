@@ -176,7 +176,7 @@ fn sync_and_async_steps_land_in_the_same_editor_state() {
             "add a capture (bakes the turned document)",
             vec![
                 Message::EditorCombineCaptureRequested(Join::Below),
-                Message::RegionCaptureCompleted(Ok(ramp(24, 12))),
+                Message::Capture(CaptureMsg::RegionCaptured(Ok(ramp(24, 12)))),
             ],
         ),
         ("align", vec![Message::EditorLayoutAlign(Align::Center)]),
@@ -223,7 +223,7 @@ fn a_sync_added_part_is_recognized_through_the_owed_flag_as_a_queued_one_is() {
         "add a capture",
         &[
             Message::EditorCombineCaptureRequested(Join::Below),
-            Message::RegionCaptureCompleted(Ok(ramp(24, 12))),
+            Message::Capture(CaptureMsg::RegionCaptured(Ok(ramp(24, 12)))),
         ],
     );
     for app in [&sync, &async_] {
@@ -339,7 +339,7 @@ fn a_refused_step_reports_the_same_refusal_on_both_paths() {
         "add a capture that is too wide",
         &[
             Message::EditorCombineCaptureRequested(Join::Below),
-            Message::RegionCaptureCompleted(Ok(ramp(wide, 1))),
+            Message::Capture(CaptureMsg::RegionCaptured(Ok(ramp(wide, 1)))),
         ],
     );
     let ed = sync.editor.as_ref().unwrap();

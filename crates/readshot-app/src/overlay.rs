@@ -16,8 +16,8 @@
 //! 3. Refine: drag a handle to resize, or drag the body to translate.
 //!    Click outside the selection to discard it and start a fresh drag.
 //! 4. Press Enter / Space (or with no selection, just Enter) to confirm
-//!    — emits [`Message::OverlaySelected`]. Esc emits
-//!    [`Message::OverlayCancelled`].
+//!    — emits [`CaptureMsg::OverlaySelected`]. Esc emits
+//!    [`CaptureMsg::OverlayCancelled`].
 //!
 //! Selection rect is in *window-local* logical pixels. On macOS this
 //! equals display-local logical pixels because the overlay window is
@@ -31,7 +31,7 @@ use iced::widget::canvas::{
 };
 use iced::{Color, Point, Rectangle, Renderer, Theme};
 
-use crate::app::{CaptureIntent, Message};
+use crate::app::{CaptureIntent, CaptureMsg, Message};
 use readshot_capture::DisplayId;
 use readshot_core::geom::Rect;
 
@@ -41,7 +41,7 @@ use readshot_core::geom::Rect;
 /// Each overlay window gets its own [`OverlayProgram`] instance whose
 /// `display_id` identifies the monitor the user is interacting with.
 /// The canvas only surfaces events when the cursor is in `bounds`, so
-/// the resulting [`Message::OverlaySelected`] always carries the
+/// the resulting [`CaptureMsg::OverlaySelected`] always carries the
 /// display id of the screen the selection actually lives on.
 ///
 /// `scale` is the
@@ -772,7 +772,10 @@ impl Program<Message> for OverlayProgram {
                 Key::Named(Named::Escape) => {
                     state.active = None;
                     state.selection = None;
-                    return Some(Action::publish(Message::OverlayCancelled).and_capture());
+                    return Some(
+                        Action::publish(Message::Capture(CaptureMsg::OverlayCancelled))
+                            .and_capture(),
+                    );
                 }
                 Key::Named(Named::Enter | Named::Space) => {
                     // Confirm: existing selection if any, else fall
@@ -791,15 +794,18 @@ impl Program<Message> for OverlayProgram {
                     state.selection = None;
                     if let Some(domain) = rect_to_domain(r) {
                         return Some(
-                            Action::publish(Message::OverlaySelected {
+                            Action::publish(Message::Capture(CaptureMsg::OverlaySelected {
                                 display_id: self.display_id.clone(),
                                 rect: domain,
                                 intent,
-                            })
+                            }))
                             .and_capture(),
                         );
                     }
-                    return Some(Action::publish(Message::OverlayCancelled).and_capture());
+                    return Some(
+                        Action::publish(Message::Capture(CaptureMsg::OverlayCancelled))
+                            .and_capture(),
+                    );
                 }
                 _ => {}
             }
@@ -813,10 +819,10 @@ impl Program<Message> for OverlayProgram {
                     state.selection = Some(start);
                     state.too_small_hint = false;
                     return Some(
-                        Action::publish(Message::OverlaySelectionChanged {
+                        Action::publish(Message::Capture(CaptureMsg::OverlaySelectionChanged {
                             display_id: self.display_id.clone(),
                             rect: rect_to_domain(start),
-                        })
+                        }))
                         .and_capture(),
                     );
                 }
@@ -828,10 +834,12 @@ impl Program<Message> for OverlayProgram {
                             let resized = resize_selection(sel, dw, dh, bounds);
                             state.selection = Some(resized);
                             return Some(
-                                Action::publish(Message::OverlaySelectionChanged {
-                                    display_id: self.display_id.clone(),
-                                    rect: rect_to_domain(resized),
-                                })
+                                Action::publish(Message::Capture(
+                                    CaptureMsg::OverlaySelectionChanged {
+                                        display_id: self.display_id.clone(),
+                                        rect: rect_to_domain(resized),
+                                    },
+                                ))
                                 .and_capture(),
                             );
                         }
@@ -843,11 +851,13 @@ impl Program<Message> for OverlayProgram {
                             if let Some(domain) = rect_to_domain(sel) {
                                 state.selection = None;
                                 return Some(
-                                    Action::publish(Message::OverlaySelected {
-                                        display_id: self.display_id.clone(),
-                                        rect: domain,
-                                        intent,
-                                    })
+                                    Action::publish(Message::Capture(
+                                        CaptureMsg::OverlaySelected {
+                                            display_id: self.display_id.clone(),
+                                            rect: domain,
+                                            intent,
+                                        },
+                                    ))
                                     .and_capture(),
                                 );
                             }
@@ -856,10 +866,12 @@ impl Program<Message> for OverlayProgram {
                             let moved = move_rect(sel, (dx, dy), bounds);
                             state.selection = Some(moved);
                             return Some(
-                                Action::publish(Message::OverlaySelectionChanged {
-                                    display_id: self.display_id.clone(),
-                                    rect: rect_to_domain(moved),
-                                })
+                                Action::publish(Message::Capture(
+                                    CaptureMsg::OverlaySelectionChanged {
+                                        display_id: self.display_id.clone(),
+                                        rect: rect_to_domain(moved),
+                                    },
+                                ))
                                 .and_capture(),
                             );
                         }
@@ -897,10 +909,10 @@ impl Program<Message> for OverlayProgram {
                         current: p,
                     });
                     return Some(
-                        Action::publish(Message::OverlaySelectionChanged {
+                        Action::publish(Message::Capture(CaptureMsg::OverlaySelectionChanged {
                             display_id: self.display_id.clone(),
                             rect: None,
-                        })
+                        }))
                         .and_capture(),
                     );
                 }
@@ -940,10 +952,12 @@ impl Program<Message> for OverlayProgram {
                 if let Some(domain) = updated_selection.and_then(rect_to_domain) {
                     // `Action::publish` already produces a redraw,
                     // per iced::widget::canvas::Action docs.
-                    return Some(Action::publish(Message::OverlaySelectionChanged {
-                        display_id: self.display_id.clone(),
-                        rect: Some(domain),
-                    }));
+                    return Some(Action::publish(Message::Capture(
+                        CaptureMsg::OverlaySelectionChanged {
+                            display_id: self.display_id.clone(),
+                            rect: Some(domain),
+                        },
+                    )));
                 }
                 Some(Action::request_redraw())
             }
@@ -960,31 +974,39 @@ impl Program<Message> for OverlayProgram {
                                 state.selection = None;
                                 if let Some(domain) = rect_to_domain(r) {
                                     return Some(
-                                        Action::publish(Message::OverlaySelected {
-                                            display_id: self.display_id.clone(),
-                                            rect: domain,
-                                            intent,
-                                        })
+                                        Action::publish(Message::Capture(
+                                            CaptureMsg::OverlaySelected {
+                                                display_id: self.display_id.clone(),
+                                                rect: domain,
+                                                intent,
+                                            },
+                                        ))
                                         .and_capture(),
                                     );
                                 }
                                 return Some(
-                                    Action::publish(Message::OverlayCancelled).and_capture(),
+                                    Action::publish(Message::Capture(CaptureMsg::OverlayCancelled))
+                                        .and_capture(),
                                 );
                             }
                             state.selection = Some(r);
                             if let Some(domain) = rect_to_domain(r) {
                                 return Some(
-                                    Action::publish(Message::OverlaySelectionChanged {
-                                        display_id: self.display_id.clone(),
-                                        rect: Some(domain),
-                                    })
+                                    Action::publish(Message::Capture(
+                                        CaptureMsg::OverlaySelectionChanged {
+                                            display_id: self.display_id.clone(),
+                                            rect: Some(domain),
+                                        },
+                                    ))
                                     .and_capture(),
                                 );
                             }
                         }
                         if self.auto_confirm_intent.is_some() {
-                            return Some(Action::publish(Message::OverlayCancelled).and_capture());
+                            return Some(
+                                Action::publish(Message::Capture(CaptureMsg::OverlayCancelled))
+                                    .and_capture(),
+                            );
                         }
                         // Too-small drag with no auto-confirm: keep the
                         // overlay open and flag the hint so the user sees
@@ -1271,7 +1293,7 @@ mod tests {
             );
             assert!(matches!(
                 started,
-                Some(Message::OverlaySelectionChanged { .. })
+                Some(Message::Capture(CaptureMsg::OverlaySelectionChanged { .. }))
             ));
             let confirmed = press(
                 &program,
@@ -1282,10 +1304,10 @@ mod tests {
             assert!(
                 matches!(
                     confirmed,
-                    Some(Message::OverlaySelected {
+                    Some(Message::Capture(CaptureMsg::OverlaySelected {
                         intent: I::CliInteractive,
                         ..
-                    })
+                    }))
                 ),
                 "⌘{letter}: {confirmed:?}"
             );
@@ -1310,10 +1332,10 @@ mod tests {
         );
         assert!(matches!(
             copied,
-            Some(Message::OverlaySelected {
+            Some(Message::Capture(CaptureMsg::OverlaySelected {
                 intent: I::CopyToClipboard,
                 ..
-            })
+            }))
         ));
     }
 

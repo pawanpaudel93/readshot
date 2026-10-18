@@ -512,7 +512,7 @@ fn cancel_is_ignored_while_stitching() {
 #[test]
 fn open_overlay_leaves_a_running_scroll_session_alone() {
     let (mut app, hud, _) = app_with_scroll_windows(true);
-    let _ = update(&mut app, Message::OpenOverlayRequested);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OpenOverlayRequested));
     assert!(!app.overlay_opening);
     let s = app.scroll_session.as_ref().unwrap();
     assert!(s.stopping);
@@ -532,7 +532,10 @@ fn retake_leaves_a_running_scroll_session_alone() {
         },
     );
     app.last_region_display_id = Some("display-a".into());
-    let _ = update(&mut app, Message::RetakeLastRegionRequested);
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RetakeLastRegionRequested),
+    );
     assert_eq!(app.pending_display_id, None);
     let s = app.scroll_session.as_ref().unwrap();
     assert!(s.stopping);
@@ -623,11 +626,11 @@ fn overlay_selection_stores_last_region_per_display() {
 
     let _ = update(
         &mut app,
-        Message::OverlaySelected {
+        Message::Capture(CaptureMsg::OverlaySelected {
             display_id: display_id.clone(),
             rect,
             intent: crate::app::CaptureIntent::Editor,
-        },
+        }),
     );
 
     assert_eq!(
@@ -644,19 +647,19 @@ fn overlay_selection_tracks_most_recent_region_display() {
 
     let _ = update(
         &mut app,
-        Message::OverlaySelected {
+        Message::Capture(CaptureMsg::OverlaySelected {
             display_id: "display-a".to_string(),
             rect: first,
             intent: crate::app::CaptureIntent::Editor,
-        },
+        }),
     );
     let _ = update(
         &mut app,
-        Message::OverlaySelected {
+        Message::Capture(CaptureMsg::OverlaySelected {
             display_id: "display-b".to_string(),
             rect: second,
             intent: crate::app::CaptureIntent::Editor,
-        },
+        }),
     );
 
     assert_eq!(app.last_region_display_id.as_deref(), Some("display-b"));
@@ -681,11 +684,11 @@ fn overlay_selection_preserves_display_context_for_fast_capture() {
 
     let _ = update(
         &mut app,
-        Message::OverlaySelected {
+        Message::Capture(CaptureMsg::OverlaySelected {
             display_id: "display-a".to_string(),
             rect,
             intent: crate::app::CaptureIntent::Editor,
-        },
+        }),
     );
 
     assert_eq!(app.pending_display_scale, Some(2.0));
@@ -716,7 +719,10 @@ fn retake_last_region_preserves_display_context() {
     );
     app.last_region_display_id = Some(display_id.clone());
 
-    let _ = update(&mut app, Message::RetakeLastRegionRequested);
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RetakeLastRegionRequested),
+    );
 
     assert_eq!(app.pending_display_id.as_deref(), Some(display_id.as_str()));
     assert_eq!(app.pending_display_scale, Some(2.0));
@@ -752,11 +758,14 @@ fn overlay_auto_confirm_is_only_for_cli_interactive() {
 fn open_overlay_sets_opening_guard_until_display_list_completes() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
 
-    let _ = update(&mut app, Message::OpenOverlayRequested);
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OpenOverlayRequested));
 
     assert!(app.overlay_opening);
 
-    let _ = update(&mut app, Message::OverlayDisplaysListed(Ok(Vec::new())));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::OverlayDisplaysListed(Ok(Vec::new()))),
+    );
 
     assert!(!app.overlay_opening);
     assert_eq!(
@@ -777,7 +786,9 @@ fn overlay_display_list_error_clears_pending_capture_state() {
 
     let _ = update(
         &mut app,
-        Message::OverlayDisplaysListed(Err("backend unavailable".into())),
+        Message::Capture(CaptureMsg::OverlayDisplaysListed(Err(
+            "backend unavailable".into(),
+        ))),
     );
 
     assert!(!app.overlay_opening);
@@ -897,7 +908,10 @@ fn opening_replacement_editor_commits_old_pending_history_text() {
 fn retake_last_region_without_previous_region_sets_status() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
 
-    let _ = update(&mut app, Message::RetakeLastRegionRequested);
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RetakeLastRegionRequested),
+    );
 
     assert_eq!(
         app.last_capture_status.as_deref(),
@@ -959,7 +973,10 @@ fn a_capture_problem_with_no_window_to_show_it_is_notified() {
     let notices = || CAPTURE_NOTICES.with(|n| n.borrow().clone());
     CAPTURE_NOTICES.with(|n| n.borrow_mut().clear());
     let mut app = build_app(Arc::new(FakePermissions::granted()));
-    let _ = update(&mut app, Message::RetakeLastRegionRequested);
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RetakeLastRegionRequested),
+    );
     let status = app.last_capture_status.clone().expect("a status");
     if CAPTURE_PROBLEM_ROUTE == CaptureProblemRoute::Notification {
         assert_eq!(notices(), vec![status.clone()]);
@@ -980,7 +997,10 @@ fn a_capture_problem_with_no_window_to_show_it_is_notified() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.windows
         .register(iced::window::Id::unique(), WindowKind::Welcome);
-    let _ = update(&mut app, Message::RetakeLastRegionRequested);
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RetakeLastRegionRequested),
+    );
     assert!(notices().is_empty());
 }
 
@@ -1070,7 +1090,10 @@ fn a_refused_notification_shows_in_the_editor_with_the_way_back() {
 #[test]
 fn with_notifications_off_capture_problems_open_the_welcome_window() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
-    let _ = update(&mut app, Message::RetakeLastRegionRequested);
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RetakeLastRegionRequested),
+    );
     let status = app.last_capture_status.clone().expect("a status");
     if CAPTURE_PROBLEM_ROUTE == CaptureProblemRoute::WelcomeWindow {
         // Off macOS capture problems open Welcome already.

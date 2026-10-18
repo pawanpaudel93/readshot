@@ -380,7 +380,9 @@ pub(crate) fn welcome_primary_message(
         WelcomeState::AwaitingGrant | WelcomeState::Denied => {
             Some(Message::App(AppMsg::OpenPermissionSettingsRequested))
         }
-        WelcomeState::Granted => (!capture_in_flight).then_some(Message::OpenOverlayRequested),
+        WelcomeState::Granted => {
+            (!capture_in_flight).then_some(Message::Capture(CaptureMsg::OpenOverlayRequested))
+        }
     }
 }
 
