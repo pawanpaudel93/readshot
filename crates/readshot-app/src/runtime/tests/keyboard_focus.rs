@@ -1171,3 +1171,29 @@ fn a_field_check_answer_for_another_editor_is_dropped() {
     assert_eq!(ed.model.undo_depth(), depth);
     assert_eq!(ed.key_queue.len(), 1, "its own check is still out");
 }
+
+/// C queued behind a field-checked ⌘Z still opens the keyboard crop
+/// draft when it runs, as a fresh C does.
+#[test]
+fn a_queued_c_still_opens_the_keyboard_crop_draft() {
+    let mut app = two_rects_first_selected();
+    let id = iced::window::Id::unique();
+    app.editor.as_mut().unwrap().window_id = Some(id);
+    beautify_shown(&mut app);
+    let _ = update(&mut app, key_press(id, ch("z"), true));
+    let _ = update(&mut app, key_press(id, ch("c"), false));
+    assert!(app.editor.as_ref().unwrap().crop_draft.is_none(), "C waits");
+    let sid = app.editor.as_ref().unwrap().session_id;
+    let _ = update(
+        &mut app,
+        Message::EditorFieldKeyResolved {
+            session: sid,
+            message: Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
+            field_focused: false,
+        },
+    );
+    assert!(
+        app.editor.as_ref().unwrap().crop_draft.is_some(),
+        "the queued C opened its crop draft"
+    );
+}

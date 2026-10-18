@@ -1060,12 +1060,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // C from the keyboard: a crop draft to move and size with the
             // arrows, since the pointer is not there to drag one (WCAG
             // 2.1.1 / 2.5.7). The toolbar button still waits for a drag.
-            let crop_key = matches!(
-                message,
-                Some(Message::EditorToolbar(
-                    readshot_ui::ToolbarMessage::SelectTool(readshot_ui::editor::ToolState::Crop)
-                ))
-            );
+            let crop_key = message.as_ref().is_some_and(is_crop_key);
             // A key's field check is out: this key waits behind it, in
             // order (`EditorFieldKeyResolved` runs the queue).
             if let Some(ed) = state.editor.as_mut().filter(|ed| !ed.key_queue.is_empty()) {
@@ -1100,21 +1095,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 None => Task::none(),
             };
             if crop_key {
-                if let Some(ed) = state.editor.as_mut() {
-                    if !ed.busy
-                        && ed.crop_draft.is_none()
-                        && ed.model.active_tool() == readshot_ui::editor::ToolState::Crop
-                    {
-                        let ratio = ed.model.effective_style().crop_aspect.ratio();
-                        ed.crop_draft = Some(keyboard_crop_draft(visible_frame(ed), ratio));
-                        ed.set_guide(
-                            format!(
-                                "Arrows move the crop, {OPTION_KEY} + arrows resize it ({SHIFT_KEY} for 10\u{a0}px). {RETURN_KEY} crops, {ESC_KEY} cancels."
-                            ),
-                            crate::editor::KeyGuide::CropDraft,
-                        );
-                    }
-                }
+                keyboard_crop_follow_up(state);
             }
             task
         }
@@ -2593,7 +2574,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         break;
                     }
                 }
+                // As a fresh key: C from the keyboard opens a crop draft.
+                let crop_key = is_crop_key(&next);
                 tasks.push(update(state, next));
+                if crop_key {
+                    keyboard_crop_follow_up(state);
+                }
             }
             Task::batch(tasks)
         }
@@ -2723,4 +2709,35 @@ fn field_owns_keys(state: &App) -> bool {
         ) || ed.pending_text.is_some()
             || ed.beautify_hex_draft.is_some()
     })
+}
+
+/// C from the keyboard (the Crop tool picked by its key).
+fn is_crop_key(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(
+            readshot_ui::editor::ToolState::Crop
+        ))
+    )
+}
+
+/// After C from the keyboard: a crop draft to move and size with the
+/// arrows, since the pointer is not there to drag one (WCAG 2.1.1 /
+/// 2.5.7). The toolbar button still waits for a drag.
+fn keyboard_crop_follow_up(state: &mut App) {
+    if let Some(ed) = state.editor.as_mut() {
+        if !ed.busy
+            && ed.crop_draft.is_none()
+            && ed.model.active_tool() == readshot_ui::editor::ToolState::Crop
+        {
+            let ratio = ed.model.effective_style().crop_aspect.ratio();
+            ed.crop_draft = Some(keyboard_crop_draft(visible_frame(ed), ratio));
+            ed.set_guide(
+                format!(
+                    "Arrows move the crop, {OPTION_KEY} + arrows resize it ({SHIFT_KEY} for 10\u{a0}px). {RETURN_KEY} crops, {ESC_KEY} cancels."
+                ),
+                crate::editor::KeyGuide::CropDraft,
+            );
+        }
+    }
 }
