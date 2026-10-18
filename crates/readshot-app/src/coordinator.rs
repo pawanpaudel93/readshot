@@ -242,12 +242,6 @@ pub struct SettledWrites {
     /// (hiding the unredacted image) still couldn't be written: History
     /// may still hold the unredacted image, so it must not be opened.
     pub exposed: bool,
-    /// The record's newest request is a redaction whose image failed to
-    /// write and waits for a retry. Its first phase removed the
-    /// unredacted image, so History has no image to open until it lands;
-    /// it is not cancelled (that would lose the image for good), so the
-    /// record must not be opened now.
-    pub redaction_due: bool,
 }
 
 #[derive(Default)]
@@ -276,11 +270,6 @@ struct ScrubState {
     /// restore request alone doesn't end it: a frame change queued behind
     /// that restore is the same session's, and must not be refused.
     scrub_owners: std::collections::HashMap<readshot_core::Uuid, Option<u64>>,
-    /// Records whose newest request is a scrub (by its seq) whose image is
-    /// still to be written: queued, or failed and waiting for a retry.
-    /// Its phase one removed the unredacted image, so until it lands the
-    /// record has none.
-    image_due: std::collections::HashMap<readshot_core::Uuid, u64>,
 }
 
 /// A secured scrub's document frame (`CaptureRecord::geometry_id`) and
@@ -382,16 +371,6 @@ impl Scrubs {
         let mut st = lock(&self.state);
         if st.latest.get(&id) == Some(&seq) {
             st.scrub_owners.remove(&id);
-        }
-    }
-
-    /// Request `seq` of record `id` is finished for good (written,
-    /// refused, or parked for the record's save): a scrub of that request
-    /// is no longer due.
-    fn finished(&self, id: readshot_core::Uuid, seq: u64) {
-        let mut st = lock(&self.state);
-        if st.image_due.get(&id) == Some(&seq) {
-            st.image_due.remove(&id);
         }
     }
 }
@@ -497,7 +476,6 @@ fn apply_rewrite(
                 target: readshot_core::log::cat::HISTORY,
                 "dropped a restore of record {id}: {why}"
             );
-            scrubs.finished(id, job.seq);
             return Outcome::Refused(why);
         }
     }
@@ -512,7 +490,6 @@ fn apply_rewrite(
             // Under the commit gate, so a settle (which takes the gate)
             // never reports a failure this write has since made good.
             scrubs.writes.succeeded(id);
-            scrubs.finished(id, job.seq);
             Outcome::Done
         }
         Ok(false) => {
@@ -521,7 +498,6 @@ fn apply_rewrite(
             if record.redacted || record.geometry_id.is_some() {
                 b.parked.insert(id, job.clone());
             }
-            scrubs.finished(id, job.seq);
             Outcome::Missing
         }
         Err(e) => {
@@ -553,7 +529,6 @@ fn fail_closed(store: &dyn HistoryStore, scrubs: &Scrubs, job: &RewriteJob) {
         }
         Ok(false) => {
             b.parked.insert(id, job.clone());
-            scrubs.finished(id, job.seq);
         }
         Err(_) => {
             lock(&scrubs.state).secured.remove(&id);
@@ -688,6 +663,10 @@ fn writer_loop(
 ) {
     use std::sync::mpsc::RecvTimeoutError;
     store.sweep_staging();
+    // Redactions a crash or quit left half-written (phase one only):
+    // finished before anything else is written, so no record stays
+    // withheld, and none ever lost its image.
+    store.finish_pending_scrubs();
     let mut retries: Vec<Retry> = Vec::new();
     loop {
         let next_due = retries.iter().map(|(due, _)| *due).min();
@@ -930,6 +909,19 @@ impl CaptureCoordinator {
                 .redactions
                 .extend(bake.iter().filter(|a| a.is_redaction()).cloned());
             record.redactions.extend(magnified);
+            // All of them, in the document frame before any crop: should
+            // this scrub's image never land, phase one's record of what to
+            // draw onto the stored image (`HistoryStore::begin_scrub`).
+            record.pending_image = Some(readshot_core::PendingImage {
+                geometry_id: record.geometry_id.clone(),
+                width: base.width(),
+                height: base.height(),
+                redactions: readshot_core::scrub::redactions_in_image(
+                    &record.redactions,
+                    base.width(),
+                    base.height(),
+                ),
+            });
         }
         // The stored image is `bake` rendered onto `base`: a baked Crop
         // makes it the crop. The record then describes that image, not the
@@ -983,7 +975,6 @@ impl CaptureCoordinator {
                 Some(_) => true,
                 None => false,
             };
-            st.image_due.remove(&id);
             let seq = next_rewrite_seq();
             st.latest.insert(id, seq);
             st.secured.remove(&id);
@@ -1007,7 +998,6 @@ impl CaptureCoordinator {
             let seq = next_rewrite_seq();
             st.latest.insert(id, seq);
             st.scrub_owners.insert(id, owner);
-            st.image_due.insert(id, seq);
             let phase_one = st.secured.get(&id) != Some(&secured_key(&record));
             (seq, phase_one)
         };
@@ -1031,8 +1021,6 @@ impl CaptureCoordinator {
                 }
                 Ok(false) => {
                     b.parked.insert(id, job);
-                    drop(b);
-                    self.scrubs.finished(id, seq);
                     return rx;
                 }
                 Err(e) => {
@@ -1059,7 +1047,6 @@ impl CaptureCoordinator {
         st.latest.insert(id, next_rewrite_seq());
         st.secured.remove(&id);
         st.scrub_owners.remove(&id);
-        st.image_due.remove(&id);
         drop(st);
         b.parked.remove(&id);
         b.unsecured.remove(&id);
@@ -1089,13 +1076,11 @@ impl CaptureCoordinator {
     /// and a restore that failed never un-redacts a record opened
     /// redacted afterwards.
     ///
-    /// The one exception is a redaction still due (`redaction_due`): its
-    /// failed write is kept retrying, because its phase one already
-    /// removed the unredacted image and cancelling it would leave the
-    /// record with no image at all. The caller must then not open (or
-    /// read) the record, so the invariant still holds: nothing reads it
-    /// before that write lands. Such a late write only ever makes History
-    /// more redacted, never less.
+    /// Nothing is lost by a cancel: no write ever deletes an image before
+    /// its replacement is in place, so a cancelled redaction leaves the
+    /// record withheld with its image set aside, and the open finishes it
+    /// from there ([`Self::finish_pending_scrub`]). Who owned the record's
+    /// scrub is forgotten too: from here on only what is on disk counts.
     ///
     /// A redaction whose first phase (hiding the unredacted image) is
     /// still pending is retried here, at once; if it still can't be
@@ -1112,17 +1097,12 @@ impl CaptureCoordinator {
             }
             let failures = tracked.failures.remove(&id).unwrap_or_default();
             drop(tracked);
-            let redaction_due = st.image_due.contains_key(&id);
-            let seq = match redaction_due {
-                // Kept: the newest request stays the newest.
-                true => st.latest.get(&id).copied().unwrap_or(0),
-                // Every earlier request is stale from here on.
-                false => {
-                    let seq = next_rewrite_seq();
-                    st.latest.insert(id, seq);
-                    seq
-                }
-            };
+            // Every earlier request is stale from here on.
+            let seq = next_rewrite_seq();
+            st.latest.insert(id, seq);
+            st.scrub_owners.remove(&id);
+            // Fail closed: phase one runs again for the next scrub.
+            st.secured.remove(&id);
             drop(st);
             let mut exposed = false;
             if let Some(entry) = b.unsecured.get_mut(&id) {
@@ -1143,12 +1123,26 @@ impl CaptureCoordinator {
                     _ => exposed = true,
                 }
             }
-            return SettledWrites {
-                failures,
-                exposed,
-                redaction_due,
-            };
+            return SettledWrites { failures, exposed };
         }
+    }
+
+    /// Finish record `id`'s redaction whose own image never landed (see
+    /// [`HistoryStore::finish_pending_scrub`]): its pending redactions
+    /// are drawn onto the image set aside, which is then swapped in.
+    /// Blocking (a decode, render and encode): call it off the UI thread,
+    /// after [`Self::settle_record_writes`]. Whether it finished one.
+    pub fn finish_pending_scrub(&self, id: readshot_core::Uuid) -> bool {
+        let Some(store) = &self.history else {
+            return false;
+        };
+        store.finish_pending_scrub(id).unwrap_or_else(|e| {
+            tracing::warn!(
+                target: readshot_core::log::cat::HISTORY,
+                "couldn't finish the pending redaction of record {id}: {e}"
+            );
+            false
+        })
     }
 
     /// Whether any History write of record `id` is queued or being
@@ -1760,6 +1754,15 @@ mod tests {
         fn sweep_staging(&self) {
             self.inner.sweep_staging()
         }
+        fn finish_pending_scrub(
+            &self,
+            id: readshot_core::Uuid,
+        ) -> Result<bool, readshot_core::HistoryError> {
+            self.inner.finish_pending_scrub(id)
+        }
+        fn finish_pending_scrubs(&self) -> usize {
+            self.inner.finish_pending_scrubs()
+        }
         fn stored_redacted(&self, r: &CaptureRecord) -> Result<bool, readshot_core::HistoryError> {
             self.inner.stored_redacted(r)
         }
@@ -2224,6 +2227,15 @@ mod tests {
         fn sweep_staging(&self) {
             self.inner.sweep_staging()
         }
+        fn finish_pending_scrub(
+            &self,
+            id: readshot_core::Uuid,
+        ) -> Result<bool, readshot_core::HistoryError> {
+            self.inner.finish_pending_scrub(id)
+        }
+        fn finish_pending_scrubs(&self) -> usize {
+            self.inner.finish_pending_scrubs()
+        }
         fn stored_redacted(&self, r: &CaptureRecord) -> Result<bool, readshot_core::HistoryError> {
             self.inner.stored_redacted(r)
         }
@@ -2481,12 +2493,12 @@ mod tests {
         );
     }
 
-    /// A redaction whose image write failed is not cancelled by a settle
-    /// (its first phase already removed the unredacted image: cancelling
-    /// it would leave the record with none). The settle says it is due,
-    /// and the retry still lands, redacted.
+    /// A redaction whose image write failed is cancelled by a settle like
+    /// any other write, and nothing is lost: phase one only set the image
+    /// aside (the record is withheld meanwhile), so the open finishes the
+    /// redaction from it.
     #[test]
-    fn a_settle_keeps_a_failed_redaction_and_says_it_is_due() {
+    fn a_settle_cancels_a_failed_redaction_and_its_image_is_kept() {
         let dir = tempfile::TempDir::new().unwrap();
         let record = saved_record(dir.path());
         let store = flaky(dir.path(), 1);
@@ -2498,20 +2510,16 @@ mod tests {
             pixelate(),
         ));
         let settled = coord.settle_record_writes(record.id);
-        assert!(settled.redaction_due);
         assert!(!settled.exposed);
         assert_eq!(settled.failures, ["history io: disk full"]);
-        assert!(
-            png_on_disk(&store.inner, &record).is_none(),
-            "phase one ran"
-        );
+        assert!(png_on_disk(&store.inner, &record).is_none(), "withheld");
         coord.drain_history_writes();
-        assert!(
-            png_on_disk(&store.inner, &record).is_some(),
-            "the retry landed"
-        );
-        assert!(sidecar(&store.inner, &record).redacted);
-        assert!(!coord.settle_record_writes(record.id).redaction_due);
+        assert!(sidecar(&store.inner, &record).scrub_pending, "cancelled");
+        assert!(coord.finish_pending_scrub(record.id));
+        let now = sidecar(&store.inner, &record);
+        assert!(now.redacted && !now.scrub_pending);
+        let png = png_on_disk(&store.inner, &record).expect("the image is kept");
+        assert_eq!(png.get_pixel(1, 1).0, [0, 0, 0, 255], "redacted");
     }
 
     /// An editor rotates (the frame rewrite fails once and waits for its
@@ -2577,6 +2585,41 @@ mod tests {
                 "run {i}: the rotate didn't land"
             );
         }
+    }
+
+    /// A redaction left half-written (phase one done, its image never
+    /// written: a crash or quit) is finished at the next launch: the
+    /// pending redactions are drawn onto the capture's image and swapped
+    /// in. No image is lost and no unredacted pixel is served.
+    #[test]
+    fn a_launch_finishes_a_redaction_left_half_written() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let fs_store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let mut half = scrubbed(&record);
+        half.redactions = pixelate();
+        assert!(fs_store.begin_scrub(&half).unwrap());
+        assert!(sidecar(&fs_store, &record).scrub_pending);
+        // The next launch.
+        let coord = history_coord(fs_store.clone());
+        coord.drain_history_writes();
+        let now = sidecar(&fs_store, &record);
+        assert!(now.redacted && !now.scrub_pending, "{now:?}");
+        let png = png_on_disk(&fs_store, &record).expect("the capture lost its image");
+        assert_eq!(png.dimensions(), (8, 8));
+        assert_eq!(
+            png.get_pixel(1, 1).0,
+            [0, 0, 0, 255],
+            "the redaction is drawn"
+        );
+        assert_eq!(
+            png.get_pixel(6, 6).0,
+            [255, 255, 255, 255],
+            "only the redaction"
+        );
+        assert!(
+            readshot_core::FsHistoryStore::abs_thumbnail_path(fs_store.root(), &record).exists()
+        );
     }
 
     /// Never stores anything: every image fails to stage.

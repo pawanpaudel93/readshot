@@ -2618,6 +2618,15 @@ impl readshot_core::HistoryStore for SlowCommitStore {
     fn sweep_staging(&self) {
         self.inner.sweep_staging()
     }
+    fn finish_pending_scrub(
+        &self,
+        id: readshot_core::Uuid,
+    ) -> Result<bool, readshot_core::HistoryError> {
+        self.inner.finish_pending_scrub(id)
+    }
+    fn finish_pending_scrubs(&self) -> usize {
+        self.inner.finish_pending_scrubs()
+    }
     fn stored_redacted(
         &self,
         r: &readshot_core::CaptureRecord,

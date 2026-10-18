@@ -4,16 +4,33 @@
 
 use super::*;
 
+/// Record `id`'s image path for Reveal, Copy Image and Pin, or `None`
+/// with the reason in History's status: not found, or withheld while its
+/// redaction is being saved (nothing of it may be handed out then).
+fn served_image(state: &mut App, id: readshot_core::Uuid) -> Option<PathBuf> {
+    let found = state
+        .history_root
+        .as_ref()
+        .zip(state.history_records.iter().find(|r| r.id == id));
+    let Some((root, record)) = found else {
+        state.history_status = Some("Capture not found.".into());
+        return None;
+    };
+    let path = history_png_path(root, record);
+    if path.is_none() {
+        state.history_status = Some(WITHHELD_NOTE.into());
+    }
+    path
+}
+
+/// A record withheld while its redaction is saved.
+pub(crate) const WITHHELD_NOTE: &str =
+    "This capture’s redaction is still being saved, so its image is hidden. Try again in a moment.";
+
 /// `Message::HistoryReveal`.
 pub(super) fn on_reveal(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
     state.history_delete_pending = None;
-    let Some(path) = state
-        .history_root
-        .as_ref()
-        .zip(state.history_records.iter().find(|r| r.id == id))
-        .map(|(root, r)| history_png_path(root, r))
-    else {
-        state.history_status = Some("Capture not found.".into());
+    let Some(path) = served_image(state, id) else {
         return Task::none();
     };
     if let Err(e) = reveal_path(&path) {
@@ -30,13 +47,7 @@ pub(super) fn on_reveal(state: &mut App, id: readshot_core::Uuid) -> Task<Messag
 /// `Message::HistoryCopyImage`.
 pub(super) fn on_copy_image(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
     state.history_delete_pending = None;
-    let Some(path) = state
-        .history_root
-        .as_ref()
-        .zip(state.history_records.iter().find(|r| r.id == id))
-        .map(|(root, r)| history_png_path(root, r))
-    else {
-        state.history_status = Some("Capture not found.".into());
+    let Some(path) = served_image(state, id) else {
         return Task::none();
     };
     Task::perform(
@@ -155,13 +166,7 @@ pub(super) fn on_copy_visible_text_done(
 /// `Message::HistoryPin`.
 pub(super) fn on_pin(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
     state.history_delete_pending = None;
-    let Some(path) = state
-        .history_root
-        .as_ref()
-        .zip(state.history_records.iter().find(|r| r.id == id))
-        .map(|(root, r)| history_png_path(root, r))
-    else {
-        state.history_status = Some("Capture not found.".into());
+    let Some(path) = served_image(state, id) else {
         return Task::none();
     };
     Task::perform(load_png_async(path), |r| {

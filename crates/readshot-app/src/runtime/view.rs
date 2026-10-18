@@ -1401,14 +1401,10 @@ fn history_split<'a>(
     let now = chrono::Local::now();
     let mut list = column![].spacing(2).padding(SP2);
     for r in visible.iter().take(page_limit) {
-        let png_path = history_png_path(root, r);
-        let preview_path = history_thumbnail_path(root, r);
-        let thumb: Element<'_, Message> = if preview_path.exists() || png_path.exists() {
-            let path = if preview_path.exists() {
-                preview_path
-            } else {
-                png_path
-            };
+        let shown = history_thumbnail_path(root, r)
+            .filter(|p| p.exists())
+            .or_else(|| history_png_path(root, r).filter(|p| p.exists()));
+        let thumb: Element<'_, Message> = if let Some(path) = shown {
             container(
                 image_widget(super::history_images::history_image_handle(&path))
                     .width(Length::Fixed(HISTORY_THUMB_W - 2.0))
@@ -1599,14 +1595,10 @@ pub(crate) fn history_selected_panel<'a>(
     };
     let id = record.id;
 
-    let png_path = history_png_path(root, record);
-    let thumb_path = history_thumbnail_path(root, record);
-    let preview: Element<'a, Message> = if png_path.exists() || thumb_path.exists() {
-        let path = if png_path.exists() {
-            png_path
-        } else {
-            thumb_path
-        };
+    let shown = history_png_path(root, record)
+        .filter(|p| p.exists())
+        .or_else(|| history_thumbnail_path(root, record).filter(|p| p.exists()));
+    let preview: Element<'a, Message> = if let Some(path) = shown {
         // Scale the capture to fill the pane (up or down, aspect kept) as
         // `ContentFit::Contain` did, but size the image box to the fitted
         // size so the 1 px outline hugs the capture, not the letterbox.
@@ -1630,6 +1622,14 @@ pub(crate) fn history_selected_panel<'a>(
         }))
         .padding(SP2)
         .into()
+    } else if record.scrub_pending {
+        empty_state(
+            AppIcon::Image,
+            p,
+            "Redaction being saved",
+            "The image stays hidden until its redacted version is saved.",
+            None,
+        )
     } else {
         empty_state(
             AppIcon::Image,

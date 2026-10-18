@@ -108,16 +108,22 @@ pub(crate) async fn load_png_async(path: PathBuf) -> Result<image::RgbaImage, im
     })
 }
 
+/// The image of `record` History may show or hand out: `None` while it
+/// is withheld (`scrub_pending`, a redaction being written). Its image is
+/// then set aside and nothing is at its path, except in the instant
+/// after a crash between marking it and setting it aside: this check
+/// covers that too.
 pub(crate) fn history_png_path(
     root: &std::path::Path,
     record: &readshot_core::CaptureRecord,
-) -> PathBuf {
-    readshot_core::FsHistoryStore::abs_png_path(root, record)
+) -> Option<PathBuf> {
+    (!record.scrub_pending).then(|| readshot_core::FsHistoryStore::abs_png_path(root, record))
 }
 
+/// `record`'s thumbnail, as [`history_png_path`].
 pub(crate) fn history_thumbnail_path(
     root: &std::path::Path,
     record: &readshot_core::CaptureRecord,
-) -> PathBuf {
-    readshot_core::FsHistoryStore::abs_thumbnail_path(root, record)
+) -> Option<PathBuf> {
+    (!record.scrub_pending).then(|| readshot_core::FsHistoryStore::abs_thumbnail_path(root, record))
 }

@@ -714,8 +714,13 @@ fn history_thumbnail_path_matches_core_layout() {
     let root = std::path::Path::new("/history");
     assert_eq!(
         history_thumbnail_path(root, &record),
-        root.join(readshot_core::FsHistoryStore::thumbnail_path(&record))
+        Some(root.join(readshot_core::FsHistoryStore::thumbnail_path(&record)))
     );
+    // Withheld while its redaction is saved: nothing to show.
+    let mut withheld = record;
+    withheld.scrub_pending = true;
+    assert_eq!(history_thumbnail_path(root, &withheld), None);
+    assert_eq!(history_png_path(root, &withheld), None);
 }
 
 #[cfg(target_os = "windows")]

@@ -5,7 +5,7 @@
 
 use super::*;
 
-mod actions;
+pub(crate) mod actions;
 mod browse;
 mod records;
 
@@ -309,8 +309,9 @@ fn focus_history_search() -> Task<Message> {
     ))
 }
 
-/// Why [`load_after_writes`] didn't open a record: its newest redaction
-/// isn't fully written to History yet (the write is retried).
+/// Why [`load_after_writes`] didn't open a record: History couldn't hide
+/// its redaction (mark it withheld, or finish it) yet. Its image is kept;
+/// a later open tries again.
 pub(crate) const REDACTION_NOT_SAVED: &str = "redaction not saved to History yet";
 
 /// Run [`load_after_writes`] for record `id` off the UI thread; the answer
@@ -337,8 +338,14 @@ fn reopen_after_sync(state: &mut App, id: readshot_core::Uuid) -> Task<Message> 
 /// ([`crate::coordinator::CaptureCoordinator::settle_record_writes`]: none
 /// of them lands after this read). Blocking, no timeout: run it off the UI
 /// thread. The second value names writes that failed or were refused
-/// (they never land now). A redaction whose unredacted image History
-/// couldn't hide yet is never opened.
+/// (they never land now).
+///
+/// A record left withheld (a redaction whose own image never landed: it
+/// failed, was cancelled by the settle, or a crash cut it short) is
+/// finished first, from its set-aside image
+/// ([`crate::coordinator::CaptureCoordinator::finish_pending_scrub`]), so
+/// it opens redacted, image and all. A redaction History couldn't hide or
+/// finish yet is never opened.
 pub(crate) fn load_after_writes(
     coord: &crate::coordinator::CaptureCoordinator,
     root: Option<std::path::PathBuf>,
@@ -349,18 +356,29 @@ pub(crate) fn load_after_writes(
 ) {
     let settled = coord.settle_record_writes(id);
     let unsaved = (!settled.failures.is_empty()).then(|| settled.failures.join("; "));
-    if settled.exposed || settled.redaction_due {
+    if settled.exposed {
         return (Err(REDACTION_NOT_SAVED.to_string()), unsaved);
     }
-    let loaded = (|| {
-        let record = coord
+    let read = || {
+        coord
             .history_list()
             .map_err(|e| e.to_string())?
             .into_iter()
             .find(|r| r.id == id)
-            .ok_or_else(|| "the capture is no longer in History".to_string())?;
+            .ok_or_else(|| "the capture is no longer in History".to_string())
+    };
+    let loaded = (|| {
+        let mut record = read()?;
+        if record.scrub_pending {
+            coord.finish_pending_scrub(id);
+            record = read()?;
+            if record.scrub_pending {
+                return Err(REDACTION_NOT_SAVED.to_string());
+            }
+        }
         let root = root.ok_or_else(|| "History isn’t available".to_string())?;
-        let img = image::ImageReader::open(history_png_path(&root, &record))
+        let path = history_png_path(&root, &record).ok_or(REDACTION_NOT_SAVED)?;
+        let img = image::ImageReader::open(path)
             .map_err(|e| e.to_string())?
             .with_guessed_format()
             .map_err(|e| e.to_string())?

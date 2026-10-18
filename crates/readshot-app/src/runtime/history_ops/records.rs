@@ -123,7 +123,7 @@ pub(super) fn on_reopened_after_sync(
         Ok(loaded) => loaded,
         Err(e) if e == REDACTION_NOT_SAVED => {
             state.history_status = Some(format!(
-                        "Couldn’t open the capture yet — History is still saving its redaction{}. Readshot keeps trying; open it again in a moment.",
+                        "Couldn’t open the capture yet — History couldn’t finish hiding its redaction{}. Its image is kept; open it again in a moment.",
                         unsaved.as_ref().map_or(String::new(), |r| format!(" ({r})"))
                     ));
             return Task::none();

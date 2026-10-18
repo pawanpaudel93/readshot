@@ -221,6 +221,36 @@ Over-masking is acceptable, under-masking never:
 * Redaction guards (`redactions_complete`, `drawn_annotations()`, the
   canvas's opaque cover for redactions not rendered yet) must not be
   weakened.
+* A History record's image is never absent and its unredacted pixels are
+  never served. The store's write order (`readshot-core::history`) is:
+  1. **Mark first.** Phase one of a scrub (`begin_scrub`) writes the
+     sidecar with `scrub_pending` and `pending_image`: the redactions to
+     draw, in the px of the image on disk (a whole-image cover when they
+     can't be placed on it). From then on the record is **withheld**:
+     `list` serves no text for it, and History, MCP and search serve no
+     image.
+  2. **Set aside, never delete.** The unredacted PNG is renamed to
+     `<id>.withheld.png` in the same folder, so nothing is left at its
+     image path, and its thumbnail is removed.
+  3. **Replace atomically.** Every image write (scrub, restore, frame
+     rewrite, crop) is staged and fsynced, then renamed over the image
+     path. Only then does the sidecar change (`scrub_pending` cleared),
+     and only then is the set-aside image removed. Thumbnails come from
+     the new image.
+* **Recovery.** A record still withheld because its redaction never
+  landed (a crash, a quit, a write cancelled by an open) is finished by
+  `finish_pending_scrub`: its pending redactions are drawn onto the
+  set-aside image with the core render, then swapped in as in step 3.
+  This runs at launch (the coordinator's writer, `finish_pending_scrubs`)
+  and when the record is opened in an editor (`load_after_writes`), so
+  the editor gets the image with the pending redactions applied. The
+  result is redacted, keeps no text, and is in the frame of the image it
+  was drawn on.
+* Every editor open of a record passes `settle_record_writes` first. A
+  write queued before the open either landed or is cancelled for good;
+  a cancel loses nothing, because of the order above. Only the editor
+  session whose scrub made a record redacted may write it unredacted
+  again (its undo, and its later changes until one of them lands).
 
 ## Design constraints worth knowing
 

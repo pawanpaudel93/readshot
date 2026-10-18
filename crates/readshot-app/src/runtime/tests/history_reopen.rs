@@ -112,6 +112,15 @@ impl HistoryStore for GatedStore {
     fn sweep_staging(&self) {
         self.inner.sweep_staging()
     }
+    fn finish_pending_scrub(
+        &self,
+        id: readshot_core::Uuid,
+    ) -> Result<bool, readshot_core::HistoryError> {
+        self.inner.finish_pending_scrub(id)
+    }
+    fn finish_pending_scrubs(&self) -> usize {
+        self.inner.finish_pending_scrubs()
+    }
     fn stored_redacted(
         &self,
         r: &readshot_core::CaptureRecord,
@@ -529,6 +538,37 @@ impl Interleaving {
         self.app.coordinator.drain_history_writes();
     }
 
+    /// Once writes are quiet: a withheld record (redaction pending) has
+    /// nothing at its image path for any reader to serve, and no text.
+    /// (Mid-commit, the new image is renamed in just before the sidecar
+    /// stops saying pending: a transient this can't check.)
+    fn check_withheld(&self) {
+        let stored = self.store.stored(self.id);
+        if stored.scrub_pending {
+            let png = FsHistoryStore::abs_png_path(self.store.inner.root(), &stored);
+            assert!(
+                !png.exists() && stored.ocr_text.is_none(),
+                "a withheld record is served after seed {}: {:?}",
+                self.seed,
+                self.log
+            );
+        }
+    }
+
+    /// After every write drained, an open always opens the record, and
+    /// its image is on disk: nothing is ever lost.
+    fn check_final_open(&mut self) {
+        let log = format!("seed {}: {:?}", self.seed, self.log);
+        let stored = self.store.stored(self.id);
+        let png = FsHistoryStore::abs_png_path(self.store.inner.root(), &stored);
+        assert!(png.exists(), "the image is gone after {log}");
+        assert!(
+            self.editor_of_record().is_some(),
+            "the final open opened nothing ({:?}) after {log}",
+            self.app.history_status
+        );
+    }
+
     /// (a) The open editor of the record shows what History stores.
     fn check_editor_matches_store(&mut self) {
         let log = format!("seed {}: {:?}", self.seed, self.log);
@@ -581,22 +621,23 @@ fn reopens_under_random_slow_and_failing_writes_keep_editor_and_history_in_step(
         }
         run.settle();
         run.check_privacy();
+        run.check_withheld();
         run.check_editor_matches_store();
         run.log.push("final-open");
         run.send(Message::HistoryOpenInEditor(run.id));
         run.settle();
         run.check_privacy();
+        run.check_final_open();
         run.check_editor_matches_store();
     }
 }
 
-/// A redaction whose image write failed (its first phase already took
-/// the unredacted image away) is not cancelled by an open: cancelling it
-/// would leave the capture with no image for good. The open is refused
-/// instead, saying History is still saving the redaction; once the retry
-/// lands, the capture opens redacted.
+/// A redaction whose image write failed is cancelled by an open like
+/// any other write, and nothing is lost: phase one only set the image
+/// aside, so the open finishes the redaction from it and the capture
+/// opens redacted, image and all. The cancelled write never lands after.
 #[test]
-fn an_open_never_cancels_a_redaction_still_being_written() {
+fn an_open_during_a_failed_redaction_opens_it_redacted_with_its_image() {
     let (_dir, store, mut app, record) = history_app();
     edit_record(&mut app, &record);
     store.fail_next_commits(1);
@@ -612,22 +653,72 @@ fn an_open_never_cancels_a_redaction_still_being_written() {
         .recv_timeout(std::time::Duration::from_secs(20))
         .unwrap();
     let _ = update(&mut app, msg);
-    assert!(app.editor.is_none(), "opened a capture with no image");
-    let said = app.history_status.clone().unwrap();
-    assert!(said.contains("still saving its redaction"), "{said}");
-    assert!(said.contains("disk full"), "{said}");
-
-    // The retry lands; opening again shows the redacted capture.
+    let b = app.editor.as_ref().expect("the capture opens");
+    assert!(b.source_record.as_ref().unwrap().redacted);
+    let status = b.status_text().unwrap_or_default();
+    assert!(status.contains("disk full"), "{status}");
     app.coordinator.drain_history_writes();
-    assert!(store.stored(record.id).redacted);
+    let stored = store.stored(record.id);
+    assert!(stored.redacted && !stored.scrub_pending);
+    assert!(FsHistoryStore::abs_png_path(store.inner.root(), &stored).exists());
+}
+
+/// Fix-4 review N-1: the redaction's image write fails, the user undoes
+/// it, and that restore fails too; then the capture is opened from
+/// History. The capture keeps its image: it opens with the redaction
+/// drawn in (History never served it unredacted, and still doesn't).
+#[test]
+fn an_undone_redaction_whose_writes_failed_still_opens_with_its_image() {
+    let (_dir, store, mut app, record) = history_app();
+    edit_record(&mut app, &record);
+    store.fail_next_commits(1000);
+    let coord = app.coordinator.clone();
+    let a = app.editor.as_mut().unwrap();
+    a.model.commit_annotation(Annotation::Blur {
+        rect: RectLike::new(2.0, 2.0, 6.0, 6.0),
+        radius: 4.0,
+    });
+    super::super::editor_ops::sync_editor_history(a, &coord);
+    let _ = update(
+        &mut app,
+        Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
+    );
     let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
     let msg = start_load(&app, record.id)
         .recv_timeout(std::time::Duration::from_secs(20))
         .unwrap();
+    store.fail_next_commits(0);
     let _ = update(&mut app, msg);
-    let b = app
-        .editor
-        .as_ref()
-        .expect("opens once the redaction landed");
+    let b = app.editor.as_ref().unwrap_or_else(|| {
+        panic!(
+            "the capture didn't open: {:?}",
+            app.history_status.as_deref()
+        )
+    });
     assert!(b.source_record.as_ref().unwrap().redacted);
+    app.coordinator.drain_history_writes();
+    let stored = store.stored(record.id);
+    assert!(stored.redacted && !stored.scrub_pending);
+    assert!(FsHistoryStore::abs_png_path(store.inner.root(), &stored).exists());
+}
+
+/// A record withheld while its redaction is saved hands nothing out:
+/// Copy Image, Pin and Reveal say so instead of reading its image.
+#[test]
+fn a_withheld_record_hands_out_no_image() {
+    let (_dir, _store, mut app, record) = history_app();
+    app.history_records[0].scrub_pending = true;
+    for message in [
+        Message::HistoryCopyImage(record.id),
+        Message::HistoryPin(record.id),
+        Message::HistoryReveal(record.id),
+    ] {
+        app.history_status = None;
+        let task = update(&mut app, message);
+        assert_eq!(task.units(), 0, "it read the image");
+        assert_eq!(
+            app.history_status.as_deref(),
+            Some(super::super::history_ops::actions::WITHHELD_NOTE)
+        );
+    }
 }
