@@ -1117,6 +1117,8 @@ fn vhairline() -> Element<'static, Message> {
 }
 
 pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
+    // History image handles asked for in this build stay cached for it.
+    super::history_images::begin_history_view_build();
     use iced::widget::tooltip::Position;
     use iced::widget::{stack, text_input};
 
