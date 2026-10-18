@@ -842,11 +842,41 @@ impl FsHistoryStore {
                 }
                 None => tracing::warn!(
                     target: crate::log::cat::HISTORY,
-                    "not removing a path of history entry {} that escapes the history root",
+                    "not removing {} of history record {}: its path escapes the history root",
+                    rel.display(),
                     entry.id
                 ),
             }
         }
+    }
+
+    /// Why an entry's files can't be removed where they are, though its
+    /// index paths are well formed: its folder (or the thumbnail's)
+    /// resolves outside the history root — a symlinked `YYYY/MM`, or a
+    /// root that can't be resolved. `None` when they can be removed (or
+    /// a path is malformed: a tampered entry, dropped with a log).
+    fn removal_refused(&self, entry: &HistoryIndexEntry) -> Option<String> {
+        let thumb = self
+            .root
+            .join(Self::thumbnail_path(&Self::record_for_paths(entry)));
+        [&entry.png_path, &entry.json_path]
+            .into_iter()
+            .filter_map(|rel| safe_relative_join(&self.root, rel))
+            .chain(std::iter::once(thumb))
+            .find(|p| !self.resolves_inside_root(p))
+            .map(|p| {
+                format!(
+                    "the folder of {} resolves outside the history root (a symlink, or a root that can't be resolved)",
+                    p.display()
+                )
+            })
+    }
+
+    /// The fields of a record its file paths are derived from.
+    fn record_for_paths(entry: &HistoryIndexEntry) -> CaptureRecord {
+        let mut r = CaptureRecord::new(entry.captured_at, 0, 0, String::new());
+        r.id = entry.id;
+        r
     }
 
     /// Remove a deleted record's thumbnail and staging files, unless their
@@ -854,6 +884,11 @@ impl FsHistoryStore {
     fn remove_derived_files(&self, record: &CaptureRecord) {
         let thumb = self.root.join(Self::thumbnail_path(record));
         if !self.resolves_inside_root(&thumb) {
+            tracing::warn!(
+                target: crate::log::cat::HISTORY,
+                "not removing the thumbnail or staging files of history record {}: their folder resolves outside the history root",
+                record.id
+            );
             return;
         }
         let _ = fs::remove_file(thumb);
@@ -1217,6 +1252,15 @@ impl HistoryStore for FsHistoryStore {
         let kept_ids: std::collections::HashSet<Uuid> = kept.iter().map(|e| e.id).collect();
         for entry in &index.records {
             if !kept_ids.contains(&entry.id) {
+                if let Some(why) = self.removal_refused(entry) {
+                    // Retention still drops the entry (it is past the
+                    // policy), but says what stays on disk and why.
+                    tracing::warn!(
+                        target: crate::log::cat::HISTORY,
+                        "retention dropped history record {} but left its files: {why}",
+                        entry.id
+                    );
+                }
                 self.remove_entry_files(entry);
                 let record_for_path = CaptureRecord {
                     id: entry.id,
@@ -1385,6 +1429,17 @@ impl HistoryStore for FsHistoryStore {
             // Already gone — not an error.
             return Ok(());
         };
+        // Files that can't be removed where they are keep their entry, so
+        // the record stays listed and the delete can be retried.
+        if let Some(why) = self.removal_refused(&index.records[pos]) {
+            tracing::warn!(
+                target: crate::log::cat::HISTORY,
+                "not deleting history record {id}: {why}"
+            );
+            return Err(HistoryError::Io(format!(
+                "couldn't delete the capture's files: {why}"
+            )));
+        }
         let entry = index.records.remove(pos);
         self.remove_entry_files(&entry);
         let record_for_path = CaptureRecord {
@@ -2448,11 +2503,16 @@ mod tests {
             });
         }
         s.write_index(&index).unwrap();
-        s.delete(a).unwrap();
+        // The delete removes nothing, so it fails and keeps the entry
+        // (the user can retry once the folder is fixed).
+        assert!(s.delete(a).is_err());
         assert!(victim.exists(), "delete followed the symlink");
+        assert_eq!(s.read_index().unwrap().records.len(), 2);
+        // Retention drops entries past the policy, files left in place.
         s.apply_retention(HistoryRetention::Last30Days, Utc::now())
             .unwrap();
         assert!(victim.exists(), "retention followed the symlink");
+        assert!(s.read_index().unwrap().records.is_empty());
         // A symlink at the leaf itself is only unlinked, never followed.
         let leaf = s.root().join("leaf.png");
         std::os::unix::fs::symlink(&victim, &leaf).unwrap();
