@@ -352,6 +352,54 @@ impl Rng {
     }
 }
 
+/// A distinctive capture for run `seed`: every channel seeded noise, so
+/// any region of it left as it was keeps the noise's spread of values.
+fn noise(seed: u64, w: u32, h: u32) -> image::RgbaImage {
+    let mut rng = Rng::new(seed ^ 0x5EED);
+    image::RgbaImage::from_fn(w, h, |_, _| {
+        let mut c = || rng.below(256) as u8;
+        image::Rgba([c(), c(), c(), 255])
+    })
+}
+
+/// The share of `img`'s pixels inside `rect` (clipped to it) that are
+/// exactly the original's, in whichever orientation of `original` (as
+/// captured, or turned a quarter, half or three quarters) matches it
+/// best; `None` when nothing of the rect is inside.
+fn share_left_as_captured(
+    img: &image::RgbaImage,
+    original: &image::RgbaImage,
+    rect: RectLike,
+) -> Option<f64> {
+    use image::imageops::{rotate180, rotate270, rotate90};
+    let x0 = rect.x.max(0.0).floor() as u32;
+    let y0 = rect.y.max(0.0).floor() as u32;
+    let x1 = ((rect.x + rect.width).ceil().max(0.0) as u32).min(img.width());
+    let y1 = ((rect.y + rect.height).ceil().max(0.0) as u32).min(img.height());
+    let total = (x1.saturating_sub(x0) * y1.saturating_sub(y0)) as f64;
+    if total == 0.0 {
+        return None;
+    }
+    [
+        original.clone(),
+        rotate90(original),
+        rotate180(original),
+        rotate270(original),
+    ]
+    .iter()
+    .filter(|o| o.dimensions() == img.dimensions())
+    .map(|o| {
+        let same = (y0..y1)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .filter(|&(x, y)| img.get_pixel(x, y) == o.get_pixel(x, y))
+            .count();
+        same as f64 / total
+    })
+    .fold(None, |best: Option<f64>, v| {
+        Some(best.map_or(v, |b| b.max(v)))
+    })
+}
+
 /// One History record edited, closed and reopened in random order while
 /// its writes fail or are slow. What the runtime would run as tasks is
 /// run here: a History open's load on its own thread, delivered later.
@@ -396,7 +444,10 @@ impl Interleaving {
         self.store.delete(self.id).unwrap();
         let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
         self.store
-            .save(&record, &readshot_core::encode_png(&ramp(40, 20)).unwrap())
+            .save(
+                &record,
+                &readshot_core::encode_png(&noise(seed, 40, 20)).unwrap(),
+            )
             .unwrap();
         self.app.history_records = self.store.list().unwrap();
         self.app.history_status = None;
@@ -583,6 +634,35 @@ impl Interleaving {
         }
     }
 
+    /// Once writes are quiet, by pixels: under every redaction a redacted
+    /// record stores, the image no longer holds the seeded noise it was
+    /// captured with (blurred, pixelated or covered: at most a few pixels
+    /// keep their exact value), in whatever orientation it is stored.
+    fn check_redacted_pixels(&self) {
+        let stored = self.store.stored(self.id);
+        if !stored.redacted || stored.scrub_pending {
+            return;
+        }
+        let png = FsHistoryStore::abs_png_path(self.store.inner.root(), &stored);
+        let img = image::open(&png).expect("the stored image").to_rgba8();
+        let original = noise(self.seed, 40, 20);
+        for rect in stored
+            .redactions
+            .iter()
+            .filter_map(Annotation::redaction_rect)
+        {
+            if let Some(share) = share_left_as_captured(&img, &original, rect) {
+                assert!(
+                    share < 0.5,
+                    "{:.0}% of the pixels under {rect:?} are as captured after seed {}: {:?}",
+                    share * 100.0,
+                    self.seed,
+                    self.log
+                );
+            }
+        }
+    }
+
     /// After every write drained, an open always opens the record, and
     /// its image is on disk: nothing is ever lost.
     fn check_final_open(&mut self) {
@@ -650,12 +730,14 @@ fn reopens_under_random_slow_and_failing_writes_keep_editor_and_history_in_step(
         run.settle();
         run.check_privacy();
         run.check_withheld();
+        run.check_redacted_pixels();
         run.check_editor_matches_store();
         run.log.push("final-open");
         run.send(Message::History(HistoryMsg::OpenInEditor(run.id)));
         run.settle();
         run.check_privacy();
         run.check_final_open();
+        run.check_redacted_pixels();
         run.check_editor_matches_store();
     }
 }
