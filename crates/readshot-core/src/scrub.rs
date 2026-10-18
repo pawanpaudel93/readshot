@@ -496,8 +496,8 @@ fn mark_word_everywhere(hay: &[char], word: &[char], mask: &mut [bool]) -> usize
 /// `doc.layout_text` with every hidden word masked.
 ///
 /// The layout text is rebuilt from the lines (indents, table pipes, code
-/// fences), so each line is found in it in reading order and its hidden
-/// spans are masked in place. Fails closed:
+/// fences), so each line is found in it and its hidden spans are masked
+/// at every place the line occurs. Fails closed:
 /// - hidden words of [`GLOBAL_MASK_MIN_CHARS`]+ chars, and every hidden
 ///   word of a line that can't be found after the previous one (a
 ///   multi-column or table layout reorders or normalises it), are masked
@@ -524,6 +524,22 @@ pub fn masked_layout_text(doc: &TextDocument, spans: &[HiddenSpan]) -> String {
             continue;
         };
         let chars: Vec<char> = line.text.chars().collect();
+        // Every occurrence of the line, not only the one the forward
+        // search found: a multi-column layout emits columns one after
+        // another, so that one may be another line that merely contains
+        // this one while the real one lies before the cursor. Over-masking
+        // beats leaking.
+        let occurrences: Vec<usize> = if found.is_some() {
+            let mut at = Vec::new();
+            let mut from = 0;
+            while let Some(p) = find_from(&layout, &needle, from) {
+                at.push(p);
+                from = p + 1;
+            }
+            at
+        } else {
+            Vec::new()
+        };
         for r in ranges {
             let end = r.end.min(chars.len());
             if r.start >= end || chars[r.start..end].iter().all(|c| c.is_whitespace()) {
@@ -531,7 +547,7 @@ pub fn masked_layout_text(doc: &TextDocument, spans: &[HiddenSpan]) -> String {
             }
             let word = &chars[r.start..end];
             let mut located = false;
-            if let Some(p) = found {
+            for &p in &occurrences {
                 for k in r.start..end.min(needle.len()) {
                     mask[p + k] = true;
                 }
@@ -1080,6 +1096,31 @@ mod tests {
             masked_layout_text(&d, &spans),
             "intro line\nkey:██████ ████"
         );
+    }
+
+    #[test]
+    fn a_short_hidden_word_is_masked_in_a_multi_column_layout() {
+        // Lines in reading order (row-major), but the layout emits the
+        // left column, then the right. The left "PIN is 042" also occurs
+        // inside a later right-column line; the forward search used to
+        // find only that one and leave the real "042" readable.
+        let line = |text: &str| TextLine {
+            text: text.into(),
+            rect: None,
+            words: Vec::new(),
+        };
+        let d = TextDocument {
+            lines: vec![
+                line("Left top"),
+                line("Right top"),
+                line("PIN is 042"),
+                line("PIN is 042 was reset"),
+            ],
+            positioned: true,
+            layout_text: "Left top\nPIN is 042\n\nRight top\nPIN is 042 was reset".into(),
+        };
+        let masked = masked_layout_text(&d, &[(2, 7..10)]);
+        assert_eq!(masked.lines().nth(1), Some("PIN is ███"), "{masked}");
     }
 
     #[test]
