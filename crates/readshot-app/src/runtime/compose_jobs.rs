@@ -855,6 +855,7 @@ fn may_wait(message: &Message) -> (bool, bool) {
         // Discarding (or arming it) needs no pixels: a step still
         // composing is abandoned with the editor, never composed here.
         | Message::EditorDiscardRequested
+        | Message::EditorPinRendered { .. }
         | Message::PinWindowReady(..)
         | Message::PinClosePressed(..)
         | Message::PinDragRequested(..)

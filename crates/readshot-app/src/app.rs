@@ -625,6 +625,13 @@ pub enum Message {
     /// open a borderless always-on-top "pin" window with that
     /// image, and close the editor.
     EditorPinRequested,
+    /// A pin's beautified image, rendered off the UI thread after Pin
+    /// closed the editor; opens the pin window (`display_bounds`: the
+    /// editor's source display, for placing it).
+    EditorPinRendered {
+        result: Result<image::RgbaImage, String>,
+        display_bounds: Option<(f32, f32, f32, f32)>,
+    },
     /// First view of a freshly-opened pin window — used to record
     /// its `window::Id` against its image state in `App::pins`.
     PinWindowReady(iced::window::Id, iced::widget::image::Handle),

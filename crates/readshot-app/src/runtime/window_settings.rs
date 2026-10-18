@@ -158,13 +158,6 @@ pub(crate) fn open_editor_window_replacing(
     Task::batch(tasks)
 }
 
-pub(crate) fn editor_pin_window_settings(
-    editor: &crate::editor::EditorSession,
-    size: (u32, u32),
-) -> window::Settings {
-    pin_window_settings(size, editor.source_display_bounds)
-}
-
 pub(crate) fn clear_pending_capture_state(state: &mut App) {
     state.pending_intent = None;
     state.pending_display_id = None;

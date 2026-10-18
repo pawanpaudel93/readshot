@@ -2146,6 +2146,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorZoomActual
         | Message::EditorZoomFit
         | Message::EditorPinRequested
+        | Message::EditorPinRendered { .. }
         | Message::PinWindowReady(..)
         | Message::PinClosePressed(..)
         | Message::PinDragRequested(..)
@@ -2961,9 +2962,14 @@ pub(crate) struct EditorOutput {
 }
 
 impl EditorOutput {
+    /// No Beautify to apply: the output is the flattened image as is.
+    pub(crate) fn is_identity(&self) -> bool {
+        self.beautify.clamped().is_identity()
+    }
+
     /// Apply Beautify. Off the UI thread for Save and Copy
     /// (`render_off_thread`); the size was checked when this was made.
-    fn render(self) -> Result<image::RgbaImage, readshot_core::document::GeometryError> {
+    pub(crate) fn render(self) -> Result<image::RgbaImage, readshot_core::document::GeometryError> {
         if self.beautify.clamped().is_identity() {
             return Ok(self.flat);
         }
@@ -2972,7 +2978,7 @@ impl EditorOutput {
 
     /// `render` on a blocking worker: a beautified canvas near the pixel
     /// budget is a gigabyte to fill, which must not stall the UI thread.
-    async fn render_off_thread(self) -> Result<image::RgbaImage, String> {
+    pub(crate) async fn render_off_thread(self) -> Result<image::RgbaImage, String> {
         tokio::task::spawn_blocking(move || self.render())
             .await
             .map_err(|e| e.to_string())?
@@ -2992,6 +2998,8 @@ pub(crate) fn editor_output(
     Ok(EditorOutput { flat, beautify })
 }
 
+/// The rendered output, in one call (tests).
+#[cfg(test)]
 fn editor_output_image(
     ed: &mut EditorSession,
 ) -> Result<image::RgbaImage, readshot_core::document::GeometryError> {

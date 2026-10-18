@@ -2349,20 +2349,16 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }
             // The output must match what is on screen.
             settle_editor_for_output(ed, &state.coordinator);
-            // A pin opens at once, so its Beautify render stays here; the
-            // limit check keeps it within the document budget.
-            let img = match editor_output_image(ed) {
-                Ok(img) => img,
+            let out = match editor_output(ed) {
+                Ok(out) => out,
                 Err(e) => {
                     ed.set_warning(super::beautify_panel::beautify_refusal("pin", e));
                     return Task::none();
                 }
             };
-            let size = (img.width(), img.height());
-            let handle = rgba_handle(img);
+            let display_bounds = ed.source_display_bounds;
             // Close the editor window if any.
             let editor_id = ed.window_id;
-            let pin_settings = editor_pin_window_settings(ed, size);
             if let Some(ed) = state.editor.take() {
                 super::compose_jobs::drop_editor(ed);
             }
@@ -2372,18 +2368,34 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 state.windows.forget(id);
                 tasks.push(window::close(id));
             }
-            // Open the pin window. We register both kind + image
-            // handle eagerly so the first `view` call paints the
-            // pin instead of the "(no capture)" fallback.
-            let (id, open_task) = window::open(pin_settings);
-            state.windows.register(id, WindowKind::Pin);
-            state
-                .pins
-                .insert(id, crate::app::PinState::new(handle.clone()));
-            tasks
-                .push(open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone())));
+            if out.is_identity() {
+                // Nothing to render: the flattened image opens at once.
+                if let Ok(img) = out.render() {
+                    tasks.push(open_pin_window(state, img, display_bounds));
+                }
+            } else {
+                // A beautified canvas (up to the pixel budget) is filled
+                // off the UI thread; the pin opens when it is ready.
+                tasks.push(Task::perform(out.render_off_thread(), move |result| {
+                    Message::EditorPinRendered {
+                        result,
+                        display_bounds,
+                    }
+                }));
+            }
             Task::batch(tasks)
         }
+        Message::EditorPinRendered {
+            result,
+            display_bounds,
+        } => match result {
+            Ok(img) => open_pin_window(state, img, display_bounds),
+            Err(e) => {
+                tracing::warn!(target: "readshot::editor", "pin render failed: {e}");
+                state.last_capture_status = Some(e);
+                Task::none()
+            }
+        },
         Message::PinWindowReady(id, handle) => {
             // The eager insert above already covers most cases; this
             // re-key handles the (rare) scenario where the iced
@@ -2621,4 +2633,22 @@ pub(crate) fn copy_all_mask(ed: &crate::editor::EditorSession) -> CopyAllMask {
             None => hide.into_iter().filter(|a| a.is_redaction()).collect(),
         },
     )
+}
+
+/// Open a pin window showing `img`. Its kind and image handle are
+/// registered eagerly so the first `view` paints the pin instead of the
+/// "(no capture)" fallback.
+fn open_pin_window(
+    state: &mut App,
+    img: image::RgbaImage,
+    display_bounds: Option<(f32, f32, f32, f32)>,
+) -> Task<Message> {
+    let settings = pin_window_settings((img.width(), img.height()), display_bounds);
+    let handle = rgba_handle(img);
+    let (id, open_task) = window::open(settings);
+    state.windows.register(id, WindowKind::Pin);
+    state
+        .pins
+        .insert(id, crate::app::PinState::new(handle.clone()));
+    open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone()))
 }

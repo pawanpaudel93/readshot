@@ -604,7 +604,7 @@ fn editor_pin_window_centers_on_capture_display() {
     let mut editor = crate::editor::EditorSession::new(solid(32, 32));
     editor.source_display_bounds = Some((-1280.0, 120.0, 1280.0, 720.0));
 
-    let settings = editor_pin_window_settings(&editor, (400, 300));
+    let settings = pin_window_settings((400, 300), editor.source_display_bounds);
 
     match settings.position {
         window::Position::Specific(point) => {

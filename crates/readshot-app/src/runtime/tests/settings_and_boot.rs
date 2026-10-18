@@ -945,3 +945,31 @@ fn recovery_actions_stack_rather_than_clip_at_the_window_minimums() {
     assert!(welcome_footer_stacks(420.0 - 80.0));
     const { assert!(WELCOME_FOOTER_ROW_MIN >= 414.0) };
 }
+
+/// Pin with a Beautify canvas: the editor closes at once and the canvas
+/// renders off the UI thread; the pin opens when it lands. Without
+/// Beautify the pin opens at once.
+#[test]
+fn a_beautified_pin_renders_off_the_ui_thread() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let mut ed = crate::editor::EditorSession::new(solid(32, 32));
+    ed.model
+        .set_beautify(readshot_core::beautify::BuiltinPreset::Minimal.settings());
+    app.editor = Some(ed);
+    let _ = update(&mut app, Message::EditorPinRequested);
+    assert!(app.editor.is_none(), "the editor closed");
+    assert!(app.pins.is_empty(), "no pin until the render lands");
+    let _ = update(
+        &mut app,
+        Message::EditorPinRendered {
+            result: Ok(solid(80, 80)),
+            display_bounds: None,
+        },
+    );
+    assert_eq!(app.pins.len(), 1);
+
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+    let _ = update(&mut app, Message::EditorPinRequested);
+    assert_eq!(app.pins.len(), 1, "no Beautify: the pin opens at once");
+}
