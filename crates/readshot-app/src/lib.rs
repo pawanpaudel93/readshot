@@ -25,6 +25,8 @@ pub mod overlay;
 pub mod permissions;
 pub mod runtime;
 pub mod startup;
+#[cfg(test)]
+mod test_probe;
 pub mod tray;
 pub mod uninstall;
 pub mod updater;

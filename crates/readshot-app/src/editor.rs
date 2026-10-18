@@ -458,20 +458,7 @@ pub const ASYNC_COMPOSE_MIN_PIXELS: u64 = 16_000_000;
 pub const LIVE_REDACTION_MAX_PIXELS: u64 = 4_000_000;
 
 #[cfg(test)]
-thread_local! {
-    static UI_RENDERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// How many document renders the display made on this thread.
-#[cfg(test)]
-pub(crate) fn ui_renders_on_this_thread() -> u64 {
-    UI_RENDERS.with(std::cell::Cell::get)
-}
-
-fn count_ui_render() {
-    #[cfg(test)]
-    UI_RENDERS.with(|c| c.set(c.get() + 1));
-}
+pub(crate) use crate::test_probe::ui_renders_on_this_thread;
 
 /// What an off-thread compose is for.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1892,7 +1879,8 @@ impl EditorSession {
             }
             return;
         }
-        count_ui_render();
+        #[cfg(test)]
+        crate::test_probe::count_ui_render();
         let flat = readshot_core::render(&base, &self.model.geometry().cover_redactions(&without));
         let handle =
             iced::widget::image::Handle::from_rgba(flat.width(), flat.height(), flat.into_raw());
@@ -2197,7 +2185,8 @@ fn next_pin_number_after(annotations: &[Annotation]) -> u32 {
 
 fn build_handle(model: &mut Model) -> iced::widget::image::Handle {
     if !model.has_flattened() {
-        count_ui_render();
+        #[cfg(test)]
+        crate::test_probe::count_ui_render();
     }
     // Shares the model's cached pixels: one copy for display and output.
     model.flattened_handle()

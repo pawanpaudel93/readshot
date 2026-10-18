@@ -73,16 +73,7 @@ pub(crate) fn is_large(ed: &EditorSession, next: &Snapshot) -> bool {
 }
 
 #[cfg(test)]
-thread_local! {
-    static COMPOSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// How many documents [`compose_with`] composed on this thread (a cached
-/// base composes nothing).
-#[cfg(test)]
-pub(crate) fn composes_on_this_thread() -> u64 {
-    COMPOSES.with(std::cell::Cell::get)
-}
+pub(crate) use crate::test_probe::{composes_on_this_thread, sent_to_dropper};
 
 /// Compose and flatten `next` (blocking; runs on a worker), reusing
 /// `base` when it is `next`'s composed base. The geometry was validated
@@ -90,7 +81,7 @@ pub(crate) fn composes_on_this_thread() -> u64 {
 pub(crate) fn compose_with(next: Snapshot, base: Option<Arc<image::RgbaImage>>) -> ComposedDoc {
     let base = base.unwrap_or_else(|| {
         #[cfg(test)]
-        COMPOSES.with(|c| c.set(c.get() + 1));
+        crate::test_probe::count_compose();
         next.doc.geometry.compose()
     });
     let drawn = next.doc.geometry.cover_redactions(&next.annotations);
@@ -127,23 +118,12 @@ fn dropper() -> Option<&'static std::sync::mpsc::Sender<Garbage>> {
         .as_ref()
 }
 
-#[cfg(test)]
-thread_local! {
-    static SENT_TO_DROPPER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// How many times this thread sent something to the dropper thread.
-#[cfg(test)]
-pub(crate) fn sent_to_dropper() -> u64 {
-    SENT_TO_DROPPER.with(std::cell::Cell::get)
-}
-
 /// Free `t` on the dropper thread: releasing a document-sized image takes
 /// the UI thread ~2 ms per 100 MP (its pages are unmapped). Without the
 /// thread, `t` is dropped here.
 pub(crate) fn free_off_thread<T: Send + 'static>(t: T) {
     #[cfg(test)]
-    SENT_TO_DROPPER.with(|c| c.set(c.get() + 1));
+    crate::test_probe::count_sent_to_dropper();
     match dropper() {
         Some(tx) => {
             let _ = tx.send(Box::new(t));
