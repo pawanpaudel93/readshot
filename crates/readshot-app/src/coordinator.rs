@@ -903,24 +903,28 @@ impl CaptureCoordinator {
             // baked now that shows any of them: the stored image has that
             // magnified copy of weakly hidden text in it, and recognition
             // of a reopened record would read it.
+            // Redactions already in `base`: the image holds them baked.
+            let already_redacted = !record.redactions.is_empty();
             let shown: Vec<_> = record.redactions.iter().chain(&bake).cloned().collect();
             let magnified = readshot_core::scrub::magnified_redactions(&shown);
             record
                 .redactions
                 .extend(bake.iter().filter(|a| a.is_redaction()).cloned());
             record.redactions.extend(magnified);
-            // All of them, in the document frame before any crop: should
-            // this scrub's image never land, phase one's record of what to
-            // draw onto the stored image (`HistoryStore::begin_scrub`).
+            // What this scrub draws (its redactions and every other
+            // annotation baked with them), in the document frame before
+            // any crop: should its image never land, phase one's record of
+            // what to draw onto the stored image (`HistoryStore::begin_scrub`).
             record.pending_image = Some(readshot_core::PendingImage {
                 geometry_id: record.geometry_id.clone(),
                 width: base.width(),
                 height: base.height(),
-                redactions: readshot_core::scrub::redactions_in_image(
-                    &record.redactions,
-                    base.width(),
-                    base.height(),
-                ),
+                bake: bake
+                    .iter()
+                    .filter(|a| !matches!(a, readshot_core::Annotation::Crop { .. }))
+                    .cloned()
+                    .collect(),
+                already_redacted,
             });
         }
         // The stored image is `bake` rendered onto `base`: a baked Crop
@@ -2620,6 +2624,71 @@ mod tests {
         assert!(
             readshot_core::FsHistoryStore::abs_thumbnail_path(fs_store.root(), &record).exists()
         );
+    }
+
+    /// Fix-5 review I-1: a capture already redacted in History is rotated
+    /// by its editor (a scrub in the new frame, nothing new redacted); the
+    /// write fails, and the capture is reopened. Its image was already
+    /// safe: it is put back as it was, never blacked out.
+    #[test]
+    fn a_failed_frame_change_of_a_redacted_capture_keeps_its_image() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let store = flaky(dir.path(), 0);
+        let coord = history_coord(store.clone());
+        drop(coord.rewrite_history_as(
+            Some(1),
+            scrubbed(&record),
+            Arc::new(white(8, 8)),
+            pixelate(),
+        ));
+        coord.flush_history_updates();
+        let landed = png_on_disk(&store.inner, &record).unwrap();
+        assert_eq!(landed.get_pixel(6, 6).0, [255, 255, 255, 255]);
+        store
+            .fail_rewrites
+            .store(1000, std::sync::atomic::Ordering::SeqCst);
+        let mut rotated = sidecar(&store.inner, &record);
+        rotated.geometry_id = Some("rotated".into());
+        drop(coord.rewrite_history_as(Some(2), rotated, Arc::new(white(8, 8)), Vec::new()));
+        coord.settle_record_writes(record.id);
+        assert!(coord.finish_pending_scrub(record.id));
+        let now = sidecar(&store.inner, &record);
+        assert!(now.redacted && !now.scrub_pending);
+        let png = png_on_disk(&store.inner, &record).unwrap();
+        assert_eq!(png, landed, "the capture's image changed");
+    }
+
+    /// Fix-5 review M-4: a redaction finished from its set-aside image
+    /// bakes what the scrub itself would have (the editor's other
+    /// annotations too, as every scrub does), so no edit is dropped.
+    #[test]
+    fn a_finished_redaction_keeps_the_editors_other_annotations() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let store = flaky(dir.path(), 1000);
+        let coord = history_coord(store.clone());
+        let mut bake = pixelate();
+        // An outline: not a redaction.
+        let outline = readshot_core::Annotation::Rectangle {
+            rect: readshot_core::RectLike::new(4.0, 4.0, 3.0, 3.0),
+            color: readshot_core::Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: readshot_core::ShapeStyle::default(),
+        };
+        assert!(!outline.is_redaction());
+        bake.push(outline);
+        drop(coord.rewrite_history_as(Some(1), scrubbed(&record), Arc::new(white(8, 8)), bake));
+        coord.settle_record_writes(record.id);
+        assert!(coord.finish_pending_scrub(record.id));
+        let png = png_on_disk(&store.inner, &record).unwrap();
+        assert_eq!(png.get_pixel(1, 1).0, [0, 0, 0, 255], "the redaction");
+        assert_ne!(
+            png.get_pixel(4, 5).0,
+            [255, 255, 255, 255],
+            "the other annotation"
+        );
+        assert_eq!(png.get_pixel(7, 0).0, [255, 255, 255, 255]);
     }
 
     /// Never stores anything: every image fails to stage.

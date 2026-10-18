@@ -263,11 +263,11 @@ pub struct CaptureRecord {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scrub_pending: bool,
     /// While `scrub_pending`: the image set aside (its document frame and
-    /// size) and the redactions to draw onto it, in its own px, should the
-    /// scrub's own image never land. On a scrub request: the redactions
-    /// and the frame they are in (before any crop), which phase one maps
-    /// onto the stored image (a whole-image cover when it can't). Never
-    /// stored on a record that isn't pending.
+    /// size, whether it is already redacted) and what to draw onto it, in
+    /// its own px, should the scrub's own image never land. On a scrub
+    /// request: what the scrub bakes (before any crop) and the frame it is
+    /// in, which phase one maps onto the stored image
+    /// ([`PendingImage`]). Never stored on a record that isn't pending.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_image: Option<PendingImage>,
     /// Which document frame the stored image (and `redactions`,
@@ -288,16 +288,25 @@ pub struct CaptureRecord {
     pub geometry_id: Option<String>,
 }
 
-/// An image, by document frame and size, and the redactions to draw onto
-/// it (see [`CaptureRecord::pending_image`]).
+/// An image, by document frame and size, and what to draw onto it (see
+/// [`CaptureRecord::pending_image`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PendingImage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geometry_id: Option<String>,
     pub width: u32,
     pub height: u32,
-    #[serde(default)]
-    pub redactions: Vec<Annotation>,
+    /// What to draw: as a scrub bakes it, the redactions and every other
+    /// annotation drawn with them (any redaction flattens the output), in
+    /// this image's px. Never a crop.
+    #[serde(default, alias = "redactions")]
+    pub bake: Vec<Annotation>,
+    /// Stored: the image itself is already redacted (a redaction that
+    /// landed), so it is safe to serve as it is once `bake` is drawn,
+    /// even when `bake` is empty. On a request: the request's image
+    /// already holds redactions baked in (a reopened redacted capture).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub already_redacted: bool,
 }
 
 /// A solid cover over the whole of a `width` × `height` image: what a
@@ -315,12 +324,23 @@ fn whole_image_cover(width: u32, height: u32) -> Annotation {
     }
 }
 
-/// The pending redactions phase one stores: those already pending on the
-/// image on disk (`on_disk`, its frame and size), plus `record`'s new ones
-/// mapped onto it — as given when they are in the same frame and size
-/// (`record.pending_image`, else the record's own frame and redactions),
-/// else a whole-image cover. An unknown image on disk (`None`) gets the
-/// cover at whatever size it turns out to be.
+/// What phase one records to draw, should the scrub's own image never
+/// land: what is already pending on the image on disk (`on_disk`: its
+/// frame, size, and whether it is already redacted), plus what this
+/// request bakes, placed on it:
+///
+/// - Nothing new is redacted and the image on disk is already redacted:
+///   it is safe as it is. The request's other annotations are added in
+///   the same frame; in another frame nothing is (a failed rotate of a
+///   redacted capture puts the capture back unchanged, never blacked out).
+/// - New redactions in the same frame and size: drawn as baked.
+/// - New redactions that can't be placed (another frame or size), or an
+///   unredacted image with nothing to hide it, or a request whose image
+///   holds redactions the image on disk lacks: a whole-image cover (fail
+///   closed: never an unredacted pixel, never a lost image).
+///
+/// An unknown image on disk (`None`) gets the cover at whatever size it
+/// turns out to be.
 fn pending_on(on_disk: Option<PendingImage>, record: &CaptureRecord) -> PendingImage {
     let request = record
         .pending_image
@@ -329,27 +349,36 @@ fn pending_on(on_disk: Option<PendingImage>, record: &CaptureRecord) -> PendingI
             geometry_id: record.geometry_id.clone(),
             width: record.width_px,
             height: record.height_px,
-            redactions: record.redactions.clone(),
+            bake: record.redactions.clone(),
+            already_redacted: false,
         });
     let Some(mut disk) = on_disk else {
         return PendingImage {
             geometry_id: None,
             width: 0,
             height: 0,
-            redactions: Vec::new(),
+            bake: Vec::new(),
+            already_redacted: false,
         };
     };
     let same = request.geometry_id == disk.geometry_id
         && (request.width, request.height) == (disk.width, disk.height);
-    let mut new: Vec<Annotation> = request
-        .redactions
+    let bake: Vec<Annotation> = request
+        .bake
         .into_iter()
-        .filter(Annotation::is_redaction)
+        .filter(|a| !matches!(a, Annotation::Crop { .. }))
         .collect();
-    if !same || new.is_empty() {
-        new = vec![whole_image_cover(disk.width, disk.height)];
-    }
-    disk.redactions.extend(new);
+    let redacts = crate::scrub::has_redaction(&bake);
+    let cover = || vec![whole_image_cover(disk.width, disk.height)];
+    let add = match (disk.already_redacted, redacts, same) {
+        (true, false, true) => bake,
+        (true, false, false) => Vec::new(),
+        (true, true, true) => bake,
+        (true, true, false) => cover(),
+        (false, true, true) if !request.already_redacted => bake,
+        (false, _, _) => cover(),
+    };
+    disk.bake.extend(add);
     disk
 }
 
@@ -903,7 +932,11 @@ impl FsHistoryStore {
                 geometry_id: s.geometry_id.clone(),
                 width: s.width_px,
                 height: s.height_px,
-                redactions: Vec::new(),
+                bake: Vec::new(),
+                // Only a redaction that landed: a record marked pending
+                // without a pending image (an older build, or a crash) may
+                // still hold the unredacted image.
+                already_redacted: s.redacted && !s.scrub_pending,
             }),
             None => None,
         };
@@ -968,15 +1001,22 @@ impl FsHistoryStore {
             .map_err(|e| HistoryError::Io(format!("couldn't read the image to redact: {e}")))?
             .to_rgba8();
         let pending = stored.pending_image.clone();
-        let mut redactions = pending
+        // What phase one recorded for this very image; anything that
+        // doesn't describe it (another size), or would leave an image not
+        // already redacted with nothing hiding it, is a whole-image cover.
+        let bake = match pending
             .as_ref()
             .filter(|p| (p.width, p.height) == img.dimensions())
-            .map(|p| p.redactions.clone())
-            .unwrap_or_default();
-        if !crate::scrub::has_redaction(&redactions) {
-            redactions = vec![whole_image_cover(img.width(), img.height())];
-        }
-        let baked = crate::render::render(&img, &redactions);
+        {
+            Some(p) if p.already_redacted || crate::scrub::has_redaction(&p.bake) => p
+                .bake
+                .iter()
+                .filter(|a| !matches!(a, Annotation::Crop { .. }))
+                .cloned()
+                .collect(),
+            _ => vec![whole_image_cover(img.width(), img.height())],
+        };
+        let baked = crate::render::render(&img, &bake);
         let png = crate::png::encode_fast(&baked)
             .map_err(|e| HistoryError::Io(format!("couldn't encode the redacted image: {e}")))?;
         let thumb = thumbnail_png(&baked);
@@ -993,7 +1033,7 @@ impl FsHistoryStore {
         done.geometry_id = pending.map_or(stored.geometry_id.clone(), |p| p.geometry_id);
         done.width_px = baked.width();
         done.height_px = baked.height();
-        done.redactions = redactions;
+        done.redactions = bake.into_iter().filter(Annotation::is_redaction).collect();
         // Not provably every redaction in the image: no text is kept.
         done.redactions_complete = false;
         done.ocr_text = None;
@@ -2557,7 +2597,7 @@ mod tests {
         assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
         let pending = stored.pending_image.unwrap();
         assert_eq!((pending.width, pending.height), (r.width_px, r.height_px));
-        assert!(crate::scrub::has_redaction(&pending.redactions));
+        assert!(crate::scrub::has_redaction(&pending.bake));
     }
 
     #[test]
