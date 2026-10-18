@@ -618,6 +618,17 @@ fn a_released_gap_drag_is_synced_to_history_when_the_window_closes() {
     assert!(app.editor.as_ref().unwrap().gap_commit_on_land);
     let _ = update(&mut app, Message::WindowClosed(id));
     assert!(app.editor.is_none());
+    // The released value composes off the UI thread; its worker lands.
+    let retiring = &app.retiring_editors[0];
+    let landed = compose_result(
+        retiring.session_id,
+        retiring
+            .compose_job
+            .as_ref()
+            .expect("the gap step is composing"),
+    );
+    let _ = update(&mut app, landed);
+    assert!(app.retiring_editors.is_empty());
     app.coordinator.flush_history_updates();
     let stored = store.list().unwrap().into_iter().next().unwrap();
     assert_ne!(stored.geometry_id, before, "the gap step reached History");
@@ -2259,4 +2270,68 @@ fn ui_thread_time_of_rotate_and_undo_at_96_mp() {
         },
     );
     step(&mut app, "undo the part", undo_msg());
+}
+
+#[test]
+fn discard_abandons_a_queued_step_and_frees_nothing_here() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    large_editor(&mut app);
+    let id = iced::window::Id::unique();
+    app.editor.as_mut().unwrap().window_id = Some(id);
+    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    let job = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
+    let late = finish_compose(&app);
+    let before = super::super::compose_jobs::composes_on_this_thread();
+    // The pending rotate is unsaved work: the first press arms.
+    let _ = update(&mut app, Message::EditorDiscardRequested);
+    assert!(app.editor.as_ref().unwrap().discard_pending_at.is_some());
+    assert!(app.editor.as_ref().unwrap().compose_job.is_some());
+    let _ = update(&mut app, Message::EditorDiscardRequested);
+    assert!(app.editor.is_none());
+    assert_eq!(
+        super::super::compose_jobs::composes_on_this_thread(),
+        before,
+        "nothing composed for a discard"
+    );
+    assert!(app.retiring_editors.is_empty(), "a discard keeps nothing");
+    // The worker that hadn't started never composes the discarded document.
+    job.output
+        .run(|| panic!("composed a document nobody will use"));
+    // A result already on its way is dropped, never applied.
+    let _ = update(&mut app, late);
+    assert!(app.editor.is_none());
+}
+
+#[test]
+fn closing_the_editor_mid_compose_never_composes_here_and_still_syncs_history() {
+    let (_dir, store, mut app) = redacted_history_editor();
+    let coord = app.coordinator.clone();
+    let id = iced::window::Id::unique();
+    {
+        let ed = app.editor.as_mut().unwrap();
+        ed.window_id = Some(id);
+        write_editor_history(ed, &coord);
+    }
+    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    let session = app.editor.as_ref().unwrap().session_id;
+    let job = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
+    let before = super::super::compose_jobs::composes_on_this_thread();
+    let _ = update(&mut app, Message::WindowClosed(id));
+    assert!(app.editor.is_none());
+    assert_eq!(
+        super::super::compose_jobs::composes_on_this_thread(),
+        before,
+        "the close composed nothing on the UI thread"
+    );
+    assert_eq!(app.retiring_editors.len(), 1, "kept until its step lands");
+    // The worker lands: the step is applied and History synced.
+    let _ = update(&mut app, compose_result(session, &job));
+    assert!(app.retiring_editors.is_empty());
+    app.coordinator.flush_history_updates();
+    let stored = store.list().unwrap().into_iter().next().unwrap();
+    assert_eq!(
+        (stored.width_px, stored.height_px),
+        (20, 40),
+        "the rotate reached History"
+    );
 }

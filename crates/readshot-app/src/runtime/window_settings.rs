@@ -131,18 +131,12 @@ pub(crate) fn open_editor_window_replacing(
     display_bounds: Option<(f32, f32, f32, f32)>,
 ) -> Task<Message> {
     let mut tasks: Vec<Task<Message>> = Vec::new();
-    if state.editor.is_some() {
-        let coord = state.coordinator.clone();
-        if let Some(old_editor) = state.editor.as_mut() {
-            super::compose_jobs::settle_all(old_editor, &coord);
-            cancel_editor_previews(old_editor);
-            commit_pending_editor_text(old_editor, &coord);
-            super::editor_ops::sync_owed_history(old_editor, &coord);
-            if let Some(old_id) = old_editor.window_id {
-                state.windows.forget(old_id);
-                tasks.push(window::close(old_id));
-            }
+    if let Some(old_editor) = state.editor.take() {
+        if let Some(old_id) = old_editor.window_id {
+            state.windows.forget(old_id);
+            tasks.push(window::close(old_id));
         }
+        tasks.push(super::compose_jobs::retire_editor(state, old_editor));
     }
     editor.source_display_bounds = display_bounds;
     state.editor = Some(editor);

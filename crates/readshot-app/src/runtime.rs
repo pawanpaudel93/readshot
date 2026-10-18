@@ -1938,21 +1938,16 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                 state.cli_tools_window_id = None;
                 state.cli_tools_status = None;
             }
-            if state
-                .editor
-                .as_ref()
-                .and_then(|ed| ed.window_id)
-                .is_some_and(|editor_id| editor_id == id)
-            {
-                if let Some(ed) = state.editor.as_mut() {
-                    compose_jobs::settle_all(ed, &state.coordinator);
-                    cancel_editor_previews(ed);
-                    commit_pending_editor_text(ed, &state.coordinator);
-                    editor_ops::sync_owed_history(ed, &state.coordinator);
+            let restore = match state.editor.take_if(|ed| ed.window_id == Some(id)) {
+                Some(ed) => {
+                    // Never composes here: a step still composing finishes
+                    // first, off the UI thread.
+                    let retired = compose_jobs::retire_editor(state, ed);
+                    state.release_editor_modifiers();
+                    Task::batch([restore, retired])
                 }
-                state.editor = None;
-                state.release_editor_modifiers();
-            }
+                None => restore,
+            };
             // A scroll-capture HUD or region window closing out-of-band
             // (OS, crash, future close affordance) must tear the whole
             // session down. Otherwise `scroll_session` stays `Some` and

@@ -597,7 +597,11 @@ pub(crate) fn handle_composed(
     output: ComposedOutput,
 ) -> Task<Message> {
     let coord = state.coordinator.clone();
+    if let Some(task) = land_retiring(state, session, seq, &output) {
+        return task;
+    }
     let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) else {
+        discard(output.take());
         return Task::none();
     };
     // Superseded by a newer request (or settled already): never applied.
@@ -834,6 +838,9 @@ fn may_wait(message: &Message) -> (bool, bool) {
         | Message::EditorResizeUnitChanged(..)
         | Message::EditorResizeLockToggled(..)
         | Message::EditorDiscardDisarmed
+        // Discarding (or arming it) needs no pixels: a step still
+        // composing is abandoned with the editor, never composed here.
+        | Message::EditorDiscardRequested
         | Message::PinWindowReady(..)
         | Message::PinClosePressed(..)
         | Message::PinDragRequested(..)
@@ -1012,6 +1019,81 @@ pub(crate) fn drop_stale_press(ed: &mut EditorSession, message: &Message) {
     }
     ed.move_drag = None;
     ed.canvas_cache.clear();
+}
+
+/// Whether settling the pending steps now would compose them, or wait
+/// for their worker, on the UI thread.
+fn settling_would_block(ed: &EditorSession) -> bool {
+    ed.compose_job
+        .as_ref()
+        .is_some_and(|j| j.kind.is_step() && !j.output.is_done())
+}
+
+/// An editor going away (its window closed, or a new capture replacing
+/// it). With nothing composing it is finished at once: its pending
+/// work settled and History synced. With a history step still composing
+/// it is kept, windowless, in `state.retiring_editors` and finished when
+/// the worker lands ([`land_retiring`]): closing never composes, or
+/// waits for a compose, on the UI thread.
+pub(crate) fn retire_editor(state: &mut App, mut ed: EditorSession) -> Task<Message> {
+    queue_released_gap(&mut ed);
+    if settling_would_block(&ed) {
+        let task = launch(&mut ed);
+        state.retiring_editors.push(ed);
+        return task;
+    }
+    finish_retiring(ed, &state.coordinator);
+    Task::none()
+}
+
+/// Settle what is left (nothing composes now), sync History, drop.
+fn finish_retiring(mut ed: EditorSession, coord: &crate::coordinator::CaptureCoordinator) {
+    settle_all(&mut ed, coord);
+    cancel_editor_previews(&mut ed);
+    commit_pending_editor_text(&mut ed, coord);
+    super::editor_ops::sync_owed_history(&mut ed, coord);
+    drop_editor(ed);
+}
+
+/// Let go of an editor nobody will use again (discarded, pinned or
+/// retired): its request still queued or composing is abandoned (never
+/// started, or freed by its worker) and its big images are freed on the
+/// dropper thread, never here.
+pub(crate) fn drop_editor(mut ed: EditorSession) {
+    abandon(ed.compose_job.take());
+    let held = hold(&ed);
+    drop(ed);
+    held.release(None);
+}
+
+/// A retiring editor's worker finished: land its steps (composed off
+/// the UI thread), then wait for the next worker (steps queued behind
+/// them) or finish the editor. `None` when `session` is not a retiring
+/// editor.
+fn land_retiring(
+    state: &mut App,
+    session: u64,
+    seq: u64,
+    output: &ComposedOutput,
+) -> Option<Task<Message>> {
+    let pos = state
+        .retiring_editors
+        .iter()
+        .position(|ed| ed.session_id == session)?;
+    let ed = &mut state.retiring_editors[pos];
+    let mut tasks = Vec::new();
+    match ed.compose_job.take_if(|j| j.seq == seq && j.kind.is_step()) {
+        // No coordinator: the History sync is owed, done once below.
+        Some(request) => tasks.push(land_steps(ed, None, request, output.take())),
+        None => discard(output.take()),
+    }
+    if settling_would_block(ed) {
+        tasks.push(launch(ed));
+        return Some(Task::batch(tasks));
+    }
+    let ed = state.retiring_editors.remove(pos);
+    finish_retiring(ed, &state.coordinator);
+    Some(Task::batch(tasks))
 }
 
 /// Settle everything off-thread compose holds back: the pending steps,

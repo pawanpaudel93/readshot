@@ -615,6 +615,12 @@ impl ComposedOutput {
         }
     }
 
+    /// Whether the worker finished (or failed): claiming won't wait or
+    /// compose.
+    pub fn is_done(&self) -> bool {
+        matches!(*self.lock(), SlotState::Done(_))
+    }
+
     /// Run `work` as the worker, unless the slot was claimed first.
     /// The slot is always finished, a panic included.
     pub fn run(&self, work: impl FnOnce() -> ComposedDoc) {

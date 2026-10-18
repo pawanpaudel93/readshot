@@ -918,6 +918,11 @@ pub struct App {
     /// Active editor session, if any. Phase C only allows one
     /// editor at a time; opening a new one replaces the old.
     pub editor: Option<crate::editor::EditorSession>,
+    /// Editors closed (or replaced) while a history step still composed
+    /// off the UI thread: kept, windowless, until the worker lands, then
+    /// finished (History synced) and dropped. Closing never composes on
+    /// the UI thread ([`crate::runtime`]'s `retire_editor`).
+    pub retiring_editors: Vec<crate::editor::EditorSession>,
     /// `window::Id` → display info for every live overlay window.
     /// One entry per monitor when the overlay flow is active; empty
     /// otherwise. The runtime uses this to look up the display id for
@@ -1365,6 +1370,7 @@ impl App {
             fixed_hotkey_failures: Vec::new(),
             tray: None,
             editor: None,
+            retiring_editors: Vec::new(),
             overlay_displays: HashMap::new(),
             overlay_opening: false,
             theme_mode: Default::default(),

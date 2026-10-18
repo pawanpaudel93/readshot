@@ -238,7 +238,10 @@ pub(crate) fn commit_pending_editor_text(
 }
 
 pub(crate) fn editor_has_unsaved_work(ed: &crate::editor::EditorSession) -> bool {
-    ed.has_output_changes() || pending_text_has_unsaved_work(ed)
+    // A history step still composing is an edit too.
+    ed.has_output_changes()
+        || pending_text_has_unsaved_work(ed)
+        || super::compose_jobs::steps_pending(ed)
 }
 
 pub(crate) fn pending_text_has_unsaved_work(ed: &crate::editor::EditorSession) -> bool {
@@ -1392,7 +1395,10 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
             }
             let id = state.editor.as_ref().and_then(|e| e.window_id);
-            state.editor = None;
+            // A step still queued or composing is abandoned with it.
+            if let Some(ed) = state.editor.take() {
+                super::compose_jobs::drop_editor(ed);
+            }
             state.release_editor_modifiers();
             if let Some(id) = id {
                 state.windows.forget(id);
@@ -2312,7 +2318,9 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // Close the editor window if any.
             let editor_id = ed.window_id;
             let pin_settings = editor_pin_window_settings(ed, size);
-            state.editor = None;
+            if let Some(ed) = state.editor.take() {
+                super::compose_jobs::drop_editor(ed);
+            }
             state.release_editor_modifiers();
             let mut tasks: Vec<Task<Message>> = Vec::new();
             if let Some(id) = editor_id {
