@@ -1141,8 +1141,6 @@ fn vhairline() -> Element<'static, Message> {
 pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     // History image handles asked for in this build stay cached for it.
     super::history_images::begin_history_view_build();
-    use iced::widget::tooltip::Position;
-    use iced::widget::{stack, text_input};
 
     let p = palette(state.theme_mode);
     let total = state.history_records.len();
@@ -1159,6 +1157,37 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
         .iter()
         .filter(|r| r.ocr_text.as_deref().is_some_and(|t| !t.trim().is_empty()))
         .count();
+
+    let title_row = history_title_row(state, p, total, shown, visible_text_count);
+    let body = history_body(state, p, visible, total);
+
+    // An armed Clear All states its consequence before the second press.
+    let mut page = column![title_row, hairline()];
+    if state.history_clear_all_pending {
+        page = page.push(
+            container(toast(ToastKind::Warn, history_clear_warning(total), None))
+                .width(Length::Fill)
+                .padding([SP2, SP4]),
+        );
+    }
+    container(page.push(body))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(surface_style)
+        .into()
+}
+
+/// The History title row: heading, search with its count, Copy Visible
+/// Text and Clear All. It is also the window's drag handle.
+fn history_title_row<'a>(
+    state: &'a App,
+    p: &'static Palette,
+    total: usize,
+    shown: usize,
+    visible_text_count: usize,
+) -> Element<'a, Message> {
+    use iced::widget::tooltip::Position;
+    use iced::widget::{stack, text_input};
 
     // --- Title row: heading · search · Copy Visible Text · Clear All ---
     let count_caption = if total == 0 {
@@ -1292,7 +1321,19 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     // background is the window's drag handle. It holds the search and
     // Clear controls, so it stays on every platform.
     let title_row = title_drag_row(title_content, state.history_window_id);
+    title_row
+}
 
+/// The History body: the list and detail split, or the empty state that
+/// applies (no History folder, no captures, no matches) with the status
+/// toast under it.
+fn history_body<'a>(
+    state: &'a App,
+    p: &'static Palette,
+    visible: Vec<&'a readshot_core::CaptureRecord>,
+    total: usize,
+) -> Element<'a, Message> {
+    let shown = visible.len();
     // --- Body ---
     let body: Element<'_, Message> = if state.history_root.is_none() {
         empty_state(
@@ -1347,21 +1388,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
         }
         _ => body,
     };
-
-    // An armed Clear All states its consequence before the second press.
-    let mut page = column![title_row, hairline()];
-    if state.history_clear_all_pending {
-        page = page.push(
-            container(toast(ToastKind::Warn, history_clear_warning(total), None))
-                .width(Length::Fill)
-                .padding([SP2, SP4]),
-        );
-    }
-    container(page.push(body))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(surface_style)
-        .into()
+    body
 }
 
 /// The search field's right padding that keeps typed text clear of the
