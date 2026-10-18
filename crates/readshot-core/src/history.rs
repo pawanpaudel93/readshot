@@ -812,10 +812,11 @@ impl FsHistoryStore {
         pending.ocr_text = self.scrub_text(record);
         self.write_sidecar(&pending)?;
         // Try both even if one fails, so a stuck PNG can't keep the
-        // unredacted thumbnail alive (or the reverse).
-        let thumb = remove_if_exists(&self.root.join(Self::thumbnail_path(record)));
+        // unredacted thumbnail alive (or the reverse). The thumbnail goes
+        // last, so none made from the old PNG outlives it.
         let png = remove_if_exists(&self.root.join(Self::png_path(record)));
-        thumb.and(png)?;
+        let thumb = remove_if_exists(&self.root.join(Self::thumbnail_path(record)));
+        png.and(thumb)?;
         Ok(true)
     }
 
@@ -854,19 +855,41 @@ impl FsHistoryStore {
         if thumb_path.exists() {
             return;
         }
-        let Ok(img) = image::open(png_path) else {
-            return;
-        };
-        self.write_thumbnail_image(record, img);
+        if let Some(read) = read_for_backfill(png_path) {
+            self.place_backfill(record, png_path, read);
+        }
     }
 
-    fn write_thumbnail_image(&self, record: &CaptureRecord, img: image::DynamicImage) {
-        let thumb = img.thumbnail(THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT);
+    /// Step two of [`Self::backfill_thumbnail_from_png_path`]: write the
+    /// thumbnail decoded without the lock — only if it is still current.
+    /// Under the index lock (the one every scrub phase holds), re-check
+    /// that there is still no thumbnail, that the record is readable and
+    /// not mid-scrub, and that the PNG on disk is byte for byte the one
+    /// decoded. A scrub that removed or replaced the PNG in between makes
+    /// the result stale: it is discarded, never written from
+    /// pre-redaction pixels.
+    fn place_backfill(&self, record: &CaptureRecord, png_path: &Path, read: Backfill) {
+        let Ok(_guard) = self.lock_index() else {
+            return;
+        };
         let abs_thumb = self.root.join(Self::thumbnail_path(record));
+        if abs_thumb.exists() {
+            return;
+        }
+        match self.read_sidecar(record) {
+            Ok(Some(stored)) if !stored.scrub_pending => {}
+            _ => return,
+        }
+        if fs::read(png_path).ok().as_deref() != Some(read.png.as_slice()) {
+            return;
+        }
+        let Some(bytes) = thumbnail_bytes(&read.thumb) else {
+            return;
+        };
         if let Some(parent) = abs_thumb.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let _ = crate::save_png(&thumb.to_rgba8(), &abs_thumb);
+        let _ = write_atomic(&abs_thumb, &bytes);
     }
 
     /// Acquire the in-process mutex only. Used by `clear_all`, which
@@ -1301,6 +1324,30 @@ impl HistoryStore for FsHistoryStore {
     }
 }
 
+/// A thumbnail decoded for a backfill, with the PNG bytes it came from.
+struct Backfill {
+    png: Vec<u8>,
+    thumb: image::RgbaImage,
+}
+
+/// `thumb` encoded as PNG.
+fn thumbnail_bytes(thumb: &image::RgbaImage) -> Option<Vec<u8>> {
+    crate::encode_png(thumb).ok()
+}
+
+/// Step one of a thumbnail backfill: read and decode the PNG (slow, so
+/// without the index lock).
+fn read_for_backfill(png_path: &Path) -> Option<Backfill> {
+    let png = fs::read(png_path).ok()?;
+    let img = image::load_from_memory(&png).ok()?;
+    Some(Backfill {
+        thumb: img
+            .thumbnail(THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT)
+            .to_rgba8(),
+        png,
+    })
+}
+
 fn remove_if_exists(path: &Path) -> Result<(), HistoryError> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -1722,6 +1769,54 @@ mod tests {
         let thumb = image::open(&thumb_path).unwrap();
         assert!(thumb.width() <= 320);
         assert!(thumb.height() <= 200);
+    }
+
+    #[test]
+    fn a_thumbnail_decoded_before_a_scrub_never_lands() {
+        // `list()` (the History window, or the MCP process) decodes the
+        // unredacted PNG of a record without a thumbnail while the editor
+        // scrubs it; its write must not put pre-redaction pixels back.
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(8, 8)).unwrap();
+        let png_path = s.root().join(FsHistoryStore::png_path(&r));
+        let thumb_path = s.root().join(FsHistoryStore::thumbnail_path(&r));
+        fs::remove_file(&thumb_path).unwrap();
+        let unredacted = read_for_backfill(&png_path).expect("decoded");
+        let unredacted_thumb = unredacted.thumb.clone();
+        // The scrub lands (its own thumbnail failed to encode).
+        let (_, black) = black_png(8, 8);
+        s.begin_scrub(&scrubbed_of(&r)).unwrap();
+        let mid = read_for_backfill(&png_path);
+        assert!(mid.is_none(), "no image on disk mid-scrub");
+        s.rewrite(&scrubbed_of(&r), &black).unwrap();
+        let _ = fs::remove_file(&thumb_path);
+        s.place_backfill(&r, &png_path, unredacted);
+        if thumb_path.exists() {
+            let landed = decode(&fs::read(&thumb_path).unwrap());
+            assert!(
+                landed != unredacted_thumb,
+                "a pre-redaction thumbnail landed"
+            );
+        }
+        // The next backfill uses the redacted pixels.
+        s.list().unwrap();
+        let landed = decode(&fs::read(&thumb_path).unwrap());
+        assert!(landed.pixels().all(|p| p.0 == [0, 0, 0, 255]));
+    }
+
+    #[test]
+    fn a_backfill_never_lands_on_a_pending_scrub() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(8, 8)).unwrap();
+        let png_path = s.root().join(FsHistoryStore::png_path(&r));
+        let thumb_path = s.root().join(FsHistoryStore::thumbnail_path(&r));
+        fs::remove_file(&thumb_path).unwrap();
+        let unredacted = read_for_backfill(&png_path).expect("decoded");
+        s.begin_scrub(&scrubbed_of(&r)).unwrap();
+        s.place_backfill(&r, &png_path, unredacted);
+        assert!(!thumb_path.exists());
     }
 
     #[test]
