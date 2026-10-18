@@ -45,7 +45,9 @@ fn drag_padding(app: &mut App, values: &[u32]) {
     for (i, v) in values.iter().enumerate() {
         let _ = update(
             app,
-            Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(*v))),
+            Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+                BeautifyEdit::Padding(*v),
+            ))),
         );
         if i == 0 {
             assert_eq!(

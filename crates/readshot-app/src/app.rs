@@ -268,6 +268,8 @@ pub enum Message {
 /// `runtime::editor_ops::handle_editor_message`.
 #[derive(Clone, Debug)]
 pub enum EditorMsg {
+    /// Beautify tab messages (`runtime::beautify_panel`).
+    Beautify(BeautifyMsg),
     /// Side panel and Text tab messages (`runtime::text_panel`).
     TextPanel(TextPanelMsg),
     Canvas(CanvasMessage),
@@ -299,27 +301,9 @@ pub enum EditorMsg {
     /// User selected a presentation frame for image outputs.
     /// A built-in Beautify preset was chosen (Frame popover; Beautify tab).
     BeautifyPreset(readshot_core::beautify::BuiltinPreset),
-    /// A saved Beautify preset (by list index) was chosen.
-    BeautifySavedPresetApplied(usize),
-    /// A discrete Beautify control changed (swatch, canvas size, toggle).
-    BeautifyEdit(readshot_core::beautify::BeautifyEdit),
-    /// A Beautify slider moved: live preview, no undo step yet.
-    BeautifySliderPreview(readshot_core::beautify::BeautifyEdit),
     /// A snapshot slider (Beautify, combine gap) was released: commit
     /// the preview as one undo step.
     SnapshotSliderCommit,
-    /// Save the current Beautify settings as a named preset.
-    BeautifySavePreset,
-    /// Remove a saved Beautify preset (by list index).
-    BeautifyDeletePreset(usize),
-    /// Undo in the "Removed …" toast: put the removed preset back.
-    BeautifyRestorePreset,
-    /// The Beautify background hex field was edited.
-    BeautifyHexChanged(String),
-    /// The Beautify background hex field was submitted.
-    BeautifyHexSubmitted,
-    /// Start the eyedropper to pick Beautify's background color.
-    BeautifyPickBackground,
     /// User clicked Copy Text (run OCR + clipboard).
     CopyTextRequested,
     /// OCR + clipboard write completed for the editor `session`.
@@ -511,6 +495,31 @@ pub enum EditorMsg {
     /// Turn the eyedropper on or off (I, or the button in the color
     /// popover). While on, a click on the image picks its color.
     EyedropperToggled,
+}
+
+/// Beautify tab messages: saved presets, controls, sliders and the
+/// background color. Handled by
+/// `runtime::beautify_panel::handle_beautify_message`.
+#[derive(Clone, Debug)]
+pub enum BeautifyMsg {
+    /// A saved Beautify preset (by list index) was chosen.
+    SavedPresetApplied(usize),
+    /// A discrete Beautify control changed (swatch, canvas size, toggle).
+    Edit(readshot_core::beautify::BeautifyEdit),
+    /// A Beautify slider moved: live preview, no undo step yet.
+    SliderPreview(readshot_core::beautify::BeautifyEdit),
+    /// Save the current Beautify settings as a named preset.
+    SavePreset,
+    /// Remove a saved Beautify preset (by list index).
+    DeletePreset(usize),
+    /// Undo in the "Removed …" toast: put the removed preset back.
+    RestorePreset,
+    /// The Beautify background hex field was edited.
+    HexChanged(String),
+    /// The Beautify background hex field was submitted.
+    HexSubmitted,
+    /// Start the eyedropper to pick Beautify's background color.
+    PickBackground,
 }
 
 /// Editor side panel and Text tab messages: recognition, line selection

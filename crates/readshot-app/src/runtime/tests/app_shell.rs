@@ -497,7 +497,9 @@ fn the_beautify_hex_field_follows_the_solid_background_unless_mid_edit() {
     let solid_bg = |rgba| BeautifyEdit::Background(Background::Solid { rgba });
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifyEdit(solid_bg([0x4f, 0x46, 0xe5, 255]))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::Edit(solid_bg([
+            0x4f, 0x46, 0xe5, 255,
+        ])))),
     );
     assert_eq!(hex(&app), "#4F46E5");
     let _ = update(
@@ -508,7 +510,7 @@ fn the_beautify_hex_field_follows_the_solid_background_unless_mid_edit() {
     // Mid-edit: a background change doesn't clobber what is typed.
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifyHexChanged("#12".into())),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::HexChanged("#12".into()))),
     );
     let _ = update(
         &mut app,
@@ -518,9 +520,14 @@ fn the_beautify_hex_field_follows_the_solid_background_unless_mid_edit() {
     // Applied: follows the background again.
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifyHexChanged("#123456".into())),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::HexChanged(
+            "#123456".into(),
+        ))),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifyHexSubmitted));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::HexSubmitted)),
+    );
     assert_eq!(hex(&app), "#123456");
     let _ = update(
         &mut app,
@@ -530,7 +537,7 @@ fn the_beautify_hex_field_follows_the_solid_background_unless_mid_edit() {
     // Reopening the tab drops an abandoned draft.
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifyHexChanged("#9".into())),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::HexChanged("#9".into()))),
     );
     let _ = update(
         &mut app,
@@ -554,7 +561,9 @@ fn beautify_slider_drag_is_one_undo_step_and_esc_cancels_it() {
     for p in [30, 60, 90] {
         let _ = update(
             &mut app,
-            Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(p))),
+            Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+                BeautifyEdit::Padding(p),
+            ))),
         );
     }
     let _ = update(&mut app, Message::Editor(EditorMsg::SnapshotSliderCommit));
@@ -564,7 +573,9 @@ fn beautify_slider_drag_is_one_undo_step_and_esc_cancels_it() {
 
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(150))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(150),
+        ))),
     );
     let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     let ed = app.editor.as_ref().unwrap();
@@ -587,7 +598,9 @@ fn a_preset_click_mid_drag_keeps_the_pre_drag_state_in_undo() {
     );
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(150))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(150),
+        ))),
     );
     let _ = update(
         &mut app,
@@ -615,7 +628,9 @@ fn undo_ends_a_slider_drag() {
     );
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(150))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(150),
+        ))),
     );
     let _ = update(
         &mut app,
@@ -638,7 +653,9 @@ fn undo_during_a_held_drag_cancels_only_the_drag_and_loses_nothing() {
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(150))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(150),
+        ))),
     );
     // The mouse is down: this is a held slider drag.
     let _ = update(
@@ -652,7 +669,9 @@ fn undo_during_a_held_drag_cancels_only_the_drag_and_loses_nothing() {
     // The slider is still held: more ticks arrive, then release.
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(160))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(160),
+        ))),
     );
     let _ = update(&mut app, Message::Editor(EditorMsg::SnapshotSliderCommit));
     let ed = app.editor.as_ref().unwrap();
@@ -662,7 +681,9 @@ fn undo_during_a_held_drag_cancels_only_the_drag_and_loses_nothing() {
     // The next drag works again.
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(30))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(30),
+        ))),
     );
     let _ = update(&mut app, Message::Editor(EditorMsg::SnapshotSliderCommit));
     assert_eq!(app.editor.as_ref().unwrap().model.beautify().padding, 30);
@@ -680,7 +701,9 @@ fn esc_during_a_held_drag_ignores_the_remaining_ticks() {
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(150))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(150),
+        ))),
     );
     // The mouse is down: this is a held slider drag.
     let _ = update(
@@ -690,7 +713,9 @@ fn esc_during_a_held_drag_ignores_the_remaining_ticks() {
     let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(151))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(151),
+        ))),
     );
     let _ = update(&mut app, Message::Editor(EditorMsg::SnapshotSliderCommit));
     let ed = app.editor.as_ref().unwrap();
@@ -711,7 +736,9 @@ fn output_commits_a_key_driven_slider_preview() {
     // Arrow keys preview but never send a release.
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(25))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(25),
+        ))),
     );
     let _ = update(&mut app, Message::Editor(EditorMsg::CopyImageRequested));
     let ed = app.editor.as_ref().unwrap();
@@ -758,7 +785,9 @@ fn a_cancelled_key_or_wheel_slider_preview_never_swallows_the_next_drag() {
         for v in [20, 21, 22] {
             let _ = update(
                 &mut app,
-                Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(v))),
+                Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+                    BeautifyEdit::Padding(v),
+                ))),
             );
         }
         cancel(&mut app);
@@ -878,7 +907,10 @@ fn picking_a_background_closes_the_narrow_panel_overlay() {
     ed.window_width = 800.0;
     ed.panel_overlay_open = true;
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifyPickBackground));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::PickBackground)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert!(!ed.panel_overlay_open);
     assert!(ed.eyedropper.is_some());
@@ -893,7 +925,10 @@ fn saved_presets_persist_apply_and_cap_at_twelve() {
         &mut app,
         Message::Editor(EditorMsg::BeautifyPreset(BuiltinPreset::Dark)),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifySavePreset));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SavePreset)),
+    );
     assert_eq!(app.preferences.editor_beautify_presets.len(), 1);
     assert_eq!(app.preferences.editor_beautify_presets[0].name, "Preset 1");
     assert_eq!(
@@ -906,14 +941,17 @@ fn saved_presets_persist_apply_and_cap_at_twelve() {
     );
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySavedPresetApplied(0)),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SavedPresetApplied(0))),
     );
     assert_eq!(
         app.editor.as_ref().unwrap().model.beautify(),
         BuiltinPreset::Dark.settings()
     );
     for _ in 0..20 {
-        let _ = update(&mut app, Message::Editor(EditorMsg::BeautifySavePreset));
+        let _ = update(
+            &mut app,
+            Message::Editor(EditorMsg::Beautify(BeautifyMsg::SavePreset)),
+        );
     }
     assert_eq!(
         app.preferences.editor_beautify_presets.len(),
@@ -922,7 +960,7 @@ fn saved_presets_persist_apply_and_cap_at_twelve() {
     let first = app.preferences.editor_beautify_presets[0].clone();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifyDeletePreset(0)),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::DeletePreset(0))),
     );
     assert_eq!(
         app.preferences.editor_beautify_presets.len(),
@@ -938,7 +976,10 @@ fn saved_presets_persist_apply_and_cap_at_twelve() {
         ed.status_text(),
         Some(format!("Removed {}.", first.name).as_str())
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifyRestorePreset));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::RestorePreset)),
+    );
     assert_eq!(
         app.preferences.editor_beautify_presets.len(),
         MAX_SAVED_PRESETS
@@ -946,7 +987,10 @@ fn saved_presets_persist_apply_and_cap_at_twelve() {
     assert_eq!(app.preferences.editor_beautify_presets[0], first);
     assert_eq!(app.editor.as_ref().unwrap().visible_toast_action(), None);
     // A second Undo does nothing.
-    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifyRestorePreset));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::RestorePreset)),
+    );
     assert_eq!(
         app.preferences.editor_beautify_presets.len(),
         MAX_SAVED_PRESETS
@@ -957,17 +1001,23 @@ fn saved_presets_persist_apply_and_cap_at_twelve() {
 fn undo_for_a_removed_preset_expires_with_its_toast() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifySavePreset));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifyDeletePreset(0)),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SavePreset)),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::DeletePreset(0))),
     );
     // Any later status replaces the toast and its Undo.
     app.editor
         .as_mut()
         .unwrap()
         .set_status(Tone::Success, "Saved.");
-    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifyRestorePreset));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::RestorePreset)),
+    );
     assert!(app.preferences.editor_beautify_presets.is_empty());
 }
 
@@ -981,7 +1031,7 @@ fn an_out_of_range_saved_preset_applies_clamped_and_never_panics() {
     app.preferences.editor_beautify_presets.push(bad);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySavedPresetApplied(0)),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SavedPresetApplied(0))),
     );
     assert_eq!(
         app.editor.as_ref().unwrap().model.beautify().padding,
@@ -989,11 +1039,11 @@ fn an_out_of_range_saved_preset_applies_clamped_and_never_panics() {
     );
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySavedPresetApplied(99)),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SavedPresetApplied(99))),
     );
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifyDeletePreset(99)),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::DeletePreset(99))),
     );
 }
 
@@ -1004,16 +1054,24 @@ fn background_hex_and_eyedropper_set_a_solid_background() {
     app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifyHexChanged("#102030".into())),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::HexChanged(
+            "#102030".into(),
+        ))),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifyHexSubmitted));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::HexSubmitted)),
+    );
     assert_eq!(
         app.editor.as_ref().unwrap().model.beautify().background,
         Background::Solid {
             rgba: [0x10, 0x20, 0x30, 255]
         }
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifyPickBackground));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::PickBackground)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
         ed.eyedropper.as_ref().unwrap().target,

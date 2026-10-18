@@ -624,11 +624,19 @@ fn activate(state: &mut App, focus: KeyFocus, pos: usize) -> Task<Message> {
             )))
         }
         F::BeautifyPreset(p) => Some(Message::Editor(EditorMsg::BeautifyPreset(p))),
-        F::BeautifySaved(i) => Some(Message::Editor(EditorMsg::BeautifySavedPresetApplied(i))),
-        F::BeautifyRemoveSaved(i) => Some(Message::Editor(EditorMsg::BeautifyDeletePreset(i))),
+        F::BeautifySaved(i) => Some(Message::Editor(EditorMsg::Beautify(
+            BeautifyMsg::SavedPresetApplied(i),
+        ))),
+        F::BeautifyRemoveSaved(i) => Some(Message::Editor(EditorMsg::Beautify(
+            BeautifyMsg::DeletePreset(i),
+        ))),
         F::BeautifyHex => return focus_field(BEAUTIFY_HEX_ID),
-        F::BeautifyPick => Some(Message::Editor(EditorMsg::BeautifyPickBackground)),
-        F::BeautifySave => Some(Message::Editor(EditorMsg::BeautifySavePreset)),
+        F::BeautifyPick => Some(Message::Editor(EditorMsg::Beautify(
+            BeautifyMsg::PickBackground,
+        ))),
+        F::BeautifySave => Some(Message::Editor(EditorMsg::Beautify(
+            BeautifyMsg::SavePreset,
+        ))),
         F::TextRetry => Some(Message::Editor(EditorMsg::TextPanel(
             TextPanelMsg::Recognize,
         ))),
@@ -740,7 +748,11 @@ fn adjust_message(state: &App, item: FocusItem, step: i32) -> Option<Vec<Message
     let dir = step.signum();
     let style = ed.model.effective_style();
     let s = |m: StyleMessage| Some(vec![Message::Editor(EditorMsg::Style(m))]);
-    let b = |e: BeautifyEdit| Some(vec![Message::Editor(EditorMsg::BeautifyEdit(e))]);
+    let b = |e: BeautifyEdit| {
+        Some(vec![Message::Editor(EditorMsg::Beautify(
+            BeautifyMsg::Edit(e),
+        ))])
+    };
     match item {
         F::MenuGap => Some(gap_messages(state, step)),
         F::MenuAlign => align_message(state, dir).map(|m| vec![m]),

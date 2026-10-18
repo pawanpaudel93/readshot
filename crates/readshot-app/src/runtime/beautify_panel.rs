@@ -60,8 +60,10 @@ fn set(ed: &mut EditorSession, s: readshot_core::beautify::BeautifySettings, wha
     }
 }
 
-pub(crate) fn handle_beautify_message(state: &mut App, message: EditorMsg) -> Task<Message> {
-    if let EditorMsg::BeautifySavePreset = message {
+/// Every [`BeautifyMsg`]: `handle_editor_message` hands each
+/// `EditorMsg::Beautify` here.
+pub(crate) fn handle_beautify_message(state: &mut App, message: BeautifyMsg) -> Task<Message> {
+    if let BeautifyMsg::SavePreset = message {
         let Some(s) = state.editor.as_ref().map(|ed| ed.model.beautify()) else {
             return Task::none();
         };
@@ -79,7 +81,7 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: EditorMsg) -> Ta
         }
         return Task::none();
     }
-    if let EditorMsg::BeautifyDeletePreset(i) = message {
+    if let BeautifyMsg::DeletePreset(i) = message {
         // Removing is immediate and persisted, so the toast offers Undo.
         if let Some(removed) = state.delete_beautify_preset(i) {
             if let Some(ed) = state.editor.as_mut() {
@@ -96,7 +98,7 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: EditorMsg) -> Ta
         }
         return Task::none();
     }
-    if let EditorMsg::BeautifyRestorePreset = message {
+    if let BeautifyMsg::RestorePreset = message {
         let pending = state.editor.as_mut().and_then(|ed| {
             (ed.visible_toast_action() == Some(crate::editor::EditorToastAction::RestorePreset))
                 .then(|| ed.status.as_mut().and_then(|s| s.removed_preset.take()))
@@ -128,21 +130,24 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: EditorMsg) -> Ta
         return Task::none();
     }
     match message {
-        EditorMsg::BeautifySavedPresetApplied(i) => {
+        // The preset list's own messages returned above: they need no
+        // idle editor.
+        BeautifyMsg::SavePreset | BeautifyMsg::DeletePreset(_) | BeautifyMsg::RestorePreset => {}
+        BeautifyMsg::SavedPresetApplied(i) => {
             if let Some(p) = saved.get(i) {
                 cancel_editor_previews(ed);
                 ed.snapshot_drag_cancelled = false;
                 set(ed, p.settings.clamped(), &format!("Applied {}", p.name));
             }
         }
-        EditorMsg::BeautifyEdit(edit) => {
+        BeautifyMsg::Edit(edit) => {
             cancel_editor_previews(ed);
             ed.snapshot_drag_cancelled = false;
             let mut s = ed.model.beautify();
             s.apply(edit);
             set(ed, s, "Beautify updated");
         }
-        EditorMsg::BeautifySliderPreview(edit) => {
+        BeautifyMsg::SliderPreview(edit) => {
             // The slider is still held after Esc / undo cancelled its drag:
             // ticks until release must not start a new preview.
             if ed.snapshot_drag_cancelled {
@@ -163,8 +168,8 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: EditorMsg) -> Ta
             // A refused preview (invalid geometry) changes nothing.
             let _ = ed.model.preview_snapshot(next);
         }
-        EditorMsg::BeautifyHexChanged(raw) => ed.beautify_hex_draft = Some(raw),
-        EditorMsg::BeautifyHexSubmitted => {
+        BeautifyMsg::HexChanged(raw) => ed.beautify_hex_draft = Some(raw),
+        BeautifyMsg::HexSubmitted => {
             match readshot_core::Rgba::from_hex(&ed.beautify_hex_shown()) {
                 Some(c) => {
                     // Applied: the field follows the background again.
@@ -183,7 +188,7 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: EditorMsg) -> Ta
                 ),
             }
         }
-        EditorMsg::BeautifyPickBackground => {
+        BeautifyMsg::PickBackground => {
             if ed.canvas_drag_active || ed.move_drag.is_some() {
                 return Task::none();
             }
@@ -196,7 +201,6 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: EditorMsg) -> Ta
                 target: EyedropperTarget::BeautifyBackground,
             });
         }
-        other => unreachable!("non-beautify message routed to the beautify handler: {other:?}"),
     }
     Task::none()
 }
@@ -230,9 +234,9 @@ fn swatch<'a>(
     let b = segment_button(
         fill.into(),
         selected,
-        (!busy).then_some(Message::Editor(EditorMsg::BeautifyEdit(
+        (!busy).then_some(Message::Editor(EditorMsg::Beautify(BeautifyMsg::Edit(
             BeautifyEdit::Background(bg),
-        ))),
+        )))),
     );
     tooltip_with_key(b, tip, None, Position::Bottom)
 }
@@ -271,7 +275,9 @@ fn slider_row<'a>(
     if !busy {
         r = r.push(
             iced::widget::slider(0.0..=max as f32, value as f32, move |v| {
-                Message::Editor(EditorMsg::BeautifySliderPreview(make(v.round() as u32)))
+                Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(make(
+                    v.round() as u32,
+                ))))
             })
             .step(1.0_f32)
             .on_release(Message::Editor(EditorMsg::SnapshotSliderCommit))
@@ -322,8 +328,9 @@ pub(crate) fn beautify_tab<'a>(
                             .size(ButtonSize::Xs.text_size())
                             .into(),
                         current.is_none() && saved.settings.clamped() == s,
-                        (!busy)
-                            .then_some(Message::Editor(EditorMsg::BeautifySavedPresetApplied(i))),
+                        (!busy).then_some(Message::Editor(EditorMsg::Beautify(
+                            BeautifyMsg::SavedPresetApplied(i)
+                        ))),
                     ),
                     lit(F::BeautifySaved(i)),
                 ),
@@ -333,7 +340,9 @@ pub(crate) fn beautify_tab<'a>(
                         p.t3,
                         "Remove Preset",
                         None,
-                        (!busy).then_some(Message::Editor(EditorMsg::BeautifyDeletePreset(i))),
+                        (!busy).then_some(Message::Editor(EditorMsg::Beautify(
+                            BeautifyMsg::DeletePreset(i)
+                        ))),
                         false,
                         ICON_BTN_XS,
                         Position::Bottom,
@@ -364,8 +373,10 @@ pub(crate) fn beautify_tab<'a>(
         focus_ring(
             text_input("#RRGGBB", &ed.beautify_hex_shown())
                 .id(iced::widget::Id::new(super::key_focus::BEAUTIFY_HEX_ID))
-                .on_input(|a| Message::Editor(EditorMsg::BeautifyHexChanged(a)))
-                .on_submit(Message::Editor(EditorMsg::BeautifyHexSubmitted))
+                .on_input(|a| Message::Editor(EditorMsg::Beautify(BeautifyMsg::HexChanged(a))))
+                .on_submit(Message::Editor(EditorMsg::Beautify(
+                    BeautifyMsg::HexSubmitted
+                )))
                 .style(text_input_style)
                 .size(TYPE_CAPTION)
                 .width(Length::Fixed(96.0)),
@@ -377,7 +388,9 @@ pub(crate) fn beautify_tab<'a>(
                 p.t2,
                 "Pick from Image",
                 None,
-                (!busy).then_some(Message::Editor(EditorMsg::BeautifyPickBackground)),
+                (!busy).then_some(Message::Editor(EditorMsg::Beautify(
+                    BeautifyMsg::PickBackground
+                ))),
                 false,
                 ICON_BTN_SM,
                 Position::Bottom,
@@ -389,29 +402,32 @@ pub(crate) fn beautify_tab<'a>(
     .align_y(Alignment::Center);
     let canvas = focus_ring(
         text_segment(&CanvasSize::ALL.map(|c| (c.label(), c)), s.canvas, |c| {
-            (!busy).then_some(Message::Editor(EditorMsg::BeautifyEdit(
+            (!busy).then_some(Message::Editor(EditorMsg::Beautify(BeautifyMsg::Edit(
                 BeautifyEdit::Canvas(c),
-            )))
+            ))))
         }),
         lit(F::BeautifyCanvas),
     );
-    let balance =
-        focus_ring(
-            toggler(s.balance)
-                .label("Center automatically")
-                .text_size(TYPE_CAPTION)
-                .on_toggle_maybe((!busy).then_some(|v| {
-                    Message::Editor(EditorMsg::BeautifyEdit(BeautifyEdit::Balance(v)))
-                })),
-            lit(F::BeautifyBalance),
-        );
+    let balance = focus_ring(
+        toggler(s.balance)
+            .label("Center automatically")
+            .text_size(TYPE_CAPTION)
+            .on_toggle_maybe((!busy).then_some(|v| {
+                Message::Editor(EditorMsg::Beautify(BeautifyMsg::Edit(
+                    BeautifyEdit::Balance(v),
+                )))
+            })),
+        lit(F::BeautifyBalance),
+    );
     let save = focus_ring(
         bar_button(
             text("Save Preset").size(ButtonSize::Sm.text_size()).into(),
             ButtonKind::Secondary,
             ButtonSize::Sm,
             (!busy && state.preferences.editor_beautify_presets.len() < MAX_SAVED_PRESETS)
-                .then_some(Message::Editor(EditorMsg::BeautifySavePreset)),
+                .then_some(Message::Editor(EditorMsg::Beautify(
+                    BeautifyMsg::SavePreset,
+                ))),
         ),
         lit(F::BeautifySave),
     );

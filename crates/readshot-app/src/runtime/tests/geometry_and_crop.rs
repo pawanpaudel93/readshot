@@ -419,7 +419,9 @@ fn rotate_drops_an_open_slider_preview_even_with_a_text_draft() {
     let start = app.editor.as_ref().unwrap().model.beautify().padding;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(150))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(150),
+        ))),
     );
     let _ = update(
         &mut app,
@@ -449,7 +451,9 @@ fn copy_commits_an_open_slider_preview_and_the_text_draft() {
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(25))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(25),
+        ))),
     );
     let _ = update(&mut app, Message::Editor(EditorMsg::CopyImageRequested));
     let ed = app.editor.as_ref().unwrap();

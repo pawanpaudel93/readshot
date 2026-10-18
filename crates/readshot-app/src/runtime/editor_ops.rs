@@ -1084,17 +1084,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: EditorMsg) -> Task
             modifiers,
         } => pins::on_pin_key_pressed(state, window, key, modifiers),
         EditorMsg::TextPanel(msg) => super::text_panel::handle_text_panel_message(state, msg),
-        msg @ (EditorMsg::BeautifySavedPresetApplied(..)
-        | EditorMsg::BeautifyEdit(..)
-        | EditorMsg::BeautifySliderPreview(..)
-        | EditorMsg::BeautifySavePreset
-        | EditorMsg::BeautifyDeletePreset(..)
-        | EditorMsg::BeautifyRestorePreset
-        | EditorMsg::BeautifyHexChanged(..)
-        | EditorMsg::BeautifyHexSubmitted
-        | EditorMsg::BeautifyPickBackground) => {
-            super::beautify_panel::handle_beautify_message(state, msg)
-        }
+        EditorMsg::Beautify(msg) => super::beautify_panel::handle_beautify_message(state, msg),
         msg @ (EditorMsg::Rotate { .. }
         | EditorMsg::Flip(..)
         | EditorMsg::ResizeOpen

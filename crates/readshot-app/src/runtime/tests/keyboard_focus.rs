@@ -1053,7 +1053,7 @@ fn undo_and_up_down_in_a_hex_field_leave_the_document_alone() {
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifyHexChanged("#12".into())),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::HexChanged("#12".into()))),
     );
     let _ = update(&mut app, key_press(id, z.clone(), true));
     let _ = update(&mut app, key_press(id, down.clone(), false));

@@ -356,8 +356,9 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 }
 
 use crate::app::{
-    App, AppMsg, CaptureMsg, EditorMsg, GlobalHotkeyAction, HistoryKeyboardAction, HistoryMsg,
-    Message, ScrollMsg, SettingsMsg, TextPanelMsg, TickMsg, WelcomeMsg, WindowKind, WindowMsg,
+    App, AppMsg, BeautifyMsg, CaptureMsg, EditorMsg, GlobalHotkeyAction, HistoryKeyboardAction,
+    HistoryMsg, Message, ScrollMsg, SettingsMsg, TextPanelMsg, TickMsg, WelcomeMsg, WindowKind,
+    WindowMsg,
 };
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;

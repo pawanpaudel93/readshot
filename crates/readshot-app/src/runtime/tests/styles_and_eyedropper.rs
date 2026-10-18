@@ -199,12 +199,20 @@ fn a_hex_background_clears_a_stale_cancelled_drag_flag() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifyHexChanged("#102030".into())),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::HexChanged(
+            "#102030".into(),
+        ))),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifyHexSubmitted));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::HexSubmitted)),
+    );
     assert!(!app.editor.as_ref().unwrap().snapshot_drag_cancelled);
     app.editor.as_mut().unwrap().snapshot_drag_cancelled = true;
-    let _ = update(&mut app, Message::Editor(EditorMsg::BeautifyPickBackground));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::PickBackground)),
+    );
     let _ = update(
         &mut app,
         Message::Editor(EditorMsg::Canvas(
@@ -412,7 +420,9 @@ fn one_real_escape_during_a_slider_preview_is_one_step() {
     use readshot_ui::editor::StyleMessage;
     let previews = [
         Message::Editor(EditorMsg::StylePreview(StyleMessage::CornerRadius(20.0))),
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(40))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(40),
+        ))),
     ];
     for preview in previews {
         let label = format!("{preview:?}");
@@ -466,7 +476,9 @@ fn one_real_escape_during_a_slider_preview_is_one_step() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::BeautifySliderPreview(BeautifyEdit::Padding(40))),
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SliderPreview(
+            BeautifyEdit::Padding(40),
+        ))),
     );
     press_escape(&mut app, id);
     let ed = app.editor.as_ref().unwrap();
