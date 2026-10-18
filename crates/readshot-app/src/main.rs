@@ -23,13 +23,13 @@ use readshot_app::runtime;
 use readshot_app::url_scheme;
 
 fn main() -> iced::Result {
-    // Emoji stamps rasterize through CoreText on macOS (spec §3.4) and
-    // from an emoji font file (NotoColorEmoji / Segoe UI Emoji, 10-25 MB)
-    // elsewhere. Build the five-emoji cache once, off the UI thread, so
-    // the first emoji stamp doesn't load or rasterize mid-frame.
+    // Emoji stamps rasterize through CoreText on macOS (spec §3.4); every
+    // path that may render a stamp gets the rasterizer. Elsewhere they
+    // come from an emoji font file, found on first use.
     #[cfg(target_os = "macos")]
-    readshot_core::stamp::set_emoji_rasterizer(readshot_app::emoji_macos::rasterize_emoji);
-    std::thread::spawn(readshot_core::stamp::prewarm_emoji);
+    {
+        readshot_core::stamp::set_emoji_rasterizer(readshot_app::emoji_macos::rasterize_emoji);
+    }
 
     // Phase D (argv path): if the binary is invoked with a
     // `readshot://...` URL as the first argument (e.g. `open
@@ -108,6 +108,12 @@ fn main() -> iced::Result {
             Err(e) => eprintln!("readshot: ignoring URL `{arg}`: {e}"),
         }
     }
+
+    // The GUI only (headless commands and --help never draw a stamp):
+    // build the five-emoji cache once, off the UI thread, so the first
+    // emoji stamp in the editor doesn't load a 10-25 MB emoji font
+    // (NotoColorEmoji / Segoe UI Emoji) or rasterize mid-frame.
+    std::thread::spawn(readshot_core::stamp::prewarm_emoji);
 
     tracing::info!(
         target: readshot_core::log::LOG_TARGET,
