@@ -558,6 +558,40 @@ fn stitch_result_closes_both_scroll_windows() {
 }
 
 #[test]
+fn a_stitched_scroll_capture_is_kept_in_history_like_any_capture() {
+    let (mut app, _, _) = app_with_scroll_windows(true);
+    app.preferences.history_retention = readshot_core::HistoryRetention::Last50;
+    let _ = update(
+        &mut app,
+        Message::Scroll(ScrollMsg::Stitched(Ok(solid(20, 40)))),
+    );
+    let ed = app.editor.as_ref().expect("the stitch opens the editor");
+    let record = ed
+        .source_record
+        .as_ref()
+        .expect("the editor is backed by a new History record");
+    assert_eq!((record.width_px, record.height_px), (20, 40));
+    assert_eq!(record.display_id, "display-a");
+    // One OCR serves the History record and the editor's Text tab.
+    assert!(matches!(
+        ed.text_panel.recognition,
+        crate::editor::TextRecognition::Recognizing { .. }
+    ));
+}
+
+#[test]
+fn a_stitched_scroll_capture_with_history_off_is_kept_nowhere() {
+    let (mut app, _, _) = app_with_scroll_windows(true);
+    app.preferences.history_retention = readshot_core::HistoryRetention::Off;
+    let _ = update(
+        &mut app,
+        Message::Scroll(ScrollMsg::Stitched(Ok(solid(20, 40)))),
+    );
+    let ed = app.editor.as_ref().expect("the stitch opens the editor");
+    assert!(ed.source_record.is_none());
+}
+
+#[test]
 fn stop_with_no_frames_cancels_instead_of_failing() {
     let (mut app, hud, region) = app_with_scroll_windows(false);
     let _ = update(&mut app, Message::Scroll(ScrollMsg::StopRequested));

@@ -579,13 +579,39 @@ fn on_scroll_stitched(state: &mut App, result: Result<image::RgbaImage, String>)
     match result {
         Ok(image) => {
             let (w, h) = (image.width(), image.height());
-            let mut ed = crate::editor::EditorSession::new_with_display_scale(image, display_scale);
+            // Kept in History like any other capture (when History is
+            // on), through the same save and the same one OCR.
+            let record = history_record_for_capture(
+                &image,
+                &session.display_id,
+                state.preferences.history_retention,
+            );
+            let shared_session = record.as_ref().map(|_| crate::editor::next_session_id());
+            let history_task = if record.is_some() {
+                persist_history_task(
+                    state.coordinator.clone(),
+                    image.clone(),
+                    record.clone(),
+                    state.preferences.history_retention,
+                    state.preferences.clone(),
+                    shared_session,
+                )
+            } else {
+                Task::none()
+            };
+            let mut ed = super::capture_ops::new_capture_editor(
+                image,
+                record,
+                shared_session,
+                display_scale,
+            );
             ed.set_status(
                 StatusTone::Success,
                 format!("Scrolling capture stitched into {w}\u{a0}×\u{a0}{h}\u{a0}px."),
             );
             Task::batch([
                 close_hud,
+                history_task,
                 open_editor_window_replacing(state, ed, display_bounds),
             ])
         }

@@ -493,31 +493,8 @@ pub(super) fn on_region_captured(
             };
             let intent_task = match intent {
                 crate::app::CaptureIntent::Editor => {
-                    let mut editor = match history_record {
-                        Some(record) => {
-                            crate::editor::EditorSession::from_history_with_display_scale(
-                                image,
-                                record,
-                                display_scale,
-                            )
-                        }
-                        None => crate::editor::EditorSession::new_with_display_scale(
-                            image,
-                            display_scale,
-                        ),
-                    };
-                    // Mark the panel Recognizing so
-                    // `request_text_recognition` doesn't start a
-                    // second OCR.
-                    if let Some(session) = shared_session {
-                        editor.session_id = session;
-                        editor.text_panel.recognition =
-                            crate::editor::TextRecognition::Recognizing {
-                                since: std::time::Instant::now(),
-                            };
-                        editor.text_panel.recognizing_part =
-                            Some(readshot_core::document::ORIGINAL_PART);
-                    }
+                    let editor =
+                        new_capture_editor(image, history_record, shared_session, display_scale);
                     open_editor_window_replacing(state, editor, display_bounds)
                 }
                 crate::app::CaptureIntent::CopyToClipboard => {
@@ -635,6 +612,35 @@ pub(super) fn on_region_captured(
             }
         }
     }
+}
+
+/// The editor for a new capture: backed by its History record when
+/// History keeps one, and sharing that record's OCR (`shared_session`)
+/// so the Text tab doesn't start a second one.
+pub(super) fn new_capture_editor(
+    image: image::RgbaImage,
+    history_record: Option<readshot_core::CaptureRecord>,
+    shared_session: Option<u64>,
+    display_scale: f32,
+) -> crate::editor::EditorSession {
+    let mut editor = match history_record {
+        Some(record) => crate::editor::EditorSession::from_history_with_display_scale(
+            image,
+            record,
+            display_scale,
+        ),
+        None => crate::editor::EditorSession::new_with_display_scale(image, display_scale),
+    };
+    // Mark the panel Recognizing so `request_text_recognition` doesn't
+    // start a second OCR.
+    if let Some(session) = shared_session {
+        editor.session_id = session;
+        editor.text_panel.recognition = crate::editor::TextRecognition::Recognizing {
+            since: std::time::Instant::now(),
+        };
+        editor.text_panel.recognizing_part = Some(readshot_core::document::ORIGINAL_PART);
+    }
+    editor
 }
 
 /// `CaptureMsg::OverlayCopyDone`.
