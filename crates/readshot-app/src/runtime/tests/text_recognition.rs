@@ -434,13 +434,19 @@ fn editor_window_resize_updates_only_the_editor_width() {
     );
     let _ = update(
         &mut app,
-        Message::EditorWindowResized(iced::window::Id::unique(), 800.0),
+        Message::Window(WindowMsg::EditorWindowResized(
+            iced::window::Id::unique(),
+            800.0,
+        )),
     );
     assert_eq!(
         app.editor.as_ref().unwrap().window_width,
         crate::editor::DEFAULT_WINDOW_WIDTH
     );
-    let _ = update(&mut app, Message::EditorWindowResized(id, 800.0));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorWindowResized(id, 800.0)),
+    );
     assert_eq!(app.editor.as_ref().unwrap().window_width, 800.0);
 }
 
@@ -526,13 +532,19 @@ fn widening_the_window_folds_an_open_overlay_into_the_docked_preference() {
     app.editor = Some(ed);
     let _ = update(&mut app, Message::EditorPanelToggled);
     assert!(app.editor.as_ref().unwrap().panel_overlay_open);
-    let _ = update(&mut app, Message::EditorWindowResized(id, 1200.0));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorWindowResized(id, 1200.0)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert!(!ed.panel_overlay_open, "no stale overlay flag");
     assert!(app.preferences.editor_panel_open, "what is shown is kept");
     assert_eq!(editor_panel_mode(&app, ed), PanelMode::Docked);
     // Narrowing again collapses; nothing reopens as an overlay.
-    let _ = update(&mut app, Message::EditorWindowResized(id, 800.0));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorWindowResized(id, 800.0)),
+    );
     assert_eq!(
         editor_panel_mode(&app, app.editor.as_ref().unwrap()),
         PanelMode::Collapsed
@@ -592,7 +604,10 @@ fn opening_the_panel_closes_an_open_popover() {
 fn dismissing_no_overlay_keeps_the_hovered_line() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     ready_editor(&mut app);
-    let _ = update(&mut app, Message::EditorTextLineHovered(1));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorTextLineHovered(1)),
+    );
     let _ = update(&mut app, Message::EditorPanelOverlayDismissed);
     assert_eq!(app.editor.as_ref().unwrap().text_panel.hovered, Some(1));
     // An open overlay that closes does drop the hover.
@@ -609,9 +624,15 @@ fn dismissing_no_overlay_keeps_the_hovered_line() {
 fn command_changes_are_tracked_without_touching_the_editor() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     ready_editor(&mut app);
-    let _ = update(&mut app, Message::EditorCommandChanged(true));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorCommandChanged(true)),
+    );
     assert!(app.editor_command_held);
-    let _ = update(&mut app, Message::EditorCommandChanged(false));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorCommandChanged(false)),
+    );
     assert!(!app.editor_command_held);
 }
 
@@ -663,7 +684,7 @@ fn editor_modifier_flags_reset_when_an_editor_opens_or_closes() {
         id
     });
     hold(&mut app);
-    let _ = update(&mut app, Message::WindowClosed(id));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
     assert!(app.editor.is_none());
     assert!(released(&app), "window closed");
 }
@@ -759,11 +780,20 @@ fn panel_line_clicks_follow_shift_and_command() {
     };
     let _ = update(&mut app, Message::EditorTextLineClicked(0));
     assert_eq!(selected(&app), [0]);
-    let _ = update(&mut app, Message::EditorShiftChanged(true));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorShiftChanged(true)),
+    );
     let _ = update(&mut app, Message::EditorTextLineClicked(2));
     assert_eq!(selected(&app), [0, 1, 2]);
-    let _ = update(&mut app, Message::EditorShiftChanged(false));
-    let _ = update(&mut app, Message::EditorCommandChanged(true));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorShiftChanged(false)),
+    );
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorCommandChanged(true)),
+    );
     let _ = update(&mut app, Message::EditorTextLineClicked(1));
     assert_eq!(selected(&app), [0, 2]);
     let _ = update(&mut app, Message::EditorTextLineClicked(9));
@@ -774,12 +804,24 @@ fn panel_line_clicks_follow_shift_and_command() {
 fn hover_tracks_the_line_under_the_pointer() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     ready_editor(&mut app);
-    let _ = update(&mut app, Message::EditorTextLineHovered(1));
-    let _ = update(&mut app, Message::EditorTextLineHovered(2));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorTextLineHovered(1)),
+    );
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorTextLineHovered(2)),
+    );
     // A late exit from line 1 must not clear line 2's hover.
-    let _ = update(&mut app, Message::EditorTextLineUnhovered(1));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorTextLineUnhovered(1)),
+    );
     assert_eq!(app.editor.as_ref().unwrap().text_panel.hovered, Some(2));
-    let _ = update(&mut app, Message::EditorTextLineUnhovered(2));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorTextLineUnhovered(2)),
+    );
     assert_eq!(app.editor.as_ref().unwrap().text_panel.hovered, None);
 }
 
@@ -849,7 +891,10 @@ fn esc_clears_the_panel_selection_last() {
 fn text_marks_follow_hover_and_selection_only_with_positions() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     ready_editor(&mut app);
-    let _ = update(&mut app, Message::EditorTextLineHovered(1));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorTextLineHovered(1)),
+    );
     let _ = update(&mut app, Message::EditorTextLineClicked(0));
     let ed = app.editor.as_ref().unwrap();
     let doc = ed.text_panel.document().unwrap();

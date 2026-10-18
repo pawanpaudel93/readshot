@@ -135,7 +135,10 @@ fn undo_during_a_held_style_drag_cancels_only_the_drag() {
     };
     tick(&mut app, 6.0);
     // The mouse is down: this is a held slider drag.
-    let _ = update(&mut app, Message::EditorPointerButton(true, None));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, None)),
+    );
     let _ = update(
         &mut app,
         Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
@@ -170,7 +173,10 @@ fn esc_during_a_held_style_drag_ignores_the_remaining_ticks() {
         Message::EditorStylePreview(StyleMessage::CornerRadius(6.0)),
     );
     // The mouse is down: this is a held slider drag.
-    let _ = update(&mut app, Message::EditorPointerButton(true, None));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, None)),
+    );
     let _ = update(&mut app, Message::EditorTextCancel);
     let _ = update(
         &mut app,

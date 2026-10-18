@@ -1216,8 +1216,8 @@ fn line_row<'a>(
     };
     let body = focus_ring(body, keyboard_cursor);
     mouse_area(body)
-        .on_enter(Message::EditorTextLineHovered(index))
-        .on_exit(Message::EditorTextLineUnhovered(index))
+        .on_enter(Message::Window(WindowMsg::EditorTextLineHovered(index)))
+        .on_exit(Message::Window(WindowMsg::EditorTextLineUnhovered(index)))
         .on_press(Message::EditorTextLineClicked(index))
         .interaction(iced::mouse::Interaction::Pointer)
         .into()

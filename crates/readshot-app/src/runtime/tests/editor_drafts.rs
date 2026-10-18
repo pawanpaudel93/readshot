@@ -985,7 +985,10 @@ fn editor_os_close_request_confirms_unsaved_work() {
     app.editor = Some(ed);
 
     // First request arms the confirmation and keeps the editor open.
-    let _ = update(&mut app, Message::WindowCloseRequested(editor_id));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::CloseRequested(editor_id)),
+    );
     let ed = app
         .editor
         .as_ref()
@@ -997,7 +1000,10 @@ fn editor_os_close_request_confirms_unsaved_work() {
     );
 
     // Second request within the confirm window closes it.
-    let _ = update(&mut app, Message::WindowCloseRequested(editor_id));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::CloseRequested(editor_id)),
+    );
     assert!(app.editor.is_none());
 }
 
@@ -1009,7 +1015,10 @@ fn editor_os_close_request_closes_clean_editor_immediately() {
     ed.window_id = Some(editor_id);
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::WindowCloseRequested(editor_id));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::CloseRequested(editor_id)),
+    );
     assert!(app.editor.is_none());
 }
 
@@ -1030,7 +1039,10 @@ fn os_close_request_for_non_editor_window_leaves_editor_untouched() {
 
     // A close request for some other window must not touch the
     // editor session (those windows auto-close on their own).
-    let _ = update(&mut app, Message::WindowCloseRequested(other_id));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::CloseRequested(other_id)),
+    );
     assert!(app.editor.is_some());
     assert!(!app.editor.as_ref().unwrap().discard_armed());
 }

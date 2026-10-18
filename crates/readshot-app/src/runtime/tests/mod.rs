@@ -53,11 +53,17 @@ fn drag_padding(app: &mut App, values: &[u32]) {
                 *v,
                 "the press tick previews"
             );
-            let _ = update(app, Message::EditorPointerButton(true, None));
+            let _ = update(
+                app,
+                Message::Window(WindowMsg::EditorPointerButton(true, None)),
+            );
         }
     }
     let _ = update(app, Message::EditorSnapshotSliderCommit);
-    let _ = update(app, Message::EditorPointerButton(false, None));
+    let _ = update(
+        app,
+        Message::Window(WindowMsg::EditorPointerButton(false, None)),
+    );
 }
 
 fn editor_with_draft_and_color_popover(app: &mut App) -> iced::window::Id {

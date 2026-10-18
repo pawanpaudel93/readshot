@@ -76,7 +76,7 @@ pub(crate) const TITLEBAR_INSET_LEFT: f32 = 12.0;
 /// Transparent, full-size-content title bar so views draw their own top
 /// row under the traffic lights (macOS only; other platforms keep theirs).
 /// Every view using this must make its title row draggable via
-/// `Message::WindowDragRequested`.
+/// `WindowMsg::DragRequested`.
 pub(crate) fn macos_fullsize_titlebar() -> window::settings::PlatformSpecific {
     #[cfg(target_os = "macos")]
     {
@@ -112,7 +112,7 @@ pub(crate) fn title_drag_row<'a>(
             .height(iced::Length::Fixed(TITLEBAR_HEIGHT)),
     );
     if let Some(id) = window_id {
-        handle = handle.on_press(Message::WindowDragRequested(id));
+        handle = handle.on_press(Message::Window(WindowMsg::DragRequested(id)));
     }
     iced::widget::stack![handle, content.into()]
         .width(iced::Length::Fill)
@@ -171,7 +171,7 @@ pub(crate) fn editor_window_settings(
         // The editor holds unsaved annotation work, so an OS-initiated
         // close (red X / ⌘W) must be intercepted and routed through the
         // unsaved-work confirmation instead of dropping the session.
-        // `Message::WindowCloseRequested` performs the actual close.
+        // `WindowMsg::CloseRequested` performs the actual close.
         exit_on_close_request: false,
         platform_specific: macos_fullsize_titlebar(),
         ..Default::default()

@@ -357,7 +357,7 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 
 use crate::app::{
     App, AppMsg, CaptureMsg, GlobalHotkeyAction, HistoryKeyboardAction, Message, TickMsg,
-    WelcomeMsg, WindowKind,
+    WelcomeMsg, WindowKind, WindowMsg,
 };
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
@@ -719,7 +719,10 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     {
         // Pulses the recognizing skeleton. Never under Reduce Motion,
         // where the skeleton is static.
-        subs.push(iced::time::every(Duration::from_millis(80)).map(|_| Message::EditorPanelTick));
+        subs.push(
+            iced::time::every(Duration::from_millis(80))
+                .map(|_| Message::Window(WindowMsg::EditorPanelTick)),
+        );
     }
     if state.editor.is_some() {
         // Keyboard sub: ⌘Z / Ctrl+Z = Undo, ⇧⌘Z / Ctrl+Shift+Z = Redo,
@@ -732,10 +735,12 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             use iced::event::Status;
             use iced::keyboard::Event as KbEvent;
             if let iced::Event::Window(iced::window::Event::Rescaled(scale)) = event {
-                return Some(Message::WindowRescaled(window, scale));
+                return Some(Message::Window(WindowMsg::Rescaled(window, scale)));
             }
             if let iced::Event::Window(iced::window::Event::Resized(size)) = event {
-                return Some(Message::EditorWindowResized(window, size.width));
+                return Some(Message::Window(WindowMsg::EditorWindowResized(
+                    window, size.width,
+                )));
             }
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
                 return Some(Message::EditorKeyPressed {
@@ -756,9 +761,9 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             match event {
                 iced::Event::Keyboard(KbEvent::KeyPressed { modifiers, .. })
                 | iced::Event::Keyboard(KbEvent::KeyReleased { modifiers, .. })
-                | iced::Event::Keyboard(KbEvent::ModifiersChanged(modifiers)) => {
-                    Some(Message::EditorShiftChanged(modifiers.shift()))
-                }
+                | iced::Event::Keyboard(KbEvent::ModifiersChanged(modifiers)) => Some(
+                    Message::Window(WindowMsg::EditorShiftChanged(modifiers.shift())),
+                ),
                 _ => None,
             }
         }));
@@ -769,15 +774,15 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         subs.push(iced::event::listen_with(|event, _status, window| {
             use iced::mouse::{Button, Event as MouseEvent};
             match event {
-                iced::Event::Mouse(MouseEvent::ButtonPressed(Button::Left)) => {
-                    Some(Message::EditorPointerButton(true, Some(window)))
-                }
-                iced::Event::Mouse(MouseEvent::ButtonReleased(Button::Left)) => {
-                    Some(Message::EditorPointerButton(false, Some(window)))
-                }
-                iced::Event::Window(iced::window::Event::Unfocused) => {
-                    Some(Message::EditorPointerWindowUnfocused(window))
-                }
+                iced::Event::Mouse(MouseEvent::ButtonPressed(Button::Left)) => Some(
+                    Message::Window(WindowMsg::EditorPointerButton(true, Some(window))),
+                ),
+                iced::Event::Mouse(MouseEvent::ButtonReleased(Button::Left)) => Some(
+                    Message::Window(WindowMsg::EditorPointerButton(false, Some(window))),
+                ),
+                iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::Window(
+                    WindowMsg::EditorPointerWindowUnfocused(window),
+                )),
                 _ => None,
             }
         }));
@@ -787,9 +792,9 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             match event {
                 iced::Event::Keyboard(KbEvent::KeyPressed { modifiers, .. })
                 | iced::Event::Keyboard(KbEvent::KeyReleased { modifiers, .. })
-                | iced::Event::Keyboard(KbEvent::ModifiersChanged(modifiers)) => {
-                    Some(Message::EditorCommandChanged(modifiers.command()))
-                }
+                | iced::Event::Keyboard(KbEvent::ModifiersChanged(modifiers)) => Some(
+                    Message::Window(WindowMsg::EditorCommandChanged(modifiers.command())),
+                ),
                 _ => None,
             }
         }));
@@ -889,13 +894,13 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     // this, `state.windows` accumulates stale ids, and helpers like
     // `show_or_focus_welcome` end up calling `gain_focus` on dead
     // windows (silent no-op) instead of opening a fresh one.
-    subs.push(window::close_events().map(Message::WindowClosed));
+    subs.push(window::close_events().map(|a| Message::Window(WindowMsg::Closed(a))));
     // The editor window opts out of iced's auto-close
     // (`exit_on_close_request: false`) so an OS close (red X / ⌘W) can
     // be routed through the unsaved-work confirmation. Every other
     // window auto-closes and only needs `close_events`; this handler
     // ignores them.
-    subs.push(window::close_requests().map(Message::WindowCloseRequested));
+    subs.push(window::close_requests().map(|a| Message::Window(WindowMsg::CloseRequested(a))));
     Subscription::batch(subs)
 }
 
@@ -1177,33 +1182,8 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             let task = history_ops::handle_history_message(state, msg);
             Task::batch([task, editor_ops::history_write_followups(state)])
         }
-        Message::WindowCloseRequested(id) => window_ops::on_window_close_requested(state, id),
-        Message::WindowClosed(id) => window_ops::on_window_closed(state, id),
-        Message::WindowRescaled(id, scale) => window_ops::on_window_rescaled(state, id, scale),
-        Message::EditorPointerButton(pressed, window) => {
-            window_ops::on_editor_pointer_button(state, pressed, window)
-        }
-        Message::EditorPointerWindowUnfocused(id) => {
-            window_ops::on_editor_pointer_window_unfocused(state, id)
-        }
-        Message::EditorShiftChanged(held) => window_ops::on_editor_shift_changed(state, held),
-        // High-frequency editor events: handled here, not in the editor
-        // arm, so they never clear the canvas geometry cache.
-        Message::EditorCommandChanged(held) => window_ops::on_editor_command_changed(state, held),
-        // Text-panel hover fires per pointer move; its outline is drawn in
-        // the canvas's uncached marks layer, so the annotation geometry
-        // cache stays valid.
-        Message::EditorTextLineHovered(index) => window_ops::on_text_line_hovered(state, index),
-        Message::EditorTextLineUnhovered(index) => window_ops::on_text_line_unhovered(state, index),
-        Message::EditorWindowResized(window, width) => {
-            window_ops::on_editor_window_resized(state, window, width)
-        }
-        // Only redraws the recognizing skeleton.
-        Message::EditorPanelTick => Task::none(),
-        Message::WindowDragRequested(id) => window::drag(id),
+        Message::Window(msg) => window_ops::handle_window_message(state, msg),
         msg @ editor_messages!() => window_ops::route_editor_message(state, msg),
-        // Bookkeeping only (no history, no settle): what the stage shows.
-        Message::EditorStageScrolled(x, y) => window_ops::on_stage_scrolled(state, x, y),
 
         Message::NoOp => Task::none(),
 

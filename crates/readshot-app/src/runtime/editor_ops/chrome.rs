@@ -123,7 +123,8 @@ pub(super) fn on_window_ready(state: &mut App, id: iced::window::Id) -> Task<Mes
     }
     // The OS can open the window smaller than requested on small
     // screens; the real width decides dock vs collapse.
-    window::size(id).map(move |size| Message::EditorWindowResized(id, size.width))
+    window::size(id)
+        .map(move |size| Message::Window(WindowMsg::EditorWindowResized(id, size.width)))
 }
 
 /// `Message::EditorDiscardDisarmed`: Keep Editing.

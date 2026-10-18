@@ -810,7 +810,7 @@ fn window_closed_clears_settings_window_id() {
     app.settings_window_id = Some(id);
     app.settings_recording_hotkey = true;
     app.settings_hotkey_error = Some("bad shortcut".into());
-    let _ = update(&mut app, Message::WindowClosed(id));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
     assert!(app.settings_window_id.is_none());
     assert!(!app.settings_recording_hotkey);
     assert!(app.settings_hotkey_error.is_none());
@@ -826,7 +826,7 @@ fn window_closed_clears_editor_session() {
     app.windows.register(id, WindowKind::Editor);
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::WindowClosed(id));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
 
     assert!(app.editor.is_none());
     assert!(app.windows.kind(id).is_none());
@@ -853,7 +853,7 @@ fn window_closed_commits_pending_history_text_before_dropping_editor() {
     app.windows.register(id, WindowKind::Editor);
     app.editor = Some(ed);
 
-    let _ = update(&mut app, Message::WindowClosed(id));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
 
     assert!(app.editor.is_none());
     assert!(app.windows.kind(id).is_none());

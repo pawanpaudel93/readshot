@@ -660,8 +660,14 @@ fn esc_during_a_crop_re_drag_is_one_step_whichever_message_comes_first() {
     // …and so does a press.
     canvas(&mut app, CanvasMessage::DragStarted);
     canvas(&mut app, CanvasMessage::DragEscaped);
-    let _ = update(&mut app, Message::EditorPointerButton(true, None));
-    let _ = update(&mut app, Message::EditorPointerButton(false, None));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, None)),
+    );
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(false, None)),
+    );
     assert_eq!(app.editor.as_ref().unwrap().escape_ended_drag, None);
     assert_eq!(app.editor.as_ref().unwrap().crop_draft, draft);
     // The next Esc (key first again) cancels the draft, and only that.

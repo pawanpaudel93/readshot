@@ -2314,7 +2314,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 .direction(scroll_direction)
                 .on_scroll(|v| {
                     let o = v.absolute_offset();
-                    Message::EditorStageScrolled(o.x, o.y)
+                    Message::Window(WindowMsg::EditorStageScrolled(o.x, o.y))
                 })
                 .width(Length::Fill)
                 .height(Length::Fill)

@@ -335,9 +335,15 @@ fn a_dropped_drag_stays_dropped_when_its_window_loses_focus() {
     };
     // The press lands the pending resize; its window then loses focus
     // before the release, and the old-frame commit arrives late.
-    let _ = update(&mut app, Message::EditorPointerButton(true, Some(a)));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, Some(a))),
+    );
     let _ = update(&mut app, Message::EditorCanvas(CanvasMessage::DragStarted));
-    let _ = update(&mut app, Message::EditorPointerWindowUnfocused(a));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerWindowUnfocused(a)),
+    );
     let _ = update(
         &mut app,
         Message::EditorCanvas(CanvasMessage::CommitAnnotation(redaction.clone())),
@@ -379,9 +385,12 @@ fn a_drag_whose_release_never_came_refuses_no_later_commit() {
         );
     };
     // A drag begins; its window closes before the release reaches us.
-    let _ = update(&mut app, Message::EditorPointerButton(true, Some(a)));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, Some(a))),
+    );
     let _ = update(&mut app, Message::EditorCanvas(CanvasMessage::DragStarted));
-    let _ = update(&mut app, Message::WindowClosed(a));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(a)));
     let ed = app.editor.as_mut().unwrap();
     assert!(ed.drag_started_in.is_none(), "its frame is forgotten");
     // The frame changes later (a resize).
@@ -615,7 +624,7 @@ fn a_released_gap_drag_is_synced_to_history_when_the_window_closes() {
     let _ = update(&mut app, Message::EditorLayoutGapPreview(10));
     let _ = update(&mut app, Message::EditorSnapshotSliderCommit);
     assert!(app.editor.as_ref().unwrap().gap_commit_on_land);
-    let _ = update(&mut app, Message::WindowClosed(id));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
     assert!(app.editor.is_none());
     // The released value composes off the UI thread; its worker lands.
     let retiring = &app.retiring_editors[0];
@@ -1042,7 +1051,10 @@ fn undo_mid_gap_drag_cancels_only_the_drag_and_held_ticks_are_ignored() {
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
     let _ = update(&mut app, Message::EditorLayoutGapPreview(4));
     // The mouse is down: this is a held slider drag.
-    let _ = update(&mut app, Message::EditorPointerButton(true, None));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, None)),
+    );
     let _ = update(&mut app, Message::EditorLayoutGapPreview(9));
     let _ = update(
         &mut app,
@@ -2317,7 +2329,7 @@ fn closing_the_editor_mid_compose_never_composes_here_and_still_syncs_history() 
     let session = app.editor.as_ref().unwrap().session_id;
     let job = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
     let before = super::super::compose_jobs::composes_on_this_thread();
-    let _ = update(&mut app, Message::WindowClosed(id));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
     assert!(app.editor.is_none());
     assert_eq!(
         super::super::compose_jobs::composes_on_this_thread(),
@@ -2381,7 +2393,7 @@ fn a_retiring_editors_late_sync_never_unredacts_a_newer_scrub() {
         });
         write_editor_history(b, &coord);
     }
-    let _ = update(&mut app, Message::WindowClosed(id_b));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id_b)));
     app.coordinator.flush_history_updates();
     let stored = store.list().unwrap().into_iter().next().unwrap();
     assert!(stored.redacted, "B's scrub landed");

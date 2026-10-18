@@ -572,7 +572,10 @@ fn undo_during_a_held_drag_cancels_only_the_drag_and_loses_nothing() {
         Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
     );
     // The mouse is down: this is a held slider drag.
-    let _ = update(&mut app, Message::EditorPointerButton(true, None));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, None)),
+    );
     let _ = update(
         &mut app,
         Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
@@ -611,7 +614,10 @@ fn esc_during_a_held_drag_ignores_the_remaining_ticks() {
         Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(150)),
     );
     // The mouse is down: this is a held slider drag.
-    let _ = update(&mut app, Message::EditorPointerButton(true, None));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, None)),
+    );
     let _ = update(&mut app, Message::EditorTextCancel);
     let _ = update(
         &mut app,
@@ -718,13 +724,19 @@ fn a_cancelled_key_style_preview_never_swallows_the_next_drag() {
         Message::EditorStylePreview(StyleMessage::CornerRadius(9.0)),
     );
     assert_eq!(radius(&app), 9.0, "the press tick previews");
-    let _ = update(&mut app, Message::EditorPointerButton(true, None));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, None)),
+    );
     let _ = update(
         &mut app,
         Message::EditorStylePreview(StyleMessage::CornerRadius(11.0)),
     );
     let _ = update(&mut app, Message::EditorStyleCommit);
-    let _ = update(&mut app, Message::EditorPointerButton(false, None));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(false, None)),
+    );
     assert_eq!(radius(&app), 11.0);
     assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth + 1);
 }
@@ -736,22 +748,37 @@ fn a_press_whose_window_loses_focus_or_closes_is_no_longer_held() {
     let (a, b) = (iced::window::Id::unique(), iced::window::Id::unique());
     let held = |app: &App| app.editor.as_ref().unwrap().pointer_held;
     // Focus loss of another window leaves the press held.
-    let _ = update(&mut app, Message::EditorPointerButton(true, Some(a)));
-    let _ = update(&mut app, Message::EditorPointerWindowUnfocused(b));
-    let _ = update(&mut app, Message::WindowClosed(b));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, Some(a))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerWindowUnfocused(b)),
+    );
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(b)));
     assert!(held(&app));
     // The press's own window losing focus: its release may never come.
     app.editor.as_mut().unwrap().snapshot_drag_cancelled = true;
-    let _ = update(&mut app, Message::EditorPointerWindowUnfocused(a));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerWindowUnfocused(a)),
+    );
     assert!(!held(&app));
     assert!(!app.editor.as_ref().unwrap().snapshot_drag_cancelled);
     // …or closing before the release reaches the app.
-    let _ = update(&mut app, Message::EditorPointerButton(true, Some(b)));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, Some(b))),
+    );
     assert!(held(&app));
-    let _ = update(&mut app, Message::WindowClosed(b));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(b)));
     assert!(!held(&app));
     // A new editor session starts with nothing held.
-    let _ = update(&mut app, Message::EditorPointerButton(true, Some(a)));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, Some(a))),
+    );
     app.editor = Some(crate::editor::EditorSession::new(solid(16, 16)));
     assert!(!held(&app));
 }
@@ -763,7 +790,10 @@ fn a_new_press_clears_a_stale_cancelled_drag_flag() {
     ed.snapshot_drag_cancelled = true;
     ed.style_drag_cancelled = true;
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::EditorPointerButton(true, None));
+    let _ = update(
+        &mut app,
+        Message::Window(WindowMsg::EditorPointerButton(true, None)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.pointer_held);
     assert!(!ed.snapshot_drag_cancelled && !ed.style_drag_cancelled);
@@ -1078,7 +1108,7 @@ fn zoom_and_relayout_pin_the_stage_to_the_recorded_offset() {
         Message::EditorZoomOut,
         Message::EditorZoomActual,
         Message::EditorZoomFit,
-        Message::EditorWindowResized(window, 900.0),
+        Message::Window(WindowMsg::EditorWindowResized(window, 900.0)),
     ] {
         let task = update(&mut app, msg.clone());
         assert!(task.units() > 0, "{msg:?} pins the stage offset");
@@ -1086,7 +1116,10 @@ fn zoom_and_relayout_pin_the_stage_to_the_recorded_offset() {
     // Another window's resize does not touch this stage.
     let task = update(
         &mut app,
-        Message::EditorWindowResized(iced::window::Id::unique(), 900.0),
+        Message::Window(WindowMsg::EditorWindowResized(
+            iced::window::Id::unique(),
+            900.0,
+        )),
     );
     assert_eq!(task.units(), 0);
 }

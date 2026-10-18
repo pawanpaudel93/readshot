@@ -5,7 +5,39 @@
 
 use super::*;
 
-/// `Message::WindowCloseRequested`.
+/// Every [`WindowMsg`].
+pub(super) fn handle_window_message(state: &mut App, message: WindowMsg) -> Task<Message> {
+    match message {
+        WindowMsg::CloseRequested(id) => on_window_close_requested(state, id),
+        WindowMsg::Closed(id) => on_window_closed(state, id),
+        WindowMsg::Rescaled(id, scale) => on_window_rescaled(state, id, scale),
+        WindowMsg::EditorPointerButton(pressed, window) => {
+            on_editor_pointer_button(state, pressed, window)
+        }
+        WindowMsg::EditorPointerWindowUnfocused(id) => {
+            on_editor_pointer_window_unfocused(state, id)
+        }
+        WindowMsg::EditorShiftChanged(held) => on_editor_shift_changed(state, held),
+        // High-frequency editor events: handled here, not in the editor
+        // arm, so they never clear the canvas geometry cache.
+        WindowMsg::EditorCommandChanged(held) => on_editor_command_changed(state, held),
+        // Text-panel hover fires per pointer move; its outline is drawn in
+        // the canvas's uncached marks layer, so the annotation geometry
+        // cache stays valid.
+        WindowMsg::EditorTextLineHovered(index) => on_text_line_hovered(state, index),
+        WindowMsg::EditorTextLineUnhovered(index) => on_text_line_unhovered(state, index),
+        WindowMsg::EditorWindowResized(window, width) => {
+            on_editor_window_resized(state, window, width)
+        }
+        // Only redraws the recognizing skeleton.
+        WindowMsg::EditorPanelTick => Task::none(),
+        WindowMsg::DragRequested(id) => window::drag(id),
+        // Bookkeeping only (no history, no settle): what the stage shows.
+        WindowMsg::EditorStageScrolled(x, y) => on_stage_scrolled(state, x, y),
+    }
+}
+
+/// `WindowMsg::CloseRequested`.
 pub(super) fn on_window_close_requested(state: &mut App, id: iced::window::Id) -> Task<Message> {
     // Only the editor window opts out of auto-close. If the
     // close request is for it, route through the same two-stage
@@ -25,7 +57,7 @@ pub(super) fn on_window_close_requested(state: &mut App, id: iced::window::Id) -
     Task::none()
 }
 
-/// `Message::WindowClosed`.
+/// `WindowMsg::Closed`.
 pub(super) fn on_window_closed(state: &mut App, id: iced::window::Id) -> Task<Message> {
     // A press that began in the closed window never gets its
     // release.
@@ -113,7 +145,7 @@ pub(super) fn on_window_closed(state: &mut App, id: iced::window::Id) -> Task<Me
     restore
 }
 
-/// `Message::WindowRescaled`.
+/// `WindowMsg::Rescaled`.
 pub(super) fn on_window_rescaled(
     state: &mut App,
     id: iced::window::Id,
@@ -133,7 +165,7 @@ pub(super) fn on_window_rescaled(
     Task::none()
 }
 
-/// `Message::EditorShiftChanged`.
+/// `WindowMsg::EditorShiftChanged`.
 pub(super) fn on_editor_shift_changed(state: &mut App, held: bool) -> Task<Message> {
     // Only react on an actual change so the per-keystroke modifier
     // stream doesn't force a canvas re-tessellation each key.
@@ -148,7 +180,7 @@ pub(super) fn on_editor_shift_changed(state: &mut App, held: bool) -> Task<Messa
     Task::none()
 }
 
-/// `Message::EditorCommandChanged`.
+/// `WindowMsg::EditorCommandChanged`.
 pub(super) fn on_editor_command_changed(state: &mut App, held: bool) -> Task<Message> {
     // Only the Text panel's ⌘-click reads it; nothing to redraw.
     if state.editor_command_held != held {
@@ -157,7 +189,7 @@ pub(super) fn on_editor_command_changed(state: &mut App, held: bool) -> Task<Mes
     Task::none()
 }
 
-/// `Message::EditorWindowResized`.
+/// `WindowMsg::EditorWindowResized`.
 pub(super) fn on_editor_window_resized(
     state: &mut App,
     window: iced::window::Id,
@@ -219,7 +251,7 @@ pub(super) fn route_editor_message(state: &mut App, msg: Message) -> Task<Messag
     Task::batch([task, editor_ops::history_write_followups(state)])
 }
 
-/// `Message::EditorPointerButton`.
+/// `WindowMsg::EditorPointerButton`.
 pub(super) fn on_editor_pointer_button(
     state: &mut App,
     pressed: bool,
@@ -231,7 +263,7 @@ pub(super) fn on_editor_pointer_button(
     Task::none()
 }
 
-/// `Message::EditorPointerWindowUnfocused`.
+/// `WindowMsg::EditorPointerWindowUnfocused`.
 pub(super) fn on_editor_pointer_window_unfocused(
     state: &mut App,
     id: iced::window::Id,
@@ -242,7 +274,7 @@ pub(super) fn on_editor_pointer_window_unfocused(
     Task::none()
 }
 
-/// `Message::EditorTextLineHovered`.
+/// `WindowMsg::EditorTextLineHovered`.
 pub(super) fn on_text_line_hovered(state: &mut App, index: usize) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         ed.text_panel.hovered = Some(index);
@@ -250,7 +282,7 @@ pub(super) fn on_text_line_hovered(state: &mut App, index: usize) -> Task<Messag
     Task::none()
 }
 
-/// `Message::EditorTextLineUnhovered`.
+/// `WindowMsg::EditorTextLineUnhovered`.
 pub(super) fn on_text_line_unhovered(state: &mut App, index: usize) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         if ed.text_panel.hovered == Some(index) {
@@ -260,7 +292,7 @@ pub(super) fn on_text_line_unhovered(state: &mut App, index: usize) -> Task<Mess
     Task::none()
 }
 
-/// `Message::EditorStageScrolled`.
+/// `WindowMsg::EditorStageScrolled`.
 pub(super) fn on_stage_scrolled(state: &mut App, x: f32, y: f32) -> Task<Message> {
     if let Some(ed) = state.editor.as_ref() {
         ed.stage_offset.set((x, y));

@@ -319,10 +319,10 @@ fn every_scroll_capture_exit_releases_the_global_esc() {
             let _ = update(app, Message::ScrollCaptureStopRequested);
         }),
         ("the HUD window closes", |app, hud, _, _| {
-            let _ = update(app, Message::WindowClosed(hud));
+            let _ = update(app, Message::Window(WindowMsg::Closed(hud)));
         }),
         ("the region window closes", |app, _, region, _| {
-            let _ = update(app, Message::WindowClosed(region));
+            let _ = update(app, Message::Window(WindowMsg::Closed(region)));
         }),
     ];
     for (label, exit) in exits {
@@ -843,7 +843,7 @@ fn closing_overlay_window_removes_display_mapping() {
     app.overlay_displays
         .insert(id, overlay_display("display-a"));
 
-    let _ = update(&mut app, Message::WindowClosed(id));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
 
     assert!(app.overlay_displays.is_empty());
     assert!(app.windows.kind(id).is_none());

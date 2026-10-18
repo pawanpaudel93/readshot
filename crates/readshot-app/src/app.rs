@@ -232,6 +232,9 @@ impl SettingsPane {
 /// or background task funnels through this enum.
 #[derive(Clone, Debug)]
 pub enum Message {
+    /// Window lifecycle, and the editor window's pointer, modifier, hover,
+    /// size and scroll events (`runtime::window_ops`).
+    Window(WindowMsg),
     /// Welcome window messages (`runtime::welcome_ops`).
     Welcome(WelcomeMsg),
     /// Background drains (hotkeys, tray, URL scheme, reopen, theme) and the
@@ -324,16 +327,6 @@ pub enum Message {
     HistoryListLoaded(Result<Vec<readshot_core::CaptureRecord>, String>),
     /// User closed the history browser window.
     HistoryClosed,
-    /// OS reports a window was closed (X button, `window::close`, …).
-    /// The handler forgets the id from `Windows` and runs any
-    /// kind-specific cleanup (e.g. clearing history-browser state).
-    WindowClosed(iced::window::Id),
-    /// OS requested a window close (X button / ⌘W) but the window has
-    /// `exit_on_close_request: false`, so iced has NOT closed it yet.
-    /// The handler decides whether to close: the editor routes through
-    /// the same unsaved-work confirmation as the in-app Discard button;
-    /// every other window closes immediately.
-    WindowCloseRequested(iced::window::Id),
     /// User typed in the history browser's search box. Empty string
     /// resets to "show every record".
     HistorySearchChanged(String),
@@ -503,19 +496,8 @@ pub enum Message {
     EditorPanelTabSelected(crate::editor::PanelTab),
     /// Click outside the narrow-window overlay panel.
     EditorPanelOverlayDismissed,
-    /// A window was resized: `(window, logical width)`. Only the editor
-    /// window's width is kept. Handled at top level (no cache clear).
-    EditorWindowResized(iced::window::Id, f32),
-    /// Redraw tick for the recognizing skeleton (not under Reduce Motion).
-    /// Handled at top level (no cache clear).
-    EditorPanelTick,
     /// "Open Settings" on the Text tab's no-text state.
     EditorOpenTextSettings,
-    /// Pointer entered Text-panel line `index`. Handled at top level
-    /// (no cache clear): it fires per pointer move.
-    EditorTextLineHovered(usize),
-    /// Pointer left Text-panel line `index`. Handled at top level.
-    EditorTextLineUnhovered(usize),
     /// Click on Text-panel line `index` (⇧ range, ⌘ toggle).
     EditorTextLineClicked(usize),
     /// Copy the selected Text-panel lines.
@@ -524,9 +506,6 @@ pub enum Message {
     EditorCopyLinesDone(Result<usize, String>),
     /// "Remove line breaks when copying" toggled.
     EditorRemoveLineBreaksToggled(bool),
-    /// Command (⌘ / Ctrl) held state changed while an editor is open.
-    /// Handled at top level (no cache clear).
-    EditorCommandChanged(bool),
     /// Smart-redact style (Solid block / Pixelate / Blur).
     EditorRedactStyleChanged(readshot_core::redact::RedactStyle),
     /// Redact every pending sensitive item as one undo step.
@@ -543,9 +522,6 @@ pub enum Message {
     EditorPopoverToggled(crate::editor::EditorPopover),
     /// Close whichever editor popover is open (click outside / Esc).
     EditorPopoverClosed,
-    /// Mouse-down on a view's own title row (windows that use the
-    /// transparent full-size title bar) — starts a native window drag.
-    WindowDragRequested(iced::window::Id),
     /// User clicked Pin in the editor — flatten the current state,
     /// open a borderless always-on-top "pin" window with that
     /// image, and close the editor.
@@ -637,10 +613,6 @@ pub enum Message {
     EditorZoomActual,
     /// Reset editor preview to fit-down mode.
     EditorZoomFit,
-    /// The editor stage scrolled to this offset (content px).
-    EditorStageScrolled(f32, f32),
-    /// The OS reported a new scale factor for a tracked window.
-    WindowRescaled(iced::window::Id, f32),
     /// Text-tool inline input — content typed by the user. Empty
     /// means the input is cleared.
     EditorTextChanged(String),
@@ -704,19 +676,6 @@ pub enum Message {
         modifiers: iced::keyboard::Modifiers,
         status_ignored: bool,
     },
-    /// Current Shift state while an editor is open. iced 0.14 doesn't
-    /// route keyboard events into canvas widgets, so the runtime watches
-    /// modifiers globally and forwards them to the editor canvas, which
-    /// uses them to constrain shape drags (square / 45°).
-    EditorShiftChanged(bool),
-    /// The left mouse button went down (`true`) or up (`false`) in any
-    /// window while an editor is open. Slider drags have no press
-    /// message of their own; this tells a held drag from a key or
-    /// Ctrl+wheel preview. Carries the window the event came from.
-    EditorPointerButton(bool, Option<iced::window::Id>),
-    /// A window lost focus: if the held press began there, its release
-    /// may never reach the app.
-    EditorPointerWindowUnfocused(iced::window::Id),
     /// Preview selected-annotation width while the toolbar slider is dragged.
     EditorLineWidthPreview(f32),
     /// Commit the toolbar slider's selected-annotation width preview.
@@ -801,6 +760,59 @@ pub enum Message {
     CliToolsCopyRequested(crate::cli_tools::Shell),
     /// Command-line setup instructions were copied, or failed to copy.
     CliToolsCopyDone(crate::cli_tools::Shell, Result<(), String>),
+}
+
+/// Window lifecycle (close, rescale, drag) and the editor window's
+/// high-frequency pointer, modifier, hover, size and scroll events. These
+/// never reach the editor handler, so they never clear the canvas geometry
+/// cache or settle pending history steps. Handled by
+/// `runtime::window_ops::handle_window_message`.
+#[derive(Clone, Debug)]
+pub enum WindowMsg {
+    /// OS reports a window was closed (X button, `window::close`, …).
+    /// The handler forgets the id from `Windows` and runs any
+    /// kind-specific cleanup (e.g. clearing history-browser state).
+    Closed(iced::window::Id),
+    /// OS requested a window close (X button / ⌘W) but the window has
+    /// `exit_on_close_request: false`, so iced has NOT closed it yet.
+    /// The handler decides whether to close: the editor routes through
+    /// the same unsaved-work confirmation as the in-app Discard button;
+    /// every other window closes immediately.
+    CloseRequested(iced::window::Id),
+    /// A window was resized: `(window, logical width)`. Only the editor
+    /// window's width is kept. Handled at top level (no cache clear).
+    EditorWindowResized(iced::window::Id, f32),
+    /// Redraw tick for the recognizing skeleton (not under Reduce Motion).
+    /// Handled at top level (no cache clear).
+    EditorPanelTick,
+    /// Pointer entered Text-panel line `index`. Handled at top level
+    /// (no cache clear): it fires per pointer move.
+    EditorTextLineHovered(usize),
+    /// Pointer left Text-panel line `index`. Handled at top level.
+    EditorTextLineUnhovered(usize),
+    /// Command (⌘ / Ctrl) held state changed while an editor is open.
+    /// Handled at top level (no cache clear).
+    EditorCommandChanged(bool),
+    /// Mouse-down on a view's own title row (windows that use the
+    /// transparent full-size title bar) — starts a native window drag.
+    DragRequested(iced::window::Id),
+    /// The editor stage scrolled to this offset (content px).
+    EditorStageScrolled(f32, f32),
+    /// The OS reported a new scale factor for a tracked window.
+    Rescaled(iced::window::Id, f32),
+    /// Current Shift state while an editor is open. iced 0.14 doesn't
+    /// route keyboard events into canvas widgets, so the runtime watches
+    /// modifiers globally and forwards them to the editor canvas, which
+    /// uses them to constrain shape drags (square / 45°).
+    EditorShiftChanged(bool),
+    /// The left mouse button went down (`true`) or up (`false`) in any
+    /// window while an editor is open. Slider drags have no press
+    /// message of their own; this tells a held drag from a key or
+    /// Ctrl+wheel preview. Carries the window the event came from.
+    EditorPointerButton(bool, Option<iced::window::Id>),
+    /// A window lost focus: if the held press began there, its release
+    /// may never reach the app.
+    EditorPointerWindowUnfocused(iced::window::Id),
 }
 
 /// Welcome window messages. Handled by

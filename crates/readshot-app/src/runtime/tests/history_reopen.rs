@@ -217,7 +217,7 @@ fn opening_a_closed_editors_record_waits_for_its_writes() {
     let a = edit_record(&mut app, &record);
     store.hold();
     let _ = update(&mut app, Message::EditorRotate { clockwise: true });
-    let _ = update(&mut app, Message::WindowClosed(a));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(a)));
     assert!(app.editor.is_none() && app.retiring_editors.is_empty());
 
     let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
@@ -481,7 +481,7 @@ impl Interleaving {
             5 => {
                 self.log.push("close");
                 if let Some(window) = self.editor_of_record().and_then(|ed| ed.window_id) {
-                    self.send(Message::WindowClosed(window));
+                    self.send(Message::Window(WindowMsg::Closed(window)));
                 }
             }
             6 => {

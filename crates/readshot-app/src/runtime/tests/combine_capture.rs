@@ -495,9 +495,9 @@ fn an_overlay_closed_by_the_os_gives_the_editor_back() {
     let (a, b) = (window::Id::unique(), window::Id::unique());
     app.windows.register(a, WindowKind::Overlay);
     app.windows.register(b, WindowKind::Overlay);
-    let _ = update(&mut app, Message::WindowClosed(a));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(a)));
     assert!(app.combine_capture.is_some(), "another overlay is still up");
-    let _ = update(&mut app, Message::WindowClosed(b));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(b)));
     assert!(app.combine_capture.is_none());
     assert!(app.pending_intent.is_none());
 }
@@ -522,7 +522,7 @@ fn closing_the_overlays_after_a_selection_keeps_the_combine_capture() {
         }),
     );
     // The close event lands before the capture request runs.
-    let _ = update(&mut app, Message::WindowClosed(id));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
     assert!(app.combine_capture.is_some());
     let _ = update(
         &mut app,
@@ -805,7 +805,7 @@ fn add_capture_after_a_scroll_capture_is_never_stranded() {
     app.overlay_opening = false;
     let id = window::Id::unique();
     app.windows.register(id, WindowKind::Overlay);
-    let _ = update(&mut app, Message::WindowClosed(id));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
     assert!(app.combine_capture.is_none(), "OS close restores");
     assert!(app.pending_intent.is_none());
 
@@ -833,7 +833,7 @@ fn a_combine_with_no_selection_restores_despite_a_stale_pending_display() {
     app.overlay_opening = false;
     let id = window::Id::unique();
     app.windows.register(id, WindowKind::Overlay);
-    let _ = update(&mut app, Message::WindowClosed(id));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
     assert!(app.combine_capture.is_none(), "OS close restores");
 
     let mut app = build_app(Arc::new(FakePermissions::granted()));
@@ -864,7 +864,7 @@ fn a_stray_cancel_after_a_combine_selection_keeps_the_capture() {
 fn an_os_close_after_a_combine_selection_keeps_the_capture() {
     let (mut app, session, id) = app_with_a_selected_combine();
     assert!(!app.capture_in_flight, "only the selection guards it");
-    let _ = update(&mut app, Message::WindowClosed(id));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
     assert!(app.combine_capture.is_some(), "OS close after selection");
     assert_the_combine_capture_lands(app, session);
 }
