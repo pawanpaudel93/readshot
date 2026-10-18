@@ -36,7 +36,7 @@ use readshot_capture::{display_local_bounds, CaptureRequest};
 use readshot_core::Preferences;
 use readshot_ui::SettingsMessage;
 
-use crate::editor::EditorSession;
+use crate::editor::{EditorSession, StatusTone};
 use crate::url_scheme::UrlAction;
 
 #[macro_use]
@@ -264,7 +264,7 @@ fn debug_editor_qa_session() -> EditorSession {
     }
     editor.refresh_image();
     editor.mark_output_clean();
-    editor.set_status("Editor QA fixture loaded.");
+    editor.set_status(StatusTone::Success, "Editor QA fixture loaded.");
     editor
 }
 
@@ -1101,10 +1101,12 @@ pub(crate) fn surface_undelivered_notices(
     for notice in notices {
         let off = notice.reason == NotShownReason::NotificationsOff;
         if let Some(editor) = state.editor.as_mut() {
+            // Only the notice's own words say what kind it is.
+            let tone = plain_status_tone(&notice.text);
             if off {
-                editor.set_status(format!("{} {NOTIFICATIONS_OFF_HINT}", notice.text));
+                editor.set_status(tone, format!("{} {NOTIFICATIONS_OFF_HINT}", notice.text));
             } else {
-                editor.set_status(notice.text.clone());
+                editor.set_status(tone, notice.text.clone());
             }
         } else if state.last_capture_status.as_deref() == Some(notice.text.as_str()) {
             tasks.push(show_or_focus_welcome(state));

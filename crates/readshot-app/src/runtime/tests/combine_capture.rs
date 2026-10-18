@@ -31,7 +31,7 @@ fn add_capture_below_hides_the_editor_and_appends_the_capture() {
     assert_eq!(ed.model.part_ids().len(), 2);
     assert_eq!(ed.image_size(), (64, 48));
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(format!("Added capture below. {UNDO_HINT}").as_str())
     );
     assert!(app.combine_capture.is_none());
@@ -59,8 +59,7 @@ fn a_failed_or_cancelled_combine_capture_restores_the_editor_unchanged() {
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.part_ids().len(), 1);
     assert!(ed
-        .status
-        .as_deref()
+        .status_text()
         .unwrap()
         .starts_with("Couldn’t add the capture"));
     assert!(app.combine_capture.is_none());
@@ -146,7 +145,7 @@ fn an_oversized_addition_is_refused() {
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.part_ids().len(), 1);
-    assert!(ed.status.as_deref().unwrap().contains("32,767"));
+    assert!(ed.status_text().unwrap().contains("32,767"));
 }
 
 #[test]
@@ -389,7 +388,7 @@ fn no_display_or_a_retake_never_strands_a_combine_capture() {
     assert!(app.combine_capture.is_none());
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some("Couldn’t add the capture — no display was detected.")
     );
     let _ = update(
@@ -406,8 +405,7 @@ fn no_display_or_a_retake_never_strands_a_combine_capture() {
         .editor
         .as_ref()
         .unwrap()
-        .status
-        .as_deref()
+        .status_text()
         .unwrap()
         .starts_with("Couldn’t add the capture"));
 }
@@ -433,8 +431,7 @@ fn an_overlay_that_cannot_open_gives_the_editor_back() {
         .editor
         .as_ref()
         .unwrap()
-        .status
-        .as_deref()
+        .status_text()
         .unwrap()
         .starts_with("Couldn’t add the capture"));
 }
@@ -864,8 +861,7 @@ fn a_selected_combine_capture_that_fails_gives_the_editor_back() {
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.part_ids().len(), 1);
     assert!(ed
-        .status
-        .as_deref()
+        .status_text()
         .unwrap()
         .starts_with("Couldn’t add the capture"));
 }
@@ -914,7 +910,7 @@ fn a_file_that_fails_to_load_leaves_the_editor_unchanged() {
     assert!(!ed.busy);
     assert_eq!(ed.model.part_ids().len(), 1);
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some("Couldn’t add the image — that file isn’t an image Readshot can read. Choose a PNG, JPEG, GIF, BMP, TIFF or WebP file.")
     );
 }

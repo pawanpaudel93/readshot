@@ -426,7 +426,7 @@ fn a_beautify_canvas_over_the_limits_is_refused_not_rendered() {
         let _ = update(&mut app, message);
         let ed = app.editor.as_ref().expect("the editor stays open");
         assert!(!ed.busy, "{verb}: nothing started");
-        let status = ed.status.clone().unwrap_or_default();
+        let status = ed.status_text().map(str::to_owned).unwrap_or_default();
         assert!(
             status.starts_with(&format!("Couldn’t {verb}.")) && status.contains("32,767"),
             "{verb}: {status}"

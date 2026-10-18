@@ -19,12 +19,15 @@ pub(super) fn on_beautify_preset(
         ed.clear_discard_confirmation();
         close_editor_popover(ed);
         if ed.model.set_beautify(preset.settings()) {
-            ed.set_status(match preset {
-                readshot_core::beautify::BuiltinPreset::None => {
-                    format!("Frame removed. {UNDO_HINT}")
-                }
-                p => format!("Frame set to {}. {UNDO_HINT}", p.label()),
-            });
+            ed.set_status(
+                StatusTone::Success,
+                match preset {
+                    readshot_core::beautify::BuiltinPreset::None => {
+                        format!("Frame removed. {UNDO_HINT}")
+                    }
+                    p => format!("Frame set to {}. {UNDO_HINT}", p.label()),
+                },
+            );
         }
     }
     Task::none()
@@ -75,7 +78,10 @@ pub(super) fn on_toolbar(state: &mut App, msg: readshot_ui::ToolbarMessage) -> T
                 && !crate::runtime::editor_options::visible_option_controls(ed).is_empty()
                 && hint_may_show(ed)
             {
-                ed.set_info(crate::runtime::view::editor_compact_hint(t));
+                ed.set_status(
+                    StatusTone::Info,
+                    crate::runtime::view::editor_compact_hint(t),
+                );
             }
             // macOS prewarms the emoji cache at startup (main).
             // Elsewhere the cache reads a large font file, so it is
@@ -106,7 +112,7 @@ pub(super) fn on_toolbar(state: &mut App, msg: readshot_ui::ToolbarMessage) -> T
             // One step per press: an open crop draft is dropped and
             // history stays put, so Undo never lands beneath it.
             ed.crop_draft = None;
-            ed.set_status("Cancelled the crop.");
+            ed.set_status(StatusTone::Notice, "Cancelled the crop.");
         }
         readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
             if (ed.snapshot_drag_baseline.is_some() && !ed.gap_commit_on_land)
@@ -116,7 +122,7 @@ pub(super) fn on_toolbar(state: &mut App, msg: readshot_ui::ToolbarMessage) -> T
             // its value before the drag) and history stays put.
             // Covers the Beautify and the options-bar style sliders.
             cancel_editor_previews(ed);
-            ed.set_status("Cancelled the slider change.");
+            ed.set_status(StatusTone::Notice, "Cancelled the slider change.");
         }
         readshot_ui::ToolbarMessage::Undo => {
             crate::runtime::image_menu::before_geometry_change(ed, &state.coordinator);
@@ -269,7 +275,10 @@ pub(super) fn on_hex_submitted(state: &mut App) -> Task<Message> {
         return Task::none();
     }
     let Some(color) = readshot_core::Rgba::from_hex(&ed.hex_draft) else {
-        ed.set_status("Couldn’t read that color. Use a hex value like #4F46E5.");
+        ed.set_status(
+            StatusTone::Error,
+            "Couldn’t read that color. Use a hex value like #4F46E5.",
+        );
         return Task::none();
     };
     apply_editor_color(ed, &state.coordinator, color);
@@ -291,7 +300,10 @@ pub(super) fn on_style_commit(state: &mut App) -> Task<Message> {
     // Release keeps the new tool style; only the selection needs
     // turning into one undo step.
     if commit_style_drag(ed, &state.coordinator) {
-        ed.set_status(format!("Updated selected annotation. {UNDO_HINT}"));
+        ed.set_status(
+            StatusTone::Success,
+            format!("Updated selected annotation. {UNDO_HINT}"),
+        );
     }
     Task::none()
 }

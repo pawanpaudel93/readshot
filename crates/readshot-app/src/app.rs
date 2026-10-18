@@ -365,8 +365,8 @@ pub enum Message {
     ScrollCaptureStitched(Result<image::RgbaImage, String>),
     /// Slow tick (~1 s) that fires while the editor is open AND the
     /// status pill is showing a dismissable message. Purely drives a
-    /// re-render so the view fn can re-check `status_set_at.elapsed()`
-    /// and hide the toast once it ages out.
+    /// re-render so the view fn can re-check the status's age
+    /// (`Status::set_at`) and hide the toast once it ages out.
     EditorStatusTick,
     /// First view of the scrolling-capture HUD window — records the
     /// `window::Id` so the runtime can close it when the session ends.

@@ -135,7 +135,7 @@ fn failed_recognition_toasts_retry_and_retry_restarts() {
     ));
     assert!(ed.status_is_error(), "{:?}", ed.status);
     assert_eq!(
-        ed.toast_action,
+        ed.toast_action(),
         Some(crate::editor::EditorToastAction::RetryRecognition)
     );
 
@@ -145,7 +145,7 @@ fn failed_recognition_toasts_retry_and_retry_restarts() {
         ed.text_panel.recognition,
         crate::editor::TextRecognition::Recognizing { .. }
     ));
-    assert!(ed.status.is_none() && ed.toast_action.is_none());
+    assert!(ed.status.is_none() && ed.toast_action().is_none());
 }
 
 #[test]
@@ -252,7 +252,7 @@ fn background_recognition_failure_is_quiet_with_the_panel_closed() {
         ed.text_panel.recognition,
         crate::editor::TextRecognition::Failed(_)
     ));
-    assert!(ed.status.is_none() && ed.toast_action.is_none());
+    assert!(ed.status.is_none() && ed.toast_action().is_none());
 
     // Asked for explicitly: the failure toasts with Retry.
     let _ = update(&mut app, Message::EditorTextRecognize);
@@ -266,7 +266,7 @@ fn background_recognition_failure_is_quiet_with_the_panel_closed() {
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
-        ed.toast_action,
+        ed.toast_action(),
         Some(crate::editor::EditorToastAction::RetryRecognition)
     );
 }
@@ -484,7 +484,7 @@ fn esc_closes_a_popover_then_the_overlay_panel_and_never_arms_discard() {
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(!ed.panel_overlay_open);
-    assert!(ed.discard_pending_at.is_none());
+    assert!(!ed.discard_armed());
 }
 
 #[test]
@@ -669,7 +669,7 @@ fn copy_all_uses_the_recognized_text_when_annotations_are_text_neutral() {
     let _ = update(&mut app, Message::EditorCopyTextRequested);
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.busy);
-    assert_eq!(ed.status.as_deref(), Some("Copying text…"));
+    assert_eq!(ed.status_text(), Some("Copying text…"));
 }
 
 #[test]
@@ -701,7 +701,7 @@ fn copy_all_re_recognizes_the_output_when_annotations_add_or_hide_text() {
             .commit_annotation(a.clone());
         let _ = update(&mut app, Message::EditorCopyTextRequested);
         assert_eq!(
-            app.editor.as_ref().unwrap().status.as_deref(),
+            app.editor.as_ref().unwrap().status_text(),
             Some("Recognizing text…"),
             "{a:?}"
         );
@@ -723,7 +723,7 @@ fn copy_all_commits_a_pending_text_draft_before_choosing_the_source() {
     let _ = update(&mut app, Message::EditorCopyTextRequested);
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.annotations().len(), 1, "draft committed");
-    assert_eq!(ed.status.as_deref(), Some("Recognizing text…"));
+    assert_eq!(ed.status_text(), Some("Recognizing text…"));
 }
 
 #[test]
@@ -732,7 +732,7 @@ fn copy_all_before_recognition_falls_back_to_ocr() {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
     let _ = update(&mut app, Message::EditorCopyTextRequested);
     assert_eq!(
-        app.editor.as_ref().unwrap().status.as_deref(),
+        app.editor.as_ref().unwrap().status_text(),
         Some("Recognizing text…")
     );
 }
@@ -796,12 +796,12 @@ fn copy_lines_needs_a_selection_and_reports_the_count() {
     let _ = update(&mut app, Message::EditorTextLineClicked(0));
     let _ = update(&mut app, Message::EditorCopyLines);
     assert_eq!(
-        app.editor.as_ref().unwrap().status.as_deref(),
+        app.editor.as_ref().unwrap().status_text(),
         Some("Copying text…")
     );
     let _ = update(&mut app, Message::EditorCopyLinesDone(Ok(2)));
     assert_eq!(
-        app.editor.as_ref().unwrap().status.as_deref(),
+        app.editor.as_ref().unwrap().status_text(),
         Some("Copied 2 lines.")
     );
 }
@@ -870,7 +870,7 @@ fn redact_all_adds_one_block_per_item_as_one_undo_step() {
     let anns = ed.model.annotations();
     assert_eq!(anns.len(), 2);
     assert_eq!(ed.model.undo_depth(), depth + 1);
-    assert_eq!(ed.status.as_deref(), Some("Redacted 2 items."));
+    assert_eq!(ed.status_text(), Some("Redacted 2 items."));
     assert!(matches!(
         ed.visible_toast_action(),
         Some(crate::editor::EditorToastAction::UndoRedaction { .. })
@@ -895,10 +895,7 @@ fn redact_all_adds_one_block_per_item_as_one_undo_step() {
         2,
         "covered items are not redacted twice"
     );
-    assert_eq!(
-        ed.status.as_deref(),
-        Some("No sensitive items left to redact.")
-    );
+    assert_eq!(ed.status_text(), Some("No sensitive items left to redact."));
 
     let _ = update(
         &mut app,
@@ -922,7 +919,7 @@ fn redact_line_uses_the_chosen_style() {
         ed.model.annotations()[0],
         Annotation::Pixelate { .. }
     ));
-    assert_eq!(ed.status.as_deref(), Some("Redacted 1 item."));
+    assert_eq!(ed.status_text(), Some("Redacted 1 item."));
     let _ = update(&mut app, Message::EditorRedactLine(0));
     assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 1);
 }
@@ -974,7 +971,7 @@ fn unlocatable_items_are_reported_not_dropped() {
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.annotations().len(), 2);
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some("Redacted 2 items. 1 more couldn’t be located; cover it by hand.")
     );
     assert!(ed.visible_toast_action().is_some());
@@ -982,7 +979,7 @@ fn unlocatable_items_are_reported_not_dropped() {
     let _ = update(&mut app, Message::EditorRedactAll);
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some("Couldn’t locate 1 sensitive item. Cover it by hand.")
     );
     assert!(ed.status_is_error());
@@ -997,7 +994,7 @@ fn redaction_undo_is_dropped_by_any_other_history_change() {
         &mut app,
         Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
     );
-    assert_eq!(app.editor.as_ref().unwrap().toast_action, None);
+    assert_eq!(app.editor.as_ref().unwrap().toast_action(), None);
     // Redo returns to the redaction's depth; the Undo must not come
     // back (a different edit could sit at that depth too).
     let _ = update(
@@ -1031,8 +1028,8 @@ fn arming_discard_drops_the_redaction_undo() {
     let _ = update(&mut app, Message::EditorRedactAll);
     let _ = update(&mut app, Message::EditorDiscardRequested);
     let ed = app.editor.as_ref().unwrap();
-    assert!(ed.discard_pending_at.is_some());
-    assert_eq!(ed.toast_action, None);
+    assert!(ed.discard_armed());
+    assert_eq!(ed.toast_action(), None);
 }
 
 #[test]
@@ -1064,7 +1061,7 @@ fn a_blur_redaction_does_not_count_as_solid() {
     assert_eq!(super::super::text_panel::redact_state(ed).pending.len(), 2);
     let _ = update(&mut app, Message::EditorRedactAll);
     let ed = app.editor.as_ref().unwrap();
-    assert_eq!(ed.status.as_deref(), Some("Redacted 2 items."));
+    assert_eq!(ed.status_text(), Some("Redacted 2 items."));
     let anns = ed.model.annotations();
     assert_eq!(anns.len(), 4);
     assert!(matches!(anns[2], Annotation::Rectangle { .. }));
@@ -1106,7 +1103,7 @@ fn copy_all_after_a_redaction_recognizes_the_output() {
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.busy);
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some("Recognizing text…"),
         "redacted text must not come from the cached panel text"
     );
@@ -1229,7 +1226,7 @@ async fn a_history_save_that_fails_is_reported_never_as_success() {
         ed.source_record.is_none(),
         "the editor no longer writes to it"
     );
-    let status = ed.status.clone().unwrap();
+    let status = ed.status_text().unwrap().to_owned();
     assert!(
         status.starts_with("Couldn’t save the capture to History"),
         "{status}"

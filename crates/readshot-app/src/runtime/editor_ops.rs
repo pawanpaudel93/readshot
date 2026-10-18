@@ -32,7 +32,7 @@ pub(crate) fn handle_commit_annotation(
     ed.refresh_image();
     if cropped {
         let (w, h) = ed.effective_image_size();
-        ed.set_info(format!(
+        ed.set_status(StatusTone::Info, format!(
             "Crop selected at {w}\u{a0}×\u{a0}{h}\u{a0}px. Drag the handles to adjust; {DELETE_KEY} or {UNDO_KEY} cancels."
         ));
     }
@@ -81,11 +81,14 @@ pub(crate) fn tab_field_focused(answers: &[bool]) -> bool {
 pub(crate) fn hint_may_show(ed: &crate::editor::EditorSession) -> bool {
     use crate::editor::KeyGuide;
     let live_guide = ed.key_guide_live() == Some(true)
-        && !matches!(ed.key_guide, Some((_, KeyGuide::Selection)));
+        && !matches!(
+            ed.status.as_ref().and_then(|s| s.guide),
+            Some(KeyGuide::Selection)
+        );
     !(ed.status_is_error()
         || ed.status_is_warning()
         || ed.visible_toast_action().is_some()
-        || ed.discard_pending_at.is_some()
+        || ed.discard_armed()
         || ed.status_is_in_progress()
         || live_guide)
 }
@@ -256,8 +259,8 @@ pub(crate) fn commit_pending_editor_text(
 }
 
 /// An annotation edit just became an undo step on the model: show it,
-/// say so (`None`: no toast, as for rapid arrow-key nudges) and write
-/// History. Geometry steps land through `compose_jobs` instead.
+/// say so as a success (`None`: no toast, as for rapid arrow-key
+/// nudges) and write History. Geometry steps land through `compose_jobs` instead.
 pub(crate) fn edit_landed(
     ed: &mut crate::editor::EditorSession,
     coord: &CaptureCoordinator,
@@ -265,7 +268,7 @@ pub(crate) fn edit_landed(
 ) {
     ed.refresh_image();
     if let Some(status) = status {
-        ed.set_status(status);
+        ed.set_status(StatusTone::Success, status);
     }
     sync_editor_history(ed, coord);
 }
@@ -482,9 +485,10 @@ pub(crate) fn sync_editor_history(
     // only valid while that redaction is the newest step: once anything
     // else changes history, drop it for good (the generation changes on
     // every push, undo and redo, even at the history cap).
-    if let Some(crate::editor::EditorToastAction::UndoRedaction { generation }) = ed.toast_action {
+    if let Some(crate::editor::EditorToastAction::UndoRedaction { generation }) = ed.toast_action()
+    {
         if generation != ed.model.history_generation() {
-            ed.toast_action = None;
+            ed.clear_toast_action();
         }
     }
     super::text_panel::prune_bake_sources(ed);

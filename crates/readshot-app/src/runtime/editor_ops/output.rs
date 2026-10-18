@@ -17,12 +17,15 @@ pub(super) fn on_save_requested(state: &mut App) -> Task<Message> {
     let out = match editor_output(ed) {
         Ok(out) => out,
         Err(e) => {
-            ed.set_warning(crate::runtime::beautify_panel::beautify_refusal("save", e));
+            ed.set_status(
+                StatusTone::Error,
+                crate::runtime::beautify_panel::beautify_refusal("save", e),
+            );
             return Task::none();
         }
     };
     ed.busy = true;
-    ed.set_status("Choose a save location…");
+    ed.set_status(StatusTone::Progress, "Choose a save location…");
     let session = ed.session_id;
     let seed = preferred_save_seed_dir(&state.preferences, &state.last_save_dir);
     let template = state.preferences.filename_template.clone();
@@ -59,18 +62,22 @@ pub(super) fn on_saved(
         if saved {
             ed.mark_output_clean();
         }
-        ed.set_status(match result {
-            Ok(Some(p)) => format!("Saved to {}.", p.display()),
-            Ok(None) => "Save cancelled.".into(),
+        let (tone, status) = match result {
+            Ok(Some(p)) => (StatusTone::Success, format!("Saved to {}.", p.display())),
+            Ok(None) => (StatusTone::Notice, "Save cancelled.".into()),
             Err(e) => {
                 tracing::warn!(target: readshot_core::log::cat::EDITOR, "save failed: {e}");
-                crate::runtime::history_ops::friendly_string_error_with(
-                    "save the image",
-                    &e,
-                    Some(crate::runtime::history_ops::SAVE_HINT),
+                (
+                    StatusTone::Error,
+                    crate::runtime::history_ops::friendly_string_error_with(
+                        "save the image",
+                        &e,
+                        Some(crate::runtime::history_ops::SAVE_HINT),
+                    ),
                 )
             }
-        });
+        };
+        ed.set_status(tone, status);
     }
     Task::none()
 }
@@ -88,16 +95,22 @@ pub(super) fn on_copy_image_requested(state: &mut App) -> Task<Message> {
     let out = match editor_output(ed) {
         Ok(out) => out,
         Err(e) => {
-            ed.set_warning(crate::runtime::beautify_panel::beautify_refusal("copy", e));
+            ed.set_status(
+                StatusTone::Error,
+                crate::runtime::beautify_panel::beautify_refusal("copy", e),
+            );
             return Task::none();
         }
     };
     ed.busy = true;
-    ed.set_status(if ed.model.beautify().is_identity() {
-        "Copying…".to_string()
-    } else {
-        "Copying beautified image…".to_string()
-    });
+    ed.set_status(
+        StatusTone::Progress,
+        if ed.model.beautify().is_identity() {
+            "Copying…".to_string()
+        } else {
+            "Copying beautified image…".to_string()
+        },
+    );
     let session = ed.session_id;
     Task::perform(
         async move {
@@ -122,17 +135,21 @@ pub(super) fn on_copy_image_done(
         if copied {
             ed.mark_output_clean();
         }
-        ed.set_status(match result {
-            Ok(()) => "Copied image to clipboard.".into(),
+        let (tone, status) = match result {
+            Ok(()) => (StatusTone::Success, "Copied image to clipboard.".into()),
             Err(e) => {
                 tracing::warn!(target: readshot_core::log::cat::EDITOR, "copy image failed: {e}");
-                crate::runtime::history_ops::friendly_string_error_with(
-                    "copy to the clipboard",
-                    &e,
-                    Some(crate::runtime::history_ops::RETRY_HINT),
+                (
+                    StatusTone::Error,
+                    crate::runtime::history_ops::friendly_string_error_with(
+                        "copy to the clipboard",
+                        &e,
+                        Some(crate::runtime::history_ops::RETRY_HINT),
+                    ),
                 )
             }
-        });
+        };
+        ed.set_status(tone, status);
     }
     Task::none()
 }
@@ -162,7 +179,10 @@ pub(super) fn on_copy_text_requested(state: &mut App) -> Task<Message> {
     // (`copy_all_mask`), or nothing is copied when it can't be.
     let mask = copy_all_mask(ed);
     if matches!(mask, CopyAllMask::Withhold) {
-        ed.set_status(crate::runtime::text_panel::COPY_TEXT_WITHHELD);
+        ed.set_status(
+            StatusTone::Notice,
+            crate::runtime::text_panel::COPY_TEXT_WITHHELD,
+        );
         return Task::none();
     }
     let neutral = matches!(mask, CopyAllMask::None)
@@ -174,7 +194,7 @@ pub(super) fn on_copy_text_requested(state: &mut App) -> Task<Message> {
     ed.busy = true;
     let session = ed.session_id;
     if let Some(text) = cached {
-        ed.set_status("Copying text…");
+        ed.set_status(StatusTone::Progress, "Copying text…");
         return Task::perform(
             crate::runtime::text_panel::copy_cached_text(text),
             move |r| Message::EditorCopyTextDone {
@@ -183,7 +203,7 @@ pub(super) fn on_copy_text_requested(state: &mut App) -> Task<Message> {
             },
         );
     }
-    ed.set_status("Recognizing text…");
+    ed.set_status(StatusTone::Progress, "Recognizing text…");
     let img = ed.model.flatten();
     let coord = state.coordinator.clone();
     let prefs = state.preferences.clone();
@@ -204,22 +224,31 @@ pub(super) fn on_copy_text_done(
 ) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
         ed.busy = false;
-        ed.set_status(match result {
-            Err(e) if e == crate::runtime::text_panel::COPY_TEXT_WITHHELD => e,
-            Ok(text) if text.is_empty() => "No text recognized.".into(),
-            Ok(text) => format!(
-                "Copied {} of text.",
-                counted(text.chars().count(), "character", "characters")
+        let (tone, status) = match result {
+            Err(e) if e == crate::runtime::text_panel::COPY_TEXT_WITHHELD => {
+                (StatusTone::Notice, e)
+            }
+            Ok(text) if text.is_empty() => (StatusTone::Notice, "No text recognized.".into()),
+            Ok(text) => (
+                StatusTone::Success,
+                format!(
+                    "Copied {} of text.",
+                    counted(text.chars().count(), "character", "characters")
+                ),
             ),
             Err(e) => {
                 tracing::warn!(target: readshot_core::log::cat::EDITOR, "copy text failed: {e}");
-                crate::runtime::history_ops::friendly_string_error_with(
-                    "copy the text",
-                    &e,
-                    Some(crate::runtime::history_ops::RETRY_HINT),
+                (
+                    StatusTone::Error,
+                    crate::runtime::history_ops::friendly_string_error_with(
+                        "copy the text",
+                        &e,
+                        Some(crate::runtime::history_ops::RETRY_HINT),
+                    ),
                 )
             }
-        });
+        };
+        ed.set_status(tone, status);
     }
     Task::none()
 }
@@ -241,7 +270,7 @@ pub(super) fn on_discard_requested(state: &mut App) -> Task<Message> {
     if dirty {
         if let Some(ed) = state.editor.as_mut() {
             let now = std::time::Instant::now();
-            let armed = ed.discard_pending_at.is_some();
+            let armed = ed.discard_armed();
             if !armed {
                 ed.arm_discard_prompt(now);
                 return Task::none();
@@ -292,7 +321,10 @@ pub(super) fn on_pin_requested(state: &mut App) -> Task<Message> {
     let out = match editor_output(ed) {
         Ok(out) => out,
         Err(e) => {
-            ed.set_warning(crate::runtime::beautify_panel::beautify_refusal("pin", e));
+            ed.set_status(
+                StatusTone::Error,
+                crate::runtime::beautify_panel::beautify_refusal("pin", e),
+            );
             return Task::none();
         }
     };

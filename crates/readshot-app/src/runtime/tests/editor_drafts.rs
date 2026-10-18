@@ -284,7 +284,7 @@ fn editor_delete_selected_dismisses_pending_text_edit() {
     assert!(ed.model.annotations().is_empty());
     assert_eq!(ed.model.selected_annotation(), None);
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(format!("Deleted annotation. {UNDO_HINT}").as_str())
     );
 }
@@ -434,7 +434,7 @@ fn editor_undo_commits_then_undoes_new_pending_text() {
     ));
     assert!(ed.model.can_redo());
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(format!("Undid edit. {REDO_HINT}").as_str())
     );
 }
@@ -536,7 +536,7 @@ fn editor_redo_with_pending_text_commits_new_branch_and_clears_redo() {
     }
     assert!(!ed.model.can_redo());
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(format!("Added text. {UNDO_HINT}").as_str())
     );
 }
@@ -872,7 +872,7 @@ fn an_output_result_from_a_replaced_editor_leaves_the_new_one_alone() {
         style: Default::default(),
     });
     ed.busy = true;
-    ed.set_status("Recognizing text…");
+    ed.set_status(crate::editor::StatusTone::Progress, "Recognizing text…");
     app.editor = Some(ed);
     let dir = tempfile::tempdir().unwrap();
     for message in [
@@ -893,7 +893,7 @@ fn an_output_result_from_a_replaced_editor_leaves_the_new_one_alone() {
         let ed = app.editor.as_ref().unwrap();
         assert!(ed.busy, "the new editor's own job is still running");
         assert!(editor_has_unsaved_work(ed), "never saved");
-        assert_eq!(ed.status.as_deref(), Some("Recognizing text…"));
+        assert_eq!(ed.status_text(), Some("Recognizing text…"));
     }
 }
 
@@ -911,9 +911,9 @@ fn editor_discard_requires_confirmation_for_non_empty_pending_text() {
     let _ = update(&mut app, Message::EditorDiscardRequested);
 
     let ed = app.editor.as_ref().expect("first discard should only arm");
-    assert!(ed.discard_pending_at.is_some());
+    assert!(ed.discard_armed());
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some("Unsaved edits. Press Discard again to close without saving.")
     );
 
@@ -990,9 +990,9 @@ fn editor_os_close_request_confirms_unsaved_work() {
         .editor
         .as_ref()
         .expect("first OS close should only arm, not drop the editor");
-    assert!(ed.discard_pending_at.is_some());
+    assert!(ed.discard_armed());
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some("Unsaved edits. Press Discard again to close without saving.")
     );
 
@@ -1032,7 +1032,7 @@ fn os_close_request_for_non_editor_window_leaves_editor_untouched() {
     // editor session (those windows auto-close on their own).
     let _ = update(&mut app, Message::WindowCloseRequested(other_id));
     assert!(app.editor.is_some());
-    assert!(app.editor.as_ref().unwrap().discard_pending_at.is_none());
+    assert!(!app.editor.as_ref().unwrap().discard_armed());
 }
 
 #[test]
@@ -1099,9 +1099,9 @@ fn editor_discard_requires_confirmation_for_changed_text_edit() {
     let _ = update(&mut app, Message::EditorDiscardRequested);
 
     let ed = app.editor.as_ref().expect("first discard should only arm");
-    assert!(ed.discard_pending_at.is_some());
+    assert!(ed.discard_armed());
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some("Unsaved edits. Press Discard again to close without saving.")
     );
 }
@@ -1116,9 +1116,9 @@ fn editor_discard_requires_confirmation_for_selected_frame() {
     let _ = update(&mut app, Message::EditorDiscardRequested);
 
     let ed = app.editor.as_ref().expect("first discard should only arm");
-    assert!(ed.discard_pending_at.is_some());
+    assert!(ed.discard_armed());
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some("Unsaved edits. Press Discard again to close without saving.")
     );
 }
@@ -1136,15 +1136,15 @@ fn editor_discard_confirmation_resets_after_frame_change() {
     app.editor = Some(ed);
 
     let _ = update(&mut app, Message::EditorDiscardRequested);
-    assert!(app.editor.as_ref().unwrap().discard_pending_at.is_some());
+    assert!(app.editor.as_ref().unwrap().discard_armed());
 
     let _ = update(&mut app, Message::EditorBeautifyPreset(BuiltinPreset::Soft));
-    assert!(app.editor.as_ref().unwrap().discard_pending_at.is_none());
+    assert!(!app.editor.as_ref().unwrap().discard_armed());
 
     let _ = update(&mut app, Message::EditorDiscardRequested);
 
     let ed = app.editor.as_ref().expect("discard should re-arm");
-    assert!(ed.discard_pending_at.is_some());
+    assert!(ed.discard_armed());
 }
 
 #[test]
@@ -1160,7 +1160,7 @@ fn editor_discard_confirmation_resets_after_annotation_change() {
     app.editor = Some(ed);
 
     let _ = update(&mut app, Message::EditorDiscardRequested);
-    assert!(app.editor.as_ref().unwrap().discard_pending_at.is_some());
+    assert!(app.editor.as_ref().unwrap().discard_armed());
 
     let _ = update(
         &mut app,
@@ -1173,12 +1173,12 @@ fn editor_discard_confirmation_resets_after_annotation_change() {
             },
         )),
     );
-    assert!(app.editor.as_ref().unwrap().discard_pending_at.is_none());
+    assert!(!app.editor.as_ref().unwrap().discard_armed());
 
     let _ = update(&mut app, Message::EditorDiscardRequested);
 
     let ed = app.editor.as_ref().expect("discard should re-arm");
-    assert!(ed.discard_pending_at.is_some());
+    assert!(ed.discard_armed());
     assert_eq!(ed.model.annotations().len(), 2);
 }
 
@@ -1386,7 +1386,7 @@ fn escape_cancels_live_canvas_drag_before_discarding() {
     // The discard path doesn't touch the drag-cancel sequence.
     assert_eq!(ed.drag_cancel_seq, seq_before.wrapping_add(1));
     assert!(
-        ed.discard_pending_at.is_some(),
+        ed.discard_armed(),
         "second Escape should arm the discard confirmation"
     );
 }
@@ -1611,22 +1611,22 @@ fn tool_and_selection_hints_reach_the_status_line() {
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(editor_compact_hint(T::Magnifier).as_str())
     );
-    assert_eq!(ed.status_tone(), crate::editor::StatusTone::Info);
+    assert_eq!(ed.status_tone(), Some(crate::editor::StatusTone::Info));
 
     // An error stays put.
-    app.editor
-        .as_mut()
-        .unwrap()
-        .set_status("Couldn’t save the image. Try again.");
+    app.editor.as_mut().unwrap().set_status(
+        crate::editor::StatusTone::Error,
+        "Couldn’t save the image. Try again.",
+    );
     let _ = update(
         &mut app,
         Message::EditorToolbar(readshot_ui::ToolbarMessage::SelectTool(T::Crop)),
     );
     assert_eq!(
-        app.editor.as_ref().unwrap().status.as_deref(),
+        app.editor.as_ref().unwrap().status_text(),
         Some("Couldn’t save the image. Try again.")
     );
 
@@ -1642,7 +1642,7 @@ fn tool_and_selection_hints_reach_the_status_line() {
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(editor_selected_hint("Rectangle", false).as_str())
     );
     assert_eq!(ed.key_guide_live(), Some(true));

@@ -234,7 +234,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
                 return Task::none();
             };
             let Some((w, h)) = d.target() else {
-                ed.set_warning(d.problem().unwrap_or_default());
+                ed.set_status(StatusTone::Warning, d.problem().unwrap_or_default());
                 return Task::none();
             };
             // The dialog's percentages and ratio refer to the size it
@@ -242,7 +242,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
             // numbers no longer mean what they say.
             if ed.effective_image_size() != d.base {
                 close_editor_popover(ed);
-                ed.set_warning("The image changed. Open Resize again.");
+                ed.set_status(StatusTone::Warning, "The image changed. Open Resize again.");
                 return Task::none();
             }
             let (bw, bh) = d.base;
@@ -261,12 +261,12 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
             match step {
                 Ok(Some(step)) if ed.is_large() || super::compose_jobs::is_large(ed, &step) => {
                     close_editor_popover(ed);
-                    ed.set_status("Resizing…");
+                    ed.set_status(StatusTone::Progress, "Resizing…");
                     return super::compose_jobs::queue_push(ed, kind, step);
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    ed.set_status(geometry_refused_status(kind, cropped, e));
+                    ed.set_status(StatusTone::Error, geometry_refused_status(kind, cropped, e));
                     return Task::none();
                 }
             }

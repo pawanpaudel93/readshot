@@ -116,7 +116,7 @@ packages beyond a stable Rust toolchain.
 | Beautify (background, shadow, …)    | `readshot-core::beautify`, `readshot-app::runtime::{beautify_panel,beautify_preview}` |
 | Side panel, Text tab, Redact        | `readshot-app::runtime::{side_panel,text_panel}`, `readshot-core::{redact,scrub,text_lines}` |
 | Large-document responsiveness       | `readshot-app::runtime::compose_jobs`          |
-| Editor status line and toasts       | `readshot-app::editor` (`set_status` …), `readshot-app::runtime::toast` |
+| Editor status line and toasts       | `readshot-app::editor` (`Status`, `StatusTone`, `set_status`), `readshot-app::runtime::toast` |
 | History window                      | `readshot-app::runtime::{history_ops,history_select,history_images}`, `readshot-core::history` |
 | Settings window                     | `readshot-app::runtime::{settings_ops,view}` (`settings_view`), `readshot-ui::settings` |
 | Scrolling capture                   | `readshot-app::runtime::scroll`, `readshot-core::scroll_stitch` |

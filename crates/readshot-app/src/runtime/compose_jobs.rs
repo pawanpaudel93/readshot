@@ -404,7 +404,7 @@ pub(crate) fn queue_geometry_step(
     let from = planned_present(ed)?;
     match EditorState::step_from(&from, next_geometry(&from.doc.geometry)) {
         Ok(Some(next)) if pending || ed.is_large() || is_large(ed, &next) => {
-            ed.set_status(in_progress_status(kind));
+            ed.set_status(StatusTone::Progress, in_progress_status(kind));
             Some(queue_step(
                 ed,
                 QueuedStep {
@@ -421,7 +421,7 @@ pub(crate) fn queue_geometry_step(
                 .annotations
                 .iter()
                 .any(|a| matches!(a, readshot_core::Annotation::Crop { .. }));
-            ed.set_status(geometry_refused_status(kind, cropped, e));
+            ed.set_status(StatusTone::Error, geometry_refused_status(kind, cropped, e));
             Some(Task::none())
         }
         _ => None,
@@ -455,7 +455,7 @@ pub(crate) fn queue_history_move(
     if !(pending || ed.is_large() || is_large(ed, &target)) {
         return None;
     }
-    ed.set_status(in_progress_status(kind));
+    ed.set_status(StatusTone::Progress, in_progress_status(kind));
     Some(queue_step(
         ed,
         QueuedStep {
@@ -489,7 +489,7 @@ pub(crate) fn queue_add_part(
                 .then(|| next.doc.geometry.parts.first().map(|p| p.id))
                 .flatten()
                 .map(|id| (id, Arc::clone(&from.doc.geometry)));
-            ed.set_status(in_progress_status(kind));
+            ed.set_status(StatusTone::Progress, in_progress_status(kind));
             Some(queue_step(
                 ed,
                 QueuedStep {
@@ -507,7 +507,7 @@ pub(crate) fn queue_add_part(
                 .annotations
                 .iter()
                 .any(|a| matches!(a, readshot_core::Annotation::Crop { .. }));
-            ed.set_status(geometry_refused_status(kind, cropped, e));
+            ed.set_status(StatusTone::Error, geometry_refused_status(kind, cropped, e));
             Some(Task::none())
         }
     }
@@ -1183,7 +1183,10 @@ pub(crate) fn queue_released_gap(ed: &mut EditorSession) {
             // The newest value is refused (it was never shown): keep the
             // value on screen, as a commit after a refused tick does.
             let cropped = ed.last_crop().is_some();
-            ed.set_status(geometry_refused_status(ComposeKind::Gap(gap), cropped, e));
+            ed.set_status(
+                StatusTone::Error,
+                geometry_refused_status(ComposeKind::Gap(gap), cropped, e),
+            );
             if ed.model.commit_preview_snapshot(baseline) {
                 ed.clear_discard_confirmation();
                 ed.refresh_image();
@@ -1422,7 +1425,7 @@ fn apply_on_model(
         }
         Ok(false) => (StepOutcome::Unchanged, None),
         Err(e) => {
-            ed.set_status(geometry_refused_status(kind, cropped, e));
+            ed.set_status(StatusTone::Error, geometry_refused_status(kind, cropped, e));
             (StepOutcome::Refused, None)
         }
     }
@@ -1489,7 +1492,7 @@ fn land(
     ed.clear_eyedropper_loupe();
     ed.clear_discard_confirmation();
     let status = landed_status(ed, last.kind);
-    ed.set_status(status);
+    ed.set_status(StatusTone::Success, status);
     match coord {
         Some(coord) => sync_editor_history(ed, coord),
         None => ed.history_sync_owed = true,

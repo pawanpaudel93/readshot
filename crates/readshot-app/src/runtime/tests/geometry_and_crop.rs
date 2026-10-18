@@ -55,7 +55,7 @@ fn rotate_moves_annotations_with_the_image_and_undoes() {
         other => panic!("{other:?}"),
     }
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(format!("Rotated right. {UNDO_HINT}").as_str())
     );
     let _ = update(
@@ -189,7 +189,7 @@ fn resize_apply_scales_the_document_and_refuses_oversize() {
     let _ = update(&mut app, Message::EditorResizeApply);
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.effective_image_size(), (20, 10), "unchanged");
-    assert!(ed.status.as_deref().unwrap().starts_with("Couldn’t resize"));
+    assert!(ed.status_text().unwrap().starts_with("Couldn’t resize"));
 }
 
 #[test]

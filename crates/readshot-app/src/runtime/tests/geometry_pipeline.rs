@@ -48,10 +48,10 @@ fn landed(app: &mut App) -> (Landed, readshot_ui::editor::Snapshot, image::RgbaI
         effective_size: ed.effective_image_size(),
         undo_depth: ed.model.undo_depth(),
         can_undo_redo: (ed.model.can_undo(), ed.model.can_redo()),
-        status: ed.status.clone(),
-        status_tone: ed.toned_status.as_ref().map(|(_, t)| *t),
+        status: ed.status_text().map(str::to_owned),
+        status_tone: ed.status_tone(),
         loupe_shown: ed.eyedropper.as_ref().map(|e| e.loupe.is_some()),
-        discard_armed: ed.discard_pending_at.is_some(),
+        discard_armed: ed.discard_armed(),
         history_sync_owed: ed.history_sync_owed,
         bake_sources,
         recognizing_part: ed.text_panel.recognizing_part,
@@ -208,7 +208,7 @@ fn a_sync_undo_clears_the_loupe_as_a_landed_async_one_does() {
     step_both(&mut sync, &mut async_, "undo", &[undo_msg()]);
     let ed = sync.editor.as_ref().unwrap();
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(format!("Undid edit. {REDO_HINT}").as_str())
     );
     assert!(ed.eyedropper.as_ref().is_some_and(|e| e.loupe.is_none()));
@@ -252,7 +252,7 @@ fn a_kept_gap_lands_as_a_step_whether_or_not_it_composed_off_thread() {
     let ed = sync.editor.as_ref().unwrap();
     assert_eq!(ed.model.geometry().gap, 10);
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(format!("Gap set to 10\u{a0}px. {UNDO_HINT}").as_str())
     );
     step_both(&mut sync, &mut async_, "undo the gap", &[undo_msg()]);

@@ -2487,30 +2487,26 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     // --- Status toast above the action bar ---
     // Auto-dismiss old success / info status text so the chrome
     // doesn't stay loud forever after a successful save / copy.
-    // In-progress strings (Saving…, Copying…, Recognising text…) and
+    // In-progress statuses (Saving…, Copying…, Recognising text…) and
     // errors are kept until the next transition overwrites them — an
     // error the user didn't act on shouldn't vanish after 4s.
-    let status_text = match (ed.status.clone(), ed.status_set_at) {
+    let shown_status = match ed.status.as_ref() {
         // A key guide whose draft, zone or selection ended is stale.
-        (Some(_), _) if ed.key_guide_live() == Some(false) => None,
-        (Some(s), Some(t))
+        Some(_) if ed.key_guide_live() == Some(false) => None,
+        Some(s)
             if !ed.status_is_in_progress()
                 && !ed.status_is_sticky()
-                && t.elapsed() > crate::editor::STATUS_AUTO_DISMISS =>
+                && s.set_at.elapsed() > crate::editor::STATUS_AUTO_DISMISS =>
         {
-            tracing::trace!(target: readshot_core::log::cat::EDITOR, "auto-dismissed status: {s}");
+            tracing::trace!(target: readshot_core::log::cat::EDITOR, "auto-dismissed status: {}", s.text);
             None
         }
-        (s, _) => s,
+        s => s,
     };
-    let discard_armed = ed.discard_pending_at.is_some();
-    let toast_layer = status_text.map(|s| {
-        let kind = editor_toast_kind(
-            &s,
-            crate::editor::status_str_is_in_progress(&s),
-            discard_armed,
-            ed.status_tone(),
-        );
+    let discard_armed = ed.discard_armed();
+    let toast_layer = shown_status.map(|status| {
+        let kind = editor_toast_kind(status.tone);
+        let s = status.text.clone();
         let action: Option<Element<'_, Message>> = if discard_armed {
             Some(
                 row![

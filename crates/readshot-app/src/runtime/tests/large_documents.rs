@@ -28,8 +28,7 @@ fn a_large_resize_composes_off_thread_and_lands_as_one_undo_step() {
     assert_eq!(ed.model.undo_depth(), depth + 1, "one undo step");
     assert_ne!(handle_id(ed), shown);
     assert!(ed
-        .status
-        .as_deref()
+        .status_text()
         .unwrap()
         .starts_with("Resized to 80\u{a0}×\u{a0}40"));
     // The same document and pixels as the synchronous path.
@@ -1207,7 +1206,7 @@ fn a_large_rotate_composes_off_thread_and_lands_as_one_undo_step() {
     assert_eq!(ed.model.undo_depth(), depth + 1, "one undo step");
     assert_ne!(handle_id(ed), shown);
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(format!("Rotated right. {UNDO_HINT}").as_str())
     );
     let mut sync = sync_editor();
@@ -1324,7 +1323,7 @@ fn a_large_undo_and_redo_across_a_rotate_swap_the_cached_bases_in() {
     assert_eq!(ed.model.undo_depth(), depth);
     assert!(Arc::ptr_eq(&ed.model.shared_base(), &original));
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(format!("Undid edit. {REDO_HINT}").as_str())
     );
     let mut sync = sync_editor();
@@ -1430,7 +1429,7 @@ fn a_large_added_part_lands_as_one_undo_step_with_its_bake() {
     assert_eq!(ed.model.part_ids().len(), 2);
     assert_eq!(ed.model.undo_depth(), depth + 1, "one undo step");
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(format!("Added image below. {UNDO_HINT}").as_str())
     );
     let baked = ed.model.part_ids()[0];
@@ -1494,7 +1493,7 @@ fn cancelling_a_large_gap_preview_puts_the_baseline_back_without_a_render() {
     let _ = update(&mut app, undo_msg());
     assert_eq!(composes(&app), before, "the baseline’s base was kept");
     let ed = app.editor.as_mut().unwrap();
-    assert_eq!(ed.status.as_deref(), Some("Cancelled the slider change."));
+    assert_eq!(ed.status_text(), Some("Cancelled the slider change."));
     assert_eq!(ed.image_size(), (40, 20));
     assert_eq!(handle_id(ed), baseline, "the baseline’s display is back");
     assert!(ed.model.has_flattened(), "and its flattened image");
@@ -1737,7 +1736,7 @@ fn undo_during_a_held_large_gap_drag_cancels_it_without_composing_its_value() {
         "the dropped value is never composed"
     );
     let ed = app.editor.as_ref().unwrap();
-    assert_eq!(ed.status.as_deref(), Some("Cancelled the slider change."));
+    assert_eq!(ed.status_text(), Some("Cancelled the slider change."));
     assert_eq!(ed.image_size(), (40, 20));
     assert_eq!(ed.model.undo_depth(), depth);
     assert!(ed.compose_job.is_none());
@@ -2286,7 +2285,7 @@ fn discard_abandons_a_queued_step_and_frees_nothing_here() {
     let before = super::super::compose_jobs::composes_on_this_thread();
     // The pending rotate is unsaved work: the first press arms.
     let _ = update(&mut app, Message::EditorDiscardRequested);
-    assert!(app.editor.as_ref().unwrap().discard_pending_at.is_some());
+    assert!(app.editor.as_ref().unwrap().discard_armed());
     assert!(app.editor.as_ref().unwrap().compose_job.is_some());
     let _ = update(&mut app, Message::EditorDiscardRequested);
     assert!(app.editor.is_none());
@@ -2539,7 +2538,13 @@ fn a_reopen_whose_previous_write_failed_says_so() {
         },
     );
     assert_eq!(app.history_status, None);
-    let status = app.editor.as_ref().unwrap().status.clone().unwrap();
+    let status = app
+        .editor
+        .as_ref()
+        .unwrap()
+        .status_text()
+        .unwrap()
+        .to_owned();
     assert!(status.contains("weren’t all saved to History"), "{status}");
     assert!(status.contains("the disk is full"), "{status}");
 }
@@ -2762,11 +2767,8 @@ fn a_deferred_open_asks_before_replacing_unsaved_work() {
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.session_id, c_session, "C stays");
-    assert!(
-        ed.discard_pending_at.is_some(),
-        "the unsaved-work prompt is armed"
-    );
-    assert!(ed.status.as_deref().unwrap().contains("Press Discard"));
+    assert!(ed.discard_armed(), "the unsaved-work prompt is armed");
+    assert!(ed.status_text().unwrap().contains("Press Discard"));
     let _ = update(&mut app, Message::EditorDiscardRequested);
     assert!(app.editor.is_none(), "C closed");
     assert_eq!(app.windows.kind(c), None, "C's window closed");
@@ -2853,12 +2855,8 @@ fn reopening_the_open_record_asks_before_dropping_beautify() {
     app.editor = Some(a);
     let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
     let ed = app.editor.as_ref().expect("asked first, nothing closed");
-    assert!(ed.discard_pending_at.is_some());
-    assert!(ed
-        .status
-        .as_deref()
-        .unwrap()
-        .contains("History doesn’t keep"));
+    assert!(ed.discard_armed());
+    assert!(ed.status_text().unwrap().contains("History doesn’t keep"));
     assert_eq!(app.awaiting_reopen, None);
     let _ = update(&mut app, Message::EditorDiscardRequested);
     assert!(app.editor.is_none(), "closed (retired) for the reopen");

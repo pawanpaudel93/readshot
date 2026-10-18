@@ -19,17 +19,15 @@ pub(super) fn on_status_tick(state: &mut App) -> Task<Message> {
         if !ed.status_is_in_progress()
             && !ed.status_is_sticky()
             && ed
-                .status_set_at
+                .status_set_at()
                 .is_some_and(|t| t.elapsed() > crate::editor::STATUS_AUTO_DISMISS)
         {
             ed.clear_status();
-            ed.toast_action = None;
         }
         // A key guide whose draft, zone or selection has ended
         // goes with it.
         if ed.key_guide_live() == Some(false) {
             ed.clear_status();
-            ed.key_guide = None;
         }
     }
     Task::none()
@@ -133,7 +131,6 @@ pub(super) fn on_discard_disarmed(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         ed.clear_discard_confirmation();
         ed.clear_status();
-        ed.toast_action = None;
     }
     Task::none()
 }
@@ -142,7 +139,6 @@ pub(super) fn on_discard_disarmed(state: &mut App) -> Task<Message> {
 pub(super) fn on_status_dismissed(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         ed.clear_status();
-        ed.toast_action = None;
     }
     Task::none()
 }

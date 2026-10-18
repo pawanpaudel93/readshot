@@ -229,9 +229,8 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
         since: std::time::Instant::now(),
     };
     ed.text_panel.recognizing_part = Some(part.id);
-    if ed.toast_action == Some(EditorToastAction::RetryRecognition) {
+    if ed.toast_action() == Some(EditorToastAction::RetryRecognition) {
         ed.clear_status();
-        ed.toast_action = None;
     }
     let session = ed.session_id;
     let (history_record, history_cut) = recognition_history_target(ed);
@@ -581,7 +580,14 @@ fn redact(state: &mut App, only_line: Option<usize>) -> Task<Message> {
     let n = ed.model.commit_annotations(annotations);
     let status = redact_status(n, missed);
     if n == 0 {
-        ed.set_status(status);
+        // Nothing left to redact is a notice; items it couldn't place
+        // are a failure.
+        let tone = if missed == 0 {
+            StatusTone::Notice
+        } else {
+            StatusTone::Error
+        };
+        ed.set_status(tone, status);
         return Task::none();
     }
     ed.refresh_image();
@@ -590,9 +596,9 @@ fn redact(state: &mut App, only_line: Option<usize>) -> Task<Message> {
     let action = EditorToastAction::UndoRedaction { generation };
     if missed > 0 {
         // Partial: the items left to cover by hand must not read as done.
-        ed.set_warning_with_action(status, action);
+        ed.set_status_with_action(StatusTone::Warning, status, action);
     } else {
-        ed.set_status_with_action(status, action);
+        ed.set_status_with_action(StatusTone::Success, status, action);
     }
     Task::none()
 }
@@ -1468,6 +1474,7 @@ fn on_text_recognized(
             // for) fails quietly, as history OCR always did.
             if !ed.busy && (panel_open || user_requested) {
                 ed.set_status_with_action(
+                    StatusTone::Error,
                     super::history_ops::friendly_string_error_with("recognize the text", &e, None),
                     EditorToastAction::RetryRecognition,
                 );
@@ -1557,12 +1564,12 @@ fn on_copy_lines(state: &mut App) -> Task<Message> {
     }
     let Some(text) = copy_lines_text(ed, &indices, remove_breaks) else {
         if ed.text_panel.document().is_some() {
-            ed.set_status(COPY_TEXT_WITHHELD);
+            ed.set_status(StatusTone::Notice, COPY_TEXT_WITHHELD);
         }
         return Task::none();
     };
     let n = indices.len();
-    ed.set_status("Copying text…");
+    ed.set_status(StatusTone::Progress, "Copying text…");
     Task::perform(copy_cached_text(text), move |r| {
         Message::EditorCopyLinesDone(r.map(|_| n).map_err(|e| e.to_string()))
     })
@@ -1571,17 +1578,24 @@ fn on_copy_lines(state: &mut App) -> Task<Message> {
 /// `Message::EditorCopyLinesDone`.
 fn on_copy_lines_done(state: &mut App, result: Result<usize, String>) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
-        ed.set_status(match result {
-            Ok(n) => format!("Copied {}.", counted(n, "line", "lines")),
+        let (tone, status) = match result {
+            Ok(n) => (
+                StatusTone::Success,
+                format!("Copied {}.", counted(n, "line", "lines")),
+            ),
             Err(e) => {
                 tracing::warn!(target: readshot_core::log::cat::EDITOR, "copy lines failed: {e}");
-                super::history_ops::friendly_string_error_with(
-                    "copy the text",
-                    &e,
-                    Some(super::history_ops::RETRY_HINT),
+                (
+                    StatusTone::Error,
+                    super::history_ops::friendly_string_error_with(
+                        "copy the text",
+                        &e,
+                        Some(super::history_ops::RETRY_HINT),
+                    ),
                 )
             }
-        });
+        };
+        ed.set_status(tone, status);
     }
     Task::none()
 }
@@ -1611,7 +1625,7 @@ fn on_history_written(
             // own version.
             if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
                 ed.source_record = None;
-                ed.set_warning(format!(
+                ed.set_status(StatusTone::Warning, format!(
                             "History keeps the redacted version of this capture (it was redacted in another window), so this change wasn’t stored there. Press {} to save this version to a file.",
                             super::keys::SAVE_KEY
                         ));
@@ -1624,7 +1638,7 @@ fn on_history_written(
             if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
                 ed.history_scrubbed = true;
                 ed.history_frame_written = crate::editor::HistoryFrame::Unknown;
-                ed.set_warning(
+                ed.set_status(StatusTone::Error,
                             "Couldn’t read this capture’s History record, so it wasn’t changed. Readshot tries again with your next edit.",
                         );
             }
@@ -1638,11 +1652,14 @@ fn on_history_written(
                 ed.history_scrubbed = true;
                 ed.history_frame_written = crate::editor::HistoryFrame::Unknown;
                 if !ed.busy {
-                    ed.set_status(super::history_ops::friendly_string_error_with(
-                        "update this capture in History",
-                        &e,
-                        Some("Readshot will keep trying."),
-                    ));
+                    ed.set_status(
+                        StatusTone::Error,
+                        super::history_ops::friendly_string_error_with(
+                            "update this capture in History",
+                            &e,
+                            Some("Readshot will keep trying."),
+                        ),
+                    );
                 }
             }
             Task::none()

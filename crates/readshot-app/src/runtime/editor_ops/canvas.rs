@@ -24,11 +24,14 @@ pub(super) fn on_canvas(state: &mut App, msg: readshot_ui::CanvasMessage) -> Tas
                     match eye.target {
                         crate::editor::EyedropperTarget::Annotation => {
                             let undoable = apply_editor_color(ed, &state.coordinator, color);
-                            ed.set_status(if undoable {
-                                format!("Picked {}. {UNDO_HINT}", color.to_hex())
-                            } else {
-                                format!("Picked {}.", color.to_hex())
-                            });
+                            ed.set_status(
+                                StatusTone::Success,
+                                if undoable {
+                                    format!("Picked {}. {UNDO_HINT}", color.to_hex())
+                                } else {
+                                    format!("Picked {}.", color.to_hex())
+                                },
+                            );
                             picked = Some(color);
                         }
                         crate::editor::EyedropperTarget::BeautifyBackground => {
@@ -44,10 +47,10 @@ pub(super) fn on_canvas(state: &mut App, msg: readshot_ui::CanvasMessage) -> Tas
                             ));
                             if ed.model.set_beautify(s) {
                                 ed.clear_discard_confirmation();
-                                ed.set_status(format!(
-                                    "Background set to {}. {UNDO_HINT}",
-                                    color.to_hex()
-                                ));
+                                ed.set_status(
+                                    StatusTone::Success,
+                                    format!("Background set to {}. {UNDO_HINT}", color.to_hex()),
+                                );
                             }
                         }
                     }

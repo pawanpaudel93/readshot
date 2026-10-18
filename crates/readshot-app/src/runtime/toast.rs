@@ -27,28 +27,27 @@ pub(crate) fn toast_is_dismissable(kind: ToastKind) -> bool {
     matches!(kind, ToastKind::Error | ToastKind::Warn)
 }
 
-/// Toast kind for the editor status line. Armed discard wins (amber),
-/// then errors, then in-flight work, then the tone the status was set
-/// with (`EditorSession::set_warning`: refusals, partial failures;
-/// `set_info`: instructions); the rest is classified from the wording.
-pub(crate) fn editor_toast_kind(
-    status: &str,
-    in_progress: bool,
-    discard_armed: bool,
-    tone: crate::editor::StatusTone,
-) -> ToastKind {
+/// Toast kind for the editor status line: the tone its writer chose.
+pub(crate) fn editor_toast_kind(tone: crate::editor::StatusTone) -> ToastKind {
     use crate::editor::StatusTone;
-    let error = crate::editor::status_str_is_error(status);
-    if discard_armed {
-        ToastKind::Warn
-    } else if in_progress && !error {
-        ToastKind::Info
-    } else if tone == StatusTone::Warning && !error {
-        ToastKind::Warn
-    } else if tone == StatusTone::Info && !error {
-        ToastKind::Info
-    } else {
-        status_toast_kind(status)
+    match tone {
+        StatusTone::Success => ToastKind::Ok,
+        StatusTone::Notice | StatusTone::Info | StatusTone::Progress => ToastKind::Info,
+        StatusTone::Warning | StatusTone::DiscardPrompt => ToastKind::Warn,
+        StatusTone::Error => ToastKind::Error,
+    }
+}
+
+/// The editor tone for a plain status string from outside the editor (a
+/// notification that could not be shown): the kind [`status_toast_kind`]
+/// gives it.
+pub(crate) fn plain_status_tone(status: &str) -> crate::editor::StatusTone {
+    use crate::editor::StatusTone;
+    match status_toast_kind(status) {
+        ToastKind::Ok => StatusTone::Success,
+        ToastKind::Info => StatusTone::Notice,
+        ToastKind::Warn => StatusTone::Warning,
+        ToastKind::Error => StatusTone::Error,
     }
 }
 

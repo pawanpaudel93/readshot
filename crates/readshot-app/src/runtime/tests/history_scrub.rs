@@ -204,8 +204,7 @@ fn a_failed_history_write_shows_an_error_and_forces_a_full_rewrite_next() {
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.status_is_error(), "{:?}", ed.status);
     assert!(
-        ed.status
-            .as_deref()
+        ed.status_text()
             .is_some_and(|s| s.ends_with("Readshot will keep trying.")),
         "{:?}",
         ed.status
@@ -1204,7 +1203,7 @@ fn copy_lines_on_a_reopened_scrub_masks_its_baked_in_redactions() {
     let _ = update(&mut app, Message::EditorTextLineClicked(0));
     let _ = update(&mut app, Message::EditorCopyLines);
     assert_eq!(
-        app.editor.as_ref().unwrap().status.as_deref(),
+        app.editor.as_ref().unwrap().status_text(),
         Some("Copying text…")
     );
 }
@@ -1226,7 +1225,7 @@ fn copy_all_on_a_reopened_scrub_masks_its_baked_in_redactions() {
     );
     let _ = update(&mut app, Message::EditorCopyTextRequested);
     assert_eq!(
-        app.editor.as_ref().unwrap().status.as_deref(),
+        app.editor.as_ref().unwrap().status_text(),
         Some("Recognizing text…")
     );
 }
@@ -1246,8 +1245,8 @@ fn copies_of_a_reopened_scrub_with_unknown_redactions_are_withheld() {
         .editor
         .as_ref()
         .unwrap()
-        .status
-        .clone()
+        .status_text()
+        .map(str::to_owned)
         .unwrap_or_default();
     assert!(status.starts_with("Text hidden"), "{status}");
     assert!(!app.editor.as_ref().unwrap().busy);
@@ -1257,8 +1256,8 @@ fn copies_of_a_reopened_scrub_with_unknown_redactions_are_withheld() {
         .editor
         .as_ref()
         .unwrap()
-        .status
-        .clone()
+        .status_text()
+        .map(str::to_owned)
         .unwrap_or_default();
     assert!(status.starts_with("Text hidden"), "{status}");
 }
@@ -1383,7 +1382,7 @@ fn a_refused_restore_tells_the_editor_and_unbinds_it() {
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.source_record.is_none(), "no more writes to that record");
-    let status = ed.status.clone().unwrap_or_default();
+    let status = ed.status_text().map(str::to_owned).unwrap_or_default();
     assert!(status.contains("redacted in another window"), "{status}");
     assert!(status.contains(super::super::keys::SAVE_KEY), "{status}");
 }
@@ -1410,7 +1409,7 @@ fn an_unreadable_record_refusal_is_reported_as_such_and_not_final() {
         ed.history_scrubbed,
         "the next sync rewrites the whole record"
     );
-    let status = ed.status.clone().unwrap_or_default();
+    let status = ed.status_text().map(str::to_owned).unwrap_or_default();
     assert!(
         status.starts_with("Couldn’t read this capture’s History record"),
         "{status}"

@@ -892,8 +892,8 @@ fn key_guides_stay_while_their_draft_lasts() {
     let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(100, 50)));
     press(&mut app, id, ch("c"), plain());
     let age = |app: &mut App| {
-        app.editor.as_mut().unwrap().status_set_at =
-            Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
+        app.editor.as_mut().unwrap().status.as_mut().unwrap().set_at =
+            std::time::Instant::now() - std::time::Duration::from_secs(60);
     };
     age(&mut app);
     let _ = update(&mut app, Message::EditorStatusTick);
@@ -999,8 +999,7 @@ fn tab_applies_a_typed_hex_and_esc_still_cancels() {
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.popover, Some(EditorPopover::Color));
     assert!(ed
-        .status
-        .as_deref()
+        .status_text()
         .unwrap_or("")
         .starts_with("Couldn’t read that color"));
     // Esc cancels: the typed value is dropped.

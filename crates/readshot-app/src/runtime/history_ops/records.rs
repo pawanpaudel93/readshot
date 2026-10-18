@@ -33,7 +33,7 @@ pub(super) fn on_record_save_failed(
         .as_mut()
         .filter(|ed| Some(ed.session_id) == session)
     {
-        Some(ed) => ed.set_warning(history_save_failure(&error, true)),
+        Some(ed) => ed.set_status(StatusTone::Error, history_save_failure(&error, true)),
         None => state.last_capture_status = Some(history_save_failure(&error, false)),
     }
     Task::none()

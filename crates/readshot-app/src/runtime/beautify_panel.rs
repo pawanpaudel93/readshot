@@ -56,7 +56,7 @@ pub(crate) fn beautify_output_refusal(ed: &EditorSession) -> Option<String> {
 fn set(ed: &mut EditorSession, s: readshot_core::beautify::BeautifySettings, what: &str) {
     if ed.model.set_beautify(s) {
         ed.clear_discard_confirmation();
-        ed.set_status(format!("{what}. {UNDO_HINT}"));
+        ed.set_status(StatusTone::Success, format!("{what}. {UNDO_HINT}"));
     }
 }
 
@@ -68,10 +68,13 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
         let saved = state.save_beautify_preset(s);
         if let Some(ed) = state.editor.as_mut() {
             match saved {
-                Some(name) => ed.set_status(format!("Saved {name}.")),
-                None => ed.set_warning(format!(
-                    "You can keep up to {MAX_SAVED_PRESETS} presets. Remove one to save another."
-                )),
+                Some(name) => ed.set_status(StatusTone::Success, format!("Saved {name}.")),
+                None => ed.set_status(
+                    StatusTone::Warning,
+                    format!(
+                        "You can keep up to {MAX_SAVED_PRESETS} presets. Remove one to save another."
+                    ),
+                ),
             }
         }
         return Task::none();
@@ -81,8 +84,14 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
         if let Some(removed) = state.delete_beautify_preset(i) {
             if let Some(ed) = state.editor.as_mut() {
                 let status = format!("Removed {}.", removed.name);
-                ed.set_status_with_action(status, crate::editor::EditorToastAction::RestorePreset);
-                ed.removed_beautify_preset = Some((i, removed));
+                ed.set_status_with_action(
+                    StatusTone::Success,
+                    status,
+                    crate::editor::EditorToastAction::RestorePreset,
+                );
+                if let Some(status) = ed.status.as_mut() {
+                    status.removed_preset = Some((i, removed));
+                }
             }
         }
         return Task::none();
@@ -90,7 +99,7 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
     if let Message::EditorBeautifyRestorePreset = message {
         let pending = state.editor.as_mut().and_then(|ed| {
             (ed.visible_toast_action() == Some(crate::editor::EditorToastAction::RestorePreset))
-                .then(|| ed.removed_beautify_preset.take())
+                .then(|| ed.status.as_mut().and_then(|s| s.removed_preset.take()))
                 .flatten()
         });
         if let Some((i, preset)) = pending {
@@ -98,11 +107,14 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
             let restored = state.restore_beautify_preset(i, preset);
             if let Some(ed) = state.editor.as_mut() {
                 if restored {
-                    ed.set_status(format!("Restored {name}."));
+                    ed.set_status(StatusTone::Success, format!("Restored {name}."));
                 } else {
-                    ed.set_status(format!(
+                    ed.set_status(
+                        StatusTone::Error,
+                        format!(
                         "Couldn’t restore {name}: you can keep up to {MAX_SAVED_PRESETS} presets."
-                    ));
+                    ),
+                    );
                 }
             }
         }
@@ -165,7 +177,10 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: Message) -> Task
                     }));
                     set(ed, s, &format!("Background set to {}", c.to_hex()));
                 }
-                None => ed.set_status("Couldn’t read that color. Use a hex value like #4F46E5."),
+                None => ed.set_status(
+                    StatusTone::Error,
+                    "Couldn’t read that color. Use a hex value like #4F46E5.",
+                ),
             }
         }
         Message::EditorBeautifyPickBackground => {

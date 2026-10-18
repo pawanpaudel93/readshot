@@ -166,7 +166,7 @@ fn debug_editor_qa_session_is_clean_and_pin_ready() {
     assert_eq!(ed.next_pin_number, 2);
     assert!(ed.model.undo_depth() > 0);
     assert!(!editor_has_unsaved_work(&ed));
-    assert_eq!(ed.status.as_deref(), Some("Editor QA fixture loaded."));
+    assert_eq!(ed.status_text(), Some("Editor QA fixture loaded."));
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn plain_esc_closes_popover_instead_of_arming_discard() {
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.popover, None);
-    assert!(ed.discard_pending_at.is_none());
+    assert!(!ed.discard_armed());
 }
 
 #[test]
@@ -333,7 +333,7 @@ fn esc_while_typing_in_the_hex_field_closes_the_popover() {
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.popover, None);
-    assert!(ed.discard_pending_at.is_none());
+    assert!(!ed.discard_armed());
 }
 
 #[test]
@@ -821,7 +821,7 @@ fn saved_presets_persist_apply_and_cap_at_twelve() {
         Some(crate::editor::EditorToastAction::RestorePreset)
     );
     assert_eq!(
-        ed.status.as_deref(),
+        ed.status_text(),
         Some(format!("Removed {}.", first.name).as_str())
     );
     let _ = update(&mut app, Message::EditorBeautifyRestorePreset);
@@ -846,7 +846,10 @@ fn undo_for_a_removed_preset_expires_with_its_toast() {
     let _ = update(&mut app, Message::EditorBeautifySavePreset);
     let _ = update(&mut app, Message::EditorBeautifyDeletePreset(0));
     // Any later status replaces the toast and its Undo.
-    app.editor.as_mut().unwrap().set_status("Saved.");
+    app.editor
+        .as_mut()
+        .unwrap()
+        .set_status(Tone::Success, "Saved.");
     let _ = update(&mut app, Message::EditorBeautifyRestorePreset);
     assert!(app.preferences.editor_beautify_presets.is_empty());
 }
@@ -994,7 +997,7 @@ fn one_esc_closes_the_popover_but_keeps_the_draft() {
     press_escape(&mut app, id);
     let ed = app.editor.as_ref().expect("editor stays open");
     assert!(ed.pending_text.is_none());
-    assert!(ed.discard_pending_at.is_none());
+    assert!(!ed.discard_armed());
 }
 
 #[test]
@@ -1025,7 +1028,7 @@ fn one_esc_closes_the_popover_but_keeps_the_selection() {
     press_escape(&mut app, id);
     let ed = app.editor.as_ref().expect("editor stays open");
     assert_eq!(ed.model.selected_annotation(), None);
-    assert!(ed.discard_pending_at.is_none());
+    assert!(!ed.discard_armed());
 }
 
 #[test]
@@ -1149,61 +1152,43 @@ fn editor_chrome_layers_clear_the_stage() {
 
 #[test]
 fn editor_toast_kind_classifies_status() {
-    assert_eq!(
-        editor_toast_kind(
-            "Couldn’t save — the folder is read-only.",
-            false,
-            false,
-            Tone::Auto
-        ),
-        ToastKind::Error
-    );
-    assert_eq!(
-        editor_toast_kind("Copied image", false, false, Tone::Auto),
-        ToastKind::Ok
-    );
-    assert_eq!(
-        editor_toast_kind("Saving…", true, false, Tone::Auto),
-        ToastKind::Info
-    );
-    assert_eq!(
-        editor_toast_kind("anything", false, true, Tone::Auto),
-        ToastKind::Warn
-    );
+    // "Couldn’t save — the folder is read-only."
+    assert_eq!(editor_toast_kind(Tone::Error), ToastKind::Error);
+    // "Copied image"
+    assert_eq!(editor_toast_kind(Tone::Success), ToastKind::Ok);
+    // "Saving…"
+    assert_eq!(editor_toast_kind(Tone::Progress), ToastKind::Info);
+    // An armed Discard.
+    assert_eq!(editor_toast_kind(Tone::DiscardPrompt), ToastKind::Warn);
     // A status set as a warning is never the success check, but an
-    // error string still reads as an error.
-    assert_eq!(
-        editor_toast_kind(
-            "The image changed. Open Resize again.",
-            false,
-            false,
-            Tone::Warning
-        ),
-        ToastKind::Warn
-    );
-    assert_eq!(
-        editor_toast_kind("Couldn’t locate 1 item.", false, false, Tone::Warning),
-        ToastKind::Error
-    );
+    // error reads as an error.
+    // "The image changed. Open Resize again."
+    assert_eq!(editor_toast_kind(Tone::Warning), ToastKind::Warn);
+    // "Couldn’t locate 1 item."
+    assert_eq!(editor_toast_kind(Tone::Error), ToastKind::Error);
 }
 
 #[test]
 fn refusals_and_partial_failures_toast_as_sticky_warnings() {
     let mut ed = debug_editor_qa_session();
-    ed.set_warning("Enter a width and height of at least 1\u{a0}px.");
+    ed.set_status(
+        Tone::Warning,
+        "Enter a width and height of at least 1\u{a0}px.",
+    );
     assert!(ed.status_is_warning());
     assert!(ed.status_is_sticky());
     // Any later status (or a direct write) drops the warning.
-    ed.set_status("Saved.");
+    ed.set_status(Tone::Success, "Saved.");
     assert!(!ed.status_is_warning());
-    ed.set_warning("x");
-    ed.status = Some("Unsaved edits".into());
+    ed.set_status(Tone::Warning, "x");
+    ed.status = Some(crate::editor::Status::new(Tone::Notice, "Unsaved edits"));
     assert!(!ed.status_is_warning());
     // Warnings survive the auto-dismiss tick.
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let mut ed = debug_editor_qa_session();
-    ed.set_warning("The image changed. Open Resize again.");
-    ed.status_set_at = Some(std::time::Instant::now() - crate::editor::STATUS_AUTO_DISMISS * 2);
+    ed.set_status(Tone::Warning, "The image changed. Open Resize again.");
+    ed.status.as_mut().unwrap().set_at =
+        std::time::Instant::now() - crate::editor::STATUS_AUTO_DISMISS * 2;
     app.editor = Some(ed);
     let _ = update(&mut app, Message::EditorStatusTick);
     assert!(app.editor.as_ref().unwrap().status.is_some());
@@ -1214,12 +1199,13 @@ fn a_partial_redaction_status_is_a_warning() {
     let s = super::super::text_panel::redact_status(2, 1);
     assert!(s.contains("cover it by hand"), "{s}");
     let mut ed = debug_editor_qa_session();
-    ed.set_warning_with_action(
+    ed.set_status_with_action(
+        Tone::Warning,
         s.clone(),
         crate::editor::EditorToastAction::UndoRedaction { generation: 0 },
     );
     assert_eq!(
-        editor_toast_kind(&s, false, false, ed.status_tone()),
+        editor_toast_kind(ed.status_tone().unwrap()),
         ToastKind::Warn
     );
 }
@@ -1245,11 +1231,8 @@ fn status_toast_kind_separates_notices_from_successes() {
     for s in ["Saved to /tmp/x.png.", "Copied text."] {
         assert_eq!(status_toast_kind(s), ToastKind::Ok, "{s:?}");
     }
-    // The editor shares the notice rule for its idle statuses.
-    assert_eq!(
-        editor_toast_kind("No text recognized.", false, false, Tone::Auto),
-        ToastKind::Info
-    );
+    // The editor's notices ("No text recognized.") show the same kind.
+    assert_eq!(editor_toast_kind(Tone::Notice), ToastKind::Info);
 }
 
 #[test]
@@ -1273,26 +1256,19 @@ fn other_status_after_arming_disarms_discard() {
     app.editor = Some(ed);
     let _ = update(&mut app, Message::EditorDiscardRequested);
     let ed = app.editor.as_mut().unwrap();
-    let armed = ed.discard_pending_at.is_some();
+    let armed = ed.discard_armed();
     assert!(armed, "dirty editor should arm");
-    ed.set_status("Copying…");
-    assert!(ed.discard_pending_at.is_none());
-    let s = ed.status.clone().unwrap();
+    ed.set_status(Tone::Progress, "Copying…");
+    assert!(!ed.discard_armed());
     assert_ne!(
-        editor_toast_kind(
-            &s,
-            crate::editor::status_str_is_in_progress(&s),
-            ed.discard_pending_at.is_some(),
-            Tone::Auto
-        ),
+        editor_toast_kind(ed.status_tone().unwrap()),
         ToastKind::Warn
     );
     let _ = update(&mut app, Message::EditorDiscardRequested);
     let ed = app.editor.as_mut().unwrap();
-    ed.set_status("Couldn’t save — disk full.");
-    let s = ed.status.clone().unwrap();
+    ed.set_status(Tone::Error, "Couldn’t save — disk full.");
     assert_eq!(
-        editor_toast_kind(&s, false, ed.discard_pending_at.is_some(), Tone::Auto),
+        editor_toast_kind(ed.status_tone().unwrap()),
         ToastKind::Error
     );
 }
@@ -1301,12 +1277,11 @@ fn other_status_after_arming_disarms_discard() {
 fn keep_editing_disarms_discard() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let mut ed = debug_editor_qa_session();
-    ed.discard_pending_at = Some(std::time::Instant::now());
-    ed.status = Some("Unsaved edits".into());
+    ed.arm_discard_prompt(std::time::Instant::now());
     app.editor = Some(ed);
     let _ = update(&mut app, Message::EditorDiscardDisarmed);
     let ed = app.editor.as_ref().unwrap();
-    assert!(ed.discard_pending_at.is_none());
+    assert!(!ed.discard_armed());
     assert!(ed.status.is_none());
 }
 
@@ -1314,15 +1289,19 @@ fn keep_editing_disarms_discard() {
 fn dismissing_status_clears_it_and_tick_keeps_errors() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let mut ed = debug_editor_qa_session();
-    ed.status = Some("Couldn’t save — the folder is read-only.".into());
-    ed.status_set_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
+    ed.status = Some(crate::editor::Status::new(
+        Tone::Error,
+        "Couldn’t save — the folder is read-only.",
+    ));
+    ed.status.as_mut().unwrap().set_at =
+        std::time::Instant::now() - std::time::Duration::from_secs(60);
     app.editor = Some(ed);
     let _ = update(&mut app, Message::EditorStatusTick);
     assert!(app.editor.as_ref().unwrap().status.is_some());
     let _ = update(&mut app, Message::EditorStatusDismissed);
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.status.is_none());
-    assert!(ed.status_set_at.is_none());
+    assert!(ed.status_set_at().is_none());
 }
 
 #[test]
@@ -1348,16 +1327,18 @@ fn popover_closed_message_clears_any_open_popover() {
 #[test]
 fn instructions_toast_as_info_not_success() {
     assert_eq!(
-        editor_toast_kind("Press ↵ to crop, esc to cancel.", false, false, Tone::Info),
+        // "Press ↵ to crop, esc to cancel."
+        editor_toast_kind(Tone::Info),
         ToastKind::Info
     );
     // Drawing a crop draft sets its instruction as Info.
     let mut ed = debug_editor_qa_session();
-    ed.set_info("Press ↵ to crop, esc to cancel.");
-    assert_eq!(ed.status_tone(), Tone::Info);
+    ed.set_status(Tone::Info, "Press ↵ to crop, esc to cancel.");
+    assert_eq!(ed.status_tone(), Some(Tone::Info));
     assert!(!ed.status_is_sticky());
-    ed.set_status("Cropped.");
-    assert_eq!(ed.status_tone(), Tone::Auto);
+    // A later status replaces the tone with its own.
+    ed.set_status(Tone::Success, "Cropped.");
+    assert_eq!(ed.status_tone(), Some(Tone::Success));
 }
 
 #[test]
@@ -1367,20 +1348,22 @@ fn warnings_can_be_dismissed_and_stop_the_status_tick() {
     assert!(!toast_is_dismissable(ToastKind::Ok));
     assert!(!toast_is_dismissable(ToastKind::Info));
     let mut ed = debug_editor_qa_session();
-    ed.set_status("Saved.");
+    ed.set_status(Tone::Success, "Saved.");
     assert!(crate::editor::status_tick_needed(&ed));
-    ed.set_warning("Enter a width and height of at least 1\u{a0}px.");
+    ed.set_status(
+        Tone::Warning,
+        "Enter a width and height of at least 1\u{a0}px.",
+    );
     assert!(!crate::editor::status_tick_needed(&ed));
-    ed.set_status("Couldn’t save — disk full.");
+    ed.set_status(Tone::Error, "Couldn’t save — disk full.");
     assert!(!crate::editor::status_tick_needed(&ed));
     // An armed Discard never expires, so it needs no tick (WCAG 2.2.1).
-    ed.set_status("Unsaved edits. Press Discard again to close without saving.");
-    ed.discard_pending_at = Some(std::time::Instant::now());
+    ed.arm_discard_prompt(std::time::Instant::now());
     assert!(!crate::editor::status_tick_needed(&ed));
     // Dismiss clears a warning like an error.
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let mut ed = debug_editor_qa_session();
-    ed.set_warning("The image changed. Open Resize again.");
+    ed.set_status(Tone::Warning, "The image changed. Open Resize again.");
     app.editor = Some(ed);
     let _ = update(&mut app, Message::EditorStatusDismissed);
     assert!(app.editor.as_ref().unwrap().status.is_none());
@@ -1401,11 +1384,10 @@ fn an_armed_discard_does_not_expire() {
     let _ = update(&mut app, Message::EditorDiscardRequested);
     let ed = app.editor.as_mut().unwrap();
     let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(600);
-    ed.discard_pending_at = Some(long_ago);
-    ed.status_set_at = Some(long_ago);
+    ed.arm_discard_prompt(long_ago);
     let _ = update(&mut app, Message::EditorStatusTick);
     let ed = app.editor.as_ref().unwrap();
-    assert!(ed.discard_pending_at.is_some(), "still armed");
+    assert!(ed.discard_armed(), "still armed");
     assert!(ed.status.is_some(), "the prompt is still shown");
     // The second press, ten minutes later, discards.
     let _ = update(&mut app, Message::EditorDiscardRequested);

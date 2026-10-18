@@ -104,7 +104,7 @@ pub(crate) fn finish_combine_capture(state: &mut App, image: image::RgbaImage) -
 
 /// The combine capture ended without an image (error, esc, no display):
 /// show the editor again, unchanged. `status` is a complete, friendly
-/// message for the editor's toast (`None` for a plain cancel).
+/// error message for the editor's toast (`None` for a plain cancel).
 pub(crate) fn abort_combine_capture(state: &mut App, status: Option<&str>) -> Task<Message> {
     // Past its selection (`OverlaySelected` marked it) the capture is in
     // flight: it must land in this editor or fail there via
@@ -140,7 +140,7 @@ pub(crate) fn fail_combine_capture(state: &mut App, status: Option<&str>) -> Tas
         return Task::none();
     };
     if let Some(status) = status {
-        ed.set_status(status);
+        ed.set_status(StatusTone::Error, status);
     }
     show_editor(ed.window_id)
 }
@@ -370,20 +370,18 @@ pub(crate) fn preview_gap(ed: &mut EditorSession, gap: u32) -> Task<Message> {
         Ok(step) => {
             match ed.model.preview_snapshot(step) {
                 Ok(()) => ed.refresh_image(),
-                Err(e) => ed.set_status(geometry_refused_status(
-                    ComposeKind::GapPreview(gap),
-                    cropped,
-                    e,
-                )),
+                Err(e) => ed.set_status(
+                    StatusTone::Error,
+                    geometry_refused_status(ComposeKind::GapPreview(gap), cropped, e),
+                ),
             }
             Task::none()
         }
         Err(e) => {
-            ed.set_status(geometry_refused_status(
-                ComposeKind::GapPreview(gap),
-                cropped,
-                e,
-            ));
+            ed.set_status(
+                StatusTone::Error,
+                geometry_refused_status(ComposeKind::GapPreview(gap), cropped, e),
+            );
             Task::none()
         }
     }
@@ -398,11 +396,10 @@ fn preview_gap_now(ed: &mut EditorSession, gap: u32) {
     let cropped = ed.last_crop().is_some();
     match ed.model.preview_geometry(&base, next) {
         Ok(()) => ed.refresh_image(),
-        Err(e) => ed.set_status(geometry_refused_status(
-            ComposeKind::GapPreview(gap),
-            cropped,
-            e,
-        )),
+        Err(e) => ed.set_status(
+            StatusTone::Error,
+            geometry_refused_status(ComposeKind::GapPreview(gap), cropped, e),
+        ),
     }
     ed.layout_gap_previewed_at = Some(Instant::now());
 }
@@ -526,7 +523,7 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
             }
             super::image_menu::prepare(ed, &coord);
             ed.busy = true;
-            ed.set_status("Choose an image…");
+            ed.set_status(StatusTone::Progress, "Choose an image…");
             let session = ed.session_id;
             let budget = PartBudget::below(ed.model.geometry());
             Task::perform(pick_and_decode_image(budget), move |result| {
@@ -545,7 +542,7 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
                     Task::none()
                 }
                 Err(e) => {
-                    ed.set_status(format!("Couldn’t add the image — {e}"));
+                    ed.set_status(StatusTone::Error, format!("Couldn’t add the image — {e}"));
                     Task::none()
                 }
             }
@@ -625,12 +622,12 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
             let next = ed.model.geometry().with_layout(gap, align);
             match ed.model.geometry_step(next) {
                 Ok(Some(step)) if ed.is_large() || super::compose_jobs::is_large(ed, &step) => {
-                    ed.set_status("Aligning…");
+                    ed.set_status(StatusTone::Progress, "Aligning…");
                     return super::compose_jobs::queue_push(ed, kind, step);
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    ed.set_status(geometry_refused_status(kind, cropped, e));
+                    ed.set_status(StatusTone::Error, geometry_refused_status(kind, cropped, e));
                     return Task::none();
                 }
             }

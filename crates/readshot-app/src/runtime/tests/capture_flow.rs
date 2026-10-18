@@ -1050,7 +1050,13 @@ fn a_refused_notification_shows_in_the_editor_with_the_way_back() {
         "Couldn’t save the capture.",
     );
     let _ = update(&mut app, Message::TrayTick);
-    let status = app.editor.as_ref().unwrap().status.clone().unwrap();
+    let status = app
+        .editor
+        .as_ref()
+        .unwrap()
+        .status_text()
+        .unwrap()
+        .to_owned();
     assert!(status.starts_with("Couldn’t save the capture."), "{status}");
     assert!(status.contains(NOTIFICATIONS_OFF_HINT), "{status}");
     assert!(app.notifications_off_told);
@@ -1086,7 +1092,13 @@ fn an_unbundled_notification_shows_in_the_editor() {
     app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
     record_undelivered(NotShownReason::NotBundled, "Checking for updates…");
     let _ = update(&mut app, Message::TrayTick);
-    let status = app.editor.as_ref().unwrap().status.clone().unwrap();
+    let status = app
+        .editor
+        .as_ref()
+        .unwrap()
+        .status_text()
+        .unwrap()
+        .to_owned();
     assert_eq!(status, "Checking for updates…");
     assert!(!app.notifications_off_told);
     assert!(!notifications_off());

@@ -514,7 +514,7 @@ pub(crate) fn open_reopened(
     );
     let opened = open_editor_window_replacing(state, editor, None);
     if let (Some(reason), Some(ed)) = (unsaved, state.editor.as_mut()) {
-        ed.set_warning(format!(
+        ed.set_status(StatusTone::Warning, format!(
             "Your last edits in the previous window weren’t all saved to History ({reason}). This is the capture as History has it."
         ));
     }

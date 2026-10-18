@@ -576,9 +576,10 @@ fn on_scroll_stitched(state: &mut App, result: Result<image::RgbaImage, String>)
         Ok(image) => {
             let (w, h) = (image.width(), image.height());
             let mut ed = crate::editor::EditorSession::new_with_display_scale(image, display_scale);
-            ed.set_status(format!(
-                "Scrolling capture stitched into {w}\u{a0}×\u{a0}{h}\u{a0}px."
-            ));
+            ed.set_status(
+                StatusTone::Success,
+                format!("Scrolling capture stitched into {w}\u{a0}×\u{a0}{h}\u{a0}px."),
+            );
             Task::batch([
                 close_hud,
                 open_editor_window_replacing(state, ed, display_bounds),

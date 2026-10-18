@@ -839,14 +839,74 @@ pub enum HistoryFrame {
     Unknown,
 }
 
-/// How a status was set: `Auto` is classified from its wording;
-/// `Info` is an instruction; `Warning` a refusal or partial failure.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// What kind of message a status is. The code that writes a status
+/// says which; nothing is read from its wording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatusTone {
-    #[default]
-    Auto,
+    /// Something finished ("Saved to …"): the success check, and it
+    /// goes after [`STATUS_AUTO_DISMISS`].
+    Success,
+    /// A neutral outcome ("No text recognized.", "Save cancelled."):
+    /// the Info kind, and it goes after [`STATUS_AUTO_DISMISS`].
+    Notice,
+    /// An instruction ("Press ↵ to crop…"): the Info kind, never the
+    /// success check. It goes after [`STATUS_AUTO_DISMISS`], unless it
+    /// is a live key guide ([`Status::guide`]).
     Info,
+    /// Work in flight ("Saving…"): the Info kind, kept until the work
+    /// replaces it.
+    Progress,
+    /// A refusal or a partial failure: the warning kind, kept until
+    /// dismissed or replaced, so an instruction in it stays readable.
     Warning,
+    /// A failure: the error kind, kept until dismissed or replaced.
+    Error,
+    /// The armed Discard prompt: the warning kind with Keep Editing and
+    /// Discard buttons. It waits for an answer, however long (WCAG 2.2.1).
+    DiscardPrompt,
+}
+
+/// The editor's status line: its text, its tone, when it was set, and
+/// what belongs to it (a toast button, a key guide, a removed preset
+/// to put back). Every field goes together: a new status replaces all
+/// of them, and clearing the status clears them all.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Status {
+    pub text: String,
+    pub tone: StatusTone,
+    /// When it was set. A successful, neutral or instruction status
+    /// goes [`STATUS_AUTO_DISMISS`] after this.
+    pub set_at: std::time::Instant,
+    /// Button in the toast.
+    pub action: Option<EditorToastAction>,
+    /// Set as a keyboard guide: what it explains. It stays while that
+    /// is going on ([`EditorSession::key_guide_live`]).
+    pub guide: Option<KeyGuide>,
+    /// A saved Beautify preset just removed, with its list index, while
+    /// the toast offers Undo for it.
+    pub removed_preset: Option<(usize, readshot_core::beautify::SavedBeautifyPreset)>,
+}
+
+impl Status {
+    /// A status with `tone`, set now, with nothing attached.
+    pub fn new(tone: StatusTone, text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            tone,
+            set_at: std::time::Instant::now(),
+            action: None,
+            guide: None,
+            removed_preset: None,
+        }
+    }
+
+    /// Kept on screen until dismissed, answered or replaced.
+    pub fn is_sticky(&self) -> bool {
+        matches!(
+            self.tone,
+            StatusTone::Warning | StatusTone::Error | StatusTone::DiscardPrompt
+        )
+    }
 }
 
 /// Whether the 1 Hz status tick has work: a status that can still
@@ -895,7 +955,10 @@ pub(crate) fn next_session_id() -> u64 {
 /// belong inside the pure model.
 pub struct EditorSession {
     pub model: Model,
-    pub status: Option<String>,
+    /// The status line ([`Status`]). Write it through
+    /// [`Self::set_status`] and the other setters, which also disarm
+    /// Discard.
+    pub status: Option<Status>,
     /// `true` while a save / copy / ocr task is in flight; the action
     /// bar buttons disable themselves in that state to avoid double
     /// firing.
@@ -933,27 +996,6 @@ pub struct EditorSession {
     /// Follow-up windows opened from the editor use this to stay on
     /// the same monitor as the captured region.
     pub source_display_bounds: Option<(f32, f32, f32, f32)>,
-    /// `Some` after the user has clicked Discard / pressed ⌘W once on
-    /// an editor with unsaved work. The next Discard commits. It stays
-    /// armed until answered (Discard, Keep Editing) or the next edit or
-    /// status, with no time limit (WCAG 2.2.1). Prevents accidental data
-    /// loss without forcing a modal dialog.
-    pub discard_pending_at: Option<std::time::Instant>,
-    /// Wall-clock instant the current `status` toast was set. The
-    /// runtime uses this to auto-dismiss successful status messages
-    /// (e.g. "Saved to …") after a few seconds so the chrome doesn't
-    /// stay loud forever.
-    pub status_set_at: Option<std::time::Instant>,
-    /// The status text and the tone it was set with ([`Self::set_warning`],
-    /// [`Self::set_info`]). Compared with `status`, so any other write of
-    /// `status` drops the tone with it.
-    pub toned_status: Option<(String, StatusTone)>,
-    /// The status text set as a keyboard guide ([`Self::set_guide`]), and
-    /// what it explains.
-    pub key_guide: Option<(String, KeyGuide)>,
-    /// A saved Beautify preset just removed, with its list index, while
-    /// the toast offers Undo for it.
-    pub removed_beautify_preset: Option<(usize, readshot_core::beautify::SavedBeautifyPreset)>,
     /// Transient Select-tool move. The model previews movement
     /// without pushing undo history on every mouse move; release
     /// commits the final state against this baseline as one undoable
@@ -1160,8 +1202,6 @@ pub struct EditorSession {
     pub session_id: u64,
     /// Text panel: recognition, hover, line selection, redact.
     pub text_panel: TextPanelState,
-    /// Button shown in the status toast. Cleared by every `set_status`.
-    pub toast_action: Option<EditorToastAction>,
     /// Current editor window width (logical px): `window::size` when the
     /// window is ready, then resize events. Decides dock vs collapse.
     pub window_width: f32,
@@ -1202,22 +1242,11 @@ pub const DEFAULT_WINDOW_WIDTH: f32 = 1100.0;
 /// they're dismissed (the toast's close button) or replaced.
 pub const STATUS_AUTO_DISMISS: std::time::Duration = std::time::Duration::from_secs(4);
 
-/// A status string is "in progress" when it ends with `…` or starts
-/// with one of the known in-flight prefixes ("Saving", "Copying",
-/// "Recognizing", "Choose"). Kept as a free function so the view can
-/// classify a toast string identically to [`EditorSession`] without
-/// re-implementing (and drifting from) the rule.
-pub fn status_str_is_in_progress(s: &str) -> bool {
-    s.ends_with('…')
-        || s.starts_with("Saving")
-        || s.starts_with("Copying")
-        || s.starts_with("Recognizing")
-        || s.starts_with("Choose")
-}
-
-/// A status string is an error when it mentions "fail" or "error"
+/// A plain status string (History's, the Welcome window's capture
+/// line) is an error when it mentions "fail" or "error"
 /// (case-insensitive), or when it opens with the friendly "Couldn't …"
-/// failure phrasing. Errors are never auto-dismissed.
+/// failure phrasing. The editor's status carries its tone instead
+/// ([`StatusTone`]).
 pub fn status_str_is_error(s: &str) -> bool {
     let lower = s.to_lowercase();
     // Typographic or straight apostrophe: the app writes ’, text from
@@ -1376,16 +1405,11 @@ impl EditorSession {
             zoom: EditorZoom::Fit,
             display_scale: display_scale.max(f32::EPSILON),
             source_display_bounds: None,
-            discard_pending_at: None,
-            key_guide: None,
             popover: None,
             resize_draft: None,
             hex_draft: String::new(),
             eyedropper: None,
             crop_draft: None,
-            status_set_at: None,
-            toned_status: None,
-            removed_beautify_preset: None,
             move_drag: None,
             width_drag_baseline: None,
             style_drag_baseline: None,
@@ -1430,7 +1454,6 @@ impl EditorSession {
             text_edit_content: None,
             session_id: next_session_id(),
             text_panel: TextPanelState::default(),
-            toast_action: None,
             window_width: DEFAULT_WINDOW_WIDTH,
             panel_overlay_open: false,
             history_scrubbed: false,
@@ -1467,16 +1490,11 @@ impl EditorSession {
             zoom: EditorZoom::Fit,
             display_scale: display_scale.max(f32::EPSILON),
             source_display_bounds: None,
-            discard_pending_at: None,
-            key_guide: None,
             popover: None,
             resize_draft: None,
             hex_draft: String::new(),
             eyedropper: None,
             crop_draft: None,
-            status_set_at: None,
-            toned_status: None,
-            removed_beautify_preset: None,
             move_drag: None,
             width_drag_baseline: None,
             style_drag_baseline: None,
@@ -1521,7 +1539,6 @@ impl EditorSession {
             text_edit_content: None,
             session_id: next_session_id(),
             text_panel: TextPanelState::default(),
-            toast_action: None,
             window_width: DEFAULT_WINDOW_WIDTH,
             panel_overlay_open: false,
             history_scrubbed: false,
@@ -1545,84 +1562,94 @@ impl EditorSession {
         }
     }
 
-    /// Set the toast text under the action row and stamp the
-    /// `status_set_at` clock so auto-dismiss can run on the runtime
-    /// tick. Use this everywhere `status = Some(…)` was set inline so
-    /// the auto-dismiss is uniform across save / copy / OCR / pin
-    /// paths.
-    ///
-    /// Any status set here replaces the armed-discard prompt, so it also
-    /// disarms Discard (the armed prompt itself is written directly by
-    /// `EditorDiscardRequested`, not through this method).
-    pub fn set_status(&mut self, msg: impl Into<String>) {
-        self.toast_action = None;
-        self.toned_status = None;
-        self.removed_beautify_preset = None;
-        self.discard_pending_at = None;
+    /// Show `text` in the status line as `tone`: the caller says what
+    /// kind of message it is. The old status goes with everything that
+    /// belonged to it (its button, key guide, removed preset), and so
+    /// does an armed Discard and what it would have done after.
+    pub fn set_status(&mut self, tone: StatusTone, text: impl Into<String>) {
         self.after_discard = None;
-        self.status = Some(msg.into());
-        self.status_set_at = Some(std::time::Instant::now());
+        self.status = Some(Status::new(tone, text));
     }
 
     /// [`Self::set_status`] plus a button in the toast.
-    pub fn set_status_with_action(&mut self, msg: impl Into<String>, action: EditorToastAction) {
-        self.set_status(msg);
-        self.toast_action = Some(action);
+    pub fn set_status_with_action(
+        &mut self,
+        tone: StatusTone,
+        text: impl Into<String>,
+        action: EditorToastAction,
+    ) {
+        self.set_status(tone, text);
+        if let Some(status) = self.status.as_mut() {
+            status.action = Some(action);
+        }
     }
 
-    /// [`Self::set_status`] for a refusal or a partial failure: the toast
-    /// shows the warning kind (never the success check) and is not
-    /// auto-dismissed, so an instruction in it stays readable.
-    pub fn set_warning(&mut self, msg: impl Into<String>) {
-        let msg = msg.into();
-        self.set_status(msg.clone());
-        self.toned_status = Some((msg, StatusTone::Warning));
+    /// An instruction ([`StatusTone::Info`]) for a keyboard task that
+    /// stays while `guide` is going on (`key_guide_live`), instead of
+    /// auto-dismissing.
+    pub fn set_guide(&mut self, text: impl Into<String>, guide: KeyGuide) {
+        self.set_status(StatusTone::Info, text);
+        if let Some(status) = self.status.as_mut() {
+            status.guide = Some(guide);
+        }
     }
 
-    /// [`Self::set_status`] for an instruction ("Press ↵ to crop…"): the
-    /// toast shows the neutral Info kind, never the success check.
-    pub fn set_info(&mut self, msg: impl Into<String>) {
-        let msg = msg.into();
-        self.set_status(msg.clone());
-        self.toned_status = Some((msg, StatusTone::Info));
-    }
-
-    /// [`Self::set_info`] for a keyboard instruction that stays while
-    /// `guide` is going on (`key_guide_live`), instead of auto-dismissing.
-    pub fn set_guide(&mut self, msg: impl Into<String>, guide: KeyGuide) {
-        let msg = msg.into();
-        self.set_info(msg.clone());
-        self.key_guide = Some((msg, guide));
-    }
-
-    /// Take the status line down (nothing to report any more). A tone,
-    /// action or key guide left with the old text no longer matches any
-    /// status, so it is ignored until the next one is set.
+    /// Take the status line down (nothing to report any more), with
+    /// everything that belonged to it.
     pub fn clear_status(&mut self) {
         self.status = None;
-        self.status_set_at = None;
+    }
+
+    /// The status line's text.
+    pub fn status_text(&self) -> Option<&str> {
+        self.status.as_ref().map(|s| s.text.as_str())
+    }
+
+    /// The tone the current status was set with.
+    pub fn status_tone(&self) -> Option<StatusTone> {
+        self.status.as_ref().map(|s| s.tone)
+    }
+
+    /// When the current status was set.
+    pub fn status_set_at(&self) -> Option<std::time::Instant> {
+        self.status.as_ref().map(|s| s.set_at)
+    }
+
+    /// The current status's toast button, whether or not it still
+    /// applies ([`Self::visible_toast_action`] says that).
+    pub fn toast_action(&self) -> Option<EditorToastAction> {
+        self.status.as_ref().and_then(|s| s.action)
+    }
+
+    /// Drop the current status's toast button, keeping its text.
+    pub fn clear_toast_action(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.action = None;
+        }
     }
 
     /// Show the armed-Discard prompt: the toast that asks for a second
-    /// Discard. It is written here rather than through
-    /// [`Self::set_status`], which disarms Discard; the toast kind comes
-    /// from `discard_pending_at`. The old toast's button (a redaction's
-    /// Undo, say) must not come back under this text once the arm
-    /// expires, so it is dropped.
+    /// Discard, set at `now`. Any earlier status goes, with its button.
     pub fn arm_discard_prompt(&mut self, now: std::time::Instant) {
-        self.discard_pending_at = Some(now);
-        self.toast_action = None;
-        self.status = Some("Unsaved edits. Press Discard again to close without saving.".into());
-        self.status_set_at = Some(now);
+        self.status = Some(Status {
+            set_at: now,
+            ..Status::new(
+                StatusTone::DiscardPrompt,
+                "Unsaved edits. Press Discard again to close without saving.",
+            )
+        });
+    }
+
+    /// Whether Discard is armed: its prompt is the status, and the next
+    /// Discard closes the editor without saving.
+    pub fn discard_armed(&self) -> bool {
+        self.status_tone() == Some(StatusTone::DiscardPrompt)
     }
 
     /// `Some(live)` while the status is a key guide: whether what it
     /// explains is still going on.
     pub fn key_guide_live(&self) -> Option<bool> {
-        let (text, guide) = self.key_guide.as_ref()?;
-        if self.status.as_deref() != Some(text.as_str()) {
-            return None;
-        }
+        let guide = self.status.as_ref()?.guide?;
         Some(match guide {
             KeyGuide::CropDraft => self.crop_draft.is_some(),
             KeyGuide::Zone => self.key_focus.is_some(),
@@ -1630,42 +1657,27 @@ impl EditorSession {
         })
     }
 
-    /// The tone the current status was set with.
-    pub fn status_tone(&self) -> StatusTone {
-        match (&self.status, &self.toned_status) {
-            (Some(s), Some((t, tone))) if s == t => *tone,
-            _ => StatusTone::Auto,
-        }
-    }
-
-    /// [`Self::set_warning`] plus a button in the toast.
-    pub fn set_warning_with_action(&mut self, msg: impl Into<String>, action: EditorToastAction) {
-        self.set_warning(msg);
-        self.toast_action = Some(action);
-    }
-
     /// Whether the current status was set as a warning.
     pub fn status_is_warning(&self) -> bool {
-        self.status_tone() == StatusTone::Warning
+        self.status_tone() == Some(StatusTone::Warning)
     }
 
-    /// Errors and warnings stay until the next status replaces them.
+    /// Errors, warnings, an armed Discard and a live key guide stay
+    /// until the next status replaces them.
     pub fn status_is_sticky(&self) -> bool {
-        self.status_is_error()
-            || self.status_is_warning()
-            || self.discard_pending_at.is_some()
-            || self.key_guide_live() == Some(true)
+        self.status.as_ref().is_some_and(Status::is_sticky) || self.key_guide_live() == Some(true)
     }
 
     /// The toast button to show: a redaction's Undo only while that
     /// redaction is still the newest history step.
     pub fn visible_toast_action(&self) -> Option<EditorToastAction> {
-        self.toast_action.filter(|a| match a {
+        let status = self.status.as_ref()?;
+        status.action.filter(|a| match a {
             EditorToastAction::UndoRedaction { generation } => {
                 self.model.history_generation() == *generation
             }
             EditorToastAction::RetryRecognition => true,
-            EditorToastAction::RestorePreset => self.removed_beautify_preset.is_some(),
+            EditorToastAction::RestorePreset => status.removed_preset.is_some(),
         })
     }
 
@@ -1763,8 +1775,15 @@ impl EditorSession {
         }
     }
 
+    /// Disarm Discard (an edit, an output, Keep Editing): its prompt
+    /// stays on screen as a plain notice, which then goes after
+    /// [`STATUS_AUTO_DISMISS`] from when it was armed.
     pub fn clear_discard_confirmation(&mut self) {
-        self.discard_pending_at = None;
+        if let Some(status) = self.status.as_mut() {
+            if status.tone == StatusTone::DiscardPrompt {
+                status.tone = StatusTone::Notice;
+            }
+        }
         self.after_discard = None;
     }
 
@@ -1772,9 +1791,10 @@ impl EditorSession {
     /// `text`; confirming it (Discard) closes this editor and then does
     /// `after`.
     pub fn arm_discard_prompt_then(&mut self, text: impl Into<String>, after: AfterDiscard) {
-        let now = std::time::Instant::now();
-        self.arm_discard_prompt(now);
-        self.status = Some(text.into());
+        self.arm_discard_prompt(std::time::Instant::now());
+        if let Some(status) = self.status.as_mut() {
+            status.text = text.into();
+        }
         self.after_discard = Some(after);
     }
 
@@ -1782,17 +1802,13 @@ impl EditorSession {
     /// leave alone — clearing "Saving…" before the save actually
     /// completes would look broken.
     pub fn status_is_in_progress(&self) -> bool {
-        self.status
-            .as_deref()
-            .is_some_and(status_str_is_in_progress)
+        self.status_tone() == Some(StatusTone::Progress)
     }
 
-    /// Whether the current status toast is an error. Errors stay on
-    /// screen (never auto-dismissed) and render with the error style;
-    /// this is the single classifier the runtime and view share so the
-    /// auto-dismiss window and the toast colour never disagree.
+    /// Whether the current status was set as an error. Errors stay on
+    /// screen (never auto-dismissed) and render with the error style.
     pub fn status_is_error(&self) -> bool {
-        self.status.as_deref().is_some_and(status_str_is_error)
+        self.status_tone() == Some(StatusTone::Error)
     }
 
     pub fn zoom_label(&self) -> String {
@@ -2237,15 +2253,14 @@ mod tests {
     }
 
     #[test]
-    fn status_classifiers_agree_across_in_progress_error_and_success() {
-        // In-progress: kept on screen, neutral style.
+    fn status_str_is_error_reads_failures_only() {
+        // In-progress lines are not errors.
         for s in [
             "Saving…",
             "Choose a save location…",
             "Copying…",
             "Recognizing text…",
         ] {
-            assert!(status_str_is_in_progress(s), "{s:?} should be in-progress");
             assert!(!status_str_is_error(s), "{s:?} should not be an error");
         }
         // Errors: kept on screen, error style. Includes the friendly
@@ -2257,31 +2272,23 @@ mod tests {
             "Unexpected error",
         ] {
             assert!(status_str_is_error(s), "{s:?} should be an error");
-            assert!(
-                !status_str_is_in_progress(s),
-                "{s:?} should not be in-progress"
-            );
         }
         // Success / info: eligible for auto-dismiss, success style.
         for s in ["Saved to ~/Desktop/shot.png", "Added text. ⌘Z to undo."] {
             assert!(!status_str_is_error(s), "{s:?} should not be an error");
-            assert!(
-                !status_str_is_in_progress(s),
-                "{s:?} should not be in-progress"
-            );
         }
     }
 
     #[test]
     fn editor_session_status_helpers_match_free_classifiers() {
         let mut s = EditorSession::new(solid(8, 8));
-        s.set_status("Couldn’t save the image — the disk is full. Pick a different folder in Settings and try again.");
+        s.set_status(StatusTone::Error, "Couldn’t save the image — the disk is full. Pick a different folder in Settings and try again.");
         assert!(s.status_is_error());
         assert!(!s.status_is_in_progress());
-        s.set_status("Saving…");
+        s.set_status(StatusTone::Progress, "Saving…");
         assert!(s.status_is_in_progress());
         assert!(!s.status_is_error());
-        s.set_status("Saved to disk");
+        s.set_status(StatusTone::Success, "Saved to disk");
         assert!(!s.status_is_error());
         assert!(!s.status_is_in_progress());
     }
@@ -2399,10 +2406,10 @@ mod tests {
     fn set_status_clears_a_toast_action() {
         let mut ed = EditorSession::new(image::RgbaImage::new(4, 4));
         let undo = EditorToastAction::UndoRedaction { generation: 0 };
-        ed.set_status_with_action("Redacted 1 item.", undo);
-        assert_eq!(ed.toast_action, Some(undo));
-        ed.set_status("Saved.");
-        assert_eq!(ed.toast_action, None);
+        ed.set_status_with_action(StatusTone::Success, "Redacted 1 item.", undo);
+        assert_eq!(ed.toast_action(), Some(undo));
+        ed.set_status(StatusTone::Success, "Saved.");
+        assert_eq!(ed.toast_action(), None);
     }
 
     #[test]
@@ -2414,7 +2421,11 @@ mod tests {
         };
         ed.model.commit_annotation(blur.clone());
         let generation = ed.model.history_generation();
-        ed.toast_action = Some(EditorToastAction::UndoRedaction { generation });
+        ed.set_status_with_action(
+            StatusTone::Success,
+            "Redacted 1 item.",
+            EditorToastAction::UndoRedaction { generation },
+        );
         assert!(ed.visible_toast_action().is_some());
         ed.model.commit_annotation(blur.clone());
         assert!(
@@ -2425,7 +2436,11 @@ mod tests {
         // depth, and Undo would then remove that edit.
         ed.model.undo();
         assert!(ed.visible_toast_action().is_none());
-        ed.toast_action = Some(EditorToastAction::RetryRecognition);
+        ed.set_status_with_action(
+            StatusTone::Error,
+            "Couldn’t recognize the text.",
+            EditorToastAction::RetryRecognition,
+        );
         assert!(ed.visible_toast_action().is_some());
     }
 
