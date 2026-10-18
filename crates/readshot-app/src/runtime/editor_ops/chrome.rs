@@ -137,6 +137,15 @@ pub(super) fn on_discard_disarmed(state: &mut App) -> Task<Message> {
 }
 
 /// `EditorMsg::StatusDismissed`.
+///
+/// Dismissing always disarms an armed Discard: the arm is the status's
+/// `DiscardPrompt` tone, so clearing the status clears the arm with it.
+/// That is deliberate. A Discard prompt the user can no longer see must
+/// not stay armed, or a later ⌘W would throw the edits away without a
+/// warning on screen; disarmed, the next ⌘W warns again. (The armed
+/// toast shows Keep Editing and Discard rather than a Dismiss button,
+/// and the status tick never expires it, so today only this message, an
+/// edit or a newer status takes it down — each of which backs out.)
 pub(super) fn on_status_dismissed(state: &mut App) -> Task<Message> {
     if let Some(ed) = state.editor.as_mut() {
         ed.clear_status();

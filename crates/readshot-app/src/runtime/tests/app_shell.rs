@@ -1512,6 +1512,113 @@ fn other_status_after_arming_disarms_discard() {
     );
 }
 
+/// Dismissing the status takes an armed Discard down with it, by design
+/// (`chrome::on_status_dismissed`): an unseen prompt must not stay armed,
+/// so the next close warns again instead of discarding.
+#[test]
+fn dismiss_disarms_discard_and_the_next_close_warns_again() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let mut ed = debug_editor_qa_session();
+    ed.model.commit_annotation(Annotation::Rectangle {
+        rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+        color: Rgba::OPAQUE_BLACK,
+        line_width: 2.0,
+        style: Default::default(),
+    });
+    app.editor = Some(ed);
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
+    assert!(app.editor.as_ref().unwrap().discard_armed());
+    let _ = update(&mut app, Message::Editor(EditorMsg::StatusDismissed));
+    assert!(app.editor.as_ref().unwrap().status_text().is_none());
+    assert!(!app.editor.as_ref().unwrap().discard_armed());
+    // The next close only warns again: the editor stays.
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
+    let ed = app.editor.as_ref().expect("the editor is still open");
+    assert!(ed.discard_armed());
+}
+
+/// The output handlers pick the tone of what happened, so the toast
+/// kind (and whether it stays) follows the outcome, not the wording.
+#[test]
+fn output_handlers_choose_the_tone_of_the_outcome() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.editor = Some(debug_editor_qa_session());
+    let session = app.editor.as_ref().unwrap().session_id;
+    let tone = |app: &App| app.editor.as_ref().unwrap().status_tone();
+    let cases: Vec<(EditorMsg, Tone)> = vec![
+        (
+            EditorMsg::Saved {
+                session,
+                result: Ok(Some("/tmp/x.png".into())),
+            },
+            Tone::Success,
+        ),
+        (
+            EditorMsg::Saved {
+                session,
+                result: Ok(None),
+            },
+            Tone::Notice,
+        ),
+        (
+            EditorMsg::Saved {
+                session,
+                result: Err("disk full".into()),
+            },
+            Tone::Error,
+        ),
+        (
+            EditorMsg::CopyImageDone {
+                session,
+                result: Ok(()),
+            },
+            Tone::Success,
+        ),
+        (
+            EditorMsg::CopyImageDone {
+                session,
+                result: Err("pasteboard".into()),
+            },
+            Tone::Error,
+        ),
+        (
+            EditorMsg::CopyTextDone {
+                session,
+                result: Ok(String::new()),
+            },
+            Tone::Notice,
+        ),
+        (
+            EditorMsg::CopyTextDone {
+                session,
+                result: Ok("hello".into()),
+            },
+            Tone::Success,
+        ),
+        (
+            EditorMsg::CopyTextDone {
+                session,
+                result: Err("ocr".into()),
+            },
+            Tone::Error,
+        ),
+    ];
+    for (msg, want) in cases {
+        let what = format!("{msg:?}");
+        let _ = update(&mut app, Message::Editor(msg));
+        assert_eq!(tone(&app), Some(want), "{what}");
+    }
+    // A save that failed stays on screen until dismissed.
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Saved {
+            session,
+            result: Err("disk full".into()),
+        }),
+    );
+    assert!(app.editor.as_ref().unwrap().status_is_sticky());
+}
+
 #[test]
 fn keep_editing_disarms_discard() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));

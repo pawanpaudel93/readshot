@@ -158,7 +158,9 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   with another capture (Add Capture Below / Beside) or an image file; gap
   and alignment are adjustable, and `⌘Z` removes an added part. `⌘W` closes; with unsaved
   edits the first press only warns; press again to discard, or click
-  Keep Editing (the warning waits for your answer).
+  Keep Editing (the warning waits for your answer). Anything that takes
+  the warning down without discarding backs out of it, so the next `⌘W`
+  warns again.
 - **Editor keyboard focus:** `⌃Tab` / `F6` move the keyboard between the
   canvas, the options bar and the side panel (`⌃⇧Tab` / `⇧F6` go back);
   `⌥⌘T` / `⌥⌘B` open the side panel's Text / Beautify tab. Inside the bar or
