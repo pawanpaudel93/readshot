@@ -220,7 +220,7 @@ fn slider_row<'a>(
             iced::widget::slider(0.0..=max as f32, value as f32, move |v| {
                 Message::EditorBeautifySliderPreview(make(v.round() as u32))
             })
-            .step(1.0)
+            .step(1.0_f32)
             .on_release(Message::EditorSnapshotSliderCommit)
             .width(Length::Fill),
         );

@@ -69,6 +69,9 @@ pub struct OCRResult {
 /// The single trait every Readshot OCR backend implements. `Send + Sync`
 /// because the capture coordinator (Task 16) holds a `Box<dyn OCREngine>`
 /// inside a `tokio::task` that may move between runtime threads.
+// `#[async_trait]` puts `#[must_use]` on methods that return its boxed
+// (already must-use) future; newer clippy flags that as double_must_use.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait OCREngine: Send + Sync {
     /// Languages this engine can recognise, BCP-47 codes. Returned as

@@ -219,7 +219,7 @@ impl OCREngine for OcrsEngine {
 fn drop_alpha_channel(rgba: &image::RgbaImage) -> Vec<u8> {
     let pixels = rgba.as_raw();
     let mut rgb = Vec::with_capacity(pixels.len() / 4 * 3);
-    for chunk in pixels.chunks_exact(4) {
+    for chunk in pixels.as_chunks::<4>().0 {
         rgb.push(chunk[0]);
         rgb.push(chunk[1]);
         rgb.push(chunk[2]);

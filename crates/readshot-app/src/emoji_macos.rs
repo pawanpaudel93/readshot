@@ -184,7 +184,7 @@ unsafe fn draw_glyph(font: CTFontRef, glyph: CGGlyph, side: usize) -> Option<Rgb
     CGContextRelease(ctx);
     // Bitmap-context memory is top row first. Un-premultiply to the
     // straight RGBA that `image` and core expect.
-    for px in buf.chunks_exact_mut(4) {
+    for px in buf.as_chunks_mut::<4>().0 {
         let a = px[3] as u16;
         if a > 0 && a < 255 {
             for c in &mut px[..3] {

@@ -3268,7 +3268,7 @@ fn width_popover<'a>(
             line_width,
             Message::EditorLineWidthPreview,
         )
-        .step(0.5)
+        .step(0.5_f32)
         .on_release(Message::EditorLineWidthCommit)
         .width(Length::Fixed(W))
         .into()

@@ -434,7 +434,7 @@ fn layout_section<'a>(ed: &'a EditorSession) -> Element<'a, Message> {
                 iced::widget::slider(0.0..=MAX_GAP as f32, gap as f32, |v| {
                     Message::EditorLayoutGapPreview(v.round() as u32)
                 })
-                .step(1.0)
+                .step(1.0_f32)
                 .on_release(Message::EditorSnapshotSliderCommit)
                 .width(Length::Fill),
                 mono_readout(format!("{gap}\u{a0}px"), &format!("{MAX_GAP}\u{a0}px"))

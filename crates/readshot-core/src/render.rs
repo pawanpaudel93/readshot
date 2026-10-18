@@ -515,7 +515,12 @@ fn blit_base(pixmap: &mut Pixmap, base: &RgbaImage, offset: (f32, f32)) {
     // straight→premultiplied conversion is the identity — each
     // overlapping row is then a plain memcpy instead of per-pixel
     // multiply/divide over the whole frame.
-    let opaque = base.as_raw().chunks_exact(4).all(|p| p[3] == u8::MAX);
+    let opaque = base
+        .as_raw()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| p[3] == u8::MAX);
     if opaque {
         let row_len = ((px1 - px0) as usize) * 4;
         let src_data = base.as_raw();
@@ -558,7 +563,7 @@ fn pixmap_to_image(pixmap: &Pixmap) -> RgbaImage {
     // Fully-opaque output (the common screenshot case): premultiplied
     // and straight RGBA are byte-identical, so the conversion is one
     // buffer copy.
-    if data.chunks_exact(4).all(|p| p[3] == u8::MAX) {
+    if data.as_chunks::<4>().0.iter().all(|p| p[3] == u8::MAX) {
         return RgbaImage::from_raw(w, h, data.to_vec())
             .expect("pixmap buffer matches its own dimensions");
     }

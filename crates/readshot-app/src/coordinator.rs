@@ -1269,7 +1269,7 @@ mod tests {
     }
 
     fn take_failure(n: &std::sync::atomic::AtomicUsize) -> bool {
-        n.fetch_update(
+        n.try_update(
             std::sync::atomic::Ordering::SeqCst,
             std::sync::atomic::Ordering::SeqCst,
             |v| v.checked_sub(1),

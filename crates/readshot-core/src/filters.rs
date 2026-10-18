@@ -242,7 +242,7 @@ mod tests {
     fn solid_pixmap(w: u32, h: u32, rgba: [u8; 4]) -> Pixmap {
         let mut p = Pixmap::new(w, h).unwrap();
         let data = p.data_mut();
-        for px in data.chunks_exact_mut(4) {
+        for px in data.as_chunks_mut::<4>().0 {
             px.copy_from_slice(&rgba);
         }
         p
@@ -279,7 +279,7 @@ mod tests {
         let mut p = solid_pixmap(8, 8, [128, 64, 32, 255]);
         blur_rect(&mut p, 0, 0, 8, 8, 2.0);
         let data = p.data();
-        for px in data.chunks_exact(4) {
+        for px in data.as_chunks::<4>().0 {
             assert_eq!(px, &[128, 64, 32, 255]);
         }
     }
@@ -292,7 +292,7 @@ mod tests {
         let mut p = solid_pixmap(5, 1, [10, 20, 30, 255]);
         pixelate_rect(&mut p, 0, 0, 5, 1, 3.0);
         let data = p.data();
-        for px in data.chunks_exact(4) {
+        for px in data.as_chunks::<4>().0 {
             assert_eq!(px, &[10, 20, 30, 255]);
         }
     }
@@ -309,7 +309,7 @@ mod tests {
         blur_rect(&mut p, 0, 0, 8, 8, f32::INFINITY);
         blur_rect(&mut p, 0, 0, 8, 8, f32::NAN);
         // Uniform image stays uniform regardless of the (clamped) radius.
-        for px in p.data().chunks_exact(4) {
+        for px in p.data().as_chunks::<4>().0 {
             assert_eq!(px, &[128, 64, 32, 255]);
         }
     }
@@ -323,7 +323,7 @@ mod tests {
         // Saturated rect dimensions must not overflow the bounds math.
         pixelate_rect(&mut p, 0, 0, i32::MAX, i32::MAX, 4.0);
         blur_rect(&mut p, 0, 0, i32::MAX, i32::MAX, 4.0);
-        for px in p.data().chunks_exact(4) {
+        for px in p.data().as_chunks::<4>().0 {
             assert_eq!(px, &[10, 20, 30, 255]);
         }
     }
