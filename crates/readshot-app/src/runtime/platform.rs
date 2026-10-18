@@ -441,3 +441,88 @@ pub(crate) fn applescript_escape(value: &str) -> String {
     }
     out
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RevealCommand {
+    pub(crate) program: &'static str,
+    pub(crate) args: Vec<String>,
+}
+
+pub(crate) fn reveal_command_for_path(path: &Path) -> RevealCommand {
+    let path_string = path.to_string_lossy().to_string();
+    #[cfg(target_os = "macos")]
+    {
+        RevealCommand {
+            program: "open",
+            args: vec!["-R".into(), path_string],
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // explorer.exe needs the path in the SAME token as `/select,`
+        // (`/select,C:\dir\file.png`). Passed as two separate argv entries
+        // Explorer ignores the selection and just opens the default folder.
+        RevealCommand {
+            program: "explorer",
+            args: vec![format!("/select,{path_string}")],
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let dir = path
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or(path_string);
+        RevealCommand {
+            program: "xdg-open",
+            args: vec![dir],
+        }
+    }
+}
+
+pub(crate) fn reveal_path(path: &Path) -> Result<(), std::io::Error> {
+    let command = reveal_command_for_path(path);
+    std::process::Command::new(command.program)
+        .args(command.args)
+        .spawn()?;
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OpenFolderCommand {
+    pub(crate) program: &'static str,
+    pub(crate) args: Vec<String>,
+}
+
+pub(crate) fn open_folder_command_for_path(path: &Path) -> OpenFolderCommand {
+    let path_string = path.to_string_lossy().to_string();
+    #[cfg(target_os = "macos")]
+    {
+        OpenFolderCommand {
+            program: "open",
+            args: vec![path_string],
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        OpenFolderCommand {
+            program: "explorer",
+            args: vec![path_string],
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        OpenFolderCommand {
+            program: "xdg-open",
+            args: vec![path_string],
+        }
+    }
+}
+
+pub(crate) fn open_folder_path(path: &Path) -> Result<(), std::io::Error> {
+    let command = open_folder_command_for_path(path);
+    std::process::Command::new(command.program)
+        .args(command.args)
+        .spawn()?;
+    Ok(())
+}
