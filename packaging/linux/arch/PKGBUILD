@@ -15,8 +15,15 @@ depends=(
   'dbus'
   'libayatana-appindicator'
   'gtk3'
+  # Linked at build and run time, matching CI (.github/workflows/test.yml):
+  # libpipewire for xcap's Wayland capture (libspa-sys), libxdo (from
+  # xdotool) for the tray menu, libgbm (from mesa) for xcap's libwayshot.
+  'libpipewire'
+  'xdotool'
+  'mesa'
 )
-makedepends=('cargo' 'pkg-config')
+# clang: bindgen generates libspa-sys's bindings at build time.
+makedepends=('cargo' 'pkg-config' 'clang')
 source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
 sha256sums=('SKIP')  # replaced by the release pipeline
 
