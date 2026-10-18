@@ -1045,6 +1045,14 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     readshot_ui::ToolbarMessage::SelectTool(readshot_ui::editor::ToolState::Crop)
                 ))
             );
+            // A key's field check is out: this key waits behind it, in
+            // order (`EditorFieldKeyResolved` runs the queue).
+            if let Some(ed) = state.editor.as_mut().filter(|ed| !ed.key_queue.is_empty()) {
+                if let Some(message) = message {
+                    ed.key_queue.push_back(message);
+                }
+                return Task::none();
+            }
             // While the Color or Resize popover is open its field may have
             // focus, an inline text draft owns its own field, and so does
             // the Beautify hex field while it holds a draft. iced's
@@ -1068,15 +1076,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 // A click can leave the caret in the Beautify hex field
                 // with nothing typed and no message: ask iced first.
                 if beautify_hex_on_screen(state) {
-                    let message = Box::new(field_key.clone());
-                    return iced::widget::operation::is_focused(iced::widget::Id::new(
-                        super::key_focus::BEAUTIFY_HEX_ID,
-                    ))
-                    .collect()
-                    .map(move |answers| Message::EditorFieldKeyResolved {
-                        message: message.clone(),
-                        field_focused: tab_field_focused(&answers),
-                    });
+                    let field_key = field_key.clone();
+                    if let Some(ed) = state.editor.as_mut() {
+                        ed.key_queue.push_back(field_key.clone());
+                    }
+                    return ask_hex_field(field_key);
                 }
             }
             let task = match message {
@@ -2550,10 +2554,33 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             message,
             field_focused,
         } => {
-            if field_focused || !is_field_key(&message) {
-                return Task::none();
+            if let Some(ed) = state.editor.as_mut() {
+                ed.key_queue.pop_front();
             }
-            update(state, *message)
+            let mut tasks = Vec::new();
+            if !field_focused && is_field_key(&message) {
+                tasks.push(update(state, *message));
+            }
+            // Then the keys that waited, in order, until one needs its own
+            // field check.
+            loop {
+                let Some(next) = state
+                    .editor
+                    .as_mut()
+                    .and_then(|ed| ed.key_queue.pop_front())
+                else {
+                    break;
+                };
+                if is_field_key(&next) && beautify_hex_on_screen(state) {
+                    if let Some(ed) = state.editor.as_mut() {
+                        ed.key_queue.push_front(next.clone());
+                    }
+                    tasks.push(ask_hex_field(next));
+                    break;
+                }
+                tasks.push(update(state, next));
+            }
+            Task::batch(tasks)
         }
         Message::EditorTabResolved {
             step,
@@ -2654,4 +2681,18 @@ fn open_pin_window(
         .pins
         .insert(id, crate::app::PinState::new(handle.clone()));
     open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone()))
+}
+
+/// Ask iced whether the Beautify hex field has the caret before `key`
+/// (Undo, Redo, an Up/Down nudge) acts; the answer is
+/// `EditorFieldKeyResolved`. Collected, so a query no widget answers
+/// still resolves, as "not focused": a key is never dropped.
+fn ask_hex_field(key: Message) -> Task<Message> {
+    let message = Box::new(key);
+    iced::widget::operation::is_focused(iced::widget::Id::new(super::key_focus::BEAUTIFY_HEX_ID))
+        .collect()
+        .map(move |answers| Message::EditorFieldKeyResolved {
+            message: message.clone(),
+            field_focused: tab_field_focused(&answers),
+        })
 }

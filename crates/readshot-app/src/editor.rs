@@ -1061,6 +1061,11 @@ pub struct EditorSession {
     /// ([`Self::beautify_hex_shown`]), so it follows the tab opening, a
     /// preset, undo or the eyedropper.
     pub beautify_hex_draft: Option<String>,
+    /// Key messages in arrival order while a key's Beautify hex field
+    /// check is out (`EditorFieldKeyResolved`); the head is the key being
+    /// checked. Later keys wait behind it, so a ⌘Z never runs after a key
+    /// pressed after it.
+    pub key_queue: std::collections::VecDeque<crate::app::Message>,
     /// The keyboard focus outside the canvas ([`KeyFocus`]); `None` is
     /// the canvas. Drawn as a focus ring on that control.
     pub key_focus: Option<KeyFocus>,
@@ -1402,6 +1407,7 @@ impl EditorSession {
             display_without: None,
             kept_display: None,
             beautify_hex_draft: None,
+            key_queue: std::collections::VecDeque::new(),
             key_focus: None,
             key_focus_return: None,
             canvas_drag_active: false,
@@ -1491,6 +1497,7 @@ impl EditorSession {
             display_without: None,
             kept_display: None,
             beautify_hex_draft: None,
+            key_queue: std::collections::VecDeque::new(),
             key_focus: None,
             key_focus_return: None,
             canvas_drag_active: false,

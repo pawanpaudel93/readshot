@@ -1086,3 +1086,28 @@ fn undo_and_up_down_in_a_hex_field_leave_the_document_alone() {
     );
     assert_eq!(first_rect_y(&app), 0.0, "the nudge undone");
 }
+
+/// While ⌘Z waits for the Beautify hex field check, a key pressed after
+/// it (⌫) waits too: the Undo runs first, then the delete, never the
+/// other way round (which would undo the delete instead).
+#[test]
+fn keys_after_a_field_checked_undo_wait_their_turn() {
+    let mut app = two_rects_first_selected();
+    let id = iced::window::Id::unique();
+    app.editor.as_mut().unwrap().window_id = Some(id);
+    beautify_shown(&mut app);
+    let count = |app: &App| app.editor.as_ref().unwrap().model.annotations().len();
+    let _ = update(&mut app, key_press(id, ch("z"), true));
+    let _ = update(&mut app, key_press(id, named(Named::Delete), false));
+    assert_eq!(count(&app), 2, "both keys wait for the field check");
+    let _ = update(
+        &mut app,
+        Message::EditorFieldKeyResolved {
+            message: Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
+            field_focused: false,
+        },
+    );
+    // Undo removed the second rect; then ⌫ deleted the selected first one.
+    assert_eq!(count(&app), 0);
+    assert!(app.editor.as_ref().unwrap().key_queue.is_empty());
+}
