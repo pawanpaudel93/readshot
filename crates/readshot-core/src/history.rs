@@ -251,11 +251,25 @@ pub struct CaptureRecord {
     /// written before it existed; never written while false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub redactions_complete: bool,
-    /// A scrub has started but its image hasn't landed: the unredacted
-    /// PNG and thumbnail were already removed, so the record is text-only
-    /// (no image on disk) until the redacted image is written.
+    /// A scrub has started but its redacted image hasn't landed: the
+    /// record is **withheld**. Its unredacted image was moved aside (never
+    /// deleted: [`FsHistoryStore::withheld_path`]) and its thumbnail
+    /// removed, so nothing is served at its image path, and readers serve
+    /// no text for it ([`HistoryStore::list`]). The redacted image then
+    /// replaces it atomically; if it never does (a crash, a quit, a
+    /// cancelled write), [`HistoryStore::finish_pending_scrub`] draws
+    /// [`Self::pending_image`]'s redactions onto the withheld image and
+    /// swaps that in instead.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scrub_pending: bool,
+    /// While `scrub_pending`: the image set aside (its document frame and
+    /// size) and the redactions to draw onto it, in its own px, should the
+    /// scrub's own image never land. On a scrub request: the redactions
+    /// and the frame they are in (before any crop), which phase one maps
+    /// onto the stored image (a whole-image cover when it can't). Never
+    /// stored on a record that isn't pending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_image: Option<PendingImage>,
     /// Which document frame the stored image (and `redactions`,
     /// `annotation_model`) is in: `None` for the capture as taken, else an
     /// opaque id of an editor geometry (rotated, resized, combined).
@@ -272,6 +286,71 @@ pub struct CaptureRecord {
         deserialize_with = "deserialize_geometry_id"
     )]
     pub geometry_id: Option<String>,
+}
+
+/// An image, by document frame and size, and the redactions to draw onto
+/// it (see [`CaptureRecord::pending_image`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PendingImage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry_id: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub redactions: Vec<Annotation>,
+}
+
+/// A solid cover over the whole of a `width` × `height` image: what a
+/// pending scrub draws when its redactions can't be placed on it (fail
+/// closed: never an unredacted pixel, never a lost image).
+fn whole_image_cover(width: u32, height: u32) -> Annotation {
+    Annotation::Rectangle {
+        rect: crate::geom::RectLike::new(0.0, 0.0, width as f32, height as f32),
+        color: crate::annotation::Rgba::OPAQUE_BLACK,
+        line_width: 0.0,
+        style: crate::annotation::ShapeStyle {
+            fill: crate::annotation::FillMode::Filled,
+            ..crate::annotation::ShapeStyle::default()
+        },
+    }
+}
+
+/// The pending redactions phase one stores: those already pending on the
+/// image on disk (`on_disk`, its frame and size), plus `record`'s new ones
+/// mapped onto it — as given when they are in the same frame and size
+/// (`record.pending_image`, else the record's own frame and redactions),
+/// else a whole-image cover. An unknown image on disk (`None`) gets the
+/// cover at whatever size it turns out to be.
+fn pending_on(on_disk: Option<PendingImage>, record: &CaptureRecord) -> PendingImage {
+    let request = record
+        .pending_image
+        .clone()
+        .unwrap_or_else(|| PendingImage {
+            geometry_id: record.geometry_id.clone(),
+            width: record.width_px,
+            height: record.height_px,
+            redactions: record.redactions.clone(),
+        });
+    let Some(mut disk) = on_disk else {
+        return PendingImage {
+            geometry_id: None,
+            width: 0,
+            height: 0,
+            redactions: Vec::new(),
+        };
+    };
+    let same = request.geometry_id == disk.geometry_id
+        && (request.width, request.height) == (disk.width, disk.height);
+    let mut new: Vec<Annotation> = request
+        .redactions
+        .into_iter()
+        .filter(Annotation::is_redaction)
+        .collect();
+    if !same || new.is_empty() {
+        new = vec![whole_image_cover(disk.width, disk.height)];
+    }
+    disk.redactions.extend(new);
+    disk
 }
 
 impl CaptureRecord {
@@ -295,6 +374,7 @@ impl CaptureRecord {
             redactions: Vec::new(),
             redactions_complete: false,
             scrub_pending: false,
+            pending_image: None,
             geometry_id: None,
         }
     }
@@ -352,13 +432,17 @@ pub trait HistoryStore: Send + Sync {
     /// after a redaction and to restore it when the redactions are
     /// undone.
     ///
-    /// A scrub (`record.redacted`) fails closed: it first does
-    /// [`Self::begin_scrub`] (masked sidecar, unredacted image removed),
-    /// then writes the new image and thumbnail, then clears
-    /// `scrub_pending`. A failure at any point leaves at worst a
-    /// text-only record with masked text, never the unredacted image or
-    /// text. A restore (`redacted: false`) writes the image first, then
-    /// the sidecar.
+    /// Never delete-before-replace: every image change renames a fully
+    /// written (fsynced) file over the old one, so the record always has
+    /// an image. A scrub (`record.redacted`) fails closed: it first does
+    /// [`Self::begin_scrub`] (the record withheld, its unredacted image
+    /// set aside), then renames the redacted image and thumbnail into
+    /// place, then clears `scrub_pending`, then removes the set-aside
+    /// image. A failure at any point leaves at worst a withheld record
+    /// whose pending redactions are finished later
+    /// ([`Self::finish_pending_scrub`]), never the unredacted image or
+    /// text served. A restore (`redacted: false`) puts the image in place
+    /// first, then the sidecar.
     ///
     /// `Ok(false)` when the record doesn't exist (not saved yet, or
     /// pruned): nothing is written and the caller must keep the request.
@@ -404,12 +488,28 @@ pub trait HistoryStore: Send + Sync {
     /// stored). An error means its state is unknown: callers treat it as
     /// redacted (fail closed).
     fn stored_redacted(&self, record: &CaptureRecord) -> Result<bool, HistoryError>;
-    /// Phase one of a scrub, cheap (no image encode): write `record`'s
-    /// sidecar (masked text, `redacted`) with `scrub_pending` set, then
-    /// remove the unredacted PNG and thumbnail. From then on History and
-    /// MCP serve no unredacted content for this record. `Ok(false)` when
-    /// the record doesn't exist.
+    /// Phase one of a scrub, cheap (no image encode): mark first — write
+    /// `record`'s sidecar (masked text, `redacted`) with `scrub_pending`
+    /// and the redactions to draw should its image never land
+    /// ([`CaptureRecord::pending_image`]) — then set the unredacted PNG
+    /// aside (a rename, never a delete) and remove its thumbnail. From
+    /// then on History and MCP serve no unredacted content for this
+    /// record. `Ok(false)` when the record doesn't exist.
     fn begin_scrub(&self, record: &CaptureRecord) -> Result<bool, HistoryError>;
+    /// Finish record `id`'s pending scrub whose own image never landed:
+    /// draw its pending redactions onto the image set aside (the core
+    /// render, as the editor draws them) and swap that in like any other
+    /// image write; the record is then redacted and served again.
+    /// `Ok(false)` when there is nothing to finish (not pending, no image
+    /// to draw on, or the record changed meanwhile).
+    fn finish_pending_scrub(&self, _id: Uuid) -> Result<bool, HistoryError> {
+        Ok(false)
+    }
+    /// [`Self::finish_pending_scrub`] for every pending record (at
+    /// launch: a crash or quit mid-scrub). Returns how many it finished.
+    fn finish_pending_scrubs(&self) -> usize {
+        0
+    }
     /// Store recognized text for `record`. A scrubbed record gets `doc`
     /// masked with its stored redactions (only when `doc` has positions or
     /// no text is stored yet, and never without stored redactions — the
@@ -633,6 +733,14 @@ impl FsHistoryStore {
         Self::record_paths(record).1
     }
 
+    /// Where a withheld record's unredacted image waits (same folder, so
+    /// setting it aside and putting it back are atomic renames) until its
+    /// redacted image replaces it. Never served.
+    pub fn withheld_path(record: &CaptureRecord) -> PathBuf {
+        let (png, _) = Self::record_paths(record);
+        png.with_file_name(format!("{}.withheld.png", record.id))
+    }
+
     pub fn thumbnail_path(record: &CaptureRecord) -> PathBuf {
         let year = record.captured_at.year();
         let month = record.captured_at.month();
@@ -713,6 +821,9 @@ impl FsHistoryStore {
     /// ([`text_allowed`]).
     fn write_sidecar(&self, record: &CaptureRecord) -> Result<(), HistoryError> {
         let mut record = record.clone();
+        if !record.scrub_pending {
+            record.pending_image = None;
+        }
         drop_unloadable_annotations(&mut record);
         drop_unknown_text(&mut record);
         let json_content = serde_json::to_string_pretty(&record)?;
@@ -783,17 +894,110 @@ impl FsHistoryStore {
         if !self.root.join(Self::json_path(record)).exists() {
             return Ok(false);
         }
+        // An unreadable sidecar says nothing about the image on disk: its
+        // pending redactions become a whole-image cover (fail closed).
+        let stored = self.read_sidecar(record).ok().flatten();
+        let on_disk = match &stored {
+            Some(s) if s.scrub_pending && s.pending_image.is_some() => s.pending_image.clone(),
+            Some(s) => Some(PendingImage {
+                geometry_id: s.geometry_id.clone(),
+                width: s.width_px,
+                height: s.height_px,
+                redactions: Vec::new(),
+            }),
+            None => None,
+        };
         let mut pending = record.clone();
         pending.redacted = true;
         pending.scrub_pending = true;
         pending.ocr_text = self.scrub_text(record);
+        pending.pending_image = Some(pending_on(on_disk, record));
+        // Mark first: from this write on, nothing of it is served.
         self.write_sidecar(&pending)?;
-        // Try both even if one fails, so a stuck PNG can't keep the
-        // unredacted thumbnail alive (or the reverse). The thumbnail goes
-        // last, so none made from the old PNG outlives it.
-        let png = remove_if_exists(&self.root.join(Self::png_path(record)));
+        // Then set the unredacted image aside (it replaces an older one
+        // set aside, which is older still), and drop its thumbnail
+        // (derived; rebuilt from the redacted image).
+        let png = self.root.join(Self::png_path(record));
+        let set_aside = match fs::rename(&png, self.root.join(Self::withheld_path(record))) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(HistoryError::from(e)),
+        };
         let thumb = remove_if_exists(&self.root.join(Self::thumbnail_path(record)));
-        png.and(thumb)?;
+        crate::fs_atomic::sync_parent_dir(&png);
+        set_aside.and(thumb)?;
+        Ok(true)
+    }
+
+    /// Remove a set-aside image once a newer image is in place.
+    fn drop_withheld(&self, record: &CaptureRecord) {
+        let _ = fs::remove_file(self.root.join(Self::withheld_path(record)));
+    }
+
+    /// [`HistoryStore::finish_pending_scrub`] for an index entry.
+    fn finish_pending_entry(&self, entry: &HistoryIndexEntry) -> Result<bool, HistoryError> {
+        let paths = Self::record_for_paths(entry);
+        let json = self.root.join(Self::json_path(&paths));
+        let Ok(before) = fs::read(&json) else {
+            return Ok(false);
+        };
+        let stored: CaptureRecord = serde_json::from_slice(&before)?;
+        if !stored.scrub_pending {
+            return Ok(false);
+        }
+        let withheld = self.root.join(Self::withheld_path(&paths));
+        // Marked but not yet set aside (a crash between the two): the
+        // image at its own path is the one to draw on.
+        let source = if withheld.exists() {
+            withheld
+        } else {
+            self.root.join(Self::png_path(&paths))
+        };
+        let Some(stamp) = FileStamp::of(&source) else {
+            return Ok(false);
+        };
+        let img = image::load_from_memory(&fs::read(&source)?)
+            .map_err(|e| HistoryError::Io(format!("couldn't read the image to redact: {e}")))?
+            .to_rgba8();
+        let pending = stored.pending_image.clone();
+        let mut redactions = pending
+            .as_ref()
+            .filter(|p| (p.width, p.height) == img.dimensions())
+            .map(|p| p.redactions.clone())
+            .unwrap_or_default();
+        if !crate::scrub::has_redaction(&redactions) {
+            redactions = vec![whole_image_cover(img.width(), img.height())];
+        }
+        let baked = crate::render::render(&img, &redactions);
+        let png = crate::png::encode_fast(&baked)
+            .map_err(|e| HistoryError::Io(format!("couldn't encode the redacted image: {e}")))?;
+        let thumb = thumbnail_png(&baked);
+        let staged = self.stage_image(&stored, &png, thumb.as_deref())?;
+        let _index_guard = self.lock_index()?;
+        // Changed meanwhile (a newer scrub or write): theirs stands.
+        if fs::read(&json).ok() != Some(before) || FileStamp::of(&source) != Some(stamp) {
+            return Ok(false);
+        }
+        let mut done = stored.clone();
+        done.scrub_pending = false;
+        done.pending_image = None;
+        done.redacted = true;
+        done.geometry_id = pending.map_or(stored.geometry_id.clone(), |p| p.geometry_id);
+        done.width_px = baked.width();
+        done.height_px = baked.height();
+        done.redactions = redactions;
+        // Not provably every redaction in the image: no text is kept.
+        done.redactions_complete = false;
+        done.ocr_text = None;
+        done.annotation_model.clear();
+        self.place_staged(&stored, &staged)?;
+        self.write_sidecar(&done)?;
+        self.drop_withheld(&stored);
+        tracing::info!(
+            target: crate::log::cat::HISTORY,
+            "finished the pending redaction of history record {}",
+            stored.id
+        );
         Ok(true)
     }
 
@@ -872,6 +1076,7 @@ impl FsHistoryStore {
             return;
         }
         let _ = fs::remove_file(thumb);
+        self.drop_withheld(record);
         self.remove_staging_for(record);
     }
 
@@ -1187,8 +1392,12 @@ impl HistoryStore for FsHistoryStore {
                         None => continue, // deleted meanwhile
                     }
                 }
-                // A record whose scrub is pending has no image on disk
-                // (text-only until it lands); there is nothing to backfill.
+                // A withheld record (scrub pending) is served without its
+                // text (and has no image at its path, so nothing to
+                // backfill) until its redacted image lands.
+                if record.scrub_pending {
+                    record.ocr_text = None;
+                }
                 self.backfill_thumbnail_from_png_path(&record, &png_abs);
                 out.push(record);
             }
@@ -1254,6 +1463,7 @@ impl HistoryStore for FsHistoryStore {
                     redactions: Vec::new(),
                     redactions_complete: false,
                     scrub_pending: false,
+                    pending_image: None,
                     geometry_id: None,
                 };
                 self.remove_derived_files(&record_for_path);
@@ -1337,9 +1547,10 @@ impl HistoryStore for FsHistoryStore {
         let _index_guard = self.lock_index()?;
         let mut done = record.clone();
         done.scrub_pending = false;
+        done.pending_image = None;
         if record.redacted {
             done.ocr_text = self.scrub_text(record);
-            // Fail closed: no unredacted content survives past here,
+            // Fail closed: nothing unredacted is served past here,
             // whatever happens to the image write below.
             if !self.begin_scrub_locked(record)? {
                 return Ok(false);
@@ -1349,14 +1560,44 @@ impl HistoryStore for FsHistoryStore {
             // unredacted image never goes over it.
             return Ok(false);
         }
+        // The new image replaces the old one in one rename; only then does
+        // the sidecar say so, and only then does a set-aside image go.
         self.place_staged(record, &staged)?;
         self.write_sidecar(&done)?;
+        self.drop_withheld(record);
         Ok(true)
     }
 
     fn begin_scrub(&self, record: &CaptureRecord) -> Result<bool, HistoryError> {
         let _index_guard = self.lock_index()?;
         self.begin_scrub_locked(record)
+    }
+
+    fn finish_pending_scrub(&self, id: Uuid) -> Result<bool, HistoryError> {
+        let index = self.read_index()?;
+        match index.records.iter().find(|e| e.id == id) {
+            Some(entry) => self.finish_pending_entry(entry),
+            None => Ok(false),
+        }
+    }
+
+    fn finish_pending_scrubs(&self) -> usize {
+        let Ok(index) = self.read_index() else {
+            return 0;
+        };
+        let mut finished = 0;
+        for entry in &index.records {
+            match self.finish_pending_entry(entry) {
+                Ok(true) => finished += 1,
+                Ok(false) => {}
+                Err(e) => tracing::warn!(
+                    target: crate::log::cat::HISTORY,
+                    "couldn't finish the pending redaction of history record {}: {e}",
+                    entry.id
+                ),
+            }
+        }
+        finished
     }
 
     fn record_recognized_text(
@@ -1432,6 +1673,7 @@ impl HistoryStore for FsHistoryStore {
             redactions: Vec::new(),
             redactions_complete: false,
             scrub_pending: false,
+            pending_image: None,
             geometry_id: None,
         };
         self.remove_derived_files(&record_for_path);
@@ -2278,47 +2520,108 @@ mod tests {
     }
 
     #[test]
-    fn begin_scrub_masks_the_text_and_removes_the_unredacted_image() {
+    fn begin_scrub_withholds_the_record_and_sets_its_image_aside() {
         let (_dir, s) = store();
         let mut r = record_at(Utc::now());
         r.ocr_text = Some("secret".into());
         s.save(&r, &valid_png(4, 4)).unwrap();
         let png = s.root().join(FsHistoryStore::png_path(&r));
         let thumb = s.root().join(FsHistoryStore::thumbnail_path(&r));
+        let withheld = s.root().join(FsHistoryStore::withheld_path(&r));
         assert!(png.exists() && thumb.exists());
         assert!(s.begin_scrub(&scrubbed_of(&r)).unwrap());
+        // Withheld: nothing at its image path, no thumbnail, no text served.
         let listed = s.list().unwrap();
-        assert_eq!(listed[0].ocr_text.as_deref(), Some("masked"));
         assert!(listed[0].redacted && listed[0].scrub_pending);
-        assert!(!png.exists() && !thumb.exists(), "text-only until it lands");
+        assert_eq!(listed[0].ocr_text, None);
+        assert!(!png.exists() && !thumb.exists());
+        // Never deleted: set aside until the redacted image replaces it.
+        assert_eq!(fs::read(&withheld).unwrap(), valid_png(4, 4));
+        let stored = s.read_sidecar(&r).unwrap().unwrap();
+        assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
+        let pending = stored.pending_image.unwrap();
+        assert_eq!((pending.width, pending.height), (r.width_px, r.height_px));
+        assert!(crate::scrub::has_redaction(&pending.redactions));
     }
 
     #[test]
-    fn begin_scrub_and_rewrite_report_a_missing_record() {
-        let (_dir, s) = store();
-        let r = record_at(Utc::now());
-        assert!(!s.begin_scrub(&scrubbed_of(&r)).unwrap());
-        assert!(!s.rewrite(&scrubbed_of(&r), &black_png(4, 4).1).unwrap());
-        assert!(!s.contains(&r));
-        assert!(s.list().unwrap().is_empty());
-    }
-
-    #[test]
-    fn a_scrub_whose_image_write_fails_leaves_a_masked_text_only_record() {
+    fn a_scrub_whose_image_write_fails_leaves_the_record_withheld_with_its_image() {
         let (_dir, s) = store();
         let mut r = record_at(Utc::now());
         r.ocr_text = Some("secret".into());
         s.save(&r, &valid_png(4, 4)).unwrap();
         let thumb = s.root().join(FsHistoryStore::thumbnail_path(&r));
-        // The PNG can't be removed or replaced (its path is a directory).
-        let png = s.root().join(FsHistoryStore::png_path(&r));
-        fs::remove_file(&png).unwrap();
-        fs::create_dir(&png).unwrap();
-        assert!(s.rewrite(&scrubbed_of(&r), &black_png(4, 4).1).is_err());
+        let scrubbed = scrubbed_of(&r);
+        let (_, black) = black_png(4, 4);
+        let staged = s.stage_image(&scrubbed, &black, None).unwrap();
+        // The staged image vanishes before the commit renames it.
+        fs::remove_file(&staged.png).unwrap();
+        assert!(s.commit_rewrite(&scrubbed, staged).is_err());
         let stored = s.read_sidecar(&r).unwrap().unwrap();
         assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
         assert!(stored.redacted && stored.scrub_pending);
         assert!(!thumb.exists());
+        assert!(!s.root().join(FsHistoryStore::png_path(&r)).exists());
+        assert!(s.root().join(FsHistoryStore::withheld_path(&r)).exists());
+    }
+
+    /// A pending scrub whose image never landed (a crash or quit after
+    /// phase one) is finished from its set-aside image: the pending
+    /// redactions are drawn on it with the core render and it is swapped
+    /// in. The record is redacted, keeps its image, and keeps no text.
+    #[test]
+    fn a_pending_scrub_is_finished_from_its_set_aside_image() {
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        r.width_px = 8;
+        r.height_px = 8;
+        r.ocr_text = Some("secret".into());
+        let white = image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 255, 255, 255]));
+        s.save(&r, &crate::png::encode(&white).unwrap()).unwrap();
+        let mut half = scrubbed_of(&r);
+        half.redactions = vec![Annotation::Rectangle {
+            rect: crate::geom::RectLike::new(0.0, 0.0, 4.0, 4.0),
+            color: crate::annotation::Rgba::OPAQUE_BLACK,
+            line_width: 0.0,
+            style: crate::annotation::ShapeStyle {
+                fill: crate::annotation::FillMode::Filled,
+                ..crate::annotation::ShapeStyle::default()
+            },
+        }];
+        assert!(s.begin_scrub(&half).unwrap());
+        assert_eq!(s.finish_pending_scrubs(), 1);
+        let listed = &s.list().unwrap()[0];
+        assert!(listed.redacted && !listed.scrub_pending);
+        assert_eq!(listed.ocr_text, None);
+        assert_eq!(listed.pending_image, None);
+        let on_disk = decode(&fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap());
+        assert_eq!(on_disk.get_pixel(1, 1).0, [0, 0, 0, 255]);
+        assert_eq!(on_disk.get_pixel(6, 6).0, [255, 255, 255, 255]);
+        assert!(s.root().join(FsHistoryStore::thumbnail_path(&r)).exists());
+        assert!(!s.root().join(FsHistoryStore::withheld_path(&r)).exists());
+        // Nothing left to finish.
+        assert_eq!(s.finish_pending_scrubs(), 0);
+    }
+
+    /// Redactions that can't be placed on the set-aside image (another
+    /// frame or size) become a whole-image cover: never an unredacted
+    /// pixel, never a lost image.
+    #[test]
+    fn a_pending_scrub_in_another_frame_is_finished_as_a_whole_image_cover() {
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        r.width_px = 4;
+        r.height_px = 4;
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let mut rotated = scrubbed_of(&r);
+        rotated.geometry_id = Some("rotated".into());
+        assert!(s.begin_scrub(&rotated).unwrap());
+        assert_eq!(s.finish_pending_scrubs(), 1);
+        let listed = &s.list().unwrap()[0];
+        assert!(listed.redacted && !listed.scrub_pending);
+        assert_eq!(listed.geometry_id, None, "the image's own frame");
+        let on_disk = decode(&fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap());
+        assert!(on_disk.pixels().all(|p| p.0 == [0, 0, 0, 255]));
     }
 
     #[test]

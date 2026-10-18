@@ -44,8 +44,8 @@ pub use error::{CaptureError, CoreError, ExportError, HistoryError, OCRError, Pr
 pub use filename::expand as expand_filename_template;
 pub use geom::{clamp_rect, InvalidRect, Point, PointLike, Rect, RectLike};
 pub use history::{
-    CaptureRecord, FsHistoryStore, HistoryIndex, HistoryIndexEntry, HistoryStore, StagedImage,
-    HISTORY_INDEX_FILENAME, HISTORY_SCHEMA_VERSION,
+    CaptureRecord, FsHistoryStore, HistoryIndex, HistoryIndexEntry, HistoryStore, PendingImage,
+    StagedImage, HISTORY_INDEX_FILENAME, HISTORY_SCHEMA_VERSION,
 };
 pub use png::{
     encode as encode_png, encode_fast as encode_png_fast, save as save_png, write as write_png,

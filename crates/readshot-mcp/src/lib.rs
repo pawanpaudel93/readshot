@@ -1270,7 +1270,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_record_whose_scrub_is_pending_is_served_text_only() {
+    async fn a_record_whose_scrub_is_pending_is_withheld() {
         use readshot_core::HistoryStore;
         let root = unique_history_root();
         let store = FsHistoryStore::new(&root);
@@ -1298,7 +1298,8 @@ mod tests {
         )
         .await;
         let capture = &resp["result"]["structuredContent"]["captures"][0];
-        assert_eq!(capture["ocr_text"], "masked ████");
+        // Withheld until its redacted image lands: no text, no image.
+        assert!(capture["ocr_text"].is_null(), "{capture}");
         assert!(capture["image_path"].is_null(), "{capture}");
     }
 

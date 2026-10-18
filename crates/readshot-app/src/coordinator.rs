@@ -67,7 +67,7 @@ pub struct CaptureCoordinator {
 enum HistoryUpdate {
     /// A plain sidecar update, and its place among the record's
     /// outstanding writes ([`WriteTracker`]).
-    Write(CaptureRecord, Option<PendingWrite>),
+    Write(Box<CaptureRecord>, Option<PendingWrite>),
     /// Replace a record's image and sidecar (the editor's History scrub
     /// and its restore). See [`HistoryRewrite`].
     Rewrite(Box<HistoryRewrite>),
@@ -828,12 +828,12 @@ impl CaptureCoordinator {
     pub fn update_history_async(&self, record: CaptureRecord) {
         let record = match &self.history_update_tx {
             Some(tx) => match tx.send(HistoryUpdate::Write(
-                record.clone(),
+                Box::new(record.clone()),
                 Some(self.scrubs.writes.begin(record.id)),
             )) {
                 Ok(()) => return,
                 Err(std::sync::mpsc::SendError(msg)) => match msg {
-                    HistoryUpdate::Write(record, _) => record,
+                    HistoryUpdate::Write(record, _) => *record,
                     HistoryUpdate::Rewrite(_) | HistoryUpdate::Flush(_) => return,
                 },
             },
@@ -1613,13 +1613,13 @@ mod tests {
         let b = readshot_core::Uuid::new_v4();
         let (ack, _rx) = std::sync::mpsc::sync_channel(1);
         let batch = vec![
-            HistoryUpdate::Write(tagged(a, "w1"), None),
+            HistoryUpdate::Write(Box::new(tagged(a, "w1")), None),
             rewrite(a, "r1"),
-            HistoryUpdate::Write(tagged(b, "b1"), None),
-            HistoryUpdate::Write(tagged(a, "w2"), None),
-            HistoryUpdate::Write(tagged(a, "w3"), None),
+            HistoryUpdate::Write(Box::new(tagged(b, "b1")), None),
+            HistoryUpdate::Write(Box::new(tagged(a, "w2")), None),
+            HistoryUpdate::Write(Box::new(tagged(a, "w3")), None),
             HistoryUpdate::Flush(ack),
-            HistoryUpdate::Write(tagged(b, "b2"), None),
+            HistoryUpdate::Write(Box::new(tagged(b, "b2")), None),
         ];
         // A rewrite supersedes every earlier write of its record; a
         // plain write only earlier plain writes after the last rewrite
@@ -1995,9 +1995,10 @@ mod tests {
         let coord = history_coord(store.clone());
         let base = Arc::new(white(8, 8));
         let rx = coord.rewrite_history_async(scrubbed(&record), Arc::clone(&base), pixelate());
-        // Synchronous phase one: masked text, no unredacted image.
+        // Synchronous phase one: withheld (no text served, no image at
+        // its path).
         let stored = sidecar(&fs_store, &record);
-        assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
+        assert_eq!(stored.ocr_text.as_deref(), None, "withheld: no text served");
         assert!(stored.scrub_pending);
         assert!(png_on_disk(&fs_store, &record).is_none());
         // The first write fails and is reported…
@@ -2038,7 +2039,7 @@ mod tests {
         // Quit: the flush secures what's still unsecured.
         coord.flush_history_updates();
         let stored = sidecar(&fs_store, &record);
-        assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
+        assert_eq!(stored.ocr_text.as_deref(), None, "withheld: no text served");
         assert!(png_on_disk(&fs_store, &record).is_none());
     }
 
@@ -2107,7 +2108,11 @@ mod tests {
         lock(&scrubs.state).latest.insert(record.id, 1);
         fail_closed(&store, &scrubs, &job);
         assert!(png_on_disk(&store, &record).is_none());
-        assert_eq!(sidecar(&store, &record).ocr_text.as_deref(), Some("masked"));
+        assert_eq!(
+            sidecar(&store, &record).ocr_text.as_deref(),
+            None,
+            "withheld: no text served"
+        );
     }
 
     #[test]
@@ -2121,7 +2126,10 @@ mod tests {
             (std::time::Instant::now(), rw)
         };
         let mut retries = vec![retry(id), retry(other)];
-        drop_superseded_retries(&mut retries, &[HistoryUpdate::Write(tagged(id, "w"), None)]);
+        drop_superseded_retries(
+            &mut retries,
+            &[HistoryUpdate::Write(Box::new(tagged(id, "w")), None)],
+        );
         assert_eq!(retries.len(), 2, "a plain write carries no image");
         drop_superseded_retries(&mut retries, &[rewrite(id, "newer")]);
         assert_eq!(retries.len(), 1);
@@ -2332,7 +2340,7 @@ mod tests {
             "unredacted image still served"
         );
         let stored = sidecar(&fs_store, &record);
-        assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
+        assert_eq!(stored.ocr_text.as_deref(), None, "withheld: no text served");
         assert!(stored.redacted);
         coord.flush_history_updates();
     }
