@@ -1224,7 +1224,8 @@ fn redact_card<'a>(
     let n = pending.len();
     let unlocatable = &rs.unlocatable;
     let head = row![
-        crate::icons::icon(AppIcon::Shield, p.warn, ICON_SIZE),
+        // Its own glyph: the Shield means the Screen Recording permission.
+        crate::icons::icon(crate::icons::action::REDACT, p.warn, ICON_SIZE),
         text(redact_card_title(n, unlocatable.len(), rs.weak.len()))
             .size(TYPE_BODY)
             .font(semibold())

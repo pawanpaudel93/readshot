@@ -110,16 +110,9 @@ fn option_control<'a>(
             style.fill,
             |f| send(StyleMessage::Fill(f)),
         ),
-        O::Dash => icon_segment(
-            &[
-                (AppIcon::SolidLine, "Solid", false),
-                (AppIcon::Dashed, "Dashed", true),
-            ],
-            style.dashed,
-            busy,
-            p,
-            |d| send(StyleMessage::Dashed(d)),
-        ),
+        O::Dash => icon_segment(&DASH_SEGMENTS, style.dashed, busy, p, |d| {
+            send(StyleMessage::Dashed(d))
+        }),
         O::CornerRadius => labeled_slider(
             "Radius",
             0.0..=readshot_ui::editor::style::MAX_CORNER_RADIUS,
@@ -130,31 +123,12 @@ fn option_control<'a>(
             busy,
             StyleMessage::CornerRadius,
         ),
-        O::LinePath => icon_segment(
-            &[
-                (AppIcon::LineStraight, "Straight", LinePathKind::Straight),
-                (AppIcon::LineCurved, "Curved", LinePathKind::Curved),
-                (AppIcon::LineSketch, "Hand-drawn", LinePathKind::HandDrawn),
-            ],
-            style.line_path,
-            busy,
-            p,
-            |k| send(StyleMessage::LinePath(k)),
-        ),
-        O::Heads => icon_segment(
-            &[
-                (
-                    AppIcon::Tool(readshot_ui::editor::ToolState::Arrow),
-                    "One Head",
-                    ArrowHeads::End,
-                ),
-                (AppIcon::ArrowBoth, "Both Heads", ArrowHeads::Both),
-            ],
-            style.heads,
-            busy,
-            p,
-            |h| send(StyleMessage::Heads(h)),
-        ),
+        O::LinePath => icon_segment(&LINE_PATH_SEGMENTS, style.line_path, busy, p, |k| {
+            send(StyleMessage::LinePath(k))
+        }),
+        O::Heads => icon_segment(&ARROW_HEAD_SEGMENTS, style.heads, busy, p, |h| {
+            send(StyleMessage::Heads(h))
+        }),
         O::TextSize => {
             let items: Vec<(&'static str, TextSize)> =
                 TextSize::ALL.iter().map(|s| (s.label(), *s)).collect();
@@ -190,18 +164,7 @@ fn option_control<'a>(
             StyleMessage::Dim,
         ),
         O::SpotlightShape => icon_segment(
-            &[
-                (
-                    AppIcon::Tool(readshot_ui::editor::ToolState::Rectangle),
-                    "Rectangle Spotlight",
-                    readshot_core::SpotlightShape::Rectangle,
-                ),
-                (
-                    AppIcon::Tool(readshot_ui::editor::ToolState::Ellipse),
-                    "Ellipse Spotlight",
-                    readshot_core::SpotlightShape::Ellipse,
-                ),
-            ],
+            &SPOTLIGHT_SHAPE_SEGMENTS,
             style.spotlight_shape,
             busy,
             p,
@@ -320,6 +283,41 @@ pub(crate) fn with_new_tool_dot<'a>(button: Element<'a, Message>) -> Element<'a,
     ]
     .into()
 }
+
+/// Line style: solid or dashed.
+pub(crate) const DASH_SEGMENTS: [(AppIcon, &str, bool); 2] = [
+    (AppIcon::SolidLine, "Solid", false),
+    (AppIcon::Dashed, "Dashed", true),
+];
+
+/// Line path: straight, curved or hand-drawn.
+pub(crate) const LINE_PATH_SEGMENTS: [(AppIcon, &str, LinePathKind); 3] = [
+    (AppIcon::LineStraight, "Straight", LinePathKind::Straight),
+    (AppIcon::LineCurved, "Curved", LinePathKind::Curved),
+    (AppIcon::LineSketch, "Hand-drawn", LinePathKind::HandDrawn),
+];
+
+/// Arrow heads. Their own glyphs: the Arrow tool icon sits in the toolbar
+/// at the same time and means "draw an arrow".
+pub(crate) const ARROW_HEAD_SEGMENTS: [(AppIcon, &str, ArrowHeads); 2] = [
+    (AppIcon::ArrowOne, "One Head", ArrowHeads::End),
+    (AppIcon::ArrowBoth, "Both Heads", ArrowHeads::Both),
+];
+
+/// Spotlight shapes. Their own glyphs: the Rectangle and Ellipse tool
+/// icons sit in the toolbar at the same time and mean "draw".
+pub(crate) const SPOTLIGHT_SHAPE_SEGMENTS: [(AppIcon, &str, readshot_core::SpotlightShape); 2] = [
+    (
+        AppIcon::SpotlightRect,
+        "Rectangle Spotlight",
+        readshot_core::SpotlightShape::Rectangle,
+    ),
+    (
+        AppIcon::SpotlightEllipse,
+        "Ellipse Spotlight",
+        readshot_core::SpotlightShape::Ellipse,
+    ),
+];
 
 /// Magnifier bubble shapes. Their own glyphs: the Ellipse and Rectangle
 /// tool icons sit in the toolbar at the same time and mean "draw".
@@ -466,7 +464,7 @@ pub(crate) fn color_popover<'a>(
         if i + 1 == rows.len() {
             r = r.push(
                 container(icon_button(
-                    AppIcon::Dropper,
+                    crate::icons::action::PICK_COLOR,
                     if busy {
                         Color {
                             a: p.t2.a * 0.45,

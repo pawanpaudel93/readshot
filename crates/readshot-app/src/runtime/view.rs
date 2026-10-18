@@ -558,7 +558,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
     header_row = header_row
         .push(Space::new().width(Length::Fill))
         .push(icon_button(
-            crate::icons::AppIcon::Close,
+            crate::icons::action::DISMISS,
             DARK.t2,
             "Cancel",
             Some(SHIFT_ESC_KEY),
@@ -1362,7 +1362,7 @@ fn history_status_toast(state: &App, p: &'static Palette) -> Option<Element<'sta
     // Errors stay until dismissed (History has no auto-expiry).
     let action = (kind == ToastKind::Error).then(|| {
         icon_button(
-            crate::icons::AppIcon::Close,
+            crate::icons::action::DISMISS,
             p.t2,
             "Dismiss",
             None,
@@ -1732,7 +1732,7 @@ pub(crate) fn history_selected_panel<'a>(
         .into()
     });
     let delete_control: Element<'a, Message> = icon_button(
-        AppIcon::Trash,
+        crate::icons::action::DELETE,
         p.t2,
         "Delete Capture",
         Some(HISTORY_DELETE_KEY),
@@ -1753,8 +1753,10 @@ pub(crate) fn history_selected_panel<'a>(
             ICON_BTN,
             Position::Top,
         ),
+        // The same pencil as the capture overlay's Edit, which opens the
+        // same editor (the external-link glyph implied leaving the app).
         icon_button(
-            AppIcon::Open,
+            crate::icons::action::OPEN_IN_EDITOR,
             p.t2,
             "Open in Editor",
             Some(RETURN_KEY),
@@ -1778,7 +1780,7 @@ pub(crate) fn history_selected_panel<'a>(
     let copy_text = tooltip_with_key(
         bar_button(
             row![
-                crate::icons::icon(AppIcon::ScanText, text_fg, ICON_SIZE),
+                crate::icons::icon(crate::icons::action::COPY_TEXT, text_fg, ICON_SIZE),
                 text("Copy Text").size(ButtonSize::Md.text_size()),
             ]
             .spacing(6)
@@ -1795,7 +1797,7 @@ pub(crate) fn history_selected_panel<'a>(
     let copy_image = tooltip_with_key(
         bar_button(
             row![
-                crate::icons::icon(AppIcon::Copy, p.pri_fg, ICON_SIZE),
+                crate::icons::icon(crate::icons::action::COPY_IMAGE, p.pri_fg, ICON_SIZE),
                 text("Copy Image").size(ButtonSize::Md.text_size()),
             ]
             .spacing(6)
@@ -1810,7 +1812,7 @@ pub(crate) fn history_selected_panel<'a>(
         Position::Top,
     );
     let pin = icon_button(
-        AppIcon::Pin,
+        crate::icons::action::PIN,
         p.t2,
         "Pin",
         Some(PIN_KEY),
@@ -2546,7 +2548,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             .align_y(Alignment::Center);
             if toast_is_dismissable(kind) {
                 r = r.push(icon_button(
-                    AppIcon::Close,
+                    crate::icons::action::DISMISS,
                     p.t2,
                     "Dismiss",
                     None,
@@ -2559,7 +2561,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             Some(r.into())
         } else if toast_is_dismissable(kind) {
             Some(icon_button(
-                AppIcon::Close,
+                crate::icons::action::DISMISS,
                 p.t2,
                 "Dismiss",
                 None,
@@ -2589,7 +2591,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         bar_button(
             row![
                 crate::icons::icon(
-                    AppIcon::Copy,
+                    crate::icons::action::COPY_IMAGE,
                     if busy { dimmed(p.pri_fg) } else { p.pri_fg },
                     ICON_SIZE
                 ),
@@ -2629,7 +2631,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         ),
         vsep(),
         icon_button(
-            AppIcon::Pin,
+            crate::icons::action::PIN,
             icon_color(!busy),
             "Pin",
             Some(PIN_KEY),
@@ -2639,7 +2641,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             Position::Top,
         ),
         icon_button(
-            AppIcon::Save,
+            crate::icons::action::SAVE,
             icon_color(!busy),
             "Save",
             Some(SAVE_KEY),
@@ -2649,7 +2651,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             Position::Top,
         ),
         icon_button(
-            AppIcon::ScanText,
+            crate::icons::action::COPY_TEXT,
             icon_color(!busy),
             "Copy Text",
             Some(COPY_TEXT_KEY),
@@ -2660,8 +2662,10 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         ),
         copy_image,
         vsep(),
+        // Discard throws the capture away: the trash, not the × that
+        // dismisses and cancels everywhere else.
         icon_button(
-            AppIcon::Close,
+            crate::icons::action::DELETE,
             icon_color(!busy),
             "Discard",
             Some(CLOSE_KEY),
@@ -3148,7 +3152,7 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
             return Space::new().into();
         }
         let close = icon_button(
-            AppIcon::Close,
+            crate::icons::action::DISMISS,
             DARK.t1,
             "Close",
             Some(ESC_KEY),
@@ -3641,7 +3645,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
         button(
             container(
                 row![
-                    crate::icons::icon(AppIcon::Edit, DARK.pri_fg, 15.0),
+                    crate::icons::icon(crate::icons::action::OPEN_IN_EDITOR, DARK.pri_fg, 15.0),
                     text("Edit").size(TYPE_BODY)
                 ]
                 .spacing(7)
@@ -3662,7 +3666,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
     let buttons = row![
         edit,
         icon_button(
-            AppIcon::Copy,
+            crate::icons::action::COPY_IMAGE,
             fg,
             "Copy Image",
             Some(COPY_IMAGE_KEY),
@@ -3672,7 +3676,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             tip_pos
         ),
         icon_button(
-            AppIcon::ScanText,
+            crate::icons::action::COPY_TEXT,
             fg,
             "Copy Text",
             Some(COPY_TEXT_KEY),
@@ -3682,7 +3686,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             tip_pos
         ),
         icon_button(
-            AppIcon::Save,
+            crate::icons::action::SAVE,
             fg,
             "Save",
             Some(SAVE_KEY),
@@ -3692,7 +3696,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
             tip_pos
         ),
         icon_button(
-            AppIcon::Pin,
+            crate::icons::action::PIN,
             fg,
             "Pin",
             Some(PIN_KEY),
@@ -3713,7 +3717,7 @@ pub(crate) fn overlay_toolbar_layer<'a>(
         ),
         vsep(),
         icon_button(
-            AppIcon::Close,
+            crate::icons::action::DISMISS,
             fg,
             "Cancel",
             Some(ESC_KEY),
@@ -4805,7 +4809,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
         WelcomeState::Pending => {
             col = col.push(welcome_brand(p, WelcomeTile::App));
             col = col.push(welcome_status_group(
-                AppIcon::Shield,
+                crate::icons::action::SCREEN_RECORDING,
                 p.warn,
                 "Screen Recording access needed",
                 "macOS asks once. Readshot only reads the screen when you capture.",
@@ -4835,7 +4839,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
         let kind = status_toast_kind(s);
         let action = (kind == ToastKind::Error).then(|| {
             icon_button(
-                AppIcon::Close,
+                crate::icons::action::DISMISS,
                 p.t2,
                 "Dismiss",
                 None,
@@ -4913,7 +4917,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                         Some(Message::OpenHistoryRequested),
                     ),
                     welcome_button(
-                        Some(AppIcon::Gear),
+                        Some(crate::icons::action::SETTINGS),
                         "Open Settings",
                         ButtonKind::Secondary,
                         ButtonSize::Md,

@@ -4,9 +4,9 @@
 //! colour brand mark elsewhere), registers it as a tray icon with the
 //! app's menu (Capture, Scrolling Capture, Retake Last Region, History,
 //! Settings, Check for Updates and About Readshot on macOS, Quit), and
-//! exposes a non-blocking
-//! [`TrayController::drain`] that the iced runtime polls every few ms
-//! to surface tray + menu events as typed actions. A left-click on
+//! exposes a non-blocking [`TrayController::drain`] that the iced
+//! runtime polls every few ms to surface tray + menu events as typed
+//! actions. A left-click on
 //! the icon itself fires Capture too, matching the muscle memory of
 //! every menu-bar capture tool on the platform.
 //!

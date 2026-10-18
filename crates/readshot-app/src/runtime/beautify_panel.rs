@@ -356,7 +356,7 @@ pub(crate) fn beautify_tab<'a>(
         ),
         focus_ring(
             icon_button(
-                AppIcon::Dropper,
+                crate::icons::action::PICK_COLOR,
                 p.t2,
                 "Pick from Image",
                 None,

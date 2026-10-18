@@ -212,7 +212,7 @@ impl SettingsPane {
     pub(crate) fn icon(self) -> crate::icons::AppIcon {
         use crate::icons::AppIcon as I;
         match self {
-            Self::Permissions => I::Shield,
+            Self::Permissions => crate::icons::action::SCREEN_RECORDING,
             Self::Capture => I::Crosshair,
             Self::Files => I::Folder,
             Self::TextRecognition => I::ScanText,

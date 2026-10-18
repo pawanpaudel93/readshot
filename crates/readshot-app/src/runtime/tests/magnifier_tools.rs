@@ -125,12 +125,35 @@ fn a_selected_magnifiers_leader_moves_the_whole_magnifier() {
     );
 }
 
+/// Every tool option drawn as a glyph segment: (option, its glyphs).
+fn option_segment_glyphs() -> Vec<(&'static str, Vec<crate::icons::AppIcon>)> {
+    fn glyphs<T, const N: usize>(
+        segments: [(crate::icons::AppIcon, &str, T); N],
+    ) -> Vec<crate::icons::AppIcon> {
+        segments.into_iter().map(|(glyph, _, _)| glyph).collect()
+    }
+    vec![
+        ("line style", glyphs(DASH_SEGMENTS)),
+        ("line path", glyphs(LINE_PATH_SEGMENTS)),
+        ("arrow heads", glyphs(ARROW_HEAD_SEGMENTS)),
+        ("spotlight shape", glyphs(SPOTLIGHT_SHAPE_SEGMENTS)),
+        ("magnifier shape", glyphs(MAGNIFIER_SHAPE_SEGMENTS)),
+    ]
+}
+
 #[test]
-fn magnifier_shape_segments_do_not_reuse_drawing_tool_glyphs() {
-    for (glyph, _, _) in MAGNIFIER_SHAPE_SEGMENTS {
-        assert!(
-            !matches!(glyph, crate::icons::AppIcon::Tool(_)),
-            "{glyph:?}"
-        );
+fn option_segments_do_not_reuse_drawing_tool_glyphs() {
+    // The toolbar shows the tool glyphs at the same time, meaning "draw
+    // this": an option segment reusing one reads as switching tools.
+    for (option, glyphs) in option_segment_glyphs() {
+        for glyph in &glyphs {
+            assert!(
+                !matches!(glyph, crate::icons::AppIcon::Tool(_)),
+                "{option}: {glyph:?}"
+            );
+        }
+        for (i, a) in glyphs.iter().enumerate() {
+            assert!(!glyphs[i + 1..].contains(a), "{option}: {a:?} twice");
+        }
     }
 }
