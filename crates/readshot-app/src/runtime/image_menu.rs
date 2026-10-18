@@ -171,9 +171,9 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
         Message::EditorRotate { clockwise } => {
             prepare(ed, &coord);
             let kind = ComposeKind::Rotate { clockwise };
-            if let Some(task) = super::compose_jobs::queue_geometry_step(ed, kind, |g| {
-                readshot_ui::editor::EditorState::rotated_geometry(g, clockwise)
-            }) {
+            if let Some(task) =
+                super::compose_jobs::queue_geometry_step(ed, kind, |g| g.rotated(clockwise))
+            {
                 return task;
             }
             super::compose_jobs::apply_step_now(ed, &coord, kind, None);
@@ -181,9 +181,9 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
         Message::EditorFlip(axis) => {
             prepare(ed, &coord);
             let kind = ComposeKind::Flip(axis);
-            if let Some(task) = super::compose_jobs::queue_geometry_step(ed, kind, |g| {
-                readshot_ui::editor::EditorState::flipped_geometry(g, axis)
-            }) {
+            if let Some(task) =
+                super::compose_jobs::queue_geometry_step(ed, kind, |g| g.flipped(axis))
+            {
                 return task;
             }
             super::compose_jobs::apply_step_now(ed, &coord, kind, None);

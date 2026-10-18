@@ -659,6 +659,21 @@ impl DocGeometry {
         }
     }
 
+    /// This geometry turned a quarter, clockwise or not.
+    pub fn rotated(&self, clockwise: bool) -> Self {
+        let t = if clockwise {
+            self.transform.rotated_cw()
+        } else {
+            self.transform.rotated_ccw()
+        };
+        self.with_transform(t)
+    }
+
+    /// This geometry mirrored along `axis`.
+    pub fn flipped(&self, axis: FlipAxis) -> Self {
+        self.with_transform(self.transform.flipped(axis))
+    }
+
     pub fn with_layout(&self, gap: u32, align: Align) -> Self {
         Self {
             gap: gap.min(MAX_GAP),

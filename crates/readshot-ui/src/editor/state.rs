@@ -792,8 +792,9 @@ impl EditorState {
 
     /// The undo step [`Self::apply_geometry`] would push for `next`,
     /// without pushing it or composing anything: `None` when `next` is
-    /// the present geometry. Pair with [`Self::push_precomposed`] to
-    /// compose the document off the UI thread.
+    /// the present geometry. Land it as [`DocOp::Push`] through
+    /// [`Self::apply_ops_precomposed`] to compose the document off the
+    /// UI thread.
     pub fn geometry_step(&self, next: DocGeometry) -> Result<Option<Snapshot>, GeometryError> {
         Self::step_from(self.history.snapshot(), next)
     }
@@ -815,21 +816,6 @@ impl EditorState {
                 beautify: from.doc.beautify,
             },
         }))
-    }
-
-    /// `g` turned a quarter (what [`Self::rotate`] moves to).
-    pub fn rotated_geometry(g: &DocGeometry, clockwise: bool) -> DocGeometry {
-        let t = if clockwise {
-            g.transform.rotated_cw()
-        } else {
-            g.transform.rotated_ccw()
-        };
-        g.with_transform(t)
-    }
-
-    /// `g` mirrored (what [`Self::flip`] moves to).
-    pub fn flipped_geometry(g: &DocGeometry, axis: FlipAxis) -> DocGeometry {
-        g.with_transform(g.transform.flipped(axis))
     }
 
     /// The undo step [`Self::add_part`] would push from `from`, without
@@ -910,26 +896,8 @@ impl EditorState {
         Some(g.with_transform(g.transform.scaled(sx, sy)))
     }
 
-    /// Push `step` (from [`Self::geometry_step`]) as one undo step with
-    /// its document already composed (`base`, from `step`'s geometry)
-    /// and flattened (`flattened`, `render(base, step.annotations)`),
-    /// so nothing is recomposed here. The caller checks the history has
-    /// not moved since `step` was made.
-    pub fn push_precomposed(
-        &mut self,
-        step: Snapshot,
-        base: Arc<RgbaImage>,
-        flattened: RgbaImage,
-    ) -> Result<(), GeometryError> {
-        step.doc.geometry.validate()?;
-        let geometry = Arc::clone(&step.doc.geometry);
-        self.history.push_snapshot(step);
-        self.install_base(geometry, base, flattened);
-        Ok(())
-    }
-
     /// [`Self::preview_snapshot`] with the document already composed
-    /// and flattened (see [`Self::push_precomposed`]).
+    /// and flattened (see [`Self::apply_ops_precomposed`]).
     pub fn preview_precomposed(
         &mut self,
         snapshot: Snapshot,
@@ -1001,14 +969,14 @@ impl EditorState {
     }
 
     pub fn rotate(&mut self, clockwise: bool) -> Result<bool, GeometryError> {
-        let next = Self::rotated_geometry(self.geometry(), clockwise);
+        let next = self.geometry().rotated(clockwise);
         // Any transform drops the untouched-original exemption from the
         // size limits, so this can fail on a huge capture.
         self.apply_geometry(next)
     }
 
     pub fn flip(&mut self, axis: FlipAxis) -> Result<bool, GeometryError> {
-        let next = Self::flipped_geometry(self.geometry(), axis);
+        let next = self.geometry().flipped(axis);
         self.apply_geometry(next)
     }
 
@@ -3439,7 +3407,9 @@ mod tests {
         assert_eq!(pre.undo_depth(), 0, "making a step changes nothing");
         let base = step.doc.geometry.compose();
         let flat = render(&base, &step.annotations);
-        pre.push_precomposed(step, base, flat).unwrap();
+        assert!(pre
+            .apply_ops_precomposed(&[DocOp::Push(step)], base, flat)
+            .unwrap());
         assert_eq!(pre.undo_depth(), 1);
         assert_eq!(pre.annotations(), sync.annotations());
         assert_eq!(pre.base().dimensions(), (12, 6));
@@ -3807,12 +3777,9 @@ mod tests {
         s.commit_annotation(block(2.0, 0.0));
         let start = s.snapshot();
         let turn = |from: &Snapshot| {
-            EditorState::step_from(
-                from,
-                EditorState::rotated_geometry(&from.doc.geometry, true),
-            )
-            .unwrap()
-            .unwrap()
+            EditorState::step_from(from, from.doc.geometry.rotated(true))
+                .unwrap()
+                .unwrap()
         };
         let one = turn(&start);
         let two = turn(&one);

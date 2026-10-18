@@ -1660,7 +1660,7 @@ mod tests {
         ed.refresh_image();
         // A rotate: its turned base was never composed (no cached base).
         let _ = queue_geometry_step(&mut ed, ComposeKind::Rotate { clockwise: true }, |g| {
-            EditorState::rotated_geometry(g, true)
+            g.rotated(true)
         })
         .expect("queued");
         let request = ed.compose_job.take().expect("queued");
