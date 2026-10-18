@@ -28,6 +28,51 @@ pub(crate) const DELETE_KEY: &str = platform_key("⌫", "Delete");
 pub(crate) const OPTION_KEY: &str = platform_key("⌥", "Alt");
 pub(crate) const SHIFT_KEY: &str = platform_key("⇧", "Shift");
 
+// Image menu and the Resize dialog.
+pub(crate) const ROTATE_LEFT_KEY: &str = platform_key("⌘[", "Ctrl+[");
+pub(crate) const ROTATE_RIGHT_KEY: &str = platform_key("⌘]", "Ctrl+]");
+/// Resize dialog: next unit (px / %).
+pub(crate) const RESIZE_UNIT_KEY: &str = platform_key("⌥P", "Alt+P");
+/// Resize dialog: lock the aspect ratio.
+pub(crate) const RESIZE_LOCK_KEY: &str = platform_key("⌥L", "Alt+L");
+
+// History's own bindings (`history_key_message`, runtime.rs). Delete is
+// ⌘⌫ (⌦ also works, and is the key elsewhere; plain ⌫ edits the search
+// field); it deletes for good, it does not move to the Trash. Copy Image
+// and Copy Text are the editor's keys ([`COPY_IMAGE_KEY`],
+// [`COPY_TEXT_KEY`]), Pin is [`PIN_KEY`].
+pub(crate) const HISTORY_DELETE_KEY: &str = platform_key("⌘⌫", "Delete");
+pub(crate) const HISTORY_SEARCH_KEY: &str = platform_key("⌘F", "Ctrl+F");
+pub(crate) const HISTORY_REVEAL_KEY: &str = platform_key("⌥⌘R", "Ctrl+Shift+R");
+pub(crate) const HISTORY_COPY_VISIBLE_KEY: &str = platform_key("⌥⇧⌘C", "Ctrl+Shift+A");
+pub(crate) const HISTORY_CLEAR_ALL_KEY: &str = platform_key("⇧⌘⌫", "Ctrl+Shift+Backspace");
+
+// Settings window: one key per pane (sidebar order), then each
+// control's own key.
+pub(crate) const SETTINGS_PANE_KEYS: [&str; 7] = [
+    platform_key("⌘1", "Ctrl+1"),
+    platform_key("⌘2", "Ctrl+2"),
+    platform_key("⌘3", "Ctrl+3"),
+    platform_key("⌘4", "Ctrl+4"),
+    platform_key("⌘5", "Ctrl+5"),
+    platform_key("⌘6", "Ctrl+6"),
+    platform_key("⌘7", "Ctrl+7"),
+];
+pub(crate) const SETTINGS_RECORD_HOTKEY_KEY: &str = platform_key("⌘K", "Ctrl+K");
+pub(crate) const SETTINGS_RETENTION_KEY: &str = platform_key("⌘R", "Ctrl+R");
+pub(crate) const SETTINGS_OCR_ENGINE_KEY: &str = platform_key("⌘E", "Ctrl+E");
+pub(crate) const SETTINGS_FORMAT_KEY: &str = platform_key("⌘F", "Ctrl+F");
+pub(crate) const SETTINGS_DEBUG_LOGGING_KEY: &str = platform_key("⌘D", "Ctrl+D");
+pub(crate) const SETTINGS_LAUNCH_AT_LOGIN_KEY: &str = platform_key("⌘L", "Ctrl+L");
+/// Reset All Settings, and its confirmation.
+pub(crate) const SETTINGS_RESET_ALL_KEY: &str = platform_key("⇧⌘R", "Ctrl+Shift+R");
+/// Uninstall Readshot, and its confirmation.
+pub(crate) const SETTINGS_UNINSTALL_KEY: &str = platform_key("⇧⌘U", "Ctrl+Shift+U");
+
+// Welcome window.
+pub(crate) const WELCOME_RESTART_KEY: &str = platform_key("⌘R", "Ctrl+R");
+pub(crate) const WELCOME_RESET_PERMISSION_KEY: &str = platform_key("⇧⌘R", "Ctrl+Shift+R");
+
 /// The inline text editor's placeholder.
 pub(crate) const TEXT_PLACEHOLDER: &str = if MAC {
     "Type text… (⌘↵ to commit, esc to cancel)"
@@ -107,6 +152,25 @@ mod tests {
             ESC_KEY,
             SHIFT_ESC_KEY,
             RETURN_KEY,
+            ROTATE_LEFT_KEY,
+            ROTATE_RIGHT_KEY,
+            RESIZE_UNIT_KEY,
+            RESIZE_LOCK_KEY,
+            HISTORY_DELETE_KEY,
+            HISTORY_SEARCH_KEY,
+            HISTORY_REVEAL_KEY,
+            HISTORY_COPY_VISIBLE_KEY,
+            HISTORY_CLEAR_ALL_KEY,
+            SETTINGS_RECORD_HOTKEY_KEY,
+            SETTINGS_RETENTION_KEY,
+            SETTINGS_OCR_ENGINE_KEY,
+            SETTINGS_FORMAT_KEY,
+            SETTINGS_DEBUG_LOGGING_KEY,
+            SETTINGS_LAUNCH_AT_LOGIN_KEY,
+            SETTINGS_RESET_ALL_KEY,
+            SETTINGS_UNINSTALL_KEY,
+            WELCOME_RESTART_KEY,
+            WELCOME_RESET_PERMISSION_KEY,
             crate::overlay::SHIFT_CHIP,
             crate::overlay::RESIZE_CHIP,
         ];
@@ -122,6 +186,7 @@ mod tests {
         ] {
             labels.push(kf::key_label(k));
         }
+        labels.extend(SETTINGS_PANE_KEYS);
         for l in labels {
             if MAC {
                 assert!(

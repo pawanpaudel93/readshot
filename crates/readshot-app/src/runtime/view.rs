@@ -929,24 +929,6 @@ const HISTORY_REVEAL_LABEL: &str = "Reveal in Finder";
 #[cfg(not(target_os = "macos"))]
 const HISTORY_REVEAL_LABEL: &str = "Show in Folder";
 
-// Key labels for History's own bindings (see the History keyboard
-// subscription in `history_key_message`, runtime.rs), as (macOS, other).
-// Delete is ⌘⌫ (⌦ also works, and is the key elsewhere; plain ⌫ edits
-// the search field). It deletes for good, it does not move to the Trash.
-// ⌘C copies the image and ⇧⌘C the text, as in the overlay and editor.
-const HISTORY_KEY_DELETE: (&str, &str) = ("⌘⌫", "Delete");
-const HISTORY_KEY_COPY_TEXT: (&str, &str) = ("⇧⌘C", "Ctrl+Shift+C");
-const HISTORY_KEY_COPY_IMAGE: (&str, &str) = ("⌘C", "Ctrl+C");
-const HISTORY_KEY_SEARCH: (&str, &str) = ("⌘F", "Ctrl+F");
-const HISTORY_KEY_REVEAL: (&str, &str) = ("⌥⌘R", "Ctrl+Shift+R");
-const HISTORY_KEY_PIN: (&str, &str) = ("⌘P", "Ctrl+P");
-const HISTORY_KEY_COPY_VISIBLE: (&str, &str) = ("⌥⇧⌘C", "Ctrl+Shift+A");
-const HISTORY_KEY_CLEAR_ALL: (&str, &str) = ("⇧⌘⌫", "Ctrl+Shift+Backspace");
-
-fn history_key(k: (&'static str, &'static str)) -> &'static str {
-    platform_key(k.0, k.1)
-}
-
 /// Widget id of the History search field, focused when the window opens.
 pub(crate) const HISTORY_SEARCH_ID: &str = "history-search";
 /// The idle Clear All button: outlined danger, like Settings' Reset and
@@ -1192,7 +1174,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
         } else {
             format!("Copy Text from {visible_text_count} Visible Captures")
         },
-        Some(history_key(HISTORY_KEY_COPY_VISIBLE)),
+        Some(HISTORY_COPY_VISIBLE_KEY),
         Position::Bottom,
     );
     // Two-stage Clear All: the idle (outlined danger) button arms; armed
@@ -1209,7 +1191,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                     Some(Message::HistoryClearAllConfirmed),
                 ),
                 "Delete All Permanently",
-                Some(history_key(HISTORY_KEY_CLEAR_ALL)),
+                Some(HISTORY_CLEAR_ALL_KEY),
                 Position::Bottom,
             ),
             tooltip_with_key(
@@ -1236,7 +1218,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                 (total > 0).then_some(Message::HistoryClearAllRequested),
             ),
             "Clear All",
-            Some(history_key(HISTORY_KEY_CLEAR_ALL)),
+            Some(HISTORY_CLEAR_ALL_KEY),
             Position::Bottom,
         )
     };
@@ -1550,8 +1532,8 @@ fn history_split<'a>(
         row![
             legend_item("↑↓", "Move"),
             legend_item(RETURN_KEY, "Open"),
-            legend_item(history_key(HISTORY_KEY_DELETE), "Delete"),
-            legend_item(history_key(HISTORY_KEY_SEARCH), "Search"),
+            legend_item(HISTORY_DELETE_KEY, "Delete"),
+            legend_item(HISTORY_SEARCH_KEY, "Search"),
         ]
         .spacing(14)
         .wrap()
@@ -1753,7 +1735,7 @@ pub(crate) fn history_selected_panel<'a>(
         AppIcon::Trash,
         p.t2,
         "Delete Capture",
-        Some(history_key(HISTORY_KEY_DELETE)),
+        Some(HISTORY_DELETE_KEY),
         (!delete_pending).then_some(Message::HistoryDelete(id)),
         delete_pending,
         ICON_BTN,
@@ -1765,7 +1747,7 @@ pub(crate) fn history_selected_panel<'a>(
             AppIcon::Folder,
             p.t2,
             HISTORY_REVEAL_LABEL,
-            Some(history_key(HISTORY_KEY_REVEAL)),
+            Some(HISTORY_REVEAL_KEY),
             Some(Message::HistoryReveal(id)),
             false,
             ICON_BTN,
@@ -1807,7 +1789,7 @@ pub(crate) fn history_selected_panel<'a>(
             has_text.then_some(Message::HistoryCopyText(id)),
         ),
         "Copy Text",
-        Some(history_key(HISTORY_KEY_COPY_TEXT)),
+        Some(COPY_TEXT_KEY),
         Position::Top,
     );
     let copy_image = tooltip_with_key(
@@ -1824,14 +1806,14 @@ pub(crate) fn history_selected_panel<'a>(
             Some(Message::HistoryCopyImage(id)),
         ),
         "Copy Image",
-        Some(history_key(HISTORY_KEY_COPY_IMAGE)),
+        Some(COPY_IMAGE_KEY),
         Position::Top,
     );
     let pin = icon_button(
         AppIcon::Pin,
         p.t2,
         "Pin",
-        Some(history_key(HISTORY_KEY_PIN)),
+        Some(PIN_KEY),
         Some(Message::HistoryPin(id)),
         false,
         ICON_BTN,
@@ -4481,15 +4463,7 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     let p = palette(state.theme_mode);
 
     // --- Sidebar -------------------------------------------------------
-    const PANE_KEYS: [&str; 7] = [
-        platform_key("⌘1", "Ctrl+1"),
-        platform_key("⌘2", "Ctrl+2"),
-        platform_key("⌘3", "Ctrl+3"),
-        platform_key("⌘4", "Ctrl+4"),
-        platform_key("⌘5", "Ctrl+5"),
-        platform_key("⌘6", "Ctrl+6"),
-        platform_key("⌘7", "Ctrl+7"),
-    ];
+    const PANE_KEYS: [&str; 7] = SETTINGS_PANE_KEYS;
     let mut nav = column![].spacing(1).padding([4, 8]);
     for (pane, key) in SettingsPane::ALL.into_iter().zip(PANE_KEYS) {
         let selected = pane == state.settings_pane;
@@ -4965,7 +4939,7 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
                     .on_press(Message::SettingsStartHotkeyRecording),
                 "Record New Shortcut",
-                Some(platform_key("⌘K", "Ctrl+K")),
+                Some(SETTINGS_RECORD_HOTKEY_KEY),
                 Position::Top,
             )
         };
@@ -5018,7 +4992,7 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
             .text_size(TYPE_BODY)
             .padding([7, 10]),
             "Next Retention Option",
-            Some(platform_key("⌘R", "Ctrl+R")),
+            Some(SETTINGS_RETENTION_KEY),
             Position::Top,
         ),
         settings_lit(state, crate::app::SettingsFocus::Retention),
@@ -5145,7 +5119,7 @@ fn settings_ocr_pane(state: &App) -> Vec<Element<'_, Message>> {
             .text_size(TYPE_BODY)
             .padding([7, 10]),
             "Next OCR Engine",
-            Some(platform_key("⌘E", "Ctrl+E")),
+            Some(SETTINGS_OCR_ENGINE_KEY),
             Position::Top,
         ),
         settings_lit(state, crate::app::SettingsFocus::OcrEngine),
@@ -5192,7 +5166,7 @@ fn settings_export_pane(state: &App) -> Vec<Element<'_, Message>> {
             .text_size(TYPE_BODY)
             .padding([7, 10]),
             "Next Format",
-            Some(platform_key("⌘F", "Ctrl+F")),
+            Some(SETTINGS_FORMAT_KEY),
             Position::Top,
         ),
         settings_lit(state, crate::app::SettingsFocus::Format),
@@ -5219,7 +5193,7 @@ fn settings_diagnostics_pane(state: &App) -> Vec<Element<'_, Message>> {
             toggler(state.preferences.debug_logging)
                 .on_toggle(|v| Message::Settings(SettingsMessage::SetDebugLogging(v))),
             "Toggle Debug Logging",
-            Some(platform_key("⌘D", "Ctrl+D")),
+            Some(SETTINGS_DEBUG_LOGGING_KEY),
             Position::Top,
         ),
         settings_lit(state, crate::app::SettingsFocus::DebugLogging),
@@ -5244,7 +5218,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
             toggler(state.preferences.launch_at_login)
                 .on_toggle(|v| Message::Settings(SettingsMessage::SetLaunchAtLogin(v))),
             "Toggle Open at Login",
-            Some(platform_key("⌘L", "Ctrl+L")),
+            Some(SETTINGS_LAUNCH_AT_LOGIN_KEY),
             Position::Top,
         ),
         settings_lit(state, F::LaunchAtLogin),
@@ -5265,7 +5239,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                             .style(|t, s| action_button_style(t, s, ActionKind::Danger))
                             .on_press(Message::SettingsResetAllConfirmed),
                         "Confirm Reset",
-                        Some(platform_key("⇧⌘R", "Ctrl+Shift+R")),
+                        Some(SETTINGS_RESET_ALL_KEY),
                         Position::Top,
                     ),
                     settings_lit(state, F::ResetConfirm)
@@ -5298,7 +5272,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                         .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
                         .on_press(Message::SettingsResetAllRequested),
                     "Reset All Settings",
-                    Some(platform_key("⇧⌘R", "Ctrl+Shift+R")),
+                    Some(SETTINGS_RESET_ALL_KEY),
                     Position::Top,
                 ),
                 settings_lit(state, F::ResetAll),
@@ -5326,7 +5300,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                         .style(|t, s| action_button_style(t, s, ActionKind::Danger))
                         .on_press(Message::SettingsUninstallConfirmed),
                     "Confirm Uninstall",
-                    Some(platform_key("⇧⌘U", "Ctrl+Shift+U")),
+                    Some(SETTINGS_UNINSTALL_KEY),
                     Position::Top,
                 ),
                 settings_lit(state, F::UninstallConfirm)
@@ -5358,7 +5332,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                         .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
                         .on_press(Message::SettingsUninstallRequested),
                     "Uninstall Readshot",
-                    Some(platform_key("⇧⌘U", "Ctrl+Shift+U")),
+                    Some(SETTINGS_UNINSTALL_KEY),
                     Position::Top,
                 ),
                 settings_lit(state, F::Uninstall),
@@ -5616,7 +5590,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                     Some(Message::RestartRequested),
                 ),
                 "Restart Readshot",
-                Some(platform_key(WELCOME_KEY_RESTART.0, WELCOME_KEY_RESTART.1)),
+                Some(WELCOME_RESTART_KEY),
                 iced::widget::tooltip::Position::Top,
             ));
             actions = actions.push(welcome_reset_footer());
@@ -5753,11 +5727,6 @@ fn welcome_status_group<'a>(
     .into()
 }
 
-/// "Already on in System Settings but still blocked?" + ghost link.
-/// Welcome window keys for Restart and Reset Permission.
-pub(crate) const WELCOME_KEY_RESTART: (&str, &str) = ("⌘R", "Ctrl+R");
-pub(crate) const WELCOME_KEY_RESET_PERMISSION: (&str, &str) = ("⇧⌘R", "Ctrl+Shift+R");
-
 /// Width the Welcome reset footer needs on one line: the question
 /// (≈ 300 px at 12 px) plus the Reset Permission button (≈ 116 px) and
 /// the gap. Narrower than this, the button goes under the question so it
@@ -5780,10 +5749,7 @@ fn welcome_reset_footer<'a>() -> Element<'a, Message> {
                 .style(|t, s| button_style(t, s, ButtonKind::Ghost))
                 .on_press(Message::ResetPermissionRequested),
             "Reset Permission",
-            Some(platform_key(
-                WELCOME_KEY_RESET_PERMISSION.0,
-                WELCOME_KEY_RESET_PERMISSION.1,
-            )),
+            Some(WELCOME_RESET_PERMISSION_KEY),
             iced::widget::tooltip::Position::Top,
         );
         let footer: Element<'a, Message> = if welcome_footer_stacks(size.width) {

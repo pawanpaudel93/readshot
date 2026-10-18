@@ -362,7 +362,7 @@ pub(crate) fn image_popover<'a>(
         image_menu_row(
             AppIcon::RotateLeft,
             "Rotate Left",
-            Some(platform_key("⌘[", "Ctrl+[")),
+            Some(ROTATE_LEFT_KEY),
             on(Message::EditorRotate { clockwise: false }),
             lit(F::MenuRotateLeft),
             p
@@ -370,7 +370,7 @@ pub(crate) fn image_popover<'a>(
         image_menu_row(
             AppIcon::RotateRight,
             "Rotate Right",
-            Some(platform_key("⌘]", "Ctrl+]")),
+            Some(ROTATE_RIGHT_KEY),
             on(Message::EditorRotate { clockwise: true }),
             lit(F::MenuRotateRight),
             p
@@ -508,7 +508,7 @@ pub(crate) fn resize_popover<'a>(
                 |u| Some(Message::EditorResizeUnitChanged(u)),
             ),
             "Unit",
-            Some(platform_key("⌥P", "Alt+P")),
+            Some(RESIZE_UNIT_KEY),
             iced::widget::tooltip::Position::Bottom,
         ),
         lit(F::ResizeUnit),
@@ -568,7 +568,7 @@ pub(crate) fn resize_popover<'a>(
                     .text_size(TYPE_CAPTION)
                     .on_toggle(Message::EditorResizeLockToggled),
                 "Lock Aspect Ratio",
-                Some(platform_key("⌥L", "Alt+L")),
+                Some(RESIZE_LOCK_KEY),
                 iced::widget::tooltip::Position::Bottom,
             ),
             lit(F::ResizeLock),
