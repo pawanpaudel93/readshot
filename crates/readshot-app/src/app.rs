@@ -453,6 +453,13 @@ pub enum Message {
     /// editor. `Ok((image, record))` opens the editor; `Err` toasts
     /// a status.
     HistoryOpenInEditorReady(Result<(image::RgbaImage, readshot_core::CaptureRecord), String>),
+    /// A record reopened after an earlier editor of it finished: loaded
+    /// fresh from disk once that editor's History writes landed.
+    /// `unsaved` names a write of those edits that failed.
+    HistoryReopenedAfterSync {
+        result: Result<(image::RgbaImage, readshot_core::CaptureRecord), String>,
+        unsaved: Option<String>,
+    },
     /// Per-row "Copy Image" — load PNG, decode, write to clipboard.
     HistoryCopyImage(readshot_core::Uuid),
     /// Per-row image clipboard write completed.
@@ -1060,6 +1067,10 @@ pub struct App {
     /// Last error from a history list / load operation. Surfaced as
     /// a toast inside the browser when set.
     pub history_status: Option<String>,
+    /// A History record the user asked to open while an earlier editor
+    /// of it was still composing: opened (from disk) once that editor has
+    /// landed and its History sync is written. Edits are never dropped.
+    pub pending_history_open: Option<readshot_core::Uuid>,
     /// Live search query in the history browser. Empty = show every
     /// record. Substring-matched (case-insensitive) against
     /// `ocr_text` and the formatted timestamp.
@@ -1430,6 +1441,7 @@ impl App {
             history_records: Vec::new(),
             history_window_id: None,
             history_status: None,
+            pending_history_open: None,
             history_search: String::new(),
             history_selected_id: None,
             history_delete_pending: None,

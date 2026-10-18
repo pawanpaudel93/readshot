@@ -326,6 +326,31 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
         }
         Message::HistoryOpenInEditor(id) => {
             state.history_delete_pending = None;
+            // An editor of this record (open, or closed but still
+            // composing) has edits History may not have yet: they land
+            // and are written first, then the record opens from disk with
+            // them. Never dropped, never opened stale.
+            let of_record = |ed: &crate::editor::EditorSession| {
+                ed.source_record.as_ref().is_some_and(|r| r.id == id)
+            };
+            let open_here = state.editor.as_ref().is_some_and(of_record);
+            if open_here || state.retiring_editors.iter().any(of_record) {
+                state.pending_history_open = Some(id);
+                state.history_status =
+                    Some("Finishing your previous edits to this capture…".into());
+                let mut tasks = Vec::new();
+                if let Some(ed) = state.editor.take_if(|ed| of_record(ed)) {
+                    if let Some(window) = ed.window_id {
+                        state.windows.forget(window);
+                        tasks.push(window::close(window));
+                    }
+                    state.release_editor_modifiers();
+                    tasks.push(super::compose_jobs::retire_editor(state, ed));
+                }
+                return Task::batch(tasks);
+            }
+            // Another record: any earlier wait is superseded.
+            state.pending_history_open = None;
             let Some((path, record)) = state
                 .history_root
                 .as_ref()
@@ -339,6 +364,16 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 async move { load_png_async(path).await.map(|img| (img, record)) },
                 |r| Message::HistoryOpenInEditorReady(r.map_err(|e| e.to_string())),
             )
+        }
+        Message::HistoryReopenedAfterSync { result, unsaved } => {
+            state.history_status = None;
+            let opened = update(state, Message::HistoryOpenInEditorReady(result));
+            if let (Some(reason), Some(ed)) = (unsaved, state.editor.as_mut()) {
+                ed.set_warning(format!(
+                    "Your last edits in the previous window weren’t all saved to History ({reason}). This is the capture as History has it."
+                ));
+            }
+            opened
         }
         Message::HistoryOpenInEditorReady(result) => match result {
             Ok((image, record)) => {
@@ -736,4 +771,54 @@ fn focus_history_search() -> Task<Message> {
     iced::widget::operation::focus(iced::widget::Id::new(
         crate::runtime::view::HISTORY_SEARCH_ID,
     ))
+}
+
+/// Open History record `id` once an earlier editor's writes for it have
+/// landed: wait for its last rewrite (`write`, if any) and the History
+/// writer queue, then read the record and its image from disk, so the
+/// new editor starts from those edits. A failed write is reported with
+/// the open (`HistoryReopenedAfterSync::unsaved`).
+pub(crate) fn reopen_after_sync(
+    state: &mut App,
+    id: readshot_core::Uuid,
+    write: Option<
+        iced::futures::channel::oneshot::Receiver<crate::coordinator::HistoryRewriteResult>,
+    >,
+) -> Task<Message> {
+    let coord = state.coordinator.clone();
+    let root = state.history_root.clone();
+    Task::perform(
+        async move {
+            let unsaved = match write {
+                Some(rx) => match rx.await {
+                    Ok(Err(e)) => Some(e.to_string()),
+                    _ => None,
+                },
+                None => None,
+            };
+            let loaded = tokio::task::spawn_blocking(move || {
+                coord.flush_history_updates();
+                let record = coord
+                    .history_list()
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .find(|r| r.id == id)
+                    .ok_or_else(|| "the capture is no longer in History".to_string())?;
+                let root = root.ok_or_else(|| "History isn’t available".to_string())?;
+                Ok::<_, String>((history_png_path(&root, &record), record))
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+            let result = match loaded {
+                Ok((path, record)) => load_png_async(path)
+                    .await
+                    .map(|img| (img, record))
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e),
+            };
+            (result, unsaved)
+        },
+        |(result, unsaved)| Message::HistoryReopenedAfterSync { result, unsaved },
+    )
 }

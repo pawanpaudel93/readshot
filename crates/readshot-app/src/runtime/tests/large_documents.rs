@@ -2369,10 +2369,7 @@ fn a_retiring_editors_late_sync_never_unredacts_a_newer_scrub() {
         &mut app,
         Message::HistoryOpenInEditorReady(Ok((img.clone(), stored))),
     );
-    assert!(
-        app.retiring_editors.is_empty(),
-        "A, an editor of the reopened record, is dropped unsynced"
-    );
+    assert_eq!(app.retiring_editors.len(), 1, "A still finishes");
     let id_b = iced::window::Id::unique();
     {
         let coord = app.coordinator.clone();
@@ -2430,4 +2427,116 @@ fn undo_through_the_hex_field_check_queues_behind_a_large_step() {
     finish_all(&mut app);
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.image_size(), (40, 20), "rotated, then undone");
+}
+
+/// The re-review's probe: in editor A on a large capture X, rotate,
+/// redact R, ⌘Z, ⌘Z, ⌘⇧Z ×2 (the redos chain behind a composing undo),
+/// then reopen X from History. A's redone redaction must reach History:
+/// the reopen waits for A to land and sync, then opens X from disk.
+#[test]
+fn reopening_a_record_waits_for_its_composing_editor_and_keeps_a_redone_redaction() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+    let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+    app.history_root = Some(dir.path().join("h"));
+    let img = ramp(40, 20);
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+    store
+        .save(&record, &readshot_core::encode_png(&img).unwrap())
+        .unwrap();
+    app.history_records = store.list().unwrap();
+    let mut a = async_compose(crate::editor::EditorSession::from_history(
+        img.clone(),
+        record.clone(),
+    ));
+    let id_a = iced::window::Id::unique();
+    a.window_id = Some(id_a);
+    app.windows.register(id_a, WindowKind::Editor);
+    app.editor = Some(a);
+    let coord = app.coordinator.clone();
+    let undo = || Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo);
+    let redo = || Message::EditorToolbar(readshot_ui::ToolbarMessage::Redo);
+
+    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    finish_all(&mut app);
+    {
+        let a = app.editor.as_mut().unwrap();
+        a.model.commit_annotation(Annotation::Blur {
+            rect: RectLike::new(4.0, 4.0, 10.0, 10.0),
+            radius: 4.0,
+        });
+        super::super::editor_ops::sync_editor_history(a, &coord);
+    }
+    let _ = update(&mut app, undo()); // R undone
+    finish_all(&mut app);
+    let _ = update(&mut app, undo()); // the rotate: composes
+    let _ = update(&mut app, redo()); // chained
+    let _ = update(&mut app, redo()); // chained: R again
+    let session_a = app.editor.as_ref().unwrap().session_id;
+    assert!(app.editor.as_ref().unwrap().compose_job.is_some());
+
+    let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
+    assert!(app.editor.is_none(), "A closed; nothing opened yet");
+    assert_eq!(app.pending_history_open, Some(record.id));
+    assert_eq!(
+        app.history_status.as_deref(),
+        Some("Finishing your previous edits to this capture…")
+    );
+    // A's composes land, one after another.
+    for _ in 0..8 {
+        let Some(job) = app
+            .retiring_editors
+            .iter()
+            .find(|ed| ed.session_id == session_a)
+            .and_then(|ed| ed.compose_job.clone())
+        else {
+            break;
+        };
+        let _ = update(&mut app, compose_result(session_a, &job));
+    }
+    assert!(app.retiring_editors.is_empty());
+    assert_eq!(app.pending_history_open, None, "the open went ahead");
+    app.coordinator.flush_history_updates();
+    let stored = store.list().unwrap().into_iter().next().unwrap();
+    assert!(stored.redacted, "the redone redaction reached History");
+    assert_eq!((stored.width_px, stored.height_px), (20, 40));
+    // The open (from disk) lands: B starts from A's final state.
+    let png = image::open(
+        dir.path()
+            .join("h")
+            .join(readshot_core::FsHistoryStore::png_path(&stored)),
+    )
+    .unwrap()
+    .to_rgba8();
+    let _ = update(
+        &mut app,
+        Message::HistoryReopenedAfterSync {
+            result: Ok((png, stored)),
+            unsaved: None,
+        },
+    );
+    let b = app.editor.as_ref().unwrap();
+    assert!(b.source_record.as_ref().unwrap().redacted);
+    assert_eq!(b.image_size(), (20, 40));
+    assert_eq!(app.history_status, None);
+}
+
+/// If the previous editor's History write failed, the record still
+/// opens (as History has it) and the editor says what wasn't saved.
+#[test]
+fn a_reopen_whose_previous_write_failed_says_so() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.history_status = Some("Finishing your previous edits to this capture…".into());
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+    let _ = update(
+        &mut app,
+        Message::HistoryReopenedAfterSync {
+            result: Ok((ramp(40, 20), record)),
+            unsaved: Some("the disk is full".into()),
+        },
+    );
+    assert_eq!(app.history_status, None);
+    let status = app.editor.as_ref().unwrap().status.clone().unwrap();
+    assert!(status.contains("weren’t all saved to History"), "{status}");
+    assert!(status.contains("the disk is full"), "{status}");
 }

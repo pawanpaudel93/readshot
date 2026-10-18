@@ -138,12 +138,6 @@ pub(crate) fn open_editor_window_replacing(
         }
         tasks.push(super::compose_jobs::retire_editor(state, old_editor));
     }
-    // Another editor now owns this History record: a retiring one's late
-    // sync must never overwrite what the new one writes (a scrub
-    // included), so it is dropped, unwritten.
-    if let Some(id) = editor.source_record.as_ref().map(|r| r.id) {
-        super::compose_jobs::drop_retiring_editors_of(state, id);
-    }
     editor.source_display_bounds = display_bounds;
     state.editor = Some(editor);
     state.release_editor_modifiers();

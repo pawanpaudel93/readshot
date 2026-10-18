@@ -1883,6 +1883,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         | Message::HistoryDeleteCancelled
         | Message::HistoryRecordSaved
         | Message::HistoryRecordSaveFailed { .. }
+        | Message::HistoryReopenedAfterSync { .. }
         | Message::HistoryShowMore) => {
             let task = history_ops::handle_history_message(state, msg);
             Task::batch([task, editor_ops::history_write_followups(state)])

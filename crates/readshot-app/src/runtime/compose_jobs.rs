@@ -1044,36 +1044,34 @@ pub(crate) fn retire_editor(state: &mut App, mut ed: EditorSession) -> Task<Mess
         state.retiring_editors.push(ed);
         return task;
     }
-    finish_retiring(ed, &state.coordinator);
-    Task::none()
+    finish_retiring(state, ed)
 }
 
-/// Settle what is left (nothing composes now), sync History, drop.
-fn finish_retiring(mut ed: EditorSession, coord: &crate::coordinator::CaptureCoordinator) {
-    settle_all(&mut ed, coord);
+/// Settle what is left (nothing composes now), sync History, drop. When
+/// the user asked to open this editor's record meanwhile and no other
+/// editor of it is still finishing, that open now goes ahead, from disk,
+/// once these writes land ([`super::history_ops::reopen_after_sync`]).
+fn finish_retiring(state: &mut App, mut ed: EditorSession) -> Task<Message> {
+    let coord = state.coordinator.clone();
+    settle_all(&mut ed, &coord);
     cancel_editor_previews(&mut ed);
-    commit_pending_editor_text(&mut ed, coord);
-    super::editor_ops::sync_owed_history(&mut ed, coord);
+    commit_pending_editor_text(&mut ed, &coord);
+    super::editor_ops::sync_owed_history(&mut ed, &coord);
+    let record = ed.source_record.as_ref().map(|r| r.id);
+    let write = ed.history_write.take();
     drop_editor(ed);
-}
-
-/// Drop every retiring editor of History record `id`, its pending steps
-/// and its owed History sync with it: another editor opened that record,
-/// and a late sync from the old one would overwrite (or un-redact) what
-/// the new one writes. Privacy over completeness: its unsynced steps are
-/// lost, and logged.
-pub(crate) fn drop_retiring_editors_of(state: &mut App, id: readshot_core::Uuid) {
-    let (dropped, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut state.retiring_editors)
-        .into_iter()
-        .partition(|ed| ed.source_record.as_ref().is_some_and(|r| r.id == id));
-    state.retiring_editors = kept;
-    for ed in dropped {
-        tracing::warn!(
-            target: readshot_core::log::cat::HISTORY,
-            "record {id} reopened while an earlier editor of it was still composing; \
-             that editor's pending changes were not written to History"
-        );
-        drop_editor(ed);
+    let still_finishing = |state: &App, id| {
+        state
+            .retiring_editors
+            .iter()
+            .any(|ed| ed.source_record.as_ref().is_some_and(|r| r.id == id))
+    };
+    match record {
+        Some(id) if state.pending_history_open == Some(id) && !still_finishing(state, id) => {
+            state.pending_history_open = None;
+            super::history_ops::reopen_after_sync(state, id, write)
+        }
+        _ => Task::none(),
     }
 }
 
@@ -1114,7 +1112,7 @@ fn land_retiring(
         return Some(Task::batch(tasks));
     }
     let ed = state.retiring_editors.remove(pos);
-    finish_retiring(ed, &state.coordinator);
+    tasks.push(finish_retiring(state, ed));
     Some(Task::batch(tasks))
 }
 
