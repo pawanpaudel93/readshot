@@ -466,6 +466,40 @@ fn one_real_escape_during_a_slider_preview_is_one_step() {
     );
 }
 
+/// A canvas `Cancelled` that is not an Escape (a released click) may
+/// cancel a key-driven slider preview, but leaves no "Escape spent"
+/// marker: the user's next Esc still does its step.
+#[test]
+fn a_cancel_without_escape_never_swallows_the_next_escape() {
+    use readshot_ui::editor::StyleMessage;
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+    let id = iced::window::Id::unique();
+    ed.window_id = Some(id);
+    ed.model.commit_annotation(Annotation::Rectangle {
+        rect: RectLike::new(0.0, 0.0, 40.0, 40.0),
+        color: Rgba::OPAQUE_BLACK,
+        line_width: 2.0,
+        style: Default::default(),
+    });
+    app.editor = Some(ed);
+    let _ = update(
+        &mut app,
+        Message::EditorStylePreview(StyleMessage::CornerRadius(20.0)),
+    );
+    let _ = update(
+        &mut app,
+        Message::EditorCanvas(readshot_ui::CanvasMessage::Cancelled),
+    );
+    assert_eq!(app.editor.as_ref().unwrap().escape_ended_drag, None);
+    press_escape(&mut app, id);
+    assert_eq!(
+        app.editor.as_ref().unwrap().model.selected_annotation(),
+        None,
+        "the Esc cleared the selection"
+    );
+}
+
 #[test]
 fn i_toggles_the_eyedropper_but_not_while_typing() {
     let toggled = editor_key_message(

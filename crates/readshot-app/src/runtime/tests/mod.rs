@@ -85,7 +85,7 @@ fn press_escape(app: &mut App, id: iced::window::Id) {
     assert!(editor_text_key_binding(escape_key_press()).is_none());
     let _ = update(
         app,
-        Message::EditorCanvas(readshot_ui::CanvasMessage::Cancelled),
+        Message::EditorCanvas(readshot_ui::CanvasMessage::Escaped),
     );
     let _ = update(
         app,

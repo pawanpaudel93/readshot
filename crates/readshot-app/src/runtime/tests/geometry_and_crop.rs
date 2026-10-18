@@ -603,7 +603,7 @@ fn esc_during_a_crop_re_drag_cancels_the_drag_then_the_draft() {
     assert!(!ed.canvas_drag_active, "the re-drag is cancelled");
     assert_eq!(ed.crop_draft, draft, "the previous draft is back");
     assert_eq!(ed.model.selected_annotation(), Some(0));
-    esc(&mut app, readshot_ui::CanvasMessage::Cancelled);
+    esc(&mut app, readshot_ui::CanvasMessage::Escaped);
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.crop_draft, None, "the second Esc cancels the draft");
     assert_eq!(ed.model.selected_annotation(), Some(0), "and only that");
@@ -657,7 +657,7 @@ fn esc_during_a_crop_re_drag_is_one_step_whichever_message_comes_first() {
     assert_eq!(app.editor.as_ref().unwrap().crop_draft, draft);
     // The next Esc (key first again) cancels the draft, and only that.
     key(&mut app, Named::Escape);
-    canvas(&mut app, CanvasMessage::Cancelled);
+    canvas(&mut app, CanvasMessage::Escaped);
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.crop_draft, None, "the next Esc cancels the draft");
     assert_eq!(ed.model.selected_annotation(), Some(0), "and only that");
@@ -738,11 +738,11 @@ fn esc_during_any_canvas_drag_ends_only_the_drag_in_either_order() {
 
         // The next Esc does what it always did: the crop draft, then
         // the selection.
-        esc(&mut app, CanvasMessage::Cancelled);
+        esc(&mut app, CanvasMessage::Escaped);
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.crop_draft, None, "{key_first}");
         assert_eq!(ed.model.selected_annotation(), Some(0), "{key_first}");
-        esc(&mut app, CanvasMessage::Cancelled);
+        esc(&mut app, CanvasMessage::Escaped);
         let ed = app.editor.as_ref().unwrap();
         assert_eq!(ed.model.selected_annotation(), None, "{key_first}");
     }

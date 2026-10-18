@@ -1799,15 +1799,18 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     // Preview-only events. The canvas's own State holds
                     // the drag points; a redraw is automatic.
                 }
-                readshot_ui::CanvasMessage::Cancelled => {
+                msg @ (readshot_ui::CanvasMessage::Cancelled
+                | readshot_ui::CanvasMessage::Escaped) => {
                     ed.canvas_drag_active = false;
                     ed.drag_started_in = None;
                     // One Esc = one step: a live slider preview cancelled
-                    // here is this Escape's step, so its key press (which
-                    // follows) must not go on to the selection or draft.
+                    // by an Escape is that Escape's step, so its key press
+                    // (which follows) must not go on to the selection or
+                    // draft. Only an Escape marks it: a `Cancelled` from a
+                    // released click has no key press to consume.
                     let slider = slider_preview_live(ed);
                     cancel_editor_previews(ed);
-                    if slider {
+                    if slider && msg == readshot_ui::CanvasMessage::Escaped {
                         ed.escape_ended_drag = Some(crate::editor::EscapeSeenBy::Canvas);
                     }
                 }

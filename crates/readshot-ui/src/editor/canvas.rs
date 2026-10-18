@@ -151,9 +151,13 @@ pub enum CanvasMessage {
     EyedropperHover(PointLike),
     /// Eyedropper mode: the user clicked to pick the color at this point.
     EyedropperPick(PointLike),
-    /// User pressed Escape or released a zero-area drag — drop
-    /// in-progress preview without committing anything.
+    /// A zero-area drag was released, or a drag's press was dropped —
+    /// drop in-progress preview without committing anything.
     Cancelled,
+    /// Escape with no drag live on the canvas: like `Cancelled`, and it
+    /// is this Escape's message (the editor may treat it as the Escape's
+    /// one step, e.g. cancelling a slider preview).
+    Escaped,
     /// Escape ended a live drag (shape, freehand, or a Select press).
     /// Like `Cancelled`, and tells the editor this Escape is spent: the
     /// key press of it must not also cancel the selection, text draft or
@@ -769,7 +773,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 let message = if drawing {
                     CanvasMessage::DragEscaped
                 } else {
-                    CanvasMessage::Cancelled
+                    CanvasMessage::Escaped
                 };
                 Some(canvas::Action::publish(message).and_capture())
             }
@@ -3387,12 +3391,12 @@ mod tests {
             assert_eq!(message, Some(CanvasMessage::DragEscaped));
             assert_eq!(live, DrawState::Idle);
         }
-        // With nothing live it is a plain cancel.
+        // With nothing live it is a plain Escape.
         let (message, _, _) = canvas
             .update(&mut state, &escape, bounds, cursor)
             .expect("escape is handled")
             .into_inner();
-        assert_eq!(message, Some(CanvasMessage::Cancelled));
+        assert_eq!(message, Some(CanvasMessage::Escaped));
     }
 
     #[test]
