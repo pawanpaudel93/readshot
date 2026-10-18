@@ -7,7 +7,7 @@
 //! regex crate, no floating-point entropy) — see the plan's decision
 //! list for the exact rules.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use crate::annotation::{Annotation, FillMode, Rgba, ShapeStyle};
@@ -109,21 +109,27 @@ pub fn summary<'a>(matches: impl IntoIterator<Item = &'a RedactMatch>) -> Vec<(R
         .collect()
 }
 
+/// Detection priority when matches overlap: Card > Email > API key >
+/// Phone.
+fn priority(k: RedactKind) -> u8 {
+    match k {
+        RedactKind::Card => 3,
+        RedactKind::Email => 2,
+        RedactKind::ApiKey => 1,
+        RedactKind::Phone => 0,
+    }
+}
+
 /// Sensitive spans in one line: char ranges, sorted, non-overlapping.
-/// Overlaps keep the higher priority: Card > Email > API key > Phone;
-/// overlapping phone candidates merge.
+///
+/// Over-cover, never under-cover: matches that overlap or touch merge
+/// into their **union**, labelled with the highest-priority kind among
+/// them (Card > Email > API key > Phone). Keeping only one of two
+/// overlapping matches would leave the other's protruding part visible
+/// (`alice@example.com/<key>`: the key token overlaps the email's domain).
 pub fn detect_line(text: &str) -> Vec<(Range<usize>, RedactKind)> {
     let cs: Vec<char> = text.chars().collect();
-    let mut accepted: BTreeMap<usize, (usize, RedactKind)> = BTreeMap::new();
-    // Accepted spans are disjoint, so of those starting before `r.end`
-    // only the last one can reach past `r.start`: O(log n) per candidate.
-    let free = |accepted: &BTreeMap<usize, (usize, RedactKind)>, r: &Range<usize>| {
-        accepted
-            .range(..r.end)
-            .next_back()
-            .is_none_or(|(_, &(end, _))| end <= r.start)
-    };
-    let strong = find_cards(&cs)
+    let mut all: Vec<(Range<usize>, RedactKind)> = find_cards(&cs)
         .into_iter()
         .map(|r| (r, RedactKind::Card))
         .chain(find_emails(&cs).into_iter().map(|r| (r, RedactKind::Email)))
@@ -131,37 +137,24 @@ pub fn detect_line(text: &str) -> Vec<(Range<usize>, RedactKind)> {
             find_api_keys(&cs)
                 .into_iter()
                 .map(|r| (r, RedactKind::ApiKey)),
-        );
-    for (r, k) in strong {
-        if free(&accepted, &r) {
-            accepted.insert(r.start, (r.end, k));
-        }
-    }
-    // Phone candidates overlap each other ("0042 415-555" vs
-    // "415-555-0100"). Picking one could leave part of the real number
-    // visible, so overlapping candidates merge into their union: over-cover,
-    // never under-cover. Candidates that hit a stronger match are dropped
-    // first; the union of overlapping free spans is contiguous and so
-    // stays free.
-    let mut phones: Vec<Range<usize>> = find_phones(&cs)
-        .into_iter()
-        .filter(|r| free(&accepted, r))
+        )
+        .chain(find_phones(&cs).into_iter().map(|r| (r, RedactKind::Phone)))
+        .filter(|(r, _)| r.start < r.end)
         .collect();
-    phones.sort_by_key(|r| r.start);
-    let mut merged: Vec<Range<usize>> = Vec::new();
-    for r in phones {
+    all.sort_by_key(|(r, _)| r.start);
+    let mut merged: Vec<(Range<usize>, RedactKind)> = Vec::new();
+    for (r, k) in all {
         match merged.last_mut() {
-            Some(last) if r.start < last.end => last.end = last.end.max(r.end),
-            _ => merged.push(r),
+            Some((last, lk)) if r.start <= last.end => {
+                last.end = last.end.max(r.end);
+                if priority(k) > priority(*lk) {
+                    *lk = k;
+                }
+            }
+            _ => merged.push((r, k)),
         }
     }
-    for r in merged {
-        accepted.insert(r.start, (r.end, RedactKind::Phone));
-    }
-    accepted
-        .into_iter()
-        .map(|(start, (end, k))| (start..end, k))
-        .collect()
+    merged
 }
 
 // --- Emails ----------------------------------------------------------
@@ -784,6 +777,26 @@ mod tests {
             )]
         );
         assert!(found("user@localhost and a@b and x@y.c0m").is_empty());
+    }
+
+    #[test]
+    fn overlapping_detections_redact_their_union() {
+        // The API-key token `example.com/<key>` overlaps the email's
+        // domain; dropping it would leave the key after the `/` visible.
+        let key = ["aB3dE5fG7h", "J9kL1mN3pQ", "5rS7tU9vW1xY3z"].concat();
+        for prefix in ["", "https://"] {
+            let text = format!("{prefix}alice@example.com/{key}");
+            let got = found(&text);
+            assert_eq!(
+                got,
+                [(format!("alice@example.com/{key}"), RedactKind::Email)],
+                "{text}"
+            );
+        }
+        // Adjacent spans stay separate items.
+        let email = ["bob", "@", "example.com"].concat();
+        let text = format!("{email} {}", fake_stripe_key());
+        assert_eq!(found(&text).len(), 2);
     }
 
     #[test]
