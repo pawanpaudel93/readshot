@@ -157,6 +157,12 @@ pub(crate) fn theme_poll_needed(state: &App) -> bool {
 /// so nothing may overwrite it with `os_theme_mode`'s fixed Dark.
 pub(crate) const READS_OS_THEME: bool = cfg!(target_os = "macos");
 
+/// Whether `subscription` runs the 1 Hz OS appearance poll: only where
+/// the app reads the OS itself, and only while a window follows it.
+pub(crate) fn theme_poll_active(state: &App) -> bool {
+    READS_OS_THEME && theme_poll_needed(state)
+}
+
 /// Register a newly opened window. On macOS a system-themed window
 /// re-reads the OS appearance here (in `update`, on the main thread) so
 /// it opens in the right mode even though the 1 Hz poll was idle until
@@ -565,7 +571,7 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     // read the OS appearance in `update()`.
     // Only while a system-themed window is open (see `theme_poll_needed`),
     // and only where the app can read the OS itself (`READS_OS_THEME`).
-    if READS_OS_THEME && theme_poll_needed(state) {
+    if theme_poll_active(state) {
         subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::ThemePollTick));
     }
     if state.welcome.should_show() {

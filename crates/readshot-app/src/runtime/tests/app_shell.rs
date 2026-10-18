@@ -119,6 +119,19 @@ fn theme_poll_runs_only_while_a_system_themed_window_is_open() {
     }
 }
 
+/// The poll `subscription` runs: on macOS while a system-themed window
+/// is open; never off macOS, where iced reports the OS theme itself and
+/// the poll's fixed Dark would overwrite it.
+#[test]
+fn the_theme_poll_runs_only_on_macos() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    assert!(!theme_poll_active(&app));
+    app.windows
+        .register(window::Id::unique(), WindowKind::Settings);
+    assert!(theme_poll_needed(&app));
+    assert_eq!(theme_poll_active(&app), cfg!(target_os = "macos"));
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn opening_a_system_themed_window_reads_the_os_mode() {
