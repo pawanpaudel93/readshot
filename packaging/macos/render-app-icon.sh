@@ -44,7 +44,7 @@ if ! command -v iconutil >/dev/null 2>&1 && ! command -v xcrun >/dev/null 2>&1; 
 fi
 
 mkdir -p "$(dirname "${ICON_OUT}")"
-ICON_BUILD_DIR="$(mktemp -d -t readshot-iconset)"
+ICON_BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/readshot-iconset.XXXXXX")"
 cleanup() {
   rm -rf "${ICON_BUILD_DIR}"
 }

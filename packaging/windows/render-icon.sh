@@ -6,8 +6,9 @@
 #                                   into readshot.exe on MSVC targets
 #
 # 32px and below come from packaging/macos/icon-small.svg (hand-tuned for a
-# few pixels); larger sizes from packaging/macos/icon.svg, cropped to its
-# tile (Windows icons fill their canvas; Apple's grid margin is macOS-only).
+# few pixels); larger sizes from packaging/macos/icon.svg. Both are cropped
+# to their tile (Windows icons fill their canvas; Apple's grid margin is
+# macOS-only).
 #
 # Needs rsvg-convert, ImageMagick 7 and python3, plus a resource compiler: llvm-rc
 # (brew install llvm; also searched in Homebrew's keg-only llvm@N) or a
@@ -22,19 +23,27 @@ OUT_DIR="${REPO_ROOT}/packaging/windows"
 ICON="${REPO_ROOT}/packaging/macos/icon.svg"
 SMALL="${REPO_ROOT}/packaging/macos/icon-small.svg"
 
-WORK="$(mktemp -d -t readshot-ico)"
+# Portable across BSD (macOS) and GNU (Linux) mktemp.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/readshot-ico.XXXXXX")"
 trap 'rm -rf "${WORK}"' EXIT
 
+# Both sources sit on Apple's grid; Windows icons fill their canvas, so
+# crop each to its tile (packaging/render-icons.sh passes its crops in).
 TILE="${READSHOT_ICON_TILE:-}"
 if [[ -z "${TILE}" ]]; then
   TILE="${WORK}/tile.svg"
   sed 's|viewBox="0 0 1024 1024"|viewBox="100 100 824 824"|' "${ICON}" > "${TILE}"
 fi
+SMALL_TILE="${READSHOT_ICON_SMALL_TILE:-}"
+if [[ -z "${SMALL_TILE}" ]]; then
+  SMALL_TILE="${WORK}/small-tile.svg"
+  sed 's|viewBox="0 0 1024 1024"|viewBox="100 100 824 824"|' "${SMALL}" > "${SMALL_TILE}"
+fi
 
 frames=()
 for size in 16 20 24 32 40 48 64 256; do
   src="${TILE}"
-  if (( size <= 32 )); then src="${SMALL}"; fi
+  if (( size <= 32 )); then src="${SMALL_TILE}"; fi
   rsvg-convert -w "${size}" -h "${size}" "${src}" -o "${WORK}/${size}.png"
   frames+=("${WORK}/${size}.png")
 done

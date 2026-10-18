@@ -5,10 +5,17 @@
   Linux hicolor sizes, favicon.ico and the Windows/Linux tray).
 
   Same mark as icon.svg (teal tile, four selection brackets, a glass
-  lens) redrawn for a handful of pixels: the tile fills the canvas,
-  the brackets are about twice as heavy and pulled out to the tile's
-  edge so they clear the lens, the lens is a flat ring, and the shine,
-  swoosh and shadows are gone (they turn to mud below 48px).
+  lens) redrawn for a handful of pixels: the brackets are about twice
+  as heavy and pulled out to the tile's edge so they clear the lens,
+  the lens is a flat ring, and the shine, swoosh and shadows are gone
+  (they turn to mud below 48px).
+
+  Like icon.svg it sits on Apple's macOS grid (an 824px tile centred
+  on the 1024 canvas): Apple keeps one footprint at every size and
+  simplifies only the detail, so a 16pt icon sits at the same size as
+  its 32pt and 128pt renditions and as the system icons beside it.
+  The art is drawn on a 960px tile and scaled onto the grid; renderers
+  that want the bare tile crop the viewBox to "100 100 824 824".
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
@@ -19,9 +26,11 @@
     </linearGradient>
   </defs>
 
+  <!-- 0.858333 = 824 / 960; 72.5333 = 100 - 32 * 0.858333. -->
+  <g transform="matrix(0.858333 0 0 0.858333 72.5333 72.5333)">
   <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#bg)"/>
 
-  <g stroke="#FFFFFF" stroke-width="100" stroke-linecap="round" stroke-linejoin="round" fill="none">
+  <g stroke="#FFFFFF" stroke-width="116" stroke-linecap="round" stroke-linejoin="round" fill="none">
     <path d="M 210 380 L 210 210 L 380 210"/>
     <path d="M 814 380 L 814 210 L 644 210"/>
     <path d="M 210 644 L 210 814 L 380 814"/>
@@ -31,4 +40,5 @@
   <circle cx="512" cy="512" r="186" fill="#082E38"/>
   <circle cx="512" cy="512" r="150" fill="#FFFFFF"/>
   <circle cx="512" cy="512" r="96" fill="#7FD9E6"/>
+  </g>
 </svg>
