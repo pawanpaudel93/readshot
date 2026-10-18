@@ -84,6 +84,45 @@ fn resize_draft_locks_the_ratio_in_px_and_percent() {
 }
 
 #[test]
+fn a_locked_resize_of_an_extreme_aspect_keeps_the_derived_side_at_one_px() {
+    let mut d = crate::editor::ResizeDraft::new((32_767, 1));
+    d.set_width("100");
+    assert_eq!(d.height, "1");
+    assert_eq!(d.target(), Some((100, 1)), "the typed width is honoured");
+    let mut d = crate::editor::ResizeDraft::new((1, 32_767));
+    d.set_height("100");
+    assert_eq!(d.width, "1");
+    assert_eq!(d.target(), Some((1, 100)));
+    // In percent too: 1 % of 32767 × 1 keeps a 1 px side.
+    let mut d = crate::editor::ResizeDraft::new((32_767, 1));
+    d.set_unit(crate::editor::ResizeUnit::Percent);
+    d.set_width("1");
+    assert_eq!(d.target(), Some((328, 1)));
+}
+
+#[test]
+fn the_resize_warning_names_the_real_problem() {
+    let mut d = crate::editor::ResizeDraft::new((400, 200));
+    d.lock = false;
+    d.set_width("abc");
+    assert_eq!(d.problem(), Some("Enter the width and height as numbers."));
+    d.set_width("0.4");
+    assert_eq!(
+        d.problem(),
+        Some("The width comes to less than 1\u{a0}px. Enter a larger size.")
+    );
+    d.set_width("100");
+    d.set_unit(crate::editor::ResizeUnit::Percent);
+    d.set_height("0.1");
+    assert_eq!(
+        d.problem(),
+        Some("The height comes to less than 1\u{a0}px. Enter a larger size.")
+    );
+    d.set_height("50");
+    assert_eq!(d.problem(), None);
+}
+
+#[test]
 fn resize_draft_unit_switches_round_trip_exactly() {
     use crate::editor::{ResizeDraft, ResizeUnit};
     let mut d = ResizeDraft::new((1000, 500));

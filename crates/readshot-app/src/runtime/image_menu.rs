@@ -206,7 +206,7 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
                 return Task::none();
             };
             let Some((w, h)) = d.target() else {
-                ed.set_warning("Enter a width and height of at least 1\u{a0}px.");
+                ed.set_warning(d.problem().unwrap_or_default());
                 return Task::none();
             };
             // The dialog's percentages and ratio refer to the size it
@@ -502,7 +502,7 @@ pub(crate) fn resize_popover<'a>(
             "{}\u{a0}×\u{a0}{}\u{a0}px → {w}\u{a0}×\u{a0}{h}\u{a0}px",
             d.base.0, d.base.1
         ),
-        None => "Enter a width and height of at least 1\u{a0}px.".into(),
+        None => d.problem().unwrap_or_default().into(),
     };
     // The preview is metadata; the validation line instructs (t2).
     let preview_style = if d.target().is_some() {

@@ -111,19 +111,22 @@ impl ResizeDraft {
         }
     }
 
-    /// Set the height from the width at the original aspect.
+    /// Set the height from the width at the original aspect, never
+    /// below 1 px (an extreme aspect would round it to 0, like
+    /// `document::scaled_size` keeps every side at least 1 px).
     fn sync_height(&mut self) {
         if let Some(w) = self.width_px() {
-            let h = w * self.base.1 as f64 / self.base.0.max(1) as f64;
+            let h = (w * self.base.1 as f64 / self.base.0.max(1) as f64).max(1.0);
             self.height = self.shown(h, self.base.1);
             self.exact_height = Some((self.height.clone(), h));
         }
     }
 
-    /// Set the width from the height at the original aspect.
+    /// Set the width from the height at the original aspect, never
+    /// below 1 px.
     fn sync_width(&mut self) {
         if let Some(h) = self.height_px() {
-            let w = h * self.base.0 as f64 / self.base.1.max(1) as f64;
+            let w = (h * self.base.0 as f64 / self.base.1.max(1) as f64).max(1.0);
             self.width = self.shown(w, self.base.0);
             self.exact_width = Some((self.width.clone(), w));
         }
@@ -169,6 +172,24 @@ impl ResizeDraft {
             self.height = self.shown(h, self.base.1);
             self.exact_height = Some((self.height.clone(), h));
         }
+    }
+
+    /// Why there is no [`Self::target`], if there isn't: a field that
+    /// isn't a positive number, a side under 1 px, or one too large.
+    pub fn problem(&self) -> Option<&'static str> {
+        if self.target().is_some() {
+            return None;
+        }
+        let (Some(w), Some(h)) = (self.width_px(), self.height_px()) else {
+            return Some("Enter the width and height as numbers.");
+        };
+        Some(if w.round() < 1.0 {
+            "The width comes to less than 1\u{a0}px. Enter a larger size."
+        } else if h.round() < 1.0 {
+            "The height comes to less than 1\u{a0}px. Enter a larger size."
+        } else {
+            "That size is too large. Enter a smaller size."
+        })
     }
 
     /// Target size in px (≥ 1), or `None` while a field isn't a number.
