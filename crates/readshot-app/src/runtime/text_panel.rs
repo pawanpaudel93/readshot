@@ -951,6 +951,15 @@ fn extends_cluster(c: char) -> bool {
     )
 }
 
+/// The Indic viramas (halant): a consonant after one is part of the
+/// same conjunct.
+fn is_virama(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x094D | 0x09CD | 0x0A4D | 0x0ACD | 0x0B4D | 0x0BCD | 0x0C4D | 0x0CCD | 0x0D4D | 0x0DCA
+    )
+}
+
 fn is_regional_indicator(c: char) -> bool {
     matches!(u32::from(c), 0x1F1E6..=0x1F1FF)
 }
@@ -965,14 +974,16 @@ fn clusters(text: &str) -> Vec<(Range<usize>, &str)> {
     let mut current: Option<(usize, usize, usize, bool)> = None;
     for (i, (byte, c)) in text.char_indices().enumerate() {
         let joins = current.is_some_and(|(_, _, ri, zwj)| {
-            zwj || extends_cluster(c) || (ri == 1 && is_regional_indicator(c))
+            zwj || extends_cluster(c) || is_virama(c) || (ri == 1 && is_regional_indicator(c))
         });
         match current.as_mut() {
             Some((_, _, ri, zwj)) if joins => {
                 if is_regional_indicator(c) {
                     *ri += 1;
                 }
-                *zwj = c == '\u{200D}';
+                // A ZWJ or a virama joins the next char (ZWJ emoji; an
+                // Indic conjunct such as क्ष, Unicode's GB9c).
+                *zwj = c == '\u{200D}' || is_virama(c);
             }
             _ => {
                 if let Some((start, from, _, _)) = current {
@@ -1710,6 +1721,13 @@ mod tests {
         let ranges: Vec<_> = clusters("e\u{301}ab").into_iter().map(|(r, _)| r).collect();
         assert_eq!(ranges, [0..2, 2..3, 3..4]);
         assert!(clusters("").is_empty());
+        // An Indic conjunct (क्ष = ka + virama + ssa) is one cluster.
+        assert_eq!(
+            parts("\u{915}\u{94D}\u{937}a"),
+            ["\u{915}\u{94D}\u{937}", "a"]
+        );
+        // Gurmukhi too (ਕ੍ਸ).
+        assert_eq!(parts("\u{A15}\u{A4D}\u{A38}"), ["\u{A15}\u{A4D}\u{A38}"]);
     }
 
     #[test]
