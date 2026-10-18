@@ -4841,7 +4841,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                 p.t2,
                 "Dismiss",
                 None,
-                Some(Message::WelcomeStatusDismissed),
+                Some(Message::Welcome(WelcomeMsg::StatusDismissed)),
                 false,
                 ICON_BTN_XS,
                 Position::Top,

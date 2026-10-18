@@ -232,6 +232,8 @@ impl SettingsPane {
 /// or background task funnels through this enum.
 #[derive(Clone, Debug)]
 pub enum Message {
+    /// Welcome window messages (`runtime::welcome_ops`).
+    Welcome(WelcomeMsg),
     /// Background drains (hotkeys, tray, URL scheme, reopen, theme) and the
     /// actions they deliver (`runtime::tick_ops`).
     Tick(TickMsg),
@@ -735,22 +737,6 @@ pub enum Message {
     /// Turn the eyedropper on or off (I, or the button in the color
     /// popover). While on, a click on the image picks its color.
     EditorEyedropperToggled,
-    /// First native-window-ready callback after the welcome window is
-    /// opened. Used by the runtime to focus the window after Launch
-    /// Services reopens an LSUIElement app.
-    WelcomeWindowReady(iced::window::Id),
-    /// Dismiss button on the Welcome status toast (errors stay until
-    /// dismissed or the next capture clears them).
-    WelcomeStatusDismissed,
-    /// Keyboard event observed while a welcome window is open. The
-    /// runtime validates `window` is the welcome window and binds
-    /// Enter to the primary action of whichever card is showing
-    /// (Allow / Open Settings / Capture). WCAG 2.1.1.
-    WelcomeKeyPressed {
-        window: iced::window::Id,
-        key: iced::keyboard::Key,
-        modifiers: iced::keyboard::Modifiers,
-    },
     /// User asked for the settings window — tray "Settings…" entry or
     /// (future) a "Settings" command from elsewhere. Single-instance:
     /// focuses the existing window if one is already open.
@@ -815,6 +801,28 @@ pub enum Message {
     CliToolsCopyRequested(crate::cli_tools::Shell),
     /// Command-line setup instructions were copied, or failed to copy.
     CliToolsCopyDone(crate::cli_tools::Shell, Result<(), String>),
+}
+
+/// Welcome window messages. Handled by
+/// `runtime::welcome_ops::handle_welcome_message`.
+#[derive(Clone, Debug)]
+pub enum WelcomeMsg {
+    /// First native-window-ready callback after the welcome window is
+    /// opened. Used by the runtime to focus the window after Launch
+    /// Services reopens an LSUIElement app.
+    WindowReady(iced::window::Id),
+    /// Dismiss button on the Welcome status toast (errors stay until
+    /// dismissed or the next capture clears them).
+    StatusDismissed,
+    /// Keyboard event observed while a welcome window is open. The
+    /// runtime validates `window` is the welcome window and binds
+    /// Enter to the primary action of whichever card is showing
+    /// (Allow / Open Settings / Capture). WCAG 2.1.1.
+    KeyPressed {
+        window: iced::window::Id,
+        key: iced::keyboard::Key,
+        modifiers: iced::keyboard::Modifiers,
+    },
 }
 
 /// Background drain ticks (global hotkeys, tray, `readshot://` URLs,

@@ -357,7 +357,7 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 
 use crate::app::{
     App, AppMsg, CaptureMsg, GlobalHotkeyAction, HistoryKeyboardAction, Message, TickMsg,
-    WindowKind,
+    WelcomeMsg, WindowKind,
 };
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
@@ -478,7 +478,7 @@ pub fn start() -> (App, Task<Message>) {
     if needs_welcome_window {
         let (id, open_task) = window::open(welcome_window_settings());
         app.windows.register(id, WindowKind::Welcome);
-        tasks.push(open_task.map(Message::WelcomeWindowReady));
+        tasks.push(open_task.map(|a| Message::Welcome(WelcomeMsg::WindowReady(a))));
     } else {
         // No welcome window — user is already past the permission
         // gate. Surface a system notification so a relaunch is
@@ -876,11 +876,11 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         subs.push(iced::event::listen_with(|event, _status, window| {
             use iced::keyboard::Event as KbEvent;
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                return Some(Message::WelcomeKeyPressed {
+                return Some(Message::Welcome(WelcomeMsg::KeyPressed {
                     window,
                     key,
                     modifiers,
-                });
+                }));
             }
             None
         }));
@@ -1169,14 +1169,7 @@ pub(crate) fn surface_capture_problem(
 fn update_message(state: &mut App, message: Message) -> Task<Message> {
     match message {
         Message::App(msg) => app_ops::handle_app_message(state, msg),
-
-        Message::WelcomeWindowReady(id) => welcome_ops::on_welcome_window_ready(state, id),
-
-        Message::WelcomeKeyPressed {
-            window,
-            key,
-            modifiers,
-        } => welcome_ops::on_welcome_key_pressed(state, window, key, modifiers),
+        Message::Welcome(msg) => welcome_ops::handle_welcome_message(state, msg),
         Message::Capture(msg) => capture_ops::handle_capture_message(state, msg),
         Message::Tick(msg) => tick_ops::handle_tick_message(state, msg),
 
@@ -1216,8 +1209,6 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
 
         msg @ scroll_messages!() => scroll::handle_scroll_message(state, msg),
 
-        Message::WelcomeStatusDismissed => welcome_ops::on_welcome_status_dismissed(state),
-
         msg @ settings_messages!() => settings_ops::handle_settings_message(state, msg),
     }
 }
@@ -1253,7 +1244,7 @@ fn show_or_focus_welcome(state: &mut App) -> Task<Message> {
     }
     let (id, open_task) = window::open(welcome_window_settings());
     register_window(state, id, WindowKind::Welcome);
-    open_task.map(Message::WelcomeWindowReady)
+    open_task.map(|a| Message::Welcome(WelcomeMsg::WindowReady(a)))
 }
 
 /// Async helper: capture the primary display's full bounds and write

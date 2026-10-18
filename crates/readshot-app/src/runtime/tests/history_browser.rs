@@ -761,7 +761,7 @@ fn welcome_ready_marks_onboarding_completed_after_grant() {
 
     let _ = update(
         &mut app,
-        Message::WelcomeWindowReady(iced::window::Id::unique()),
+        Message::Welcome(WelcomeMsg::WindowReady(iced::window::Id::unique())),
     );
 
     assert!(app.preferences.onboarding_completed);
@@ -785,7 +785,7 @@ fn capture_request_marks_in_flight_and_clears_on_completion() {
 fn welcome_status_dismissed_clears_capture_status() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.last_capture_status = Some("Couldn’t save.".into());
-    let _ = update(&mut app, Message::WelcomeStatusDismissed);
+    let _ = update(&mut app, Message::Welcome(WelcomeMsg::StatusDismissed));
     assert!(app.last_capture_status.is_none());
 }
 

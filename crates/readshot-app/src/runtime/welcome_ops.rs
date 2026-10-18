@@ -4,7 +4,22 @@
 
 use super::*;
 
-/// `Message::WelcomeWindowReady`.
+/// Every [`WelcomeMsg`].
+pub(super) fn handle_welcome_message(state: &mut App, message: WelcomeMsg) -> Task<Message> {
+    match message {
+        WelcomeMsg::WindowReady(id) => on_welcome_window_ready(state, id),
+
+        WelcomeMsg::KeyPressed {
+            window,
+            key,
+            modifiers,
+        } => on_welcome_key_pressed(state, window, key, modifiers),
+
+        WelcomeMsg::StatusDismissed => on_welcome_status_dismissed(state),
+    }
+}
+
+/// `WelcomeMsg::WindowReady`.
 pub(super) fn on_welcome_window_ready(state: &mut App, id: iced::window::Id) -> Task<Message> {
     if !state.welcome.should_show() {
         state.mark_onboarding_completed();
@@ -12,7 +27,7 @@ pub(super) fn on_welcome_window_ready(state: &mut App, id: iced::window::Id) -> 
     window::gain_focus(id)
 }
 
-/// `Message::WelcomeKeyPressed`.
+/// `WelcomeMsg::KeyPressed`.
 pub(super) fn on_welcome_key_pressed(
     state: &mut App,
     window: iced::window::Id,
@@ -30,7 +45,7 @@ pub(super) fn on_welcome_key_pressed(
     }
 }
 
-/// `Message::WelcomeStatusDismissed`.
+/// `WelcomeMsg::StatusDismissed`.
 pub(super) fn on_welcome_status_dismissed(state: &mut App) -> Task<Message> {
     state.last_capture_status = None;
     Task::none()
