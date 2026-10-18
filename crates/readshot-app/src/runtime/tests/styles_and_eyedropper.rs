@@ -864,11 +864,11 @@ fn eyedropper_pick_on_a_selection_keeps_the_undo_hint() {
 fn rotate_flip_and_resize_wait_for_a_held_canvas_drag() {
     for held_move in [false, true] {
         for msg in [
-            Message::Editor(EditorMsg::Rotate { clockwise: true }),
-            Message::Editor(EditorMsg::Flip(
+            Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
+            Message::Editor(EditorMsg::Image(ImageMsg::Flip(
                 readshot_core::document::FlipAxis::Horizontal,
-            )),
-            Message::Editor(EditorMsg::ResizeOpen),
+            ))),
+            Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)),
         ] {
             let mut app = build_app(Arc::new(FakePermissions::granted()));
             let mut ed = crate::editor::EditorSession::new(solid(16, 8));
@@ -898,7 +898,7 @@ fn rotate_flip_and_resize_wait_for_a_held_canvas_drag() {
     app.editor = Some(crate::editor::EditorSession::new(solid(16, 8)));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     assert!(!app.editor.as_ref().unwrap().model.geometry().is_original());
 }

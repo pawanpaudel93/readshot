@@ -10,12 +10,18 @@ fn a_large_resize_composes_off_thread_and_lands_as_one_undo_step() {
     app.editor = Some(ed);
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
     let shown = handle_id(app.editor.as_ref().unwrap());
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::ResizeWidthChanged("80".into())),
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeApply));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeWidthChanged("80".into()))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeApply)),
+    );
     let ed = app.editor.as_ref().unwrap();
     // Nothing changes until the result lands: the previous image stays.
     assert!(ed.compose_job.is_some());
@@ -105,7 +111,7 @@ fn a_rotate_after_a_pending_resize_queues_behind_it() {
     let before = super::super::compose_jobs::composes_on_this_thread();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     assert_eq!(
         super::super::compose_jobs::composes_on_this_thread(),
@@ -821,7 +827,7 @@ fn a_press_after_a_same_batch_frame_change_is_mapped_or_dropped() {
     let mut app = fresh();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     press(&mut app);
     let ed = app.editor.as_ref().unwrap();
@@ -1019,7 +1025,7 @@ fn a_released_gap_drag_is_kept_when_another_edit_comes_first() {
     // cancelled; the rotate queues behind it.
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let _ = update(&mut app, late);
     finish_all(&mut app);
@@ -1054,12 +1060,18 @@ fn an_output_mid_resize_applies_the_resize_first() {
         40, 20,
     ))));
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::ResizeWidthChanged("80".into())),
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeApply));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeWidthChanged("80".into()))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeApply)),
+    );
     let late = finish_compose(&app);
     let coord = app.coordinator.clone();
     let ed = app.editor.as_mut().unwrap();
@@ -1284,7 +1296,7 @@ fn a_large_rotate_composes_off_thread_and_lands_as_one_undo_step() {
     let before = composes(&app);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     // Queued: nothing composed here, nothing changes until it lands.
     assert_eq!(composes(&app), before);
@@ -1323,7 +1335,7 @@ fn an_edit_before_a_large_rotate_lands_applies_it_first_and_drops_its_late_resul
     let depth = large_editor(&mut app);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let late = finish_compose(&app);
     // Delete is not chained: the rotate is applied first, then the
@@ -1353,7 +1365,7 @@ fn rotate_flip_undo_and_redo_on_a_large_document_queue_and_land_in_order() {
     let before = composes(&app);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     // ⌘[ ⌘] ⌘Z ⇧⌘Z arrive as keys while the rotate composes: each
     // queues behind it, none settles it.
@@ -1373,9 +1385,9 @@ fn rotate_flip_undo_and_redo_on_a_large_document_queue_and_land_in_order() {
     };
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Flip(
+        Message::Editor(EditorMsg::Image(ImageMsg::Flip(
             readshot_core::document::FlipAxis::Horizontal,
-        )),
+        ))),
     );
     let _ = update(&mut app, key("z", false));
     let _ = update(&mut app, key("z", true));
@@ -1412,7 +1424,7 @@ fn a_large_undo_and_redo_across_a_rotate_swap_the_cached_bases_in() {
     let original = app.editor.as_ref().unwrap().model.shared_base();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     finish_all(&mut app);
     let rotated = app.editor.as_ref().unwrap().model.shared_base();
@@ -1452,9 +1464,11 @@ fn rapid_large_undos_land_in_order_one_compose_at_a_time() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let depth = large_editor(&mut app);
     for msg in [
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
-        Message::Editor(EditorMsg::Flip(readshot_core::document::FlipAxis::Vertical)),
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
+        Message::Editor(EditorMsg::Image(ImageMsg::Flip(
+            readshot_core::document::FlipAxis::Vertical,
+        ))),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     ] {
         let _ = update(&mut app, msg);
         finish_all(&mut app);
@@ -1489,7 +1503,7 @@ fn an_edit_before_a_large_undo_lands_applies_it_first_and_drops_its_late_result(
     let depth = large_editor(&mut app);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     finish_all(&mut app);
     let _ = update(&mut app, undo_msg());
@@ -1891,7 +1905,7 @@ fn bare_modifiers_and_zoom_keys_never_settle_pending_steps() {
     app.editor.as_mut().unwrap().window_id = Some(window);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let before = composes(&app);
     // ⌘ and ⇧ alone (as winit sends them before ⌘Z / ⇧⌘Z), then ⌘=.
@@ -2213,7 +2227,7 @@ fn the_display_shares_the_flattened_pixels_with_the_model() {
     large_editor(&mut app);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     finish_all(&mut app);
     let ed = app.editor.as_ref().unwrap();
@@ -2244,7 +2258,7 @@ fn a_replaced_flatten_worker_is_abandoned() {
     // A rotate replaces it before its worker starts: it never runs.
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let ran = std::cell::Cell::new(false);
     flatten.output.run(|| {
@@ -2261,7 +2275,7 @@ fn the_toolbar_shows_undo_and_redo_as_they_will_be_after_queued_steps() {
     large_editor(&mut app);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let _ = update(&mut app, undo_msg());
     let ed = app.editor.as_ref().unwrap();
@@ -2381,7 +2395,7 @@ fn ui_thread_time_of_rotate_and_undo_at_96_mp() {
     step(
         &mut app,
         "rotate",
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     step(&mut app, "undo", undo_msg());
     step(
@@ -2417,7 +2431,7 @@ fn discard_abandons_a_queued_step_and_frees_nothing_here() {
     app.editor.as_mut().unwrap().window_id = Some(id);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let job = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
     let late = finish_compose(&app);
@@ -2454,7 +2468,7 @@ fn closing_the_editor_mid_compose_never_composes_here_and_still_syncs_history() 
     }
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let session = app.editor.as_ref().unwrap().session_id;
     let job = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
@@ -2502,7 +2516,7 @@ fn a_retiring_editors_late_sync_never_unredacts_a_newer_scrub() {
     app.editor = Some(a);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let session_a = app.editor.as_ref().unwrap().session_id;
     let job_a = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
@@ -2553,7 +2567,7 @@ fn undo_through_the_hex_field_check_queues_behind_a_large_step() {
     app.preferences.editor_panel_open = true;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let before = composes(&app);
     let _ = update(
@@ -2609,7 +2623,7 @@ fn reopening_a_record_waits_for_its_composing_editor_and_keeps_a_redone_redactio
 
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     finish_all(&mut app);
     {
@@ -2843,7 +2857,7 @@ fn a_reopen_waits_for_every_write_of_the_record_with_no_timeout() {
     *store.held.lock().unwrap() = true;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     assert_eq!(app.editor.as_ref().unwrap().image_size(), (20, 40));
 

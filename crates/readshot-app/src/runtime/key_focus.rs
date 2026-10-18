@@ -580,11 +580,19 @@ fn activate(state: &mut App, focus: KeyFocus, pos: usize) -> Task<Message> {
     };
     let busy = ed.busy;
     let msg: Option<Message> = match focus.item {
-        F::MenuResize => Some(Message::Editor(EditorMsg::ResizeOpen)),
-        F::MenuRotateLeft => Some(Message::Editor(EditorMsg::Rotate { clockwise: false })),
-        F::MenuRotateRight => Some(Message::Editor(EditorMsg::Rotate { clockwise: true })),
-        F::MenuFlipH => Some(Message::Editor(EditorMsg::Flip(FlipAxis::Horizontal))),
-        F::MenuFlipV => Some(Message::Editor(EditorMsg::Flip(FlipAxis::Vertical))),
+        F::MenuResize => Some(Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen))),
+        F::MenuRotateLeft => Some(Message::Editor(EditorMsg::Image(ImageMsg::Rotate {
+            clockwise: false,
+        }))),
+        F::MenuRotateRight => Some(Message::Editor(EditorMsg::Image(ImageMsg::Rotate {
+            clockwise: true,
+        }))),
+        F::MenuFlipH => Some(Message::Editor(EditorMsg::Image(ImageMsg::Flip(
+            FlipAxis::Horizontal,
+        )))),
+        F::MenuFlipV => Some(Message::Editor(EditorMsg::Image(ImageMsg::Flip(
+            FlipAxis::Vertical,
+        )))),
         F::MenuAddBelow => Some(Message::Editor(EditorMsg::CombineCaptureRequested(
             Join::Below,
         ))),
@@ -654,7 +662,7 @@ fn activate(state: &mut App, focus: KeyFocus, pos: usize) -> Task<Message> {
             return field_id(focus.item).map_or_else(Task::none, focus_field)
         }
         F::ResizeCancel => Some(Message::Editor(EditorMsg::PopoverClosed)),
-        F::ResizeApply => Some(Message::Editor(EditorMsg::ResizeApply)),
+        F::ResizeApply => Some(Message::Editor(EditorMsg::Image(ImageMsg::ResizeApply))),
         // Values: Space / ↵ step them forward, as → does.
         other => {
             return match adjust_message(state, other, 1) {
@@ -866,11 +874,15 @@ fn adjust_message(state: &App, item: FocusItem, step: i32) -> Option<Vec<Message
                 crate::editor::ResizeUnit::Pixels => crate::editor::ResizeUnit::Percent,
                 crate::editor::ResizeUnit::Percent => crate::editor::ResizeUnit::Pixels,
             };
-            Some(vec![Message::Editor(EditorMsg::ResizeUnitChanged(next))])
+            Some(vec![Message::Editor(EditorMsg::Image(
+                ImageMsg::ResizeUnitChanged(next),
+            ))])
         }
         F::ResizeLock => {
             let d = ed.resize_draft.as_ref()?;
-            Some(vec![Message::Editor(EditorMsg::ResizeLockToggled(!d.lock))])
+            Some(vec![Message::Editor(EditorMsg::Image(
+                ImageMsg::ResizeLockToggled(!d.lock),
+            ))])
         }
         _ => None,
     }

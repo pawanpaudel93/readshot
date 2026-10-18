@@ -8,11 +8,15 @@ fn rotate_and_resize_keys_map_only_when_not_typing() {
     let cmd = command_modifiers();
     assert!(matches!(
         editor_key_message(Key::Character("[".into()), cmd, true),
-        Some(Message::Editor(EditorMsg::Rotate { clockwise: false }))
+        Some(Message::Editor(EditorMsg::Image(ImageMsg::Rotate {
+            clockwise: false
+        })))
     ));
     assert!(matches!(
         editor_key_message(Key::Character("]".into()), cmd, true),
-        Some(Message::Editor(EditorMsg::Rotate { clockwise: true }))
+        Some(Message::Editor(EditorMsg::Image(ImageMsg::Rotate {
+            clockwise: true
+        })))
     ));
     assert!(editor_key_message(Key::Character("]".into()), cmd, false).is_none());
     assert!(matches!(
@@ -21,7 +25,7 @@ fn rotate_and_resize_keys_map_only_when_not_typing() {
             editor_alt_modifiers(),
             true
         ),
-        Some(Message::Editor(EditorMsg::ResizeOpen))
+        Some(Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)))
     ));
     // Plain [ / ] still bump the width; plain I is still the eyedropper.
     assert!(matches!(
@@ -47,7 +51,7 @@ fn rotate_moves_annotations_with_the_image_and_undoes() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.image_size(), (20, 30));
@@ -177,25 +181,39 @@ fn resize_draft_lock_follows_the_original_aspect() {
 fn resize_apply_scales_the_document_and_refuses_oversize() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(40, 20)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)),
+    );
     assert_eq!(
         app.editor.as_ref().unwrap().popover,
         Some(crate::editor::EditorPopover::Resize)
     );
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::ResizeWidthChanged("20".into())),
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeWidthChanged("20".into()))),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeApply));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeApply)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.effective_image_size(), (20, 10));
     assert_eq!(ed.popover, None);
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::ResizeWidthChanged("70000".into())),
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeApply));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeWidthChanged(
+            "70000".into(),
+        ))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeApply)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.effective_image_size(), (20, 10), "unchanged");
     assert!(ed.status_text().unwrap().starts_with("Couldn’t resize"));
@@ -215,9 +233,9 @@ fn flip_mirrors_and_escape_closes_the_image_menu() {
     assert_eq!(app.editor.as_ref().unwrap().popover, None);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Flip(
+        Message::Editor(EditorMsg::Image(ImageMsg::Flip(
             readshot_core::document::FlipAxis::Horizontal,
-        )),
+        ))),
     );
     assert!(
         app.editor
@@ -234,7 +252,10 @@ fn flip_mirrors_and_escape_closes_the_image_menu() {
 fn escape_closes_the_resize_dialog_and_drops_its_draft() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)),
+    );
     assert!(app.editor.as_ref().unwrap().resize_draft.is_some());
     let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     let ed = app.editor.as_ref().unwrap();
@@ -389,7 +410,7 @@ fn rotating_a_redacted_capture_keeps_boxes_and_history_in_one_frame_through_undo
     };
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     check(&app, true);
     let _ = update(
@@ -425,7 +446,7 @@ fn rotate_drops_an_open_slider_preview_even_with_a_text_draft() {
     );
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let ed = app.editor.as_mut().unwrap();
     assert_eq!(ed.model.beautify().padding, start, "preview dropped");
@@ -476,7 +497,10 @@ fn cmd_z_is_ignored_while_the_resize_dialog_is_open() {
         style: Default::default(),
     });
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)),
+    );
     let cmd = iced::keyboard::Modifiers::COMMAND;
     for mods in [cmd, cmd | iced::keyboard::Modifiers::SHIFT] {
         let _ = update(
@@ -496,12 +520,18 @@ fn cmd_z_is_ignored_while_the_resize_dialog_is_open() {
 fn reopening_resize_while_it_is_open_keeps_the_typed_draft() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(40, 20)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::ResizeWidthChanged("12".into())),
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeWidthChanged("12".into()))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.resize_draft.as_ref().unwrap().width, "12");
     assert_eq!(ed.popover, Some(crate::editor::EditorPopover::Resize));
@@ -516,12 +546,18 @@ fn resizing_a_cropped_image_reports_the_exact_size() {
     });
     assert_eq!(ed.effective_image_size(), (101, 77));
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeOpen));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::ResizeWidthChanged("999".into())),
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::ResizeApply));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeWidthChanged("999".into()))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeApply)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.effective_image_size(), (999, 762));
 }
@@ -913,7 +949,7 @@ fn an_image_menu_action_drops_the_crop_draft() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     assert_eq!(app.editor.as_ref().unwrap().crop_draft, None);
 }

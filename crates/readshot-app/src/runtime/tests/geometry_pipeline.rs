@@ -145,9 +145,9 @@ fn same_document(a: &readshot_ui::editor::Snapshot, b: &readshot_ui::editor::Sna
 
 fn resize_to(width: &str) -> Vec<Message> {
     vec![
-        Message::Editor(EditorMsg::ResizeOpen),
-        Message::Editor(EditorMsg::ResizeWidthChanged(width.into())),
-        Message::Editor(EditorMsg::ResizeApply),
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)),
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeWidthChanged(width.into()))),
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeApply)),
     ]
 }
 
@@ -157,11 +157,15 @@ fn sync_and_async_steps_land_in_the_same_editor_state() {
     let steps: Vec<(&str, Vec<Message>)> = vec![
         (
             "rotate",
-            vec![Message::Editor(EditorMsg::Rotate { clockwise: true })],
+            vec![Message::Editor(EditorMsg::Image(ImageMsg::Rotate {
+                clockwise: true,
+            }))],
         ),
         (
             "flip",
-            vec![Message::Editor(EditorMsg::Flip(FlipAxis::Horizontal))],
+            vec![Message::Editor(EditorMsg::Image(ImageMsg::Flip(
+                FlipAxis::Horizontal,
+            )))],
         ),
         ("resize", resize_to("40")),
         (
@@ -196,7 +200,9 @@ fn sync_and_async_steps_land_in_the_same_editor_state() {
         ("redo again", vec![redo_msg()]),
         (
             "rotate left",
-            vec![Message::Editor(EditorMsg::Rotate { clockwise: false })],
+            vec![Message::Editor(EditorMsg::Image(ImageMsg::Rotate {
+                clockwise: false,
+            }))],
         ),
         ("undo the rotate", vec![undo_msg()]),
     ];
@@ -212,7 +218,9 @@ fn a_sync_undo_clears_the_loupe_as_a_landed_async_one_does() {
         &mut sync,
         &mut async_,
         "rotate",
-        &[Message::Editor(EditorMsg::Rotate { clockwise: true })],
+        &[Message::Editor(EditorMsg::Image(ImageMsg::Rotate {
+            clockwise: true,
+        }))],
     );
     step_both(&mut sync, &mut async_, "undo", &[undo_msg()]);
     let ed = sync.editor.as_ref().unwrap();

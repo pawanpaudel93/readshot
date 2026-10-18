@@ -864,12 +864,15 @@ fn rect_at(x: f32) -> Vec<readshot_core::Annotation> {
 }
 
 fn apply_resize_width(app: &mut App, width: &str) {
-    let _ = update(app, Message::Editor(EditorMsg::ResizeOpen));
+    let _ = update(app, Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)));
     let _ = update(
         app,
-        Message::Editor(EditorMsg::ResizeWidthChanged(width.into())),
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeWidthChanged(width.into()))),
     );
-    let _ = update(app, Message::Editor(EditorMsg::ResizeApply));
+    let _ = update(
+        app,
+        Message::Editor(EditorMsg::Image(ImageMsg::ResizeApply)),
+    );
 }
 
 fn undo_msg() -> Message {

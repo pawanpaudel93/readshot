@@ -51,7 +51,7 @@ pub(crate) fn editor_key_message(
         )));
     }
     if editor_alt_chord(&key, modifiers, RESIZE_LETTER) {
-        return Some(Message::Editor(EditorMsg::ResizeOpen));
+        return Some(Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)));
     }
     // The new chords never fire while a text field has the caret
     // (`status_ignored` false): a field's own ⇧⌘V pastes, and must not
@@ -75,16 +75,16 @@ pub(crate) fn editor_key_message(
         (Key::Character(c), true, true)
             if status_ignored && !modifiers.alt() && c.eq_ignore_ascii_case("h") =>
         {
-            return Some(Message::Editor(EditorMsg::Flip(
+            return Some(Message::Editor(EditorMsg::Image(ImageMsg::Flip(
                 readshot_core::document::FlipAxis::Horizontal,
-            )));
+            ))));
         }
         (Key::Character(c), true, true)
             if status_ignored && !modifiers.alt() && c.eq_ignore_ascii_case("v") =>
         {
-            return Some(Message::Editor(EditorMsg::Flip(
+            return Some(Message::Editor(EditorMsg::Image(ImageMsg::Flip(
                 readshot_core::document::FlipAxis::Vertical,
-            )));
+            ))));
         }
         (Key::Character(c), true, false) if c.eq_ignore_ascii_case("z") => {
             return Some(Message::Editor(EditorMsg::Toolbar(
@@ -112,10 +112,14 @@ pub(crate) fn editor_key_message(
             return Some(Message::Editor(EditorMsg::DiscardRequested));
         }
         (Key::Character(c), true, false) if status_ignored && !modifiers.alt() && c == "[" => {
-            return Some(Message::Editor(EditorMsg::Rotate { clockwise: false }));
+            return Some(Message::Editor(EditorMsg::Image(ImageMsg::Rotate {
+                clockwise: false,
+            })));
         }
         (Key::Character(c), true, false) if status_ignored && !modifiers.alt() && c == "]" => {
-            return Some(Message::Editor(EditorMsg::Rotate { clockwise: true }));
+            return Some(Message::Editor(EditorMsg::Image(ImageMsg::Rotate {
+                clockwise: true,
+            })));
         }
         (Key::Character(c), true, _) if c == "+" || c == "=" => {
             return Some(Message::Editor(EditorMsg::ZoomIn));

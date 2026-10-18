@@ -268,6 +268,8 @@ pub enum Message {
 /// `runtime::editor_ops::handle_editor_message`.
 #[derive(Clone, Debug)]
 pub enum EditorMsg {
+    /// Image menu messages: rotate, flip and Resize (`runtime::image_menu`).
+    Image(ImageMsg),
     /// Beautify tab messages (`runtime::beautify_panel`).
     Beautify(BeautifyMsg),
     /// Side panel and Text tab messages (`runtime::text_panel`).
@@ -361,19 +363,6 @@ pub enum EditorMsg {
     /// shortcuts; the runtime resolves the new width against the
     /// current model state and clamps to the published range.
     WidthBump(f32),
-    /// Rotate the document a quarter turn (⌘] right, ⌘[ left).
-    Rotate {
-        clockwise: bool,
-    },
-    Flip(readshot_core::document::FlipAxis),
-    /// Open the Resize dialog (⌥⌘I; Ctrl+Shift+R off macOS; or
-    /// Image › Resize…).
-    ResizeOpen,
-    ResizeWidthChanged(String),
-    ResizeHeightChanged(String),
-    ResizeUnitChanged(crate::editor::ResizeUnit),
-    ResizeLockToggled(bool),
-    ResizeApply,
     /// Image › Add Capture Below… / Beside…
     CombineCaptureRequested(readshot_core::document::Join),
     /// Image › Add Image from File…
@@ -495,6 +484,25 @@ pub enum EditorMsg {
     /// Turn the eyedropper on or off (I, or the button in the color
     /// popover). While on, a click on the image picks its color.
     EyedropperToggled,
+}
+
+/// Image menu messages: rotate, flip and the Resize dialog. Handled by
+/// `runtime::image_menu::handle_image_message`.
+#[derive(Clone, Debug)]
+pub enum ImageMsg {
+    /// Rotate the document a quarter turn (⌘] right, ⌘[ left).
+    Rotate {
+        clockwise: bool,
+    },
+    Flip(readshot_core::document::FlipAxis),
+    /// Open the Resize dialog (⌥⌘I; Ctrl+Shift+R off macOS; or
+    /// Image › Resize…).
+    ResizeOpen,
+    ResizeWidthChanged(String),
+    ResizeHeightChanged(String),
+    ResizeUnitChanged(crate::editor::ResizeUnit),
+    ResizeLockToggled(bool),
+    ResizeApply,
 }
 
 /// Beautify tab messages: saved presets, controls, sliders and the

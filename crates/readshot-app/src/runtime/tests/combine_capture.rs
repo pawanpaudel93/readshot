@@ -168,7 +168,7 @@ fn combining_a_rotated_document_maps_its_text_through_the_bake() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let _ = update(
         &mut app,
@@ -204,7 +204,7 @@ fn a_bake_before_recognition_recognizes_the_source_part_upright() {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let _ = update(
         &mut app,
@@ -598,7 +598,7 @@ fn a_bake_source_no_state_can_reach_is_released() {
     app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let _ = update(
         &mut app,
@@ -626,7 +626,7 @@ fn a_bake_source_no_state_can_reach_is_released() {
     // part, so its source (a whole earlier document) is released.
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: false }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: false })),
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(!ed.model.can_redo());
@@ -642,7 +642,7 @@ fn a_bake_of_a_bake_keeps_the_inner_source() {
     for _ in 0..2 {
         let _ = update(
             &mut app,
-            Message::Editor(EditorMsg::Rotate { clockwise: true }),
+            Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
         );
         let _ = update(
             &mut app,
@@ -671,7 +671,7 @@ fn a_baked_part_is_never_recognized_in_its_own_pixels() {
     app.editor = Some(crate::editor::EditorSession::new(solid(30, 20)));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let _ = update(
         &mut app,
@@ -725,7 +725,7 @@ async fn a_scrubbed_record_keeps_its_redactions_through_a_bake() {
     ));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let _ = update(
         &mut app,

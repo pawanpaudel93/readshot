@@ -836,10 +836,10 @@ fn may_wait(message: &EditorMsg) -> (bool, bool) {
         | EditorMsg::ZoomActual
         | EditorMsg::ZoomFit
         | EditorMsg::TextPanel(TextPanelMsg::PanelTabSelected(..))
-        | EditorMsg::ResizeWidthChanged(..)
-        | EditorMsg::ResizeHeightChanged(..)
-        | EditorMsg::ResizeUnitChanged(..)
-        | EditorMsg::ResizeLockToggled(..)
+        | EditorMsg::Image(ImageMsg::ResizeWidthChanged(..))
+        | EditorMsg::Image(ImageMsg::ResizeHeightChanged(..))
+        | EditorMsg::Image(ImageMsg::ResizeUnitChanged(..))
+        | EditorMsg::Image(ImageMsg::ResizeLockToggled(..))
         | EditorMsg::DiscardDisarmed
         // Discarding (or arming it) needs no pixels: a step still
         // composing is abandoned with the editor, never composed here.
@@ -869,8 +869,8 @@ fn chains_onto_steps(message: &EditorMsg) -> bool {
     }
     matches!(
         message,
-        EditorMsg::Rotate { .. }
-            | EditorMsg::Flip(..)
+        EditorMsg::Image(ImageMsg::Rotate { .. })
+            | EditorMsg::Image(ImageMsg::Flip(..))
             | EditorMsg::Toolbar(
                 readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
             )

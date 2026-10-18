@@ -218,7 +218,7 @@ fn opening_a_closed_editors_record_waits_for_its_writes() {
     store.hold();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let _ = update(&mut app, Message::Window(WindowMsg::Closed(a)));
     assert!(app.editor.is_none() && app.retiring_editors.is_empty());
@@ -263,7 +263,7 @@ fn a_second_open_click_joins_the_waiting_open() {
     store.hold();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let _ = update(
         &mut app,
@@ -307,7 +307,7 @@ fn a_new_capture_during_the_wait_cancels_the_open() {
     store.hold();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::Rotate { clockwise: true }),
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
     );
     let _ = update(
         &mut app,
@@ -481,7 +481,9 @@ impl Interleaving {
             2 => {
                 self.log.push("rotate");
                 if self.editor_of_record().is_some() {
-                    self.send(Message::Editor(EditorMsg::Rotate { clockwise: true }));
+                    self.send(Message::Editor(EditorMsg::Image(ImageMsg::Rotate {
+                        clockwise: true,
+                    })));
                 }
             }
             3 => {

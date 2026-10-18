@@ -126,7 +126,7 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
         (
             ch(RESIZE_LETTER),
             editor_alt_modifiers(),
-            "Editor(ResizeOpen)",
+            "Editor(Image(ResizeOpen))",
         ),
         (ch("["), mods(true, false, false, false), "clockwise: false"),
         (ch("]"), mods(true, false, false, false), "clockwise: true"),
@@ -157,12 +157,12 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
         (
             ch("h"),
             mods(true, true, false, false),
-            "Editor(Flip(Horizontal))",
+            "Editor(Image(Flip(Horizontal)))",
         ),
         (
             ch("v"),
             mods(true, true, false, false),
-            "Editor(Flip(Vertical))",
+            "Editor(Image(Flip(Vertical)))",
         ),
         (ch("t"), editor_alt_modifiers(), "Editor(PanelTabKey(Text))"),
         (

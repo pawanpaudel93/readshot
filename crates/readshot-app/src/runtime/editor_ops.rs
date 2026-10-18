@@ -1085,14 +1085,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: EditorMsg) -> Task
         } => pins::on_pin_key_pressed(state, window, key, modifiers),
         EditorMsg::TextPanel(msg) => super::text_panel::handle_text_panel_message(state, msg),
         EditorMsg::Beautify(msg) => super::beautify_panel::handle_beautify_message(state, msg),
-        msg @ (EditorMsg::Rotate { .. }
-        | EditorMsg::Flip(..)
-        | EditorMsg::ResizeOpen
-        | EditorMsg::ResizeWidthChanged(..)
-        | EditorMsg::ResizeHeightChanged(..)
-        | EditorMsg::ResizeUnitChanged(..)
-        | EditorMsg::ResizeLockToggled(..)
-        | EditorMsg::ResizeApply) => super::image_menu::handle_image_message(state, msg),
+        EditorMsg::Image(msg) => super::image_menu::handle_image_message(state, msg),
         msg @ (EditorMsg::CombineCaptureRequested(..)
         | EditorMsg::AddImageFromFile
         | EditorMsg::PartLoaded { .. }
