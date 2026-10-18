@@ -724,7 +724,7 @@ pub struct ShownImage {
     pub offset: (f32, f32),
     pub size: (u32, u32),
     /// Image px per document px: 1 for a render, less for the scaled-down
-    /// placeholder a large editor opens with ([`placeholder_display`]).
+    /// placeholder a large editor opens with (`placeholder_display`).
     pub scale: f32,
 }
 
@@ -1140,7 +1140,7 @@ pub struct EditorSession {
     /// dragged. Cropping changes output geometry but no pixels, so the
     /// annotation stack (blur included) renders once per drag and each
     /// tick serves a sub-rect copy instead of a full re-render per
-    /// mouse-move event. Cleared by [`refresh_image`].
+    /// mouse-move event. Cleared by [`Self::refresh_image`].
     crop_drag_flat: Option<image::RgbaImage>,
     /// Backing store for the inline multi-line text editor widget. Text
     /// annotations support `\n`, so the inline editor is an

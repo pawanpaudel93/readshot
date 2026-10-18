@@ -627,7 +627,7 @@ pub(crate) fn log_file_location() -> String {
     }
 }
 
-/// Turn a typed [`HistoryError`] into a short, human-readable status
+/// Turn a typed [`readshot_core::HistoryError`] into a short, human-readable status
 /// line. The raw error is logged separately via tracing; the user sees
 /// plain language plus a hint (permission denied / not found) when the
 /// underlying io error exposes one.

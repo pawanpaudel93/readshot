@@ -1010,7 +1010,7 @@ fn app_window_shortcut_message(
 /// Top-level update fn. Delegates testable transitions to
 /// [`App::update_sync`] and adds the iced-only async branches. After
 /// every message the editor's off-thread document work is started
-/// ([`compose_jobs::after_update`]).
+/// (`compose_jobs::after_update`).
 pub fn update(state: &mut App, message: Message) -> Task<Message> {
     let task = update_message(state, message);
     sync_scroll_escape_hotkeys(state);

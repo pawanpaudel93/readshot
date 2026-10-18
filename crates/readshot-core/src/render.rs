@@ -54,7 +54,7 @@ fn snap_slack(v: f32) -> f32 {
 
 /// The whole pixels a redaction rect (`Annotation::redaction_rect`)
 /// hides: its edges snapped **outward** (a partly covered pixel is
-/// hidden whole, never anti-aliased), within [`snap_slack`] of float
+/// hidden whole, never anti-aliased), within `snap_slack` of float
 /// noise. Redaction annotations keep their exact rect, so mapping them
 /// through a resize and back neither grows nor shrinks them; this is
 /// where they become pixels (render, History bake, text masking).

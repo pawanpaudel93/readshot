@@ -547,7 +547,7 @@ fn mark_word_everywhere(hay: &[char], word: &[char], mask: &mut [bool]) -> usize
 /// The layout text is rebuilt from the lines (indents, table pipes, code
 /// fences), so each line is found in it and its hidden spans are masked
 /// at every place the line occurs. Fails closed:
-/// - hidden words of [`GLOBAL_MASK_MIN_CHARS`]+ chars, and every hidden
+/// - hidden words of `GLOBAL_MASK_MIN_CHARS`+ chars, and every hidden
 ///   word of a line that can't be found after the previous one (a
 ///   multi-column or table layout reorders or normalises it), are masked
 ///   at **every** occurrence — over-masking beats leaking;

@@ -1067,7 +1067,7 @@ impl EditorState {
     }
 
     /// Hit-test the selected annotation's resize handles at the default
-    /// 1:1 display scale. Prefer [`resize_handle_at_scaled`] from the
+    /// 1:1 display scale. Prefer [`Self::resize_handle_at_scaled`] from the
     /// interactive canvas so the grab radius stays constant on screen.
     pub fn resize_handle_at(&self, point: PointLike) -> Option<ResizeHandle> {
         self.resize_handle_at_scaled(point, 1.0)
@@ -1452,7 +1452,7 @@ impl EditorState {
 
     /// Nudge a non-Crop annotation back toward the image if a move has
     /// pushed its bounding box fully off the base, so at least
-    /// [`MIN_ON_IMAGE`] base pixels of it remain grabbable. Crop is
+    /// `MIN_ON_IMAGE` base pixels of it remain grabbable. Crop is
     /// handled by its own edge/position clamps and is skipped here.
     fn clamp_annotation_into_base(&self, annotation: &mut Annotation) {
         if matches!(annotation, Annotation::Crop { .. }) {
