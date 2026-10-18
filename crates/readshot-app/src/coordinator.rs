@@ -269,8 +269,12 @@ struct ScrubState {
     /// removed) is on disk, per record, with the document frame they are
     /// in: the same redactions in another frame cover other pixels.
     secured: std::collections::HashMap<readshot_core::Uuid, SecuredScrub>,
-    /// The editor session that requested the newest scrub of each record
-    /// (`None`: a caller without one). Only that session may restore it.
+    /// The editor session whose scrub made each record redacted (`None`:
+    /// a caller without one). Only that session may write it unredacted
+    /// again: its undo, and its later changes, until one of them lands
+    /// (the record is then unredacted on disk and needs no owner). A
+    /// restore request alone doesn't end it: a frame change queued behind
+    /// that restore is the same session's, and must not be refused.
     scrub_owners: std::collections::HashMap<readshot_core::Uuid, Option<u64>>,
     /// Records whose newest request is a scrub (by its seq) whose image is
     /// still to be written: queued, or failed and waiting for a retry.
@@ -368,6 +372,16 @@ impl Scrubs {
         let mut st = lock(&self.state);
         if st.latest.get(&id) == Some(&seq) {
             st.secured.insert(id, secured_key(record));
+        }
+    }
+
+    /// Unredacted request `seq` of record `id` landed: if it is still the
+    /// newest, the record is unredacted on disk and nobody owns a scrub
+    /// of it any more.
+    fn unredacted_landed(&self, id: readshot_core::Uuid, seq: u64) {
+        let mut st = lock(&self.state);
+        if st.latest.get(&id) == Some(&seq) {
+            st.scrub_owners.remove(&id);
         }
     }
 
@@ -491,6 +505,8 @@ fn apply_rewrite(
         Ok(true) => {
             if record.redacted {
                 scrubs.mark_secured(id, job.seq, record);
+            } else {
+                scrubs.unredacted_landed(id, job.seq);
             }
             b.unsecured.remove(&id);
             // Under the commit gate, so a settle (which takes the gate)
@@ -967,7 +983,6 @@ impl CaptureCoordinator {
                 Some(_) => true,
                 None => false,
             };
-            st.scrub_owners.remove(&id);
             st.image_due.remove(&id);
             let seq = next_rewrite_seq();
             st.latest.insert(id, seq);
@@ -2525,6 +2540,43 @@ mod tests {
             1,
             "the retry dropped the later sync"
         );
+    }
+
+    /// Fix-4 review N-2: the same editor redacts, undoes it, then rotates
+    /// before the restore lands. The rotate is that editor's own change to
+    /// a record only it redacted: it lands (unredacted, rotated), and the
+    /// capture never loses its image.
+    #[test]
+    fn a_frame_change_after_an_undone_redaction_lands_with_its_image() {
+        for i in 0..20 {
+            let dir = tempfile::TempDir::new().unwrap();
+            let record = saved_record(dir.path());
+            let store = flaky(dir.path(), 0);
+            let coord = history_coord(store.clone());
+            let base = Arc::new(white(8, 8));
+            let a = Some(1);
+            drop(coord.rewrite_history_as(a, scrubbed(&record), Arc::clone(&base), pixelate()));
+            drop(coord.rewrite_history_as(a, record.clone(), Arc::clone(&base), Vec::new()));
+            let mut rotated = record.clone();
+            rotated.geometry_id = Some("rotated".into());
+            drop(coord.rewrite_history_as(a, rotated, Arc::new(white(6, 4)), Vec::new()));
+            coord.flush_history_updates();
+            let now = sidecar(&store.inner, &record);
+            assert!(
+                png_on_disk(&store.inner, &record).is_some(),
+                "run {i}: the capture lost its image"
+            );
+            assert_eq!(
+                (
+                    now.geometry_id.as_deref(),
+                    now.width_px,
+                    now.height_px,
+                    now.redacted
+                ),
+                (Some("rotated"), 6, 4, false),
+                "run {i}: the rotate didn't land"
+            );
+        }
     }
 
     /// Never stores anything: every image fails to stage.
