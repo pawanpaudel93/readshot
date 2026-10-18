@@ -609,6 +609,10 @@ pub enum TextPanelMsg {
 
 /// History browser messages, and the completions of History writes made
 /// for a capture. Handled by `runtime::history_ops::handle_history_message`.
+// `ReopenedAfterSync` carries the reopened image by value, as it did in
+// the flat `Message` (which was as large): a message is moved, not
+// copied, through one update, so boxing it would buy nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum HistoryMsg {
     /// Fire-and-forget history persistence completion. The boolean
