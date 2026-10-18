@@ -873,19 +873,22 @@ impl CaptureCoordinator {
     }
 
     /// Append a capture to history, respecting the retention policy.
-    /// Off → no-op. Other policies → save and apply retention.
+    /// Off (or no store) → `Ok`, nothing written. Other policies → save
+    /// and apply retention. A failed save is the error (the capture is
+    /// not in History); a failed retention pass after a good save is
+    /// only logged.
     pub async fn record_history(
         &self,
         record: CaptureRecord,
         png_bytes: Vec<u8>,
         policy: HistoryRetention,
         now: chrono::DateTime<chrono::Utc>,
-    ) {
+    ) -> Result<(), readshot_core::HistoryError> {
         if matches!(policy, HistoryRetention::Off) {
-            return;
+            return Ok(());
         }
         let Some(history) = &self.history else {
-            return;
+            return Ok(());
         };
         // `save` writes the PNG, decodes it again to render a
         // thumbnail, and fsyncs — synchronous fs/CPU work that would
@@ -895,16 +898,20 @@ impl CaptureCoordinator {
         let join = tokio::task::spawn_blocking(move || {
             if let Err(e) = save_capture(history.as_ref(), &scrubs, &record, &png_bytes) {
                 tracing::warn!(target: readshot_core::log::cat::HISTORY, "history save failed: {e}");
-                return;
+                return Err(e);
             }
             if let Err(e) = history.apply_retention(policy, now) {
                 tracing::warn!(target: readshot_core::log::cat::HISTORY, "retention apply failed: {e}");
             }
+            Ok(())
         })
         .await;
-        if let Err(e) = join {
+        join.unwrap_or_else(|e| {
             tracing::warn!(target: readshot_core::log::cat::HISTORY, "history save worker failed: {e}");
-        }
+            Err(readshot_core::HistoryError::Io(format!(
+                "the history save worker failed: {e}"
+            )))
+        })
     }
 }
 
@@ -1405,7 +1412,8 @@ mod tests {
                 HistoryRetention::Unlimited,
                 chrono::Utc::now(),
             )
-            .await;
+            .await
+            .unwrap();
         let stored = sidecar(&store, &record);
         assert!(stored.redacted);
         assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
@@ -1435,7 +1443,8 @@ mod tests {
                 HistoryRetention::Unlimited,
                 chrono::Utc::now(),
             )
-            .await;
+            .await
+            .unwrap();
         let stored = sidecar(&store, &record);
         assert_eq!(stored.geometry_id.as_deref(), Some("n:rot=1"));
         assert!(!stored.redacted);
@@ -1461,7 +1470,8 @@ mod tests {
                 HistoryRetention::Unlimited,
                 chrono::Utc::now(),
             )
-            .await;
+            .await
+            .unwrap();
         let stored = sidecar(&store, &record);
         assert!(!stored.redacted);
         assert_eq!(stored.ocr_text.as_deref(), Some("original"));

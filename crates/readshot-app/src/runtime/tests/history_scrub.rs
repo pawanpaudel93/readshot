@@ -117,7 +117,8 @@ async fn a_capture_saved_after_the_editor_closed_is_still_scrubbed() {
             readshot_core::HistoryRetention::Unlimited,
             chrono::Utc::now(),
         )
-        .await;
+        .await
+        .unwrap();
     // The late OCR pass can't put the raw text back either.
     app.coordinator
         .record_recognized_text(&record, &sample_doc(), true)

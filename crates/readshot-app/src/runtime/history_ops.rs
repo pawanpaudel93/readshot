@@ -17,6 +17,20 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             }
             Task::none()
         }
+        Message::HistoryRecordSaveFailed { session, error } => {
+            // Tell the user where they are looking: the editor opened for
+            // this capture, else the capture status (menu bar,
+            // notification).
+            match state
+                .editor
+                .as_mut()
+                .filter(|ed| Some(ed.session_id) == session)
+            {
+                Some(ed) => ed.set_warning(history_save_failure(&error, true)),
+                None => state.last_capture_status = Some(history_save_failure(&error, false)),
+            }
+            Task::none()
+        }
         Message::HistoryRecordPersisted(result) => {
             match result {
                 Ok(true) => {
@@ -557,6 +571,29 @@ pub(crate) const CAPTURE_PERMISSION_HINT: &str =
     "Check Screen Recording permission in System Settings and try again.";
 pub(crate) const REOPEN_HISTORY_HINT: &str = "Close History and open it again.";
 pub(crate) const RESTART_HINT: &str = "Quit and reopen Readshot, then try again.";
+
+/// The status for a capture History couldn't store: the reason when one
+/// is recognisable, and the way to keep the image (in the editor, Save
+/// with its key, from the app's key labels; elsewhere, capture again).
+pub(crate) fn history_save_failure(raw: &str, in_editor: bool) -> String {
+    let reason = io_reason_hint(raw);
+    let fix = match reason {
+        Some("the disk is full") => "Free some space",
+        Some("permission denied" | "the location is read-only") => {
+            "Make sure Readshot can write to its History folder"
+        }
+        _ => "Try again",
+    };
+    let next = if in_editor {
+        format!(
+            "{fix}, or press {} to save this image to a file.",
+            super::keys::SAVE_KEY
+        )
+    } else {
+        format!("{fix}, then capture again.")
+    };
+    compose_friendly("save the capture to History", reason, Some(&next))
+}
 
 /// Where the log file lives, for errors whose cause only the log knows
 /// (mirrors `main.rs`), with the home folder shortened to `~`.

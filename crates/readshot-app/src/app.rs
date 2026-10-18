@@ -488,6 +488,14 @@ pub enum Message {
     /// runs). Refreshes the open browser so the new row appears right
     /// away instead of only after OCR completes.
     HistoryRecordSaved,
+    /// A freshly-captured record could not be written to History (a full
+    /// disk, a read-only or unreadable History folder). `session` is the
+    /// editor opened for that capture, if any. The capture is not in
+    /// History; the user is told so and what to do.
+    HistoryRecordSaveFailed {
+        session: Option<u64>,
+        error: String,
+    },
     /// User clicked "Show More" in the history browser — reveal the
     /// next page of matching rows.
     HistoryShowMore,

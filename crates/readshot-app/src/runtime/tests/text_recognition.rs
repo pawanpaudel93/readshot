@@ -1160,3 +1160,91 @@ fn the_redaction_undo_hides_after_a_newer_edit_at_the_history_cap() {
         "Undo would undo the nudge, not the redaction"
     );
 }
+
+/// A store that refuses the record (here: its root is a file, as with a
+/// read-only or broken History folder): no success signal, no text
+/// step, and the user is told in the editor what happened and how to
+/// keep the image.
+#[tokio::test]
+async fn a_history_save_that_fails_is_reported_never_as_success() {
+    use iced::futures::StreamExt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let blocker = dir.path().join("history");
+    std::fs::write(&blocker, b"not a folder").unwrap();
+    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(blocker.join("inner")));
+    let perms = Arc::new(FakePermissions::granted());
+    let coord = CaptureCoordinator::new(
+        Arc::new(FakeCapturer::new()),
+        Arc::new(FakeOcrEngine::with_text("hello")),
+        perms.clone(),
+        Some(store.clone()),
+    );
+    let img = solid(16, 16);
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 16, 16, "fake-0");
+    assert!(coord
+        .record_history(
+            record.clone(),
+            readshot_core::encode_png(&img).unwrap(),
+            readshot_core::HistoryRetention::Last50,
+            chrono::Utc::now(),
+        )
+        .await
+        .is_err());
+    let session = 41;
+    let (tx, rx) = iced::futures::channel::mpsc::channel(4);
+    persist_history(
+        coord.clone(),
+        img.clone(),
+        Some(record),
+        readshot_core::HistoryRetention::Last50,
+        Preferences::default(),
+        Some(session),
+        tx,
+    )
+    .await;
+    let msgs: Vec<Message> = rx.collect().await;
+    assert!(
+        !msgs.iter().any(|m| matches!(
+            m,
+            Message::HistoryRecordSaved | Message::HistoryRecordPersisted(_)
+        )),
+        "{msgs:?}"
+    );
+    let failed = msgs
+        .into_iter()
+        .find(|m| matches!(m, Message::HistoryRecordSaveFailed { .. }))
+        .expect("the failure is reported");
+
+    // In the editor opened for the capture: a warning with the way out.
+    let mut app = App::new(coord, perms, Preferences::default());
+    let mut ed = crate::editor::EditorSession::new(img);
+    ed.session_id = session;
+    app.editor = Some(ed);
+    let _ = update(&mut app, failed.clone());
+    let ed = app.editor.as_ref().unwrap();
+    let status = ed.status.clone().unwrap();
+    assert!(
+        status.starts_with("Couldn’t save the capture to History"),
+        "{status}"
+    );
+    assert!(status.contains(super::super::keys::SAVE_KEY), "{status}");
+    assert!(ed.status_is_warning() || ed.status_is_error(), "{status}");
+    // Without that editor: the capture status says so.
+    app.editor = None;
+    let _ = update(&mut app, failed);
+    let status = app.last_capture_status.clone().unwrap();
+    assert!(status.contains("capture again"), "{status}");
+}
+
+#[test]
+fn history_save_failures_name_the_reason_and_the_fix() {
+    use super::super::history_ops::history_save_failure;
+    let full = history_save_failure("history io: No space left on device (os error 28)", true);
+    assert!(full.contains("the disk is full"), "{full}");
+    assert!(full.contains("Free some space"), "{full}");
+    let ro = history_save_failure("Read-only file system (os error 30)", false);
+    assert!(
+        ro.contains("read-only") && ro.contains("capture again"),
+        "{ro}"
+    );
+}

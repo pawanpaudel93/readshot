@@ -1870,6 +1870,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         | Message::HistoryDeleteConfirmed(..)
         | Message::HistoryDeleteCancelled
         | Message::HistoryRecordSaved
+        | Message::HistoryRecordSaveFailed { .. }
         | Message::HistoryShowMore) => {
             let task = history_ops::handle_history_message(state, msg);
             Task::batch([task, editor_ops::history_write_followups(state)])
@@ -2697,7 +2698,10 @@ fn persist_history_task(
 ///   the new row shows up without waiting on OCR;
 /// * [`Message::HistoryRecordPersisted`] once both resolve — `Ok(true)`
 ///   when text landed, `Ok(false)` when OCR failed or the update did.
-///   Not sent when the PNG encode failed (no record was saved).
+///   Not sent when the PNG encode or the save failed (no record was
+///   saved);
+/// * [`Message::HistoryRecordSaveFailed`] instead of the two above when
+///   the store refused the record.
 async fn persist_history(
     coord: CaptureCoordinator,
     img: image::RgbaImage,
@@ -2757,7 +2761,16 @@ async fn persist_history(
                     return false;
                 }
             };
-            coord.record_history(record, buf, policy, now).await;
+            if let Err(e) = coord.record_history(record, buf, policy, now).await {
+                // Not saved: no success signal, no text step.
+                let _ = output
+                    .send(Message::HistoryRecordSaveFailed {
+                        session: editor_session,
+                        error: e.to_string(),
+                    })
+                    .await;
+                return false;
+            }
             let _ = output.send(Message::HistoryRecordSaved).await;
             true
         }
