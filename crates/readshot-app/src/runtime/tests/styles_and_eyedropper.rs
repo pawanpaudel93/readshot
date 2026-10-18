@@ -676,18 +676,22 @@ fn eyedropper_pick_matches_the_pixel_shown_after_a_fractional_crop() {
     let crop = |x: f32, y: f32| Annotation::Crop {
         rect: RectLike::new(x, y, 12.0, 8.0),
     };
-    // x0 = 10.6, y0 = 3.6: local (0.5, 0.5) → base (11.1, 4.1),
-    // but blit_base shows base (10, 3) at displayed (0, 0).
+    // x0 = 10.6, y0 = 3.6: the displayed image starts at base (10, 3),
+    // and the canvas maps with that whole-pixel origin (crop_offset), so
+    // local (0.5, 0.5) → base (10.5, 3.5).
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let mut ed = crate::editor::EditorSession::new(img.clone());
     ed.model.commit_annotation(crop(10.6, 3.6));
     ed.model.clear_selection();
+    assert_eq!(ed.crop_offset(), (10.0, 3.0));
+    let (ox, oy) = ed.crop_offset();
     app.editor = Some(ed);
     let _ = update(&mut app, Message::EditorEyedropperToggled);
     let _ = update(
         &mut app,
         Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(
-            11.1, 4.1,
+            0.5 + ox,
+            0.5 + oy,
         ))),
     );
     let loupe = app
@@ -708,7 +712,8 @@ fn eyedropper_pick_matches_the_pixel_shown_after_a_fractional_crop() {
     let _ = update(
         &mut app,
         Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperPick(PointLike::new(
-            11.1, 4.1,
+            0.5 + ox,
+            0.5 + oy,
         ))),
     );
     assert_eq!(

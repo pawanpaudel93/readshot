@@ -2114,14 +2114,18 @@ impl EditorSession {
 
     /// Offset of the effective displayed image inside the base
     /// image's coordinate frame — `(0, 0)` if no Crop, else the
-    /// most recent Crop rect's top-left clamped to the base.
+    /// most recent Crop rect's top-left clamped to the base, at the
+    /// whole pixel the displayed (and rendered) image starts at.
     /// Cursor positions get this added to them before they're
     /// stored on annotations so the renderer's "translate by crop
     /// offset" pass produces pixels under the cursor.
     pub fn crop_offset(&self) -> (f32, f32) {
         let (bw, bh) = self.image_size();
         if let Some(r) = self.last_crop() {
-            (r.x.max(0.0).min(bw as f32), r.y.max(0.0).min(bh as f32))
+            (
+                r.x.max(0.0).min(bw as f32).floor(),
+                r.y.max(0.0).min(bh as f32).floor(),
+            )
         } else {
             (0.0, 0.0)
         }

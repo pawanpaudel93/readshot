@@ -487,7 +487,10 @@ fn compute_output_geometry(
         let y1 = (rect.y + rect.height).min(base_h as f32);
         let w = (x1 - x0).max(1.0).round() as u32;
         let h = (y1 - y0).max(1.0).round() as u32;
-        (w, h, (-x0, -y0))
+        // The base is blitted at whole pixels, so the origin is the whole
+        // pixel it starts at: every annotation, redaction and word box
+        // then moves by exactly the offset the pixels under it moved by.
+        (w, h, (-x0.floor(), -y0.floor()))
     } else {
         (base_w, base_h, (0.0, 0.0))
     }
@@ -1773,6 +1776,29 @@ mod tests {
         );
         assert_eq!(out.width(), 16);
         assert_eq!(out.height(), 24);
+    }
+
+    /// A fractional crop origin: the base is blitted from the whole pixel
+    /// it starts at, and every annotation moves by that same offset, not
+    /// by the fraction (they were 0.6 px off the pixels they were drawn on).
+    #[test]
+    fn a_fractional_crop_moves_annotations_with_the_pixels() {
+        let base = solid_base(64, 64, [255, 255, 255]);
+        let arrow = Annotation::Rectangle {
+            rect: RectLike::new(20.0, 20.0, 12.0, 9.0),
+            color: Rgba::new(1.0, 0.0, 0.0, 1.0),
+            line_width: 3.0,
+            style: Default::default(),
+        };
+        let crop = |x: f32, y: f32| Annotation::Crop {
+            rect: RectLike::new(x, y, 40.0, 30.0),
+        };
+        let fractional = render(&base, &[crop(10.6, 4.3), arrow.clone()]);
+        let whole = render(&base, &[crop(10.0, 4.0), arrow]);
+        assert_eq!(fractional.dimensions(), whole.dimensions());
+        assert!(fractional == whole, "the annotation drifted off its pixels");
+        let c = output_crop(64, 64, &[crop(10.6, 4.3)]).unwrap();
+        assert_eq!((c.x, c.y), (10.0, 4.0));
     }
 
     #[test]

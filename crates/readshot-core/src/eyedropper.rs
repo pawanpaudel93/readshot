@@ -17,11 +17,10 @@ fn pixel(img: &RgbaImage, x: i64, y: i64) -> Option<Rgba> {
 }
 
 /// Map a canvas base point to the base pixel the editor actually shows
-/// there. The canvas adds the crop origin as-is (`x0 = 10.6`), but
-/// `render::blit_base` truncates its offset (`(-10.6) as i32 = -10`), so
-/// displayed column `j` shows base column `j + trunc(x0)`. Subtracting
-/// `fract()` (which is `x - trunc(x)` for either sign) lands on that
-/// same column.
+/// there. `render::blit_base` shows base column `j + trunc(x0)` at
+/// displayed column `j`; the editor's crop origin is that whole pixel
+/// already (a no-op then), and for a fractional origin subtracting
+/// `fract()` (`x - trunc(x)` for either sign) lands on the same column.
 pub fn displayed_base_point(at: PointLike, crop_origin: (f32, f32)) -> PointLike {
     PointLike::new(at.x - crop_origin.0.fract(), at.y - crop_origin.1.fract())
 }
