@@ -720,20 +720,13 @@ pub fn panel_text_matches_output(annotations: &[Annotation]) -> bool {
     })
 }
 
-fn contains(outer: RectLike, inner: RectLike) -> bool {
-    outer.x <= inner.x
-        && outer.y <= inner.y
-        && outer.x + outer.width >= inner.x + inner.width
-        && outer.y + outer.height >= inner.y + inner.height
-}
-
 /// Whether an existing redaction ([`Annotation::redaction_rect`]: an
 /// opaque square-cornered filled rectangle, a blur or a pixelate) already
 /// covers `rect`.
 pub fn is_covered(rect: RectLike, annotations: &[Annotation]) -> bool {
     annotations
         .iter()
-        .any(|a| a.redaction_rect().is_some_and(|r| contains(r, rect)))
+        .any(|a| a.redaction_rect().is_some_and(|r| r.contains(rect)))
 }
 
 #[cfg(test)]
@@ -1052,13 +1045,6 @@ mod tests {
         }
     }
 
-    fn contains_rect(outer: RectLike, inner: RectLike) -> bool {
-        outer.x <= inner.x
-            && outer.y <= inner.y
-            && outer.x + outer.width >= inner.x + inner.width
-            && outer.y + outer.height >= inner.y + inner.height
-    }
-
     #[test]
     fn locate_covers_each_located_match_with_a_whole_pixel_rect() {
         let lines = vec![RecognizedLine {
@@ -1077,7 +1063,7 @@ mod tests {
         let (m, r) = &located.rects[0];
         assert_eq!(m, &matches[0]);
         let span = doc.lines[0].span_rect(m.span.clone()).unwrap();
-        assert!(contains_rect(*r, span), "{r:?} vs {span:?}");
+        assert!(r.contains(span), "{r:?} vs {span:?}");
         for v in [r.x, r.y, r.width, r.height] {
             assert_eq!(v, v.round());
         }

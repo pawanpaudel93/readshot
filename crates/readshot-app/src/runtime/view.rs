@@ -1087,7 +1087,7 @@ fn highlighted_text<'a>(
     iced::widget::rich_text(spans).size(size)
 }
 
-fn semibold() -> iced::Font {
+pub(crate) fn semibold() -> iced::Font {
     iced::Font {
         weight: iced::font::Weight::Semibold,
         ..iced::Font::DEFAULT

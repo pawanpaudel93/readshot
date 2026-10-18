@@ -319,10 +319,6 @@ fn wholly_in_crop(r: RectLike, crop: crate::render::OutputCrop) -> Option<RectLi
     })
 }
 
-fn area(r: RectLike) -> f32 {
-    r.width.max(0.0) * r.height.max(0.0)
-}
-
 /// Width and height of `a ∩ b` (0 when they don't overlap).
 fn intersection(a: RectLike, b: RectLike) -> (f32, f32) {
     let x0 = a.x.max(b.x);
@@ -336,7 +332,7 @@ fn intersection(a: RectLike, b: RectLike) -> (f32, f32) {
 /// hairline contact (see the module docs), or hairlines that together
 /// reach [`HAIRLINE_FRACTION`] of it.
 fn is_hidden(word: RectLike, redactions: &[RectLike]) -> bool {
-    let a = area(word);
+    let a = word.area();
     // NaN or no area: not a usable box.
     if a.is_nan() || a <= 0.0 {
         return false;
@@ -387,7 +383,7 @@ fn hidden_in_line(line: &TextLine, redactions: &[RectLike]) -> Option<Vec<Range<
     let n = chars.len();
     // A line box with no usable area (NaN, or clamped to nothing) can't
     // be tested: its unboxed chars count as hidden (fail closed).
-    let line_area = area(line_rect);
+    let line_area = line_rect.area();
     let line_hit = line_area.is_nan() || line_area <= 0.0 || is_hidden(line_rect, redactions);
     let usable: Vec<_> = line
         .words

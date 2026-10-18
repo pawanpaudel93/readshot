@@ -1125,13 +1125,6 @@ fn recognizing_view<'a>(ed: &EditorSession, reduce_motion: bool) -> Element<'a, 
     col.into()
 }
 
-fn semibold() -> iced::Font {
-    iced::Font {
-        weight: iced::font::Weight::Semibold,
-        ..iced::Font::DEFAULT
-    }
-}
-
 fn redact_card_style(theme: &Theme) -> container::Style {
     let p = palette_for(theme);
     container::Style {

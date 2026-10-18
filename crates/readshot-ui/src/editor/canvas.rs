@@ -1086,7 +1086,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
                 .chain(self.text_hover.map(|r| (r, true)));
             let mut frame = Frame::new(renderer, bounds.size());
             for (r, hovered) in marks {
-                let Some(r) = intersect_rect(r, visible) else {
+                let Some(r) = r.intersect(visible) else {
                     continue;
                 };
                 if let Some(rect) = base_rect_to_canvas(
@@ -1218,18 +1218,9 @@ impl EditorCanvas {
             self.image_size.0 as f32,
             self.image_size.1 as f32,
         );
-        let Some(v) = self.viewport else {
-            return image;
-        };
-        let x0 = image.x.max(v.x);
-        let y0 = image.y.max(v.y);
-        let x1 = (image.x + image.width).min(v.x + v.width);
-        let y1 = (image.y + image.height).min(v.y + v.height);
-        if x1 > x0 && y1 > y0 {
-            RectLike::new(x0, y0, x1 - x0, y1 - y0)
-        } else {
-            image
-        }
+        self.viewport
+            .and_then(|v| image.intersect(v))
+            .unwrap_or(image)
     }
 
     /// Hit-test the selected annotation's handles. `scale` is the
@@ -2064,16 +2055,6 @@ fn text_mark_colors(hovered: bool) -> (Color, Option<Color>) {
             None,
         )
     }
-}
-
-/// `a ∩ b` in base coordinates, `None` when they don't overlap. Line
-/// marks are clipped to the visible (cropped) image.
-fn intersect_rect(a: RectLike, b: RectLike) -> Option<RectLike> {
-    let x0 = a.x.max(b.x);
-    let y0 = a.y.max(b.y);
-    let x1 = (a.x + a.width).min(b.x + b.width);
-    let y1 = (a.y + a.height).min(b.y + b.height);
-    (x1 > x0 && y1 > y0).then(|| RectLike::new(x0, y0, x1 - x0, y1 - y0))
 }
 
 fn draw_selection_bounds(frame: &mut Frame, rect: Rectangle) {
@@ -3637,13 +3618,10 @@ mod tests {
     fn marks_are_clipped_to_the_visible_crop() {
         let crop = RectLike::new(10.0, 10.0, 50.0, 30.0);
         assert_eq!(
-            intersect_rect(RectLike::new(0.0, 20.0, 30.0, 5.0), crop),
+            RectLike::new(0.0, 20.0, 30.0, 5.0).intersect(crop),
             Some(RectLike::new(10.0, 20.0, 20.0, 5.0))
         );
-        assert_eq!(
-            intersect_rect(RectLike::new(70.0, 20.0, 5.0, 5.0), crop),
-            None
-        );
+        assert_eq!(RectLike::new(70.0, 20.0, 5.0, 5.0).intersect(crop), None);
     }
 
     #[test]

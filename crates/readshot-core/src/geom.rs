@@ -54,6 +54,27 @@ impl RectLike {
             height,
         }
     }
+
+    /// The overlap of `self` and `other`, `None` unless it has area.
+    pub fn intersect(self, other: RectLike) -> Option<RectLike> {
+        let (x0, y0) = (self.x.max(other.x), self.y.max(other.y));
+        let x1 = (self.x + self.width).min(other.x + other.width);
+        let y1 = (self.y + self.height).min(other.y + other.height);
+        (x1 > x0 && y1 > y0).then(|| RectLike::new(x0, y0, x1 - x0, y1 - y0))
+    }
+
+    /// Width × height, a negative (or NaN) side counting as 0.
+    pub fn area(self) -> f32 {
+        self.width.max(0.0) * self.height.max(0.0)
+    }
+
+    /// Whether `inner` lies within `self` (shared edges count as inside).
+    pub fn contains(self, inner: RectLike) -> bool {
+        self.x <= inner.x
+            && self.y <= inner.y
+            && self.x + self.width >= inner.x + inner.width
+            && self.y + self.height >= inner.y + inner.height
+    }
 }
 
 impl From<PointLike> for Point {

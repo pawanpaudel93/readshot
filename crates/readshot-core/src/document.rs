@@ -957,13 +957,6 @@ pub fn map_annotation(a: &Annotation, m: &Affine) -> Annotation {
     out
 }
 
-fn intersect(a: RectLike, b: RectLike) -> Option<RectLike> {
-    let (x0, y0) = (a.x.max(b.x), a.y.max(b.y));
-    let x1 = (a.x + a.width).min(b.x + b.width);
-    let y1 = (a.y + a.height).min(b.y + b.height);
-    (x1 > x0 && y1 > y0).then(|| RectLike::new(x0, y0, x1 - x0, y1 - y0))
-}
-
 /// Old document px to new document px for the pixels of part `id`.
 fn part_map(old: &DocGeometry, new: &DocGeometry, id: PartId) -> Option<Affine> {
     Some(old.part_affine(id)?.inverse()?.then(&new.part_affine(id)?))
@@ -1012,7 +1005,7 @@ pub fn remap_annotations(
             let pieces: Vec<(PartId, RectLike)> = old
                 .parts
                 .iter()
-                .filter_map(|p| Some((p.id, intersect(r, old.part_rect(p.id)?)?)))
+                .filter_map(|p| Some((p.id, r.intersect(old.part_rect(p.id)?)?)))
                 .collect();
             if !pieces.is_empty() {
                 // One overlapped part: its affine maps the whole rect.
@@ -1348,14 +1341,7 @@ mod tests {
         );
         let px = crate::render::redaction_pixels(r);
         assert_eq!(px, RectLike::new(0.0, 0.0, 2.0, 2.0));
-        assert!(contains(small.redaction_cover(r), px));
-    }
-
-    fn contains(outer: RectLike, inner: RectLike) -> bool {
-        outer.x <= inner.x
-            && outer.y <= inner.y
-            && outer.x + outer.width >= inner.x + inner.width
-            && outer.y + outer.height >= inner.y + inner.height
+        assert!(small.redaction_cover(r).contains(px));
     }
 
     /// `r`'s pixels with no slack at all: every pixel it touches.
@@ -1410,7 +1396,7 @@ mod tests {
                     for a in &there {
                         let cover = mid.redaction_cover(redaction_rect_of(a));
                         assert!(
-                            contains(cover, touched(m.map_rect(original))),
+                            cover.contains(touched(m.map_rect(original))),
                             "{w}x{h} ×{s}: {cover:?}"
                         );
                     }
@@ -1501,10 +1487,7 @@ mod tests {
                     .unwrap()
                     .map_rect(rect_of(&pieces[if id == ORIGINAL_PART { 0 } else { 1 }])),
             );
-            assert!(contains(
-                half.redaction_cover(rect_of(piece)),
-                touched(want)
-            ));
+            assert!(half.redaction_cover(rect_of(piece)).contains(touched(want)));
         }
         let back = scaled(&half, 2.0, 2.0);
         let home = remap_annotations(&half, &back, &there);
