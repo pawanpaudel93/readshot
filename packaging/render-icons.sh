@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Regenerate every committed raster of the Readshot brand icon from the
-# two SVG sources, so no surface ever drifts from the canonical art:
+# three SVG sources, so no surface ever drifts from the canonical art:
 #
 #   packaging/macos/icon.svg        canonical art, on Apple's 824/1024 grid
-#   packaging/macos/icon-small.svg  hand-tuned variant for 32px and below
+#   packaging/macos/icon-small.svg  hand-tuned variant for 20 to 32px
+#   packaging/macos/icon-16.svg     tile and lens only, for 16px
 #
 # Outputs (all committed):
 #   crates/readshot-app/assets/readshot-tile-128.png  Welcome brand tile and
@@ -28,6 +29,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ICON="${REPO_ROOT}/packaging/macos/icon.svg"
 SMALL="${REPO_ROOT}/packaging/macos/icon-small.svg"
+TINY="${REPO_ROOT}/packaging/macos/icon-16.svg"
 
 for tool in rsvg-convert magick; do
   if ! command -v "${tool}" >/dev/null 2>&1; then
@@ -41,7 +43,7 @@ done
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/readshot-icons.XXXXXX")"
 trap 'rm -rf "${WORK}"' EXIT
 
-# Both sources sit on Apple's 824/1024 grid, so every size of the macOS
+# Every source sits on Apple's 824/1024 grid, so every size of the macOS
 # icns and the Linux hicolor theme has the same footprint. Cropping the
 # viewBox to the 824px tile gives the bare tile, for surfaces that do not
 # use that margin (Windows, the web, in-app images, the off-macOS tray).
@@ -54,8 +56,10 @@ crop_to_tile() { # src out
 }
 TILE="${WORK}/tile.svg"
 SMALL_TILE="${WORK}/small-tile.svg"
+TINY_TILE="${WORK}/tiny-tile.svg"
 crop_to_tile "${ICON}" "${TILE}"
 crop_to_tile "${SMALL}" "${SMALL_TILE}"
+crop_to_tile "${TINY}" "${TINY_TILE}"
 # The tile with square corners, for apple-touch-icon: iOS applies its own
 # corner mask and fills transparent corners with black.
 SQUARE="${WORK}/square.svg"
@@ -66,15 +70,19 @@ grep -q 'id="tile" .* rx="0"' "${SQUARE}" || {
 }
 export READSHOT_ICON_TILE="${TILE}"
 export READSHOT_ICON_SMALL_TILE="${SMALL_TILE}"
+export READSHOT_ICON_TINY_TILE="${TINY_TILE}"
 
 png() { # svg size out
   mkdir -p "$(dirname "$3")"
   rsvg-convert -w "$2" -h "$2" "$1" -o "$3"
 }
 
-# Pick the source for a pixel size: the hand-tuned art at 32px and below.
-source_for() { # size small-source large-source
-  if (( $1 <= 32 )); then echo "$2"; else echo "$3"; fi
+# Pick the source for a pixel size: the lens-only art at 16px, the
+# hand-tuned art up to 32px, the canonical art above.
+source_for() { # size tiny-source small-source large-source
+  if (( $1 <= 16 )); then echo "$2"
+  elif (( $1 <= 32 )); then echo "$3"
+  else echo "$4"; fi
 }
 
 echo "-> in-app assets"
@@ -86,7 +94,7 @@ echo "-> Linux hicolor icons"
 HICOLOR="${REPO_ROOT}/packaging/linux/icons/hicolor"
 rm -rf "${HICOLOR}"
 for size in 16 24 32 48 64 128 256 512; do
-  png "$(source_for "${size}" "${SMALL}" "${ICON}")" "${size}" \
+  png "$(source_for "${size}" "${TINY}" "${SMALL}" "${ICON}")" "${size}" \
     "${HICOLOR}/${size}x${size}/apps/np.com.pawanpaudel.readshot.png"
 done
 mkdir -p "${HICOLOR}/scalable/apps"
@@ -101,7 +109,7 @@ echo "-> website"
 SITE="${REPO_ROOT}/site"
 cp "${TILE}" "${SITE}/favicon.svg"
 for size in 16 32 48; do
-  png "$(source_for "${size}" "${SMALL_TILE}" "${TILE}")" "${size}" "${WORK}/fav-${size}.png"
+  png "$(source_for "${size}" "${TINY_TILE}" "${SMALL_TILE}" "${TILE}")" "${size}" "${WORK}/fav-${size}.png"
 done
 magick "${WORK}/fav-16.png" "${WORK}/fav-32.png" "${WORK}/fav-48.png" "${SITE}/favicon.ico"
 png "${SQUARE}" 180 "${SITE}/apple-touch-icon.png"

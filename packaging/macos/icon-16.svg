@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Readshot app icon for 16px only (the 16pt @1x slot of AppIcon.icns,
+  the 16px Linux hicolor icon, the 16px Windows .ico frame and the 16px
+  favicon frame).
+
+  At 16px even icon-small.svg's heavy brackets blur into speckles around
+  the lens. This variant keeps the tile and the lens and drops the
+  brackets, so the lens can be drawn large enough to stay crisp: on the
+  macOS grid one 16px pixel is about 75 units of the 960px tile, and the
+  lens rings are sized to whole pixels there (white ring 2px wide, cyan
+  core 4px across, a dark rim of 1px against the tile).
+
+  Like icon.svg and icon-small.svg it sits on Apple's macOS grid (an
+  824px tile centred on the 1024 canvas); renderers that want the bare
+  tile crop the viewBox to "100 100 824 824".
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#123B48"/>
+      <stop offset="48%" stop-color="#176E80"/>
+      <stop offset="100%" stop-color="#21B6A8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 0.858333 = 824 / 960; 72.5333 = 100 - 32 * 0.858333. -->
+  <g transform="matrix(0.858333 0 0 0.858333 72.5333 72.5333)">
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#bg)"/>
+
+  <circle cx="512" cy="512" r="373" fill="#082E38"/>
+  <circle cx="512" cy="512" r="298" fill="#FFFFFF"/>
+  <circle cx="512" cy="512" r="149" fill="#7FD9E6"/>
+  </g>
+</svg>

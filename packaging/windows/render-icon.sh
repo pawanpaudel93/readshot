@@ -5,10 +5,10 @@
 #   packaging/windows/readshot.res  readshot.rc compiled; build.rs links it
 #                                   into readshot.exe on MSVC targets
 #
-# 32px and below come from packaging/macos/icon-small.svg (hand-tuned for a
-# few pixels); larger sizes from packaging/macos/icon.svg. Both are cropped
-# to their tile (Windows icons fill their canvas; Apple's grid margin is
-# macOS-only).
+# 16px comes from packaging/macos/icon-16.svg (tile and lens only), 20 to
+# 32px from packaging/macos/icon-small.svg (hand-tuned for a few pixels),
+# larger sizes from packaging/macos/icon.svg. Each is cropped to its tile
+# (Windows icons fill their canvas; Apple's grid margin is macOS-only).
 #
 # Needs rsvg-convert, ImageMagick 7 and python3, plus a resource compiler: llvm-rc
 # (brew install llvm; also searched in Homebrew's keg-only llvm@N) or a
@@ -22,12 +22,13 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT_DIR="${REPO_ROOT}/packaging/windows"
 ICON="${REPO_ROOT}/packaging/macos/icon.svg"
 SMALL="${REPO_ROOT}/packaging/macos/icon-small.svg"
+TINY="${REPO_ROOT}/packaging/macos/icon-16.svg"
 
 # Portable across BSD (macOS) and GNU (Linux) mktemp.
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/readshot-ico.XXXXXX")"
 trap 'rm -rf "${WORK}"' EXIT
 
-# Both sources sit on Apple's grid; Windows icons fill their canvas, so
+# Every source sits on Apple's grid; Windows icons fill their canvas, so
 # crop each to its tile (packaging/render-icons.sh passes its crops in).
 TILE="${READSHOT_ICON_TILE:-}"
 if [[ -z "${TILE}" ]]; then
@@ -39,11 +40,17 @@ if [[ -z "${SMALL_TILE}" ]]; then
   SMALL_TILE="${WORK}/small-tile.svg"
   sed 's|viewBox="0 0 1024 1024"|viewBox="100 100 824 824"|' "${SMALL}" > "${SMALL_TILE}"
 fi
+TINY_TILE="${READSHOT_ICON_TINY_TILE:-}"
+if [[ -z "${TINY_TILE}" ]]; then
+  TINY_TILE="${WORK}/tiny-tile.svg"
+  sed 's|viewBox="0 0 1024 1024"|viewBox="100 100 824 824"|' "${TINY}" > "${TINY_TILE}"
+fi
 
 frames=()
 for size in 16 20 24 32 40 48 64 256; do
   src="${TILE}"
   if (( size <= 32 )); then src="${SMALL_TILE}"; fi
+  if (( size <= 16 )); then src="${TINY_TILE}"; fi
   rsvg-convert -w "${size}" -h "${size}" "${src}" -o "${WORK}/${size}.png"
   frames+=("${WORK}/${size}.png")
 done

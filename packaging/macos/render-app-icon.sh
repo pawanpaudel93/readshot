@@ -15,8 +15,10 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ICON_SRC="${REPO_ROOT}/packaging/macos/icon.svg"
 # Hand-tuned art for the slots that draw 32px or fewer pixels: at those
-# sizes the canonical art's brackets blur into the tile.
+# sizes the canonical art's brackets blur into the tile. At 16px even the
+# hand-tuned brackets do, so that slot has the tile and lens only.
 ICON_SMALL_SRC="${REPO_ROOT}/packaging/macos/icon-small.svg"
+ICON_16_SRC="${REPO_ROOT}/packaging/macos/icon-16.svg"
 ICON_OUT="$1"
 PNG_512_OUT=""
 
@@ -28,7 +30,7 @@ if [[ "$#" -eq 3 ]]; then
   PNG_512_OUT="$3"
 fi
 
-for src in "${ICON_SRC}" "${ICON_SMALL_SRC}"; do
+for src in "${ICON_SRC}" "${ICON_SMALL_SRC}" "${ICON_16_SRC}"; do
   if [[ ! -f "${src}" ]]; then
     echo "error: ${src} missing" >&2
     exit 1
@@ -70,6 +72,7 @@ for entry in \
   name="${entry#* }"
   src="${ICON_SRC}"
   if (( size <= 32 )); then src="${ICON_SMALL_SRC}"; fi
+  if (( size <= 16 )); then src="${ICON_16_SRC}"; fi
   rsvg-convert -w "${size}" -h "${size}" "${src}" -o "${ICONSET}/${name}"
 done
 

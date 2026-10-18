@@ -22,7 +22,8 @@ Shared assets:
   `twitter:card`).
 
 Every icon image is generated from `packaging/macos/icon.svg` (and
-`icon-small.svg` for the 16/32 px favicon frames) by
+`icon-16.svg` for the 16 px favicon frame, `icon-small.svg` for the 32 px
+one) by
 `packaging/render-icons.sh`; edit the SVG and rerun it rather than editing
 the images.
 
