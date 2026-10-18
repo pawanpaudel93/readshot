@@ -8,9 +8,10 @@ use iced::keyboard::{key::Named, Key, Modifiers};
 
 fn hist(m: Option<Message>) -> Option<HistoryKeyboardAction> {
     match m {
-        Some(Message::HistoryKeyboardShortcut(_, a) | Message::HistoryCapturedShortcut(_, a)) => {
-            Some(a)
-        }
+        Some(
+            Message::History(HistoryMsg::KeyboardShortcut(_, a))
+            | Message::History(HistoryMsg::CapturedShortcut(_, a)),
+        ) => Some(a),
         _ => None,
     }
 }
@@ -95,8 +96,14 @@ fn clear_all_arms_then_confirms_and_esc_cancels_it() {
     let (_dir, _store, mut app, _newer, _older) = app_with_two_saved_records();
     let w = iced::window::Id::unique();
     app.history_window_id = Some(w);
-    let clear = Message::HistoryKeyboardShortcut(w, HistoryKeyboardAction::ClearAll);
-    let esc = Message::HistoryKeyboardShortcut(w, HistoryKeyboardAction::Escape);
+    let clear = Message::History(HistoryMsg::KeyboardShortcut(
+        w,
+        HistoryKeyboardAction::ClearAll,
+    ));
+    let esc = Message::History(HistoryMsg::KeyboardShortcut(
+        w,
+        HistoryKeyboardAction::Escape,
+    ));
     let _ = update(&mut app, clear.clone());
     assert!(app.history_clear_all_pending);
     assert_eq!(app.history_records.len(), 2, "one press only arms");
@@ -117,7 +124,7 @@ fn moving_past_the_page_shows_more() {
     app.history_selected_id = Some(app.history_records[page - 1].id);
     let limit = app.history_page_limit;
     assert_eq!(limit, page);
-    let _ = update(&mut app, Message::HistorySelectNext);
+    let _ = update(&mut app, Message::History(HistoryMsg::SelectNext));
     assert_eq!(app.history_selected_id, Some(app.history_records[page].id));
     assert!(
         app.history_page_limit > page,

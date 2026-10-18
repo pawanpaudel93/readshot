@@ -5,7 +5,7 @@
 
 use super::*;
 
-/// `Message::OpenHistoryRequested`.
+/// `HistoryMsg::OpenRequested`.
 pub(super) fn on_open_history(state: &mut App) -> Task<Message> {
     // Single-instance — if the window already exists just
     // refocus it and refresh the list.
@@ -23,12 +23,12 @@ pub(super) fn on_open_history(state: &mut App) -> Task<Message> {
     state.history_delete_pending = None;
     state.history_page_limit = crate::app::HISTORY_PAGE_SIZE;
     Task::batch([
-        open_task.map(Message::HistoryWindowReady),
+        open_task.map(|a| Message::History(HistoryMsg::WindowReady(a))),
         history_list_task(state.coordinator.clone()),
     ])
 }
 
-/// `Message::HistoryClosed`.
+/// `HistoryMsg::Closed`.
 pub(super) fn on_history_closed(state: &mut App) -> Task<Message> {
     let id = state.history_window_id.take();
     state.history_records.clear();
@@ -48,7 +48,7 @@ pub(super) fn on_history_closed(state: &mut App) -> Task<Message> {
     }
 }
 
-/// `Message::HistorySearchChanged`.
+/// `HistoryMsg::SearchChanged`.
 pub(super) fn on_search_changed(state: &mut App, q: String) -> Task<Message> {
     // A search change (Escape maps here too) cancels an armed
     // delete and resets paging so the first page of the new
@@ -64,7 +64,7 @@ pub(super) fn on_search_changed(state: &mut App, q: String) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::HistorySelect`.
+/// `HistoryMsg::Select`.
 pub(super) fn on_select(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
     if state.history_delete_pending != Some(id) {
         state.history_delete_pending = None;
@@ -75,7 +75,7 @@ pub(super) fn on_select(state: &mut App, id: readshot_core::Uuid) -> Task<Messag
     Task::none()
 }
 
-/// `Message::HistorySelectPrevious`.
+/// `HistoryMsg::SelectPrevious`.
 pub(super) fn on_select_previous(state: &mut App) -> Task<Message> {
     state.history_delete_pending = None;
     state.history_selected_id = adjacent_history_selection(
@@ -87,7 +87,7 @@ pub(super) fn on_select_previous(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::HistorySelectNext`.
+/// `HistoryMsg::SelectNext`.
 pub(super) fn on_select_next(state: &mut App) -> Task<Message> {
     state.history_delete_pending = None;
     state.history_selected_id = adjacent_history_selection(
@@ -111,7 +111,7 @@ pub(super) fn on_select_next(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::HistoryKeyboardShortcut`.
+/// `HistoryMsg::KeyboardShortcut`.
 pub(super) fn on_keyboard_shortcut(
     state: &mut App,
     window_id: iced::window::Id,
@@ -124,27 +124,29 @@ pub(super) fn on_keyboard_shortcut(
         // Moving through the list hands keyboard focus from the
         // search field to the list, so ⌘C / ⌘⌫ / ⌦ reach History.
         HistoryKeyboardAction::Previous => Task::batch([
-            update(state, Message::HistorySelectPrevious),
+            update(state, Message::History(HistoryMsg::SelectPrevious)),
             unfocus_history_search(),
         ]),
         HistoryKeyboardAction::Next => Task::batch([
-            update(state, Message::HistorySelectNext),
+            update(state, Message::History(HistoryMsg::SelectNext)),
             unfocus_history_search(),
         ]),
         HistoryKeyboardAction::Open => Task::batch([
-            update(state, Message::HistoryOpenSelected),
+            update(state, Message::History(HistoryMsg::OpenSelected)),
             unfocus_history_search(),
         ]),
-        HistoryKeyboardAction::Delete => update(state, Message::HistoryDeleteSelected),
+        HistoryKeyboardAction::Delete => {
+            update(state, Message::History(HistoryMsg::DeleteSelected))
+        }
         HistoryKeyboardAction::CopyText => match state.history_selected_id {
-            Some(id) => update(state, Message::HistoryCopyText(id)),
+            Some(id) => update(state, Message::History(HistoryMsg::CopyText(id))),
             None => {
                 state.history_status = Some("No history capture selected.".into());
                 Task::none()
             }
         },
         HistoryKeyboardAction::CopyImage => match state.history_selected_id {
-            Some(id) => update(state, Message::HistoryCopyImage(id)),
+            Some(id) => update(state, Message::History(HistoryMsg::CopyImage(id))),
             None => {
                 state.history_status = Some("No history capture selected.".into());
                 Task::none()
@@ -152,46 +154,50 @@ pub(super) fn on_keyboard_shortcut(
         },
         HistoryKeyboardAction::FocusSearch => focus_history_search(),
         HistoryKeyboardAction::Reveal => match state.history_selected_id {
-            Some(id) => update(state, Message::HistoryReveal(id)),
+            Some(id) => update(state, Message::History(HistoryMsg::Reveal(id))),
             None => {
                 state.history_status = Some("No history capture selected.".into());
                 Task::none()
             }
         },
         HistoryKeyboardAction::Pin => match state.history_selected_id {
-            Some(id) => update(state, Message::HistoryPin(id)),
+            Some(id) => update(state, Message::History(HistoryMsg::Pin(id))),
             None => {
                 state.history_status = Some("No history capture selected.".into());
                 Task::none()
             }
         },
-        HistoryKeyboardAction::CopyVisibleText => {
-            update(state, Message::HistoryCopyVisibleTextRequested)
-        }
+        HistoryKeyboardAction::CopyVisibleText => update(
+            state,
+            Message::History(HistoryMsg::CopyVisibleTextRequested),
+        ),
         HistoryKeyboardAction::ClearAll => {
             if state.history_records.is_empty() {
                 Task::none()
             } else if state.history_clear_all_pending {
-                update(state, Message::HistoryClearAllConfirmed)
+                update(state, Message::History(HistoryMsg::ClearAllConfirmed))
             } else {
-                update(state, Message::HistoryClearAllRequested)
+                update(state, Message::History(HistoryMsg::ClearAllRequested))
             }
         }
         // One esc, one step back: an armed prompt first, then the
         // search.
         HistoryKeyboardAction::Escape => {
             if state.history_clear_all_pending {
-                update(state, Message::HistoryClearAllCancelled)
+                update(state, Message::History(HistoryMsg::ClearAllCancelled))
             } else if state.history_delete_pending.is_some() {
-                update(state, Message::HistoryDeleteCancelled)
+                update(state, Message::History(HistoryMsg::DeleteCancelled))
             } else {
-                update(state, Message::HistorySearchChanged(String::new()))
+                update(
+                    state,
+                    Message::History(HistoryMsg::SearchChanged(String::new())),
+                )
             }
         }
     }
 }
 
-/// `Message::HistoryClearAllRequested`.
+/// `HistoryMsg::ClearAllRequested`.
 pub(super) fn on_clear_all_requested(state: &mut App) -> Task<Message> {
     // First click arms the destructive prompt. The button
     // flips to "Confirm Clear · Cancel" so the user has a
@@ -202,7 +208,7 @@ pub(super) fn on_clear_all_requested(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::HistoryClearAllConfirmed`.
+/// `HistoryMsg::ClearAllConfirmed`.
 pub(super) fn on_clear_all_confirmed(state: &mut App) -> Task<Message> {
     state.history_clear_all_pending = false;
     state.history_delete_pending = None;

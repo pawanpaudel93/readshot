@@ -72,33 +72,33 @@ fn history_copy_keys_match_overlay_and_editor() {
     let cmd_shift = command_modifiers() | Modifiers::SHIFT;
     assert!(matches!(
         history_key_message(w, &c, command_modifiers(), true),
-        Some(Message::HistoryKeyboardShortcut(
+        Some(Message::History(HistoryMsg::KeyboardShortcut(
             _,
             HistoryKeyboardAction::CopyImage
-        ))
+        )))
     ));
     assert!(matches!(
         history_key_message(w, &c, cmd_shift, true),
-        Some(Message::HistoryKeyboardShortcut(
+        Some(Message::History(HistoryMsg::KeyboardShortcut(
             _,
             HistoryKeyboardAction::CopyText
-        ))
+        )))
     ));
     // A focused search field captured it: deferred to the handler,
     // which only applies it while the query is empty.
     assert!(matches!(
         history_key_message(w, &c, command_modifiers(), false),
-        Some(Message::HistoryCapturedShortcut(
+        Some(Message::History(HistoryMsg::CapturedShortcut(
             _,
             HistoryKeyboardAction::CopyImage
-        ))
+        )))
     ));
     assert!(matches!(
         history_key_message(w, &c, cmd_shift, false),
-        Some(Message::HistoryCapturedShortcut(
+        Some(Message::History(HistoryMsg::CapturedShortcut(
             _,
             HistoryKeyboardAction::CopyText
-        ))
+        )))
     ));
 }
 
@@ -109,10 +109,10 @@ fn history_delete_keys() {
     let is_delete = |m: Option<Message>| {
         matches!(
             m,
-            Some(Message::HistoryKeyboardShortcut(
+            Some(Message::History(HistoryMsg::KeyboardShortcut(
                 _,
                 HistoryKeyboardAction::Delete
-            ))
+            )))
         )
     };
     let bs = Key::Named(Named::Backspace);
@@ -136,17 +136,17 @@ fn history_delete_keys() {
     // Captured by the search field: deferred, never immediate.
     assert!(matches!(
         history_key_message(w, &bs, command_modifiers(), false),
-        Some(Message::HistoryCapturedShortcut(
+        Some(Message::History(HistoryMsg::CapturedShortcut(
             _,
             HistoryKeyboardAction::Delete
-        ))
+        )))
     ));
     assert!(matches!(
         history_key_message(w, &del, Modifiers::empty(), false),
-        Some(Message::HistoryCapturedShortcut(
+        Some(Message::History(HistoryMsg::CapturedShortcut(
             _,
             HistoryKeyboardAction::Delete
-        ))
+        )))
     ));
 }
 
@@ -155,7 +155,7 @@ fn history_captured_shortcut_applies_only_for_empty_search() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let id = iced::window::Id::unique();
     app.history_window_id = Some(id);
-    let captured = |a| Message::HistoryCapturedShortcut(id, a);
+    let captured = |a| Message::History(HistoryMsg::CapturedShortcut(id, a));
 
     // Non-empty query: the field owns the chord, nothing happens.
     app.history_search = "invoice".into();
@@ -178,7 +178,10 @@ fn history_second_delete_key_confirms() {
     app.history_window_id = Some(id);
     let rec = readshot_core::Uuid::new_v4();
     app.history_selected_id = Some(rec);
-    let del = Message::HistoryKeyboardShortcut(id, HistoryKeyboardAction::Delete);
+    let del = Message::History(HistoryMsg::KeyboardShortcut(
+        id,
+        HistoryKeyboardAction::Delete,
+    ));
     let _ = update(&mut app, del.clone());
     assert_eq!(app.history_delete_pending, Some(rec));
     // Second press goes down the confirm path (pending is consumed).
@@ -192,17 +195,17 @@ fn history_arrow_while_search_focused_returns_nav_message() {
     let w = iced::window::Id::unique();
     assert!(matches!(
         history_key_message(w, &Key::Named(Named::ArrowDown), Modifiers::empty(), false),
-        Some(Message::HistoryKeyboardShortcut(
+        Some(Message::History(HistoryMsg::KeyboardShortcut(
             _,
             HistoryKeyboardAction::Next
-        ))
+        )))
     ));
     // The handler pairs the move with an unfocus task for the field.
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.history_window_id = Some(w);
     let task = update(
         &mut app,
-        Message::HistoryKeyboardShortcut(w, HistoryKeyboardAction::Next),
+        Message::History(HistoryMsg::KeyboardShortcut(w, HistoryKeyboardAction::Next)),
     );
     assert!(task.units() >= 1);
 }
@@ -478,17 +481,17 @@ fn history_command_chords_work_with_the_platform_command_key() {
     let f = Key::Character("f".into());
     assert!(matches!(
         history_key_message(w, &f, command_modifiers(), true),
-        Some(Message::HistoryKeyboardShortcut(
+        Some(Message::History(HistoryMsg::KeyboardShortcut(
             _,
             HistoryKeyboardAction::FocusSearch
-        ))
+        )))
     ));
     assert!(matches!(
         history_key_message(w, &Key::Named(Named::Backspace), command_modifiers(), true),
-        Some(Message::HistoryKeyboardShortcut(
+        Some(Message::History(HistoryMsg::KeyboardShortcut(
             _,
             HistoryKeyboardAction::Delete
-        ))
+        )))
     ));
     // The other command-ish key on top (⌃ on macOS, the logo key
     // elsewhere) is not the chord.
@@ -503,9 +506,9 @@ fn history_command_chords_work_with_the_platform_command_key() {
     // ⌦ alone deletes; with the command key it is not a delete chord.
     assert!(matches!(
         history_key_message(w, &Key::Named(Named::Delete), Modifiers::empty(), true),
-        Some(Message::HistoryKeyboardShortcut(
+        Some(Message::History(HistoryMsg::KeyboardShortcut(
             _,
             HistoryKeyboardAction::Delete
-        ))
+        )))
     ));
 }

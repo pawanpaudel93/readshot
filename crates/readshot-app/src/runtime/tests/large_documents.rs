@@ -2487,7 +2487,10 @@ fn reopening_a_record_waits_for_its_composing_editor_and_keeps_a_redone_redactio
     let session_a = app.editor.as_ref().unwrap().session_id;
     assert!(app.editor.as_ref().unwrap().compose_job.is_some());
 
-    let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::OpenInEditor(record.id)),
+    );
     assert!(app.editor.is_none(), "A closed; nothing opened yet");
     assert_eq!(app.pending_history_open, Some(record.id));
     assert_eq!(
@@ -2521,11 +2524,11 @@ fn reopening_a_record_waits_for_its_composing_editor_and_keeps_a_redone_redactio
     assert_eq!(unsaved, None);
     let _ = update(
         &mut app,
-        Message::HistoryReopenedAfterSync {
+        Message::History(HistoryMsg::ReopenedAfterSync {
             record_id: record.id,
             result,
             unsaved,
-        },
+        }),
     );
     let b = app.editor.as_ref().unwrap();
     assert!(b.source_record.as_ref().unwrap().redacted);
@@ -2543,11 +2546,11 @@ fn a_reopen_whose_previous_write_failed_says_so() {
     app.awaiting_reopen = Some(record.id);
     let _ = update(
         &mut app,
-        Message::HistoryReopenedAfterSync {
+        Message::History(HistoryMsg::ReopenedAfterSync {
             record_id: record.id,
             result: Ok((ramp(40, 20), record)),
             unsaved: Some("the disk is full".into()),
-        },
+        }),
     );
     assert_eq!(app.history_status, None);
     let status = app
@@ -2700,7 +2703,10 @@ fn a_reopen_waits_for_every_write_of_the_record_with_no_timeout() {
     let _ = update(&mut app, Message::EditorRotate { clockwise: true });
     assert_eq!(app.editor.as_ref().unwrap().image_size(), (20, 40));
 
-    let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::OpenInEditor(record.id)),
+    );
     assert!(app.editor.is_none());
     assert_eq!(app.awaiting_reopen, Some(record.id));
     assert_eq!(
@@ -2733,11 +2739,11 @@ fn a_reopen_waits_for_every_write_of_the_record_with_no_timeout() {
     assert_eq!(unsaved, None);
     let _ = update(
         &mut app,
-        Message::HistoryReopenedAfterSync {
+        Message::History(HistoryMsg::ReopenedAfterSync {
             record_id: record.id,
             result,
             unsaved,
-        },
+        }),
     );
     let b = app.editor.as_mut().unwrap();
     assert_eq!(b.image_size(), (20, 40), "B opens on the rotated record");
@@ -2780,11 +2786,11 @@ fn a_deferred_open_asks_before_replacing_unsaved_work() {
     let c_session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::HistoryReopenedAfterSync {
+        Message::History(HistoryMsg::ReopenedAfterSync {
             record_id: record.id,
             result: Ok((ramp(40, 20), record.clone())),
             unsaved: None,
-        },
+        }),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.session_id, c_session, "C stays");
@@ -2797,11 +2803,11 @@ fn a_deferred_open_asks_before_replacing_unsaved_work() {
     assert_eq!(app.awaiting_reopen, Some(record.id));
     let _ = update(
         &mut app,
-        Message::HistoryReopenedAfterSync {
+        Message::History(HistoryMsg::ReopenedAfterSync {
             record_id: record.id,
             result: Ok((ramp(40, 20), record.clone())),
             unsaved: None,
-        },
+        }),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_ne!(ed.session_id, c_session);
@@ -2815,14 +2821,14 @@ fn a_deferred_open_is_cancelled_when_history_closed() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
     app.awaiting_reopen = Some(record.id);
-    let _ = update(&mut app, Message::HistoryClosed);
+    let _ = update(&mut app, Message::History(HistoryMsg::Closed));
     let _ = update(
         &mut app,
-        Message::HistoryReopenedAfterSync {
+        Message::History(HistoryMsg::ReopenedAfterSync {
             record_id: record.id,
             result: Ok((ramp(40, 20), record)),
             unsaved: Some("the disk is full".into()),
-        },
+        }),
     );
     assert!(app.editor.is_none());
     let status = app.last_capture_status.clone().unwrap();
@@ -2840,11 +2846,11 @@ fn a_failed_reopen_shows_why_and_what_wasnt_saved() {
     app.awaiting_reopen = Some(id);
     let _ = update(
         &mut app,
-        Message::HistoryReopenedAfterSync {
+        Message::History(HistoryMsg::ReopenedAfterSync {
             record_id: id,
             result: Err("No such file or directory (os error 2)".into()),
             unsaved: Some("the disk is full".into()),
-        },
+        }),
     );
     assert!(app.editor.is_none());
     let status = app.history_status.clone().unwrap();
@@ -2874,7 +2880,10 @@ fn reopening_the_open_record_asks_before_dropping_beautify() {
     a.window_id = Some(iced::window::Id::unique());
     a.model.set_beautify(BuiltinPreset::Soft.settings());
     app.editor = Some(a);
-    let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::OpenInEditor(record.id)),
+    );
     let ed = app.editor.as_ref().expect("asked first, nothing closed");
     assert!(ed.discard_armed());
     assert!(ed.status_text().unwrap().contains("History doesn’t keep"));

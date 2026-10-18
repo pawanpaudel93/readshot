@@ -356,8 +356,8 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 }
 
 use crate::app::{
-    App, AppMsg, CaptureMsg, GlobalHotkeyAction, HistoryKeyboardAction, Message, ScrollMsg,
-    SettingsMsg, TickMsg, WelcomeMsg, WindowKind, WindowMsg,
+    App, AppMsg, CaptureMsg, GlobalHotkeyAction, HistoryKeyboardAction, HistoryMsg, Message,
+    ScrollMsg, SettingsMsg, TickMsg, WelcomeMsg, WindowKind, WindowMsg,
 };
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
@@ -914,16 +914,16 @@ pub(crate) fn history_key_message(
     status_ignored: bool,
 ) -> Option<Message> {
     use iced::keyboard::{key::Named, Key};
-    let action = |a| Some(Message::HistoryKeyboardShortcut(window, a));
+    let action = |a| Some(Message::History(HistoryMsg::KeyboardShortcut(window, a)));
     // A focused search field captures ⌘C and ⌫/⌦ even when it has nothing
     // to copy or delete. Subscriptions cannot see app state, so captured
     // chords go out as `HistoryCapturedShortcut` and the handler applies
     // them only while the search query is empty.
     let chord = |a| {
         Some(if status_ignored {
-            Message::HistoryKeyboardShortcut(window, a)
+            Message::History(HistoryMsg::KeyboardShortcut(window, a))
         } else {
-            Message::HistoryCapturedShortcut(window, a)
+            Message::History(HistoryMsg::CapturedShortcut(window, a))
         })
     };
     // ⌘F focuses the search field, wherever focus is. (Off macOS
@@ -1034,7 +1034,9 @@ fn app_window_shortcut_message(
         return None;
     }
     match key {
-        Key::Character(c) if c.eq_ignore_ascii_case("y") => Some(Message::OpenHistoryRequested),
+        Key::Character(c) if c.eq_ignore_ascii_case("y") => {
+            Some(Message::History(HistoryMsg::OpenRequested))
+        }
         Key::Character(c) if c == "," => Some(Message::Settings(SettingsMsg::OpenRequested)),
         _ => None,
     }
@@ -1178,7 +1180,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         Message::Capture(msg) => capture_ops::handle_capture_message(state, msg),
         Message::Tick(msg) => tick_ops::handle_tick_message(state, msg),
 
-        msg @ history_messages!() => {
+        Message::History(msg) => {
             let task = history_ops::handle_history_message(state, msg);
             Task::batch([task, editor_ops::history_write_followups(state)])
         }
@@ -1464,13 +1466,13 @@ fn persist_history_task(
 ///   same OCR feeds that editor's Text panel (one OCR per capture),
 ///   errors included so the editor never stays Recognizing. Engines map
 ///   a panicked OCR worker to an error, so this is always sent;
-/// * [`Message::HistoryRecordSaved`] the moment the record hits disk —
+/// * [`HistoryMsg::RecordSaved`] the moment the record hits disk —
 ///   the new row shows up without waiting on OCR;
-/// * [`Message::HistoryRecordPersisted`] once both resolve — `Ok(true)`
+/// * [`HistoryMsg::RecordPersisted`] once both resolve — `Ok(true)`
 ///   when text landed, `Ok(false)` when OCR failed or the update did.
 ///   Not sent when the PNG encode or the save failed (no record was
 ///   saved);
-/// * [`Message::HistoryRecordSaveFailed`] instead of the two above when
+/// * [`HistoryMsg::RecordSaveFailed`] instead of the two above when
 ///   the store refused the record.
 async fn persist_history(
     coord: CaptureCoordinator,
@@ -1535,15 +1537,15 @@ async fn persist_history(
             if let Err(e) = coord.record_history(record, buf, policy, now).await {
                 // Not saved: no success signal, no text step.
                 let _ = output
-                    .send(Message::HistoryRecordSaveFailed {
+                    .send(Message::History(HistoryMsg::RecordSaveFailed {
                         session: editor_session,
                         record_id,
                         error: e.to_string(),
-                    })
+                    }))
                     .await;
                 return false;
             }
-            let _ = output.send(Message::HistoryRecordSaved).await;
+            let _ = output.send(Message::History(HistoryMsg::RecordSaved)).await;
             true
         }
     };
@@ -1580,7 +1582,7 @@ async fn persist_history(
         }
     };
     let _ = output
-        .send(Message::HistoryRecordPersisted(Ok(persisted)))
+        .send(Message::History(HistoryMsg::RecordPersisted(Ok(persisted))))
         .await;
 }
 
@@ -1713,7 +1715,7 @@ fn history_list_task(coord: CaptureCoordinator) -> Task<Message> {
                 .map_err(|e| e.to_string())?
                 .map_err(|e| e.to_string())
         },
-        Message::HistoryListLoaded,
+        |a| Message::History(HistoryMsg::ListLoaded(a)),
     )
 }
 

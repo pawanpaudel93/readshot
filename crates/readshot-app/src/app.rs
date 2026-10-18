@@ -232,6 +232,8 @@ impl SettingsPane {
 /// or background task funnels through this enum.
 #[derive(Clone, Debug)]
 pub enum Message {
+    /// History browser and History persistence messages (`runtime::history_ops`).
+    History(HistoryMsg),
     /// Settings and command-line setup window messages (`runtime::settings_ops`).
     Settings(SettingsMsg),
     /// Scrolling-capture messages (`runtime::scroll`).
@@ -262,119 +264,6 @@ pub enum Message {
     /// underlying drag layer and turn an opacity-slider drag into a
     /// window move.
     NoOp,
-    /// Fire-and-forget history persistence completion. The boolean
-    /// payload is `true` when the chain completed all the way through
-    /// the OCR-and-update step (so the browser should reload to see
-    /// the new text); `false` when history was disabled or OCR
-    /// failed. Errors are logged but never block the user flow.
-    HistoryRecordPersisted(Result<bool, String>),
-    /// User asked for the history browser (tray menu / future
-    /// hotkey). Either focuses the existing window or opens a new
-    /// one and triggers a fresh `HistoryListLoaded`.
-    OpenHistoryRequested,
-    /// First view of the freshly-opened history window — runtime
-    /// records the `window::Id` so close + focus paths work.
-    HistoryWindowReady(iced::window::Id),
-    /// Async list of persisted captures finished — populates the
-    /// history browser. `Err` toasts an error and leaves the list
-    /// empty.
-    HistoryListLoaded(Result<Vec<readshot_core::CaptureRecord>, String>),
-    /// User closed the history browser window.
-    HistoryClosed,
-    /// User typed in the history browser's search box. Empty string
-    /// resets to "show every record".
-    HistorySearchChanged(String),
-    /// Dismiss button on the History status toast (errors stay until
-    /// dismissed or replaced by the next status).
-    HistoryStatusDismissed,
-    /// User selected a capture in the history browser.
-    HistorySelect(readshot_core::Uuid),
-    /// Move selection to the previous visible history capture.
-    HistorySelectPrevious,
-    /// Move selection to the next visible history capture.
-    HistorySelectNext,
-    /// Open the selected history capture in the editor.
-    HistoryOpenSelected,
-    /// Delete the selected history capture.
-    HistoryDeleteSelected,
-    /// Keyboard shortcut from a history window. The runtime validates
-    /// the window id before applying the action, because iced event
-    /// subscriptions are global to the daemon.
-    HistoryKeyboardShortcut(iced::window::Id, HistoryKeyboardAction),
-    /// A copy / delete chord a widget (the search field) already
-    /// captured. Applied only while the search query is empty, since an
-    /// empty field has nothing to copy or delete.
-    HistoryCapturedShortcut(iced::window::Id, HistoryKeyboardAction),
-    /// Browser-level "Clear All" — first click arms the confirm
-    /// prompt. The button label flips and a Cancel option appears;
-    /// a second click sends `HistoryClearAllConfirmed`.
-    HistoryClearAllRequested,
-    /// Confirm the armed "Clear All" — actually wipes the history.
-    HistoryClearAllConfirmed,
-    /// Cancel the armed "Clear All" — returns the button to its
-    /// idle state without touching any records.
-    HistoryClearAllCancelled,
-    /// Open a History record in the editor (the row's Open, a
-    /// double-click, Enter): `history_ops::open_history_record`, the one
-    /// path that does. Annotation edits flow back into the JSON sidecar.
-    HistoryOpenInEditor(readshot_core::Uuid),
-    /// A History record to open, read fresh from disk once every History
-    /// write of it was done or cancelled (`history_ops::load_after_writes`).
-    /// `unsaved` names writes of earlier edits that failed.
-    HistoryReopenedAfterSync {
-        record_id: readshot_core::Uuid,
-        result: Result<(image::RgbaImage, readshot_core::CaptureRecord), String>,
-        unsaved: Option<String>,
-    },
-    /// Per-row "Copy Image" — load PNG, decode, write to clipboard.
-    HistoryCopyImage(readshot_core::Uuid),
-    /// Per-row image clipboard write completed.
-    HistoryCopyImageDone(Result<(), String>),
-    /// Per-row "Reveal" — ask the OS file manager to select the PNG
-    /// or open its containing folder.
-    HistoryReveal(readshot_core::Uuid),
-    /// Per-row "Copy Text" — read the cached `ocr_text` and write it
-    /// to the clipboard. Synchronous (no OCR re-run).
-    HistoryCopyText(readshot_core::Uuid),
-    /// Per-row OCR-text clipboard write completed.
-    HistoryCopyTextDone(Result<String, String>),
-    /// Copy OCR text from every currently visible history row.
-    HistoryCopyVisibleTextRequested,
-    /// Bulk OCR-text clipboard write completed.
-    HistoryCopyVisibleTextDone(Result<usize, String>),
-    /// Per-row "Pin" — load PNG, decode, open as a borderless
-    /// always-on-top pin window.
-    HistoryPin(readshot_core::Uuid),
-    /// Async PNG-decode finished for the row that asked to pin.
-    HistoryPinReady(Result<image::RgbaImage, String>),
-    /// Per-row "Delete" — first press arms the destructive prompt for
-    /// that capture (the row's button flips to "Delete Capture"). A
-    /// second press for the same id confirms; selecting another row,
-    /// changing the search, or pressing Escape cancels.
-    HistoryDelete(readshot_core::Uuid),
-    /// Confirm the armed single-capture delete — actually removes the
-    /// PNG + sidecar + index entry from disk and refreshes the list.
-    HistoryDeleteConfirmed(readshot_core::Uuid),
-    /// Cancel the armed single-capture delete without touching disk.
-    HistoryDeleteCancelled,
-    /// A freshly-captured record was written to disk (before OCR
-    /// runs). Refreshes the open browser so the new row appears right
-    /// away instead of only after OCR completes.
-    HistoryRecordSaved,
-    /// A freshly-captured record could not be written to History (a full
-    /// disk, a read-only or unreadable History folder). `session` is the
-    /// editor opened for that capture, if any. The capture is not in
-    /// History; the user is told so and what to do.
-    HistoryRecordSaveFailed {
-        session: Option<u64>,
-        /// The record that isn't in History: editors drop their link to
-        /// it and the coordinator its parked rewrites.
-        record_id: readshot_core::Uuid,
-        error: String,
-    },
-    /// User clicked "Show More" in the history browser — reveal the
-    /// next page of matching rows.
-    HistoryShowMore,
     /// First view callback for the editor window — used to record
     /// the `window::Id` so Discard can close the right one.
     EditorWindowReady(iced::window::Id),
@@ -650,6 +539,125 @@ pub enum Message {
     /// Turn the eyedropper on or off (I, or the button in the color
     /// popover). While on, a click on the image picks its color.
     EditorEyedropperToggled,
+}
+
+/// History browser messages, and the completions of History writes made
+/// for a capture. Handled by `runtime::history_ops::handle_history_message`.
+#[derive(Clone, Debug)]
+pub enum HistoryMsg {
+    /// Fire-and-forget history persistence completion. The boolean
+    /// payload is `true` when the chain completed all the way through
+    /// the OCR-and-update step (so the browser should reload to see
+    /// the new text); `false` when history was disabled or OCR
+    /// failed. Errors are logged but never block the user flow.
+    RecordPersisted(Result<bool, String>),
+    /// User asked for the history browser (tray menu / future
+    /// hotkey). Either focuses the existing window or opens a new
+    /// one and triggers a fresh `HistoryListLoaded`.
+    OpenRequested,
+    /// First view of the freshly-opened history window — runtime
+    /// records the `window::Id` so close + focus paths work.
+    WindowReady(iced::window::Id),
+    /// Async list of persisted captures finished — populates the
+    /// history browser. `Err` toasts an error and leaves the list
+    /// empty.
+    ListLoaded(Result<Vec<readshot_core::CaptureRecord>, String>),
+    /// User closed the history browser window.
+    Closed,
+    /// User typed in the history browser's search box. Empty string
+    /// resets to "show every record".
+    SearchChanged(String),
+    /// Dismiss button on the History status toast (errors stay until
+    /// dismissed or replaced by the next status).
+    StatusDismissed,
+    /// User selected a capture in the history browser.
+    Select(readshot_core::Uuid),
+    /// Move selection to the previous visible history capture.
+    SelectPrevious,
+    /// Move selection to the next visible history capture.
+    SelectNext,
+    /// Open the selected history capture in the editor.
+    OpenSelected,
+    /// Delete the selected history capture.
+    DeleteSelected,
+    /// Keyboard shortcut from a history window. The runtime validates
+    /// the window id before applying the action, because iced event
+    /// subscriptions are global to the daemon.
+    KeyboardShortcut(iced::window::Id, HistoryKeyboardAction),
+    /// A copy / delete chord a widget (the search field) already
+    /// captured. Applied only while the search query is empty, since an
+    /// empty field has nothing to copy or delete.
+    CapturedShortcut(iced::window::Id, HistoryKeyboardAction),
+    /// Browser-level "Clear All" — first click arms the confirm
+    /// prompt. The button label flips and a Cancel option appears;
+    /// a second click sends `HistoryClearAllConfirmed`.
+    ClearAllRequested,
+    /// Confirm the armed "Clear All" — actually wipes the history.
+    ClearAllConfirmed,
+    /// Cancel the armed "Clear All" — returns the button to its
+    /// idle state without touching any records.
+    ClearAllCancelled,
+    /// Open a History record in the editor (the row's Open, a
+    /// double-click, Enter): `history_ops::open_history_record`, the one
+    /// path that does. Annotation edits flow back into the JSON sidecar.
+    OpenInEditor(readshot_core::Uuid),
+    /// A History record to open, read fresh from disk once every History
+    /// write of it was done or cancelled (`history_ops::load_after_writes`).
+    /// `unsaved` names writes of earlier edits that failed.
+    ReopenedAfterSync {
+        record_id: readshot_core::Uuid,
+        result: Result<(image::RgbaImage, readshot_core::CaptureRecord), String>,
+        unsaved: Option<String>,
+    },
+    /// Per-row "Copy Image" — load PNG, decode, write to clipboard.
+    CopyImage(readshot_core::Uuid),
+    /// Per-row image clipboard write completed.
+    CopyImageDone(Result<(), String>),
+    /// Per-row "Reveal" — ask the OS file manager to select the PNG
+    /// or open its containing folder.
+    Reveal(readshot_core::Uuid),
+    /// Per-row "Copy Text" — read the cached `ocr_text` and write it
+    /// to the clipboard. Synchronous (no OCR re-run).
+    CopyText(readshot_core::Uuid),
+    /// Per-row OCR-text clipboard write completed.
+    CopyTextDone(Result<String, String>),
+    /// Copy OCR text from every currently visible history row.
+    CopyVisibleTextRequested,
+    /// Bulk OCR-text clipboard write completed.
+    CopyVisibleTextDone(Result<usize, String>),
+    /// Per-row "Pin" — load PNG, decode, open as a borderless
+    /// always-on-top pin window.
+    Pin(readshot_core::Uuid),
+    /// Async PNG-decode finished for the row that asked to pin.
+    PinReady(Result<image::RgbaImage, String>),
+    /// Per-row "Delete" — first press arms the destructive prompt for
+    /// that capture (the row's button flips to "Delete Capture"). A
+    /// second press for the same id confirms; selecting another row,
+    /// changing the search, or pressing Escape cancels.
+    Delete(readshot_core::Uuid),
+    /// Confirm the armed single-capture delete — actually removes the
+    /// PNG + sidecar + index entry from disk and refreshes the list.
+    DeleteConfirmed(readshot_core::Uuid),
+    /// Cancel the armed single-capture delete without touching disk.
+    DeleteCancelled,
+    /// A freshly-captured record was written to disk (before OCR
+    /// runs). Refreshes the open browser so the new row appears right
+    /// away instead of only after OCR completes.
+    RecordSaved,
+    /// A freshly-captured record could not be written to History (a full
+    /// disk, a read-only or unreadable History folder). `session` is the
+    /// editor opened for that capture, if any. The capture is not in
+    /// History; the user is told so and what to do.
+    RecordSaveFailed {
+        session: Option<u64>,
+        /// The record that isn't in History: editors drop their link to
+        /// it and the coordinator its parked rewrites.
+        record_id: readshot_core::Uuid,
+        error: String,
+    },
+    /// User clicked "Show More" in the history browser — reveal the
+    /// next page of matching rows.
+    ShowMore,
 }
 
 /// Settings and command-line setup window messages. Handled by

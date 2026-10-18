@@ -299,10 +299,10 @@ async fn history_ocr_feeds_the_editor_first_and_stores_the_layout_text() {
     }
     assert!(msgs
         .iter()
-        .any(|m| matches!(m, Message::HistoryRecordSaved)));
+        .any(|m| matches!(m, Message::History(HistoryMsg::RecordSaved))));
     assert!(matches!(
         msgs.last(),
-        Some(Message::HistoryRecordPersisted(Ok(true)))
+        Some(Message::History(HistoryMsg::RecordPersisted(Ok(true))))
     ));
     let stored = coord.history_list().unwrap();
     let stored = stored.iter().find(|r| r.id == record.id).unwrap();
@@ -330,7 +330,7 @@ async fn history_ocr_errors_reach_the_editor_even_when_the_save_fails() {
     ));
     assert!(matches!(
         msgs.last(),
-        Some(Message::HistoryRecordPersisted(Ok(false)))
+        Some(Message::History(HistoryMsg::RecordPersisted(Ok(false))))
     ));
 
     // A 0 × 0 image fails the PNG encode: no record is saved, but the
@@ -1249,18 +1249,19 @@ async fn a_history_save_that_fails_is_reported_never_as_success() {
     assert!(
         !msgs.iter().any(|m| matches!(
             m,
-            Message::HistoryRecordSaved | Message::HistoryRecordPersisted(_)
+            Message::History(HistoryMsg::RecordSaved)
+                | Message::History(HistoryMsg::RecordPersisted(_))
         )),
         "{msgs:?}"
     );
     let failed = msgs
         .into_iter()
-        .find(|m| matches!(m, Message::HistoryRecordSaveFailed { .. }))
+        .find(|m| matches!(m, Message::History(HistoryMsg::RecordSaveFailed { .. })))
         .expect("the failure is reported");
 
     // In the editor opened for the capture: a warning with the way out.
     let record = match &failed {
-        Message::HistoryRecordSaveFailed { record_id, .. } => {
+        Message::History(HistoryMsg::RecordSaveFailed { record_id, .. }) => {
             let mut r = readshot_core::CaptureRecord::new(chrono::Utc::now(), 16, 16, "fake-0");
             r.id = *record_id;
             r

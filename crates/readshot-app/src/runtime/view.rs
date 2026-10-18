@@ -1132,7 +1132,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     let caption_room = history_count_room(&count_caption);
     let search_input = text_input("Search text", &state.history_search)
         .id(iced::widget::Id::new(HISTORY_SEARCH_ID))
-        .on_input(Message::HistorySearchChanged)
+        .on_input(|a| Message::History(HistoryMsg::SearchChanged(a)))
         .width(Length::Fill)
         .padding(iced::Padding {
             top: 6.0,
@@ -1167,7 +1167,8 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                 .into(),
             ButtonKind::Ghost,
             ButtonSize::Sm,
-            (visible_text_count > 0).then_some(Message::HistoryCopyVisibleTextRequested),
+            (visible_text_count > 0)
+                .then_some(Message::History(HistoryMsg::CopyVisibleTextRequested)),
         ),
         if visible_text_count == 1 {
             "Copy Text from 1 Visible Capture".to_string()
@@ -1188,7 +1189,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                         .into(),
                     ButtonKind::DangerSolid,
                     ButtonSize::Sm,
-                    Some(Message::HistoryClearAllConfirmed),
+                    Some(Message::History(HistoryMsg::ClearAllConfirmed)),
                 ),
                 "Delete All Permanently",
                 Some(HISTORY_CLEAR_ALL_KEY),
@@ -1199,7 +1200,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                     text("Cancel").size(ButtonSize::Sm.text_size()).into(),
                     ButtonKind::Ghost,
                     ButtonSize::Sm,
-                    Some(Message::HistoryClearAllCancelled),
+                    Some(Message::History(HistoryMsg::ClearAllCancelled)),
                 ),
                 "Cancel",
                 Some(ESC_KEY),
@@ -1215,7 +1216,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                 text("Clear All").size(ButtonSize::Sm.text_size()).into(),
                 HISTORY_CLEAR_ALL_KIND,
                 ButtonSize::Sm,
-                (total > 0).then_some(Message::HistoryClearAllRequested),
+                (total > 0).then_some(Message::History(HistoryMsg::ClearAllRequested)),
             ),
             "Clear All",
             Some(HISTORY_CLEAR_ALL_KEY),
@@ -1289,7 +1290,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
                         text("Clear Search").size(ButtonSize::Md.text_size()).into(),
                         ButtonKind::Secondary,
                         ButtonSize::Md,
-                        Some(Message::HistorySearchChanged(String::new())),
+                        Some(Message::History(HistoryMsg::SearchChanged(String::new()))),
                     )
                     .into(),
                 ),
@@ -1366,7 +1367,7 @@ fn history_status_toast(state: &App, p: &'static Palette) -> Option<Element<'sta
             p.t2,
             "Dismiss",
             None,
-            Some(Message::HistoryStatusDismissed),
+            Some(Message::History(HistoryMsg::StatusDismissed)),
             false,
             ICON_BTN_XS,
             iced::widget::tooltip::Position::Top,
@@ -1496,8 +1497,8 @@ fn history_split<'a>(
         });
         list = list.push(
             mouse_area(row_widget)
-                .on_press(Message::HistorySelect(r.id))
-                .on_double_click(Message::HistoryOpenInEditor(r.id))
+                .on_press(Message::History(HistoryMsg::Select(r.id)))
+                .on_double_click(Message::History(HistoryMsg::OpenInEditor(r.id)))
                 .interaction(iced::mouse::Interaction::Pointer),
         );
     }
@@ -1511,7 +1512,7 @@ fn history_split<'a>(
                     .into(),
                 ButtonKind::Ghost,
                 ButtonSize::Sm,
-                Some(Message::HistoryShowMore),
+                Some(Message::History(HistoryMsg::ShowMore)),
             ))
             .center_x(Length::Fill)
             .padding([SP1, 0.0]),
@@ -1716,13 +1717,13 @@ pub(crate) fn history_selected_panel<'a>(
                         .into(),
                     ButtonKind::DangerSolid,
                     ButtonSize::Sm,
-                    Some(Message::HistoryDeleteConfirmed(id)),
+                    Some(Message::History(HistoryMsg::DeleteConfirmed(id))),
                 ),
                 bar_button(
                     text("Cancel").size(ButtonSize::Sm.text_size()).into(),
                     ButtonKind::Ghost,
                     ButtonSize::Sm,
-                    Some(Message::HistoryDeleteCancelled),
+                    Some(Message::History(HistoryMsg::DeleteCancelled)),
                 ),
             ]
             .spacing(SP1)
@@ -1736,7 +1737,7 @@ pub(crate) fn history_selected_panel<'a>(
         p.t2,
         "Delete Capture",
         Some(HISTORY_DELETE_KEY),
-        (!delete_pending).then_some(Message::HistoryDelete(id)),
+        (!delete_pending).then_some(Message::History(HistoryMsg::Delete(id))),
         delete_pending,
         ICON_BTN,
         Position::Top,
@@ -1748,7 +1749,7 @@ pub(crate) fn history_selected_panel<'a>(
             p.t2,
             HISTORY_REVEAL_LABEL,
             Some(HISTORY_REVEAL_KEY),
-            Some(Message::HistoryReveal(id)),
+            Some(Message::History(HistoryMsg::Reveal(id))),
             false,
             ICON_BTN,
             Position::Top,
@@ -1760,7 +1761,7 @@ pub(crate) fn history_selected_panel<'a>(
             p.t2,
             "Open in Editor",
             Some(RETURN_KEY),
-            Some(Message::HistoryOpenInEditor(id)),
+            Some(Message::History(HistoryMsg::OpenInEditor(id))),
             false,
             ICON_BTN,
             Position::Top,
@@ -1788,7 +1789,7 @@ pub(crate) fn history_selected_panel<'a>(
             .into(),
             ButtonKind::Secondary,
             ButtonSize::Md,
-            has_text.then_some(Message::HistoryCopyText(id)),
+            has_text.then_some(Message::History(HistoryMsg::CopyText(id))),
         ),
         "Copy Text",
         Some(COPY_TEXT_KEY),
@@ -1805,7 +1806,7 @@ pub(crate) fn history_selected_panel<'a>(
             .into(),
             ButtonKind::Primary,
             ButtonSize::Md,
-            Some(Message::HistoryCopyImage(id)),
+            Some(Message::History(HistoryMsg::CopyImage(id))),
         ),
         "Copy Image",
         Some(COPY_IMAGE_KEY),
@@ -1816,7 +1817,7 @@ pub(crate) fn history_selected_panel<'a>(
         p.t2,
         "Pin",
         Some(PIN_KEY),
-        Some(Message::HistoryPin(id)),
+        Some(Message::History(HistoryMsg::Pin(id))),
         false,
         ICON_BTN,
         Position::Top,
@@ -4917,7 +4918,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                         ButtonSize::Md,
                         None,
                         p,
-                        Some(Message::OpenHistoryRequested),
+                        Some(Message::History(HistoryMsg::OpenRequested)),
                     ),
                     welcome_button(
                         Some(crate::icons::action::SETTINGS),

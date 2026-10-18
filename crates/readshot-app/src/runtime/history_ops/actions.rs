@@ -27,7 +27,7 @@ fn served_image(state: &mut App, id: readshot_core::Uuid) -> Option<PathBuf> {
 pub(crate) const WITHHELD_NOTE: &str =
     "This capture’s redaction is still being saved, so its image is hidden. Try again in a moment.";
 
-/// `Message::HistoryReveal`.
+/// `HistoryMsg::Reveal`.
 pub(super) fn on_reveal(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
     state.history_delete_pending = None;
     let Some(path) = served_image(state, id) else {
@@ -44,7 +44,7 @@ pub(super) fn on_reveal(state: &mut App, id: readshot_core::Uuid) -> Task<Messag
     Task::none()
 }
 
-/// `Message::HistoryCopyImage`.
+/// `HistoryMsg::CopyImage`.
 pub(super) fn on_copy_image(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
     state.history_delete_pending = None;
     let Some(path) = served_image(state, id) else {
@@ -57,11 +57,11 @@ pub(super) fn on_copy_image(state: &mut App, id: readshot_core::Uuid) -> Task<Me
                 .await
                 .map_err(|e| e.to_string())
         },
-        Message::HistoryCopyImageDone,
+        |a| Message::History(HistoryMsg::CopyImageDone(a)),
     )
 }
 
-/// `Message::HistoryCopyImageDone`.
+/// `HistoryMsg::CopyImageDone`.
 pub(super) fn on_copy_image_done(state: &mut App, result: Result<(), String>) -> Task<Message> {
     state.history_status = Some(match result {
         Ok(()) => "Copied image to clipboard.".into(),
@@ -73,7 +73,7 @@ pub(super) fn on_copy_image_done(state: &mut App, result: Result<(), String>) ->
     Task::none()
 }
 
-/// `Message::HistoryCopyText`.
+/// `HistoryMsg::CopyText`.
 pub(super) fn on_copy_text(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
     state.history_delete_pending = None;
     match state
@@ -91,7 +91,7 @@ pub(super) fn on_copy_text(state: &mut App, id: readshot_core::Uuid) -> Task<Mes
                         .map_err(|e| e.to_string())?;
                     Ok(text)
                 },
-                Message::HistoryCopyTextDone,
+                |a| Message::History(HistoryMsg::CopyTextDone(a)),
             )
         }
         _ => {
@@ -110,7 +110,7 @@ pub(super) fn on_copy_text(state: &mut App, id: readshot_core::Uuid) -> Task<Mes
     }
 }
 
-/// `Message::HistoryCopyTextDone`.
+/// `HistoryMsg::CopyTextDone`.
 pub(super) fn on_copy_text_done(state: &mut App, result: Result<String, String>) -> Task<Message> {
     state.history_status = Some(match result {
         Ok(text) if text.is_empty() => "No OCR text on this capture yet.".into(),
@@ -126,7 +126,7 @@ pub(super) fn on_copy_text_done(state: &mut App, result: Result<String, String>)
     Task::none()
 }
 
-/// `Message::HistoryCopyVisibleTextRequested`.
+/// `HistoryMsg::CopyVisibleTextRequested`.
 pub(super) fn on_copy_visible_text(state: &mut App) -> Task<Message> {
     let text = visible_history_text(&state.history_records, &state.history_search);
     if text.trim().is_empty() {
@@ -141,11 +141,11 @@ pub(super) fn on_copy_visible_text(state: &mut App) -> Task<Message> {
                 .map_err(|e| e.to_string())?;
             Ok(count)
         },
-        Message::HistoryCopyVisibleTextDone,
+        |a| Message::History(HistoryMsg::CopyVisibleTextDone(a)),
     )
 }
 
-/// `Message::HistoryCopyVisibleTextDone`.
+/// `HistoryMsg::CopyVisibleTextDone`.
 pub(super) fn on_copy_visible_text_done(
     state: &mut App,
     result: Result<usize, String>,
@@ -163,18 +163,18 @@ pub(super) fn on_copy_visible_text_done(
     Task::none()
 }
 
-/// `Message::HistoryPin`.
+/// `HistoryMsg::Pin`.
 pub(super) fn on_pin(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
     state.history_delete_pending = None;
     let Some(path) = served_image(state, id) else {
         return Task::none();
     };
     Task::perform(load_png_async(path), |r| {
-        Message::HistoryPinReady(r.map_err(|e| e.to_string()))
+        Message::History(HistoryMsg::PinReady(r.map_err(|e| e.to_string())))
     })
 }
 
-/// `Message::HistoryPinReady`.
+/// `HistoryMsg::PinReady`.
 pub(super) fn on_pin_ready(
     state: &mut App,
     result: Result<image::RgbaImage, String>,
@@ -202,7 +202,7 @@ pub(super) fn on_pin_ready(
     }
 }
 
-/// `Message::HistoryDelete`: ask before deleting.
+/// `HistoryMsg::Delete`: ask before deleting.
 pub(super) fn on_delete(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
     // Two-stage guard, mirroring "Clear All": the first press
     // arms the prompt (the row's button flips to "Confirm

@@ -2,47 +2,6 @@
 //! pattern macros so the dispatcher stays short while its `match` stays
 //! exhaustive: a variant missing from every list is still a compile error.
 
-/// Every message the History handler
-/// (`history_ops::handle_history_message`) takes.
-macro_rules! history_messages {
-    () => {
-        (Message::HistoryRecordPersisted(..)
-            | Message::OpenHistoryRequested
-            | Message::HistoryWindowReady(..)
-            | Message::HistoryListLoaded(..)
-            | Message::HistoryClosed
-            | Message::HistorySearchChanged(..)
-            | Message::HistoryStatusDismissed
-            | Message::HistorySelect(..)
-            | Message::HistorySelectPrevious
-            | Message::HistorySelectNext
-            | Message::HistoryOpenSelected
-            | Message::HistoryDeleteSelected
-            | Message::HistoryKeyboardShortcut(..)
-            | Message::HistoryCapturedShortcut(..)
-            | Message::HistoryClearAllRequested
-            | Message::HistoryClearAllCancelled
-            | Message::HistoryClearAllConfirmed
-            | Message::HistoryOpenInEditor(..)
-            | Message::HistoryReveal(..)
-            | Message::HistoryCopyImage(..)
-            | Message::HistoryCopyImageDone(..)
-            | Message::HistoryCopyText(..)
-            | Message::HistoryCopyTextDone(..)
-            | Message::HistoryCopyVisibleTextRequested
-            | Message::HistoryCopyVisibleTextDone(..)
-            | Message::HistoryPin(..)
-            | Message::HistoryPinReady(..)
-            | Message::HistoryDelete(..)
-            | Message::HistoryDeleteConfirmed(..)
-            | Message::HistoryDeleteCancelled
-            | Message::HistoryRecordSaved
-            | Message::HistoryRecordSaveFailed { .. }
-            | Message::HistoryReopenedAfterSync { .. }
-            | Message::HistoryShowMore)
-    };
-}
-
 /// Every message the editor handler
 /// (`editor_ops::handle_editor_message`) takes.
 macro_rules! editor_messages {

@@ -574,7 +574,7 @@ fn app_window_shortcuts_open_history_and_settings() {
 
     assert!(matches!(
         app_window_shortcut_message(iced::keyboard::Key::Character("y".into()), modifiers),
-        Some(Message::OpenHistoryRequested)
+        Some(Message::History(HistoryMsg::OpenRequested))
     ));
     assert!(matches!(
         app_window_shortcut_message(iced::keyboard::Key::Character(",".into()), modifiers),

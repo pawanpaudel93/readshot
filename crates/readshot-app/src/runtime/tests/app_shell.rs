@@ -1272,7 +1272,7 @@ fn status_toast_kind_separates_notices_from_successes() {
 fn history_status_dismissed_clears_history_status() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.history_status = Some("Couldn’t read history: denied".into());
-    let _ = update(&mut app, Message::HistoryStatusDismissed);
+    let _ = update(&mut app, Message::History(HistoryMsg::StatusDismissed));
     assert!(app.history_status.is_none());
 }
 

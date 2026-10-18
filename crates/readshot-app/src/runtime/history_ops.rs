@@ -9,27 +9,24 @@ pub(crate) mod actions;
 mod browse;
 mod records;
 
-/// Every history message arm, extracted from `runtime::update` so the
-/// top-level dispatcher stays navigable. Routed from `update`'s
-/// grouped arm; the trailing `unreachable!` only fires if a
-/// non-history message is mis-routed here.
-pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<Message> {
+/// Every [`HistoryMsg`]: `update` hands each `Message::History` here.
+pub(crate) fn handle_history_message(state: &mut App, message: HistoryMsg) -> Task<Message> {
     match message {
-        Message::HistoryRecordSaved => {
+        HistoryMsg::RecordSaved => {
             if state.history_window_id.is_some() {
                 return history_list_task(state.coordinator.clone());
             }
             Task::none()
         }
-        Message::HistoryRecordSaveFailed {
+        HistoryMsg::RecordSaveFailed {
             session,
             record_id,
             error,
         } => records::on_record_save_failed(state, session, record_id, error),
-        Message::HistoryRecordPersisted(result) => records::on_record_persisted(state, result),
+        HistoryMsg::RecordPersisted(result) => records::on_record_persisted(state, result),
 
-        Message::OpenHistoryRequested => browse::on_open_history(state),
-        Message::HistoryWindowReady(id) => {
+        HistoryMsg::OpenRequested => browse::on_open_history(state),
+        HistoryMsg::WindowReady(id) => {
             // Window settings already register at open-time; the
             // ready callback just records the id in case iced hands
             // back a different one.
@@ -37,79 +34,81 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             // Typing right away searches, like Spotlight or Finder.
             Task::batch([window::gain_focus(id), focus_history_search()])
         }
-        Message::HistoryListLoaded(result) => records::on_list_loaded(state, result),
-        Message::HistoryClosed => browse::on_history_closed(state),
-        Message::HistoryStatusDismissed => {
+        HistoryMsg::ListLoaded(result) => records::on_list_loaded(state, result),
+        HistoryMsg::Closed => browse::on_history_closed(state),
+        HistoryMsg::StatusDismissed => {
             state.history_status = None;
             Task::none()
         }
-        Message::HistorySearchChanged(q) => browse::on_search_changed(state, q),
-        Message::HistorySelect(id) => browse::on_select(state, id),
-        Message::HistorySelectPrevious => browse::on_select_previous(state),
-        Message::HistorySelectNext => browse::on_select_next(state),
-        Message::HistoryOpenSelected => match state.history_selected_id {
-            Some(id) => update(state, Message::HistoryOpenInEditor(id)),
+        HistoryMsg::SearchChanged(q) => browse::on_search_changed(state, q),
+        HistoryMsg::Select(id) => browse::on_select(state, id),
+        HistoryMsg::SelectPrevious => browse::on_select_previous(state),
+        HistoryMsg::SelectNext => browse::on_select_next(state),
+        HistoryMsg::OpenSelected => match state.history_selected_id {
+            Some(id) => update(state, Message::History(HistoryMsg::OpenInEditor(id))),
             None => {
                 state.history_status = Some("No history capture selected.".into());
                 Task::none()
             }
         },
-        Message::HistoryDeleteSelected => match state.history_selected_id {
-            Some(id) => update(state, Message::HistoryDelete(id)),
+        HistoryMsg::DeleteSelected => match state.history_selected_id {
+            Some(id) => update(state, Message::History(HistoryMsg::Delete(id))),
             None => {
                 state.history_status = Some("No history capture selected.".into());
                 Task::none()
             }
         },
-        Message::HistoryCapturedShortcut(window_id, action) => {
+        HistoryMsg::CapturedShortcut(window_id, action) => {
             if state.history_search.is_empty() {
-                update(state, Message::HistoryKeyboardShortcut(window_id, action))
+                update(
+                    state,
+                    Message::History(HistoryMsg::KeyboardShortcut(window_id, action)),
+                )
             } else {
                 Task::none()
             }
         }
-        Message::HistoryKeyboardShortcut(window_id, action) => {
+        HistoryMsg::KeyboardShortcut(window_id, action) => {
             browse::on_keyboard_shortcut(state, window_id, action)
         }
-        Message::HistoryClearAllRequested => browse::on_clear_all_requested(state),
-        Message::HistoryClearAllCancelled => {
+        HistoryMsg::ClearAllRequested => browse::on_clear_all_requested(state),
+        HistoryMsg::ClearAllCancelled => {
             state.history_clear_all_pending = false;
             Task::none()
         }
-        Message::HistoryClearAllConfirmed => browse::on_clear_all_confirmed(state),
-        Message::HistoryOpenInEditor(id) => {
+        HistoryMsg::ClearAllConfirmed => browse::on_clear_all_confirmed(state),
+        HistoryMsg::OpenInEditor(id) => {
             state.history_delete_pending = None;
             open_history_record(state, id)
         }
-        Message::HistoryReopenedAfterSync {
+        HistoryMsg::ReopenedAfterSync {
             record_id,
             result,
             unsaved,
         } => records::on_reopened_after_sync(state, record_id, result, unsaved),
-        Message::HistoryReveal(id) => actions::on_reveal(state, id),
-        Message::HistoryCopyImage(id) => actions::on_copy_image(state, id),
-        Message::HistoryCopyImageDone(result) => actions::on_copy_image_done(state, result),
-        Message::HistoryCopyText(id) => actions::on_copy_text(state, id),
-        Message::HistoryCopyTextDone(result) => actions::on_copy_text_done(state, result),
-        Message::HistoryCopyVisibleTextRequested => actions::on_copy_visible_text(state),
-        Message::HistoryCopyVisibleTextDone(result) => {
+        HistoryMsg::Reveal(id) => actions::on_reveal(state, id),
+        HistoryMsg::CopyImage(id) => actions::on_copy_image(state, id),
+        HistoryMsg::CopyImageDone(result) => actions::on_copy_image_done(state, result),
+        HistoryMsg::CopyText(id) => actions::on_copy_text(state, id),
+        HistoryMsg::CopyTextDone(result) => actions::on_copy_text_done(state, result),
+        HistoryMsg::CopyVisibleTextRequested => actions::on_copy_visible_text(state),
+        HistoryMsg::CopyVisibleTextDone(result) => {
             actions::on_copy_visible_text_done(state, result)
         }
-        Message::HistoryPin(id) => actions::on_pin(state, id),
-        Message::HistoryPinReady(result) => actions::on_pin_ready(state, result),
-        Message::HistoryDelete(id) => actions::on_delete(state, id),
-        Message::HistoryDeleteConfirmed(id) => delete_history_record(state, id),
-        Message::HistoryDeleteCancelled => {
+        HistoryMsg::Pin(id) => actions::on_pin(state, id),
+        HistoryMsg::PinReady(result) => actions::on_pin_ready(state, result),
+        HistoryMsg::Delete(id) => actions::on_delete(state, id),
+        HistoryMsg::DeleteConfirmed(id) => delete_history_record(state, id),
+        HistoryMsg::DeleteCancelled => {
             state.history_delete_pending = None;
             Task::none()
         }
-        Message::HistoryShowMore => {
+        HistoryMsg::ShowMore => {
             state.history_page_limit = state
                 .history_page_limit
                 .saturating_add(crate::app::HISTORY_PAGE_SIZE);
             Task::none()
         }
-        other => unreachable!("non-history message routed to the history handler: {other:?}"),
     }
 }
 
@@ -325,10 +324,12 @@ fn reopen_after_sync(state: &mut App, id: readshot_core::Uuid) -> Task<Message> 
                 .await
                 .unwrap_or_else(|e| (Err(e.to_string()), None))
         },
-        move |(result, unsaved)| Message::HistoryReopenedAfterSync {
-            record_id: id,
-            result,
-            unsaved,
+        move |(result, unsaved)| {
+            Message::History(HistoryMsg::ReopenedAfterSync {
+                record_id: id,
+                result,
+                unsaved,
+            })
         },
     )
 }

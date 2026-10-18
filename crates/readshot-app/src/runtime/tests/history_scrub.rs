@@ -702,7 +702,10 @@ fn a_cropped_record_of_an_older_rule_drops_its_text_on_load_and_stores_none() {
     );
     // Whether that era's stored redactions are complete is unknown: no
     // text is recovered from the stored image (fail closed).
-    let _ = update(&mut app, Message::HistoryListLoaded(Ok(listed)));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::ListLoaded(Ok(listed))),
+    );
     app.coordinator.flush_history_updates();
     assert_eq!(stored_record(&store, record.id).ocr_text, None);
 }
@@ -740,7 +743,10 @@ async fn a_new_redaction_over_unknown_baked_in_redactions_never_recovers_text() 
     }
     // Nor does loading History recover anything.
     let listed = app.coordinator.history_list().unwrap();
-    let _ = update(&mut app, Message::HistoryListLoaded(Ok(listed)));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::ListLoaded(Ok(listed))),
+    );
     app.coordinator.flush_history_updates();
     let text = stored_record(&store, record.id).ocr_text;
     assert_eq!(text, None, "fail closed");

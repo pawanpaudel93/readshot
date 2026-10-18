@@ -5,7 +5,7 @@
 
 use super::*;
 
-/// `Message::HistoryRecordSaveFailed`.
+/// `HistoryMsg::RecordSaveFailed`.
 pub(super) fn on_record_save_failed(
     state: &mut App,
     session: Option<u64>,
@@ -39,7 +39,7 @@ pub(super) fn on_record_save_failed(
     Task::none()
 }
 
-/// `Message::HistoryRecordPersisted`.
+/// `HistoryMsg::RecordPersisted`.
 pub(super) fn on_record_persisted(state: &mut App, result: Result<bool, String>) -> Task<Message> {
     match result {
         Ok(true) => {
@@ -62,7 +62,7 @@ pub(super) fn on_record_persisted(state: &mut App, result: Result<bool, String>)
     Task::none()
 }
 
-/// `Message::HistoryListLoaded`.
+/// `HistoryMsg::ListLoaded`.
 pub(super) fn on_list_loaded(
     state: &mut App,
     result: Result<Vec<readshot_core::CaptureRecord>, String>,
@@ -92,7 +92,7 @@ pub(super) fn on_list_loaded(
     Task::none()
 }
 
-/// `Message::HistoryReopenedAfterSync`: the record's writes landed; open it.
+/// `HistoryMsg::ReopenedAfterSync`: the record's writes landed; open it.
 pub(super) fn on_reopened_after_sync(
     state: &mut App,
     record_id: readshot_core::Uuid,

@@ -294,7 +294,7 @@ fn history_list_load_selects_first_visible_capture() {
 
     let _ = update(
         &mut app,
-        Message::HistoryListLoaded(Ok(vec![first.clone(), second])),
+        Message::History(HistoryMsg::ListLoaded(Ok(vec![first.clone(), second]))),
     );
 
     assert_eq!(app.history_selected_id, Some(first.id));
@@ -311,7 +311,10 @@ fn history_search_keeps_selection_inside_filtered_results() {
     app.history_records = vec![first, second];
     app.history_selected_id = app.history_records.first().map(|r| r.id);
 
-    let _ = update(&mut app, Message::HistorySearchChanged("invoice".into()));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::SearchChanged("invoice".into())),
+    );
 
     assert_eq!(app.history_selected_id, Some(second_id));
 }
@@ -325,13 +328,13 @@ fn history_keyboard_selection_moves_through_visible_rows() {
     app.history_records = vec![first, second];
     app.history_selected_id = app.history_records.first().map(|r| r.id);
 
-    let _ = update(&mut app, Message::HistorySelectNext);
+    let _ = update(&mut app, Message::History(HistoryMsg::SelectNext));
     assert_eq!(app.history_selected_id, Some(second_id));
 
-    let _ = update(&mut app, Message::HistorySelectNext);
+    let _ = update(&mut app, Message::History(HistoryMsg::SelectNext));
     assert_eq!(app.history_selected_id, Some(second_id));
 
-    let _ = update(&mut app, Message::HistorySelectPrevious);
+    let _ = update(&mut app, Message::History(HistoryMsg::SelectPrevious));
     assert_eq!(
         app.history_selected_id,
         app.history_records.first().map(|r| r.id)
@@ -346,7 +349,10 @@ fn history_copy_shortcut_requires_selected_capture() {
 
     let _ = update(
         &mut app,
-        Message::HistoryKeyboardShortcut(id, HistoryKeyboardAction::CopyText),
+        Message::History(HistoryMsg::KeyboardShortcut(
+            id,
+            HistoryKeyboardAction::CopyText,
+        )),
     );
 
     assert_eq!(
@@ -364,7 +370,10 @@ fn history_focus_search_shortcut_leaves_state_alone() {
 
     let _ = update(
         &mut app,
-        Message::HistoryKeyboardShortcut(id, HistoryKeyboardAction::FocusSearch),
+        Message::History(HistoryMsg::KeyboardShortcut(
+            id,
+            HistoryKeyboardAction::FocusSearch,
+        )),
     );
 
     assert_eq!(app.history_status, None);
@@ -375,14 +384,20 @@ fn history_focus_search_shortcut_leaves_state_alone() {
 fn history_copy_completion_updates_history_status() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
 
-    let _ = update(&mut app, Message::HistoryCopyImageDone(Ok(())));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::CopyImageDone(Ok(()))),
+    );
 
     assert_eq!(
         app.history_status.as_deref(),
         Some("Copied image to clipboard.")
     );
 
-    let _ = update(&mut app, Message::HistoryCopyTextDone(Ok("hello".into())));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::CopyTextDone(Ok("hello".into()))),
+    );
 
     assert_eq!(
         app.history_status.as_deref(),
@@ -460,16 +475,16 @@ fn history_clear_all_removes_records_and_resets_browser_state() {
     app.history_status = Some("stale".into());
 
     // First click arms the destructive prompt; records stay intact.
-    let _ = update(&mut app, Message::HistoryClearAllRequested);
+    let _ = update(&mut app, Message::History(HistoryMsg::ClearAllRequested));
     assert!(app.history_clear_all_pending);
     assert_eq!(app.history_records.len(), 2);
     // Cancel exits the armed state without touching anything.
-    let _ = update(&mut app, Message::HistoryClearAllCancelled);
+    let _ = update(&mut app, Message::History(HistoryMsg::ClearAllCancelled));
     assert!(!app.history_clear_all_pending);
     assert_eq!(app.history_records.len(), 2);
     // Re-arm and confirm; now the records actually go.
-    let _ = update(&mut app, Message::HistoryClearAllRequested);
-    let _ = update(&mut app, Message::HistoryClearAllConfirmed);
+    let _ = update(&mut app, Message::History(HistoryMsg::ClearAllRequested));
+    let _ = update(&mut app, Message::History(HistoryMsg::ClearAllConfirmed));
 
     assert!(!app.history_clear_all_pending);
     assert!(store.list().unwrap().is_empty());
@@ -486,12 +501,15 @@ fn single_delete_arms_before_removing_anything() {
     let (_dir, store, mut app, newer, _older) = app_with_two_saved_records();
 
     // First press only arms the prompt; nothing is removed.
-    let _ = update(&mut app, Message::HistoryDelete(newer.id));
+    let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
     assert_eq!(app.history_delete_pending, Some(newer.id));
     assert_eq!(store.list().unwrap().len(), 2);
 
     // Explicit confirm removes exactly the armed record.
-    let _ = update(&mut app, Message::HistoryDeleteConfirmed(newer.id));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::DeleteConfirmed(newer.id)),
+    );
     assert_eq!(app.history_delete_pending, None);
     let remaining = store.list().unwrap();
     assert_eq!(remaining.len(), 1);
@@ -502,8 +520,8 @@ fn single_delete_arms_before_removing_anything() {
 fn single_delete_second_press_confirms() {
     // Delete-key path: a repeat press for the same id confirms.
     let (_dir, store, mut app, newer, _older) = app_with_two_saved_records();
-    let _ = update(&mut app, Message::HistoryDelete(newer.id));
-    let _ = update(&mut app, Message::HistoryDelete(newer.id));
+    let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
+    let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
     assert_eq!(app.history_delete_pending, None);
     assert_eq!(store.list().unwrap().len(), 1);
 }
@@ -513,18 +531,21 @@ fn single_delete_cancelled_by_other_actions() {
     let (_dir, store, mut app, newer, older) = app_with_two_saved_records();
 
     // Selecting another row cancels the armed delete.
-    let _ = update(&mut app, Message::HistoryDelete(newer.id));
-    let _ = update(&mut app, Message::HistorySelect(older.id));
+    let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
+    let _ = update(&mut app, Message::History(HistoryMsg::Select(older.id)));
     assert_eq!(app.history_delete_pending, None);
 
     // A search change (Escape maps here too) cancels it.
-    let _ = update(&mut app, Message::HistoryDelete(newer.id));
-    let _ = update(&mut app, Message::HistorySearchChanged("x".into()));
+    let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::SearchChanged("x".into())),
+    );
     assert_eq!(app.history_delete_pending, None);
 
     // Explicit cancel clears it as well.
-    let _ = update(&mut app, Message::HistoryDelete(newer.id));
-    let _ = update(&mut app, Message::HistoryDeleteCancelled);
+    let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
+    let _ = update(&mut app, Message::History(HistoryMsg::DeleteCancelled));
     assert_eq!(app.history_delete_pending, None);
 
     // Nothing was ever removed while only arming/cancelling.
@@ -539,11 +560,17 @@ fn history_record_saved_refreshes_only_when_browser_open() {
 
     // Closed browser: no reload work is scheduled.
     app.history_window_id = None;
-    assert_eq!(update(&mut app, Message::HistoryRecordSaved).units(), 0);
+    assert_eq!(
+        update(&mut app, Message::History(HistoryMsg::RecordSaved)).units(),
+        0
+    );
 
     // Open browser: the fresh (text-less) row triggers a reload.
     app.history_window_id = Some(iced::window::Id::unique());
-    assert_eq!(update(&mut app, Message::HistoryRecordSaved).units(), 1);
+    assert_eq!(
+        update(&mut app, Message::History(HistoryMsg::RecordSaved)).units(),
+        1
+    );
 }
 
 #[test]
@@ -553,13 +580,21 @@ fn history_persisted_refreshes_on_text_but_not_on_ocr_failure() {
 
     // OCR landed text → reload to surface it.
     assert_eq!(
-        update(&mut app, Message::HistoryRecordPersisted(Ok(true))).units(),
+        update(
+            &mut app,
+            Message::History(HistoryMsg::RecordPersisted(Ok(true)))
+        )
+        .units(),
         1
     );
     // OCR failed/empty → row already shown via HistoryRecordSaved,
     // text won't change, so no extra reload.
     assert_eq!(
-        update(&mut app, Message::HistoryRecordPersisted(Ok(false))).units(),
+        update(
+            &mut app,
+            Message::History(HistoryMsg::RecordPersisted(Ok(false)))
+        )
+        .units(),
         0
     );
 }
@@ -571,12 +606,15 @@ fn history_show_more_grows_page_and_search_resets_it() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     assert_eq!(app.history_page_limit, crate::app::HISTORY_PAGE_SIZE);
 
-    let _ = update(&mut app, Message::HistoryShowMore);
+    let _ = update(&mut app, Message::History(HistoryMsg::ShowMore));
     assert_eq!(app.history_page_limit, crate::app::HISTORY_PAGE_SIZE * 2);
 
     // A search change resets paging to the first page so the new
     // result set starts from the top.
-    let _ = update(&mut app, Message::HistorySearchChanged("q".into()));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::SearchChanged("q".into())),
+    );
     assert_eq!(app.history_page_limit, crate::app::HISTORY_PAGE_SIZE);
 }
 
@@ -881,7 +919,7 @@ fn a_redacted_capture_says_its_text_is_hidden_not_pending() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let id = hidden.id;
     app.history_records = vec![hidden, plain.clone()];
-    let _ = update(&mut app, Message::HistoryCopyText(id));
+    let _ = update(&mut app, Message::History(HistoryMsg::CopyText(id)));
     assert_eq!(
         app.history_status.as_deref(),
         Some(history_ops::HIDDEN_TEXT_NOTE)
@@ -891,7 +929,7 @@ fn a_redacted_capture_says_its_text_is_hidden_not_pending() {
         status_toast_kind(history_ops::HIDDEN_TEXT_NOTE),
         ToastKind::Info
     );
-    let _ = update(&mut app, Message::HistoryCopyText(plain.id));
+    let _ = update(&mut app, Message::History(HistoryMsg::CopyText(plain.id)));
     assert_eq!(
         app.history_status.as_deref(),
         Some("No OCR text on this capture yet.")

@@ -58,7 +58,7 @@ pub(super) fn on_hotkey_tick(state: &mut App) -> Task<Message> {
         if state.welcome.should_show() {
             return show_or_focus_welcome(state);
         }
-        return update(state, Message::OpenHistoryRequested);
+        return update(state, Message::History(HistoryMsg::OpenRequested));
     }
     if capture {
         if state.welcome.should_show() {
@@ -162,7 +162,7 @@ pub(super) fn on_tray_action(state: &mut App, action: crate::tray::TrayAction) -
             if state.welcome.should_show() {
                 show_or_focus_welcome(state)
             } else {
-                update(state, Message::OpenHistoryRequested)
+                update(state, Message::History(HistoryMsg::OpenRequested))
             }
         }
         crate::tray::TrayAction::Settings => {

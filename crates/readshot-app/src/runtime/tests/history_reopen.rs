@@ -187,11 +187,11 @@ fn start_load(app: &App, id: readshot_core::Uuid) -> std::sync::mpsc::Receiver<M
     let root = app.history_root.clone();
     std::thread::spawn(move || {
         let (result, unsaved) = super::super::history_ops::load_after_writes(&coord, root, id);
-        let _ = tx.send(Message::HistoryReopenedAfterSync {
+        let _ = tx.send(Message::History(HistoryMsg::ReopenedAfterSync {
             record_id: id,
             result,
             unsaved,
-        });
+        }));
     });
     rx
 }
@@ -220,7 +220,10 @@ fn opening_a_closed_editors_record_waits_for_its_writes() {
     let _ = update(&mut app, Message::Window(WindowMsg::Closed(a)));
     assert!(app.editor.is_none() && app.retiring_editors.is_empty());
 
-    let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::OpenInEditor(record.id)),
+    );
     assert_eq!(
         app.awaiting_reopen,
         Some(record.id),
@@ -256,11 +259,17 @@ fn a_second_open_click_joins_the_waiting_open() {
     edit_record(&mut app, &record);
     store.hold();
     let _ = update(&mut app, Message::EditorRotate { clockwise: true });
-    let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::OpenInEditor(record.id)),
+    );
     assert_eq!(app.awaiting_reopen, Some(record.id));
     let rx = start_load(&app, record.id);
 
-    let second = update(&mut app, Message::HistoryOpenInEditor(record.id));
+    let second = update(
+        &mut app,
+        Message::History(HistoryMsg::OpenInEditor(record.id)),
+    );
     assert_eq!(
         app.awaiting_reopen,
         Some(record.id),
@@ -291,7 +300,10 @@ fn a_new_capture_during_the_wait_cancels_the_open() {
     edit_record(&mut app, &record);
     store.hold();
     let _ = update(&mut app, Message::EditorRotate { clockwise: true });
-    let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::OpenInEditor(record.id)),
+    );
     assert_eq!(app.awaiting_reopen, Some(record.id));
     let rx = start_load(&app, record.id);
 
@@ -486,12 +498,12 @@ impl Interleaving {
             }
             6 => {
                 self.log.push("open");
-                self.send(Message::HistoryOpenInEditor(self.id));
+                self.send(Message::History(HistoryMsg::OpenInEditor(self.id)));
             }
             7 => {
                 self.log.push("second-open");
-                self.send(Message::HistoryOpenInEditor(self.id));
-                self.send(Message::HistoryOpenInEditor(self.id));
+                self.send(Message::History(HistoryMsg::OpenInEditor(self.id)));
+                self.send(Message::History(HistoryMsg::OpenInEditor(self.id)));
             }
             8 => {
                 self.log.push("write-failure");
@@ -615,7 +627,7 @@ fn reopens_under_random_slow_and_failing_writes_keep_editor_and_history_in_step(
     for seed in 0..300u64 {
         let mut rng = Rng::new(seed);
         run.next_run(seed);
-        run.send(Message::HistoryOpenInEditor(run.id));
+        run.send(Message::History(HistoryMsg::OpenInEditor(run.id)));
         for _ in 0..24 {
             run.step(&mut rng);
         }
@@ -624,7 +636,7 @@ fn reopens_under_random_slow_and_failing_writes_keep_editor_and_history_in_step(
         run.check_withheld();
         run.check_editor_matches_store();
         run.log.push("final-open");
-        run.send(Message::HistoryOpenInEditor(run.id));
+        run.send(Message::History(HistoryMsg::OpenInEditor(run.id)));
         run.settle();
         run.check_privacy();
         run.check_final_open();
@@ -648,7 +660,10 @@ fn an_open_during_a_failed_redaction_opens_it_redacted_with_its_image() {
         radius: 4.0,
     });
     super::super::editor_ops::sync_editor_history(a, &coord);
-    let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::OpenInEditor(record.id)),
+    );
     let msg = start_load(&app, record.id)
         .recv_timeout(std::time::Duration::from_secs(20))
         .unwrap();
@@ -683,7 +698,10 @@ fn an_undone_redaction_whose_writes_failed_still_opens_with_its_image() {
         &mut app,
         Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo),
     );
-    let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::OpenInEditor(record.id)),
+    );
     let msg = start_load(&app, record.id)
         .recv_timeout(std::time::Duration::from_secs(20))
         .unwrap();
@@ -709,9 +727,9 @@ fn a_withheld_record_hands_out_no_image() {
     let (_dir, _store, mut app, record) = history_app();
     app.history_records[0].scrub_pending = true;
     for message in [
-        Message::HistoryCopyImage(record.id),
-        Message::HistoryPin(record.id),
-        Message::HistoryReveal(record.id),
+        Message::History(HistoryMsg::CopyImage(record.id)),
+        Message::History(HistoryMsg::Pin(record.id)),
+        Message::History(HistoryMsg::Reveal(record.id)),
     ] {
         app.history_status = None;
         let task = update(&mut app, message);
