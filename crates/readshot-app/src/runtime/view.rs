@@ -4953,32 +4953,52 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WelcomeTile {
-    /// Dark rounded app tile with the scan icon (permission states).
+    /// The Readshot app icon (permission states).
     App,
     /// Green circle with a check (granted).
     Done,
 }
 
+/// The Readshot brand tile as an image handle, built once so the image
+/// is uploaded once rather than on every redraw.
+fn brand_tile_handle() -> iced::widget::image::Handle {
+    static HANDLE: std::sync::OnceLock<iced::widget::image::Handle> = std::sync::OnceLock::new();
+    HANDLE
+        .get_or_init(|| {
+            iced::widget::image::Handle::from_bytes(super::window_settings::BRAND_TILE_PNG)
+        })
+        .clone()
+}
+
 /// Tile plus the title (and, for the permission states, the tagline).
 fn welcome_brand(p: &'static Palette, tile: WelcomeTile) -> Element<'static, Message> {
     use crate::icons::AppIcon;
-    let (glyph, color, radius, fill) = match tile {
-        WelcomeTile::App => (AppIcon::ScanText, p.acc_text, 16.0, p.tile_bg),
-        WelcomeTile::Done => (AppIcon::CheckCircle, p.ok, 32.0, Color { a: 0.14, ..p.ok }),
+    const TILE: f32 = 64.0;
+    let tile_el: Element<'static, Message> = match tile {
+        // The real app icon (teal tile, brackets, lens), rendered from
+        // packaging/macos/icon.svg at 128 px so it is sharp at 2x.
+        WelcomeTile::App => iced::widget::image(brand_tile_handle())
+            .width(Length::Fixed(TILE))
+            .height(Length::Fixed(TILE))
+            .into(),
+        WelcomeTile::Done => {
+            let fill = Color { a: 0.14, ..p.ok };
+            container(crate::icons::icon(AppIcon::CheckCircle, p.ok, 32.0))
+                .width(Length::Fixed(TILE))
+                .height(Length::Fixed(TILE))
+                .center_x(Length::Fixed(TILE))
+                .center_y(Length::Fixed(TILE))
+                .style(move |_| container::Style {
+                    background: Some(fill.into()),
+                    border: iced::Border {
+                        radius: (TILE / 2.0).into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .into()
+        }
     };
-    let tile_el = container(crate::icons::icon(glyph, color, 30.0))
-        .width(Length::Fixed(64.0))
-        .height(Length::Fixed(64.0))
-        .center_x(Length::Fixed(64.0))
-        .center_y(Length::Fixed(64.0))
-        .style(move |_| container::Style {
-            background: Some(fill.into()),
-            border: iced::Border {
-                radius: radius.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        });
     let (title, tagline) = match tile {
         WelcomeTile::App => ("Readshot", Some("Capture, search, find again.")),
         WelcomeTile::Done => ("You’re all set.", None),

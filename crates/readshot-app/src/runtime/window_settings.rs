@@ -11,6 +11,59 @@ pub(crate) fn mono_font() -> iced::Font {
     iced::Font::with_name(readshot_core::render::FONT_FAMILY)
 }
 
+/// The app id: the macOS bundle id, the Linux desktop entry's basename
+/// (`np.com.pawanpaudel.readshot.desktop`) and `StartupWMClass`, and the
+/// hicolor icon name. Every window carries it on Linux (Wayland `app_id`,
+/// X11 `WM_CLASS`) so docks and taskbars group Readshot's windows under its
+/// desktop entry and show its icon instead of a generic one.
+// Read only by the Linux window settings (and the tests elsewhere).
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+pub(crate) const APP_ID: &str = "np.com.pawanpaudel.readshot";
+
+/// The Readshot brand tile, 128 px: `packaging/macos/icon.svg` cropped to
+/// its tile by `packaging/render-icons.sh`. The Welcome window shows it at
+/// 64 pt (sharp at 2x), and it is every window's icon.
+pub(crate) const BRAND_TILE_PNG: &[u8] = include_bytes!("../../assets/readshot-tile-128.png");
+
+/// The Readshot icon for a window's title bar, taskbar button and Alt-Tab
+/// entry (Windows, Linux). macOS has no per-window icons (the bundle icon
+/// governs the Dock and app switcher), so winit ignores it there and
+/// setting it is harmless. Decoded once.
+pub(crate) fn app_window_icon() -> Option<window::Icon> {
+    static ICON: std::sync::OnceLock<Option<window::Icon>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| {
+        let decoded = image::load_from_memory_with_format(BRAND_TILE_PNG, image::ImageFormat::Png)
+            .map_err(|e| e.to_string())
+            .and_then(|img| {
+                let rgba = img.into_rgba8();
+                let (w, h) = rgba.dimensions();
+                window::icon::from_rgba(rgba.into_raw(), w, h).map_err(|e| e.to_string())
+            });
+        match decoded {
+            Ok(icon) => Some(icon),
+            Err(e) => {
+                tracing::warn!(
+                    target: readshot_core::log::cat::APP,
+                    "could not decode the window icon: {e}"
+                );
+                None
+            }
+        }
+    })
+    .clone()
+}
+
+/// `settings` with what every Readshot window shares: the app icon and,
+/// on Linux, the app id. Every `*_window_settings` constructor ends here.
+pub(crate) fn with_app_identity(mut settings: window::Settings) -> window::Settings {
+    settings.icon = app_window_icon();
+    #[cfg(target_os = "linux")]
+    {
+        settings.platform_specific.application_id = APP_ID.to_string();
+    }
+    settings
+}
+
 /// Height of a view's own title row when the window uses
 /// [`macos_fullsize_titlebar`].
 pub(crate) const TITLEBAR_HEIGHT: f32 = 44.0;
@@ -81,7 +134,7 @@ pub(crate) fn welcome_window_settings() -> window::Settings {
     const W: f32 = 520.0;
     const H: f32 = 380.0;
     let size = iced::Size::new(W, H);
-    window::Settings {
+    with_app_identity(window::Settings {
         size,
         min_size: Some(iced::Size::new(420.0, 320.0)),
         position: centered_window_position_on_active_display(size)
@@ -91,7 +144,7 @@ pub(crate) fn welcome_window_settings() -> window::Settings {
         transparent: false,
         visible: true,
         ..Default::default()
-    }
+    })
 }
 
 /// Window settings for the annotation / actions editor. Default size
@@ -107,7 +160,7 @@ pub(crate) fn editor_window_settings(
     let position = centered_window_position(display_bounds, size)
         .or_else(|| centered_window_position_on_active_display(size))
         .unwrap_or(window::Position::Centered);
-    window::Settings {
+    with_app_identity(window::Settings {
         size,
         min_size: Some(iced::Size::new(720.0, 480.0)),
         position,
@@ -122,7 +175,7 @@ pub(crate) fn editor_window_settings(
         exit_on_close_request: false,
         platform_specific: macos_fullsize_titlebar(),
         ..Default::default()
-    }
+    })
 }
 
 pub(crate) fn open_editor_window_replacing(
@@ -168,7 +221,7 @@ pub(crate) fn history_window_settings() -> window::Settings {
     const W: f32 = 900.0;
     const H: f32 = 700.0;
     let size = iced::Size::new(W, H);
-    window::Settings {
+    with_app_identity(window::Settings {
         size,
         min_size: Some(iced::Size::new(540.0, 400.0)),
         position: centered_window_position_on_active_display(size)
@@ -179,7 +232,7 @@ pub(crate) fn history_window_settings() -> window::Settings {
         visible: true,
         platform_specific: macos_fullsize_titlebar(),
         ..Default::default()
-    }
+    })
 }
 
 /// Window settings for the preferences window.
@@ -187,7 +240,7 @@ pub(crate) fn settings_window_settings() -> window::Settings {
     const W: f32 = 720.0;
     const H: f32 = 640.0;
     let size = iced::Size::new(W, H);
-    window::Settings {
+    with_app_identity(window::Settings {
         size,
         min_size: Some(iced::Size::new(520.0, 480.0)),
         position: centered_window_position_on_active_display(size)
@@ -198,14 +251,14 @@ pub(crate) fn settings_window_settings() -> window::Settings {
         visible: true,
         platform_specific: macos_fullsize_titlebar(),
         ..Default::default()
-    }
+    })
 }
 
 pub(crate) fn cli_tools_window_settings() -> window::Settings {
     const W: f32 = 760.0;
     const H: f32 = 620.0;
     let size = iced::Size::new(W, H);
-    window::Settings {
+    with_app_identity(window::Settings {
         size,
         min_size: Some(iced::Size::new(560.0, 420.0)),
         position: centered_window_position_on_active_display(size)
@@ -216,7 +269,7 @@ pub(crate) fn cli_tools_window_settings() -> window::Settings {
         visible: true,
         platform_specific: macos_fullsize_titlebar(),
         ..Default::default()
-    }
+    })
 }
 
 /// Window settings for one overlay window covering a single display.
@@ -249,7 +302,7 @@ pub(crate) fn pin_window_settings(
     let position = centered_window_position(display_bounds, size)
         .or_else(|| centered_window_position_on_active_display(size))
         .unwrap_or(window::Position::Default);
-    window::Settings {
+    with_app_identity(window::Settings {
         size,
         min_size: Some(iced::Size::new(120.0, 80.0)),
         position,
@@ -262,7 +315,7 @@ pub(crate) fn pin_window_settings(
         closeable: false,
         minimizable: false,
         ..Default::default()
-    }
+    })
 }
 
 pub(crate) fn centered_window_position(
@@ -379,7 +432,7 @@ pub(crate) fn scroll_hud_window_settings(
     position: iced::Point,
     size: iced::Size,
 ) -> window::Settings {
-    window::Settings {
+    with_app_identity(window::Settings {
         size,
         min_size: Some(size),
         position: window::Position::Specific(position),
@@ -392,7 +445,7 @@ pub(crate) fn scroll_hud_window_settings(
         closeable: false,
         minimizable: false,
         ..Default::default()
-    }
+    })
 }
 
 /// Window settings for the transparent click-through region indicator
@@ -407,7 +460,7 @@ pub(crate) fn scroll_region_window_settings(
     display_bounds: (f32, f32, f32, f32),
 ) -> window::Settings {
     let (ox, oy, w, h) = display_bounds;
-    window::Settings {
+    with_app_identity(window::Settings {
         size: iced::Size::new(w, h),
         min_size: None,
         position: window::Position::Specific(iced::Point::new(ox, oy)),
@@ -420,14 +473,14 @@ pub(crate) fn scroll_region_window_settings(
         closeable: false,
         minimizable: false,
         ..Default::default()
-    }
+    })
 }
 
 pub(crate) fn overlay_window_settings_for(
     display: &readshot_capture::DisplayInfo,
 ) -> window::Settings {
     let bounds = display.bounds;
-    window::Settings {
+    with_app_identity(window::Settings {
         size: iced::Size::new(bounds.width(), bounds.height()),
         min_size: None,
         position: window::Position::Specific(iced::Point::new(bounds.x(), bounds.y())),
@@ -440,7 +493,7 @@ pub(crate) fn overlay_window_settings_for(
         closeable: false,
         minimizable: false,
         ..Default::default()
-    }
+    })
 }
 
 pub(crate) fn configure_overlay_window_after_open(id: window::Id) -> Task<Message> {
@@ -580,5 +633,75 @@ mod scroll_window_tests {
         let (pos, size) = scroll_window_frame(rect, Some(d));
         assert!(on_display(pos, size, d), "{pos:?} {size:?}");
         assert_eq!(pos, iced::Point::new(1440.0 - 360.0 - 16.0, 16.0));
+    }
+}
+
+#[cfg(test)]
+mod app_identity_tests {
+    use super::*;
+
+    /// Every window Readshot opens, through its settings constructor.
+    fn every_window() -> Vec<(&'static str, window::Settings)> {
+        let display = readshot_capture::DisplayInfo {
+            id: "1".into(),
+            bounds: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 1440.0, 900.0).unwrap(),
+            scale: 2.0,
+            name: "Built-in".into(),
+            is_primary: true,
+        };
+        vec![
+            ("welcome", welcome_window_settings()),
+            ("editor", editor_window_settings(None)),
+            ("history", history_window_settings()),
+            ("settings", settings_window_settings()),
+            ("cli tools", cli_tools_window_settings()),
+            ("pin", pin_window_settings((400, 300), None)),
+            (
+                "scroll hud",
+                scroll_hud_window_settings(iced::Point::ORIGIN, iced::Size::new(360.0, 540.0)),
+            ),
+            (
+                "scroll region",
+                scroll_region_window_settings((0.0, 0.0, 1440.0, 900.0)),
+            ),
+            ("overlay", overlay_window_settings_for(&display)),
+        ]
+    }
+
+    #[test]
+    fn every_window_carries_the_readshot_icon() {
+        for (name, settings) in every_window() {
+            let icon = settings
+                .icon
+                .unwrap_or_else(|| panic!("{name} has no icon"));
+            let (rgba, size) = icon.into_raw();
+            assert_eq!((size.width, size.height), (128, 128), "{name}");
+            // The brand tile, not a blank or placeholder: its centre is the
+            // lens, its edge midpoints are the teal tile.
+            let px = |x: u32, y: u32| {
+                let i = ((y * 128 + x) * 4) as usize;
+                [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
+            };
+            assert_eq!(px(64, 8)[3], 255, "{name}: tile edge is opaque");
+            let edge = px(64, 8);
+            assert!(edge[2] > edge[0] && edge[1] > edge[0], "{name}: teal tile");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn every_window_carries_the_app_id() {
+        for (name, settings) in every_window() {
+            assert_eq!(settings.platform_specific.application_id, APP_ID, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_app_id_matches_the_bundle_and_desktop_entry() {
+        let plist = include_str!("../../../../packaging/macos/Info.plist");
+        assert!(plist.contains(&format!("<string>{APP_ID}</string>")));
+        let desktop = include_str!("../../../../packaging/linux/readshot.desktop");
+        assert!(desktop.contains(&format!("\nIcon={APP_ID}\n")));
+        assert!(desktop.contains(&format!("\nStartupWMClass={APP_ID}\n")));
     }
 }

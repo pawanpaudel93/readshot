@@ -1,6 +1,7 @@
 //! System tray integration.
 //!
-//! Builds a small icon at runtime, registers it as a tray icon with the
+//! Builds the tray icon (a runtime-drawn template mark on macOS, the
+//! colour brand mark elsewhere), registers it as a tray icon with the
 //! app's menu (Capture, Scrolling Capture, Retake Last Region, History,
 //! Settings, Check for Updates on macOS, Quit), and exposes a non-blocking
 //! [`TrayController::drain`] that the iced runtime polls every few ms
@@ -26,6 +27,7 @@ use std::collections::HashMap;
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
+#[cfg(any(target_os = "macos", test))]
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
@@ -251,7 +253,7 @@ fn tray_icon_event_action(
 /// accelerator). `hotkey_label` is the already-pretty-printed shortcut
 /// (for the tray tooltip).
 pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<TrayController> {
-    let icon = match build_icon(32) {
+    let icon = match tray_icon_image() {
         Ok(i) => i,
         Err(e) => {
             tracing::warn!(target: readshot_core::log::cat::TRAY, "icon build failed: {e}");
@@ -330,7 +332,9 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
         .with_menu_on_left_click(false)
         .with_tooltip(tray_tooltip(hotkey_label))
         .with_icon(icon)
-        .with_icon_as_template(true) // macOS renders the icon monochrome / dark-mode aware.
+        // macOS renders the template icon monochrome and dark-mode aware;
+        // other platforms ignore the flag (they get the colour mark).
+        .with_icon_as_template(true)
         .build()
     {
         Ok(t) => t,
@@ -349,6 +353,43 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
     })
 }
 
+/// tray-icon draws the macOS status item 18 pt tall: a 36 px bitmap is
+/// pixel-exact on Retina (a 32 px one was upscaled and soft).
+#[cfg(any(target_os = "macos", test))]
+const MENU_BAR_ICON_PX: u32 = 36;
+
+/// The off-macOS tray icon: the full-colour brand mark rendered from
+/// `packaging/macos/icon-small.svg` by `packaging/render-icons.sh`.
+#[cfg_attr(all(target_os = "macos", not(test)), allow(dead_code))]
+const TRAY_COLOR_PNG: &[u8] = include_bytes!("../assets/tray-color-32.png");
+
+/// The tray icon for this platform. macOS gets the monochrome template
+/// mark, which the menu bar tints for light and dark. Windows and Linux
+/// do not honour the template flag, so the black template glyph vanished
+/// on their dark taskbars and panels; they get the full-colour brand mark
+/// instead (a teal tile with white brackets and lens), which reads on
+/// both light and dark.
+fn tray_icon_image() -> Result<Icon, IconError> {
+    #[cfg(target_os = "macos")]
+    {
+        build_icon(MENU_BAR_ICON_PX)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let (rgba, w, h) = brand_tray_rgba()?;
+        Icon::from_rgba(rgba, w, h).map_err(IconError::Icon)
+    }
+}
+
+/// [`TRAY_COLOR_PNG`] as straight RGBA, with its size.
+#[cfg_attr(all(target_os = "macos", not(test)), allow(dead_code))]
+fn brand_tray_rgba() -> Result<(Vec<u8>, u32, u32), IconError> {
+    let rgba =
+        image::load_from_memory_with_format(TRAY_COLOR_PNG, image::ImageFormat::Png)?.into_rgba8();
+    let (w, h) = rgba.dimensions();
+    Ok((rgba.into_raw(), w, h))
+}
+
 /// Generate a small RGBA icon for the menu-bar tray.
 ///
 /// Drawn as a macOS *template image*: transparent background, solid
@@ -357,11 +398,13 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
 /// in dark mode, near-black in light mode), with a nice highlight
 /// when the menu is open. This matches the app-icon's brand language:
 /// four airy selection-corner brackets and a centered lens ring.
+#[cfg(any(target_os = "macos", test))]
 fn build_icon(size: u32) -> Result<Icon, IconError> {
     let rgba = build_icon_rgba(size)?;
     Icon::from_rgba(rgba, size, size).map_err(IconError::Icon)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn build_icon_rgba(size: u32) -> Result<Vec<u8>, IconError> {
     let mut pixmap = Pixmap::new(size, size).ok_or(IconError::Pixmap)?;
     let s = size as f32;
@@ -440,6 +483,7 @@ fn build_icon_rgba(size: u32) -> Result<Vec<u8>, IconError> {
     Ok(unpremultiply(raw))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn unpremultiply(mut buf: Vec<u8>) -> Vec<u8> {
     for px in buf.as_chunks_mut::<4>().0 {
         let a = px[3] as u32;
@@ -455,12 +499,16 @@ fn unpremultiply(mut buf: Vec<u8>) -> Vec<u8> {
 
 #[derive(Debug, thiserror::Error)]
 enum IconError {
+    #[cfg(any(target_os = "macos", test))]
     #[error("could not allocate pixmap")]
     Pixmap,
+    #[cfg(any(target_os = "macos", test))]
     #[error("path geometry was empty")]
     Path,
     #[error(transparent)]
     Icon(#[from] tray_icon::BadIcon),
+    #[error("could not decode the tray icon: {0}")]
+    Decode(#[from] image::ImageError),
 }
 
 #[cfg(test)]
@@ -671,6 +719,45 @@ mod tests {
             alpha_at(size / 2 + 5, size / 2) > 0,
             "lens ring should be visible"
         );
+    }
+
+    #[test]
+    fn the_macos_template_icon_is_pixel_exact_on_retina() {
+        // 18 pt status item at 2x.
+        assert_eq!(MENU_BAR_ICON_PX, 36);
+        assert!(build_icon(MENU_BAR_ICON_PX).is_ok());
+    }
+
+    /// Share of the icon's pixels that stand out from a taskbar colour
+    /// (composited luminance at least 0.25 away from it).
+    fn visible_share(rgba: &[u8], bar: [f32; 3]) -> f32 {
+        let lum = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+        let bar_l = lum(bar);
+        let px = rgba.as_chunks::<4>().0;
+        let visible = px
+            .iter()
+            .filter(|p| {
+                let a = p[3] as f32 / 255.0;
+                let c = [0, 1, 2].map(|i| p[i] as f32 / 255.0 * a + bar[i] * (1.0 - a));
+                (lum(c) - bar_l).abs() >= 0.25
+            })
+            .count();
+        visible as f32 / px.len() as f32
+    }
+
+    #[test]
+    fn the_colour_tray_icon_reads_on_dark_and_light_taskbars() {
+        let (rgba, w, h) = brand_tray_rgba().unwrap();
+        assert_eq!((w, h), (32, 32));
+        assert!(Icon::from_rgba(rgba.clone(), w, h).is_ok());
+        // Windows 11 dark taskbar, GNOME's dark panel, a light taskbar.
+        for bar in [[0.12, 0.12, 0.12], [0.0, 0.0, 0.0], [0.95, 0.95, 0.95]] {
+            let share = visible_share(&rgba, bar);
+            assert!(share > 0.3, "only {share} of the icon shows on {bar:?}");
+        }
+        // The black template glyph, by contrast, is what vanished on dark.
+        let template = build_icon_rgba(32).unwrap();
+        assert!(visible_share(&template, [0.12, 0.12, 0.12]) < 0.05);
     }
 
     #[test]

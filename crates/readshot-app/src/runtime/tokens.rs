@@ -42,8 +42,6 @@ pub(crate) struct Palette {
     pub tip_shadow: Color,
     pub tip_kbd_bg: Color,
     pub tip_kbd_fg: Color,
-    /// The dark brand tile behind the app glyph (Welcome).
-    pub tile_bg: Color,
     pub kbd_bg: Color,
     pub shadow: Color,
 }
@@ -75,7 +73,6 @@ pub(crate) const DARK: Palette = Palette {
     tip_shadow: Color::from_rgba(0.0, 0.0, 0.0, 0.35),
     tip_kbd_bg: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
     tip_kbd_fg: Color::from_rgb8(0xE5, 0xE5, 0xE5),
-    tile_bg: Color::from_rgb8(0x14, 0x18, 0x1E),
     kbd_bg: Color::from_rgba(1.0, 1.0, 1.0, 0.08),
     shadow: Color::from_rgba(0.0, 0.0, 0.0, 0.45),
 };
@@ -107,7 +104,6 @@ pub(crate) const LIGHT: Palette = Palette {
     tip_shadow: Color::from_rgba(0.0, 0.0, 0.0, 0.35),
     tip_kbd_bg: Color::from_rgba(1.0, 1.0, 1.0, 0.12),
     tip_kbd_fg: Color::from_rgb8(0xE5, 0xE5, 0xE5),
-    tile_bg: Color::from_rgb8(0x14, 0x18, 0x1E),
     kbd_bg: Color::from_rgba(0.0, 0.0, 0.0, 0.06),
     shadow: Color::from_rgba(0.0, 0.0, 0.0, 0.14),
 };
