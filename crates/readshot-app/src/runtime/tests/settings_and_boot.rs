@@ -625,7 +625,7 @@ fn global_hotkey_action_maps_pressed_ids() {
 fn hotkey_tick_no_events_is_noop() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     // No manager registered → tick does nothing meaningful.
-    let _ = update(&mut app, Message::HotkeyTick);
+    let _ = update(&mut app, Message::Tick(TickMsg::Hotkey));
     assert!(!app.capture_in_flight);
 }
 
@@ -636,7 +636,7 @@ fn url_tick_drains_delivered_url_actions() {
     crate::url_events::deliver_url_string("readshot://new").unwrap();
     let mut app = build_app(Arc::new(FakePermissions::granted()));
 
-    let _ = update(&mut app, Message::UrlTick);
+    let _ = update(&mut app, Message::Tick(TickMsg::Url));
 
     assert_eq!(crate::url_events::drain_actions(), Vec::new());
 }

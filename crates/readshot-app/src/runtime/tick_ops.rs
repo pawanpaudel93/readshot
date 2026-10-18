@@ -5,7 +5,26 @@
 
 use super::*;
 
-/// `Message::HotkeyTick`: drain the global hotkey presses.
+/// Every [`TickMsg`].
+pub(super) fn handle_tick_message(state: &mut App, message: TickMsg) -> Task<Message> {
+    match message {
+        TickMsg::Hotkey => on_hotkey_tick(state),
+
+        TickMsg::Tray => on_tray_tick(state),
+
+        TickMsg::Url => on_url_tick(state),
+
+        TickMsg::AppReopen => on_app_reopen_tick(),
+
+        TickMsg::TrayAction(action) => on_tray_action(state, action),
+
+        TickMsg::ThemePoll => on_theme_poll_tick(state),
+        TickMsg::SystemThemeChanged(mode) => on_system_theme_changed(state, mode),
+        TickMsg::UrlAction(action) => on_url_action(state, action),
+    }
+}
+
+/// `TickMsg::Hotkey`: drain the global hotkey presses.
 pub(super) fn on_hotkey_tick(state: &mut App) -> Task<Message> {
     // Drain anything the OS-side handler queued. We collapse
     // repeated presses into one action per tick so a mashed
@@ -55,7 +74,7 @@ pub(super) fn on_hotkey_tick(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::TrayTick`: drain tray clicks and the notification path's
+/// `TickMsg::Tray`: drain tray clicks and the notification path's
 /// news ([`process_notices`]).
 pub(super) fn on_tray_tick(state: &mut App) -> Task<Message> {
     let undelivered = process_notices(state);
@@ -68,13 +87,13 @@ pub(super) fn on_tray_tick(state: &mut App) -> Task<Message> {
     // are fine too (no-op coalescing happens later).
     let tasks: Vec<Task<Message>> = actions
         .into_iter()
-        .map(|a| Task::done(Message::TrayActionPerformed(a)))
+        .map(|a| Task::done(Message::Tick(TickMsg::TrayAction(a))))
         .chain(std::iter::once(undelivered))
         .collect();
     Task::batch(tasks)
 }
 
-/// `Message::UrlTick`: drain `readshot://` actions, and, with no tray (it
+/// `TickMsg::Url`: drain `readshot://` actions, and, with no tray (it
 /// failed to install) and so no `TrayTick`, the notification path's news.
 pub(super) fn on_url_tick(state: &mut App) -> Task<Message> {
     let notices = if state.tray.is_none() {
@@ -84,13 +103,13 @@ pub(super) fn on_url_tick(state: &mut App) -> Task<Message> {
     };
     let tasks: Vec<Task<Message>> = crate::url_events::drain_actions()
         .into_iter()
-        .map(|action| Task::done(Message::UrlActionReceived(action)))
+        .map(|action| Task::done(Message::Tick(TickMsg::UrlAction(action))))
         .chain(std::iter::once(notices))
         .collect();
     Task::batch(tasks)
 }
 
-/// `Message::AppReopenTick`.
+/// `TickMsg::AppReopen`.
 pub(super) fn on_app_reopen_tick() -> Task<Message> {
     if crate::app_events::take_reopen_requests() == 0 {
         Task::none()
@@ -99,7 +118,7 @@ pub(super) fn on_app_reopen_tick() -> Task<Message> {
     }
 }
 
-/// `Message::TrayActionPerformed`.
+/// `TickMsg::TrayAction`.
 pub(super) fn on_tray_action(state: &mut App, action: crate::tray::TrayAction) -> Task<Message> {
     match action {
         crate::tray::TrayAction::Capture => {
@@ -172,7 +191,7 @@ pub(super) fn on_tray_action(state: &mut App, action: crate::tray::TrayAction) -
     }
 }
 
-/// `Message::SystemThemeChanged`.
+/// `TickMsg::SystemThemeChanged`.
 pub(super) fn on_system_theme_changed(state: &mut App, mode: iced::theme::Mode) -> Task<Message> {
     state.theme_mode = match mode {
         iced::theme::Mode::Light => ThemeMode::Light,
@@ -187,7 +206,7 @@ pub(super) fn on_system_theme_changed(state: &mut App, mode: iced::theme::Mode) 
     Task::none()
 }
 
-/// `Message::UrlActionReceived`.
+/// `TickMsg::UrlAction`.
 pub(super) fn on_url_action(state: &mut App, action: UrlAction) -> Task<Message> {
     match action {
         UrlAction::NewCapture => {
@@ -205,7 +224,7 @@ pub(super) fn on_url_action(state: &mut App, action: UrlAction) -> Task<Message>
     }
 }
 
-/// `Message::ThemePollTick`.
+/// `TickMsg::ThemePoll`.
 pub(super) fn on_theme_poll_tick(state: &mut App) -> Task<Message> {
     let os = os_theme_mode();
     if os != state.theme_mode {

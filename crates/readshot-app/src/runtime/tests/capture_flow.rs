@@ -819,7 +819,10 @@ fn url_capture_waits_for_permission_then_replays() {
     let perms = Arc::new(FakePermissions::denied());
     let mut app = build_app(perms.clone());
 
-    let _ = update(&mut app, Message::UrlActionReceived(UrlAction::NewCapture));
+    let _ = update(
+        &mut app,
+        Message::Tick(TickMsg::UrlAction(UrlAction::NewCapture)),
+    );
 
     assert_eq!(
         app.pending_url_after_permission,
@@ -1069,7 +1072,7 @@ fn a_refused_notification_shows_in_the_editor_with_the_way_back() {
         NotShownReason::NotificationsOff,
         "Couldn’t save the capture.",
     );
-    let _ = update(&mut app, Message::TrayTick);
+    let _ = update(&mut app, Message::Tick(TickMsg::Tray));
     let status = app
         .editor
         .as_ref()
@@ -1101,7 +1104,7 @@ fn with_notifications_off_capture_problems_open_the_welcome_window() {
     }
     assert!(!app.windows.kinds().any(|k| k == WindowKind::Welcome));
     record_undelivered(NotShownReason::NotificationsOff, &status);
-    let _ = update(&mut app, Message::TrayTick);
+    let _ = update(&mut app, Message::Tick(TickMsg::Tray));
     assert!(app.windows.kinds().any(|k| k == WindowKind::Welcome));
     assert!(notifications_off());
     assert_eq!(capture_problem_route(), CaptureProblemRoute::WelcomeWindow);
@@ -1114,7 +1117,7 @@ fn an_unbundled_notification_shows_in_the_editor() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
     record_undelivered(NotShownReason::NotBundled, "Checking for updates…");
-    let _ = update(&mut app, Message::TrayTick);
+    let _ = update(&mut app, Message::Tick(TickMsg::Tray));
     let status = app
         .editor
         .as_ref()
@@ -1135,17 +1138,17 @@ fn an_unbundled_notification_shows_in_the_editor() {
 fn notifications_that_work_again_end_the_off_state() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     record_undelivered(NotShownReason::NotificationsOff, "Couldn’t capture.");
-    let _ = update(&mut app, Message::TrayTick);
+    let _ = update(&mut app, Message::Tick(TickMsg::Tray));
     assert!(app.notifications_off_told);
     assert!(notifications_off());
     record_notifications_on();
-    let _ = update(&mut app, Message::TrayTick);
+    let _ = update(&mut app, Message::Tick(TickMsg::Tray));
     assert!(!app.notifications_off_told, "the tray item goes");
     assert!(!notifications_off());
     assert_eq!(capture_problem_route(), CAPTURE_PROBLEM_ROUTE);
     // Off again: said again.
     record_undelivered(NotShownReason::NotificationsOff, "Couldn’t capture.");
-    let _ = update(&mut app, Message::TrayTick);
+    let _ = update(&mut app, Message::Tick(TickMsg::Tray));
     assert!(app.notifications_off_told);
 }
 
@@ -1160,7 +1163,7 @@ fn without_a_tray_undelivered_notices_still_reach_the_editor() {
         NotShownReason::NotificationsOff,
         "Couldn’t save the capture.",
     );
-    let _ = update(&mut app, Message::UrlTick);
+    let _ = update(&mut app, Message::Tick(TickMsg::Url));
     let status = app
         .editor
         .as_ref()

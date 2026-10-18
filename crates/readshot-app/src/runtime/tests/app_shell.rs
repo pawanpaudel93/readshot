@@ -63,21 +63,21 @@ fn system_theme_message_switches_mode() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let _ = update(
         &mut app,
-        Message::SystemThemeChanged(iced::theme::Mode::Light),
+        Message::Tick(TickMsg::SystemThemeChanged(iced::theme::Mode::Light)),
     );
     assert_eq!(app.theme_mode, ThemeMode::Light);
     let _ = update(
         &mut app,
-        Message::SystemThemeChanged(iced::theme::Mode::Dark),
+        Message::Tick(TickMsg::SystemThemeChanged(iced::theme::Mode::Dark)),
     );
     assert_eq!(app.theme_mode, ThemeMode::Dark);
     let _ = update(
         &mut app,
-        Message::SystemThemeChanged(iced::theme::Mode::Light),
+        Message::Tick(TickMsg::SystemThemeChanged(iced::theme::Mode::Light)),
     );
     let _ = update(
         &mut app,
-        Message::SystemThemeChanged(iced::theme::Mode::None),
+        Message::Tick(TickMsg::SystemThemeChanged(iced::theme::Mode::None)),
     );
     // macOS: no tone means dark. Elsewhere `None` is "no news" (an X11
     // window opening), so the OS's last answer stands.
@@ -93,7 +93,7 @@ fn system_theme_message_switches_mode() {
 fn theme_poll_tick_reads_os_mode_on_update_thread() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.theme_mode = ThemeMode::Light;
-    let _ = update(&mut app, Message::ThemePollTick);
+    let _ = update(&mut app, Message::Tick(TickMsg::ThemePoll));
     // Off the main thread (tests) `os_theme_mode` reports Dark.
     assert_eq!(app.theme_mode, os_theme_mode());
 }
@@ -151,7 +151,7 @@ fn opening_a_window_keeps_the_reported_system_mode_off_macos() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let _ = update(
         &mut app,
-        Message::SystemThemeChanged(iced::theme::Mode::Light),
+        Message::Tick(TickMsg::SystemThemeChanged(iced::theme::Mode::Light)),
     );
     let _ = update(&mut app, Message::OpenSettingsRequested);
     assert_eq!(app.theme_mode, ThemeMode::Light);

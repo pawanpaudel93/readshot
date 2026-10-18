@@ -113,7 +113,7 @@ fn on_permission_tick(state: &mut App, tick: AppMsg) -> Task<Message> {
         let pending_url = state.pending_url_after_permission.take();
         if !was_onboarding_completed {
             return pending_url
-                .map(|action| Task::done(Message::UrlActionReceived(action)))
+                .map(|action| Task::done(Message::Tick(TickMsg::UrlAction(action))))
                 .unwrap_or_else(Task::none);
         }
         let welcome_ids: Vec<_> = state
@@ -130,7 +130,7 @@ fn on_permission_tick(state: &mut App, tick: AppMsg) -> Task<Message> {
             notify_running_in_menu_bar(&state.preferences.capture_hotkey);
         }
         if let Some(action) = pending_url {
-            close_tasks.push(Task::done(Message::UrlActionReceived(action)));
+            close_tasks.push(Task::done(Message::Tick(TickMsg::UrlAction(action))));
         }
         return Task::batch(close_tasks);
     }

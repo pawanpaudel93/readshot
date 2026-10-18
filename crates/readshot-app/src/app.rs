@@ -232,6 +232,9 @@ impl SettingsPane {
 /// or background task funnels through this enum.
 #[derive(Clone, Debug)]
 pub enum Message {
+    /// Background drains (hotkeys, tray, URL scheme, reopen, theme) and the
+    /// actions they deliver (`runtime::tick_ops`).
+    Tick(TickMsg),
     /// Capture messages: the overlay, region and full-display captures, and
     /// what is done with a result outside the editor (`runtime::capture_ops`).
     Capture(CaptureMsg),
@@ -241,17 +244,6 @@ pub enum Message {
     EditorCanvas(CanvasMessage),
     EditorToolbar(ToolbarMessage),
     Settings(SettingsMessage),
-    /// 50 ms drain tick — runtime polls the global-hotkey receiver and
-    /// emits a `CaptureFullPrimaryRequested` if any events arrived.
-    HotkeyTick,
-    /// 100 ms drain tick — runtime polls the tray + menu event channels.
-    TrayTick,
-    /// 100 ms drain tick — runtime polls queued `readshot://` URL events.
-    UrlTick,
-    /// 100 ms drain tick — runtime polls queued macOS app-reopen events.
-    AppReopenTick,
-    /// User selected an item in the tray menu (or left-clicked the icon).
-    TrayActionPerformed(crate::tray::TrayAction),
     /// Periodic tick driving the scrolling-capture frame loop. Fires
     /// from a 250 ms timer subscription while a session is active.
     ScrollCaptureTick,
@@ -823,13 +815,31 @@ pub enum Message {
     CliToolsCopyRequested(crate::cli_tools::Shell),
     /// Command-line setup instructions were copied, or failed to copy.
     CliToolsCopyDone(crate::cli_tools::Shell, Result<(), String>),
+}
+
+/// Background drain ticks (global hotkeys, tray, `readshot://` URLs,
+/// Launch Services reopen, appearance) and the tray, URL and theme events
+/// they deliver. Handled by `runtime::tick_ops::handle_tick_message`.
+#[derive(Clone, Debug)]
+pub enum TickMsg {
+    /// 50 ms drain tick — runtime polls the global-hotkey receiver and
+    /// emits a `CaptureFullPrimaryRequested` if any events arrived.
+    Hotkey,
+    /// 100 ms drain tick — runtime polls the tray + menu event channels.
+    Tray,
+    /// 100 ms drain tick — runtime polls queued `readshot://` URL events.
+    Url,
+    /// 100 ms drain tick — runtime polls queued macOS app-reopen events.
+    AppReopen,
+    /// User selected an item in the tray menu (or left-clicked the icon).
+    TrayAction(crate::tray::TrayAction),
     /// User invoked the URL scheme.
-    UrlActionReceived(crate::url_scheme::UrlAction),
+    UrlAction(crate::url_scheme::UrlAction),
     /// macOS/Windows appearance changed (or the initial query returned).
     /// `Mode::None` means "unknown" and falls back to dark.
     SystemThemeChanged(iced::theme::Mode),
     /// 1s tick; `update()` re-reads the OS appearance on the app thread.
-    ThemePollTick,
+    ThemePoll,
 }
 
 /// Capture messages: the region overlay, region and full-display

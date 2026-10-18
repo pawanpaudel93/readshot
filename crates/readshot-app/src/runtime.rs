@@ -92,7 +92,7 @@ mod welcome_ops;
 mod window_ops;
 
 /// Initial URL action set from `main.rs` before `iced::daemon` starts.
-/// `start()` consumes this and feeds an extra `Message::UrlActionReceived`
+/// `start()` consumes this and feeds an extra `TickMsg::UrlAction`
 /// task on boot, before the welcome window even has time to paint.
 static INITIAL_URL_ACTION: OnceLock<Mutex<Option<UrlAction>>> = OnceLock::new();
 static CLI_INTERACTIVE_REQUEST: OnceLock<Mutex<Option<CliInteractiveRequest>>> = OnceLock::new();
@@ -356,7 +356,8 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 }
 
 use crate::app::{
-    App, AppMsg, CaptureMsg, GlobalHotkeyAction, HistoryKeyboardAction, Message, WindowKind,
+    App, AppMsg, CaptureMsg, GlobalHotkeyAction, HistoryKeyboardAction, Message, TickMsg,
+    WindowKind,
 };
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
@@ -468,7 +469,7 @@ pub fn start() -> (App, Task<Message>) {
     // instead of popping a window in the user's face.
     let initial_url_action = take_initial_url_action();
     let mut tasks: Vec<Task<Message>> =
-        vec![iced::system::theme().map(Message::SystemThemeChanged)];
+        vec![iced::system::theme().map(|a| Message::Tick(TickMsg::SystemThemeChanged(a)))];
     let needs_welcome_window = needs_welcome_window_on_boot(
         app.welcome,
         initial_url_action.is_some(),
@@ -489,7 +490,7 @@ pub fn start() -> (App, Task<Message>) {
         notify_running_in_menu_bar(&app.preferences.capture_hotkey);
     }
     if let Some(action) = initial_url_action {
-        tasks.push(Task::done(Message::UrlActionReceived(action)));
+        tasks.push(Task::done(Message::Tick(TickMsg::UrlAction(action))));
     }
     (app, Task::batch(tasks))
 }
@@ -577,7 +578,7 @@ fn focus_scroll_hud(state: &App) -> Task<Message> {
 /// + app/window keyboard shortcuts.
 pub fn subscription(state: &App) -> Subscription<Message> {
     let mut subs = Vec::new();
-    subs.push(iced::system::theme_changes().map(Message::SystemThemeChanged));
+    subs.push(iced::system::theme_changes().map(|a| Message::Tick(TickMsg::SystemThemeChanged(a))));
     // iced pins each open window's appearance to its theme, so winit
     // suppresses theme-change events for those windows; poll the OS too.
     // The handler is idempotent, so identical repeats are free.
@@ -587,7 +588,9 @@ pub fn subscription(state: &App) -> Subscription<Message> {
     // Only while a system-themed window is open (see `theme_poll_needed`),
     // and only where the app can read the OS itself (`READS_OS_THEME`).
     if theme_poll_active(state) {
-        subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::ThemePollTick));
+        subs.push(
+            iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick(TickMsg::ThemePoll)),
+        );
     }
     if state.welcome.should_show() {
         // Polling at 500 ms keeps the UI responsive without burning
@@ -613,12 +616,16 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // crossbeam channel `global-hotkey` writes to from its OS event
         // handler. Latency from keypress to capture stays well under the
         // threshold where a global hotkey feels laggy.
-        subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::HotkeyTick));
+        subs.push(
+            iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick(TickMsg::Hotkey)),
+        );
     }
     if state.tray.is_some() {
         // 250 ms is fine for tray clicks — humans can't tell the
         // difference between a 100 ms and 250 ms tray menu response.
-        subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::TrayTick));
+        subs.push(
+            iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick(TickMsg::Tray)),
+        );
     }
     #[cfg(target_os = "macos")]
     {
@@ -626,8 +633,13 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // while the app is already running. Those callbacks queue work;
         // these ticks drain them back into iced. Both are rare, external,
         // user-initiated events, so a slower poll costs nothing.
-        subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::UrlTick));
-        subs.push(iced::time::every(Duration::from_millis(500)).map(|_| Message::AppReopenTick));
+        subs.push(
+            iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick(TickMsg::Url)),
+        );
+        subs.push(
+            iced::time::every(Duration::from_millis(500))
+                .map(|_| Message::Tick(TickMsg::AppReopen)),
+        );
     }
     if state.scroll_session.is_some() {
         // Drive the scrolling-capture frame loop. The capture
@@ -1166,16 +1178,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             modifiers,
         } => welcome_ops::on_welcome_key_pressed(state, window, key, modifiers),
         Message::Capture(msg) => capture_ops::handle_capture_message(state, msg),
-
-        Message::HotkeyTick => tick_ops::on_hotkey_tick(state),
-
-        Message::TrayTick => tick_ops::on_tray_tick(state),
-
-        Message::UrlTick => tick_ops::on_url_tick(state),
-
-        Message::AppReopenTick => tick_ops::on_app_reopen_tick(),
-
-        Message::TrayActionPerformed(action) => tick_ops::on_tray_action(state, action),
+        Message::Tick(msg) => tick_ops::handle_tick_message(state, msg),
 
         msg @ history_messages!() => {
             let task = history_ops::handle_history_message(state, msg);
@@ -1214,10 +1217,6 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         msg @ scroll_messages!() => scroll::handle_scroll_message(state, msg),
 
         Message::WelcomeStatusDismissed => welcome_ops::on_welcome_status_dismissed(state),
-
-        Message::ThemePollTick => tick_ops::on_theme_poll_tick(state),
-        Message::SystemThemeChanged(mode) => tick_ops::on_system_theme_changed(state, mode),
-        Message::UrlActionReceived(action) => tick_ops::on_url_action(state, action),
 
         msg @ settings_messages!() => settings_ops::handle_settings_message(state, msg),
     }
