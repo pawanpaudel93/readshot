@@ -302,10 +302,10 @@ pub(crate) fn relaunch_command_for_bundle(bundle: &Path, mode: RelaunchMode) -> 
 /// post-grant. Without this, users who triggered the grant flow
 /// might think the app crashed when the window disappeared.
 ///
-/// macOS: `osascript display notification …` is the lowest-friction
-/// way to do this without a third-party crate. The notification
-/// mentions the configured capture hotkey so the user knows how to
-/// trigger a screenshot from anywhere.
+/// macOS: posted as Readshot through UNUserNotificationCenter
+/// ([`show_macos_notification`]). The notification mentions the
+/// configured capture hotkey so the user knows how to trigger a
+/// screenshot from anywhere.
 ///
 /// Other platforms: no-op for now. Linux libnotify / Windows toast
 /// land when those platform backends do.
@@ -390,56 +390,78 @@ pub(crate) fn notify_update_check_failed(e: &crate::updater::UpdaterError) {
     }
 }
 
+/// Post a notification as Readshot (its name and icon, listed under
+/// Readshot in System Settings › Notifications) through
+/// UNUserNotificationCenter, via the Swift shim `src/macos_notify.swift`.
+///
+/// Never blocks and never fails loudly: running outside an app bundle
+/// (`cargo run`, tests) posts nothing, and a user who turned Readshot's
+/// notifications off gets the text in the log instead.
 #[cfg(target_os = "macos")]
 pub(crate) fn show_macos_notification(title: &str, body: &str) {
-    let script = macos_notification_script(title, body);
-    let spawn = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-    if let Err(e) = spawn {
-        tracing::warn!(
+    let (title_c, body_c) = notification_c_strings(title, body);
+    // SAFETY: both pointers are valid NUL-terminated strings that outlive
+    // the call (the shim copies them before returning), and the callback
+    // is a plain `extern "C"` function with the signature the shim
+    // declares.
+    let status = unsafe {
+        readshot_notify_post(
+            title_c.as_ptr(),
+            body_c.as_ptr(),
+            Some(notification_log_callback),
+        )
+    };
+    match status {
+        0 => {}
+        1 => tracing::info!(
             target: readshot_core::log::cat::APP,
-            "osascript spawn failed: {e}"
-        );
+            "not running from Readshot.app, so no notification: {title} — {body}"
+        ),
+        other => tracing::warn!(
+            target: readshot_core::log::cat::APP,
+            "notification shim refused \"{title}\" (status {other})"
+        ),
+    }
+}
+
+/// C strings for the shim. An interior NUL would make `CString::new`
+/// fail (and truncate the text on the Swift side), so it is dropped.
+#[cfg(target_os = "macos")]
+pub(crate) fn notification_c_strings(
+    title: &str,
+    body: &str,
+) -> (std::ffi::CString, std::ffi::CString) {
+    let c =
+        |s: &str| std::ffi::CString::new(s.replace('\0', "")).expect("interior NULs were removed");
+    (c(title), c(body))
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn notification_log_callback(level: i32, message: *const std::ffi::c_char) {
+    if message.is_null() {
+        return;
+    }
+    // SAFETY: the shim passes a NUL-terminated string that stays valid for
+    // the duration of this call.
+    let message = unsafe { std::ffi::CStr::from_ptr(message) }.to_string_lossy();
+    if level == 0 {
+        tracing::info!(target: readshot_core::log::cat::APP, "{message}");
+    } else {
+        tracing::warn!(target: readshot_core::log::cat::APP, "{message}");
     }
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn macos_notification_script(title: &str, body: &str) -> String {
-    format!(
-        r#"display notification "{}" with title "{}""#,
-        applescript_escape(body),
-        applescript_escape(title)
-    )
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn applescript_escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for c in value.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            // Newlines / carriage returns / NULs would otherwise close
-            // the string literal or break osascript parsing entirely.
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            // AppleScript's line-continuation char joins onto the
-            // next statement. AppleScript strings have no `\u`
-            // escape, so the only safe option is to drop it.
-            '\u{00AC}' => {}
-            c if (c as u32) < 0x20 => {
-                // Drop other control chars; they have no useful
-                // representation inside an AppleScript string.
-            }
-            c => out.push(c),
-        }
-    }
-    out
+unsafe extern "C" {
+    /// `src/macos_notify.swift`. Returns 0 when handed to the notification
+    /// center, 1 when not running from an app bundle (nothing posted), 2
+    /// for a null argument. `log` receives `(0 = info | 1 = warn, text)`,
+    /// possibly later and on another thread.
+    fn readshot_notify_post(
+        title: *const std::ffi::c_char,
+        body: *const std::ffi::c_char,
+        log: Option<extern "C" fn(i32, *const std::ffi::c_char)>,
+    ) -> i32;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

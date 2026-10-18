@@ -1038,7 +1038,8 @@ pub(crate) fn capture_status_is_problem(status: &str) -> bool {
 /// How a capture problem no open window shows reaches the user.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CaptureProblemRoute {
-    /// A system notification (macOS, through osascript).
+    /// A system notification (macOS, posted as Readshot through
+    /// UNUserNotificationCenter).
     Notification,
     /// The Welcome window, which shows the status, brought forward
     /// (Windows and Linux, which have no notification path yet).

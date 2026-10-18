@@ -669,12 +669,21 @@ fn open_folder_command_uses_plain_open_on_macos() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn macos_notification_script_escapes_title_and_body() {
-    let script = macos_notification_script("Readshot \"updates\"", "Path C:\\tmp\\\"x\"");
-    assert_eq!(
-        script,
-        r#"display notification "Path C:\\tmp\\\"x\"" with title "Readshot \"updates\"""#
-    );
+fn notification_text_reaches_the_shim_verbatim_except_nuls() {
+    // UNUserNotificationCenter takes plain strings: quotes, backslashes and
+    // newlines need no escaping (osascript did), only NULs must go.
+    let (title, body) =
+        notification_c_strings("Readshot \"updates\"", "Path C:\\tmp\\\"x\"\nnext\0line");
+    assert_eq!(title.to_str().unwrap(), "Readshot \"updates\"");
+    assert_eq!(body.to_str().unwrap(), "Path C:\\tmp\\\"x\"\nnextline");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_notification_outside_an_app_bundle_is_a_safe_no_op() {
+    // The test binary is not inside Readshot.app: the shim must post
+    // nothing (UNUserNotificationCenter would raise without a bundle).
+    show_macos_notification("Readshot", "test notification");
 }
 
 #[cfg(target_os = "macos")]
