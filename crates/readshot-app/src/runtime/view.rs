@@ -1649,8 +1649,6 @@ pub(crate) fn history_selected_panel<'a>(
     stack_actions: bool,
 ) -> Element<'a, Message> {
     use crate::icons::AppIcon;
-    use iced::widget::image as image_widget;
-    use iced::widget::tooltip::Position;
 
     let Some(record) = record else {
         return empty_state(
@@ -1662,6 +1660,39 @@ pub(crate) fn history_selected_panel<'a>(
         );
     };
     let id = record.id;
+
+    let preview = history_selected_preview(record, root, p);
+    let ocr = record
+        .ocr_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
+    let (heading, text_box) = history_selected_text(record, ocr, query, p);
+    let (delete_confirm, actions) =
+        history_selected_actions(id, p, delete_pending, stack_actions, ocr.is_some());
+
+    let mut panel = column![preview, heading, text_box];
+    if let Some(confirm) = delete_confirm {
+        panel = panel.push(confirm);
+    }
+    panel
+        .push(actions)
+        .spacing(SP3)
+        .padding(SP4)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+/// The detail pane's preview: the capture fitted to the pane, or why
+/// there is none to show.
+fn history_selected_preview<'a>(
+    record: &'a readshot_core::CaptureRecord,
+    root: &Path,
+    p: &'static Palette,
+) -> Element<'a, Message> {
+    use crate::icons::AppIcon;
+    use iced::widget::image as image_widget;
 
     let shown = history_png_path(root, record)
         .filter(|p| p.exists())
@@ -1712,16 +1743,21 @@ pub(crate) fn history_selected_panel<'a>(
         .height(Length::FillPortion(5))
         .clip(true)
         .style(history_selected_panel_style);
+    preview.into()
+}
 
+/// The detail pane's recognized-text heading (time stamp, word count)
+/// and its text box, with `query` highlighted.
+fn history_selected_text<'a>(
+    record: &'a readshot_core::CaptureRecord,
+    ocr: Option<&'a str>,
+    query: &str,
+    p: &'static Palette,
+) -> (Element<'a, Message>, Element<'a, Message>) {
     let stamp = history_timestamp_label(
         record.captured_at.with_timezone(&chrono::Local),
         chrono::Local::now(),
     );
-    let ocr = record
-        .ocr_text
-        .as_deref()
-        .map(str::trim)
-        .filter(|t| !t.is_empty());
     let words = history_word_count(ocr);
     let heading = row![
         text("Recognized text")
@@ -1766,6 +1802,20 @@ pub(crate) fn history_selected_panel<'a>(
         .width(Length::Fill)
         .height(Length::FillPortion(4))
         .style(history_selected_panel_style);
+    (heading.into(), text_box.into())
+}
+
+/// The detail pane's actions for capture `id`, and the armed delete's
+/// confirmation row while a delete is armed.
+fn history_selected_actions<'a>(
+    id: readshot_core::Uuid,
+    p: &'static Palette,
+    delete_pending: bool,
+    stack_actions: bool,
+    has_text: bool,
+) -> (Option<Element<'a, Message>>, Element<'a, Message>) {
+    use crate::icons::AppIcon;
+    use iced::widget::tooltip::Position;
 
     // Two-stage delete, like Clear All: the icon arms; armed shows its
     // consequence and a solid "Delete Capture" plus Cancel on a row of
@@ -1836,7 +1886,6 @@ pub(crate) fn history_selected_panel<'a>(
     ]
     .spacing(2)
     .align_y(Alignment::Center);
-    let has_text = ocr.is_some();
     let text_fg = if has_text {
         p.t1
     } else {
@@ -1910,18 +1959,7 @@ pub(crate) fn history_selected_panel<'a>(
         .align_y(Alignment::Center)
         .into()
     };
-
-    let mut panel = column![preview, heading, text_box];
-    if let Some(confirm) = delete_confirm {
-        panel = panel.push(confirm);
-    }
-    panel
-        .push(actions)
-        .spacing(SP3)
-        .padding(SP4)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    (delete_confirm, actions)
 }
 
 /// Selected list row: accent tint fill with a 35 % accent hairline.
