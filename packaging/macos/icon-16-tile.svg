@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Readshot app icon at 16px for surfaces where the tile fills the canvas:
+  the 16px Windows .ico frame and the 16px favicon frame.
+
+  icon-16.svg is drawn on Apple's macOS grid, where its lens rings land on
+  whole pixels. Cropped to the bare tile (viewBox "100 100 824 824", as
+  the other sources are for Windows and the web) one pixel is about 51.5
+  units, not 64, so the same rings fall between pixels and come out soft.
+  This variant is drawn in 16px units instead, so every ring edge is a
+  whole pixel from the centre: a dark rim 1px wide, a white ring 2px wide
+  and a cyan core 6px across, on the same tile and gradient.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#123B48"/>
+      <stop offset="48%" stop-color="#176E80"/>
+      <stop offset="100%" stop-color="#21B6A8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 3.75 = the tile's 224/960 corner radius at 16px. -->
+  <rect width="16" height="16" rx="3.75" fill="url(#bg)"/>
+
+  <circle cx="8" cy="8" r="6" fill="#082E38"/>
+  <circle cx="8" cy="8" r="5" fill="#FFFFFF"/>
+  <circle cx="8" cy="8" r="3" fill="#7FD9E6"/>
+</svg>

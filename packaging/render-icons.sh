@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Regenerate every committed raster of the Readshot brand icon from the
-# three SVG sources, so no surface ever drifts from the canonical art:
+# four SVG sources, so no surface ever drifts from the canonical art:
 #
 #   packaging/macos/icon.svg        canonical art, on Apple's 824/1024 grid
 #   packaging/macos/icon-small.svg  hand-tuned variant for 20 to 32px
 #   packaging/macos/icon-16.svg     tile and lens only, for 16px
+#   packaging/macos/icon-16-tile.svg  the same, drawn on the bare tile in
+#                                   16px units, for the 16px .ico and
+#                                   favicon frames
 #
 # Outputs (all committed):
 #   crates/readshot-app/assets/readshot-tile-128.png  Welcome brand tile and
@@ -30,6 +33,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ICON="${REPO_ROOT}/packaging/macos/icon.svg"
 SMALL="${REPO_ROOT}/packaging/macos/icon-small.svg"
 TINY="${REPO_ROOT}/packaging/macos/icon-16.svg"
+# Already the bare tile, pixel-snapped at 16px: not cropped.
+TINY_TILE="${REPO_ROOT}/packaging/macos/icon-16-tile.svg"
 
 for tool in rsvg-convert magick; do
   if ! command -v "${tool}" >/dev/null 2>&1; then
@@ -56,10 +61,8 @@ crop_to_tile() { # src out
 }
 TILE="${WORK}/tile.svg"
 SMALL_TILE="${WORK}/small-tile.svg"
-TINY_TILE="${WORK}/tiny-tile.svg"
 crop_to_tile "${ICON}" "${TILE}"
 crop_to_tile "${SMALL}" "${SMALL_TILE}"
-crop_to_tile "${TINY}" "${TINY_TILE}"
 # The tile with square corners, for apple-touch-icon: iOS applies its own
 # corner mask and fills transparent corners with black.
 SQUARE="${WORK}/square.svg"

@@ -5,7 +5,8 @@
 #   packaging/windows/readshot.res  readshot.rc compiled; build.rs links it
 #                                   into readshot.exe on MSVC targets
 #
-# 16px comes from packaging/macos/icon-16.svg (tile and lens only), 20 to
+# 16px comes from packaging/macos/icon-16-tile.svg (tile and lens only,
+# pixel-snapped on the bare tile), 20 to
 # 32px from packaging/macos/icon-small.svg (hand-tuned for a few pixels),
 # larger sizes from packaging/macos/icon.svg. Each is cropped to its tile
 # (Windows icons fill their canvas; Apple's grid margin is macOS-only).
@@ -22,7 +23,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT_DIR="${REPO_ROOT}/packaging/windows"
 ICON="${REPO_ROOT}/packaging/macos/icon.svg"
 SMALL="${REPO_ROOT}/packaging/macos/icon-small.svg"
-TINY="${REPO_ROOT}/packaging/macos/icon-16.svg"
+# The 16px frame's source is already the bare tile, drawn in 16px units so
+# its rings land on whole pixels (cropping icon-16.svg would not).
+TINY_TILE_SRC="${REPO_ROOT}/packaging/macos/icon-16-tile.svg"
 
 # Portable across BSD (macOS) and GNU (Linux) mktemp.
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/readshot-ico.XXXXXX")"
@@ -40,11 +43,7 @@ if [[ -z "${SMALL_TILE}" ]]; then
   SMALL_TILE="${WORK}/small-tile.svg"
   sed 's|viewBox="0 0 1024 1024"|viewBox="100 100 824 824"|' "${SMALL}" > "${SMALL_TILE}"
 fi
-TINY_TILE="${READSHOT_ICON_TINY_TILE:-}"
-if [[ -z "${TINY_TILE}" ]]; then
-  TINY_TILE="${WORK}/tiny-tile.svg"
-  sed 's|viewBox="0 0 1024 1024"|viewBox="100 100 824 824"|' "${TINY}" > "${TINY_TILE}"
-fi
+TINY_TILE="${READSHOT_ICON_TINY_TILE:-${TINY_TILE_SRC}}"
 
 frames=()
 for size in 16 20 24 32 40 48 64 256; do
