@@ -40,9 +40,14 @@ pub(crate) fn editor_toast_kind(tone: crate::editor::StatusTone) -> ToastKind {
 
 /// The editor tone for a plain status string from outside the editor (a
 /// notification that could not be shown): the kind [`status_toast_kind`]
-/// gives it.
+/// gives it. One that reports work starting ("Checking for updates…") is
+/// a notice: the editor will never see that work end, so it must not
+/// wait for it.
 pub(crate) fn plain_status_tone(status: &str) -> crate::editor::StatusTone {
     use crate::editor::StatusTone;
+    if status.ends_with('…') && !crate::editor::status_str_is_error(status) {
+        return StatusTone::Notice;
+    }
     match status_toast_kind(status) {
         ToastKind::Ok => StatusTone::Success,
         ToastKind::Info => StatusTone::Notice,
