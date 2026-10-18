@@ -47,6 +47,12 @@ pub(crate) fn preview_rows(frame: &image::RgbaImage, new_rows: Option<u32>) -> i
     if rows == 0 || fw == 0 {
         return image::RgbaImage::new(PREVIEW_STRIP_W, 0);
     }
+    // Only the newest PREVIEW_STRIP_MAX_H strip rows are ever kept: on a
+    // narrow region (upscaled to the strip width) scale just the source
+    // rows that become them, never the whole frame.
+    let kept_src_rows =
+        (u64::from(PREVIEW_STRIP_MAX_H) * u64::from(fw)).div_ceil(u64::from(PREVIEW_STRIP_W));
+    let rows = rows.min(u32::try_from(kept_src_rows).unwrap_or(u32::MAX).max(1));
     let scale = PREVIEW_STRIP_W as f32 / fw as f32;
     let h = ((rows as f32 * scale).round() as u32).max(1);
     let src = crop_imm(frame, 0, fh - rows, fw, rows).to_image();
@@ -65,10 +71,17 @@ pub(crate) fn append_preview_rows(
     if added.height() == 0 {
         return prev;
     }
-    let mut out = image::RgbaImage::new(PREVIEW_STRIP_W, prev.height() + added.height());
-    image::imageops::replace(&mut out, &prev, 0, 0);
-    image::imageops::replace(&mut out, &added, 0, prev.height() as i64);
-    keep_tail(out)
+    let added = keep_tail(added);
+    // Only the part of `prev` that stays above `added` is copied.
+    let keep_prev = prev
+        .height()
+        .min(PREVIEW_STRIP_MAX_H.saturating_sub(added.height()));
+    let mut out = image::RgbaImage::new(PREVIEW_STRIP_W, keep_prev + added.height());
+    let prev_tail =
+        image::imageops::crop_imm(&prev, 0, prev.height() - keep_prev, prev.width(), keep_prev);
+    image::imageops::replace(&mut out, &*prev_tail, 0, 0);
+    image::imageops::replace(&mut out, &added, 0, i64::from(keep_prev));
+    out
 }
 
 fn keep_tail(img: image::RgbaImage) -> image::RgbaImage {
@@ -547,6 +560,35 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_narrow_region_scales_only_the_rows_the_strip_keeps() {
+        // An 8 px wide, 1600 px tall frame (a 4 pt region at 2x) would
+        // upscale to 340 x 68000 (about 92 MB); only the newest 4096
+        // strip rows are ever kept, so only their source rows scale.
+        let mut frame = image::RgbaImage::from_pixel(8, 1600, image::Rgba([0, 0, 255, 255]));
+        for y in 1500..1600 {
+            for x in 0..8 {
+                frame.put_pixel(x, y, image::Rgba([255, 0, 0, 255]));
+            }
+        }
+        let rows = preview_rows(&frame, None);
+        assert_eq!(rows.width(), PREVIEW_STRIP_W);
+        assert!(
+            rows.height() <= PREVIEW_STRIP_MAX_H + PREVIEW_STRIP_W / 8,
+            "{} rows scaled",
+            rows.height()
+        );
+        // It is the bottom of the frame: the newest rows.
+        assert_eq!(rows.get_pixel(0, rows.height() - 1).0, [255, 0, 0, 255]);
+        // Appending keeps the cap without building the whole join.
+        let strip = append_preview_rows(None, rows);
+        assert_eq!(strip.height(), PREVIEW_STRIP_MAX_H);
+        let more = preview_rows(&frame, Some(1000));
+        let strip = append_preview_rows(Some(strip), more);
+        assert_eq!(strip.height(), PREVIEW_STRIP_MAX_H);
+        assert_eq!(strip.get_pixel(0, strip.height() - 1).0, [255, 0, 0, 255]);
+    }
 
     #[test]
     fn preview_rows_scale_to_strip_width() {
