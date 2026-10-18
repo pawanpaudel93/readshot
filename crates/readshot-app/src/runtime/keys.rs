@@ -14,7 +14,7 @@ pub(crate) const COPY_TEXT_KEY: &str = platform_key("⇧⌘C", "Ctrl+Shift+C");
 pub(crate) const SAVE_KEY: &str = platform_key("⌘S", "Ctrl+S");
 pub(crate) const PIN_KEY: &str = platform_key("⌘P", "Ctrl+P");
 pub(crate) const CLOSE_KEY: &str = platform_key("⌘W", "Ctrl+W");
-pub(crate) const ZOOM_OUT_KEY: &str = platform_key("⌘−", "Ctrl+−");
+pub(crate) const ZOOM_OUT_KEY: &str = platform_key("⌘−", "Ctrl+-");
 pub(crate) const ZOOM_IN_KEY: &str = platform_key("⌘=", "Ctrl+=");
 pub(crate) const ZOOM_ACTUAL_KEY: &str = platform_key("⌘0", "Ctrl+0");
 pub(crate) const SCROLL_CAPTURE_KEY: &str = platform_key("⌘R", "Ctrl+R");
