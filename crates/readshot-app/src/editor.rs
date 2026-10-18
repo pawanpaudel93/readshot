@@ -870,10 +870,12 @@ pub enum KeyGuide {
 /// Button in the status toast.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditorToastAction {
-    /// "Redacted N items" → Undo ⌘Z. `undo_depth` is the model's undo
-    /// depth right after the redaction: the button shows only while it
-    /// still matches, so it can never undo a later edit.
-    UndoRedaction { undo_depth: usize },
+    /// "Redacted N items" → Undo ⌘Z. `generation` is the model's
+    /// history generation right after the redaction: the button shows
+    /// only while it still matches, so it can never undo a later edit.
+    /// (Not the undo depth: at the history cap a push drops the oldest
+    /// step and the depth stays the same.)
+    UndoRedaction { generation: u64 },
     /// Recognition failed → Retry.
     RetryRecognition,
     /// "Removed Preset N." → Undo puts the preset back.
@@ -1623,8 +1625,8 @@ impl EditorSession {
     /// redaction is still the newest history step.
     pub fn visible_toast_action(&self) -> Option<EditorToastAction> {
         self.toast_action.filter(|a| match a {
-            EditorToastAction::UndoRedaction { undo_depth } => {
-                self.model.undo_depth() == *undo_depth
+            EditorToastAction::UndoRedaction { generation } => {
+                self.model.history_generation() == *generation
             }
             EditorToastAction::RetryRecognition => true,
             EditorToastAction::RestorePreset => self.removed_beautify_preset.is_some(),
@@ -2343,7 +2345,7 @@ mod tests {
     #[test]
     fn set_status_clears_a_toast_action() {
         let mut ed = EditorSession::new(image::RgbaImage::new(4, 4));
-        let undo = EditorToastAction::UndoRedaction { undo_depth: 0 };
+        let undo = EditorToastAction::UndoRedaction { generation: 0 };
         ed.set_status_with_action("Redacted 1 item.", undo);
         assert_eq!(ed.toast_action, Some(undo));
         ed.set_status("Saved.");
@@ -2358,19 +2360,18 @@ mod tests {
             radius: 2.0,
         };
         ed.model.commit_annotation(blur.clone());
-        let undo_depth = ed.model.undo_depth();
-        ed.toast_action = Some(EditorToastAction::UndoRedaction { undo_depth });
+        let generation = ed.model.history_generation();
+        ed.toast_action = Some(EditorToastAction::UndoRedaction { generation });
         assert!(ed.visible_toast_action().is_some());
-        ed.model.commit_annotation(blur);
+        ed.model.commit_annotation(blur.clone());
         assert!(
             ed.visible_toast_action().is_none(),
             "Undo would undo the newer edit"
         );
+        // Gone for good: an undo + a different edit could restore the
+        // depth, and Undo would then remove that edit.
         ed.model.undo();
-        assert!(
-            ed.visible_toast_action().is_some(),
-            "the redaction is newest again"
-        );
+        assert!(ed.visible_toast_action().is_none());
         ed.toast_action = Some(EditorToastAction::RetryRecognition);
         assert!(ed.visible_toast_action().is_some());
     }

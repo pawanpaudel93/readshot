@@ -6282,7 +6282,7 @@ mod tests {
     #[test]
     fn toast_actions_name_their_key() {
         use crate::editor::EditorToastAction as A;
-        let (label, key, msg) = super::toast_action_parts(A::UndoRedaction { undo_depth: 0 });
+        let (label, key, msg) = super::toast_action_parts(A::UndoRedaction { generation: 0 });
         assert_eq!((label, key), ("Undo", Some(crate::runtime::UNDO_KEY)));
         assert!(matches!(
             msg,

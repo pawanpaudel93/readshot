@@ -440,10 +440,10 @@ pub(crate) fn sync_editor_history(
     ed.history_sync_owed = false;
     // Every history change passes here. A redaction's toast Undo is
     // only valid while that redaction is the newest step: once anything
-    // else changes history, drop it for good (depth alone could match
-    // again after undo + a different edit, and Undo would remove that).
-    if let Some(crate::editor::EditorToastAction::UndoRedaction { undo_depth }) = ed.toast_action {
-        if undo_depth != ed.model.undo_depth() {
+    // else changes history, drop it for good (the generation changes on
+    // every push, undo and redo, even at the history cap).
+    if let Some(crate::editor::EditorToastAction::UndoRedaction { generation }) = ed.toast_action {
+        if generation != ed.model.history_generation() {
             ed.toast_action = None;
         }
     }

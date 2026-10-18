@@ -1203,7 +1203,7 @@ fn a_partial_redaction_status_is_a_warning() {
     let mut ed = debug_editor_qa_session();
     ed.set_warning_with_action(
         s.clone(),
-        crate::editor::EditorToastAction::UndoRedaction { undo_depth: 0 },
+        crate::editor::EditorToastAction::UndoRedaction { generation: 0 },
     );
     assert_eq!(
         editor_toast_kind(&s, false, false, ed.status_tone()),

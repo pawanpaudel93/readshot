@@ -1116,3 +1116,47 @@ fn copy_all_after_a_redaction_recognizes_the_output() {
         "redacted text must not come from the cached panel text"
     );
 }
+
+/// At the 64-step history cap a push drops the oldest step, so the undo
+/// depth stays the same: the redaction's toast Undo must still go away
+/// once another edit (a nudge, which sets no status) is newer.
+#[test]
+fn the_redaction_undo_hides_after_a_newer_edit_at_the_history_cap() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    ready_editor(&mut app);
+    {
+        let ed = app.editor.as_mut().unwrap();
+        for i in 0..70 {
+            ed.model.commit_annotation(Annotation::Rectangle {
+                rect: RectLike::new(1.0, 1.0, 2.0 + i as f32 * 0.01, 2.0),
+                color: Rgba::OPAQUE_BLACK,
+                line_width: 1.0,
+                style: Default::default(),
+            });
+        }
+        assert_eq!(
+            ed.model.undo_depth(),
+            readshot_ui::editor::undo::MAX_HISTORY
+        );
+    }
+    let _ = update(&mut app, Message::EditorRedactAll);
+    let ed = app.editor.as_mut().unwrap();
+    assert!(ed.visible_toast_action().is_some());
+    let last = ed.model.annotations().len() - 1;
+    let Annotation::Rectangle { rect, .. } = ed.model.annotations()[last].clone() else {
+        panic!("a redaction block");
+    };
+    let centre = PointLike::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+    assert_eq!(ed.model.select_at(centre), Some(last));
+    let _ = update(&mut app, Message::EditorNudgeSelected(1.0, 0.0));
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(
+        ed.model.undo_depth(),
+        readshot_ui::editor::undo::MAX_HISTORY
+    );
+    assert_eq!(
+        ed.visible_toast_action(),
+        None,
+        "Undo would undo the nudge, not the redaction"
+    );
+}

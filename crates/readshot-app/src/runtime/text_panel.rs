@@ -782,8 +782,8 @@ fn redact(state: &mut App, only_line: Option<usize>) -> Task<Message> {
     }
     ed.refresh_image();
     sync_editor_history(ed, &state.coordinator);
-    let undo_depth = ed.model.undo_depth();
-    let action = EditorToastAction::UndoRedaction { undo_depth };
+    let generation = ed.model.history_generation();
+    let action = EditorToastAction::UndoRedaction { generation };
     if missed > 0 {
         // Partial: the items left to cover by hand must not read as done.
         ed.set_warning_with_action(status, action);
