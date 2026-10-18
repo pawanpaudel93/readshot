@@ -44,6 +44,7 @@ jobs:
 
       # libpipewire-0.3-dev + clang/libclang-dev: bindgen in libspa-sys
       # (xcap's Wayland capture). libxdo-dev: muda/tray-icon link -lxdo.
+      # libgbm-dev: xcap's libwayshot links -lgbm.
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -60,7 +61,8 @@ jobs:
             libpipewire-0.3-dev \
             libclang-dev \
             clang \
-            libxdo-dev
+            libxdo-dev \
+            libgbm-dev
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
