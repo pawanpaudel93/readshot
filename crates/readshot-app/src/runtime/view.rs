@@ -846,8 +846,6 @@ fn cli_card<'a>(
 }
 
 pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
-    use iced::widget::{mouse_area, stack};
-
     let status = state.cli_tools_status.as_deref().unwrap_or("");
 
     // --- Title row (transparent full-size title bar on macOS) ---
@@ -866,17 +864,7 @@ pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
     .height(Length::Fixed(TITLEBAR_HEIGHT))
     .align_y(Alignment::Center);
     // The row's empty background is the window's drag handle.
-    let mut drag_handle = mouse_area(
-        Space::new()
-            .width(Length::Fill)
-            .height(Length::Fixed(TITLEBAR_HEIGHT)),
-    );
-    if let Some(id) = state.cli_tools_window_id {
-        drag_handle = drag_handle.on_press(Message::WindowDragRequested(id));
-    }
-    let title_row = stack![drag_handle, title_content]
-        .width(Length::Fill)
-        .height(Length::Fixed(TITLEBAR_HEIGHT));
+    let title_row = own_title_row(title_content, state.cli_tools_window_id);
 
     // --- Body: same order as before, restyled as cards ---
     let mut cards =
@@ -920,7 +908,7 @@ pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
     ))
     .height(Length::Fill);
 
-    container(column![title_row, body])
+    container(column![].push(title_row).push(body))
         .width(Length::Fill)
         .height(Length::Fill)
         .style(bg_style)
@@ -1130,7 +1118,7 @@ fn vhairline() -> Element<'static, Message> {
 
 pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     use iced::widget::tooltip::Position;
-    use iced::widget::{mouse_area, stack, text_input};
+    use iced::widget::{stack, text_input};
 
     let p = palette(state.theme_mode);
     let total = state.history_records.len();
@@ -1252,13 +1240,15 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     };
     // While Clear All asks, Copy Visible Text steps aside so the search
     // field keeps its room at the 540 px minimum.
-    let mut title_content = row![
-        text("History")
-            .size(TYPE_HEADING)
-            .font(semibold())
-            .style(text_t1),
-        container(search).center_x(Length::Fill),
-    ];
+    // Off macOS the native title bar already says "History".
+    let mut title_content = row![]
+        .push(DRAWS_OWN_TITLE_BAR.then(|| {
+            text("History")
+                .size(TYPE_HEADING)
+                .font(semibold())
+                .style(text_t1)
+        }))
+        .push(container(search).center_x(Length::Fill));
     if !state.history_clear_all_pending {
         title_content = title_content.push(copy_visible);
     }
@@ -1274,18 +1264,9 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fixed(TITLEBAR_HEIGHT));
     // The transparent title bar is covered by this row; its empty
-    // background is the window's drag handle.
-    let mut drag_handle = mouse_area(
-        Space::new()
-            .width(Length::Fill)
-            .height(Length::Fixed(TITLEBAR_HEIGHT)),
-    );
-    if let Some(id) = state.history_window_id {
-        drag_handle = drag_handle.on_press(Message::WindowDragRequested(id));
-    }
-    let title_row = stack![drag_handle, title_content]
-        .width(Length::Fill)
-        .height(Length::Fixed(TITLEBAR_HEIGHT));
+    // background is the window's drag handle. It holds the search and
+    // Clear controls, so it stays on every platform.
+    let title_row = title_drag_row(title_content, state.history_window_id);
 
     // --- Body ---
     let body: Element<'_, Message> = if state.history_root.is_none() {
@@ -4494,23 +4475,8 @@ pub(crate) fn overlay_toolbar_layer<'a>(
 /// path from the old single-page layout is kept; only placement moved.
 pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     use iced::widget::tooltip::Position;
-    use iced::widget::{mouse_area, stack};
 
     let p = palette(state.theme_mode);
-
-    // Window drag handle for one of the two title strips (the window
-    // uses a transparent full-size title bar on macOS).
-    let drag_handle = || {
-        let mut handle = mouse_area(
-            Space::new()
-                .width(Length::Fill)
-                .height(Length::Fixed(TITLEBAR_HEIGHT)),
-        );
-        if let Some(id) = state.settings_window_id {
-            handle = handle.on_press(Message::WindowDragRequested(id));
-        }
-        handle
-    };
 
     // --- Sidebar -------------------------------------------------------
     const PANE_KEYS: [&str; 7] = [
@@ -4599,12 +4565,14 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     ]
     .spacing(6)
     .padding([12, 16]);
-    let sidebar = container(column![
-        drag_handle(),
-        nav,
-        Space::new().height(Length::Fill),
-        footer
-    ])
+    // The sidebar's top strip only clears the traffic lights.
+    let sidebar = container(
+        column![]
+            .push(own_title_row(Space::new(), state.settings_window_id))
+            .push(nav)
+            .push(Space::new().height(Length::Fill))
+            .push(footer),
+    )
     .width(Length::Fixed(200.0))
     .height(Length::Fill)
     .style(surface_style);
@@ -4640,9 +4608,8 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fixed(TITLEBAR_HEIGHT))
         .align_y(Alignment::Center);
-    let title_row = stack![drag_handle(), title_content]
-        .width(Length::Fill)
-        .height(Length::Fixed(TITLEBAR_HEIGHT));
+    // The pane's heading, not the window's name: kept on every platform.
+    let title_row = title_drag_row(title_content, state.settings_window_id);
     let pane_body = scrollable(
         container(iced::widget::Column::with_children(body).spacing(SP2))
             .width(Length::Fill)

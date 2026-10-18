@@ -39,6 +39,44 @@ pub(crate) fn macos_fullsize_titlebar() -> window::settings::PlatformSpecific {
     }
 }
 
+/// Whether windows built with [`macos_fullsize_titlebar`] hide the
+/// native title bar, so their views draw their own title row. Off macOS
+/// the native bar stays and already names and drags the window.
+pub(crate) const DRAWS_OWN_TITLE_BAR: bool = cfg!(target_os = "macos");
+
+/// `content` laid over the window's drag handle, [`TITLEBAR_HEIGHT`]
+/// tall: the top row of a view whose window uses
+/// [`macos_fullsize_titlebar`]. Use it directly for rows that hold
+/// controls (they stay on every platform); use [`own_title_row`] for a
+/// row that only names the window or clears the traffic lights.
+pub(crate) fn title_drag_row<'a>(
+    content: impl Into<iced::Element<'a, Message>>,
+    window_id: Option<window::Id>,
+) -> iced::Element<'a, Message> {
+    let mut handle = iced::widget::mouse_area(
+        iced::widget::Space::new()
+            .width(iced::Length::Fill)
+            .height(iced::Length::Fixed(TITLEBAR_HEIGHT)),
+    );
+    if let Some(id) = window_id {
+        handle = handle.on_press(Message::WindowDragRequested(id));
+    }
+    iced::widget::stack![handle, content.into()]
+        .width(iced::Length::Fill)
+        .height(iced::Length::Fixed(TITLEBAR_HEIGHT))
+        .into()
+}
+
+/// A title row that only names the window (or clears the traffic
+/// lights): [`title_drag_row`] on macOS, nothing elsewhere, where it
+/// would repeat the native title bar and cost 44 px.
+pub(crate) fn own_title_row<'a>(
+    content: impl Into<iced::Element<'a, Message>>,
+    window_id: Option<window::Id>,
+) -> Option<iced::Element<'a, Message>> {
+    DRAWS_OWN_TITLE_BAR.then(|| title_drag_row(content, window_id))
+}
+
 pub(crate) fn welcome_window_settings() -> window::Settings {
     const W: f32 = 520.0;
     const H: f32 = 380.0;
