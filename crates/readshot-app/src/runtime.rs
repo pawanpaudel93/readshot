@@ -1441,9 +1441,6 @@ fn reset_settings_to_defaults(state: &mut App) {
         SettingsMessage::SetOcrLanguages(defaults.ocr_languages),
     )));
     state.update_sync(Message::Settings(SettingsMsg::Edit(
-        SettingsMessage::SetOcrEngine(defaults.ocr_engine_choice),
-    )));
-    state.update_sync(Message::Settings(SettingsMsg::Edit(
         SettingsMessage::SetLaunchAtLogin(defaults.launch_at_login),
     )));
     state.update_sync(Message::Settings(SettingsMsg::Edit(

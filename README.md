@@ -184,8 +184,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   `esc` cancels an armed prompt or clears the search. On Windows and Linux,
   Reveal is `Ctrl+Shift+R` and Copy Visible Text is `Ctrl+Shift+A`.
 - **Settings window:** `⌘1`–`⌘7` switch panes; `esc` / `⌘W` close; `⌘L`
-  toggles launch-at-login and `⌘D` toggles debug logging; `⌘R`, `⌘E`, `⌘F`
-  cycle retention, OCR engine, and format; `⌘K` records a new capture
+  toggles launch-at-login and `⌘D` toggles debug logging; `⌘R` and `⌘F`
+  cycle retention and the default save format; `⌘K` records a new capture
   shortcut; `⇧⌘R` resets and `⇧⌘U` uninstalls (press twice to confirm).
   Each shortcut also brings up the pane its setting lives on, and the pane
   title says what changed. `Tab` / `⇧Tab` move a focus ring through the

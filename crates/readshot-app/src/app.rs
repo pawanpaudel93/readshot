@@ -157,7 +157,6 @@ pub enum SettingsFocus {
     FolderOpen,
     FolderReset,
     FilenameField,
-    OcrEngine,
     OcrLanguage(usize),
     Format,
     DebugLogging,

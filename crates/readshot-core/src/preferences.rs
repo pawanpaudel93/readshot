@@ -74,28 +74,6 @@ impl fmt::Display for HistoryRetention {
     }
 }
 
-/// Which OCR engine to use. `Native` picks the per-platform default
-/// (Apple Vision / Windows.Media.Ocr / ocrs); `Tesseract` opts the user
-/// into a separately-installed Tesseract binary as the fallback.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OcrEngineChoice {
-    #[default]
-    Native,
-    Tesseract,
-}
-
-/// User-facing labels for the OCR engine choice.
-impl fmt::Display for OcrEngineChoice {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let label = match self {
-            OcrEngineChoice::Native => "System default",
-            OcrEngineChoice::Tesseract => "Tesseract",
-        };
-        f.write_str(label)
-    }
-}
-
 /// Sparkle / self-check / Flatpak update channel.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -155,8 +133,6 @@ pub struct Preferences {
     /// Empty means "ask the OCR engine to use whatever it has". The
     /// engine intersects this with its own supported list at runtime.
     pub ocr_languages: Vec<String>,
-
-    pub ocr_engine_choice: OcrEngineChoice,
 
     pub launch_at_login: bool,
 
@@ -239,7 +215,6 @@ impl Default for Preferences {
             default_format: ExportFormat::Png,
             history_retention: HistoryRetention::Off,
             ocr_languages: Vec::new(),
-            ocr_engine_choice: OcrEngineChoice::Native,
             launch_at_login: false,
             update_channel: UpdateChannel::Stable,
             debug_logging: false,
@@ -390,6 +365,23 @@ mod tests {
         assert!(!p.push_recent_color("#333333"), "already most recent");
         assert!(p.push_recent_color("#abcdef"));
         assert_eq!(p.editor_recent_colors[0], "#ABCDEF");
+    }
+
+    #[test]
+    fn a_file_from_a_build_with_the_ocr_engine_choice_still_loads() {
+        // Older builds offered System default / Tesseract (no Tesseract
+        // engine ever shipped) and wrote the choice. It is ignored now.
+        let (_dir, path) = temp_path();
+        std::fs::write(
+            &path,
+            "schema_version = 3\nocr_engine_choice = \"tesseract\"\ndebug_logging = true\n",
+        )
+        .unwrap();
+        let p = Preferences::load(&path).unwrap();
+        assert!(p.debug_logging);
+        p.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("ocr_engine_choice"), "{saved}");
     }
 
     #[test]

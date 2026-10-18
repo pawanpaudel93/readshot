@@ -290,10 +290,9 @@ fn settings_keys_map_to_actions() {
         settings_key_action(&Key::Character("r".into()), cmd),
         Some(SettingsKeyAction::CycleRetention)
     );
-    assert_eq!(
-        settings_key_action(&Key::Character("e".into()), cmd),
-        Some(SettingsKeyAction::CycleEngine)
-    );
+    // No OCR engine choice ships (one engine per platform), so ⌘E is
+    // left to the system.
+    assert_eq!(settings_key_action(&Key::Character("e".into()), cmd), None);
     assert_eq!(
         settings_key_action(&Key::Character("f".into()), cmd),
         Some(SettingsKeyAction::CycleFormat)

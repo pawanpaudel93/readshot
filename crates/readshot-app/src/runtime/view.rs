@@ -4683,51 +4683,24 @@ fn settings_files_pane(state: &App) -> Vec<Element<'_, Message>> {
 }
 
 fn settings_ocr_pane(state: &App) -> Vec<Element<'_, Message>> {
-    use iced::widget::pick_list;
-    use iced::widget::tooltip::Position;
-    use readshot_core::OcrEngineChoice;
-
-    const ENGINE_OPTIONS: [OcrEngineChoice; 2] =
-        [OcrEngineChoice::Native, OcrEngineChoice::Tesseract];
-
+    // One engine per platform (Apple Vision, Windows.Media.Ocr, ocrs), so
+    // there is no engine to choose; only the languages.
     let ocr_supported = state.coordinator.supported_languages();
     let ocr_selected = state.preferences.ocr_languages.clone();
-    let engine_control = focus_ring(
-        tooltip_with_key(
-            pick_list(
-                &ENGINE_OPTIONS[..],
-                Some(state.preferences.ocr_engine_choice),
-                |c| Message::Settings(SettingsMsg::Edit(SettingsMessage::SetOcrEngine(c))),
-            )
-            .text_size(TYPE_BODY)
-            .padding([7, 10]),
-            "Next OCR Engine",
-            Some(SETTINGS_OCR_ENGINE_KEY),
-            Position::Top,
-        ),
-        settings_lit(state, crate::app::SettingsFocus::OcrEngine),
-    );
     vec![
-        settings_group_heading("OCR engine and languages", text_t3),
-        settings_group(vec![
-            group_row(
-                "OCR engine",
-                "System default uses your platform’s built-in recognizer. Takes effect after restart.",
-                engine_control,
+        settings_group_heading("Recognition languages", text_t3),
+        settings_group(vec![settings_block(
+            "Recognition languages",
+            "Leave all off to let the recognizer choose. Applies to your next capture.",
+            ocr_language_control(
+                &ocr_supported,
+                &ocr_selected,
+                match state.settings_focus {
+                    Some(crate::app::SettingsFocus::OcrLanguage(i)) => Some(i),
+                    _ => None,
+                },
             ),
-            settings_block(
-                "Recognition languages",
-                "Leave all off to let the recognizer choose. Applies to your next capture.",
-                ocr_language_control(
-                    &ocr_supported,
-                    &ocr_selected,
-                    match state.settings_focus {
-                        Some(crate::app::SettingsFocus::OcrLanguage(i)) => Some(i),
-                        _ => None,
-                    },
-                ),
-            ),
-        ]),
+        )]),
     ]
 }
 

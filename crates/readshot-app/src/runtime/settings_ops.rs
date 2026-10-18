@@ -148,10 +148,6 @@ const RETENTIONS: [readshot_core::HistoryRetention; 4] = [
     readshot_core::HistoryRetention::Last30Days,
     readshot_core::HistoryRetention::Unlimited,
 ];
-const ENGINES: [readshot_core::OcrEngineChoice; 2] = [
-    readshot_core::OcrEngineChoice::Native,
-    readshot_core::OcrEngineChoice::Tesseract,
-];
 const FORMATS: [readshot_core::ExportFormat; 3] = [
     readshot_core::ExportFormat::Png,
     readshot_core::ExportFormat::Jpeg,
@@ -182,9 +178,7 @@ pub(crate) fn settings_focus_items(state: &App) -> Vec<SettingsFocus> {
         ],
         SettingsPane::TextRecognition => {
             let n = state.coordinator.supported_languages().len();
-            let mut v = vec![F::OcrEngine];
-            v.extend((0..n).map(F::OcrLanguage));
-            v
+            (0..n).map(F::OcrLanguage).collect()
         }
         SettingsPane::Export => vec![F::Format],
         SettingsPane::Diagnostics => vec![F::DebugLogging],
@@ -296,10 +290,6 @@ fn adjust_settings_item(state: &mut App, item: SettingsFocus, step: i32) -> Task
                 retention_feedback(v),
             )
         }
-        F::OcrEngine => {
-            let v = pick(&ENGINES, p.ocr_engine_choice, step);
-            (SettingsMessage::SetOcrEngine(v), format!("OCR engine: {v}"))
-        }
         F::Format => {
             let v = pick(&FORMATS, p.default_format, step);
             (
@@ -399,7 +389,7 @@ fn activate_settings_item(state: &mut App, item: SettingsFocus) -> Task<Message>
         )),
         F::UninstallConfirm => Message::Settings(SettingsMsg::UninstallConfirmed),
         F::UninstallCancel => Message::Settings(SettingsMsg::UninstallCancelled),
-        F::Retention | F::OcrEngine | F::Format | F::LaunchAtLogin | F::DebugLogging => {
+        F::Retention | F::Format | F::LaunchAtLogin | F::DebugLogging => {
             return adjust_settings_item(state, item, 1)
         }
     };
@@ -624,13 +614,11 @@ fn on_settings_key_pressed(
         SettingsKeyAction::ToggleLaunchAtLogin
         | SettingsKeyAction::ToggleDebugLogging
         | SettingsKeyAction::CycleRetention
-        | SettingsKeyAction::CycleEngine
         | SettingsKeyAction::CycleFormat => {
             let item = match action {
                 SettingsKeyAction::ToggleLaunchAtLogin => SettingsFocus::LaunchAtLogin,
                 SettingsKeyAction::ToggleDebugLogging => SettingsFocus::DebugLogging,
                 SettingsKeyAction::CycleRetention => SettingsFocus::Retention,
-                SettingsKeyAction::CycleEngine => SettingsFocus::OcrEngine,
                 _ => SettingsFocus::Format,
             };
             adjust_settings_item(state, item, 1)

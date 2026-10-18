@@ -313,7 +313,6 @@ pub(crate) enum SettingsKeyAction {
     ToggleLaunchAtLogin,
     ToggleDebugLogging,
     CycleRetention,
-    CycleEngine,
     CycleFormat,
     /// Arm "Reset All Settings"; a second press confirms.
     ResetAll,
@@ -333,7 +332,6 @@ impl SettingsKeyAction {
             Self::ToggleLaunchAtLogin | Self::ResetAll | Self::Uninstall => Some(SettingsPane::App),
             Self::ToggleDebugLogging => Some(SettingsPane::Diagnostics),
             Self::CycleRetention | Self::RecordShortcut => Some(SettingsPane::Capture),
-            Self::CycleEngine => Some(SettingsPane::TextRecognition),
             Self::CycleFormat => Some(SettingsPane::Export),
             Self::Close | Self::SelectPane(_) => None,
         }
@@ -377,7 +375,6 @@ pub(crate) fn settings_key_action(
         "l" => Some(SettingsKeyAction::ToggleLaunchAtLogin),
         "d" => Some(SettingsKeyAction::ToggleDebugLogging),
         "r" => Some(SettingsKeyAction::CycleRetention),
-        "e" => Some(SettingsKeyAction::CycleEngine),
         "f" => Some(SettingsKeyAction::CycleFormat),
         "k" => Some(SettingsKeyAction::RecordShortcut),
         d if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {

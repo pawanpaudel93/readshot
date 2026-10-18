@@ -15,7 +15,7 @@
 
 use std::path::PathBuf;
 
-use readshot_core::{ExportFormat, HistoryRetention, OcrEngineChoice, Preferences, UpdateChannel};
+use readshot_core::{ExportFormat, HistoryRetention, Preferences, UpdateChannel};
 
 /// Visual tab the user is currently viewing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -38,7 +38,6 @@ pub enum SettingsMessage {
     SetDefaultFormat(ExportFormat),
     SetHistoryRetention(HistoryRetention),
     SetOcrLanguages(Vec<String>),
-    SetOcrEngine(OcrEngineChoice),
     SetLaunchAtLogin(bool),
     SetUpdateChannel(UpdateChannel),
     SetDebugLogging(bool),
@@ -108,14 +107,6 @@ pub fn apply(prefs: &mut Preferences, msg: SettingsMessage) -> bool {
                 false
             } else {
                 prefs.ocr_languages = langs;
-                true
-            }
-        }
-        SettingsMessage::SetOcrEngine(c) => {
-            if prefs.ocr_engine_choice == c {
-                false
-            } else {
-                prefs.ocr_engine_choice = c;
                 true
             }
         }

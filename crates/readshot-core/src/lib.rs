@@ -55,8 +55,7 @@ pub use png::{
 // open-from-history, etc.). Re-export so they don't need a separate
 // dependency on `uuid`.
 pub use preferences::{
-    ExportFormat, HistoryRetention, OcrEngineChoice, Preferences, UpdateChannel,
-    PREFERENCES_SCHEMA_VERSION,
+    ExportFormat, HistoryRetention, Preferences, UpdateChannel, PREFERENCES_SCHEMA_VERSION,
 };
 pub use render::render;
 pub use uuid::Uuid;

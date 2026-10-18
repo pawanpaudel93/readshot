@@ -60,7 +60,6 @@ pub(crate) const SETTINGS_PANE_KEYS: [&str; 7] = [
 ];
 pub(crate) const SETTINGS_RECORD_HOTKEY_KEY: &str = platform_key("⌘K", "Ctrl+K");
 pub(crate) const SETTINGS_RETENTION_KEY: &str = platform_key("⌘R", "Ctrl+R");
-pub(crate) const SETTINGS_OCR_ENGINE_KEY: &str = platform_key("⌘E", "Ctrl+E");
 pub(crate) const SETTINGS_FORMAT_KEY: &str = platform_key("⌘F", "Ctrl+F");
 pub(crate) const SETTINGS_DEBUG_LOGGING_KEY: &str = platform_key("⌘D", "Ctrl+D");
 pub(crate) const SETTINGS_LAUNCH_AT_LOGIN_KEY: &str = platform_key("⌘L", "Ctrl+L");
@@ -163,7 +162,6 @@ mod tests {
             HISTORY_CLEAR_ALL_KEY,
             SETTINGS_RECORD_HOTKEY_KEY,
             SETTINGS_RETENTION_KEY,
-            SETTINGS_OCR_ENGINE_KEY,
             SETTINGS_FORMAT_KEY,
             SETTINGS_DEBUG_LOGGING_KEY,
             SETTINGS_LAUNCH_AT_LOGIN_KEY,
