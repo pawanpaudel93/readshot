@@ -61,6 +61,7 @@ mod text_panel;
 pub(crate) use text_panel::*;
 mod side_panel;
 pub(crate) use side_panel::*;
+mod history_images;
 mod history_ops;
 mod settings_ops;
 

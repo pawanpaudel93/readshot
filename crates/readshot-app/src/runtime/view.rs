@@ -1426,7 +1426,7 @@ fn history_split<'a>(
                 png_path
             };
             container(
-                image_widget(image_widget::Handle::from_path(path))
+                image_widget(super::history_images::history_image_handle(&path))
                     .width(Length::Fixed(HISTORY_THUMB_W - 2.0))
                     .height(Length::Fixed(HISTORY_THUMB_H - 2.0))
                     .content_fit(iced::ContentFit::Cover)
@@ -1626,7 +1626,7 @@ pub(crate) fn history_selected_panel<'a>(
         // Scale the capture to fill the pane (up or down, aspect kept) as
         // `ContentFit::Contain` did, but size the image box to the fitted
         // size so the 1 px outline hugs the capture, not the letterbox.
-        let handle = image_widget::Handle::from_path(path);
+        let handle = super::history_images::history_image_handle(&path);
         let natural = (record.width_px as f32, record.height_px as f32);
         container(responsive(move |size| {
             let (w, h) = contain_fit(natural, (size.width - 2.0, size.height - 2.0));
