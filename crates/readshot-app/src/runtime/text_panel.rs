@@ -877,25 +877,113 @@ pub(crate) enum Run {
 }
 
 /// `text` split into runs; `marks` and `redacted` are char ranges
-/// (`marks` wins where both apply).
+/// (`marks` wins where both apply). A run boundary never splits a
+/// grapheme cluster ([`clusters`]): a cluster any char of which is
+/// marked (or redacted) is marked whole, so a combining accent, a ZWJ
+/// emoji or a flag is never drawn in two pieces.
 pub(crate) fn line_spans(
     text: &str,
     marks: &[Range<usize>],
     redacted: &[Range<usize>],
 ) -> Vec<(String, Run)> {
     let mut out: Vec<(String, Run)> = Vec::new();
-    for (i, c) in text.chars().enumerate() {
-        let run = if marks.iter().any(|r| r.contains(&i)) {
+    for (chars, cluster) in clusters(text) {
+        let hit = |ranges: &[Range<usize>]| {
+            ranges
+                .iter()
+                .any(|r| r.start < chars.end && chars.start < r.end)
+        };
+        let run = if hit(marks) {
             Run::Marked
-        } else if redacted.iter().any(|r| r.contains(&i)) {
+        } else if hit(redacted) {
             Run::Redacted
         } else {
             Run::Plain
         };
         match out.last_mut() {
-            Some((s, r)) if *r == run => s.push(c),
-            _ => out.push((c.to_string(), run)),
+            Some((s, r)) if *r == run => s.push_str(cluster),
+            _ => out.push((cluster.to_string(), run)),
         }
+    }
+    out
+}
+
+/// A char that attaches to the one before it in a cluster: combining
+/// marks (the combining blocks and the common Hebrew, Arabic, Indic and
+/// Thai marks), variation selectors, emoji skin-tone modifiers, tag
+/// characters and the zero-width joiner. An approximation of Unicode's
+/// extended grapheme clusters, enough for display.
+fn extends_cluster(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x0300..=0x036F
+            | 0x0483..=0x0489
+            | 0x0591..=0x05BD
+            | 0x05BF
+            | 0x05C1..=0x05C2
+            | 0x05C4..=0x05C5
+            | 0x05C7
+            | 0x0610..=0x061A
+            | 0x064B..=0x065F
+            | 0x0670
+            | 0x06D6..=0x06DC
+            | 0x06DF..=0x06E4
+            | 0x06E7..=0x06E8
+            | 0x06EA..=0x06ED
+            | 0x0900..=0x0903
+            | 0x093A..=0x094F
+            | 0x0951..=0x0957
+            | 0x0962..=0x0963
+            | 0x0981..=0x0983
+            | 0x09BC..=0x09D7
+            | 0x0E31
+            | 0x0E34..=0x0E3A
+            | 0x0E47..=0x0E4E
+            | 0x1AB0..=0x1AFF
+            | 0x1DC0..=0x1DFF
+            | 0x200C..=0x200D
+            | 0x20D0..=0x20FF
+            | 0xFE00..=0xFE0F
+            | 0xFE20..=0xFE2F
+            | 0x1F3FB..=0x1F3FF
+            | 0xE0020..=0xE007F
+            | 0xE0100..=0xE01EF
+    )
+}
+
+fn is_regional_indicator(c: char) -> bool {
+    matches!(u32::from(c), 0x1F1E6..=0x1F1FF)
+}
+
+/// `text` as grapheme clusters, each with its char range: a base char
+/// plus every char that extends it ([`extends_cluster`]), the char after
+/// a zero-width joiner (ZWJ emoji sequences), and regional indicators in
+/// pairs (flags).
+fn clusters(text: &str) -> Vec<(Range<usize>, &str)> {
+    let mut out: Vec<(Range<usize>, &str)> = Vec::new();
+    // (char start, byte start, regional indicators so far, after a ZWJ)
+    let mut current: Option<(usize, usize, usize, bool)> = None;
+    for (i, (byte, c)) in text.char_indices().enumerate() {
+        let joins = current.is_some_and(|(_, _, ri, zwj)| {
+            zwj || extends_cluster(c) || (ri == 1 && is_regional_indicator(c))
+        });
+        match current.as_mut() {
+            Some((_, _, ri, zwj)) if joins => {
+                if is_regional_indicator(c) {
+                    *ri += 1;
+                }
+                *zwj = c == '\u{200D}';
+            }
+            _ => {
+                if let Some((start, from, _, _)) = current {
+                    out.push((start..i, &text[from..byte]));
+                }
+                current = Some((i, byte, usize::from(is_regional_indicator(c)), false));
+            }
+        }
+    }
+    if let Some((start, from, _, _)) = current {
+        out.push((start..text.chars().count(), &text[from..]));
     }
     out
 }
@@ -1596,6 +1684,61 @@ mod tests {
             ]
         );
         assert!(line_spans("", &[], &[]).is_empty());
+    }
+
+    #[test]
+    fn clusters_keep_marks_joiners_selectors_tones_and_flags_together() {
+        let parts = |s: &str| -> Vec<String> {
+            clusters(s)
+                .into_iter()
+                .map(|(_, c)| c.to_string())
+                .collect()
+        };
+        // e + combining acute; a precomposed é stays one char.
+        assert_eq!(parts("e\u{301}x"), ["e\u{301}", "x"]);
+        // A ZWJ family is one cluster.
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        assert_eq!(parts(&format!("a{family}b")), ["a", family, "b"]);
+        // Variation selector, skin tone, keycap.
+        assert_eq!(parts("\u{2764}\u{FE0F}!"), ["\u{2764}\u{FE0F}", "!"]);
+        assert_eq!(parts("\u{1F44B}\u{1F3FD}"), ["\u{1F44B}\u{1F3FD}"]);
+        assert_eq!(parts("1\u{FE0F}\u{20E3}"), ["1\u{FE0F}\u{20E3}"]);
+        // Regional indicators pair up: two flags, then a lone one.
+        let (fr, de) = ("\u{1F1EB}\u{1F1F7}", "\u{1F1E9}\u{1F1EA}");
+        assert_eq!(parts(&format!("{fr}{de}\u{1F1EB}")), [fr, de, "\u{1F1EB}"]);
+        // Char ranges line up with char indices.
+        let ranges: Vec<_> = clusters("e\u{301}ab").into_iter().map(|(r, _)| r).collect();
+        assert_eq!(ranges, [0..2, 2..3, 3..4]);
+        assert!(clusters("").is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn line_spans_never_split_a_cluster() {
+        // A detector span ending between e and its accent marks both.
+        assert_eq!(
+            line_spans("xe\u{301}y", &[0..2], &[]),
+            vec![
+                ("xe\u{301}".to_string(), Run::Marked),
+                ("y".to_string(), Run::Plain)
+            ]
+        );
+        // A redaction covering half a flag mutes the whole flag.
+        let flag = "\u{1F1EB}\u{1F1F7}";
+        assert_eq!(
+            line_spans(&format!("{flag} a@b.co"), &[3..9], &[1..2]),
+            vec![
+                (flag.to_string(), Run::Redacted),
+                (" ".to_string(), Run::Plain),
+                ("a@b.co".to_string(), Run::Marked)
+            ]
+        );
+        // A ZWJ family split by a mark is marked whole.
+        let family = "\u{1F468}\u{200D}\u{1F469}";
+        assert_eq!(
+            line_spans(family, &[2..3], &[]),
+            vec![(family.to_string(), Run::Marked)]
+        );
     }
 
     #[test]
