@@ -932,3 +932,16 @@ fn the_compact_scroll_footer_keeps_both_labels_whole() {
 fn every_size_readout_reads_the_same_way() {
     assert_eq!(size_px(1200, 800), "1200\u{a0}×\u{a0}800\u{a0}px");
 }
+
+/// A delete History refuses because the record's folder links outside
+/// History names that reason and the fix, not "try again".
+#[test]
+fn a_refused_delete_names_the_link_and_the_fix() {
+    let e = readshot_core::HistoryError::OutsideRoot(
+        "the folder of /x/2026/10/a.png resolves outside the history root".into(),
+    );
+    let msg = history_ops::friendly_history_error("delete this capture", &e);
+    assert!(msg.contains("a link to a folder outside History"), "{msg}");
+    assert!(msg.contains("Replace that link"), "{msg}");
+    assert!(!msg.contains("/x/2026"), "{msg}");
+}

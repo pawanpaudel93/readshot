@@ -621,6 +621,9 @@ pub(crate) const HIDDEN_TEXT_LIST_LABEL: &str = "Text hidden (redacted)";
 /// never leaves the user at a dead end. Kept as module consts so every
 /// call site draws from the same small vocabulary.
 pub(crate) const RETRY_HINT: &str = "Try again.";
+/// For a record whose History folder is a link out of History.
+pub(crate) const OUTSIDE_ROOT_HINT: &str =
+    "Replace that link with a real folder (or move the folder back into History), then try again.";
 pub(crate) const SAVE_HINT: &str = "Pick a different folder in Settings and try again.";
 pub(crate) const CAPTURE_PERMISSION_HINT: &str =
     "Check Screen Recording permission in System Settings and try again.";
@@ -680,6 +683,14 @@ pub(crate) fn friendly_history_error(action: &str, e: &readshot_core::HistoryErr
                 action,
                 Some("the history data looks damaged"),
                 Some(RESTART_HINT),
+            );
+        }
+        // Retrying can't help: the folder must be fixed first.
+        HistoryError::OutsideRoot(_) => {
+            return compose_friendly(
+                action,
+                Some("its folder in History is a link to a folder outside History"),
+                Some(OUTSIDE_ROOT_HINT),
             );
         }
     };

@@ -1405,9 +1405,7 @@ impl HistoryStore for FsHistoryStore {
                 target: crate::log::cat::HISTORY,
                 "not deleting history record {id}: {why}"
             );
-            return Err(HistoryError::Io(format!(
-                "couldn't delete the capture's files: {why}"
-            )));
+            return Err(HistoryError::OutsideRoot(why));
         }
         let entry = index.records.remove(pos);
         self.remove_entry_files(&entry);

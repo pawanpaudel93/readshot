@@ -135,6 +135,10 @@ pub enum HistoryError {
     Parse(String),
     #[error("history serialise: {0}")]
     Serialize(String),
+    /// A record's folder resolves outside the history root (a symlinked
+    /// `YYYY/MM`): its files are left alone and the record is kept.
+    #[error("history path outside the root: {0}")]
+    OutsideRoot(String),
 }
 
 impl From<std::io::Error> for HistoryError {
