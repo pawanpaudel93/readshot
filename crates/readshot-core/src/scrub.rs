@@ -6,19 +6,30 @@
 //! Lines. Hidden characters become `█`, one per character, so line
 //! structure and word lengths survive.
 //!
-//! Which words are hidden:
+//! Which words are hidden (privacy over precision: over-masking is
+//! acceptable, under-masking never):
 //! - **With line positions** (Apple Vision): a recognized word whose box
-//!   is at least half covered by redactions — an opaque, square-cornered
-//!   filled rectangle (the Solid redaction), a Blur or a Pixelate. Blur
-//!   and pixelate count as hiding here: the user meant to hide the word.
-//!   Coverage adds up over every redaction, so two adjacent blocks that
-//!   each cover part of a word can hide it together (this can only over-
-//!   count, never miss).
-//! - **Without positions** (Windows, Linux engines): nothing ties a word
-//!   to a place on the image, so when any redaction exists every
-//!   sensitive item the smart-redact detector finds ([`crate::redact::scan`])
-//!   is masked, in every line. Words a user hid by hand that the detector
-//!   doesn't recognise stay readable — the limit of position-less OCR.
+//!   any redaction overlaps — an opaque, square-cornered filled rectangle
+//!   (the Solid redaction), a Blur or a Pixelate — is hidden **in full**,
+//!   however little of it is covered: a cover over only `hunter2` in
+//!   `password=hunter2` hides the whole token. Blur and pixelate count as
+//!   hiding: the user meant to hide the word. Only hairline contact is
+//!   ignored, so a cover that grazes the neighbouring word's edge leaves
+//!   it readable: an overlap under [`HAIRLINE_PX`] deep (its narrow side)
+//!   **and** under [`HAIRLINE_FRACTION`] of the word box's area. Overlaps
+//!   add up, so several hairlines that together pass the area limit hide
+//!   the word.
+//! - A token no usable word box accounts for has no reliable position
+//!   inside its line: the line box is axis-aligned, and after a flip or a
+//!   turn its text runs right to left or along y. So any redaction
+//!   overlapping the line box (same hairline rule) hides every such token
+//!   of that line.
+//! - **Without positions** (Windows, Linux engines), or a line without a
+//!   box: nothing ties a word to a place on the image, so once any
+//!   redaction exists nothing can tell which words it hides.
+//!   [`hidden_spans`] returns `None` and callers withhold the text
+//!   entirely (History stores none, Copy Lines refuses) — never text with
+//!   only the detected items masked.
 //!
 //! Pure; no I/O.
 
@@ -32,8 +43,13 @@ use crate::text_lines::{TextDocument, TextLine};
 /// The mask character.
 pub const MASK: char = '█';
 
-/// Fraction of a word box that redactions must cover to hide the word.
-const HIDDEN_FRACTION: f32 = 0.5;
+/// Hairline tolerance: an overlap shallower than this (px, its narrow
+/// side) **and** smaller than [`HAIRLINE_FRACTION`] of the word box is
+/// contact, not cover, and hides nothing.
+pub const HAIRLINE_PX: f32 = 1.0;
+
+/// See [`HAIRLINE_PX`]: the area limit, as a fraction of the word box.
+pub const HAIRLINE_FRACTION: f32 = 0.01;
 
 /// A hidden run: chars `span` of `TextDocument::lines[line]`.
 pub type HiddenSpan = (usize, Range<usize>);
@@ -49,10 +65,16 @@ pub fn has_redaction(annotations: &[Annotation]) -> bool {
     annotations.iter().any(is_redaction)
 }
 
+/// Every redaction's rect, normalised to non-negative sizes.
 fn redaction_rects(annotations: &[Annotation]) -> Vec<RectLike> {
     annotations
         .iter()
         .filter_map(Annotation::redaction_rect)
+        .map(|r| {
+            let (x0, x1) = (r.x.min(r.x + r.width), r.x.max(r.x + r.width));
+            let (y0, y1) = (r.y.min(r.y + r.height), r.y.max(r.y + r.height));
+            RectLike::new(x0, y0, x1 - x0, y1 - y0)
+        })
         .collect()
 }
 
@@ -252,21 +274,38 @@ fn area(r: RectLike) -> f32 {
     r.width.max(0.0) * r.height.max(0.0)
 }
 
-fn intersection_area(a: RectLike, b: RectLike) -> f32 {
+/// Width and height of `a ∩ b` (0 when they don't overlap).
+fn intersection(a: RectLike, b: RectLike) -> (f32, f32) {
     let x0 = a.x.max(b.x);
     let y0 = a.y.max(b.y);
     let x1 = (a.x + a.width).min(b.x + b.width);
     let y1 = (a.y + a.height).min(b.y + b.height);
-    (x1 - x0).max(0.0) * (y1 - y0).max(0.0)
+    ((x1 - x0).max(0.0), (y1 - y0).max(0.0))
 }
 
+/// Whether redactions hide `word` (a box): any overlap that isn't
+/// hairline contact (see the module docs), or hairlines that together
+/// reach [`HAIRLINE_FRACTION`] of it.
 fn is_hidden(word: RectLike, redactions: &[RectLike]) -> bool {
     let a = area(word);
-    if a <= 0.0 {
+    // NaN or no area: not a usable box.
+    if a.is_nan() || a <= 0.0 {
         return false;
     }
-    let covered: f32 = redactions.iter().map(|r| intersection_area(word, *r)).sum();
-    covered >= a * HIDDEN_FRACTION
+    let mut hairlines = 0.0;
+    for r in redactions {
+        let (w, h) = intersection(word, *r);
+        if w.is_nan() || h.is_nan() || w <= 0.0 || h <= 0.0 {
+            continue;
+        }
+        let overlap = w * h;
+        let hairline = w.min(h) < HAIRLINE_PX && overlap < a * HAIRLINE_FRACTION;
+        if !hairline {
+            return true;
+        }
+        hairlines += overlap;
+    }
+    hairlines >= a * HAIRLINE_FRACTION
 }
 
 /// Whitespace-delimited token ranges (char indices) of `chars`.
@@ -287,15 +326,20 @@ fn tokens(chars: &[char]) -> Vec<Range<usize>> {
     out
 }
 
-/// Hidden char ranges of one positioned line. Each word box is tested on
-/// its own; a token no usable word box accounts for is tested with its
-/// proportional slice of the line box.
-fn hidden_in_line(line: &TextLine, redactions: &[RectLike]) -> Vec<Range<usize>> {
-    let Some(line_rect) = line.rect else {
-        return Vec::new();
-    };
+/// Hidden char ranges of one positioned line; `None` when it has no box
+/// (nothing can tell what is hidden). Each word box is tested on its own
+/// ([`is_hidden`]) and hides its whole token part. Chars no usable word
+/// box accounts for are hidden when any redaction hides the line box: a
+/// position inside the line can't be trusted (flips and turns reverse or
+/// rotate the text inside its axis-aligned box).
+fn hidden_in_line(line: &TextLine, redactions: &[RectLike]) -> Option<Vec<Range<usize>>> {
+    let line_rect = line.rect?;
     let chars: Vec<char> = line.text.chars().collect();
     let n = chars.len();
+    // A line box with no usable area (NaN, or clamped to nothing) can't
+    // be tested: its unboxed chars count as hidden (fail closed).
+    let line_area = area(line_rect);
+    let line_hit = line_area.is_nan() || line_area <= 0.0 || is_hidden(line_rect, redactions);
     let usable: Vec<_> = line
         .words
         .iter()
@@ -307,20 +351,16 @@ fn hidden_in_line(line: &TextLine, redactions: &[RectLike]) -> Vec<Range<usize>>
             .iter()
             .filter(|w| tok.start < w.end && w.start < tok.end)
             .collect();
-        if boxed.is_empty() {
-            if is_hidden(slice(line_rect, n, tok.clone()), redactions) {
-                out.push(tok);
-            }
-            continue;
-        }
         for w in &boxed {
             if is_hidden(w.rect, redactions) {
                 out.push(tok.start.max(w.start)..tok.end.min(w.end).min(n));
             }
         }
-        // Chars of the token no word box accounts for (an engine that
-        // boxed only part of a glued token) are tested on their own, by
-        // their slice of the line box — never skipped.
+        if !line_hit {
+            continue;
+        }
+        // Chars of the token no word box accounts for (no box at all, or
+        // an engine that boxed only part of a glued token): never skipped.
         let mut i = tok.start;
         while i < tok.end {
             if boxed.iter().any(|w| w.start <= i && i < w.end) {
@@ -331,45 +371,41 @@ fn hidden_in_line(line: &TextLine, redactions: &[RectLike]) -> Vec<Range<usize>>
             while i < tok.end && !boxed.iter().any(|w| w.start <= i && i < w.end) {
                 i += 1;
             }
-            if is_hidden(slice(line_rect, n, rs..i), redactions) {
-                out.push(rs..i);
-            }
+            out.push(rs..i);
         }
     }
-    out
-}
-
-/// Proportional slice of `line` for chars `r` of an `n`-char line.
-fn slice(line: RectLike, n: usize, r: Range<usize>) -> RectLike {
-    let nf = n as f32;
-    let x0 = line.x + line.width * r.start as f32 / nf;
-    let x1 = line.x + line.width * r.end as f32 / nf;
-    RectLike::new(x0, line.y, x1 - x0, line.height)
+    Some(out)
 }
 
 /// Every hidden span of `doc` under `annotations` (see the module docs
-/// for the rule with and without positions). Empty when no annotation is
-/// a redaction.
-pub fn hidden_spans(doc: &TextDocument, annotations: &[Annotation]) -> Vec<HiddenSpan> {
+/// for the rule). `Some(empty)` when no annotation is a redaction.
+/// `None` when there is a redaction but `doc` can't tell what it hides
+/// (no positions, or a line without a box): the caller must then
+/// withhold the text, never serve it.
+pub fn hidden_spans(doc: &TextDocument, annotations: &[Annotation]) -> Option<Vec<HiddenSpan>> {
     if !has_redaction(annotations) {
-        return Vec::new();
+        return Some(Vec::new());
     }
     if !doc.positioned {
-        return crate::redact::scan(doc)
-            .into_iter()
-            .map(|m| (m.line, m.span))
-            .collect();
+        return None;
     }
     let redactions = redaction_rects(annotations);
-    doc.lines
-        .iter()
-        .enumerate()
-        .flat_map(|(i, line)| {
-            hidden_in_line(line, &redactions)
+    let mut out = Vec::new();
+    for (i, line) in doc.lines.iter().enumerate() {
+        out.extend(
+            hidden_in_line(line, &redactions)?
                 .into_iter()
-                .map(move |r| (i, r))
-        })
-        .collect()
+                .map(|r| (i, r)),
+        );
+    }
+    Some(out)
+}
+
+/// `doc`'s layout text with every word `annotations` hide masked
+/// ([`hidden_spans`], [`masked_layout_text`]); `None` when it can't be
+/// masked and must be withheld.
+pub fn masked_text(doc: &TextDocument, annotations: &[Annotation]) -> Option<String> {
+    Some(masked_layout_text(doc, &hidden_spans(doc, annotations)?))
 }
 
 fn by_line(spans: &[HiddenSpan]) -> BTreeMap<usize, Vec<Range<usize>>> {
@@ -666,7 +702,7 @@ mod tests {
         let hide = redactions_in_crop(&[solid(RectLike::new(50.0, 10.0, 60.0, 10.0))], crop);
         let out = document_in_crop(&doc(), crop).unwrap();
         assert_eq!(
-            masked_layout_text(&out, &hidden_spans(&out, &hide)),
+            masked_layout_text(&out, &hidden_spans(&out, &hide).unwrap()),
             "██████"
         );
     }
@@ -912,14 +948,13 @@ mod tests {
     }
 
     #[test]
-    fn a_word_at_least_half_covered_is_hidden() {
+    fn a_word_covered_at_all_is_hidden() {
         let d = doc();
-        // Covers 30 of the 60 px of "Zx9Qw7" (exactly half).
-        let anns = [solid(RectLike::new(50.0, 10.0, 30.0, 10.0))];
-        assert_eq!(hidden_spans(&d, &anns), vec![(1, 5..11)]);
-        // 29 px: under half.
-        let anns = [solid(RectLike::new(50.0, 10.0, 29.0, 10.0))];
-        assert!(hidden_spans(&d, &anns).is_empty());
+        // Half, then a sixth, of the 60 px of "Zx9Qw7": hidden either way.
+        for w in [30.0, 10.0] {
+            let anns = [solid(RectLike::new(50.0, 10.0, w, 10.0))];
+            assert_eq!(hidden_spans(&d, &anns).unwrap(), vec![(1, 5..11)]);
+        }
     }
 
     #[test]
@@ -935,7 +970,7 @@ mod tests {
                 block_size: 4.0,
             },
         ];
-        assert_eq!(hidden_spans(&d, &anns), vec![(1, 5..11)]);
+        assert_eq!(hidden_spans(&d, &anns).unwrap(), vec![(1, 5..11)]);
     }
 
     #[test]
@@ -946,24 +981,29 @@ mod tests {
             color: Rgba::OPAQUE_BLACK,
             line_width: 4.0,
         }];
-        assert!(hidden_spans(&d, &anns).is_empty());
+        assert!(hidden_spans(&d, &anns).unwrap().is_empty());
         assert!(!has_redaction(&anns));
     }
 
     #[test]
-    fn tokens_without_word_boxes_use_their_slice_of_the_line() {
+    fn tokens_without_word_boxes_are_hidden_with_their_line() {
         let mut d = doc();
         d.lines[1].words.clear();
-        // 16 chars over 160 px: "Zx9Qw7" is x 50..110.
         let anns = [solid(RectLike::new(50.0, 10.0, 60.0, 10.0))];
-        assert_eq!(hidden_spans(&d, &anns), vec![(1, 5..11)]);
+        assert_eq!(
+            hidden_spans(&d, &anns).unwrap(),
+            vec![(1, 0..4), (1, 5..11), (1, 12..16)]
+        );
+        // Line one (y 0–10) is only touched: untouched.
+        let masked = mask_document(&d, &hidden_spans(&d, &anns).unwrap());
+        assert_eq!(masked.lines[0].text, "intro line");
     }
 
     #[test]
     fn masking_keeps_char_counts_and_line_structure() {
         let d = doc();
         let anns = [solid(RectLike::new(50.0, 10.0, 60.0, 10.0))];
-        let spans = hidden_spans(&d, &anns);
+        let spans = hidden_spans(&d, &anns).unwrap();
         let masked = mask_document(&d, &spans);
         assert_eq!(masked.lines[0].text, "intro line");
         assert_eq!(masked.lines[1].text, "key: ██████ next");
@@ -981,7 +1021,7 @@ mod tests {
         // A table layout normalises the line; the word appears twice.
         d.layout_text = "| key: | Zx9Qw7 | next |\nagain Zx9Qw7".into();
         let anns = [solid(RectLike::new(50.0, 10.0, 60.0, 10.0))];
-        let spans = hidden_spans(&d, &anns);
+        let spans = hidden_spans(&d, &anns).unwrap();
         assert_eq!(
             masked_layout_text(&d, &spans),
             "| key: | ██████ | next |\nagain ██████"
@@ -989,19 +1029,29 @@ mod tests {
     }
 
     #[test]
-    fn without_positions_every_detected_item_is_masked_once_anything_is_redacted() {
+    fn without_positions_any_redaction_withholds_the_text() {
+        // Nothing ties a word to a place on the image, so nothing can say
+        // which words a hand-drawn redaction hides: the text is withheld
+        // (`None`), never stored with only the detected items masked.
         let email = ["someone", "@", "example.com"].concat();
-        let d = TextDocument::from_plain(&format!("Contact\nmail {email} now"));
+        let d = TextDocument::from_plain(&format!("Patient: John Smith\nmail {email} now"));
         let anns = [solid(RectLike::new(0.0, 0.0, 4.0, 4.0))];
-        let spans = hidden_spans(&d, &anns);
-        let masked = mask_document(&d, &spans);
-        assert!(!masked.layout_text.contains(&email));
+        assert_eq!(hidden_spans(&d, &anns), None);
+        // No redaction: nothing is hidden, the text is fine as is.
+        assert_eq!(hidden_spans(&d, &[]), Some(Vec::new()));
+        // A positioned document with a line that lost its box can't be
+        // placed either.
+        let mut boxless = doc();
+        boxless.lines[1].rect = None;
+        assert_eq!(hidden_spans(&boxless, &anns), None);
+        // A line box with no usable size: its unboxed words are hidden.
+        let mut degenerate = doc();
+        degenerate.lines[0].rect = Some(RectLike::new(f32::NAN, 0.0, 10.0, 10.0));
+        degenerate.lines[0].words.clear();
         assert_eq!(
-            masked.layout_text,
-            format!("Contact\nmail {} now", "█".repeat(email.chars().count()))
+            hidden_spans(&degenerate, &anns).unwrap(),
+            vec![(0, 0..5), (0, 6..10)]
         );
-        // No redaction: nothing is masked.
-        assert!(hidden_spans(&d, &[]).is_empty());
     }
 
     #[test]
@@ -1012,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn chars_of_a_token_outside_every_word_box_are_tested_on_their_own() {
+    fn chars_outside_every_word_box_are_hidden_with_their_line() {
         let mut d = doc();
         // Only "key:" has a box; "Zx9Qw7" and "next" have none, and the
         // engine boxed the first half of a glued token "key:Zx9Qw7".
@@ -1020,13 +1070,15 @@ mod tests {
         d.lines[1].rect = Some(RectLike::new(0.0, 10.0, 150.0, 10.0));
         d.lines[1].words = vec![word(0, 4, 0.0, 10.0, 40.0)];
         d.layout_text = "intro line\nkey:Zx9Qw7 next".into();
-        // Cover x 40..100 — the unboxed "Zx9Qw7" only.
+        // Cover x 40..100. The unboxed chars have no trusted place in the
+        // line, so the cover hides all of them; "key:" (x 0–40, only
+        // touched) stays.
         let anns = [solid(RectLike::new(40.0, 10.0, 60.0, 10.0))];
-        let spans = hidden_spans(&d, &anns);
-        assert_eq!(spans, vec![(1, 4..10)]);
+        let spans = hidden_spans(&d, &anns).unwrap();
+        assert_eq!(spans, vec![(1, 4..10), (1, 11..15)]);
         assert_eq!(
             masked_layout_text(&d, &spans),
-            "intro line\nkey:██████ next"
+            "intro line\nkey:██████ ████"
         );
     }
 
@@ -1037,7 +1089,7 @@ mod tests {
         // the layout no line accounts for (e.g. a code fence header).
         d.layout_text = "Zx9Qw7\nintro line\n  key: Zx9Qw7 next".into();
         let anns = [solid(RectLike::new(50.0, 10.0, 60.0, 10.0))];
-        let spans = hidden_spans(&d, &anns);
+        let spans = hidden_spans(&d, &anns).unwrap();
         let masked = masked_layout_text(&d, &spans);
         assert!(!masked.contains("Zx9Qw7"), "{masked}");
     }
@@ -1049,8 +1101,130 @@ mod tests {
         // neither the line nor the word can be found in it.
         d.layout_text = "intro line\nkey: Zx9 Qw7 next".into();
         let anns = [solid(RectLike::new(50.0, 10.0, 60.0, 10.0))];
-        let spans = hidden_spans(&d, &anns);
+        let spans = hidden_spans(&d, &anns).unwrap();
         let masked = masked_layout_text(&d, &spans);
         assert_eq!(masked, "intro line\nkey: ██████ next");
+    }
+
+    /// "password=hunter2", one Vision box over the whole token, x 0–160.
+    fn password_line() -> TextDocument {
+        one_box_line("password=hunter2", 0.0, 0.0)
+    }
+
+    #[test]
+    fn a_word_partly_covered_is_hidden_in_full() {
+        // A Blur over "hunter2" only (x 90–160, 44 % of the box): the
+        // image hides it, so the text must too — the whole token goes.
+        let d = password_line();
+        for a in [
+            Annotation::Blur {
+                rect: RectLike::new(90.0, 0.0, 70.0, 10.0),
+                radius: 2.0,
+            },
+            solid(RectLike::new(150.0, 2.0, 10.0, 6.0)),
+            Annotation::Pixelate {
+                rect: RectLike::new(-20.0, -5.0, 22.0, 30.0),
+                block_size: 4.0,
+            },
+        ] {
+            let spans = hidden_spans(&d, std::slice::from_ref(&a)).unwrap();
+            assert_eq!(spans, vec![(0, 0..16)], "{a:?}");
+            let masked = masked_layout_text(&d, &spans);
+            assert!(!masked.contains("hunter2"), "{masked}");
+        }
+    }
+
+    #[test]
+    fn hairline_contact_does_not_hide_a_neighbouring_word() {
+        // "key: Zx9Qw7 next": "next" is x 120–160. A cover whose edge
+        // meets it within the hairline tolerance (under 1 px deep and
+        // under 1 % of the box) leaves it; 1 px deep hides it.
+        let d = doc();
+        let cover = |x1: f32| solid(RectLike::new(50.0, 10.0, x1 - 50.0, 10.0));
+        // 0.9 px into "next": 9 px² of 400 (2.25 %) — over 1 % of the
+        // box, so not hairline: hidden.
+        assert_eq!(
+            hidden_spans(&d, &[cover(120.9)]).unwrap(),
+            vec![(1, 5..11), (1, 12..16)]
+        );
+        // 0.3 px: 3 px² (0.75 %) and under 1 px: hairline, ignored.
+        assert_eq!(hidden_spans(&d, &[cover(120.3)]).unwrap(), vec![(1, 5..11)]);
+        // Exactly 1 px deep is never hairline, even if tiny in area.
+        let mut wide = one_box_line(&"w".repeat(100), 0.0, 0.0);
+        wide.lines[0].words[0].rect = RectLike::new(0.0, 0.0, 1000.0, 10.0);
+        let edge = |w: f32| solid(RectLike::new(1000.0 - w, 0.0, 50.0, 10.0));
+        assert_eq!(hidden_spans(&wide, &[edge(1.0)]).unwrap().len(), 1);
+        // 0.9 px deep, 9 px² of 10 000 (0.09 %): hairline.
+        assert!(hidden_spans(&wide, &[edge(0.9)]).unwrap().is_empty());
+        // Merely touching (0 px) is no overlap.
+        assert!(hidden_spans(&wide, &[edge(0.0)]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn several_hairlines_that_add_up_hide_the_word() {
+        let mut wide = one_box_line(&"w".repeat(100), 0.0, 0.0);
+        wide.lines[0].words[0].rect = RectLike::new(0.0, 0.0, 100.0, 10.0);
+        // Two 0.6 px slivers: 6 px² each (0.6 %), 1.2 % together.
+        let anns = [
+            solid(RectLike::new(-10.0, 0.0, 10.6, 10.0)),
+            solid(RectLike::new(99.4, 0.0, 10.0, 10.0)),
+        ];
+        assert_eq!(hidden_spans(&wide, &anns).unwrap().len(), 1);
+        assert!(hidden_spans(&wide, &anns[..1]).unwrap().is_empty());
+    }
+
+    /// "SECRET1234 and some other words here" (36 chars) with a line box
+    /// x 10–370, y 10–30 of a 400 × 50 image and no word boxes; the real
+    /// glyphs of "SECRET1234" are x 10–110.
+    fn boxless_line() -> TextDocument {
+        TextDocument {
+            lines: vec![TextLine {
+                text: "SECRET1234 and some other words here".into(),
+                rect: Some(RectLike::new(10.0, 10.0, 360.0, 20.0)),
+                words: Vec::new(),
+            }],
+            positioned: true,
+            layout_text: "SECRET1234 and some other words here".into(),
+        }
+    }
+
+    fn every_orientation() -> Vec<(&'static str, crate::document::Transform)> {
+        use crate::document::{FlipAxis, Transform};
+        let t = Transform::default();
+        vec![
+            ("identity", t),
+            ("flip h", t.flipped(FlipAxis::Horizontal)),
+            ("flip v", t.flipped(FlipAxis::Vertical)),
+            ("turn 90", t.rotated_cw()),
+            ("turn 180", t.rotated_cw().rotated_cw()),
+            ("turn 270", t.rotated_ccw()),
+            (
+                "turn 90 + flip h",
+                t.rotated_cw().flipped(FlipAxis::Horizontal),
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_boxless_token_is_hidden_whatever_the_orientation() {
+        use crate::document::{map_annotation, map_text_document};
+        let d = boxless_line();
+        let secret = solid(RectLike::new(10.0, 10.0, 100.0, 20.0));
+        for (name, t) in every_orientation() {
+            let (m, _) = t.affine(400, 50);
+            let moved = map_text_document(&d, &m);
+            // The user covers where the secret really is now.
+            let cover = map_annotation(&secret, &m);
+            let spans = hidden_spans(&moved, std::slice::from_ref(&cover)).unwrap();
+            let masked = masked_layout_text(&moved, &spans);
+            assert!(!masked.contains("SECRET1234"), "{name}: {masked}");
+        }
+    }
+
+    #[test]
+    fn a_redaction_off_a_boxless_line_hides_none_of_it() {
+        let d = boxless_line();
+        let elsewhere = solid(RectLike::new(10.0, 35.0, 100.0, 10.0));
+        assert!(hidden_spans(&d, &[elsewhere]).unwrap().is_empty());
     }
 }

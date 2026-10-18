@@ -57,7 +57,7 @@ fn a_non_redaction_edit_keeps_the_plain_sidecar_sync() {
 }
 
 #[test]
-fn without_positions_a_redaction_masks_every_detected_item() {
+fn without_positions_a_redaction_withholds_the_stored_text() {
     let dir = tempfile::TempDir::new().unwrap();
     let store = Arc::new(FsHistoryStore::new(dir.path().join("history")));
     let mut app = build_app_with_history(
@@ -72,8 +72,9 @@ fn without_positions_a_redaction_masks_every_detected_item() {
     let mut ed = crate::editor::EditorSession::from_history(solid(64, 64), record);
     super::super::text_panel::seed_text_from_history(&mut ed, false);
     app.editor = Some(ed);
-    // A solid block drawn by hand somewhere: positions are unknown,
-    // so every detected item is masked.
+    // A solid block drawn by hand somewhere: positions are unknown, so
+    // nothing can tell which words it hides — no text is stored (masking
+    // only the detected email would keep a hand-covered word readable).
     let _ = update(
         &mut app,
         Message::EditorCanvas(readshot_ui::CanvasMessage::CommitAnnotation(
@@ -85,10 +86,17 @@ fn without_positions_a_redaction_masks_every_detected_item() {
     );
     app.coordinator.flush_history_updates();
     let (record, _) = stored(&store);
-    assert_eq!(
-        record.ocr_text.as_deref(),
-        Some(format!("Contact\nmail {} today", "█".repeat(EMAIL.len())).as_str())
-    );
+    assert!(record.redacted);
+    assert_eq!(record.ocr_text, None);
+    // Text recognized later without positions isn't stored either.
+    store
+        .record_recognized_text(
+            &record,
+            &readshot_core::text_lines::TextDocument::from_plain("Contact"),
+            true,
+        )
+        .unwrap();
+    assert_eq!(stored(&store).0.ocr_text, None);
 }
 
 #[tokio::test]
@@ -315,13 +323,10 @@ fn an_added_part_needs_its_own_recognition_and_the_scrub_fails_closed_until_then
         "the new part isn’t recognized yet"
     );
     assert_eq!(
-        scrubbed_history_text(ed, true),
+        scrubbed_history_text(ed),
         None,
         "no text rather than unmasked text"
     );
-    // Without positions from the engine either: still no text while a
-    // part has none.
-    assert_eq!(scrubbed_history_text(ed, false), None);
     let _ = update(
         &mut app,
         Message::EditorTextRecognized {
@@ -338,7 +343,7 @@ fn an_added_part_needs_its_own_recognition_and_the_scrub_fails_closed_until_then
     assert_eq!(doc.lines.len(), 2);
     assert_eq!(doc.lines[1].rect, Some(RectLike::new(1.0, 11.0, 10.0, 4.0)));
     assert_eq!(
-        scrubbed_history_text(ed, true).as_deref(),
+        scrubbed_history_text(ed).as_deref(),
         Some("█████\n\n██████")
     );
 }
@@ -1144,20 +1149,24 @@ fn a_redaction_follows_a_rotation_and_its_undo_in_history() {
 }
 
 #[test]
-fn without_positions_a_rotated_capture_still_masks_its_own_text() {
+fn without_positions_a_hand_drawn_redaction_withholds_the_text() {
+    // Windows / Linux: the capture's text has no word positions, so
+    // nothing can tell which words a hand-drawn cover hides. The scrub
+    // must store no text, never the text with only detected items masked
+    // ("John Smith" isn't a detected item).
     let mut record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 20, 10, "d");
     let email = format!("{}@{}", "priya", "example.com");
-    record.ocr_text = Some(format!("Email {email}"));
+    record.ocr_text = Some(format!("Patient: John Smith\nEmail {email}"));
     let mut ed = crate::editor::EditorSession::from_history(solid(20, 10), record);
+    super::super::text_panel::seed_text_from_history(&mut ed, false);
     ed.model
         .commit_annotation(word_blur(RectLike::new(0.0, 0.0, 4.0, 4.0)));
+    assert_eq!(scrubbed_history_text(&ed), None);
     ed.model.rotate(true).unwrap();
-    let text = scrubbed_history_text(&ed, false).expect("the capture's own text, masked");
-    assert!(!text.contains(&email), "{text}");
-    assert!(text.starts_with("Email "), "{text}");
-    // Another part with no text: nothing at all.
-    ed.model
-        .add_part(solid(20, 10), readshot_core::document::Join::Below)
-        .unwrap();
-    assert_eq!(scrubbed_history_text(&ed, false), None);
+    assert_eq!(scrubbed_history_text(&ed), None);
+    // Copy N Lines withholds it too.
+    assert_eq!(
+        super::super::text_panel::copy_lines_text(&ed, &[0], false),
+        None
+    );
 }

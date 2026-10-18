@@ -1148,7 +1148,7 @@ impl HistoryStore for FsHistoryStore {
         doc: &TextDocument,
         fill_unredacted: bool,
     ) -> Result<(), HistoryError> {
-        use crate::scrub::{has_redaction, hidden_spans, masked_layout_text};
+        use crate::scrub::{has_redaction, masked_text};
         let _index_guard = self.lock_index()?;
         let Some(mut stored) = self.read_sidecar(record) else {
             return Ok(());
@@ -1163,12 +1163,16 @@ impl HistoryStore for FsHistoryStore {
             if !stored.redactions_complete {
                 return Ok(());
             }
-            let precise = doc.positioned || stored.ocr_text.is_none();
-            if !precise || !has_redaction(&stored.redactions) {
+            if !has_redaction(&stored.redactions) {
                 return Ok(());
             }
-            let spans = hidden_spans(doc, &stored.redactions);
-            stored.ocr_text = Some(masked_layout_text(doc, &spans));
+            // Only positioned text can be masked: without positions
+            // nothing can say which words a redaction hides, so nothing
+            // is stored (`masked_text` is `None`).
+            let Some(text) = masked_text(doc, &stored.redactions) else {
+                return Ok(());
+            };
+            stored.ocr_text = Some(text);
         } else if fill_unredacted {
             stored.ocr_text = Some(doc.layout_text.clone());
         } else {
@@ -1960,11 +1964,14 @@ mod tests {
             lines: vec![TextLine {
                 text: "pin 4821 ok".into(),
                 rect: Some(crate::RectLike::new(0.0, 0.0, 11.0, 2.0)),
-                words: vec![WordRect {
-                    start: 4,
-                    end: 8,
-                    rect: crate::RectLike::new(4.0, 0.0, 4.0, 2.0),
-                }],
+                words: [(0, 3, 0.0, 3.0), (4, 8, 4.0, 4.0), (9, 11, 9.0, 2.0)]
+                    .into_iter()
+                    .map(|(start, end, x, w)| WordRect {
+                        start,
+                        end,
+                        rect: crate::RectLike::new(x, 0.0, w, 2.0),
+                    })
+                    .collect(),
             }],
             positioned: true,
             layout_text: "pin 4821 ok".into(),
@@ -2009,6 +2016,29 @@ mod tests {
             s.list().unwrap()[0].ocr_text.as_deref(),
             Some("pin ████ ok")
         );
+    }
+
+    #[test]
+    fn unpositioned_text_never_fills_a_scrubbed_record() {
+        // Windows / Linux: a hand-drawn Blur over the whole image, then
+        // the capture's plain recognition lands. Nothing can place its
+        // words, so none of it may be stored or served.
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let mut scrubbed = scrubbed_of(&r);
+        scrubbed.redactions = vec![Annotation::Blur {
+            rect: crate::RectLike::new(0.0, 0.0, 4.0, 4.0),
+            radius: 2.0,
+        }];
+        scrubbed.redactions_complete = true;
+        scrubbed.ocr_text = None;
+        s.rewrite(&scrubbed, &valid_png(4, 4)).unwrap();
+        let plain = TextDocument::from_plain("Patient: John Smith");
+        s.record_recognized_text(&r, &plain, true).unwrap();
+        let listed = &s.list().unwrap()[0];
+        assert!(listed.redacted && listed.redactions_complete);
+        assert_eq!(listed.ocr_text, None);
     }
 
     #[test]

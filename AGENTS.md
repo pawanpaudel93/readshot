@@ -129,10 +129,25 @@ Free / 16:9 / 4:3 / 1:1 presets) it has:
   (`compose_jobs`): pending steps settle before any interaction or
   output, so nothing lands under an open drag.
 
-Privacy rule: after a redaction, History and the MCP server never
-serve unredacted content (pixels or recognized text). Redaction guards
-(`redactions_complete`, `drawn_annotations()`, the canvas's opaque
-cover for redactions not rendered yet) must not be weakened.
+Privacy rule: after a redaction, nothing persisted or served — History
+text, images, thumbnails and search, the MCP server, the CLI, clipboard
+copies — exposes content under a redaction (pixels or recognized text).
+Over-masking is acceptable, under-masking never:
+
+* What counts as a redaction, and its rect, is defined once:
+  `Annotation::redaction_rect` (Solid block, Blur, Pixelate). Every site
+  uses it.
+* Text masking (`readshot-core::scrub::hidden_spans`): a word whose box
+  any redaction overlaps is masked in full (only hairline contact, under
+  1 px deep and under 1 % of the box, is ignored); a word with no box of
+  its own is masked when a redaction overlaps its line (flips and turns
+  make a position inside the line untrustworthy). Without word positions
+  (Windows/Linux OCR) a redaction makes the text unmaskable:
+  `hidden_spans` returns `None` and the text is withheld (History stores
+  none, MCP serves `null`, Copy Lines refuses).
+* Redaction guards (`redactions_complete`, `drawn_annotations()`, the
+  canvas's opaque cover for redactions not rendered yet) must not be
+  weakened.
 
 ## Design constraints worth knowing
 

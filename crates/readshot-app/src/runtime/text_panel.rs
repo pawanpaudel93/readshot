@@ -829,7 +829,8 @@ pub(crate) fn click_selection(
 
 /// Copy N Lines text: the lines at `indices` with every word a
 /// redaction hides masked (`█` per char), matching the exported image.
-/// `None` without recognized text.
+/// `None` without recognized text, or when the text can't be masked (no
+/// positions while a redaction exists): withheld, never copied unmasked.
 pub(crate) fn copy_lines_text(
     ed: &EditorSession,
     indices: &[usize],
@@ -838,7 +839,7 @@ pub(crate) fn copy_lines_text(
     use readshot_core::scrub::{hidden_spans, mask_document};
     let doc = ed.text_panel.document()?;
     // Masked like the exported image: the redactions as drawn.
-    let spans = hidden_spans(doc, &ed.model.drawn_annotations());
+    let spans = hidden_spans(doc, &ed.model.drawn_annotations())?;
     Some(if spans.is_empty() {
         readshot_core::text_lines::copy_lines(doc, indices, remove_breaks)
     } else {

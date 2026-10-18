@@ -114,8 +114,15 @@ output.
 
 A redacted capture never serves what its redactions hide. Its PNG is
 the redacted image, and its `ocr_text` is masked with `█` wherever a
-redaction covers a word. `ocr_text` is `null` by design when Readshot
-can't prove the text is safe to serve:
+redaction overlaps a word: the whole word is masked, however little of
+it is covered (only hairline contact, under 1 px deep and under 1 % of
+the word, is ignored). A word the OCR engine gave no box of its own is
+masked when any redaction overlaps its line. `ocr_text` is `null` by
+design when Readshot can't prove the text is safe to serve:
+
+- a capture redacted where the OCR engine reports no word positions
+  (Windows and Linux): nothing can tell which words a redaction hides,
+  so no text is kept for it;
 
 - the record's list of redactions isn't known to be complete (a
   capture redacted again by an older version, one written before the

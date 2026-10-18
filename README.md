@@ -38,8 +38,9 @@ find it later by searching the text inside the screenshot.
   choice of recognition languages.
 - Searchable capture history with open, reveal, copy, pin, and delete
   actions. Deleting is permanent (not the Trash). A redacted capture whose
-  redactions can't all be accounted for keeps no text; History says
-  "Text hidden" for it.
+  redactions can't all be accounted for keeps no text, and neither does
+  a redacted capture on Windows or Linux (their OCR gives no word
+  positions to mask by); History says "Text hidden" for it.
 - Pin captures as always-on-top reference windows.
 - In-app updates via "Check for Updates…" in the menu bar.
 - Clean uninstall from Settings, `readshot uninstall`, or the installer

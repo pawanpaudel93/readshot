@@ -497,7 +497,7 @@ pub(crate) fn write_editor_history(
     let known = crate::editor::HistoryFrame::Known(frame);
     if readshot_core::scrub::has_redaction(annotations) {
         let mut scrubbed = record;
-        scrubbed.ocr_text = scrubbed_history_text(ed, coord.engine_reports_positions());
+        scrubbed.ocr_text = scrubbed_history_text(ed);
         scrubbed.annotation_model = Vec::new();
         scrubbed.redacted = true;
         scrubbed.redactions_complete = complete;
@@ -561,13 +561,13 @@ fn inherited_redactions(
     Some(ed.model.geometry().cover_redactions(&mapped))
 }
 
-/// `doc` with every word hidden by `hide` masked.
+/// `doc` with every word hidden by `hide` masked; `None` when it can't be
+/// masked ([`readshot_core::scrub::hidden_spans`]) and must be withheld.
 fn masked_text(
     doc: &readshot_core::text_lines::TextDocument,
     hide: &[readshot_core::Annotation],
-) -> String {
-    use readshot_core::scrub::{hidden_spans, masked_layout_text};
-    masked_layout_text(doc, &hidden_spans(doc, hide))
+) -> Option<String> {
+    readshot_core::scrub::masked_text(doc, hide)
 }
 
 /// History's id for the document frame the editor shows now (D2): the
@@ -590,7 +590,7 @@ fn history_plain_text(ed: &crate::editor::EditorSession) -> Option<String> {
             super::text_panel::current_positioned_document(ed),
             inherited_redactions(ed),
         ) {
-            return Some(masked_text(doc, &hide));
+            return masked_text(doc, &hide);
         }
         // The stored masked text is the opened image's alone.
         return only_the_original_part(ed)
@@ -621,57 +621,37 @@ fn original_history_text(ed: &crate::editor::EditorSession) -> Option<String> {
 
 /// The text History keeps while redactions are present: the recognized
 /// text with every hidden word masked, using the Text panel's document
-/// (word boxes) when it has positions.
-///
-/// Without a positioned document:
-/// - an engine that reports positions (Apple Vision) will produce one, so
-///   store **no** text for now (fail closed) — masking only the detected
-///   items would keep a hand-redacted name readable. The precise text is
-///   stored when recognition lands, editor open or not
+/// (word boxes). Only positioned text can be masked
+/// ([`readshot_core::scrub::hidden_spans`]), so without a positioned
+/// document **no** text is stored (fail closed):
+/// - an engine that reports positions (Apple Vision) will produce one; the
+///   precise text is stored when recognition lands, editor open or not
 ///   (`text_panel::store_recognized_text`);
-/// - an engine without positions never will, so mask every detected item
-///   in the known text (the documented fallback).
+/// - an engine without positions (Windows, Linux) never will: nothing can
+///   tell which words a hand-drawn redaction hides, so the record keeps no
+///   text at all (History shows "Text hidden", MCP serves `null`). Masking
+///   only the detected items would keep a hand-redacted name readable.
+///   Recognizing the baked image again is no fix either: a weak Blur or
+///   Pixelate can leave words recognition still reads.
 ///
 /// `None` also when no text is known at all, and whenever the document
 /// has a part other than the opened image with no recognition yet (no
 /// text rather than text nothing could mask: decision D2).
-pub(crate) fn scrubbed_history_text(
-    ed: &crate::editor::EditorSession,
-    engine_reports_positions: bool,
-) -> Option<String> {
-    use readshot_core::text_lines::TextDocument;
+pub(crate) fn scrubbed_history_text(ed: &crate::editor::EditorSession) -> Option<String> {
     // The editor's redactions plus, for a reopened scrubbed record, the
     // ones baked into its image (recognition may still read words under a
     // weak blur).
     let inherited = inherited_redactions(ed);
     let mut hide = ed.model.drawn_annotations();
     hide.extend(inherited.iter().flatten().cloned());
-    let mask = |doc: &TextDocument| masked_text(doc, &hide);
+    let doc = super::text_panel::current_positioned_document(ed)?;
+    inherited.as_ref()?;
     if let Some(crop) = history_crop(ed) {
         // The stored image is the crop: only text whose boxes are inside
-        // it may be stored, and without boxes nothing tells which.
-        let doc = super::text_panel::current_positioned_document(ed)?;
-        inherited.as_ref()?;
+        // it may be stored.
         return cropped_history_document(doc, &hide, crop).map(|d| d.layout_text);
     }
-    if let Some(doc) = super::text_panel::current_positioned_document(ed) {
-        return inherited.is_some().then(|| mask(doc));
-    }
-    if engine_reports_positions {
-        return None;
-    }
-    if source_scrubbed(ed) {
-        // Only the stored text is known to be masked; a fresh plain
-        // recognition of the flattened image is not.
-        return original_history_text(ed).map(|t| mask(&TextDocument::from_plain(&t)));
-    }
-    match ed.text_panel.document() {
-        Some(doc) => Some(mask(doc)),
-        None if only_the_original_part(ed) => {
-            original_history_text(ed).map(|t| mask(&TextDocument::from_plain(&t)))
-        }
-        None => None,
-    }
+    masked_text(doc, &hide)
 }
 
 /// The crop History's image gets from a write now: a scrub bakes every
@@ -713,10 +693,10 @@ pub(crate) fn cropped_history_document(
     crop: readshot_core::render::OutputCrop,
 ) -> Option<readshot_core::text_lines::TextDocument> {
     use readshot_core::scrub::{document_in_crop, hidden_spans, mask_document, redactions_in_crop};
-    let premasked = mask_document(doc, &hidden_spans(doc, hide));
+    let premasked = mask_document(doc, &hidden_spans(doc, hide)?);
     let cut = document_in_crop(&premasked, crop)?;
     let hide = redactions_in_crop(hide, crop);
-    Some(mask_document(&cut, &hidden_spans(&cut, &hide)))
+    Some(mask_document(&cut, &hidden_spans(&cut, &hide)?))
 }
 
 /// The document is made of the opened image alone (perhaps transformed),
