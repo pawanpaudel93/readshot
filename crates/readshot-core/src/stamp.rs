@@ -427,26 +427,42 @@ fn draw_emoji(
         (ih * k).round().max(1.0) as u32,
     );
     let scaled = scale_straight_alpha(&bitmap.image, tw, th);
-    let x0 = (c.x - tw as f32 * 0.5).round() as i32;
-    let y0 = (c.y - th as f32 * 0.5).round() as i32;
-    let (pw, ph) = (pixmap.width() as i32, pixmap.height() as i32);
-    let tint = [
-        (color.r.clamp(0.0, 1.0) * 255.0) as u8,
-        (color.g.clamp(0.0, 1.0) * 255.0) as u8,
-        (color.b.clamp(0.0, 1.0) * 255.0) as u8,
-    ];
+    let tint = bitmap.tint.then(|| {
+        [
+            (color.r.clamp(0.0, 1.0) * 255.0) as u8,
+            (color.g.clamp(0.0, 1.0) * 255.0) as u8,
+            (color.b.clamp(0.0, 1.0) * 255.0) as u8,
+        ]
+    });
+    blit_centred(pixmap, c, &scaled, tint);
+}
+
+/// Composite `img` centred on `c` (output px), clipped to the pixmap;
+/// `tint` replaces its colour, keeping its alpha. Positions are i64 and
+/// saturating, so any origin (a hand-edited sidecar's 3e9, an infinity
+/// or NaN) draws nothing instead of overflowing.
+fn blit_centred(pixmap: &mut Pixmap, c: PointLike, img: &RgbaImage, tint: Option<[u8; 3]>) {
+    let (tw, th) = img.dimensions();
+    let x0 = (f64::from(c.x) - f64::from(tw) * 0.5).round() as i64;
+    let y0 = (f64::from(c.y) - f64::from(th) * 0.5).round() as i64;
+    let (pw, ph) = (i64::from(pixmap.width()), i64::from(pixmap.height()));
+    if c.x.is_nan() || c.y.is_nan() || x0 >= pw || y0 >= ph {
+        return;
+    }
     let data = pixmap.data_mut();
-    for (x, y, px) in scaled.enumerate_pixels() {
-        let (dx, dy) = (x0 + x as i32, y0 + y as i32);
+    for (x, y, px) in img.enumerate_pixels() {
+        let (dx, dy) = (
+            x0.saturating_add(i64::from(x)),
+            y0.saturating_add(i64::from(y)),
+        );
         if dx < 0 || dy < 0 || dx >= pw || dy >= ph {
             continue;
         }
-        let src = if bitmap.tint {
-            [tint[0], tint[1], tint[2], px[3]]
-        } else {
-            px.0
+        let src = match tint {
+            Some(t) => [t[0], t[1], t[2], px[3]],
+            None => px.0,
         };
-        composite_premultiplied(data, (dy * pw + dx) as usize * 4, src, 1.0);
+        composite_premultiplied(data, ((dy * pw + dx) * 4) as usize, src, 1.0);
     }
 }
 
@@ -519,6 +535,36 @@ mod tests {
             }
         }
         assert!(edges > 0, "the test needs partially covered edge pixels");
+    }
+
+    #[test]
+    fn a_stamp_at_any_origin_draws_without_overflowing() {
+        let img = RgbaImage::from_pixel(4, 4, image::Rgba([255, 0, 0, 255]));
+        for (x, y) in [
+            (3e9, 3e9),
+            (-3e9, -3e9),
+            (3e9, 5.0),
+            (f32::INFINITY, 5.0),
+            (f32::NEG_INFINITY, f32::NEG_INFINITY),
+            (f32::NAN, 5.0),
+            (f32::MAX, f32::MIN),
+        ] {
+            let mut pixmap = Pixmap::new(10, 10).unwrap();
+            blit_centred(&mut pixmap, PointLike::new(x, y), &img, None);
+            assert!(
+                pixmap.data().iter().all(|&b| b == 0),
+                "({x}, {y}) drew inside the pixmap"
+            );
+        }
+        let mut pixmap = Pixmap::new(10, 10).unwrap();
+        blit_centred(
+            &mut pixmap,
+            PointLike::new(5.0, 5.0),
+            &img,
+            Some([0, 0, 255]),
+        );
+        let i = (5 * 10 + 5) * 4;
+        assert_eq!(&pixmap.data()[i..i + 4], &[0, 0, 255, 255]);
     }
 
     #[test]
