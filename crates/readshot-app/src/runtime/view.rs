@@ -4565,10 +4565,15 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     ]
     .spacing(6)
     .padding([12, 16]);
-    // The sidebar's top strip only clears the traffic lights.
+    // The sidebar's top strip clears the traffic lights on macOS; off
+    // macOS (native title bar) it is a plain strip of the same height, so
+    // the first section lines up with the pane's heading row, which
+    // stays on every platform.
+    let sidebar_top: Element<'_, Message> = own_title_row(Space::new(), state.settings_window_id)
+        .unwrap_or_else(|| Space::new().height(Length::Fixed(TITLEBAR_HEIGHT)).into());
     let sidebar = container(
         column![]
-            .push(own_title_row(Space::new(), state.settings_window_id))
+            .push(sidebar_top)
             .push(nav)
             .push(Space::new().height(Length::Fill))
             .push(footer),
