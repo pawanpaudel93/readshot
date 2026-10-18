@@ -74,6 +74,38 @@ pub(crate) fn os_reduce_motion() -> bool {
     false
 }
 
+/// Bring Readshot forward and open AppKit's standard About panel, which
+/// reads the bundle: the app icon, name, version and copyright. Readshot
+/// is a menu-bar (LSUIElement) app, so without the activation the panel
+/// would open behind the frontmost app. Other platforms have no About
+/// item in the tray.
+#[cfg(target_os = "macos")]
+pub(crate) fn show_about_panel() {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    if objc2::MainThreadMarker::new().is_none() {
+        return;
+    }
+    let Some(class) = AnyClass::get(c"NSApplication") else {
+        return;
+    };
+    // SAFETY: on the main thread (checked above). `sharedApplication` is
+    // the process-wide singleton, null-checked before use; activation and
+    // `orderFrontStandardAboutPanel:` (whose sender may be nil) are
+    // main-thread AppKit calls.
+    unsafe {
+        let app: *mut AnyObject = msg_send![class, sharedApplication];
+        if let Some(app) = app.as_ref() {
+            let _: () = msg_send![app, activateIgnoringOtherApps: true];
+            let _: () = msg_send![app, orderFrontStandardAboutPanel: Option::<&AnyObject>::None];
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn show_about_panel() {}
+
 /// The OS light/dark appearance. macOS reads
 /// `NSApplication.effectiveAppearance.name` (contains "Dark" in dark
 /// mode); off the main thread and on other platforms this is `Dark`.

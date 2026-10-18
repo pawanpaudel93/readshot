@@ -1307,6 +1307,10 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                 }
                 Task::none()
             }
+            crate::tray::TrayAction::About => {
+                show_about_panel();
+                Task::none()
+            }
             crate::tray::TrayAction::Quit => quit_readshot(&state.coordinator),
         },
 

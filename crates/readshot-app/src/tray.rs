@@ -3,7 +3,8 @@
 //! Builds the tray icon (a runtime-drawn template mark on macOS, the
 //! colour brand mark elsewhere), registers it as a tray icon with the
 //! app's menu (Capture, Scrolling Capture, Retake Last Region, History,
-//! Settings, Check for Updates on macOS, Quit), and exposes a non-blocking
+//! Settings, Check for Updates and About Readshot on macOS, Quit), and
+//! exposes a non-blocking
 //! [`TrayController::drain`] that the iced runtime polls every few ms
 //! to surface tray + menu events as typed actions. A left-click on
 //! the icon itself fires Capture too, matching the muscle memory of
@@ -35,7 +36,8 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 /// overlay; `RetakeLastRegion` repeats the last confirmed overlay
 /// rectangle; `History` opens the persistent capture browser;
 /// `Settings` opens the preferences window; `CheckForUpdates` opens
-/// Sparkle's standard updater UI on macOS; `Quit` exits the daemon.
+/// Sparkle's standard updater UI on macOS; `About` opens the standard
+/// About panel (icon, name, version) on macOS; `Quit` exits the daemon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Capture,
@@ -48,6 +50,7 @@ pub enum TrayAction {
     History,
     Settings,
     CheckForUpdates,
+    About,
     Quit,
 }
 
@@ -90,11 +93,18 @@ fn menu_items(_hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<
     ];
 
     #[cfg(target_os = "macos")]
-    items.push(TrayMenuItem {
-        label: "Check for Updates…".to_string(),
-        enabled: true,
-        action: Some(TrayAction::CheckForUpdates),
-    });
+    items.extend([
+        TrayMenuItem {
+            label: "Check for Updates…".to_string(),
+            enabled: true,
+            action: Some(TrayAction::CheckForUpdates),
+        },
+        TrayMenuItem {
+            label: "About Readshot".to_string(),
+            enabled: true,
+            action: Some(TrayAction::About),
+        },
+    ]);
 
     items.extend([
         TrayMenuItem {
@@ -290,6 +300,8 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
     );
     #[cfg(target_os = "macos")]
     let item_check_updates = MenuItem::new("Check for Updates…", true, None);
+    #[cfg(target_os = "macos")]
+    let item_about = MenuItem::new("About Readshot", true, None);
     let item_quit = MenuItem::new("Quit Readshot", true, None);
 
     let mut menu_ids = HashMap::new();
@@ -303,6 +315,8 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
     menu_ids.insert(item_settings.id().clone(), TrayAction::Settings);
     #[cfg(target_os = "macos")]
     menu_ids.insert(item_check_updates.id().clone(), TrayAction::CheckForUpdates);
+    #[cfg(target_os = "macos")]
+    menu_ids.insert(item_about.id().clone(), TrayAction::About);
     menu_ids.insert(item_quit.id().clone(), TrayAction::Quit);
 
     if let Err(e) = menu.append_items(&[
@@ -316,7 +330,7 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
         return None;
     }
     #[cfg(target_os = "macos")]
-    if let Err(e) = menu.append(&item_check_updates) {
+    if let Err(e) = menu.append_items(&[&item_check_updates, &item_about]) {
         tracing::warn!(target: readshot_core::log::cat::TRAY, "menu build failed: {e}");
         return None;
     }
@@ -545,7 +559,7 @@ mod tests {
             TrayAction::Settings,
         ];
         #[cfg(target_os = "macos")]
-        expected.push(TrayAction::CheckForUpdates);
+        expected.extend([TrayAction::CheckForUpdates, TrayAction::About]);
         expected.push(TrayAction::Quit);
 
         assert_eq!(actions, expected);
@@ -566,6 +580,7 @@ mod tests {
                 TrayAction::History,
                 TrayAction::Settings,
                 TrayAction::CheckForUpdates,
+                TrayAction::About,
                 TrayAction::Quit,
             ]
         );
