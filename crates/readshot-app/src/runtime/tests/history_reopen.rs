@@ -303,6 +303,293 @@ fn a_new_capture_during_the_wait_cancels_the_open() {
     assert!(ed.crop_draft.is_some(), "its crop draft is kept");
 }
 
+/// xorshift64*: a small seeded generator (no new dependency).
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Self {
+        Self(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D) % n
+    }
+}
+
+/// One History record edited, closed and reopened in random order while
+/// its writes fail or are slow. What the runtime would run as tasks is
+/// run here: a History open's load on its own thread, delivered later.
+struct Interleaving {
+    _dir: tempfile::TempDir,
+    store: Arc<GatedStore>,
+    app: App,
+    id: readshot_core::Uuid,
+    seed: u64,
+    /// Loads started by opens, delivered in order.
+    loads: std::collections::VecDeque<std::sync::mpsc::Receiver<Message>>,
+    /// An editor opened the record redacted: History must keep it so.
+    shown_redacted: bool,
+    log: Vec<&'static str>,
+}
+
+impl Interleaving {
+    fn new() -> Self {
+        let (dir, store, app, record) = history_app();
+        Self {
+            _dir: dir,
+            store,
+            app,
+            id: record.id,
+            seed: 0,
+            loads: std::collections::VecDeque::new(),
+            shown_redacted: false,
+            log: Vec::new(),
+        }
+    }
+
+    /// The next run, on a record of its own (the app is reused: building
+    /// one per run would dominate the test's time).
+    fn next_run(&mut self, seed: u64) {
+        if let Some(ed) = self.app.editor.take() {
+            if let Some(window) = ed.window_id {
+                self.app.windows.forget(window);
+            }
+            super::super::compose_jobs::drop_editor(ed);
+        }
+        // History stays one record long, so reading it stays cheap.
+        self.store.delete(self.id).unwrap();
+        let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+        self.store
+            .save(&record, &readshot_core::encode_png(&ramp(40, 20)).unwrap())
+            .unwrap();
+        self.app.history_records = self.store.list().unwrap();
+        self.app.history_status = None;
+        self.id = record.id;
+        self.seed = seed;
+        self.shown_redacted = false;
+        self.log.clear();
+    }
+
+    fn editor_of_record(&mut self) -> Option<&mut crate::editor::EditorSession> {
+        let id = self.id;
+        self.app
+            .editor
+            .as_mut()
+            .filter(|ed| ed.source_record.as_ref().is_some_and(|r| r.id == id))
+    }
+
+    /// `update`, starting the load an open begins (the runtime runs it
+    /// as a task).
+    fn send(&mut self, message: Message) {
+        let loading =
+            |app: &App, id| app.awaiting_reopen == Some(id) && app.pending_history_open.is_none();
+        let before = loading(&self.app, self.id);
+        let _ = update(&mut self.app, message);
+        if loading(&self.app, self.id) && !before {
+            self.loads.push_back(start_load(&self.app, self.id));
+        }
+    }
+
+    fn sync_after(&mut self, edit: impl FnOnce(&mut crate::editor::EditorSession)) {
+        let coord = self.app.coordinator.clone();
+        if let Some(ed) = self.editor_of_record() {
+            edit(ed);
+            super::super::editor_ops::sync_editor_history(ed, &coord);
+        }
+    }
+
+    /// The oldest load's answer, when it is ready (`wait`: block for it).
+    fn deliver(&mut self, wait: bool) {
+        let Some(rx) = self.loads.front() else {
+            return;
+        };
+        let msg = if wait {
+            rx.recv_timeout(std::time::Duration::from_secs(30))
+                .expect("an open never finished waiting")
+        } else {
+            match rx.try_recv() {
+                Ok(msg) => msg,
+                Err(_) => return,
+            }
+        };
+        self.loads.pop_front();
+        self.send(msg);
+        // The window the runtime opened for it.
+        let window = self
+            .app
+            .windows
+            .iter()
+            .find(|(_, kind)| **kind == WindowKind::Editor)
+            .map(|(id, _)| *id);
+        if let Some(ed) = self.editor_of_record() {
+            if ed.window_id.is_none() {
+                ed.window_id = window;
+            }
+            if ed.source_record.as_ref().is_some_and(|r| r.redacted) {
+                self.shown_redacted = true;
+            }
+        }
+    }
+
+    fn step(&mut self, rng: &mut Rng) {
+        match rng.below(12) {
+            0 | 1 => {
+                self.log.push("edit");
+                let at = rng.below(20) as f32;
+                self.sync_after(|ed| {
+                    ed.model.commit_annotation(Annotation::Rectangle {
+                        rect: RectLike::new(at, 1.0, 3.0, 3.0),
+                        color: Rgba::OPAQUE_BLACK,
+                        line_width: 1.0,
+                        style: Default::default(),
+                    })
+                });
+            }
+            2 => {
+                self.log.push("rotate");
+                if self.editor_of_record().is_some() {
+                    self.send(Message::EditorRotate { clockwise: true });
+                }
+            }
+            3 => {
+                self.log.push("redact");
+                self.sync_after(|ed| {
+                    ed.model.commit_annotation(Annotation::Blur {
+                        rect: RectLike::new(2.0, 2.0, 6.0, 6.0),
+                        radius: 4.0,
+                    })
+                });
+            }
+            4 => {
+                self.log.push("undo");
+                if self.editor_of_record().is_some() {
+                    self.send(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
+                }
+            }
+            5 => {
+                self.log.push("close");
+                if let Some(window) = self.editor_of_record().and_then(|ed| ed.window_id) {
+                    self.send(Message::WindowClosed(window));
+                }
+            }
+            6 => {
+                self.log.push("open");
+                self.send(Message::HistoryOpenInEditor(self.id));
+            }
+            7 => {
+                self.log.push("second-open");
+                self.send(Message::HistoryOpenInEditor(self.id));
+                self.send(Message::HistoryOpenInEditor(self.id));
+            }
+            8 => {
+                self.log.push("write-failure");
+                self.store.fail_next_commits(1 + rng.below(2) as usize);
+            }
+            9 => {
+                self.log.push("write-slow");
+                self.store.hold();
+            }
+            10 => {
+                self.log.push("write-done");
+                self.store.release();
+            }
+            _ => {
+                self.log.push("load-lands");
+                // It can't finish while a write it waits for is held.
+                let held = *self.store.held.lock().unwrap()
+                    && self.app.coordinator.record_writes_outstanding(self.id);
+                self.deliver(!held);
+            }
+        }
+        self.check_privacy();
+    }
+
+    /// (b) A record an editor opened redacted is never stored unredacted.
+    fn check_privacy(&self) {
+        if self.shown_redacted {
+            assert!(
+                self.store.stored(self.id).redacted,
+                "a record shown redacted is stored unredacted after seed {}: {:?}",
+                self.seed,
+                self.log
+            );
+        }
+    }
+
+    /// Let every write and open finish.
+    fn settle(&mut self) {
+        self.store.fail_next_commits(0);
+        self.store.release();
+        while !self.loads.is_empty() {
+            self.deliver(true);
+        }
+        self.app.coordinator.drain_history_writes();
+    }
+
+    /// (a) The open editor of the record shows what History stores.
+    fn check_editor_matches_store(&mut self) {
+        let log = format!("seed {}: {:?}", self.seed, self.log);
+        let stored = self.store.stored(self.id);
+        let Some(ed) = self.editor_of_record() else {
+            return;
+        };
+        let annotations = ed.model.annotations().to_vec();
+        let redacted = readshot_core::scrub::has_redaction(&annotations)
+            || ed.source_record.as_ref().is_some_and(|r| r.redacted);
+        let expected_annotations = if readshot_core::scrub::has_redaction(&annotations) {
+            Vec::new()
+        } else {
+            annotations
+        };
+        let base = (ed.model.base().width(), ed.model.base().height());
+        let frame = super::super::editor_ops::history_geometry_id(ed);
+        assert_eq!(
+            (stored.width_px, stored.height_px),
+            base,
+            "size differs after {log}"
+        );
+        assert_eq!(stored.redacted, redacted, "redaction differs after {log}");
+        assert_eq!(stored.geometry_id, frame, "frame differs after {log}");
+        assert_eq!(
+            stored.annotation_model, expected_annotations,
+            "annotations differ after {log}"
+        );
+    }
+}
+
+/// Random interleavings of edit, rotate, redact, undo, close, open,
+/// second open, failing and slow writes for one record. After all writes
+/// drain, the open editor shows exactly what History stores, and a record
+/// an editor showed redacted is never stored unredacted. Then it is
+/// opened once more: that copy matches History too, and nothing written
+/// before the open lands after it.
+#[test]
+fn reopens_under_random_slow_and_failing_writes_keep_editor_and_history_in_step() {
+    // Thousands of History writes; durability across a crash isn't what
+    // this tests.
+    readshot_core::skip_fsync_in_this_process();
+    let mut run = Interleaving::new();
+    for seed in 0..300u64 {
+        let mut rng = Rng::new(seed);
+        run.next_run(seed);
+        run.send(Message::HistoryOpenInEditor(run.id));
+        for _ in 0..24 {
+            run.step(&mut rng);
+        }
+        run.settle();
+        run.check_privacy();
+        run.check_editor_matches_store();
+        run.log.push("final-open");
+        run.send(Message::HistoryOpenInEditor(run.id));
+        run.settle();
+        run.check_privacy();
+        run.check_editor_matches_store();
+    }
+}
+
 /// A redaction whose image write failed (its first phase already took
 /// the unredacted image away) is not cancelled by an open: cancelling it
 /// would leave the capture with no image for good. The open is refused

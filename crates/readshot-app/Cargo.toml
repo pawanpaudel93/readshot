@@ -47,6 +47,7 @@ objc2 = "0.6"
 screencapturekit = "1.5"
 
 [dev-dependencies]
+readshot-core = { path = "../readshot-core", features = ["test-fixtures"] }
 readshot-capture = { path = "../readshot-capture", features = ["test-fixtures"] }
 readshot-ocr = { path = "../readshot-ocr", features = ["test-fixtures"] }
 tempfile = { workspace = true }

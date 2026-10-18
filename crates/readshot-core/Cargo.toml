@@ -20,6 +20,12 @@ toml = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
+[features]
+default = []
+# Test-only switches for higher crates' tests (enabled from their
+# dev-dependencies), e.g. `skip_fsync_in_this_process`.
+test-fixtures = []
+
 [dev-dependencies]
 insta = { workspace = true }
 readshot-test-fixtures = { path = "../readshot-test-fixtures" }

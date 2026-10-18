@@ -14,6 +14,29 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Tests only (`test-fixtures`): writes in this process skip `fsync`.
+#[cfg(feature = "test-fixtures")]
+static SKIP_FSYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Tests only: from now on, writes in this process are not `fsync`ed
+/// (still atomic). For tests that write History thousands of times and
+/// never test durability across a crash.
+#[cfg(feature = "test-fixtures")]
+pub fn skip_fsync_in_this_process() {
+    SKIP_FSYNC.store(true, Ordering::Relaxed);
+}
+
+fn fsync_skipped() -> bool {
+    #[cfg(feature = "test-fixtures")]
+    {
+        SKIP_FSYNC.load(Ordering::Relaxed)
+    }
+    #[cfg(not(feature = "test-fixtures"))]
+    {
+        false
+    }
+}
+
 /// Write `contents` to `path` atomically. The parent directory must
 /// already exist; the temp file lives next to the target so the
 /// final `rename` is on the same filesystem. The temp suffix
@@ -40,10 +63,16 @@ fn write_tmp_file(tmp_path: &Path, contents: &[u8]) -> io::Result<()> {
         .create_new(true)
         .open(tmp_path)?;
     file.write_all(contents)?;
+    if fsync_skipped() {
+        return Ok(());
+    }
     file.sync_all()
 }
 
 pub(crate) fn sync_parent_dir(path: &Path) {
+    if fsync_skipped() {
+        return;
+    }
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     if let Ok(dir) = fs::File::open(parent) {
         let _ = dir.sync_all();

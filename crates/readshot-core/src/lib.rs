@@ -14,6 +14,8 @@ pub mod eyedropper;
 pub mod filename;
 pub mod filters;
 pub(crate) mod fs_atomic;
+#[cfg(feature = "test-fixtures")]
+pub use fs_atomic::skip_fsync_in_this_process;
 pub mod geom;
 pub mod history;
 pub mod line_geom;
