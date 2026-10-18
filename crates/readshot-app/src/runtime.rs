@@ -356,8 +356,8 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 }
 
 use crate::app::{
-    App, AppMsg, CaptureMsg, GlobalHotkeyAction, HistoryKeyboardAction, Message, TickMsg,
-    WelcomeMsg, WindowKind, WindowMsg,
+    App, AppMsg, CaptureMsg, GlobalHotkeyAction, HistoryKeyboardAction, Message, ScrollMsg,
+    TickMsg, WelcomeMsg, WindowKind, WindowMsg,
 };
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
@@ -648,7 +648,7 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         // flight) so a slow backend can't pile up requests.
         subs.push(
             iced::time::every(Duration::from_millis(SCROLL_FRAME_INTERVAL_MS))
-                .map(|_| Message::ScrollCaptureTick),
+                .map(|_| Message::Scroll(ScrollMsg::Tick)),
         );
         // Esc anywhere ends the session (same as the Stop button);
         // Shift+Esc / ⌘. discards it (same as Cancel, which arms then
@@ -1187,7 +1187,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
 
         Message::NoOp => Task::none(),
 
-        msg @ scroll_messages!() => scroll::handle_scroll_message(state, msg),
+        Message::Scroll(msg) => scroll::handle_scroll_message(state, msg),
 
         msg @ settings_messages!() => settings_ops::handle_settings_message(state, msg),
     }

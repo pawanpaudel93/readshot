@@ -232,6 +232,8 @@ impl SettingsPane {
 /// or background task funnels through this enum.
 #[derive(Clone, Debug)]
 pub enum Message {
+    /// Scrolling-capture messages (`runtime::scroll`).
+    Scroll(ScrollMsg),
     /// Window lifecycle, and the editor window's pointer, modifier, hover,
     /// size and scroll events (`runtime::window_ops`).
     Window(WindowMsg),
@@ -249,65 +251,16 @@ pub enum Message {
     EditorCanvas(CanvasMessage),
     EditorToolbar(ToolbarMessage),
     Settings(SettingsMessage),
-    /// Periodic tick driving the scrolling-capture frame loop. Fires
-    /// from a 250 ms timer subscription while a session is active.
-    ScrollCaptureTick,
-    /// Async per-frame capture for the scrolling-capture session
-    /// finished. `Ok` appends the frame; `Err` logs and continues
-    /// (a one-off backend error shouldn't kill the whole session).
-    ScrollCaptureFrame {
-        seq: u64,
-        result: Result<image::RgbaImage, String>,
-    },
-    /// Background motion-judge verdict for the frame at `seq`. `image`
-    /// is the candidate frame handed back from the worker (`None` only
-    /// if the worker died); `moved` says whether it scrolled vs the
-    /// previous accepted frame and should join the session. `offset`
-    /// is the measured vertical motion (`None` if unmeasurable, e.g. a
-    /// size change); `rows` is the downscaled preview slice for the
-    /// newly revealed rows, computed on the worker (`Some` only when
-    /// `moved`).
-    ScrollFrameJudged {
-        seq: u64,
-        image: Option<image::RgbaImage>,
-        moved: bool,
-        offset: Option<u32>,
-        rows: Option<image::RgbaImage>,
-    },
-    /// User clicked Stop in the HUD (or pressed Esc / hit an auto-
-    /// stop limit). Closes the HUD and kicks off stitching of the
-    /// captured frames.
-    ScrollCaptureStopRequested,
-    /// User clicked Cancel in the HUD. Throws the session away
-    /// without stitching — captured frames are dropped on the floor.
-    ScrollCaptureCancelRequested,
-    /// User clicked Keep Going on an armed cancel. Disarms the cancel
-    /// so the session carries on recording.
-    ScrollCaptureKeepGoing,
-    /// Stitching task finished. `Ok` opens the stitched image in the
-    /// editor; `Err` toasts a status and clears the session.
-    ScrollCaptureStitched(Result<image::RgbaImage, String>),
     /// Slow tick (~1 s) that fires while the editor is open AND the
     /// status pill is showing a dismissable message. Purely drives a
     /// re-render so the view fn can re-check the status's age
     /// (`Status::set_at`) and hide the toast once it ages out.
     EditorStatusTick,
-    /// First view of the scrolling-capture HUD window — records the
-    /// `window::Id` so the runtime can close it when the session ends.
-    ScrollHudWindowReady(iced::window::Id),
-    /// User pressed the HUD's drag handle. Hands off the OS window
-    /// drag so they can reposition the HUD without it stealing focus
-    /// from the page they're scrolling.
-    ScrollHudDragRequested,
     /// No-op message used purely to consume mouse presses on the
     /// pin window's controls row so they don't fall through to the
     /// underlying drag layer and turn an opacity-slider drag into a
     /// window move.
     NoOp,
-    /// First view of the transparent click-through region-indicator
-    /// window — runtime records the id and enables mouse passthrough
-    /// so scroll events fall through to the page underneath.
-    ScrollRegionWindowReady(iced::window::Id),
     /// Fire-and-forget history persistence completion. The boolean
     /// payload is `true` when the chain completed all the way through
     /// the OCR-and-update step (so the browser should reload to see
@@ -760,6 +713,61 @@ pub enum Message {
     CliToolsCopyRequested(crate::cli_tools::Shell),
     /// Command-line setup instructions were copied, or failed to copy.
     CliToolsCopyDone(crate::cli_tools::Shell, Result<(), String>),
+}
+
+/// Scrolling-capture messages: the HUD and region windows, the frame
+/// loop and stitching. Handled by `runtime::scroll::handle_scroll_message`.
+#[derive(Clone, Debug)]
+pub enum ScrollMsg {
+    /// Periodic tick driving the scrolling-capture frame loop. Fires
+    /// from a 250 ms timer subscription while a session is active.
+    Tick,
+    /// Async per-frame capture for the scrolling-capture session
+    /// finished. `Ok` appends the frame; `Err` logs and continues
+    /// (a one-off backend error shouldn't kill the whole session).
+    Frame {
+        seq: u64,
+        result: Result<image::RgbaImage, String>,
+    },
+    /// Background motion-judge verdict for the frame at `seq`. `image`
+    /// is the candidate frame handed back from the worker (`None` only
+    /// if the worker died); `moved` says whether it scrolled vs the
+    /// previous accepted frame and should join the session. `offset`
+    /// is the measured vertical motion (`None` if unmeasurable, e.g. a
+    /// size change); `rows` is the downscaled preview slice for the
+    /// newly revealed rows, computed on the worker (`Some` only when
+    /// `moved`).
+    FrameJudged {
+        seq: u64,
+        image: Option<image::RgbaImage>,
+        moved: bool,
+        offset: Option<u32>,
+        rows: Option<image::RgbaImage>,
+    },
+    /// User clicked Stop in the HUD (or pressed Esc / hit an auto-
+    /// stop limit). Closes the HUD and kicks off stitching of the
+    /// captured frames.
+    StopRequested,
+    /// User clicked Cancel in the HUD. Throws the session away
+    /// without stitching — captured frames are dropped on the floor.
+    CancelRequested,
+    /// User clicked Keep Going on an armed cancel. Disarms the cancel
+    /// so the session carries on recording.
+    KeepGoing,
+    /// Stitching task finished. `Ok` opens the stitched image in the
+    /// editor; `Err` toasts a status and clears the session.
+    Stitched(Result<image::RgbaImage, String>),
+    /// First view of the scrolling-capture HUD window — records the
+    /// `window::Id` so the runtime can close it when the session ends.
+    HudWindowReady(iced::window::Id),
+    /// User pressed the HUD's drag handle. Hands off the OS window
+    /// drag so they can reposition the HUD without it stealing focus
+    /// from the page they're scrolling.
+    HudDragRequested,
+    /// First view of the transparent click-through region-indicator
+    /// window — runtime records the id and enables mouse passthrough
+    /// so scroll events fall through to the page underneath.
+    RegionWindowReady(iced::window::Id),
 }
 
 /// Window lifecycle (close, rescale, drag) and the editor window's
@@ -1275,7 +1283,7 @@ pub struct ScrollSession {
     /// `Some(seq)` while a frame is being compared against the
     /// previous accepted frame on a blocking worker (the SAD scan is
     /// too expensive for the UI thread). Draining pauses until the
-    /// verdict (`Message::ScrollFrameJudged`) comes back so frames
+    /// verdict (`ScrollMsg::FrameJudged`) comes back so frames
     /// stay in chronological order.
     pub judge_in_flight: Option<u64>,
     /// True after the user has clicked Stop / pressed Esc / hit a

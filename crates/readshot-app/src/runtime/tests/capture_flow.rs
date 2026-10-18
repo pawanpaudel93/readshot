@@ -43,10 +43,10 @@ fn scroll_capture_drains_out_of_order_frames_in_sequence() {
     // Out-of-order arrival: seq 2 buffers until seq 1 lands.
     let _ = update(
         &mut app,
-        Message::ScrollCaptureFrame {
+        Message::Scroll(ScrollMsg::Frame {
             seq: 2,
             result: Ok(scrolling_texture(80, 120, 28)),
-        },
+        }),
     );
     let session = app.scroll_session.as_ref().unwrap();
     assert_eq!(session.frames.len(), 1);
@@ -57,10 +57,10 @@ fn scroll_capture_drains_out_of_order_frames_in_sequence() {
     // pauses (the verdict task isn't executed in tests).
     let _ = update(
         &mut app,
-        Message::ScrollCaptureFrame {
+        Message::Scroll(ScrollMsg::Frame {
             seq: 1,
             result: Ok(scrolling_texture(80, 120, 14)),
-        },
+        }),
     );
     let session = app.scroll_session.as_ref().unwrap();
     assert_eq!(session.frames.len(), 1);
@@ -71,13 +71,13 @@ fn scroll_capture_drains_out_of_order_frames_in_sequence() {
     // for the buffered seq 2.
     let _ = update(
         &mut app,
-        Message::ScrollFrameJudged {
+        Message::Scroll(ScrollMsg::FrameJudged {
             seq: 1,
             image: Some(scrolling_texture(80, 120, 14)),
             moved: true,
             offset: None,
             rows: None,
-        },
+        }),
     );
     let session = app.scroll_session.as_ref().unwrap();
     assert_eq!(session.frames.len(), 2);
@@ -86,13 +86,13 @@ fn scroll_capture_drains_out_of_order_frames_in_sequence() {
 
     let _ = update(
         &mut app,
-        Message::ScrollFrameJudged {
+        Message::Scroll(ScrollMsg::FrameJudged {
             seq: 2,
             image: Some(scrolling_texture(80, 120, 28)),
             moved: true,
             offset: None,
             rows: None,
-        },
+        }),
     );
     let session = app.scroll_session.as_ref().unwrap();
     assert_eq!(session.frames.len(), 3);
@@ -112,13 +112,13 @@ fn scroll_judge_rejection_counts_no_motion_and_stale_verdicts_drop() {
     // Stale verdict (wrong seq) is dropped entirely.
     let _ = update(
         &mut app,
-        Message::ScrollFrameJudged {
+        Message::Scroll(ScrollMsg::FrameJudged {
             seq: 3,
             image: Some(scrolling_texture(80, 120, 14)),
             moved: true,
             offset: None,
             rows: None,
-        },
+        }),
     );
     let session = app.scroll_session.as_ref().unwrap();
     assert_eq!(session.frames.len(), 1);
@@ -127,13 +127,13 @@ fn scroll_judge_rejection_counts_no_motion_and_stale_verdicts_drop() {
     // A "no motion" verdict bumps the counter without appending.
     let _ = update(
         &mut app,
-        Message::ScrollFrameJudged {
+        Message::Scroll(ScrollMsg::FrameJudged {
             seq: 7,
             image: Some(scrolling_texture(80, 120, 0)),
             moved: false,
             offset: None,
             rows: None,
-        },
+        }),
     );
     let session = app.scroll_session.as_ref().unwrap();
     assert_eq!(session.frames.len(), 1);
@@ -294,29 +294,32 @@ fn every_scroll_capture_exit_releases_the_global_esc() {
     let exits: [(&str, Exit); 7] = [
         ("stop, then the stitch lands", |app, _, _, frames| {
             frames(app);
-            let _ = update(app, Message::ScrollCaptureStopRequested);
+            let _ = update(app, Message::Scroll(ScrollMsg::StopRequested));
             assert!(app.scroll_session.as_ref().unwrap().stopping);
             let _ = update(
                 app,
-                Message::ScrollCaptureStitched(Ok(scrolling_texture(80, 130, 0))),
+                Message::Scroll(ScrollMsg::Stitched(Ok(scrolling_texture(80, 130, 0)))),
             );
         }),
         ("stop, then the stitch fails", |app, _, _, frames| {
             frames(app);
-            let _ = update(app, Message::ScrollCaptureStopRequested);
-            let _ = update(app, Message::ScrollCaptureStitched(Err("boom".into())));
+            let _ = update(app, Message::Scroll(ScrollMsg::StopRequested));
+            let _ = update(
+                app,
+                Message::Scroll(ScrollMsg::Stitched(Err("boom".into()))),
+            );
         }),
         ("cancel with nothing captured", |app, _, _, _| {
-            let _ = update(app, Message::ScrollCaptureCancelRequested);
+            let _ = update(app, Message::Scroll(ScrollMsg::CancelRequested));
         }),
         ("cancel, confirmed", |app, _, _, frames| {
             frames(app);
-            let _ = update(app, Message::ScrollCaptureCancelRequested);
+            let _ = update(app, Message::Scroll(ScrollMsg::CancelRequested));
             assert!(app.scroll_session.is_some(), "armed");
-            let _ = update(app, Message::ScrollCaptureCancelRequested);
+            let _ = update(app, Message::Scroll(ScrollMsg::CancelRequested));
         }),
         ("stop with nothing captured", |app, _, _, _| {
-            let _ = update(app, Message::ScrollCaptureStopRequested);
+            let _ = update(app, Message::Scroll(ScrollMsg::StopRequested));
         }),
         ("the HUD window closes", |app, hud, _, _| {
             let _ = update(app, Message::Window(WindowMsg::Closed(hud)));
@@ -361,7 +364,7 @@ fn keep_going_disarms_cancel() {
     let mut s = test_session();
     s.cancel_armed_at = Some(std::time::Instant::now());
     app.scroll_session = Some(s);
-    let _ = update(&mut app, Message::ScrollCaptureKeepGoing);
+    let _ = update(&mut app, Message::Scroll(ScrollMsg::KeepGoing));
     assert!(app
         .scroll_session
         .as_ref()
@@ -394,7 +397,7 @@ fn a_new_frame_answers_an_armed_cancel() {
         .frames
         .push(Arc::new(scrolling_texture(80, 120, 10)));
     app.scroll_session = Some(session);
-    let _ = update(&mut app, Message::ScrollCaptureCancelRequested);
+    let _ = update(&mut app, Message::Scroll(ScrollMsg::CancelRequested));
     assert!(cancel_armed(app.scroll_session.as_ref().unwrap()));
     // Momentum frames right after the click keep it armed.
     accept_scroll_frame(
@@ -430,7 +433,7 @@ fn a_second_cancel_during_momentum_discards() {
         .frames
         .push(Arc::new(scrolling_texture(80, 120, 10)));
     app.scroll_session = Some(session);
-    let _ = update(&mut app, Message::ScrollCaptureCancelRequested);
+    let _ = update(&mut app, Message::Scroll(ScrollMsg::CancelRequested));
     for offset in [20, 30, 40] {
         accept_scroll_frame(
             app.scroll_session.as_mut().unwrap(),
@@ -439,7 +442,7 @@ fn a_second_cancel_during_momentum_discards() {
             Some(10),
         );
     }
-    let _ = update(&mut app, Message::ScrollCaptureCancelRequested);
+    let _ = update(&mut app, Message::Scroll(ScrollMsg::CancelRequested));
     assert!(app.scroll_session.is_none(), "discarded");
 }
 
@@ -456,7 +459,7 @@ fn frames_arriving_after_stop_do_not_touch_the_session() {
         .insert(2, Ok(scrolling_texture(80, 120, 28)));
     s.capture_in_flight = 1;
     app.scroll_session = Some(s);
-    let _ = update(&mut app, Message::ScrollCaptureStopRequested);
+    let _ = update(&mut app, Message::Scroll(ScrollMsg::StopRequested));
     let before = app.scroll_session.as_ref().unwrap();
     let strip_h = before.preview_strip.as_ref().unwrap().height();
     let stitched = before.stitched_rows;
@@ -465,20 +468,20 @@ fn frames_arriving_after_stop_do_not_touch_the_session() {
 
     let _ = update(
         &mut app,
-        Message::ScrollFrameJudged {
+        Message::Scroll(ScrollMsg::FrameJudged {
             seq: 1,
             image: Some(scrolling_texture(80, 120, 14)),
             moved: true,
             offset: Some(14),
             rows: Some(image::RgbaImage::new(PREVIEW_STRIP_W, 60)),
-        },
+        }),
     );
     let _ = update(
         &mut app,
-        Message::ScrollCaptureFrame {
+        Message::Scroll(ScrollMsg::Frame {
             seq: 3,
             result: Ok(scrolling_texture(80, 120, 42)),
-        },
+        }),
     );
     let after = app.scroll_session.as_ref().unwrap();
     assert!(after.frames.is_empty());
@@ -494,7 +497,7 @@ fn stitch_result_without_a_session_is_dropped() {
     assert!(app.scroll_session.is_none());
     let _ = update(
         &mut app,
-        Message::ScrollCaptureStitched(Ok(image::RgbaImage::new(10, 10))),
+        Message::Scroll(ScrollMsg::Stitched(Ok(image::RgbaImage::new(10, 10)))),
     );
     assert!(app.editor.is_none());
 }
@@ -505,7 +508,7 @@ fn cancel_is_ignored_while_stitching() {
     let mut s = test_session();
     s.stopping = true;
     app.scroll_session = Some(s);
-    let _ = update(&mut app, Message::ScrollCaptureCancelRequested);
+    let _ = update(&mut app, Message::Scroll(ScrollMsg::CancelRequested));
     assert!(app.scroll_session.is_some());
 }
 
@@ -545,7 +548,10 @@ fn retake_leaves_a_running_scroll_session_alone() {
 #[test]
 fn stitch_result_closes_both_scroll_windows() {
     let (mut app, hud, region) = app_with_scroll_windows(true);
-    let _ = update(&mut app, Message::ScrollCaptureStitched(Err("boom".into())));
+    let _ = update(
+        &mut app,
+        Message::Scroll(ScrollMsg::Stitched(Err("boom".into()))),
+    );
     assert!(app.scroll_session.is_none());
     assert_eq!(app.windows.kind(hud), None);
     assert_eq!(app.windows.kind(region), None);
@@ -554,7 +560,7 @@ fn stitch_result_closes_both_scroll_windows() {
 #[test]
 fn stop_with_no_frames_cancels_instead_of_failing() {
     let (mut app, hud, region) = app_with_scroll_windows(false);
-    let _ = update(&mut app, Message::ScrollCaptureStopRequested);
+    let _ = update(&mut app, Message::Scroll(ScrollMsg::StopRequested));
     assert!(app.scroll_session.is_none());
     assert_eq!(app.windows.kind(hud), None);
     assert_eq!(app.windows.kind(region), None);
@@ -1052,7 +1058,7 @@ fn a_refused_scroll_esc_is_tried_once_and_the_other_still_works() {
     assert!(scroll_key_message_beside_globals(&esc, Modifiers::empty(), true, false).is_none());
     assert!(matches!(
         scroll_key_message_beside_globals(&esc, Modifiers::SHIFT, true, false),
-        Some(Message::ScrollCaptureCancelRequested)
+        Some(Message::Scroll(ScrollMsg::CancelRequested))
     ));
     // A new session tries again.
     app.scroll_session = None;

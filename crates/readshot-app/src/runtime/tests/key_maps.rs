@@ -9,18 +9,18 @@ fn scroll_keys_map_stop_and_discard() {
     // Esc alone stops & stitches (same as the Stop button).
     assert!(matches!(
         scroll_key_message(&esc, Modifiers::empty()),
-        Some(Message::ScrollCaptureStopRequested)
+        Some(Message::Scroll(ScrollMsg::StopRequested))
     ));
     // Shift+Esc and ⌘. discard (same as the Cancel button, which
     // arms then confirms on repeat).
     assert!(matches!(
         scroll_key_message(&esc, Modifiers::SHIFT),
-        Some(Message::ScrollCaptureCancelRequested)
+        Some(Message::Scroll(ScrollMsg::CancelRequested))
     ));
     let dot = Key::Character(".".into());
     assert!(matches!(
         scroll_key_message(&dot, command_modifiers()),
-        Some(Message::ScrollCaptureCancelRequested)
+        Some(Message::Scroll(ScrollMsg::CancelRequested))
     ));
     assert!(scroll_key_message(&dot, Modifiers::empty()).is_none());
 }

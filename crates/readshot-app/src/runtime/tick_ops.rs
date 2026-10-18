@@ -46,10 +46,10 @@ pub(super) fn on_hotkey_tick(state: &mut App) -> Task<Message> {
         }
     }
     if scroll_discard {
-        return update(state, Message::ScrollCaptureCancelRequested);
+        return update(state, Message::Scroll(ScrollMsg::CancelRequested));
     }
     if scroll_stop {
-        return update(state, Message::ScrollCaptureStopRequested);
+        return update(state, Message::Scroll(ScrollMsg::StopRequested));
     }
     if settings {
         return update(state, Message::OpenSettingsRequested);

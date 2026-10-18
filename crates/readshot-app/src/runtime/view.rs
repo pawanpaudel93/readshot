@@ -562,7 +562,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
             DARK.t2,
             "Cancel",
             Some(SHIFT_ESC_KEY),
-            (!stopping).then_some(Message::ScrollCaptureCancelRequested),
+            (!stopping).then_some(Message::Scroll(ScrollMsg::CancelRequested)),
             false,
             ICON_BTN,
             Position::Bottom,
@@ -579,7 +579,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
             .height(Length::Fixed(48.0))
             .center_y(Length::Fixed(48.0)),
     )
-    .on_press(Message::ScrollHudDragRequested)
+    .on_press(Message::Scroll(ScrollMsg::HudDragRequested))
     .interaction(iced::mouse::Interaction::Grab);
 
     // ---- Stage: the image.
@@ -714,14 +714,14 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
                 scroll_hud_button(
                     scroll_discard_label(window_w, frame_count),
                     ButtonKind::DangerSolid,
-                    Some(Message::ScrollCaptureCancelRequested),
+                    Some(Message::Scroll(ScrollMsg::CancelRequested)),
                     None,
                     1,
                 ),
                 scroll_hud_button(
                     scroll_keep_going_label(window_w).to_string(),
                     ButtonKind::Primary,
-                    Some(Message::ScrollCaptureKeepGoing),
+                    Some(Message::Scroll(ScrollMsg::KeepGoing)),
                     None,
                     1,
                 ),
@@ -742,7 +742,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
                     scroll_hud_button(
                         "Cancel".to_string(),
                         ButtonKind::Secondary,
-                        Some(Message::ScrollCaptureCancelRequested),
+                        Some(Message::Scroll(ScrollMsg::CancelRequested)),
                         None,
                         2,
                     ),
@@ -753,7 +753,7 @@ fn scroll_hud_body(state: &App, window_w: f32) -> Element<'_, Message> {
                 scroll_hud_button(
                     "Stop & Stitch".to_string(),
                     ButtonKind::Primary,
-                    (!waiting).then_some(Message::ScrollCaptureStopRequested),
+                    (!waiting).then_some(Message::Scroll(ScrollMsg::StopRequested)),
                     scroll_stop_key_chip(hud, compact, scroll_escape_globals(state).0),
                     3,
                 ),

@@ -152,20 +152,22 @@ pub(crate) fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession)
                         .ok()
                     },
                     move |judged| match judged {
-                        Some((image, moved, offset, rows)) => Message::ScrollFrameJudged {
-                            seq,
-                            image: Some(image),
-                            moved,
-                            offset,
-                            rows,
-                        },
-                        None => Message::ScrollFrameJudged {
+                        Some((image, moved, offset, rows)) => {
+                            Message::Scroll(ScrollMsg::FrameJudged {
+                                seq,
+                                image: Some(image),
+                                moved,
+                                offset,
+                                rows,
+                            })
+                        }
+                        None => Message::Scroll(ScrollMsg::FrameJudged {
                             seq,
                             image: None,
                             moved: false,
                             offset: None,
                             rows: None,
-                        },
+                        }),
                     },
                 );
             }
@@ -354,38 +356,35 @@ fn close_scroll_windows(state: &mut App, session: &crate::app::ScrollSession) ->
     Task::batch(tasks)
 }
 
-/// Every scroll-capture message arm, extracted from `runtime::update` so the
-/// top-level dispatcher stays navigable. Routed from `update`'s
-/// grouped arm; the trailing `unreachable!` only fires if a
-/// non-scroll-capture message is mis-routed here.
-pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<Message> {
+/// Every [`ScrollMsg`]: `update` hands each `Message::Scroll` here.
+pub(crate) fn handle_scroll_message(state: &mut App, message: ScrollMsg) -> Task<Message> {
     match message {
-        Message::ScrollHudWindowReady(id) => {
+        ScrollMsg::HudWindowReady(id) => {
             if let Some(session) = state.scroll_session.as_mut() {
                 session.hud_window_id = Some(id);
             }
             Task::none()
         }
 
-        Message::ScrollRegionWindowReady(id) => {
+        ScrollMsg::RegionWindowReady(id) => {
             // Enable mouse passthrough so scroll wheel events fall
             // through to the page underneath. Without this, the
             // always-on-top transparent window would swallow scrolls.
             window::enable_mouse_passthrough(id)
         }
 
-        Message::ScrollHudDragRequested => {
+        ScrollMsg::HudDragRequested => {
             match state.scroll_session.as_ref().and_then(|s| s.hud_window_id) {
                 Some(id) => window::drag(id),
                 None => Task::none(),
             }
         }
 
-        Message::ScrollCaptureTick => on_scroll_tick(state),
+        ScrollMsg::Tick => on_scroll_tick(state),
 
-        Message::ScrollCaptureFrame { seq, result } => on_scroll_frame(state, seq, result),
+        ScrollMsg::Frame { seq, result } => on_scroll_frame(state, seq, result),
 
-        Message::ScrollFrameJudged {
+        ScrollMsg::FrameJudged {
             seq,
             image,
             moved,
@@ -393,25 +392,22 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             rows,
         } => on_frame_judged(state, seq, image, moved, offset, rows),
 
-        Message::ScrollCaptureCancelRequested => on_scroll_cancel(state),
+        ScrollMsg::CancelRequested => on_scroll_cancel(state),
 
-        Message::ScrollCaptureKeepGoing => {
+        ScrollMsg::KeepGoing => {
             if let Some(session) = state.scroll_session.as_mut() {
                 session.cancel_armed_at = None;
             }
             Task::none()
         }
 
-        Message::ScrollCaptureStopRequested => on_scroll_stop(state),
+        ScrollMsg::StopRequested => on_scroll_stop(state),
 
-        Message::ScrollCaptureStitched(result) => on_scroll_stitched(state, result),
-        other => unreachable!(
-            "non-scroll-capture message routed to the scroll-capture handler: {other:?}"
-        ),
+        ScrollMsg::Stitched(result) => on_scroll_stitched(state, result),
     }
 }
 
-/// `Message::ScrollCaptureTick`.
+/// `ScrollMsg::Tick`.
 fn on_scroll_tick(state: &mut App) -> Task<Message> {
     let Some(session) = state.scroll_session.as_mut() else {
         return Task::none();
@@ -420,7 +416,7 @@ fn on_scroll_tick(state: &mut App) -> Task<Message> {
         return Task::none();
     }
     if session.frames.len() >= SCROLL_MAX_FRAMES {
-        return Task::done(Message::ScrollCaptureStopRequested);
+        return Task::done(Message::Scroll(ScrollMsg::StopRequested));
     }
     session.capture_in_flight += 1;
     session.next_capture_seq = session.next_capture_seq.saturating_add(1);
@@ -434,14 +430,16 @@ fn on_scroll_tick(state: &mut App) -> Task<Message> {
     };
     Task::perform(
         async move { coord.capture_region(request).await },
-        move |result| Message::ScrollCaptureFrame {
-            seq,
-            result: result.map_err(|e| e.to_string()),
+        move |result| {
+            Message::Scroll(ScrollMsg::Frame {
+                seq,
+                result: result.map_err(|e| e.to_string()),
+            })
         },
     )
 }
 
-/// `Message::ScrollCaptureFrame`.
+/// `ScrollMsg::Frame`.
 fn on_scroll_frame(
     state: &mut App,
     seq: u64,
@@ -460,7 +458,7 @@ fn on_scroll_frame(
     drain_ready_scroll_frames(session)
 }
 
-/// `Message::ScrollFrameJudged`.
+/// `ScrollMsg::FrameJudged`.
 fn on_frame_judged(
     state: &mut App,
     seq: u64,
@@ -486,7 +484,7 @@ fn on_frame_judged(
     drain_ready_scroll_frames(session)
 }
 
-/// `Message::ScrollCaptureCancelRequested`.
+/// `ScrollMsg::CancelRequested`.
 fn on_scroll_cancel(state: &mut App) -> Task<Message> {
     // Two-click cancel guard. Discarding a session that
     // already accumulated frames is destructive (the captured
@@ -517,7 +515,7 @@ fn on_scroll_cancel(state: &mut App) -> Task<Message> {
     close_scroll_windows(state, &session)
 }
 
-/// `Message::ScrollCaptureStopRequested`.
+/// `ScrollMsg::StopRequested`.
 fn on_scroll_stop(state: &mut App) -> Task<Message> {
     let Some(session) = state.scroll_session.as_mut() else {
         return Task::none();
@@ -553,12 +551,12 @@ fn on_scroll_stop(state: &mut App) -> Task<Message> {
         tasks.push(window::close(id));
     }
     tasks.push(Task::perform(stitch_frames_async(frames), |r| {
-        Message::ScrollCaptureStitched(r.map_err(|e| e.to_string()))
+        Message::Scroll(ScrollMsg::Stitched(r.map_err(|e| e.to_string())))
     }));
     Task::batch(tasks)
 }
 
-/// `Message::ScrollCaptureStitched`.
+/// `ScrollMsg::Stitched`.
 fn on_scroll_stitched(state: &mut App, result: Result<image::RgbaImage, String>) -> Task<Message> {
     // No session means it was torn down while stitching (e.g.
     // cancelled out-of-band): the result is stale, drop it.

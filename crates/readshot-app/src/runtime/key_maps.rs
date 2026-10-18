@@ -432,11 +432,11 @@ pub(crate) fn scroll_key_message(
     use iced::keyboard::{key::Named, Key};
     match key {
         Key::Named(Named::Escape) if modifiers.shift() => {
-            Some(Message::ScrollCaptureCancelRequested)
+            Some(Message::Scroll(ScrollMsg::CancelRequested))
         }
-        Key::Named(Named::Escape) => Some(Message::ScrollCaptureStopRequested),
+        Key::Named(Named::Escape) => Some(Message::Scroll(ScrollMsg::StopRequested)),
         Key::Character(c) if c.as_str() == "." && modifiers.command() => {
-            Some(Message::ScrollCaptureCancelRequested)
+            Some(Message::Scroll(ScrollMsg::CancelRequested))
         }
         _ => None,
     }

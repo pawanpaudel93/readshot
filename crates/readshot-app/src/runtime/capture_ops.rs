@@ -338,11 +338,11 @@ pub(super) fn on_overlay_selected(
         if let Some(s) = state.scroll_session.as_mut() {
             s.region_window_id = Some(region_id);
         }
-        tasks.push(region_open.map(Message::ScrollRegionWindowReady));
+        tasks.push(region_open.map(|a| Message::Scroll(ScrollMsg::RegionWindowReady(a))));
         let (hud_pos, hud_size) = scroll_window_frame(rect, Some(bounds));
         let (hud_id, hud_open) = window::open(scroll_hud_window_settings(hud_pos, hud_size));
         state.windows.register(hud_id, WindowKind::ScrollHud);
-        tasks.push(hud_open.map(Message::ScrollHudWindowReady));
+        tasks.push(hud_open.map(|a| Message::Scroll(ScrollMsg::HudWindowReady(a))));
         return Task::batch(tasks);
     }
     tasks.push(Task::done(Message::Capture(CaptureMsg::RegionRequested {
@@ -595,13 +595,15 @@ pub(super) fn on_region_captured(
                         if let Some(s) = state.scroll_session.as_mut() {
                             s.region_window_id = Some(region_id);
                         }
-                        tasks.push(region_open.map(Message::ScrollRegionWindowReady));
+                        tasks.push(
+                            region_open.map(|a| Message::Scroll(ScrollMsg::RegionWindowReady(a))),
+                        );
                     }
                     let (hud_pos, hud_size) = scroll_window_frame(last.rect, display_bounds);
                     let (hud_id, hud_open) =
                         window::open(scroll_hud_window_settings(hud_pos, hud_size));
                     state.windows.register(hud_id, WindowKind::ScrollHud);
-                    tasks.push(hud_open.map(Message::ScrollHudWindowReady));
+                    tasks.push(hud_open.map(|a| Message::Scroll(ScrollMsg::HudWindowReady(a))));
                     Task::batch(tasks)
                 }
             };

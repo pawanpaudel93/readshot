@@ -145,23 +145,6 @@ macro_rules! editor_messages {
     };
 }
 
-/// Every message the scroll-capture handler
-/// (`scroll::handle_scroll_message`) takes.
-macro_rules! scroll_messages {
-    () => {
-        (Message::ScrollHudWindowReady(..)
-            | Message::ScrollRegionWindowReady(..)
-            | Message::ScrollHudDragRequested
-            | Message::ScrollCaptureTick
-            | Message::ScrollCaptureFrame { .. }
-            | Message::ScrollFrameJudged { .. }
-            | Message::ScrollCaptureCancelRequested
-            | Message::ScrollCaptureKeepGoing
-            | Message::ScrollCaptureStopRequested
-            | Message::ScrollCaptureStitched(..))
-    };
-}
-
 /// Every message the Settings handler
 /// (`settings_ops::handle_settings_message`) takes.
 macro_rules! settings_messages {
