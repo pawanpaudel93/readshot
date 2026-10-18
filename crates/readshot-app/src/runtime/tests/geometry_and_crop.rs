@@ -16,7 +16,11 @@ fn rotate_and_resize_keys_map_only_when_not_typing() {
     ));
     assert!(editor_key_message(Key::Character("]".into()), cmd, false).is_none());
     assert!(matches!(
-        editor_key_message(Key::Character("i".into()), cmd | Modifiers::ALT, true),
+        editor_key_message(
+            Key::Character(RESIZE_LETTER.into()),
+            editor_alt_modifiers(),
+            true
+        ),
         Some(Message::EditorResizeOpen)
     ));
     // Plain [ / ] still bump the width; plain I is still the eyedropper.

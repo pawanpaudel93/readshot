@@ -223,7 +223,7 @@ fn stop_button_shows_esc_chip_only_while_recording_and_roomy() {
     );
     assert_eq!(
         scroll_stop_key_chip(ScrollHudState::Recording, false, true),
-        Some("esc")
+        Some(crate::runtime::ESC_KEY)
     );
     // esc not global: no chip promising a key the other app swallows.
     assert_eq!(

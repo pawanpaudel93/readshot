@@ -137,6 +137,18 @@ fn command_modifiers() -> iced::keyboard::Modifiers {
     modifiers
 }
 
+/// The editor's second-level chord modifiers (see `editor_alt_chord`):
+/// ⌥⌘ on macOS, Ctrl+Shift elsewhere.
+fn editor_alt_modifiers() -> iced::keyboard::Modifiers {
+    let mut modifiers = command_modifiers();
+    if cfg!(target_os = "macos") {
+        modifiers.insert(iced::keyboard::Modifiers::ALT);
+    } else {
+        modifiers.insert(iced::keyboard::Modifiers::SHIFT);
+    }
+    modifiers
+}
+
 fn scrolling_texture(w: u32, h: u32, offset: u32) -> image::RgbaImage {
     let mut img = image::RgbaImage::new(w, h);
     for y in 0..h {

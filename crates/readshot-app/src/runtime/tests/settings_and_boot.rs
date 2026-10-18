@@ -218,12 +218,21 @@ async fn cli_interactive_write_removes_existing_tmp_file() {
     assert_eq!(saved.height(), 8);
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn pretty_hotkey_renders_macos_glyphs() {
     assert_eq!(pretty_hotkey("cmd+shift+x"), "\u{21E7}\u{2318}X");
     // Apple order ⌃⌥⇧⌘: control then alt here.
     assert_eq!(pretty_hotkey("ctrl+alt+y"), "\u{2303}\u{2325}Y");
     assert_eq!(pretty_hotkey("CMD+Shift+Z"), "\u{21E7}\u{2318}Z");
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn pretty_hotkey_renders_pc_words() {
+    // PC order: Ctrl, Shift, Alt, Super.
+    assert_eq!(pretty_hotkey("ctrl+shift+x"), "Ctrl+Shift+X");
+    assert_eq!(pretty_hotkey("ctrl+alt+y"), "Ctrl+Alt+Y");
 }
 
 #[test]
@@ -439,6 +448,8 @@ fn shortcut_recorder_requires_a_modifier() {
     assert_eq!(shortcut, None);
 }
 
+// LOGO is ⌘ only on macOS; off macOS `command()` is Ctrl.
+#[cfg(target_os = "macos")]
 #[test]
 fn shortcut_recorder_formats_command_shift_character() {
     let mut modifiers = iced::keyboard::Modifiers::default();

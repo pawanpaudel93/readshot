@@ -218,7 +218,14 @@ fn every_hint_is_a_sentence_with_one_name_per_key() {
         assert!(h.ends_with('.'), "{h}");
         assert!(h.chars().next().unwrap().is_uppercase(), "{h}");
         assert!(!h.contains('·') && !h.contains(" — "), "{h}");
-        assert!(!h.contains("Enter") && !h.contains("centre"), "{h}");
+        assert!(!h.contains("centre"), "{h}");
+        // macOS names the key ↩; elsewhere "Enter" appears only as the
+        // documented Ctrl+Enter chord.
+        if cfg!(target_os = "macos") {
+            assert!(!h.contains("Enter"), "{h}");
+        } else {
+            assert!(!h.replace("Ctrl+Enter", "").contains("Enter"), "{h}");
+        }
         if !cfg!(target_os = "macos") {
             assert!(!h.contains('⌘') && !h.contains('⌫'), "{h}");
         }

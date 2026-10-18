@@ -355,9 +355,9 @@ async fn history_ocr_errors_reach_the_editor_even_when_the_save_fails() {
 
 #[test]
 fn option_command_p_toggles_the_panel_and_command_p_still_pins() {
-    use iced::keyboard::{Key, Modifiers};
-    let mut alt_cmd = command_modifiers();
-    alt_cmd.insert(Modifiers::ALT);
+    use iced::keyboard::Key;
+    // ⌥⌘P on macOS, Ctrl+Shift+P elsewhere.
+    let alt_cmd = editor_alt_modifiers();
     for ignored in [true, false] {
         assert!(matches!(
             editor_key_message(Key::Character("p".into()), alt_cmd, ignored),
