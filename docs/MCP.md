@@ -133,9 +133,12 @@ design when Readshot can't prove the text is safe to serve:
   word positions yet (only positioned text can be masked); it is filled
   in, masked, once it has.
 
-`image_path` is `null` while a redaction is being written to disk (the
-unredacted image is already gone); the record is text-only until the
-redacted image lands.
+`image_path` is `null` whenever the record's image isn't on disk: while
+a redaction is being written (the unredacted image is already gone, and
+the record is text-only until the redacted image lands), and also when
+the PNG is missing for any other reason (removed by hand, or a record
+left half-deleted). Treat `null` as "no image to read", not as an error;
+the record's other fields, its text included, are still valid.
 
 For agents that only need text, use `capture_text`: it captures the
 requested region, runs OCR, and returns text without an image payload.
