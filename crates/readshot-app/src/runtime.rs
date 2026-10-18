@@ -39,6 +39,8 @@ use readshot_ui::SettingsMessage;
 use crate::editor::EditorSession;
 use crate::url_scheme::UrlAction;
 
+#[macro_use]
+mod routes;
 mod hotkeys;
 pub(crate) use hotkeys::*;
 mod window_settings;
@@ -83,6 +85,11 @@ mod key_focus;
 pub(crate) use key_focus::*;
 mod keys;
 pub(crate) use keys::*;
+mod app_ops;
+mod capture_ops;
+mod tick_ops;
+mod welcome_ops;
+mod window_ops;
 
 /// Initial URL action set from `main.rs` before `iced::daemon` starts.
 /// `start()` consumes this and feeds an extra `Message::UrlActionReceived`
@@ -1128,410 +1135,43 @@ pub(crate) fn surface_capture_problem(
 
 fn update_message(state: &mut App, message: Message) -> Task<Message> {
     match message {
-        Message::WelcomeWindowReady(id) => {
-            if !state.welcome.should_show() {
-                state.mark_onboarding_completed();
-            }
-            window::gain_focus(id)
-        }
+        Message::WelcomeWindowReady(id) => welcome_ops::on_welcome_window_ready(state, id),
 
         Message::WelcomeKeyPressed {
             window,
             key,
             modifiers,
-        } => {
-            // Validate the focused window really is the welcome window —
-            // the keyboard subscription is global to the daemon.
-            if state.windows.kind(window) != Some(WindowKind::Welcome) {
-                return Task::none();
-            }
-            match welcome_key_message(state.welcome, state.capture_in_flight, &key, modifiers) {
-                Some(message) => update(state, message),
-                None => Task::none(),
-            }
-        }
+        } => welcome_ops::on_welcome_key_pressed(state, window, key, modifiers),
 
         // Explicit checks (Recheck, after Allow) may probe; the periodic
         // tick must not, or macOS re-raises its permission alert each time.
         tick @ (Message::PermissionTick | Message::PermissionPollTick) => {
-            let status = if matches!(tick, Message::PermissionPollTick) {
-                state.permissions.status_quiet()
-            } else {
-                state.permissions.status()
-            };
-            let was_showing = state.welcome.should_show();
-            let was_onboarding_completed = state.preferences.onboarding_completed;
-            // Reuse the existing synchronous handler — it drives the
-            // `WelcomeState` machine without touching iced state.
-            state.update_sync(Message::PermissionPoll(status));
-            // If the permission gate just cleared for a user who has
-            // not yet completed onboarding, keep the visible welcome
-            // window open so it can redraw as the "You're all set"
-            // state. Returning users get the old tray-only behavior:
-            // close the permission window and show a notification.
-            if was_showing && !state.welcome.should_show() {
-                let pending_url = state.pending_url_after_permission.take();
-                if !was_onboarding_completed {
-                    return pending_url
-                        .map(|action| Task::done(Message::UrlActionReceived(action)))
-                        .unwrap_or_else(Task::none);
-                }
-                let welcome_ids: Vec<_> = state
-                    .windows
-                    .iter()
-                    .filter_map(|(id, k)| (*k == WindowKind::Welcome).then_some(*id))
-                    .collect();
-                let mut close_tasks: Vec<Task<Message>> = Vec::with_capacity(welcome_ids.len());
-                for id in welcome_ids {
-                    state.windows.forget(id);
-                    close_tasks.push(window::close(id));
-                }
-                if !close_tasks.is_empty() {
-                    notify_running_in_menu_bar(&state.preferences.capture_hotkey);
-                }
-                if let Some(action) = pending_url {
-                    close_tasks.push(Task::done(Message::UrlActionReceived(action)));
-                }
-                return Task::batch(close_tasks);
-            }
-            Task::none()
+            app_ops::on_permission_tick(state, tick)
         }
 
-        Message::OverlayShiftChanged(held) => {
-            // No-op when state didn't actually flip — keeps the redraw
-            // path from firing on every key event.
-            if state.overlay_shift_held == held {
-                return Task::none();
-            }
-            state.overlay_shift_held = held;
-            // The overlay rebuilds OverlayProgram from `state` on every
-            // view(); the state update itself schedules the next view,
-            // so this does not need the animation tick to be active.
-            Task::none()
-        }
+        Message::OverlayShiftChanged(held) => capture_ops::on_overlay_shift_changed(state, held),
 
-        Message::HotkeyTick => {
-            // Drain anything the OS-side handler queued. We collapse
-            // repeated presses into one action per tick so a mashed
-            // hotkey doesn't stack pending windows/captures.
-            let mut capture = false;
-            let mut history = false;
-            let mut settings = false;
-            let mut scroll_stop = false;
-            let mut scroll_discard = false;
-            let receiver = GlobalHotKeyEvent::receiver();
-            while let Ok(event) = receiver.try_recv() {
-                match global_hotkey_action(&event, &state.hotkey_actions) {
-                    Some(GlobalHotkeyAction::Capture) => capture = true,
-                    Some(GlobalHotkeyAction::History) => history = true,
-                    Some(GlobalHotkeyAction::Settings) => settings = true,
-                    Some(GlobalHotkeyAction::ScrollStop) => scroll_stop = true,
-                    Some(GlobalHotkeyAction::ScrollDiscard) => scroll_discard = true,
-                    None => {}
-                }
-            }
-            if scroll_discard {
-                return update(state, Message::ScrollCaptureCancelRequested);
-            }
-            if scroll_stop {
-                return update(state, Message::ScrollCaptureStopRequested);
-            }
-            if settings {
-                return update(state, Message::OpenSettingsRequested);
-            }
-            if history {
-                if state.welcome.should_show() {
-                    return show_or_focus_welcome(state);
-                }
-                return update(state, Message::OpenHistoryRequested);
-            }
-            if capture {
-                if state.welcome.should_show() {
-                    // Hotkey works the same as a tray click: when
-                    // permission isn't granted yet, point the user
-                    // back at the welcome window so they can fix it.
-                    return show_or_focus_welcome(state);
-                }
-                if !state.capture_in_flight {
-                    return update(state, Message::OpenOverlayRequested);
-                }
-            }
-            Task::none()
-        }
+        Message::HotkeyTick => tick_ops::on_hotkey_tick(state),
 
-        Message::TrayTick => {
-            let undelivered = surface_undelivered_notices(state, take_undelivered_notices());
-            let actions = match &state.tray {
-                Some(t) => t.drain(),
-                None => Vec::new(),
-            };
-            // We chain Tasks for each action — typically a single
-            // click → a single TrayActionPerformed message. Multiple
-            // are fine too (no-op coalescing happens later).
-            let tasks: Vec<Task<Message>> = actions
-                .into_iter()
-                .map(|a| Task::done(Message::TrayActionPerformed(a)))
-                .chain(std::iter::once(undelivered))
-                .collect();
-            Task::batch(tasks)
-        }
+        Message::TrayTick => tick_ops::on_tray_tick(state),
 
-        Message::UrlTick => {
-            let tasks: Vec<Task<Message>> = crate::url_events::drain_actions()
-                .into_iter()
-                .map(|action| Task::done(Message::UrlActionReceived(action)))
-                .collect();
-            Task::batch(tasks)
-        }
+        Message::UrlTick => tick_ops::on_url_tick(),
 
-        Message::AppReopenTick => {
-            if crate::app_events::take_reopen_requests() == 0 {
-                Task::none()
-            } else {
-                Task::done(Message::AppReopenRequested)
-            }
-        }
+        Message::AppReopenTick => tick_ops::on_app_reopen_tick(),
 
         Message::AppReopenRequested => show_or_focus_welcome(state),
 
-        Message::TrayActionPerformed(action) => match action {
-            crate::tray::TrayAction::Capture => {
-                if state.welcome.should_show() {
-                    // Permission gate not cleared yet — surface the
-                    // welcome window so the user can grant access
-                    // instead of silently no-opping.
-                    show_or_focus_welcome(state)
-                } else if state.capture_in_flight {
-                    Task::none()
-                } else {
-                    state.pending_intent = Some(crate::app::CaptureIntent::Editor);
-                    update(state, Message::OpenOverlayRequested)
-                }
-            }
-            crate::tray::TrayAction::ScrollCapture => {
-                if state.welcome.should_show() {
-                    show_or_focus_welcome(state)
-                } else if state.capture_in_flight || state.scroll_session.is_some() {
-                    Task::none()
-                } else {
-                    // Pre-set the intent so the overlay's mouse-up /
-                    // Enter confirm immediately starts a scroll
-                    // session instead of routing to the editor. The
-                    // quick-action toolbar still shows so the user
-                    // can change their mind, but they no longer have
-                    // to hunt for the Scrolling Capture button — the default
-                    // matches the menu entry they clicked.
-                    state.pending_intent = Some(crate::app::CaptureIntent::ScrollCapture);
-                    update(state, Message::OpenOverlayRequested)
-                }
-            }
-            crate::tray::TrayAction::RetakeLastRegion => {
-                state.pending_intent = Some(crate::app::CaptureIntent::Editor);
-                update(state, Message::RetakeLastRegionRequested)
-            }
-            crate::tray::TrayAction::History => {
-                if state.welcome.should_show() {
-                    show_or_focus_welcome(state)
-                } else {
-                    update(state, Message::OpenHistoryRequested)
-                }
-            }
-            crate::tray::TrayAction::Settings => {
-                // Settings doesn't gate on permission — the user
-                // might want to flip preferences before granting
-                // Screen Recording.
-                update(state, Message::OpenSettingsRequested)
-            }
-            crate::tray::TrayAction::CheckForUpdates => {
-                notify_update_check_started();
-                if let Err(e) = crate::updater::check_for_updates() {
-                    tracing::warn!(target: readshot_core::log::cat::UPDATER, "manual update check failed: {e}");
-                    notify_update_check_failed(&e);
-                }
-                Task::none()
-            }
-            crate::tray::TrayAction::NotificationSettings => {
-                open_notification_settings();
-                Task::none()
-            }
-            crate::tray::TrayAction::About => {
-                show_about_panel();
-                Task::none()
-            }
-            crate::tray::TrayAction::Quit => quit_readshot(&state.coordinator),
-        },
+        Message::TrayActionPerformed(action) => tick_ops::on_tray_action(state, action),
 
-        Message::CaptureFullPrimaryRequested => {
-            let coord = state.coordinator.clone();
-            state.capture_in_flight = true;
-            state.last_capture_status = None;
-            Task::perform(capture_primary_to_desktop(coord), |result| {
-                Message::CaptureSaved(result.map_err(|e| e.to_string()))
-            })
-        }
+        Message::CaptureFullPrimaryRequested => capture_ops::on_capture_full_primary(state),
 
-        Message::OpenOverlayRequested => {
-            // An Add Capture whose overlay can't open gives its hidden
-            // editor back at once: whenever this request opens nothing and
-            // no overlay is up or on its way.
-            let overlay_up =
-                state.overlay_opening || state.windows.kinds().any(|k| k == WindowKind::Overlay);
-            let refused = state.welcome.should_show()
-                || state.capture_in_flight
-                || state.scroll_session.is_some()
-                || overlay_up;
-            // Never once the combine's own capture is in flight (its
-            // selection was made): see `abort_combine_capture`.
-            let restore = if refused && !overlay_up && !combine_selection_made(state) {
-                let why = if state.capture_in_flight || state.scroll_session.is_some() {
-                    "Couldn’t add the capture — another capture is in progress."
-                } else {
-                    "Couldn’t add the capture. Try again."
-                };
-                abort_combine_capture(state, Some(why))
-            } else {
-                Task::none()
-            };
-            if state.welcome.should_show() || state.capture_in_flight || state.overlay_opening {
-                return restore;
-            }
-            // A scroll capture is running or stitching: starting another
-            // would overwrite its session and orphan its windows.
-            if state.scroll_session.is_some() {
-                return Task::batch([restore, focus_scroll_hud(state)]);
-            }
-            // Don't stack overlays.
-            if state.windows.kinds().any(|k| k == WindowKind::Overlay) {
-                return Task::none();
-            }
-            // List displays asynchronously; the result drives the
-            // actual window-open work in `OverlayDisplaysListed` so we
-            // can spawn one transparent overlay per monitor.
-            let coord = state.coordinator.clone();
-            // Cheap refresh so a scroll session started from this
-            // overlay honours a reduce-motion toggle the user flipped
-            // since launch.
-            state.reduce_motion = os_reduce_motion();
-            state.overlay_opening = true;
-            Task::perform(async move { coord.list_displays().await }, |result| {
-                Message::OverlayDisplaysListed(result.map_err(|e| e.to_string()))
-            })
-        }
+        Message::OpenOverlayRequested => capture_ops::on_open_overlay(state),
 
-        Message::RetakeLastRegionRequested => {
-            if state.welcome.should_show() {
-                return show_or_focus_welcome(state);
-            }
-            // An Add Capture is choosing its region: a retake would land
-            // in that editor instead.
-            if state.capture_in_flight || state.combine_capture.is_some() {
-                return Task::none();
-            }
-            if state.scroll_session.is_some() {
-                return focus_scroll_hud(state);
-            }
-            let Some((display_id, last)) =
-                state
-                    .last_region_display_id
-                    .as_ref()
-                    .and_then(|display_id| {
-                        state
-                            .last_regions
-                            .get(display_id)
-                            .map(|last| (display_id.clone(), *last))
-                    })
-            else {
-                state.last_capture_status = Some(
-                    "No previous region to retake. Capture a region first, then use Retake Last Region."
-                        .into(),
-                );
-                return Task::none();
-            };
+        Message::RetakeLastRegionRequested => capture_ops::on_retake_last_region(state),
 
-            state
-                .pending_intent
-                .get_or_insert(crate::app::CaptureIntent::Editor);
-            state.pending_display_id = Some(display_id.clone());
-            state.pending_display_scale = Some(last.display_scale);
-            state.pending_display_bounds = last.display_bounds;
-            update(
-                state,
-                Message::CaptureRegionRequested {
-                    display_id,
-                    rect: last.rect,
-                },
-            )
-        }
-
-        Message::OverlayDisplaysListed(Err(e)) => {
-            state.overlay_opening = false;
-            clear_pending_capture_state(state);
-            tracing::warn!(target: readshot_core::log::cat::CAPTURE, "could not list displays: {e}");
-            state.last_capture_status = Some(history_ops::friendly_capture_error(&e));
-            let restore = abort_combine_capture(state, Some(&combine_capture_failed_status(&e)));
-            if state.cli_interactive_output.is_some() {
-                Task::batch([
-                    restore,
-                    Task::done(Message::CliInteractiveWritten(Err(format!(
-                        "could not list displays: {e}"
-                    )))),
-                ])
-            } else {
-                restore
-            }
-        }
+        Message::OverlayDisplaysListed(Err(e)) => capture_ops::on_displays_list_failed(state, e),
         Message::OverlayDisplaysListed(Ok(displays)) => {
-            state.overlay_opening = false;
-            if displays.is_empty() {
-                clear_pending_capture_state(state);
-                tracing::warn!(target: readshot_core::log::cat::CAPTURE, "no displays detected");
-                state.last_capture_status =
-                    Some("Couldn’t capture — no display was detected.".into());
-                let restore = abort_combine_capture(
-                    state,
-                    Some("Couldn’t add the capture — no display was detected."),
-                );
-                return if state.cli_interactive_output.is_some() {
-                    Task::batch([
-                        restore,
-                        Task::done(Message::CliInteractiveWritten(Err(
-                            "no displays detected".into()
-                        ))),
-                    ])
-                } else {
-                    restore
-                };
-            }
-            // Spawn one borderless transparent overlay per display,
-            // positioned at that display's *global* logical origin.
-            // We register the (window_id, display) mapping eagerly so
-            // `view()` and the OverlaySelected message handler can
-            // both look up which monitor a given overlay covers.
-            let mut tasks: Vec<Task<Message>> = Vec::with_capacity(displays.len());
-            // Fresh overlay session — clear any leftover toolbar state
-            // from a previous capture flow.
-            state.overlay_selections.clear();
-            state
-                .pending_intent
-                .get_or_insert(crate::app::CaptureIntent::Editor);
-            for d in &displays {
-                let settings = overlay_window_settings_for(d);
-                let (id, open_task) = window::open(settings);
-                state.windows.register(id, WindowKind::Overlay);
-                state.overlay_displays.insert(
-                    id,
-                    crate::app::OverlayDisplay {
-                        display_id: d.id.clone(),
-                        scale: d.scale,
-                        origin_x: d.bounds.x(),
-                        origin_y: d.bounds.y(),
-                        width: d.bounds.width(),
-                        height: d.bounds.height(),
-                    },
-                );
-                tasks.push(open_task.map(Message::OverlayWindowReady));
-            }
-            Task::batch(tasks)
+            capture_ops::on_displays_listed(state, displays)
         }
 
         Message::OverlayWindowReady(id) => configure_overlay_window_after_open(id),
@@ -1540,886 +1180,75 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             display_id,
             rect,
             intent,
-        } => {
-            // Close every overlay window — selection on any one of
-            // them ends the multi-monitor session — before snapping
-            // the screenshot so the dimming veil doesn't show up in
-            // the captured pixels.
-            let overlay_record = state
-                .overlay_displays
-                .values()
-                .find(|d| d.display_id == display_id);
-            let display_scale = overlay_record.map(|d| d.scale).unwrap_or(1.0);
-            let display_bounds =
-                overlay_record.map(|d| (d.origin_x, d.origin_y, d.width, d.height));
-            state.last_regions.insert(
-                display_id.clone(),
-                crate::app::LastRegion {
-                    rect,
-                    display_scale,
-                    display_bounds,
-                },
-            );
-            state.last_region_display_id = Some(display_id.clone());
-            if let Some(tray) = state.tray.as_ref() {
-                tray.set_retake_last_region_enabled(true);
-            }
-            // An Add Capture's overlay always returns to its editor, even
-            // if another flow overwrote the pending intent meanwhile: the
-            // hidden editor must never be stranded.
-            let intent = if let Some(cc) = state.combine_capture.as_mut() {
-                cc.selected = true;
-                crate::app::CaptureIntent::CombineIntoEditor
-            } else {
-                intent
-            };
-            state.pending_intent = Some(intent);
-            state.pending_display_id = Some(display_id.clone());
-            state.pending_display_scale = Some(display_scale);
-            state.pending_display_bounds = display_bounds;
-            state.overlay_selections.clear();
-            let mut tasks = close_all_overlays(state);
-            // Scroll capture: skip the synchronous first-frame capture
-            // and open the HUD + region indicator immediately. The
-            // timer tick captures frame 1 on its next fire, ~120 ms
-            // later, so the HUD shows up instantly instead of waiting
-            // for the ~100-200 ms ScreenCaptureKit round-trip.
-            if matches!(intent, crate::app::CaptureIntent::ScrollCapture) {
-                let Some(bounds) = display_bounds else {
-                    // We set pending_intent/display_id/display_scale/
-                    // display_bounds above; a scroll capture with no known
-                    // display bounds can't proceed, so clear that state
-                    // instead of leaving it dangling for the next flow.
-                    clear_pending_capture_state(state);
-                    return Task::batch(tasks);
-                };
-                let session = crate::app::ScrollSession {
-                    display_id: display_id.clone(),
-                    rect,
-                    scale: display_scale,
-                    frames: Vec::new(),
-                    no_motion_count: 0,
-                    hud_window_id: None,
-                    region_window_id: None,
-                    display_size: Some(bounds),
-                    capture_in_flight: 0,
-                    next_capture_seq: 0,
-                    next_frame_seq_to_process: 1,
-                    pending_frames: std::collections::BTreeMap::new(),
-                    judge_in_flight: None,
-                    stopping: false,
-                    started_at: std::time::Instant::now(),
-                    last_frame_at: None,
-                    frame_tick: 0,
-                    preview_strip: None,
-                    preview_handle: None,
-                    stitched_rows: 0,
-                    last_frame_rows_scaled: 0,
-                    stitch_frame_count: 0,
-                    cancel_armed_at: None,
-                    recent_join_heights: std::collections::VecDeque::new(),
-                };
-                state.reduce_motion = os_reduce_motion();
-                state.scroll_session = Some(session);
-                // The session carries its own display; the pending
-                // fields are for a one-shot region capture and would be
-                // stale for whatever capture comes next.
-                clear_pending_capture_state(state);
-                let (region_id, region_open) = window::open(scroll_region_window_settings(bounds));
-                state.windows.register(region_id, WindowKind::ScrollRegion);
-                if let Some(s) = state.scroll_session.as_mut() {
-                    s.region_window_id = Some(region_id);
-                }
-                tasks.push(region_open.map(Message::ScrollRegionWindowReady));
-                let (hud_pos, hud_size) = scroll_window_frame(rect, Some(bounds));
-                let (hud_id, hud_open) =
-                    window::open(scroll_hud_window_settings(hud_pos, hud_size));
-                state.windows.register(hud_id, WindowKind::ScrollHud);
-                tasks.push(hud_open.map(Message::ScrollHudWindowReady));
-                return Task::batch(tasks);
-            }
-            tasks.push(Task::done(Message::CaptureRegionRequested {
-                display_id,
-                rect,
-            }));
-            Task::batch(tasks)
-        }
+        } => capture_ops::on_overlay_selected(state, display_id, rect, intent),
 
         Message::OverlaySelectionChanged { display_id, rect } => {
-            match rect {
-                Some(r) => {
-                    state.overlay_selections.insert(display_id, r);
-                }
-                None => {
-                    state.overlay_selections.remove(&display_id);
-                }
-            }
-            Task::none()
+            capture_ops::on_overlay_selection_changed(state, display_id, rect)
         }
 
-        Message::OverlayCancelled => {
-            state.overlay_selections.clear();
-            state.overlay_opening = false;
-            // A stray cancel after a combine's selection must leave its
-            // in-flight capture's display scale and cursor choice alone.
-            if !combine_selection_made(state) {
-                clear_pending_capture_state(state);
-            }
-            let restore = abort_combine_capture(state, None);
-            if state.cli_interactive_output.is_some() {
-                state.cli_interactive_output = None;
-                return Task::batch(
-                    close_all_overlays(state)
-                        .into_iter()
-                        .chain([restore, iced::exit()]),
-                );
-            }
-            Task::batch(
-                close_all_overlays(state)
-                    .into_iter()
-                    .chain(std::iter::once(restore)),
-            )
-        }
+        Message::OverlayCancelled => capture_ops::on_overlay_cancelled(state),
 
         Message::CaptureRegionRequested { display_id, rect } => {
-            let coord = state.coordinator.clone();
-            let hide_cursor = state.pending_hide_cursor;
-            let display_scale = state.pending_display_scale;
-            state.capture_in_flight = true;
-            state.last_capture_status = None;
-            // Region capture lands in the editor instead of saving
-            // directly — the editor decides what to do with it.
-            Task::perform(
-                async move {
-                    match display_scale {
-                        Some(scale) => {
-                            capture_region_to_image_with_scale(
-                                coord,
-                                display_id,
-                                rect,
-                                scale,
-                                hide_cursor,
-                            )
-                            .await
-                        }
-                        None => capture_region_to_image(coord, display_id, rect, hide_cursor).await,
-                    }
-                },
-                |result| Message::RegionCaptureCompleted(result.map_err(|e| e.to_string())),
-            )
+            capture_ops::on_capture_region(state, display_id, rect)
         }
 
-        Message::RegionCaptureCompleted(result) => {
-            state.capture_in_flight = false;
-            let intent = state
-                .pending_intent
-                .take()
-                .unwrap_or(crate::app::CaptureIntent::Editor);
-            let display_id = state.pending_display_id.take().unwrap_or_default();
-            let display_scale = state.pending_display_scale.take().unwrap_or(1.0);
-            let display_bounds = state.pending_display_bounds.take();
-            state.pending_hide_cursor = true;
-            // Add Capture: back to the same editor, no History record.
-            if intent == crate::app::CaptureIntent::CombineIntoEditor
-                || state.combine_capture.is_some()
-            {
-                return match result {
-                    Ok(image) => finish_combine_capture(state, image),
-                    Err(e) => {
-                        tracing::warn!(target: readshot_core::log::cat::CAPTURE, "region capture failed: {e}");
-                        let status = combine_capture_failed_status(&e);
-                        fail_combine_capture(state, Some(&status))
-                    }
-                };
-            }
-            match result {
-                Ok(image) => {
-                    let history_record = history_record_for_capture(
-                        &image,
-                        &display_id,
-                        state.preferences.history_retention,
-                    );
-                    // One OCR per capture: when history is on (a record
-                    // exists) its task OCRs the same base image, so an
-                    // editor opened for this capture shares that result.
-                    // Its session id is allocated up front so the history
-                    // task can tag the result before the editor exists.
-                    let shared_session = (intent == crate::app::CaptureIntent::Editor
-                        && history_record.is_some())
-                    .then(crate::editor::next_session_id);
-                    // Persist a history record in parallel with the
-                    // user-visible intent action. The history task is
-                    // gated on `preferences.history_retention` and
-                    // logs internally on failure, so it can never
-                    // block or fail the user-visible flow.
-                    let history_task = if intent == crate::app::CaptureIntent::CliInteractive
-                        || history_record.is_none()
-                    {
-                        Task::none()
-                    } else {
-                        persist_history_task(
-                            state.coordinator.clone(),
-                            image.clone(),
-                            history_record.clone(),
-                            state.preferences.history_retention,
-                            state.preferences.clone(),
-                            shared_session,
-                        )
-                    };
-                    let intent_task = match intent {
-                        crate::app::CaptureIntent::Editor => {
-                            let mut editor = match history_record {
-                                Some(record) => {
-                                    crate::editor::EditorSession::from_history_with_display_scale(
-                                        image,
-                                        record,
-                                        display_scale,
-                                    )
-                                }
-                                None => crate::editor::EditorSession::new_with_display_scale(
-                                    image,
-                                    display_scale,
-                                ),
-                            };
-                            // Mark the panel Recognizing so
-                            // `request_text_recognition` doesn't start a
-                            // second OCR.
-                            if let Some(session) = shared_session {
-                                editor.session_id = session;
-                                editor.text_panel.recognition =
-                                    crate::editor::TextRecognition::Recognizing {
-                                        since: std::time::Instant::now(),
-                                    };
-                                editor.text_panel.recognizing_part =
-                                    Some(readshot_core::document::ORIGINAL_PART);
-                            }
-                            open_editor_window_replacing(state, editor, display_bounds)
-                        }
-                        crate::app::CaptureIntent::CopyToClipboard => {
-                            Task::perform(copy_image_to_clipboard(image), |r| {
-                                Message::OverlayCopyDone(r.map_err(|e| e.to_string()))
-                            })
-                        }
-                        crate::app::CaptureIntent::CopyTextDirect => {
-                            let coord = state.coordinator.clone();
-                            let prefs = state.preferences.clone();
-                            let mask = editor_ops::CopyAllMask::None;
-                            Task::perform(ocr_then_copy(coord, image, prefs, false, mask), |r| {
-                                Message::OverlayCopyTextDone(r.map_err(|e| e.to_string()))
-                            })
-                        }
-                        crate::app::CaptureIntent::SaveDirect => {
-                            let seed =
-                                preferred_save_seed_dir(&state.preferences, &state.last_save_dir);
-                            let template = state.preferences.filename_template.clone();
-                            Task::perform(save_image_via_picker(image, seed, template), |r| {
-                                Message::OverlaySaveDone(r.map_err(|e| e.to_string()))
-                            })
-                        }
-                        crate::app::CaptureIntent::Pin => {
-                            let size = (image.width(), image.height());
-                            let handle = rgba_handle(image);
-                            let (id, open_task) =
-                                window::open(pin_window_settings(size, display_bounds));
-                            state.windows.register(id, WindowKind::Pin);
-                            state
-                                .pins
-                                .insert(id, crate::app::PinState::new(handle.clone()));
-                            open_task
-                                .map(move |opened| Message::PinWindowReady(opened, handle.clone()))
-                        }
-                        crate::app::CaptureIntent::CliInteractive => {
-                            let Some(output) = state.cli_interactive_output.take() else {
-                                return Task::done(Message::CliInteractiveWritten(Err(
-                                    "missing CLI interactive output path".into(),
-                                )));
-                            };
-                            Task::perform(write_cli_interactive_capture(image, output), |r| {
-                                Message::CliInteractiveWritten(r.map_err(|e| e.to_string()))
-                            })
-                        }
-                        crate::app::CaptureIntent::CombineIntoEditor => {
-                            unreachable!("handled above")
-                        }
-                        crate::app::CaptureIntent::ScrollCapture => {
-                            // Start a new scrolling-capture session.
-                            // The first frame is the just-captured `image`;
-                            // subsequent frames come from the timer-tick loop.
-                            // `last_regions` was populated by OverlaySelected just
-                            // before this branch ran, so the lookup is safe.
-                            let Some(last) = state.last_regions.get(&display_id).copied() else {
-                                state.last_capture_status =
-                                    Some(format!(
-                                        "Couldn’t start the scrolling capture — the selected area was lost. {}",
-                                        scroll::SCROLL_RETRY_HINT
-                                    ));
-                                return Task::batch([history_task]);
-                            };
-                            let mut session = crate::app::ScrollSession::new(
-                                display_id.clone(),
-                                last.rect,
-                                display_scale,
-                            );
-                            let rows = preview_rows(&image, None);
-                            accept_scroll_frame(&mut session, image, Some(rows), None);
-                            session.display_size = display_bounds;
-                            state.reduce_motion = os_reduce_motion();
-                            state.scroll_session = Some(session);
-                            // Open the click-through region indicator
-                            // first so the user sees the rect outline
-                            // anchored to the page they're scrolling.
-                            // The HUD opens beside it for stop/cancel.
-                            let mut tasks: Vec<Task<Message>> = Vec::new();
-                            if let Some(bounds) = display_bounds {
-                                let (region_id, region_open) =
-                                    window::open(scroll_region_window_settings(bounds));
-                                state.windows.register(region_id, WindowKind::ScrollRegion);
-                                if let Some(s) = state.scroll_session.as_mut() {
-                                    s.region_window_id = Some(region_id);
-                                }
-                                tasks.push(region_open.map(Message::ScrollRegionWindowReady));
-                            }
-                            let (hud_pos, hud_size) =
-                                scroll_window_frame(last.rect, display_bounds);
-                            let (hud_id, hud_open) =
-                                window::open(scroll_hud_window_settings(hud_pos, hud_size));
-                            state.windows.register(hud_id, WindowKind::ScrollHud);
-                            tasks.push(hud_open.map(Message::ScrollHudWindowReady));
-                            Task::batch(tasks)
-                        }
-                    };
-                    Task::batch([history_task, intent_task])
-                }
-                Err(e) => {
-                    tracing::warn!(target: readshot_core::log::cat::CAPTURE, "region capture failed: {e}");
-                    state.last_capture_status = Some(history_ops::friendly_capture_error(&e));
-                    if state.cli_interactive_output.is_some() {
-                        Task::done(Message::CliInteractiveWritten(Err(e)))
-                    } else {
-                        Task::none()
-                    }
-                }
-            }
-        }
+        Message::RegionCaptureCompleted(result) => capture_ops::on_region_captured(state, result),
 
-        msg @ (Message::HistoryRecordPersisted(..)
-        | Message::OpenHistoryRequested
-        | Message::HistoryWindowReady(..)
-        | Message::HistoryListLoaded(..)
-        | Message::HistoryClosed
-        | Message::HistorySearchChanged(..)
-        | Message::HistoryStatusDismissed
-        | Message::HistorySelect(..)
-        | Message::HistorySelectPrevious
-        | Message::HistorySelectNext
-        | Message::HistoryOpenSelected
-        | Message::HistoryDeleteSelected
-        | Message::HistoryKeyboardShortcut(..)
-        | Message::HistoryCapturedShortcut(..)
-        | Message::HistoryClearAllRequested
-        | Message::HistoryClearAllCancelled
-        | Message::HistoryClearAllConfirmed
-        | Message::HistoryOpenInEditor(..)
-        | Message::HistoryReveal(..)
-        | Message::HistoryCopyImage(..)
-        | Message::HistoryCopyImageDone(..)
-        | Message::HistoryCopyText(..)
-        | Message::HistoryCopyTextDone(..)
-        | Message::HistoryCopyVisibleTextRequested
-        | Message::HistoryCopyVisibleTextDone(..)
-        | Message::HistoryPin(..)
-        | Message::HistoryPinReady(..)
-        | Message::HistoryDelete(..)
-        | Message::HistoryDeleteConfirmed(..)
-        | Message::HistoryDeleteCancelled
-        | Message::HistoryRecordSaved
-        | Message::HistoryRecordSaveFailed { .. }
-        | Message::HistoryReopenedAfterSync { .. }
-        | Message::HistoryShowMore) => {
+        msg @ history_messages!() => {
             let task = history_ops::handle_history_message(state, msg);
             Task::batch([task, editor_ops::history_write_followups(state)])
         }
-        Message::WindowCloseRequested(id) => {
-            // Only the editor window opts out of auto-close. If the
-            // close request is for it, route through the same two-stage
-            // unsaved-work confirmation as the in-app Discard button:
-            // clean editors (and the confirmed second request) close
-            // immediately; a dirty editor arms the confirmation and
-            // stays open. Every other window uses iced's default
-            // auto-close, so there is nothing to do here.
-            let is_editor = state
-                .editor
-                .as_ref()
-                .and_then(|ed| ed.window_id)
-                .is_some_and(|editor_id| editor_id == id);
-            if is_editor {
-                return update(state, Message::EditorDiscardRequested);
-            }
-            Task::none()
-        }
-        Message::WindowClosed(id) => {
-            // A press that began in the closed window never gets its
-            // release.
-            if let Some(ed) = state.editor.as_mut() {
-                ed.pointer_window_gone(id);
-            }
-            // Always drop the id from `Windows` so helpers that
-            // probe the live-window map (e.g. `show_or_focus_welcome`)
-            // don't try to focus a dead window.
-            state.windows.forget(id);
-            state.overlay_displays.remove(&id);
-            // The last overlay went away without a selection or a cancel
-            // (closed by the OS): an Add Capture waiting on it gives its
-            // hidden editor back. A confirmed selection marked the combine
-            // (it ends when its capture completes), so that capture is left
-            // to finish.
-            let restore = if state.combine_capture.is_some()
-                && !state.overlay_opening
-                && !state.capture_in_flight
-                && !combine_selection_made(state)
-                && !state.windows.kinds().any(|k| k == WindowKind::Overlay)
-            {
-                state.overlay_selections.clear();
-                abort_combine_capture(state, None)
-            } else {
-                Task::none()
-            };
-            if state.history_window_id == Some(id) {
-                state.history_window_id = None;
-                state.history_records.clear();
-                history_images::trim_history_image_cache();
-                state.history_status = None;
-                // An open from it that is still waiting is cancelled.
-                history_ops::cancel_history_open(state, "History was closed before it opened");
-                state.history_search.clear();
-                state.history_selected_id = None;
-            }
-            if state.settings_window_id == Some(id) {
-                state.settings_window_id = None;
-                state.settings_recording_hotkey = false;
-                state.settings_hotkey_error = None;
-                state.settings_hotkey_status = None;
-                state.settings_status = None;
-                state.settings_reset_all_pending = false;
-            }
-            if state.cli_tools_window_id == Some(id) {
-                state.cli_tools_window_id = None;
-                state.cli_tools_status = None;
-            }
-            let restore = match state.editor.take_if(|ed| ed.window_id == Some(id)) {
-                Some(ed) => {
-                    // Never composes here: a step still composing finishes
-                    // first, off the UI thread.
-                    let retired = compose_jobs::retire_editor(state, ed);
-                    state.release_editor_modifiers();
-                    Task::batch([restore, retired])
-                }
-                None => restore,
-            };
-            // A scroll-capture HUD or region window closing out-of-band
-            // (OS, crash, future close affordance) must tear the whole
-            // session down. Otherwise `scroll_session` stays `Some` and
-            // the frame-capture tick — gated on `scroll_session.is_some()`
-            // — keeps firing forever against dead window ids.
-            if state
-                .scroll_session
-                .as_ref()
-                .is_some_and(|s| s.hud_window_id == Some(id) || s.region_window_id == Some(id))
-            {
-                if let Some(session) = state.scroll_session.take() {
-                    let mut tasks: Vec<Task<Message>> = Vec::new();
-                    for sibling in [session.hud_window_id, session.region_window_id]
-                        .into_iter()
-                        .flatten()
-                        .filter(|&w| w != id)
-                    {
-                        state.windows.forget(sibling);
-                        tasks.push(window::close(sibling));
-                    }
-                    state.last_capture_status = Some("Scrolling capture cancelled.".into());
-                    tasks.push(restore);
-                    return Task::batch(tasks);
-                }
-            }
-            restore
-        }
-        Message::WindowRescaled(id, scale) => {
-            if matches!(state.windows.kind(id), Some(WindowKind::Editor)) {
-                if let Some(ed) = state.editor.as_mut() {
-                    let was_actual = ed.zoom_is_actual_size();
-                    ed.display_scale = scale.max(f32::EPSILON);
-                    if was_actual {
-                        ed.zoom = ed.actual_size_zoom();
-                    }
-                    // The stage relaid out without a scroll event.
-                    return view::pin_stage_offset(ed);
-                }
-            }
-            Task::none()
-        }
+        Message::WindowCloseRequested(id) => window_ops::on_window_close_requested(state, id),
+        Message::WindowClosed(id) => window_ops::on_window_closed(state, id),
+        Message::WindowRescaled(id, scale) => window_ops::on_window_rescaled(state, id, scale),
         Message::EditorPointerButton(pressed, window) => {
-            if let Some(ed) = state.editor.as_mut() {
-                ed.set_pointer_held(pressed.then_some(window));
-            }
-            Task::none()
+            window_ops::on_editor_pointer_button(state, pressed, window)
         }
         Message::EditorPointerWindowUnfocused(id) => {
-            if let Some(ed) = state.editor.as_mut() {
-                ed.pointer_window_gone(id);
-            }
-            Task::none()
+            window_ops::on_editor_pointer_window_unfocused(state, id)
         }
-        Message::EditorShiftChanged(held) => {
-            // Only react on an actual change so the per-keystroke modifier
-            // stream doesn't force a canvas re-tessellation each key.
-            if state.editor_shift_held != held {
-                state.editor_shift_held = held;
-                if let Some(ed) = state.editor.as_ref() {
-                    // Re-tessellate so a live drag preview reflects the new
-                    // constraint on the next redraw.
-                    ed.canvas_cache.clear();
-                }
-            }
-            Task::none()
-        }
+        Message::EditorShiftChanged(held) => window_ops::on_editor_shift_changed(state, held),
         // High-frequency editor events: handled here, not in the editor
         // arm, so they never clear the canvas geometry cache.
-        Message::EditorCommandChanged(held) => {
-            // Only the Text panel's ⌘-click reads it; nothing to redraw.
-            if state.editor_command_held != held {
-                state.editor_command_held = held;
-            }
-            Task::none()
-        }
+        Message::EditorCommandChanged(held) => window_ops::on_editor_command_changed(state, held),
         // Text-panel hover fires per pointer move; its outline is drawn in
         // the canvas's uncached marks layer, so the annotation geometry
         // cache stays valid.
-        Message::EditorTextLineHovered(index) => {
-            if let Some(ed) = state.editor.as_mut() {
-                ed.text_panel.hovered = Some(index);
-            }
-            Task::none()
-        }
-        Message::EditorTextLineUnhovered(index) => {
-            if let Some(ed) = state.editor.as_mut() {
-                if ed.text_panel.hovered == Some(index) {
-                    ed.text_panel.hovered = None;
-                }
-            }
-            Task::none()
-        }
+        Message::EditorTextLineHovered(index) => window_ops::on_text_line_hovered(state, index),
+        Message::EditorTextLineUnhovered(index) => window_ops::on_text_line_unhovered(state, index),
         Message::EditorWindowResized(window, width) => {
-            let mut docked_overlay = false;
-            if let Some(ed) = state.editor.as_mut() {
-                if ed.window_id == Some(window) {
-                    ed.window_width = width;
-                    // An overlay widened into the dock is now the docked
-                    // panel: fold it into the preference (as ⌥⌘P does)
-                    // so no stale overlay flag is left to eat an Esc.
-                    if width >= PANEL_DOCK_MIN_WINDOW && ed.panel_overlay_open {
-                        ed.panel_overlay_open = false;
-                        docked_overlay = true;
-                    }
-                }
-            }
-            if docked_overlay {
-                state.set_editor_panel_open(true);
-            }
-            // The stage relaid out without a scroll event.
-            match state.editor.as_ref() {
-                Some(ed) if ed.window_id == Some(window) => view::pin_stage_offset(ed),
-                _ => Task::none(),
-            }
+            window_ops::on_editor_window_resized(state, window, width)
         }
         // Only redraws the recognizing skeleton.
         Message::EditorPanelTick => Task::none(),
         Message::WindowDragRequested(id) => window::drag(id),
-        msg @ (Message::EditorKeyPressed { .. }
-        | Message::EditorStatusTick
-        | Message::EditorWindowReady(..)
-        | Message::EditorSaveRequested
-        | Message::EditorSaved { .. }
-        | Message::EditorCopyImageRequested
-        | Message::EditorCopyImageDone { .. }
-        | Message::EditorBeautifyPreset(..)
-        | Message::EditorBeautifySavedPresetApplied(..)
-        | Message::EditorBeautifyEdit(..)
-        | Message::EditorBeautifySliderPreview(..)
-        | Message::EditorSnapshotSliderCommit
-        | Message::EditorBeautifySavePreset
-        | Message::EditorBeautifyDeletePreset(..)
-        | Message::EditorBeautifyRestorePreset
-        | Message::EditorBeautifyHexChanged(..)
-        | Message::EditorBeautifyHexSubmitted
-        | Message::EditorBeautifyPickBackground
-        | Message::EditorCopyTextRequested
-        | Message::EditorCopyTextDone { .. }
-        | Message::EditorDiscardRequested
-        | Message::EditorDiscardDisarmed
-        | Message::EditorStatusDismissed
-        | Message::EditorPopoverToggled(..)
-        | Message::EditorPopoverClosed
-        | Message::EditorToolbar(..)
-        | Message::EditorLineWidthPreview(..)
-        | Message::EditorLineWidthCommit
-        | Message::EditorStyle(..)
-        | Message::EditorStylePreview(..)
-        | Message::EditorStyleCommit
-        | Message::EditorHexChanged(..)
-        | Message::EditorHexSubmitted
-        | Message::EditorEyedropperToggled
-        | Message::EditorCanvas(..)
-        | Message::EditorEditSelectedText
-        | Message::EditorImageMenuKey
-        | Message::EditorPanelTabKey(..)
-        | Message::EditorFocusZoneCycle(..)
-        | Message::EditorCycleSelection(..)
-        | Message::EditorTabResolved { .. }
-        | Message::EditorFieldKeyResolved { .. }
-        | Message::EditorResizeByKeys(..)
-        | Message::EditorDeleteSelected
-        | Message::EditorCropApply
-        | Message::EditorCropCancel
-        | Message::EditorNudgeSelected(..)
-        | Message::EditorTextChanged(..)
-        | Message::EditorTextAction(..)
-        | Message::EditorTextCommit
-        | Message::EditorTextCancel
-        | Message::EditorWidthBump(..)
-        | Message::EditorRotate { .. }
-        | Message::EditorFlip(..)
-        | Message::EditorResizeOpen
-        | Message::EditorResizeWidthChanged(..)
-        | Message::EditorResizeHeightChanged(..)
-        | Message::EditorResizeUnitChanged(..)
-        | Message::EditorResizeLockToggled(..)
-        | Message::EditorResizeApply
-        | Message::EditorCombineCaptureRequested(..)
-        | Message::EditorAddImageFromFile
-        | Message::EditorPartLoaded { .. }
-        | Message::EditorLayoutGapPreview(..)
-        | Message::EditorLayoutGapFlush { .. }
-        | Message::EditorLayoutAlign(..)
-        | Message::EditorComposed { .. }
-        | Message::EditorColorCycle(..)
-        | Message::EditorZoomIn
-        | Message::EditorZoomOut
-        | Message::EditorZoomActual
-        | Message::EditorZoomFit
-        | Message::EditorPinRequested
-        | Message::EditorPinRendered { .. }
-        | Message::PinWindowReady(..)
-        | Message::PinClosePressed(..)
-        | Message::PinDragRequested(..)
-        | Message::PinOpacityChanged(..)
-        | Message::PinLockToggled(..)
-        | Message::PinHovered(..)
-        | Message::PinKeyPressed { .. }
-        | Message::EditorTextRecognize
-        | Message::EditorTextRecognized { .. }
-        | Message::EditorPanelToggled
-        | Message::EditorPanelTabSelected(..)
-        | Message::EditorPanelOverlayDismissed
-        | Message::EditorOpenTextSettings
-        | Message::EditorTextLineClicked(..)
-        | Message::EditorCopyLines
-        | Message::EditorCopyLinesDone(..)
-        | Message::EditorRemoveLineBreaksToggled(..)
-        | Message::EditorRedactStyleChanged(..)
-        | Message::EditorRedactAll
-        | Message::EditorRedactLine(..)
-        | Message::EditorHistoryWritten { .. }) => {
-            // Images the message lets go of are freed off the UI thread.
-            let held = state.editor.as_ref().map(compose_jobs::hold);
-            // The frame the canvas computed this message's points in: the
-            // one the last view showed (a step settled now, or a change
-            // handled earlier in the same batch, may have moved it).
-            let shown = state.editor.as_ref().map(|ed| ed.shown_frame());
-            compose_jobs::settle_before(state, &msg);
-            // A canvas point computed against another frame than the
-            // present one is mapped into it, or the message is dropped.
-            let msg = match (state.editor.as_mut(), shown) {
-                (Some(ed), Some(shown))
-                    if compose_jobs::points_into_the_shown_image(&msg)
-                        && !crate::editor::same_frame(&shown, ed.model.geometry()) =>
-                {
-                    compose_jobs::remap_stale_press(ed, &shown, msg)
-                }
-                (Some(ed), _) => compose_jobs::remap_same_batch_drag(ed, msg),
-                (None, _) => Some(msg),
-            };
-            let task = match msg {
-                Some(msg) => editor_ops::handle_editor_message(state, msg),
-                None => Task::none(),
-            };
-            editor_ops::sync_owed_editor_history(state);
-            if let Some(held) = held {
-                held.release(state.editor.as_ref());
-            }
-            Task::batch([task, editor_ops::history_write_followups(state)])
-        }
+        msg @ editor_messages!() => window_ops::route_editor_message(state, msg),
         // Bookkeeping only (no history, no settle): what the stage shows.
-        Message::EditorStageScrolled(x, y) => {
-            if let Some(ed) = state.editor.as_ref() {
-                ed.stage_offset.set((x, y));
-            }
-            Task::none()
-        }
-        Message::OverlayCopyDone(result) => {
-            state.last_capture_status = Some(match result {
-                Ok(()) => "Copied image to clipboard.".into(),
-                Err(e) => {
-                    tracing::warn!(target: readshot_core::log::cat::CAPTURE, "copy image failed: {e}");
-                    history_ops::friendly_string_error_with(
-                        "copy to the clipboard",
-                        &e,
-                        Some(history_ops::RETRY_HINT),
-                    )
-                }
-            });
-            Task::none()
-        }
-        Message::OverlaySaveDone(result) => {
-            if let Ok(Some(path)) = &result {
-                if let Some(parent) = path.parent() {
-                    state.last_save_dir = Some(parent.to_path_buf());
-                }
-            }
-            state.last_capture_status = Some(match result {
-                Ok(Some(p)) => format!("Saved to {}.", p.display()),
-                Ok(None) => "Save cancelled.".into(),
-                Err(e) => {
-                    tracing::warn!(target: readshot_core::log::cat::CAPTURE, "save failed: {e}");
-                    history_ops::friendly_string_error_with(
-                        "save the image",
-                        &e,
-                        Some(history_ops::SAVE_HINT),
-                    )
-                }
-            });
-            Task::none()
-        }
+        Message::EditorStageScrolled(x, y) => window_ops::on_stage_scrolled(state, x, y),
+        Message::OverlayCopyDone(result) => capture_ops::on_overlay_copy_done(state, result),
+        Message::OverlaySaveDone(result) => capture_ops::on_overlay_save_done(state, result),
         Message::OverlayCopyTextDone(result) => {
-            state.last_capture_status = Some(match result {
-                Ok(text) if text.is_empty() => "No text recognized.".into(),
-                Ok(text) => {
-                    let n = text.chars().count();
-                    format!("Copied {} of text.", counted(n, "character", "characters"))
-                }
-                Err(e) => {
-                    tracing::warn!(target: readshot_core::log::cat::CAPTURE, "copy text failed: {e}");
-                    history_ops::friendly_string_error_with(
-                        "copy the text",
-                        &e,
-                        Some(history_ops::RETRY_HINT),
-                    )
-                }
-            });
-            Task::none()
+            capture_ops::on_overlay_copy_text_done(state, result)
         }
         Message::CliInteractiveWritten(result) => {
-            if let Err(e) = result {
-                tracing::warn!(target: readshot_core::log::cat::CLI, "interactive capture failed: {e}");
-            }
-            state.cli_interactive_output = None;
-            state.overlay_opening = false;
-            clear_pending_capture_state(state);
-            iced::exit()
+            capture_ops::on_cli_interactive_written(state, result)
         }
 
         Message::NoOp => Task::none(),
 
-        msg @ (Message::ScrollHudWindowReady(..)
-        | Message::ScrollRegionWindowReady(..)
-        | Message::ScrollHudDragRequested
-        | Message::ScrollCaptureTick
-        | Message::ScrollCaptureFrame { .. }
-        | Message::ScrollFrameJudged { .. }
-        | Message::ScrollCaptureCancelRequested
-        | Message::ScrollCaptureKeepGoing
-        | Message::ScrollCaptureStopRequested
-        | Message::ScrollCaptureStitched(..)) => scroll::handle_scroll_message(state, msg),
+        msg @ scroll_messages!() => scroll::handle_scroll_message(state, msg),
 
-        Message::WelcomeStatusDismissed => {
-            state.last_capture_status = None;
-            Task::none()
-        }
+        Message::WelcomeStatusDismissed => welcome_ops::on_welcome_status_dismissed(state),
 
-        Message::CaptureSaved(result) => {
-            state.capture_in_flight = false;
-            state.last_capture_status = Some(match &result {
-                Ok(path) => format!("Saved to {}.", path.display()),
-                Err(e) => {
-                    tracing::warn!(target: readshot_core::log::cat::CAPTURE, "capture failed: {e}");
-                    history_ops::friendly_capture_error(e)
-                }
-            });
-            Task::none()
-        }
+        Message::CaptureSaved(result) => capture_ops::on_capture_saved(state, result),
 
-        Message::ThemePollTick => {
-            let os = os_theme_mode();
-            if os != state.theme_mode {
-                state.theme_mode = os;
-            }
-            Task::none()
-        }
-        Message::SystemThemeChanged(mode) => {
-            state.theme_mode = match mode {
-                iced::theme::Mode::Light => ThemeMode::Light,
-                iced::theme::Mode::Dark => ThemeMode::Dark,
-                // Off macOS `None` is "no news", not "dark": an X11 window
-                // has no theme of its own, and iced reports that as `None`
-                // every time one opens, which would wipe the portal's
-                // answer.
-                iced::theme::Mode::None if !READS_OS_THEME => state.theme_mode,
-                iced::theme::Mode::None => ThemeMode::Dark,
-            };
-            Task::none()
-        }
-        Message::UrlActionReceived(action) => match action {
-            UrlAction::NewCapture => {
-                tracing::info!(target: readshot_core::log::cat::URL, "readshot:// → opening overlay");
-                if state.welcome.should_show() {
-                    state.pending_url_after_permission = Some(UrlAction::NewCapture);
-                    return show_or_focus_welcome(state);
-                }
-                update(state, Message::OpenOverlayRequested)
-            }
-            UrlAction::Unknown(path) => {
-                tracing::warn!(target: readshot_core::log::cat::URL, "ignoring unknown readshot:// path: {path}");
-                Task::none()
-            }
-        },
+        Message::ThemePollTick => tick_ops::on_theme_poll_tick(state),
+        Message::SystemThemeChanged(mode) => tick_ops::on_system_theme_changed(state, mode),
+        Message::UrlActionReceived(action) => tick_ops::on_url_action(state, action),
 
         Message::QuitRequested => quit_readshot(&state.coordinator),
 
-        Message::RestartRequested => {
-            // macOS Screen Recording's TCC grant is cached per-process
-            // by `CGPreflightScreenCaptureAccess` — once a process has
-            // seen "denied", it can't ever see "granted" without a
-            // restart. We spawn a fresh Launch Services launch and
-            // hard-exit so the daemon can't get into a half-shutdown
-            // race (`iced::exit()` returns a Task that may not have
-            // finished by the time the new instance comes up).
-            #[cfg(target_os = "macos")]
-            {
-                disarm_relaunch_on_system_quit();
-                match relaunch_via_launch_services() {
-                    Ok(()) => {
-                        tracing::info!(target: readshot_core::log::cat::PERMS, "respawned via Launch Services; exiting");
-                        // Tiny sleep so `open -n` definitely got the
-                        // request through before this PID disappears.
-                        std::thread::sleep(Duration::from_millis(150));
-                        std::process::exit(0);
-                    }
-                    Err(e) => {
-                        tracing::warn!(target: readshot_core::log::cat::PERMS, "relaunch failed: {e}");
-                    }
-                }
-            }
-            iced::exit()
-        }
+        Message::RestartRequested => app_ops::on_restart_requested(),
 
         // GrantPermissionRequested: just trigger the macOS permission
         // prompt by poking ScreenCaptureKit
@@ -2430,32 +1259,12 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         // "Open Settings again" button in the AwaitingGrant state
         // covers users whose prompt never appears (e.g. previously
         // denied) by deep-linking directly.
-        Message::GrantPermissionRequested => {
-            state.update_sync(Message::GrantPermissionRequested);
-            let coord = state.coordinator.clone();
-            Task::perform(
-                async move {
-                    // The error case (no grant yet) is exactly when
-                    // macOS shows its prompt — that's what we want.
-                    let _ = coord.list_displays().await;
-                },
-                |()| Message::PermissionTick,
-            )
-        }
+        Message::GrantPermissionRequested => app_ops::on_grant_permission(state),
 
         // Clear the stale row, re-register this signature with macOS (the
         // SCK probe inside `list_displays` does that), and open the pane
         // so the user can switch Readshot on for this build.
-        Message::ResetPermissionRequested => {
-            state.update_sync(Message::ResetPermissionRequested);
-            let coord = state.coordinator.clone();
-            Task::perform(
-                async move {
-                    let _ = coord.list_displays().await;
-                },
-                |()| Message::OpenPermissionSettingsRequested,
-            )
-        }
+        Message::ResetPermissionRequested => app_ops::on_reset_permission(state),
 
         // Synchronous transitions — reuse the existing handler.
         msg @ (Message::PermissionPoll(_) | Message::OpenPermissionSettingsRequested) => {
@@ -2463,31 +1272,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
 
-        msg @ (Message::Settings(..)
-        | Message::OpenSettingsRequested
-        | Message::SettingsChooseSaveFolderRequested
-        | Message::SettingsSaveFolderPicked(..)
-        | Message::SettingsOpenSaveFolderRequested
-        | Message::SettingsOpenSaveFolderDone(..)
-        | Message::SettingsStartHotkeyRecording
-        | Message::SettingsHotkeyRecorded(..)
-        | Message::SettingsHotkeyRecordingInvalid
-        | Message::SettingsHotkeyRecordingCancelled
-        | Message::SettingsResetAllRequested
-        | Message::SettingsResetAllCancelled
-        | Message::SettingsResetAllConfirmed
-        | Message::SettingsUninstallRequested
-        | Message::SettingsUninstallCancelled
-        | Message::SettingsUninstallPurgeToggled(..)
-        | Message::SettingsUninstallConfirmed
-        | Message::SettingsUninstallFinished
-        | Message::SettingsWindowReady(..)
-        | Message::SettingsPaneSelected(..)
-        | Message::SettingsKeyPressed { .. }
-        | Message::OpenCliToolsRequested
-        | Message::CliToolsWindowReady(..)
-        | Message::CliToolsCopyRequested(..)
-        | Message::CliToolsCopyDone(..)) => settings_ops::handle_settings_message(state, msg),
+        msg @ settings_messages!() => settings_ops::handle_settings_message(state, msg),
     }
 }
 
