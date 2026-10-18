@@ -50,6 +50,17 @@ pub(crate) fn editor_selected_hint(kind: &str, text_editable: bool) -> String {
     }
 }
 
+/// A key's message that a focused text field should own: Undo, Redo
+/// and an Up/Down nudge (a single-line field ignores those keys).
+fn is_field_key(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::EditorToolbar(
+            readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
+        )
+    ) || matches!(message, Message::EditorNudgeSelected(dx, _) if *dx == 0.0)
+}
+
 /// The focus query's answer for a canvas Tab: the field's own answer, or
 /// "not focused" when no widget answered.
 pub(crate) fn tab_field_focused(answers: &[bool]) -> bool {
@@ -1026,25 +1037,39 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     readshot_ui::ToolbarMessage::SelectTool(readshot_ui::editor::ToolState::Crop)
                 ))
             );
-            // While the Color popover is open its hex field may have focus,
-            // and an inline text draft owns its own field. iced's text_input
-            // has no undo and doesn't capture Cmd+Z, so undo/redo would
-            // silently rewind the drawing under the popover, or commit the
-            // draft and then undo it (the typed text vanishes).
-            if matches!(
-                message,
-                Some(Message::EditorToolbar(
-                    readshot_ui::ToolbarMessage::Undo | readshot_ui::ToolbarMessage::Redo
-                ))
-            ) && state.editor.as_ref().is_some_and(|ed| {
-                matches!(
-                    ed.popover,
-                    Some(
-                        crate::editor::EditorPopover::Color | crate::editor::EditorPopover::Resize
-                    )
-                ) || ed.pending_text.is_some()
-            }) {
-                return Task::none();
+            // While the Color or Resize popover is open its field may have
+            // focus, an inline text draft owns its own field, and so does
+            // the Beautify hex field while it holds a draft. iced's
+            // text_input has no undo and doesn't capture Cmd+Z, nor Up/Down,
+            // so undo/redo would silently rewind the drawing under the
+            // field (or commit the draft and then undo it), and Up/Down
+            // would move the selected annotation under the caret.
+            if let Some(field_key) = message.as_ref().filter(|m| is_field_key(m)) {
+                if state.editor.as_ref().is_some_and(|ed| {
+                    matches!(
+                        ed.popover,
+                        Some(
+                            crate::editor::EditorPopover::Color
+                                | crate::editor::EditorPopover::Resize
+                        )
+                    ) || ed.pending_text.is_some()
+                        || ed.beautify_hex_draft.is_some()
+                }) {
+                    return Task::none();
+                }
+                // A click can leave the caret in the Beautify hex field
+                // with nothing typed and no message: ask iced first.
+                if beautify_hex_on_screen(state) {
+                    let message = Box::new(field_key.clone());
+                    return iced::widget::operation::is_focused(iced::widget::Id::new(
+                        super::key_focus::BEAUTIFY_HEX_ID,
+                    ))
+                    .collect()
+                    .map(move |answers| Message::EditorFieldKeyResolved {
+                        message: message.clone(),
+                        field_focused: tab_field_focused(&answers),
+                    });
+                }
             }
             let task = match message {
                 Some(message) => update(state, message),
@@ -2485,6 +2510,15 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 });
             }
             cycle_selection_by_tab(state, step)
+        }
+        Message::EditorFieldKeyResolved {
+            message,
+            field_focused,
+        } => {
+            if field_focused || !is_field_key(&message) {
+                return Task::none();
+            }
+            update(state, *message)
         }
         Message::EditorTabResolved {
             step,

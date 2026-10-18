@@ -1014,3 +1014,76 @@ fn tab_applies_a_typed_hex_and_esc_still_cancels() {
     assert_eq!(ed.popover, None);
     assert!(swatch_eq(ed.model.effective_color(), before));
 }
+
+fn first_rect_y(app: &App) -> f32 {
+    match &app.editor.as_ref().unwrap().model.annotations()[0] {
+        Annotation::Rectangle { rect, .. } => rect.y,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// ⌘Z and ↑/↓ typed in the Beautify hex field (or the Color popover's)
+/// belong to the field: they never undo or nudge the document under it.
+#[test]
+fn undo_and_up_down_in_a_hex_field_leave_the_document_alone() {
+    let down = iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowDown);
+    let z = iced::keyboard::Key::Character("z".into());
+
+    // A typed Beautify hex draft.
+    let mut app = two_rects_first_selected();
+    let id = iced::window::Id::unique();
+    app.editor.as_mut().unwrap().window_id = Some(id);
+    let depth = app.editor.as_ref().unwrap().model.undo_depth();
+    let _ = update(&mut app, Message::EditorBeautifyHexChanged("#12".into()));
+    let _ = update(&mut app, key_press(id, z.clone(), true));
+    let _ = update(&mut app, key_press(id, down.clone(), false));
+    assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth);
+    assert_eq!(first_rect_y(&app), 0.0, "not nudged");
+
+    // The Color popover's hex field.
+    let mut app = two_rects_first_selected();
+    app.editor.as_mut().unwrap().window_id = Some(id);
+    app.editor.as_mut().unwrap().popover = Some(crate::editor::EditorPopover::Color);
+    let _ = update(&mut app, key_press(id, down.clone(), false));
+    assert_eq!(first_rect_y(&app), 0.0, "not nudged under the popover");
+
+    // The Beautify field on screen, nothing typed: iced is asked first.
+    let mut app = two_rects_first_selected();
+    app.editor.as_mut().unwrap().window_id = Some(id);
+    beautify_shown(&mut app);
+    let _ = update(&mut app, key_press(id, z, true));
+    assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth);
+    let _ = update(&mut app, key_press(id, down, false));
+    assert_eq!(first_rect_y(&app), 0.0);
+    let undo = Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo));
+    let nudge = Box::new(Message::EditorNudgeSelected(0.0, 1.0));
+    // The field has the caret: the keys are its own.
+    for message in [undo.clone(), nudge.clone()] {
+        let _ = update(
+            &mut app,
+            Message::EditorFieldKeyResolved {
+                message,
+                field_focused: true,
+            },
+        );
+    }
+    assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth);
+    assert_eq!(first_rect_y(&app), 0.0);
+    // It doesn't: they act on the document.
+    let _ = update(
+        &mut app,
+        Message::EditorFieldKeyResolved {
+            message: nudge,
+            field_focused: false,
+        },
+    );
+    assert_eq!(first_rect_y(&app), 1.0, "nudged");
+    let _ = update(
+        &mut app,
+        Message::EditorFieldKeyResolved {
+            message: undo,
+            field_focused: false,
+        },
+    );
+    assert_eq!(first_rect_y(&app), 0.0, "the nudge undone");
+}

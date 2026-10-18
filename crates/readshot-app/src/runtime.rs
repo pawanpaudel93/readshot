@@ -2107,6 +2107,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         | Message::EditorFocusZoneCycle(..)
         | Message::EditorCycleSelection(..)
         | Message::EditorTabResolved { .. }
+        | Message::EditorFieldKeyResolved { .. }
         | Message::EditorResizeByKeys(..)
         | Message::EditorDeleteSelected
         | Message::EditorCropApply

@@ -734,6 +734,14 @@ pub enum Message {
         step: i32,
         field_focused: bool,
     },
+    /// The answer to an Undo, Redo or Up/Down nudge key's check of the
+    /// Beautify hex field: with the field focused the key is the field's
+    /// (iced's text_input has no undo and ignores Up/Down, so they reach
+    /// the editor) and does nothing; otherwise `message` runs.
+    EditorFieldKeyResolved {
+        message: Box<Message>,
+        field_focused: bool,
+    },
     /// ⌥ + arrow: grow or shrink the crop draft or the selection from
     /// its bottom-right edge; a selected magnifier moves only its bubble.
     EditorResizeByKeys(f32, f32),
