@@ -25,15 +25,6 @@ fn mods(cmd: bool, shift: bool, alt: bool, ctrl: bool) -> Modifiers {
     m
 }
 
-/// The editor's second-level chord: ⌥⌘ on macOS, Ctrl+Shift elsewhere.
-fn alt_chord() -> Modifiers {
-    if cfg!(target_os = "macos") {
-        mods(true, false, true, false)
-    } else {
-        mods(true, true, false, false)
-    }
-}
-
 fn ch(c: &str) -> Key {
     Key::Character(c.into())
 }
@@ -117,7 +108,7 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
             mods(true, false, false, false),
             "EditorPinRequested",
         ),
-        (ch("p"), alt_chord(), "EditorPanelToggled"),
+        (ch("p"), editor_alt_modifiers(), "EditorPanelToggled"),
         (
             ch("s"),
             mods(true, false, false, false),
@@ -128,7 +119,7 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
             mods(true, false, false, false),
             "EditorDiscardRequested",
         ),
-        (ch(RESIZE_LETTER), alt_chord(), "EditorResizeOpen"),
+        (ch(RESIZE_LETTER), editor_alt_modifiers(), "EditorResizeOpen"),
         (ch("["), mods(true, false, false, false), "clockwise: false"),
         (ch("]"), mods(true, false, false, false), "clockwise: true"),
         (ch("="), mods(true, false, false, false), "EditorZoomIn"),
@@ -161,8 +152,8 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
             mods(true, true, false, false),
             "EditorFlip(Vertical)",
         ),
-        (ch("t"), alt_chord(), "EditorPanelTabKey(Text)"),
-        (ch("b"), alt_chord(), "EditorPanelTabKey(Beautify)"),
+        (ch("t"), editor_alt_modifiers(), "EditorPanelTabKey(Text)"),
+        (ch("b"), editor_alt_modifiers(), "EditorPanelTabKey(Beautify)"),
         (named(Named::Tab), plain(), "EditorCycleSelection(1)"),
         (
             named(Named::Tab),
@@ -415,7 +406,7 @@ fn layout_gap_and_align_step_from_the_keyboard() {
 #[test]
 fn resize_opens_with_width_focused_and_tabs_through_the_dialog() {
     let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
-    press(&mut app, id, ch(RESIZE_LETTER), alt_chord());
+    press(&mut app, id, ch(RESIZE_LETTER), editor_alt_modifiers());
     assert_eq!(
         app.editor.as_ref().unwrap().popover,
         Some(EditorPopover::Resize)
@@ -535,7 +526,7 @@ fn closing_a_popover_opened_from_the_bar_returns_the_focus_to_it() {
 #[test]
 fn the_beautify_tab_is_operable_from_the_keyboard() {
     let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
-    press(&mut app, id, ch("b"), alt_chord());
+    press(&mut app, id, ch("b"), editor_alt_modifiers());
     assert_eq!(
         PanelTab::from_id(&app.preferences.editor_panel_tab),
         PanelTab::Beautify
@@ -600,7 +591,7 @@ fn text_lines_are_selected_copied_and_redacted_from_the_keyboard() {
     ready_editor(&mut app);
     let id = iced::window::Id::unique();
     app.editor.as_mut().unwrap().window_id = Some(id);
-    press(&mut app, id, ch("t"), alt_chord());
+    press(&mut app, id, ch("t"), editor_alt_modifiers());
     while focus(&app) != at(FocusZone::Panel, FocusItem::TextLines) {
         press(&mut app, id, named(Named::Tab), plain());
     }
@@ -750,9 +741,9 @@ fn alt_arrows_resize_a_selected_box_from_its_corner() {
 #[test]
 fn hiding_the_panel_hands_the_keys_back_to_the_canvas() {
     let (mut app, id) = editor_app(two_rects_first_selected().editor.take().unwrap());
-    press(&mut app, id, ch("b"), alt_chord());
+    press(&mut app, id, ch("b"), editor_alt_modifiers());
     assert_eq!(focus(&app), at(FocusZone::Panel, FocusItem::PanelTabs));
-    press(&mut app, id, ch("p"), alt_chord());
+    press(&mut app, id, ch("p"), editor_alt_modifiers());
     // The panel is gone: the arrow nudges the selection again.
     press(&mut app, id, named(Named::ArrowRight), plain());
     assert_eq!(focus(&app), None);
@@ -772,8 +763,8 @@ fn new_chords_stay_out_of_text_fields() {
         (ch("v"), mods(true, true, false, false)),
         (ch("h"), mods(true, true, false, false)),
         (ch("i"), mods(true, true, false, false)),
-        (ch("t"), alt_chord()),
-        (ch("b"), alt_chord()),
+        (ch("t"), editor_alt_modifiers()),
+        (ch("b"), editor_alt_modifiers()),
         (named(Named::Tab), plain()),
         (named(Named::ArrowRight), mods(false, false, true, false)),
     ];
