@@ -1,6 +1,7 @@
 // Extracted from runtime.rs (pure code-move). `use super::*` pulls in
 // sibling/parent items; the explicit imports mirror runtime.rs's preamble.
 
+#[cfg(target_os = "macos")]
 use std::path::Path;
 
 use iced::Task;
@@ -116,6 +117,8 @@ pub(crate) fn os_theme_mode() -> crate::runtime::ThemeMode {
     }
 }
 
+/// Off macOS the app never calls this outside the (macOS-only) poll; the
+/// OS appearance arrives as `SystemThemeChanged` (see `READS_OS_THEME`).
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn os_theme_mode() -> crate::runtime::ThemeMode {
     crate::runtime::ThemeMode::Dark
@@ -242,8 +245,8 @@ pub(crate) fn arm_relaunch_on_system_quit(started_without_permission: bool) {
 }
 
 /// Our own Quit and Restart exits are deliberate — don't relaunch.
+#[cfg(target_os = "macos")]
 pub(crate) fn disarm_relaunch_on_system_quit() {
-    #[cfg(target_os = "macos")]
     EXIT_IS_OURS.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
@@ -373,9 +376,14 @@ pub(crate) fn notify_update_check_failed(e: &crate::updater::UpdaterError) {
     {
         show_macos_notification("Readshot updates", &update_check_failure_message(e));
     }
+    // No notification channel off macOS yet: the log is the record.
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = e;
+        tracing::warn!(
+            target: "readshot::updater",
+            "{}",
+            update_check_failure_message(e)
+        );
     }
 }
 

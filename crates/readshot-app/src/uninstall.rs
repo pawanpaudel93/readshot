@@ -697,8 +697,10 @@ mod tests {
         );
     }
 
+    // The symlink tests are Unix-only: creating a symlink on Windows
+    // needs a privilege the test runner may not hold.
+    #[cfg(unix)]
     fn make_symlink(link: &Path, target: &Path) {
-        #[cfg(unix)]
         std::os::unix::fs::symlink(target, link).unwrap();
     }
 
@@ -735,6 +737,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn planner_includes_only_readshot_symlinks() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -765,6 +768,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn planner_leaves_foreign_symlinks_alone() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -858,6 +862,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn executor_removes_symlink_and_leaves_regular_file() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();

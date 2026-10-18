@@ -822,14 +822,17 @@ fn the_history_preview_scales_small_captures_up_to_the_pane() {
 #[test]
 fn an_update_check_failure_points_to_a_reinstall_not_the_network() {
     use crate::updater::UpdaterError;
-    let mut errors = vec![UpdaterError::Unsupported];
+    // Only `Unsupported` exists off macOS; the Sparkle errors are mac-only.
+    #[cfg(not(target_os = "macos"))]
+    let errors = vec![UpdaterError::Unsupported];
     #[cfg(target_os = "macos")]
-    errors.extend([
+    let errors = vec![
+        UpdaterError::Unsupported,
         UpdaterError::FrameworkLoad("dlopen".into()),
         UpdaterError::MissingControllerClass,
         UpdaterError::NilController,
         UpdaterError::NotInstalled,
-    ]);
+    ];
     for e in errors {
         let msg = crate::runtime::platform::update_check_failure_message(&e);
         assert!(msg.starts_with("Couldn’t check for updates — "), "{msg}");

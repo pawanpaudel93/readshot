@@ -1,10 +1,14 @@
 //! Launch-at-login integration.
 
-use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "macos", test))]
+use std::path::Path;
+use std::path::PathBuf;
 
 use thiserror::Error;
 
+#[cfg(any(target_os = "macos", test))]
 const LAUNCH_AGENT_LABEL: &str = "np.com.pawanpaudel.readshot.login";
+#[cfg(target_os = "macos")]
 const LAUNCH_AGENT_FILENAME: &str = "np.com.pawanpaudel.readshot.login.plist";
 
 #[derive(Debug, Error)]
@@ -88,6 +92,7 @@ fn remove_launch_agent(plist_path: &Path) -> Result<(), StartupError> {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn launch_agent_plist(app_bundle_path: &Path) -> String {
     let bundle = escape_plist_string(&app_bundle_path.to_string_lossy());
     format!(
@@ -112,6 +117,7 @@ fn launch_agent_plist(app_bundle_path: &Path) -> String {
     )
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn bundle_path_from_exe(exe: &Path) -> Option<PathBuf> {
     let macos_dir = exe.parent()?;
     if macos_dir.file_name()? != "MacOS" {
@@ -128,6 +134,7 @@ fn bundle_path_from_exe(exe: &Path) -> Option<PathBuf> {
     Some(app_dir.to_path_buf())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn escape_plist_string(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
