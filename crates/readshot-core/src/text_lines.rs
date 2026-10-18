@@ -544,9 +544,12 @@ mod tests {
         );
         let r = line.span_rect(0..8).unwrap();
         assert!(rect_close(r, RectLike::new(0.0, 0.0, 100.0, 10.0)), "{r:?}");
-        // Just "bb": no box, so the proportional slice (3..5 of 8, padded).
+        // Just "bb": no box, so the whole line box.
         let bb = line.span_rect(3..5).unwrap();
-        assert!(bb.x < 37.5 && bb.x + bb.width > 62.5, "{bb:?}");
+        assert!(
+            rect_close(bb, RectLike::new(0.0, 0.0, 100.0, 10.0)),
+            "{bb:?}"
+        );
     }
 
     #[test]

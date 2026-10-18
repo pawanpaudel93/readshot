@@ -613,7 +613,7 @@ impl DocGeometry {
     }
 
     /// `anns` as they are drawn over this document's composed image: every
-    /// redaction ([`crate::scrub::is_redaction`]) widened to
+    /// redaction ([`Annotation::redaction_rect`]) widened to
     /// [`Self::redaction_cover`], everything else as is. What every
     /// render of the document, its History bake and its text masking use;
     /// the editor keeps the exact rects (so mapping never accumulates).
@@ -980,7 +980,7 @@ pub fn map_point(old: &DocGeometry, new: &DocGeometry, p: PointLike) -> Option<P
 
 /// `anns` (document px of `old`) in document px of `new`. Each annotation
 /// moves with the part under its anchor; parts missing from either side
-/// leave it where it is. A redaction (see `scrub::is_redaction`) that
+/// leave it where it is. A redaction (see [`Annotation::redaction_rect`]) that
 /// overlaps a part moves with that part; one that overlaps two or more is split
 /// along the parts, and each piece
 /// moves with its own part (exactly; each piece covers its whole pixels

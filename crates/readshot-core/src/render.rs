@@ -52,7 +52,7 @@ fn snap_slack(v: f32) -> f32 {
     1e-3 + v.abs() * 1e-6
 }
 
-/// The whole pixels a redaction rect (`crate::scrub::is_redaction`)
+/// The whole pixels a redaction rect (`Annotation::redaction_rect`)
 /// hides: its edges snapped **outward** (a partly covered pixel is
 /// hidden whole, never anti-aliased), within [`snap_slack`] of float
 /// noise. Redaction annotations keep their exact rect, so mapping them
