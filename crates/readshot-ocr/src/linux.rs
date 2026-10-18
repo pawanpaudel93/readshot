@@ -21,7 +21,7 @@
 //!
 //! If the files are missing, the first call to [`recognise`] returns a
 //! typed [`OCRError::Backend`] explaining that the models need to be
-//! downloaded. The Linux package post-install hook (Task 17) handles
+//! downloaded. The Linux package post-install hook handles
 //! the download for end users.
 //!
 //! ## Languages
@@ -104,8 +104,8 @@ fn ensure_initialised<'a>(
     if !det_path.exists() || !rec_path.exists() {
         return Err(OCRError::Backend(format!(
             "ocrs models missing under {dir}; expected `{det}` and `{rec}` — \
-             download from https://github.com/robertknight/ocrs (see \
-             docs/AGENTS-CLI.md once Task 20 lands)",
+             download them from https://github.com/robertknight/ocrs into \
+             that folder",
             dir = models_dir.display(),
             det = DETECTION_FILENAME,
             rec = RECOGNITION_FILENAME,

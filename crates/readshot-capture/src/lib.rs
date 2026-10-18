@@ -15,7 +15,7 @@
 //! capture without an OS-level grant.
 //!
 //! Errors are typed as [`readshot_core::error::CaptureError`]; the CLI
-//! exit-code mapper (spec §3.15) and MCP error mapper (spec §3.16) match
+//! exit-code mapper and MCP error mapper match
 //! on its variants directly.
 
 use async_trait::async_trait;
@@ -219,7 +219,7 @@ pub fn rect_relative_to_display(rect: Rect, display_bounds: Rect) -> Rect {
 
 /// The single trait every Readshot capture backend implements.
 ///
-/// `Send + Sync` because the capture coordinator (Task 16) holds a
+/// `Send + Sync` because the capture coordinator holds a
 /// `Box<dyn Capturer>` inside a `tokio::task` that may move between
 /// runtime threads.
 // `#[async_trait]` puts `#[must_use]` on methods that return its boxed
@@ -247,8 +247,8 @@ pub trait Capturer: Send + Sync {
 }
 
 /// Construct the platform-default Capturer for the current target. The
-/// per-OS implementations land in Tasks 7–9; this function is here so
-/// the composition root (Task 16) can ask for a Capturer without
+/// per-OS implementations live in their own modules; this function is here so
+/// the composition root can ask for a Capturer without
 /// branching on `cfg(target_os)` at the call site.
 ///
 /// `#[allow(clippy::needless_return)]` is required because the cfg

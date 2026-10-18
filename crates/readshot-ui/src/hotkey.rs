@@ -10,7 +10,7 @@
 //!    `GlobalHotKeyManager`.
 //! 3. Bridges hotkey events from the manager into iced's
 //!    `Subscription` machinery (the actual subscription lives in
-//!    Task 16; this module exposes the typed message it emits).
+//!    `readshot-app`; this module exposes the typed message it emits).
 //!
 //! Parsing is intentionally lenient: case-insensitive, allows
 //! `+`/`-`/space as separators, and accepts both

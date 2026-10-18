@@ -1,4 +1,4 @@
-//! Live canvas preview of Beautify (spec §3.9). The export is
+//! Live canvas preview of Beautify. The export is
 //! `readshot_core::beautify::render`; the preview approximates it with
 //! iced containers (padding, background, radius, shadow) so slider drags
 //! never re-render pixels. Geometry comes from the same

@@ -1,4 +1,4 @@
-//! Editor options bar (spec §2.2): one floating row under the tool bar
+//! Editor options bar: one floating row under the tool bar
 //! showing only the active tool's settings, or the selected
 //! annotation's. Hidden for Select with nothing selected. The color and
 //! width popovers open from it.
@@ -337,7 +337,7 @@ pub(crate) const MAGNIFIER_SHAPE_SEGMENTS: [(AppIcon, &str, readshot_core::Magni
 ];
 
 /// A text (or swatch + text) button in the bar. `selected` uses the same
-/// teal selected state as the icon buttons (§2.1: teal marks selection),
+/// teal selected state as the icon buttons (teal marks selection),
 /// so every current value in the bar reads the same way.
 /// `msg: None` renders it disabled.
 pub(crate) fn segment_button<'a>(
@@ -447,7 +447,7 @@ pub(crate) fn widest_line_width_label() -> String {
     )
 }
 
-/// Color popover (spec §3.5): 12 presets, the Recent row (last 6
+/// Color popover: 12 presets, the Recent row (last 6
 /// custom colors), and a hex field.
 pub(crate) fn color_popover<'a>(
     current: Rgba,

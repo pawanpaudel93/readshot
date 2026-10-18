@@ -112,7 +112,7 @@ async fn recognises_rendered_text_with_automatic_language_detection() {
 
 #[tokio::test]
 async fn empty_white_image_returns_empty_text_not_error() {
-    // Spec §3.16 requires no-text to be a *successful* result, not an
+    // No text must be a *successful* result, not an
     // error, so the MCP server can return `{ text: "" }` to agents.
     let mut blank = RgbaImage::new(64, 64);
     for px in blank.pixels_mut() {

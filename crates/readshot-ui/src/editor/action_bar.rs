@@ -7,18 +7,16 @@
 //! Copy Text → OCREngine + ClipboardWriter, Pin → a new pin window,
 //! Discard → close editor.
 
-/// Public messages the bar publishes. Keep the names stable; they
-/// appear in spec §3.10 verbatim.
+/// Public messages the bar publishes. Keep the names stable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActionMessage {
     CopyImage,
     /// Copy the recognised text from the current capture; uses the
-    /// platform OCR engine via the trait set up in Task 10.
+    /// platform OCR engine through the `OCREngine` trait.
     CopyText,
     Save,
     /// Pin the current capture as a floating window so the user can
-    /// reference it while working in another app. Implementation in
-    /// Task 16.
+    /// reference it while working in another app.
     Pin,
     Discard,
     /// Triggered by ⌘/Ctrl+Z / ⌘/Ctrl+Shift+Z. The action bar
@@ -38,8 +36,8 @@ pub const BUTTON_ORDER: [ActionMessage; 5] = [
 ];
 
 /// Default keyboard shortcut for each action, in a platform-neutral
-/// "Ctrl+X" notation. Task 6's hotkey wiring on macOS swaps "Ctrl"
-/// to "Cmd" automatically; toolbar tooltips show the localised form.
+/// "Ctrl+X" notation. On macOS the app shows "Ctrl" as ⌘; toolbar
+/// tooltips show the localised form.
 pub fn default_shortcut(message: ActionMessage) -> Option<&'static str> {
     Some(match message {
         ActionMessage::CopyImage => "Ctrl+C",
@@ -52,8 +50,8 @@ pub fn default_shortcut(message: ActionMessage) -> Option<&'static str> {
     })
 }
 
-/// Default labels that appear on each button. Plain ASCII — Task 16
-/// wires localisation later if it becomes a goal.
+/// Default labels that appear on each button. Plain ASCII; there is no
+/// localisation.
 pub fn default_label(message: ActionMessage) -> &'static str {
     match message {
         ActionMessage::CopyImage => "Copy Image",

@@ -7,7 +7,7 @@
 //! Splitting service from view keeps every backend interaction
 //! testable with fakes.
 //!
-//! Capture flow (per spec §3.5 and §5.1):
+//! Capture flow:
 //!
 //! 1. Permissions check — `pre_capture_gate()`.
 //! 2. List displays — `list_displays()`.

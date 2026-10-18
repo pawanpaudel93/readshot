@@ -1,4 +1,4 @@
-//! Smart redact (spec §3.8): find emails, phone numbers, API keys /
+//! Smart redact: find emails, phone numbers, API keys /
 //! tokens and card numbers in recognized text, and build the redaction
 //! annotations that cover them. Pure and local: input is the OCR text
 //! and line boxes, output is char spans and ordinary annotations.
@@ -47,7 +47,7 @@ pub struct RedactMatch {
 }
 
 /// How a redaction covers its span. Solid is the default because blur
-/// can sometimes be partly reversed (spec §3.8).
+/// can sometimes be partly reversed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RedactStyle {
     #[default]
@@ -474,7 +474,7 @@ const KEY_PREFIXES: &[(&str, usize)] = &[
     ("xapp-", 10),
 ];
 
-/// Minimum length of an unprefixed high-entropy token (spec §3.8).
+/// Minimum length of an unprefixed high-entropy token.
 pub const MIN_SECRET_LEN: usize = 20;
 
 fn is_key_char(c: char) -> bool {

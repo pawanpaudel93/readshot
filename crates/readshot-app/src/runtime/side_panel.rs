@@ -1,4 +1,4 @@
-//! Editor side panel (spec §2.3): right, 300 px, tabs (Text,
+//! Editor side panel: right, 300 px, tabs (Text,
 //! Beautify), hide/show ⌥⌘P (Ctrl+Shift+P off macOS), open state and
 //! tab remembered.
 //! Docks and reflows the canvas when the window is wide enough. Below

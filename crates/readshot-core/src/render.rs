@@ -1,4 +1,4 @@
-//! Annotation renderer — implementation lands in Task 4.
+//! Annotation renderer.
 //!
 //! Given a base [`image::RgbaImage`] and a slice of [`Annotation`]s, this
 //! module produces a flattened RGBA image. Drawing happens on a
@@ -246,7 +246,7 @@ pub fn render(base: &RgbaImage, model: &[Annotation]) -> RgbaImage {
     }
 
     // Magnifiers last: a bubble copies what is already composed, so it
-    // shows every redaction, blur and pixelate (spec §3.2, plan D-6).
+    // shows every redaction, blur and pixelate.
     for ann in model {
         if let Annotation::Magnifier {
             source,

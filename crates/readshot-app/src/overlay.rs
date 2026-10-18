@@ -316,7 +316,7 @@ const MONO_ADVANCE: f32 = 0.6;
 const HINT_TEXT_W: f32 = HINT_TEXT_SIZE * MONO_ADVANCE;
 const HINT_KEY_W: f32 = HINT_KEY_SIZE * MONO_ADVANCE;
 
-/// Platform key labels in the hint pill (spec §2.1 rule 4 on macOS; the
+/// Platform key labels in the hint pill (the ⇧ / ⌥ glyphs on macOS; the
 /// Shift / Alt words elsewhere).
 pub(crate) const SHIFT_CHIP: &str = crate::runtime::platform_key("⇧", "Shift");
 pub(crate) const RESIZE_CHIP: &str = crate::runtime::platform_key("⌥←→↑↓", "Alt+←→↑↓");

@@ -1,7 +1,7 @@
 //! Typed error enums shared across the workspace.
 //!
-//! The CLI exit-code mapper (Task 18) and the MCP `ToolError` mapper
-//! (Task 19) match on these variants directly; replacing them with
+//! The CLI exit-code mapper and the MCP `ToolError` mapper
+//! match on these variants directly; replacing them with
 //! `anyhow::Error` would erase the discriminants both layers need.
 
 use thiserror::Error;

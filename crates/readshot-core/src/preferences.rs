@@ -1,4 +1,4 @@
-//! User preferences — the TOML on-disk schema described in spec §3.11.
+//! User preferences — the TOML on-disk schema.
 //!
 //! [`Preferences`] is the typed Rust mirror of the file at
 //! `<config_dir>/readshot/preferences.toml`. The file is pretty-printed
@@ -179,7 +179,7 @@ pub struct Preferences {
     /// most `RECENT_COLORS_MAX`. Presets are never stored here.
     pub editor_recent_colors: Vec<String>,
 
-    /// Editor side panel shown (spec §2.3). Remembered across sessions.
+    /// Editor side panel shown. Remembered across sessions.
     pub editor_panel_open: bool,
 
     /// Last side-panel tab id (`"text"` or `"beautify"`). A
@@ -187,7 +187,7 @@ pub struct Preferences {
     /// older build fail to read this file. Unknown ids mean Text.
     pub editor_panel_tab: String,
 
-    /// Text panel: "Remove line breaks when copying" (spec §3.7).
+    /// Text panel: "Remove line breaks when copying".
     pub editor_copy_remove_line_breaks: bool,
 
     /// Beautify presets the user saved (Save Preset), oldest first, at

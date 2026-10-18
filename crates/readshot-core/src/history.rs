@@ -1,4 +1,4 @@
-//! Capture history persistence — the on-disk model from spec §3.10.
+//! Capture history persistence — the on-disk model.
 //!
 //! When the user opts in via [`HistoryRetention`], every saved capture
 //! produces three things:

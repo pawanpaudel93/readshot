@@ -1356,7 +1356,7 @@ pub enum CaptureIntent {
     CombineIntoEditor,
 }
 
-/// An Add Capture Below/Beside in flight (spec §3.11): the editor window
+/// An Add Capture Below/Beside in flight: the editor window
 /// is hidden while the overlay is up; the capture lands in this session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CombineCapture {

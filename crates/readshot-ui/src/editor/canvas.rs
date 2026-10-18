@@ -1067,7 +1067,7 @@ impl canvas::Program<CanvasMessage, Theme, Renderer> for EditorCanvas {
         // as the cursor leaves the image, which changes the mouse
         // interaction (and so redraws) without any editor message.
         let mut layers = vec![geometry];
-        // Text-panel line marks (spec §3.7) live in their own uncached
+        // Text-panel line marks live in their own uncached
         // layer, like the loupe: hover changes per pointer move and must
         // not force the cached annotation geometry to re-tessellate.
         // Selected lines are tinted, the hovered line outlined on top,
@@ -2077,7 +2077,7 @@ fn draw_selection_bounds(frame: &mut Frame, rect: Rectangle) {
 }
 
 fn draw_selection_handle(frame: &mut Frame, point: Point) {
-    // Round handles (spec §3.2): white fill, 1.5 px selection-teal ring.
+    // Round handles: white fill, 1.5 px selection-teal ring.
     let handle_path = Path::circle(point, 5.0);
     // Dark outer ring first: the white fill covers its inner half.
     frame.stroke(

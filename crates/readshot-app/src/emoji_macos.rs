@@ -1,4 +1,4 @@
-//! macOS emoji rasterizer for emoji stamps (spec §3.4).
+//! macOS emoji rasterizer for emoji stamps.
 //!
 //! Draws one emoji with CoreText (Apple Color Emoji, by font name) into
 //! an RGBA bitmap context. Registered with

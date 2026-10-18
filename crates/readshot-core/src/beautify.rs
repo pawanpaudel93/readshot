@@ -1,4 +1,4 @@
-//! Beautify (spec §3.9): the presentation around the editor output —
+//! Beautify: the presentation around the editor output —
 //! background, padding, corner radius, shadow and canvas size. Pure:
 //! settings in, pixels out. The six built-in presets reproduce the
 //! retired Frame styles byte for byte (`tests/beautify_parity.rs`), so the

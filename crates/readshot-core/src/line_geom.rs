@@ -1,4 +1,4 @@
-//! Pure geometry for styled lines and arrows (spec §3.3).
+//! Pure geometry for styled lines and arrows.
 //!
 //! The renderer, the editor's hit-testing and the canvas preview all
 //! call these functions so a curve or a hand-drawn wobble is the same

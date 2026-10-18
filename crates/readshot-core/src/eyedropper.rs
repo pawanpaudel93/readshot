@@ -1,4 +1,4 @@
-//! Eyedropper sampling (spec §3.5). Samples the *source* image (not the
+//! Eyedropper sampling. Samples the *source* image (not the
 //! annotated render), so picking a color never picks up a stroke.
 
 use image::RgbaImage;

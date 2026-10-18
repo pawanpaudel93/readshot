@@ -650,7 +650,7 @@ fn history_plain_text(ed: &crate::editor::EditorSession) -> Option<String> {
     }
     if !only_the_original_part(ed) {
         // Combined (or baked): the merged text of every part, or none
-        // while a part has no recognition yet (decision D2).
+        // while a part has no recognition yet.
         return ed.text_panel.document().map(|doc| doc.layout_text.clone());
     }
     original_history_text(ed)
@@ -687,7 +687,7 @@ fn original_history_text(ed: &crate::editor::EditorSession) -> Option<String> {
 ///
 /// `None` also when no text is known at all, and whenever the document
 /// has a part other than the opened image with no recognition yet (no
-/// text rather than text nothing could mask: decision D2).
+/// text rather than text nothing could mask).
 pub(crate) fn scrubbed_history_text(ed: &crate::editor::EditorSession) -> Option<String> {
     // The editor's redactions plus, for a reopened scrubbed record, the
     // ones baked into its image (recognition may still read words under a
@@ -1346,7 +1346,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // drop the text (the `image_menu::prepare` order).
             cancel_editor_previews(ed);
             commit_pending_editor_text(ed, &state.coordinator);
-            // Copy All (spec §3.7, ⇧⌘C, also the action bar's Copy Text):
+            // Copy All (⇧⌘C, also the action bar's Copy Text):
             // the panel's recognized text only when it is ready and every
             // annotation is text-neutral (whitelist). Otherwise recognize
             // the output, so typed text is never dropped and redacted,
@@ -1497,7 +1497,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     let changed = ed.model.active_tool() != t;
                     ed.model.set_tool(t);
                     // The tool's how-to, now that the options bar has
-                    // taken the old hint line (spec §3.2): a notice when
+                    // taken the old hint line: a notice when
                     // the tool is chosen. Select keeps its hint line.
                     if changed
                         && !super::editor_options::visible_option_controls(ed).is_empty()
@@ -2013,7 +2013,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     ed.canvas_drag_active = false;
                     cancel_editor_previews(ed);
                     if let readshot_core::Annotation::Crop { rect } = annotation {
-                        // Crop is a draft until Apply ↵ (spec §3.10). A tool
+                        // Crop is a draft until Apply ↵. A tool
                         // switched mid-drag must not leave a draft behind.
                         if ed.model.active_tool() == readshot_ui::editor::ToolState::Crop {
                             ed.crop_draft = Some(rect);

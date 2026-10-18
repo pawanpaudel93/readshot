@@ -20,7 +20,7 @@
 //! * Windows: no explicit grant for non-elevated apps capturing
 //!   non-elevated content. Capturing a UAC-elevated window from a
 //!   non-elevated process returns an empty / protected frame; the fix
-//!   is to elevate Readshot itself (spec §3.12).
+//!   is to elevate Readshot itself.
 //! * Linux/Wayland: the portal consent dialog is the grant; the token
 //!   is reused for the rest of the session. X11 has no consent step.
 

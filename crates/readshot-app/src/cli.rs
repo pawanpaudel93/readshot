@@ -1,13 +1,13 @@
-//! Headless CLI surface (Task 18).
+//! Headless CLI surface.
 //!
-//! Spec §6 (API Contracts) lists three external entry points:
+//! Readshot has three external entry points:
 //!
 //! 1. `readshot://` URL scheme → opens the *interactive* overlay
 //!    (handled by [`crate::url_scheme`]).
 //! 2. `readshot capture | capture-window | ocr | capture-and-ocr |
 //!    list-displays | list-windows` → silent, scriptable subcommands
 //!    (this module).
-//! 3. The MCP server (Task 19) — wraps the same coordinator.
+//! 3. The MCP server — wraps the same coordinator.
 //!
 //! The CLI deliberately bypasses the iced GUI: it constructs the
 //! coordinator directly, runs one operation, prints the result to

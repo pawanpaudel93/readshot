@@ -4,9 +4,6 @@
 //! depends only on `serde`, `thiserror`, `tiny-skia`, and `image`. Every
 //! other crate in the workspace either re-exports types from here or
 //! implements one of the traits declared elsewhere using these primitives.
-//!
-//! See `docs/superpowers/specs/2026-04-23-readshot-design.md` §3.8 for the
-//! design rationale.
 
 pub mod annotation;
 pub mod arrowhead;

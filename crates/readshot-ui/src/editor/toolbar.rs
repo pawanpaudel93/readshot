@@ -4,11 +4,9 @@
 //! palette and a thickness slider. It publishes [`ToolbarMessage`]s
 //! the composition root maps to [`super::EditorState`] mutations.
 //!
-//! Task 14 ships the model + tested helpers; the iced view function
-//! that materialises the buttons lives here as well, but we leave the
-//! actual layout call (placement on screen, styling) to Task 16's
-//! editor window because the toolbar is a *secondary* iced window
-//! anchored to the selection.
+//! The model and its tested helpers live here, with the iced view
+//! function that materialises the buttons; the editor window in
+//! `readshot-app` places and styles them.
 
 use readshot_core::Rgba;
 
@@ -54,7 +52,7 @@ pub enum ToolbarMessage {
     Redo,
 }
 
-/// Tool bar groups (spec §2.1): Select | shapes | freehand + text |
+/// Tool bar groups: Select | shapes | freehand + text |
 /// effects | marks (pin, stamp, magnifier) | crop. A new tool extends its
 /// group, `TOOL_ORDER`, and the `slot` match in the test — nothing else
 /// needs to know the layout.

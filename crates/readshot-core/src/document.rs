@@ -1,4 +1,4 @@
-//! The editor document (spec §5): parts laid out with a gap and an
+//! The editor document: parts laid out with a gap and an
 //! alignment, then one rotate/flip/scale transform. Annotations, OCR
 //! boxes and History redactions live in *document pixels*: the composed
 //! image's pixel grid. Pure; no UI.
@@ -689,7 +689,8 @@ impl DocGeometry {
     }
 
     /// One part holding the current document pixels, no transform. Used
-    /// before a part is added to a transformed document (decision D4).
+    /// before a part is added to a transformed document: a part is never
+    /// joined to turned pixels.
     /// Fails when the document is invalid. `id` must be fresh: asking for
     /// [`ORIGINAL_PART`] gets the next unused id instead, so cached OCR of
     /// the untouched capture is never matched to baked pixels.

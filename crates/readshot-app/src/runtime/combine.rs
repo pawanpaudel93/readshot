@@ -1,4 +1,4 @@
-//! Combine captures (spec §3.11, decision D4). Add Capture reuses the
+//! Combine captures. Add Capture reuses the
 //! capture overlay while the editor window is hidden; Add Image from File
 //! uses the system picker. Each addition is one undo step.
 //!

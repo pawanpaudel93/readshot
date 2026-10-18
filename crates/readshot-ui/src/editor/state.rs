@@ -8,7 +8,7 @@
 //!
 //! Splitting the model from the iced view (the Canvas widget in
 //! `canvas.rs`) means every state transition is unit-testable without
-//! a windowing system. Task 16's composition root holds an
+//! a windowing system. the composition root (`readshot-app`) holds an
 //! `EditorState` and feeds it iced messages.
 
 use std::sync::Arc;
@@ -987,8 +987,8 @@ impl EditorState {
         }
     }
 
-    /// Append `image` joined `join` (decision D4: a transformed document
-    /// is baked into one part first). One undo step; returns the new id.
+    /// Append `image` joined `join` (a transformed document is
+    /// baked into one part first). One undo step; returns the new id.
     pub fn add_part(&mut self, image: RgbaImage, join: Join) -> Result<PartId, GeometryError> {
         let from = self.snapshot();
         let (step, id) = self.add_part_step(&from, Arc::new(image), join)?;

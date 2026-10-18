@@ -567,7 +567,7 @@ pub(crate) fn toast<'a>(
         .into()
 }
 
-/// Text fields: raised fill, 1 px border, 2 px accent ring when focused (spec §2.3 focus ring).
+/// Text fields: raised fill, 1 px border, 2 px accent ring when focused.
 pub(crate) fn text_input_style(
     theme: &Theme,
     status: iced::widget::text_input::Status,
@@ -611,7 +611,7 @@ pub(crate) fn group_row<'a>(
         .into()
 }
 
-#[allow(clippy::too_many_arguments)] // signature fixed by the redesign plan
+#[allow(clippy::too_many_arguments)] // one argument per visual part of the control
 pub(crate) fn icon_button<'a>(
     glyph: crate::icons::AppIcon,
     color: Color,

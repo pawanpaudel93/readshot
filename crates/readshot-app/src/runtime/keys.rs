@@ -1,5 +1,5 @@
 //! Key labels for chips, tooltips and status lines, in the platform's
-//! own form: the macOS glyphs (spec §2.1 rule 4: `⇧⌘C`, `↵`, `⌫`,
+//! own form: the macOS glyphs (`⇧⌘C`, `↵`, `⌫`,
 //! lowercase `esc`) on macOS, the Ctrl form elsewhere, so Windows and
 //! Linux are never told to press ⌘. One name per key everywhere.
 
@@ -128,7 +128,7 @@ mod tests {
     }
 
     /// One naming rule per platform. macOS: glyphs and lowercase `esc`
-    /// (spec §2.1 rule 4). Elsewhere: words joined with "+" ("Shift+Esc",
+    ///. Elsewhere: words joined with "+" ("Shift+Esc",
     /// "Ctrl+Enter"), never a Mac glyph.
     #[test]
     fn every_key_label_follows_its_platform_rule() {

@@ -1,4 +1,4 @@
-//! Editor Text panel (spec §3.6–§3.8): recognition of the base image,
+//! Editor Text panel: recognition of the base image,
 //! the Text tab, line selection and copy, smart redact and the smart
 //! highlighter snap. Positions come from the OCR engine; without them
 //! (Windows, Linux today) only the list and copying are offered.
@@ -25,8 +25,9 @@ use readshot_core::text_lines::{TextDocument, TextLine};
 /// Rebuild the Text panel's document for the current geometry: every
 /// part's recognition (part px) mapped into document px and merged.
 /// Clears hover and selection (line indices may have moved). While a
-/// part has no recognition there is no document (decision D2): the
-/// scrub then stores no text rather than text it can't mask.
+/// part has no recognition there is no document (a combined document
+/// has text only once every part is recognized): the scrub then stores
+/// no text rather than text it can't mask.
 pub(crate) fn refresh_text_for_geometry(ed: &mut EditorSession) {
     use readshot_core::document::{map_text_document, merge_text_documents};
     let _ = resolve_baked_docs(&mut ed.text_panel);
@@ -65,11 +66,12 @@ pub(crate) fn refresh_text_for_geometry(ed: &mut EditorSession) {
     }
 }
 
-/// Give every baked part (decision D4) whose source parts are all
+/// Give every baked part (a transformed document baked into one part
+/// before a combine) whose source parts are all
 /// recognized its text: their recognitions mapped through the geometry
 /// it was baked from, merged. Baked px are that geometry's document px,
 /// so the boxes land exactly; the turned pixels are never recognized
-/// (M-5). Repeats until nothing changes, for a bake of a bake. `true`
+///. Repeats until nothing changes, for a bake of a bake. `true`
 /// when a baked part got its text.
 pub(crate) fn resolve_baked_docs(tp: &mut crate::editor::TextPanelState) -> bool {
     use readshot_core::document::{map_text_document, merge_text_documents};
@@ -270,7 +272,8 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
 /// for, if any. The task stores masked text in History itself (so it
 /// lands after the editor closes) only while the document is the original frame:
 /// part px are document px there. Otherwise the editor-side write in
-/// `EditorTextRecognized` does it (decision D2). The record carries
+/// `EditorTextRecognized` does it, once every part is recognized. The
+/// record carries
 /// the frame id, so History drops the text if it holds another frame
 /// by the time it lands.
 ///
@@ -795,7 +798,7 @@ fn redact(state: &mut App, only_line: Option<usize>) -> Task<Message> {
     Task::none()
 }
 
-/// Line selection (spec §3.7): a click selects one line (clicking the
+/// Line selection: a click selects one line (clicking the
 /// only selected line clears it); ⇧ selects the range from the anchor
 /// (added to the selection when ⌘ is held too); ⌘ toggles one line.
 pub(crate) fn click_selection(
@@ -1037,7 +1040,7 @@ pub(crate) fn skeleton_alpha(elapsed_ms: u128, reduce_motion: bool) -> f32 {
     0.55 + 0.45 * tri
 }
 
-/// Body of the Text tab for every recognition state (spec §3.7).
+/// Body of the Text tab for every recognition state.
 pub(crate) fn text_tab<'a>(
     state: &'a App,
     ed: &'a EditorSession,
@@ -1162,8 +1165,8 @@ pub(crate) fn redact_card_title(pending: usize, unlocatable: usize, weak: usize)
 }
 
 /// Size of the Text tab's safety and redaction notes: full sentences,
-/// so the readable caption size, never Micro (spec §2.2 keeps 11 px for
-/// key chips and labels).
+/// so the readable caption size, never Micro (11 px is for key chips and
+/// labels).
 pub(crate) const REDACT_NOTE_SIZE: f32 = TYPE_CAPTION;
 
 /// The note for matches that can't be placed on the image.
@@ -1189,7 +1192,7 @@ pub(crate) fn weak_note(weak: usize, style: RedactStyle) -> String {
     }
 }
 
-/// "N sensitive items" card at the top of the Text tab (spec §3.8):
+/// "N sensitive items" card at the top of the Text tab:
 /// style picker, Redact All, and a chip per kind. Hidden without
 /// positions or matches; says "All … redacted" once everything is
 /// covered. Redact All is Secondary: Copy Image is the view's primary.
@@ -1414,7 +1417,7 @@ fn line_row<'a>(
         .into()
 }
 
-/// The recognized-text list with copy controls (spec §3.7, mockup 1).
+/// The recognized-text list with copy controls.
 fn lines_view<'a>(
     state: &'a App,
     ed: &'a EditorSession,
@@ -1551,7 +1554,7 @@ pub(crate) fn text_marks(
     )
 }
 
-/// Smart highlighter (spec §3.6): with Snap to text on and line
+/// Smart highlighter: with Snap to text on and line
 /// positions available, a highlighter stroke over a text line becomes a
 /// straight mark across the touched words, as tall as the line. Every
 /// other annotation, and strokes off text, pass through unchanged.

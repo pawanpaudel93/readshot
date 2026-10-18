@@ -1,4 +1,4 @@
-//! Beautify tab (spec §3.9): presets, background, padding, corner radius,
+//! Beautify tab: presets, background, padding, corner radius,
 //! shadow, canvas size, Auto Balance, Save Preset. Every change is an
 //! undo step on the editor model; sliders preview live and commit once
 //! on release.

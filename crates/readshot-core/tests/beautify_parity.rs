@@ -1,5 +1,5 @@
 //! Beautify's built-in presets must reproduce the retired Frame styles
-//! byte for byte (spec §3.9). `legacy` is a frozen copy of
+//! byte for byte. `legacy` is a frozen copy of
 //! `readshot-app/src/runtime/frame_render.rs` at 43a0c63. Never edit it.
 
 use image::{Rgba, RgbaImage};

@@ -1,9 +1,9 @@
 //! `readshot://` URL scheme parser.
 //!
-//! Spec §6 (API Contracts) declares one external entry point: a
+//! One external entry point is a
 //! URL scheme that triggers the *interactive* capture overlay. The
 //! scheme intentionally cannot drive a silent capture — that's the
-//! job of the CLI and MCP surfaces (Tasks 18, 19), which run as the
+//! job of the CLI and MCP surfaces, which run as the
 //! user's own process and inherit the user's grants.
 //!
 //! Supported URLs (case-insensitive scheme):

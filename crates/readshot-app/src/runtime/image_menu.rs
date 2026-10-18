@@ -1,4 +1,4 @@
-//! Image menu (spec §2.5, §3.10): Resize…, Rotate Left/Right, Flip
+//! Image menu: Resize…, Rotate Left/Right, Flip
 //! Horizontal/Vertical, the combine items (Add Capture Below/Beside, Add
 //! Image from File; `combine.rs`) and, once there are two parts, the
 //! Layout gap and alignment. Every action is

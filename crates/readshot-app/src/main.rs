@@ -23,7 +23,7 @@ use readshot_app::runtime;
 use readshot_app::url_scheme;
 
 fn main() -> iced::Result {
-    // Emoji stamps rasterize through CoreText on macOS (spec §3.4); every
+    // Emoji stamps rasterize through CoreText on macOS; every
     // path that may render a stamp gets the rasterizer. Elsewhere they
     // come from an emoji font file, found on first use.
     #[cfg(target_os = "macos")]

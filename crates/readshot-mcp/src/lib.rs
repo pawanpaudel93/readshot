@@ -1,4 +1,4 @@
-//! Readshot MCP server (Task 19).
+//! Readshot MCP server.
 //!
 //! Implements a minimal Model Context Protocol stdio server so AI
 //! agents (Claude Desktop, Cursor, OpenAI desktop, etc.) can ask

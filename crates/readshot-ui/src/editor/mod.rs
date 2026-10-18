@@ -1,6 +1,6 @@
 //! Annotation editor — the second-stage UI after a capture confirms.
 //!
-//! Public surface (used by Task 16's composition root):
+//! Public surface (used by the composition root (`readshot-app`)):
 //!
 //! * [`EditorState`] — the model. Pure logic, fully unit-testable.
 //! * [`EditorOutcome`] — what the editor returns to the coordinator.
@@ -15,7 +15,7 @@
 //!   publish, plus their layout constants ([`toolbar::PALETTE`],
 //!   [`toolbar::TOOL_ORDER`], [`action_bar::BUTTON_ORDER`]).
 //!
-//! What this module does **not** own (Task 16): the iced window
+//! What this module does **not** own: the iced window
 //! itself, the secondary-toolbar window, the keyboard-shortcut event
 //! filter that maps ⌘/Ctrl+S to `ActionMessage::Save`, and any
 //! permission / IO side-effects.
@@ -46,7 +46,7 @@ pub use undo::History;
 pub use undo::{DocState, Snapshot};
 
 /// What the editor returns to the capture coordinator when the user
-/// commits an action. Mirrors spec §3.3's `EditorOutcome` enum.
+/// commits an action.
 #[derive(Debug)]
 pub enum EditorOutcome {
     CopyImage(RgbaImage),

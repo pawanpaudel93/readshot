@@ -1,4 +1,4 @@
-//! Stamp annotations (spec §3.4).
+//! Stamp annotations.
 //!
 //! Symbol stamps are vector marks on a disc in the stamp color, so they
 //! are deterministic and pixel-snapshot tested. Emoji stamps prefer a

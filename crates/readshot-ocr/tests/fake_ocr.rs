@@ -38,7 +38,7 @@ async fn returns_explicit_confidence_when_set() {
 
 #[tokio::test]
 async fn no_text_variant_returns_empty_string_not_an_error() {
-    // Spec §3.16: empty results are NOT errors — the MCP server relies
+    // Empty results are NOT errors — the MCP server relies
     // on this so agents see `text: ""` rather than a tool error.
     let engine = FakeOcrEngine::no_text();
     let result = engine.recognise(dummy_request()).await.unwrap();

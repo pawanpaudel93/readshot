@@ -915,7 +915,7 @@ pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
         .into()
 }
 
-/// History layout (spec §3.3): list column width at full size, and the
+/// History layout: list column width at full size, and the
 /// 16:10 row thumbnail.
 const HISTORY_LIST_WIDTH: f32 = 340.0;
 const HISTORY_THUMB_W: f32 = 64.0;
@@ -4076,7 +4076,7 @@ pub(crate) fn scroll_key_message(
     }
 }
 
-/// Each tool's how-to (spec §3.2's per-tool hint): a sentence ending in a
+/// Each tool's how-to: a sentence ending in a
 /// full stop, keys named as in chips (`⌫`, `↵`, `esc`; the Ctrl form off
 /// macOS). Shown in the tool's tooltip, under the tool bar when there is
 /// no options bar, and as a notice when the tool is chosen.

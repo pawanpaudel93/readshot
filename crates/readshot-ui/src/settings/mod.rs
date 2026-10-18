@@ -1,6 +1,6 @@
 //! Settings window state + message router.
 //!
-//! The window itself is opened by Task 16's composition root via
+//! The window itself is opened by the composition root (`readshot-app`) via
 //! iced's `daemon` runtime. This module owns:
 //!
 //! * The typed [`SettingsMessage`] enum mirroring every editable

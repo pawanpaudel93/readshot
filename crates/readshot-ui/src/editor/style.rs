@@ -1,4 +1,4 @@
-//! Per-tool drawing options (spec §2.2, §3.3).
+//! Per-tool drawing options.
 //!
 //! [`ToolStyle`] is what the next shape gets; [`StyleMessage`] is one
 //! change from the options bar. [`options_for`] says which controls the
@@ -163,7 +163,7 @@ pub struct ToolStyle {
     pub spotlight_shape: SpotlightShape,
     pub dim: f32,
     pub stamp: StampKind,
-    /// Highlighter: snap strokes to recognized text lines (spec §3.6).
+    /// Highlighter: snap strokes to recognized text lines.
     pub snap_to_text: bool,
     /// Crop tool: the aspect preset the drag and draft follow.
     pub crop_aspect: CropAspect,

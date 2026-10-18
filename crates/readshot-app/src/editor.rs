@@ -35,7 +35,7 @@ pub enum ResizeUnit {
     Percent,
 }
 
-/// The Resize dialog's fields (spec §3.10). `base` is the size it opened
+/// The Resize dialog's fields. `base` is the size it opened
 /// at (the displayed, cropped image), which percentages refer to.
 ///
 /// The fields show whole numbers, but a value the dialog worked out
@@ -204,10 +204,10 @@ impl ResizeDraft {
 /// What an eyedropper pick sets.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EyedropperTarget {
-    /// The tool / selection color (spec §3.5).
+    /// The tool / selection color.
     #[default]
     Annotation,
-    /// Beautify's solid background (spec §3.9).
+    /// Beautify's solid background.
     BeautifyBackground,
 }
 
@@ -218,7 +218,7 @@ pub struct EyedropperState {
     pub target: EyedropperTarget,
 }
 
-/// Side-panel tabs (spec §2.3): Text and Beautify. A new tab is a
+/// Side-panel tabs: Text and Beautify. A new tab is a
 /// variant here, its id, and one arm in `runtime::side_panel::side_panel`.
 /// The frame a canvas drag's points are in
 /// ([`EditorSession::drag_started_in`]).
@@ -420,10 +420,11 @@ pub struct TextPanelState {
     /// one (rotate, combine, undo across either) means its boxes are
     /// stale and must be rebuilt before anything uses them.
     pub built_for: Option<std::sync::Arc<readshot_core::document::DocGeometry>>,
-    /// Parts made by baking a transformed document before a combine
-    /// (decision D4), each with the geometry it was baked from. A baked
+    /// Parts made by baking a transformed document into one part before
+    /// a combine (a part is never added to a turned document), each
+    /// with the geometry it was baked from. A baked
     /// part's text is its source parts' recognitions mapped through that
-    /// geometry, never a recognition of the turned pixels (M-5).
+    /// geometry, never a recognition of the turned pixels.
     pub bake_sources: std::collections::BTreeMap<
         readshot_core::document::PartId,
         std::sync::Arc<readshot_core::document::DocGeometry>,
@@ -1066,9 +1067,9 @@ pub struct EditorSession {
     pub resize_draft: Option<ResizeDraft>,
     /// Draft text of the color popover's hex field.
     pub hex_draft: String,
-    /// Some while the eyedropper is active (spec §3.5).
+    /// Some while the eyedropper is active.
     pub eyedropper: Option<EyedropperState>,
-    /// Crop tool: the dragged rect waiting for Apply ↵ (spec §3.10).
+    /// Crop tool: the dragged rect waiting for Apply ↵.
     pub crop_draft: Option<readshot_core::RectLike>,
     /// True while a shape/freehand drag is in progress on the canvas
     /// (between `DragStarted` and its `Cancelled`/`CommitAnnotation`).

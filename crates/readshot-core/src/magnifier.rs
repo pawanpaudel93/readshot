@@ -1,4 +1,4 @@
-//! Magnifier callout geometry (spec §3.2). Pure; `render` draws it and
+//! Magnifier callout geometry. Pure; `render` draws it and
 //! the editor hit-tests with it.
 
 use crate::annotation::MagnifierShape;

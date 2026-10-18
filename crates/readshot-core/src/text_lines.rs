@@ -1,4 +1,4 @@
-//! Recognized text the way the editor's Text panel uses it (spec §3.7):
+//! Recognized text the way the editor's Text panel uses it:
 //! lines in reading order with boxes in **base-image pixels** when the
 //! engine reports positions, plus the copy and smart-highlighter
 //! geometry built on them. Pure; no UI.
@@ -218,7 +218,7 @@ pub fn copy_all(doc: &TextDocument, remove_breaks: bool) -> String {
     }
 }
 
-/// Smart highlighter (spec §3.6). When a freehand stroke runs along a
+/// Smart highlighter. When a freehand stroke runs along a
 /// recognized line (its mean Y inside the line box, overlapping it
 /// horizontally), return a straight two-point stroke across the words
 /// it touched, as tall as the line: `(points, line_width)`. `None` keeps

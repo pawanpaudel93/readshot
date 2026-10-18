@@ -3,18 +3,17 @@
 //! The public API is the [`OCREngine`] trait plus three platform-specific
 //! implementations selected at compile time:
 //!
-//! * [`macos::AppleVisionEngine`] — `objc2-vision`'s `VNRecognizeTextRequest`
-//!   (Task 11 fills in the body).
+//! * [`macos::AppleVisionEngine`] — `objc2-vision`'s `VNRecognizeTextRequest`.
 //! * `windows::WindowsMediaOcrEngine` — `windows` crate's
-//!   `Windows::Media::Ocr` (Task 12).
+//!   `Windows::Media::Ocr`.
 //! * `linux::OcrsEngine` — the pure-Rust `ocrs` engine over its two
-//!   `.rten` model files (this task).
+//!   `.rten` model files.
 //!
 //! The optional `test-fixtures` feature exposes `fake::FakeOcrEngine`,
 //! which returns deterministic preset text for tests.
 //!
 //! Errors are typed as [`readshot_core::error::OCRError`]; the CLI exit-code
-//! mapper (spec §3.15) and MCP error mapper (spec §3.16) match on its
+//! mapper and MCP error mapper match on its
 //! variants directly.
 
 use async_trait::async_trait;
@@ -67,7 +66,7 @@ pub struct OCRResult {
 }
 
 /// The single trait every Readshot OCR backend implements. `Send + Sync`
-/// because the capture coordinator (Task 16) holds a `Box<dyn OCREngine>`
+/// because the capture coordinator holds a `Box<dyn OCREngine>`
 /// inside a `tokio::task` that may move between runtime threads.
 // `#[async_trait]` puts `#[must_use]` on methods that return its boxed
 // (already must-use) future; newer clippy flags that as double_must_use.
@@ -91,7 +90,7 @@ pub trait OCREngine: Send + Sync {
 
 /// Construct the platform-default OCR engine. The Linux variant uses a
 /// fallback models directory (`<data_dir>/readshot/models/`); the user's
-/// `Preferences` can override this in higher layers (Task 16).
+/// `Preferences` can override this in higher layers.
 #[allow(clippy::needless_return)]
 pub fn default_engine() -> Box<dyn OCREngine> {
     #[cfg(target_os = "macos")]

@@ -1,7 +1,7 @@
 //! Editor annotation model.
 //!
-//! [`Annotation`] is a pure value enum that the renderer (Task 4), the
-//! capture history sidecar (Task 5), and the editor UI (Task 14) all share.
+//! [`Annotation`] is a pure value enum that the renderer, the
+//! capture history sidecar, and the editor UI all share.
 //! It is intentionally serde-friendly and contains no `tiny_skia` types
 //! directly — see [`crate::geom`] for the rationale.
 //!
@@ -89,7 +89,7 @@ pub enum FillMode {
     Both,
 }
 
-/// Rectangle / ellipse options (spec §3.3).
+/// Rectangle / ellipse options.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShapeStyle {
@@ -105,7 +105,7 @@ impl ShapeStyle {
     }
 }
 
-/// Spotlight hole shape (spec §3.1).
+/// Spotlight hole shape.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpotlightShape {
@@ -114,7 +114,7 @@ pub enum SpotlightShape {
     Ellipse,
 }
 
-/// Magnifier bubble shape (spec §3.2).
+/// Magnifier bubble shape.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MagnifierShape {
@@ -123,7 +123,7 @@ pub enum MagnifierShape {
     RoundedSquare,
 }
 
-/// Default dim outside a spotlight (spec §3.1: 55 %).
+/// Default dim outside a spotlight: 55 %.
 pub const DEFAULT_SPOTLIGHT_DIM: f32 = 0.55;
 
 /// Path a line or arrow follows between its endpoints.
@@ -148,7 +148,7 @@ pub enum ArrowHeads {
     Both,
 }
 
-/// Line / arrow options (spec §3.3). `heads` only matters for arrows.
+/// Line / arrow options. `heads` only matters for arrows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LineStyle {
@@ -163,7 +163,7 @@ impl LineStyle {
     }
 }
 
-/// Text options (spec §3.3). Size lives in `Annotation::Text::size`.
+/// Text options. Size lives in `Annotation::Text::size`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TextStyle {
@@ -177,7 +177,7 @@ impl TextStyle {
     }
 }
 
-/// Stamp marks (spec §3.4). Symbol stamps are vector marks on a disc in
+/// Stamp marks. Symbol stamps are vector marks on a disc in
 /// the stamp color; emoji stamps come from the system emoji font.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -200,7 +200,7 @@ pub enum StampKind {
 }
 
 impl StampKind {
-    /// Picker order (spec §3.4 / mockup): ✓ ✕ ! ? ★ ♥ then 👍 👎 🔥 🎉 👀 ➜.
+    /// Picker order: ✓ ✕ ! ? ★ ♥ then 👍 👎 🔥 🎉 👀 ➜.
     pub const ALL: [Self; 12] = [
         Self::Check,
         Self::Cross,
@@ -339,7 +339,7 @@ pub enum Annotation {
         number: u32,
         color: Rgba,
     },
-    /// A mark sized like a numbered pin (spec §3.4). `color` tints symbol
+    /// A mark sized like a numbered pin. `color` tints symbol
     /// stamps; emoji keep their own colors.
     Stamp {
         origin: PointLike,
@@ -347,7 +347,7 @@ pub enum Annotation {
         color: Rgba,
     },
     /// A callout that shows the circle around `source` enlarged `zoom`×
-    /// in a bubble at `bubble` with a dashed leader (spec §3.2). Drawn in
+    /// in a bubble at `bubble` with a dashed leader. Drawn in
     /// a final pass so the bubble always shows redactions.
     Magnifier {
         source: PointLike,

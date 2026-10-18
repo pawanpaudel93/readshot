@@ -1,6 +1,5 @@
 //! Design tokens for the 2026 redesign — the single source of truth for
-//! colors, radii, sizes and type. Mirrors the table in
-//! docs/superpowers/specs/2026-10-15-ui-redesign-design.md §2.2.
+//! colors, radii, sizes and type: the one table of them.
 //! Views never inline colors; style closures call `palette_for(theme)`.
 
 use iced::Color;
@@ -120,7 +119,7 @@ pub(crate) fn palette(mode: ThemeMode) -> &'static Palette {
     }
 }
 
-// Radius (spec §2.2): nested corners shrink inward.
+// Radius: nested corners shrink inward.
 pub(crate) const R_CHIP: f32 = 5.0;
 pub(crate) const R_TIP: f32 = 7.0;
 pub(crate) const R_BUTTON: f32 = 8.0;
