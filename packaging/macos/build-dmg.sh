@@ -244,7 +244,9 @@ ln -s /Applications "${DMG_STAGING}/Applications"
 
 if command -v create-dmg >/dev/null 2>&1; then
   # Window background: packaging/macos/dmg-background.svg at 1x and 2x,
-  # combined into one HiDPI TIFF so Retina Finder windows stay sharp.
+  # combined into one HiDPI TIFF so Retina Finder windows stay sharp. The
+  # window is 28 pt taller than the 360 pt art: --window-size includes the
+  # title bar.
   DMG_BACKGROUND="target/release/dmg-background.tiff"
   rsvg-convert -w 640 -h 360 packaging/macos/dmg-background.svg -o target/release/dmg-background.png
   rsvg-convert -w 1280 -h 720 packaging/macos/dmg-background.svg -o target/release/dmg-background@2x.png
@@ -256,7 +258,7 @@ if command -v create-dmg >/dev/null 2>&1; then
     --volicon "${ICON_OUT}" \
     --background "${DMG_BACKGROUND}" \
     --window-pos 200 120 \
-    --window-size 640 360 \
+    --window-size 640 388 \
     --icon-size 96 \
     --icon "${APP_NAME}.app" 160 170 \
     --app-drop-link 480 170 \
