@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="packaging/macos/icon.svg" width="112" height="112" alt="Readshot app icon">
+</p>
+
 # Readshot
 
 [![test](https://github.com/pawanpaudel93/readshot/actions/workflows/test.yml/badge.svg)](https://github.com/pawanpaudel93/readshot/actions/workflows/test.yml)

@@ -49,7 +49,8 @@ modules:
       - cargo build --release --bin readshot
       - install -Dm755 target/release/readshot /app/bin/readshot
       - install -Dm644 packaging/linux/readshot.desktop /app/share/applications/np.com.pawanpaudel.readshot.desktop
-      - install -Dm644 packaging/linux/readshot.png /app/share/icons/hicolor/512x512/apps/np.com.pawanpaudel.readshot.png
+      # Every hicolor size plus the scalable SVG (packaging/render-icons.sh).
+      - mkdir -p /app/share/icons && cp -R packaging/linux/icons/hicolor /app/share/icons/
     sources:
       - type: dir
         path: ../../..

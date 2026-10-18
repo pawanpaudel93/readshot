@@ -14,6 +14,9 @@ fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ICON_SRC="${REPO_ROOT}/packaging/macos/icon.svg"
+# Hand-tuned art for the slots that draw 32px or fewer pixels: at those
+# sizes the canonical art's brackets blur into the tile.
+ICON_SMALL_SRC="${REPO_ROOT}/packaging/macos/icon-small.svg"
 ICON_OUT="$1"
 PNG_512_OUT=""
 
@@ -25,10 +28,12 @@ if [[ "$#" -eq 3 ]]; then
   PNG_512_OUT="$3"
 fi
 
-if [[ ! -f "${ICON_SRC}" ]]; then
-  echo "error: ${ICON_SRC} missing" >&2
-  exit 1
-fi
+for src in "${ICON_SRC}" "${ICON_SMALL_SRC}"; do
+  if [[ ! -f "${src}" ]]; then
+    echo "error: ${src} missing" >&2
+    exit 1
+  fi
+done
 if ! command -v rsvg-convert >/dev/null 2>&1; then
   echo "error: rsvg-convert not found (brew install librsvg)" >&2
   exit 1
@@ -63,7 +68,9 @@ for entry in \
 ; do
   size="${entry%% *}"
   name="${entry#* }"
-  rsvg-convert -w "${size}" -h "${size}" "${ICON_SRC}" -o "${ICONSET}/${name}"
+  src="${ICON_SRC}"
+  if (( size <= 32 )); then src="${ICON_SMALL_SRC}"; fi
+  rsvg-convert -w "${size}" -h "${size}" "${src}" -o "${ICONSET}/${name}"
 done
 
 if ! iconutil -c icns "${ICONSET}" -o "${ICON_OUT}" 2>"${ICON_BUILD_DIR}/iconutil.log"; then

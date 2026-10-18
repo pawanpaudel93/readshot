@@ -25,22 +25,23 @@ fi
 rm -rf "${APP_DIR}"
 mkdir -p "${APP_DIR}/usr/bin"
 mkdir -p "${APP_DIR}/usr/share/applications"
-mkdir -p "${APP_DIR}/usr/share/icons/hicolor/512x512/apps"
 
 cp "${BIN_PATH}" "${APP_DIR}/usr/bin/readshot"
 chmod +x "${APP_DIR}/usr/bin/readshot"
 
-cp packaging/linux/readshot.desktop "${APP_DIR}/readshot.desktop"
-cp packaging/linux/readshot.desktop "${APP_DIR}/usr/share/applications/readshot.desktop"
+# Named after the app id (the Wayland app_id / X11 WM_CLASS the windows
+# carry) so the desktop maps windows to this entry and its icon.
+cp packaging/linux/readshot.desktop "${APP_DIR}/np.com.pawanpaudel.readshot.desktop"
+cp packaging/linux/readshot.desktop \
+  "${APP_DIR}/usr/share/applications/np.com.pawanpaudel.readshot.desktop"
 
 # The AppDir root icon must be named after the desktop file's
 # `Icon=np.com.pawanpaudel.readshot` key; appimagetool derives .DirIcon
 # from it. A mismatched name (readshot.png) leaves the AppImage iconless.
 cp packaging/linux/readshot.png "${APP_DIR}/np.com.pawanpaudel.readshot.png" 2>/dev/null || \
   echo "warning: packaging/linux/readshot.png missing — AppImage will be iconless"
-cp packaging/linux/readshot.png \
-  "${APP_DIR}/usr/share/icons/hicolor/512x512/apps/np.com.pawanpaudel.readshot.png" \
-  2>/dev/null || true
+# Every hicolor size plus the scalable SVG (packaging/render-icons.sh).
+cp -R packaging/linux/icons/hicolor "${APP_DIR}/usr/share/icons/"
 
 cat > "${APP_DIR}/AppRun" <<'EOF'
 #!/usr/bin/env bash

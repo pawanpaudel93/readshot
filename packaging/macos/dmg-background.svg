@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Background of the Readshot DMG window (640x360 points, matching
+  build-dmg.sh's create-dmg window size). The app icon sits at
+  (160, 170) and the Applications link at (480, 170); the arrow points
+  from one to the other. build-dmg.sh renders it at 1x and 2x into a
+  HiDPI TIFF.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F6FAFB"/>
+      <stop offset="100%" stop-color="#E4EEF1"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" fill="url(#bg)"/>
+  <g fill="none" stroke="#176E80" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.55">
+    <path d="M 266 170 L 374 170"/>
+    <path d="M 354 150 L 376 170 L 354 190"/>
+  </g>
+  <text x="320" y="300" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15" fill="#3D5560">Drag Readshot to Applications to install it</text>
+</svg>

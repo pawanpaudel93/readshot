@@ -8,5 +8,9 @@ Icon=np.com.pawanpaudel.readshot
 Terminal=false
 Categories=Graphics;Utility;
 StartupNotify=true
+# Matches the X11 WM_CLASS / Wayland app_id every Readshot window sets
+# (window_settings.rs APP_ID), so docks and taskbars group the windows
+# under this entry and show its icon.
+StartupWMClass=np.com.pawanpaudel.readshot
 MimeType=x-scheme-handler/readshot;
 Keywords=screenshot;capture;ocr;text;annotation;

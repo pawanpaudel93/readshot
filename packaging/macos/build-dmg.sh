@@ -243,8 +243,18 @@ cp -R "${APP_BUNDLE}" "${DMG_STAGING}/${APP_NAME}.app"
 ln -s /Applications "${DMG_STAGING}/Applications"
 
 if command -v create-dmg >/dev/null 2>&1; then
+  # Window background: packaging/macos/dmg-background.svg at 1x and 2x,
+  # combined into one HiDPI TIFF so Retina Finder windows stay sharp.
+  DMG_BACKGROUND="target/release/dmg-background.tiff"
+  rsvg-convert -w 640 -h 360 packaging/macos/dmg-background.svg -o target/release/dmg-background.png
+  rsvg-convert -w 1280 -h 720 packaging/macos/dmg-background.svg -o target/release/dmg-background@2x.png
+  tiffutil -cathidpicheck target/release/dmg-background.png target/release/dmg-background@2x.png \
+    -out "${DMG_BACKGROUND}"
+  # --volicon: the mounted volume shows the Readshot icon, not a generic disk.
   create-dmg \
     --volname "${APP_NAME}" \
+    --volicon "${ICON_OUT}" \
+    --background "${DMG_BACKGROUND}" \
     --window-pos 200 120 \
     --window-size 640 360 \
     --icon-size 96 \

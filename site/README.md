@@ -15,7 +15,16 @@ Shared assets:
 
 - `styles.css` — site styling.
 - `script.js` — copy-button behavior.
-- `favicon.svg` — app-icon aligned favicon.
+- `favicon.svg`, `favicon.ico`, `apple-touch-icon.png`, `icon-192.png`,
+  `icon-512.png`, `site.webmanifest` — the app icon for browsers and home
+  screens.
+- `og-image.png` — the 1200×630 link-preview image (`og:image`,
+  `twitter:card`).
+
+Every icon image is generated from `packaging/macos/icon.svg` (and
+`icon-small.svg` for the 16/32 px favicon frames) by
+`packaging/render-icons.sh`; edit the SVG and rerun it rather than editing
+the images.
 
 ## Install Redirect
 

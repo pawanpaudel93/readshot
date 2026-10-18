@@ -6,9 +6,17 @@
 
   Visual: a deep teal-blue rounded tile with selection-corner
   brackets framing a centered glass lens. Reads as "screenshot
-  selection + OCR lens" from 16px to 1024px.
+  selection + OCR lens" from 48px up; icon-small.svg is the
+  hand-tuned variant every rendition of 32px and below uses.
+
+  Layout: the artwork is drawn on a 896px tile and scaled into
+  Apple's macOS app-icon grid (an 824px tile centred on the 1024
+  canvas, with a soft drop shadow), so it sits at the same size as
+  system icons in Finder, Launchpad and the Dock. Renderers that
+  want the bare tile (Windows, Linux, the web) crop the viewBox to
+  "100 100 824 824"; packaging/render-icons.sh does that.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 100 824 824">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#123B48"/>
@@ -35,12 +43,17 @@
       <feComponentTransfer><feFuncA type="linear" slope="0.28"/></feComponentTransfer>
       <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
+    <filter id="tileShadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
     <filter id="lensShadow" x="-30%" y="-30%" width="160%" height="160%">
       <feDropShadow dx="0" dy="24" stdDeviation="24" flood-color="#062A33" flood-opacity="0.42"/>
     </filter>
   </defs>
 
-  <rect x="64" y="64" width="896" height="896" rx="224" fill="url(#bg)"/>
+  <!-- 0.919643 = 824 / 896; 41.1429 = 512 - 512 * 0.919643. -->
+  <g transform="matrix(0.919643 0 0 0.919643 41.1429 41.1429)">
+  <rect id="tile" x="64" y="64" width="896" height="896" rx="224" fill="url(#bg)" filter="url(#tileShadow)"/>
   <rect x="96" y="88" width="832" height="520" rx="196" fill="url(#shine)"/>
   <path d="M 168 764 C 300 884 724 920 856 684" fill="none" stroke="#0D3B46" stroke-width="84" stroke-linecap="round" stroke-opacity="0.2"/>
 
@@ -59,5 +72,6 @@
     <path d="M -48 -58 C -4 -98 74 -82 96 -24" fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round" stroke-opacity="0.72"/>
     <circle cx="-34" cy="-34" r="22" fill="#FFFFFF" fill-opacity="0.86"/>
     <circle cx="44" cy="54" r="18" fill="#7DF7E7" fill-opacity="0.68"/>
+  </g>
   </g>
 </svg>

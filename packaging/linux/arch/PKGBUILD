@@ -47,12 +47,18 @@ check() {
 package() {
   cd "${pkgname}-${pkgver}"
   install -Dm755 "target/release/readshot" "${pkgdir}/usr/bin/readshot"
+  # Named after the app id (the Wayland app_id / X11 WM_CLASS the windows
+  # carry) so the desktop maps windows to this entry and its icon.
   install -Dm644 "packaging/linux/readshot.desktop" \
-    "${pkgdir}/usr/share/applications/${pkgname}.desktop"
-  # Icon id must match `Icon=np.com.pawanpaudel.readshot` in the .desktop
-  # file (512×512 PNG, mirrored from the Flatpak manifest).
-  install -Dm644 "packaging/linux/readshot.png" \
-    "${pkgdir}/usr/share/icons/hicolor/512x512/apps/np.com.pawanpaudel.readshot.png"
+    "${pkgdir}/usr/share/applications/np.com.pawanpaudel.readshot.desktop"
+  # Every hicolor size plus the scalable SVG (rendered by
+  # packaging/render-icons.sh). The icon id matches
+  # `Icon=np.com.pawanpaudel.readshot` in the .desktop file.
+  local icon
+  while IFS= read -r icon; do
+    install -Dm644 "packaging/linux/icons/hicolor/${icon}" \
+      "${pkgdir}/usr/share/icons/hicolor/${icon}"
+  done < <(cd packaging/linux/icons/hicolor && find . -type f -name 'np.com.pawanpaudel.readshot.*' | sed 's|^\./||')
   install -Dm644 "LICENSE" \
     "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }
