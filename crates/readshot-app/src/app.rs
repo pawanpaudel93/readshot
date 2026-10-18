@@ -229,7 +229,10 @@ impl SettingsPane {
 }
 
 /// Top-level application message — every event from every UI surface
-/// or background task funnels through this enum.
+/// or background task funnels through this enum. Each variant wraps the
+/// message enum of one handler module, and that module's handler matches
+/// its own enum exhaustively: `runtime::update` only unwraps, so a new
+/// message can only be added where it is handled.
 #[derive(Clone, Debug)]
 pub enum Message {
     /// Editor and pin window messages (`runtime::editor_ops`, through

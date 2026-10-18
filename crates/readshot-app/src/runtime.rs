@@ -39,8 +39,6 @@ use readshot_ui::SettingsMessage;
 use crate::editor::{EditorSession, StatusTone};
 use crate::url_scheme::UrlAction;
 
-#[macro_use]
-mod routes;
 mod hotkeys;
 pub(crate) use hotkeys::*;
 mod window_settings;
