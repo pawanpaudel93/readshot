@@ -942,10 +942,18 @@ impl FsHistoryStore {
             return Ok(false);
         };
         let stored: CaptureRecord = serde_json::from_slice(&before)?;
+        let withheld = self.root.join(Self::withheld_path(&paths));
         if !stored.scrub_pending {
+            // A crash after the replacement landed but before the
+            // set-aside image went: no unredacted copy stays on disk.
+            if withheld.exists() {
+                let _index_guard = self.lock_index()?;
+                if fs::read(&json).ok() == Some(before) {
+                    self.drop_withheld(&stored);
+                }
+            }
             return Ok(false);
         }
-        let withheld = self.root.join(Self::withheld_path(&paths));
         // Marked but not yet set aside (a crash between the two): the
         // image at its own path is the one to draw on.
         let source = if withheld.exists() {
@@ -1526,9 +1534,17 @@ impl HistoryStore for FsHistoryStore {
             return Ok(());
         }
         let mut merged = record.clone();
-        if merged.ocr_text.is_none() {
-            if let Some(prev) = prev {
+        if let Some(prev) = prev {
+            if merged.ocr_text.is_none() {
                 merged.ocr_text = prev.ocr_text;
+            }
+            // A sync knows nothing of a pending scrub: only an image swap
+            // (a commit, or finishing it) may end one. Clearing it here
+            // would leave a record with its image set aside and nothing to
+            // finish it.
+            if prev.scrub_pending {
+                merged.scrub_pending = true;
+                merged.pending_image = prev.pending_image;
             }
         }
         self.write_sidecar(&merged)?;
@@ -2601,6 +2617,92 @@ mod tests {
         assert!(!s.root().join(FsHistoryStore::withheld_path(&r)).exists());
         // Nothing left to finish.
         assert_eq!(s.finish_pending_scrubs(), 0);
+    }
+
+    /// Fail closed: a plain sidecar sync (which knows nothing of a
+    /// pending scrub) never clears `scrub_pending` or the pending
+    /// redactions. Only an image swap may.
+    #[test]
+    fn a_sidecar_sync_never_clears_a_pending_scrub() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let scrubbed = scrubbed_of(&r);
+        assert!(s.begin_scrub(&scrubbed).unwrap());
+        // An editor of the redacted record syncs its annotations.
+        let mut sync = scrubbed.clone();
+        sync.scrub_pending = false;
+        sync.pending_image = None;
+        sync.ocr_text = None;
+        s.update(&sync).unwrap();
+        let stored = s.read_sidecar(&r).unwrap().unwrap();
+        assert!(stored.scrub_pending, "a sync cleared the pending scrub");
+        assert!(stored.pending_image.is_some());
+        assert!(stored.redacted);
+        // Still finished from its set-aside image.
+        assert_eq!(s.finish_pending_scrubs(), 1);
+        assert!(s.root().join(FsHistoryStore::png_path(&r)).exists());
+    }
+
+    /// Fail closed: a crash after a redacted image landed but before the
+    /// set-aside unredacted image was removed leaves no unredacted copy
+    /// for good: the next launch removes it.
+    #[test]
+    fn a_set_aside_image_left_behind_is_removed_at_launch() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let scrubbed = scrubbed_of(&r);
+        let (_, black) = black_png(4, 4);
+        assert!(s.rewrite(&scrubbed, &black).unwrap());
+        let withheld = s.root().join(FsHistoryStore::withheld_path(&r));
+        fs::write(&withheld, valid_png(4, 4)).unwrap();
+        s.finish_pending_scrubs();
+        assert!(!withheld.exists(), "an unredacted copy stayed on disk");
+        assert!(s.root().join(FsHistoryStore::png_path(&r)).exists());
+    }
+
+    /// Fail closed: a pending scrub whose set-aside image can't be
+    /// decoded stays withheld (logged): no image is placed at its path
+    /// and none of it is served; it is kept for a later try.
+    #[test]
+    fn a_pending_scrub_that_cant_be_drawn_stays_withheld() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        assert!(s.begin_scrub(&scrubbed_of(&r)).unwrap());
+        let withheld = s.root().join(FsHistoryStore::withheld_path(&r));
+        fs::write(&withheld, b"not a png").unwrap();
+        assert_eq!(s.finish_pending_scrubs(), 0);
+        let listed = &s.list().unwrap()[0];
+        assert!(listed.scrub_pending && listed.redacted);
+        assert_eq!(listed.ocr_text, None);
+        assert!(!s.root().join(FsHistoryStore::png_path(&r)).exists());
+        assert!(withheld.exists(), "kept for a later try");
+    }
+
+    /// Fail closed: a pending record whose sidecar is garbled (its
+    /// pending redactions can't be decoded) is never served, and its
+    /// recovery places nothing, even when its unredacted image is still
+    /// at its own path (a crash between marking and setting it aside).
+    #[test]
+    fn a_garbled_pending_sidecar_is_never_served_or_drawn_from() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let json = s.root().join(FsHistoryStore::json_path(&r));
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&json).unwrap()).unwrap();
+        raw["redacted"] = true.into();
+        raw["scrub_pending"] = true.into();
+        raw["pending_image"] = "garbage".into();
+        fs::write(&json, raw.to_string()).unwrap();
+        let png = s.root().join(FsHistoryStore::png_path(&r));
+        let before = fs::read(&png).unwrap();
+        assert!(s.list().unwrap().is_empty(), "a garbled record was served");
+        assert_eq!(s.finish_pending_scrubs(), 0);
+        assert_eq!(fs::read(&png).unwrap(), before, "recovery wrote over it");
+        assert!(s.stored_redacted(&r).is_err(), "unknown counts as redacted");
     }
 
     /// Redactions that can't be placed on the set-aside image (another
