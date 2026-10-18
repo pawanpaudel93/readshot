@@ -705,9 +705,10 @@ pub(crate) fn redact_state(ed: &EditorSession) -> RedactState {
         unlocatable,
         ..RedactState::default()
     };
+    // What the output hides: the redactions as drawn. Built once: it
+    // clones every annotation, and the panel view calls this per frame.
+    let drawn = ed.model.drawn_annotations();
     for (m, rect) in rects {
-        // What the output hides: the redactions as drawn.
-        let drawn = ed.model.drawn_annotations();
         let cov = coverage(rect, &drawn);
         if cov != Coverage::None {
             out.covered.push(m.clone());
