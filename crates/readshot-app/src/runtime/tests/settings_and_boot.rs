@@ -380,7 +380,7 @@ fn editor_output_image_bakes_annotations_and_selected_frame() {
     ed.model
         .set_beautify(readshot_core::beautify::BuiltinPreset::Minimal.settings());
 
-    let output = editor_output_image(&mut ed);
+    let output = editor_output_image(&mut ed).unwrap();
 
     assert_eq!((output.width(), output.height()), (80, 80));
     assert_eq!(*output.get_pixel(0, 0), image::Rgba([255, 255, 255, 255]));
@@ -389,6 +389,60 @@ fn editor_output_image_bakes_annotations_and_selected_frame() {
         annotated[0] > 180 && annotated[1] < 80 && annotated[2] < 80,
         "expected visible red annotation pixel, got {annotated:?}"
     );
+}
+
+/// A 16:9 canvas on a tall document: 100 × 20000 with 200 px padding
+/// would be 36267 × 20400, over the 32767 px side limit.
+fn app_with_oversized_beautify() -> (App, iced::window::Id) {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let mut ed = crate::editor::EditorSession::new(solid(100, 20_000));
+    let id = iced::window::Id::unique();
+    ed.window_id = Some(id);
+    app.windows.register(id, WindowKind::Editor);
+    let mut s = readshot_core::beautify::BuiltinPreset::Minimal.settings();
+    s.padding = readshot_core::beautify::MAX_PADDING;
+    s.canvas = readshot_core::beautify::CanvasSize::Wide;
+    ed.model.set_beautify(s);
+    app.editor = Some(ed);
+    (app, id)
+}
+
+#[test]
+fn a_beautify_canvas_over_the_limits_is_refused_not_rendered() {
+    let (mut app, id) = app_with_oversized_beautify();
+    let ed = app.editor.as_ref().unwrap();
+    let reason = super::super::beautify_panel::beautify_output_refusal(ed)
+        .expect("the panel says why the canvas can't be made");
+    assert!(reason.contains("36,267"), "{reason}");
+    assert!(reason.contains("32,767"), "{reason}");
+    assert!(super::super::view::editor_size_label(ed).contains("too large"));
+    assert!(editor_output_image(app.editor.as_mut().unwrap()).is_err());
+
+    for (message, verb) in [
+        (Message::EditorSaveRequested, "save"),
+        (Message::EditorCopyImageRequested, "copy"),
+        (Message::EditorPinRequested, "pin"),
+    ] {
+        let _ = update(&mut app, message);
+        let ed = app.editor.as_ref().expect("the editor stays open");
+        assert!(!ed.busy, "{verb}: nothing started");
+        let status = ed.status.clone().unwrap_or_default();
+        assert!(
+            status.starts_with(&format!("Couldn’t {verb}.")) && status.contains("32,767"),
+            "{verb}: {status}"
+        );
+    }
+    assert!(app.pins.is_empty(), "no pin opened");
+    assert_eq!(app.windows.kind(id), Some(WindowKind::Editor));
+
+    // Back to Auto: the same document outputs normally.
+    let ed = app.editor.as_mut().unwrap();
+    let mut s = ed.model.beautify();
+    s.canvas = readshot_core::beautify::CanvasSize::Auto;
+    ed.model.set_beautify(s);
+    assert!(super::super::beautify_panel::beautify_output_refusal(ed).is_none());
+    let out = editor_output_image(ed).unwrap();
+    assert_eq!(out.dimensions(), (500, 20_400));
 }
 
 #[test]

@@ -345,7 +345,7 @@ fn pairs() -> [(BuiltinPreset, legacy::Style); 6] {
 fn builtin_presets_match_the_retired_frame_styles_byte_for_byte() {
     for img in fixtures() {
         for (preset, style) in pairs() {
-            let new = render(&img, &preset.settings());
+            let new = render(&img, &preset.settings()).unwrap();
             let old = legacy::share_framed_image(&img, style);
             assert_eq!(
                 (new.width(), new.height()),
@@ -367,7 +367,7 @@ fn builtin_presets_match_the_retired_frame_styles_byte_for_byte() {
 #[test]
 fn no_frame_is_the_source_image() {
     for img in fixtures() {
-        let out = render(&img, &BuiltinPreset::None.settings());
+        let out = render(&img, &BuiltinPreset::None.settings()).unwrap();
         assert_eq!(out.as_raw(), img.as_raw());
         assert_eq!(out.dimensions(), img.dimensions());
     }

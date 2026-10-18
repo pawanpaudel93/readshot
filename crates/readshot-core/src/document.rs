@@ -377,7 +377,10 @@ fn clamp_u32(v: i64) -> u32 {
     u32::try_from(v.max(0)).unwrap_or(u32::MAX)
 }
 
-fn check_size(w: u32, h: u32) -> Result<(), GeometryError> {
+/// The document limits: no side over `MAX_DOC_SIDE`, no more than
+/// `MAX_DOC_PIXELS` pixels. Every newly composed image (combine,
+/// transform, Beautify output) must pass it before it is allocated.
+pub fn check_size(w: u32, h: u32) -> Result<(), GeometryError> {
     if w > MAX_DOC_SIDE || h > MAX_DOC_SIDE {
         return Err(GeometryError::TooLarge {
             width: w,

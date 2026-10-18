@@ -1127,14 +1127,26 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }
             // The output must match what is on screen.
             settle_editor_for_output(ed, &state.coordinator);
+            let out = match editor_output(ed) {
+                Ok(out) => out,
+                Err(e) => {
+                    ed.set_warning(super::beautify_panel::beautify_refusal("save", e));
+                    return Task::none();
+                }
+            };
             ed.busy = true;
             ed.set_status("Choose a save location…");
-            let img = editor_output_image(ed);
             let seed = preferred_save_seed_dir(&state.preferences, &state.last_save_dir);
             let template = state.preferences.filename_template.clone();
-            Task::perform(save_image_via_picker(img, seed, template), |r| {
-                Message::EditorSaved(r.map_err(|e| e.to_string()))
-            })
+            Task::perform(
+                async move {
+                    let img = out.render_off_thread().await?;
+                    save_image_via_picker(img, seed, template)
+                        .await
+                        .map_err(|e| e.to_string())
+                },
+                Message::EditorSaved,
+            )
         }
         Message::EditorSaved(result) => {
             // Remember the parent directory of any successful save —
@@ -1176,16 +1188,28 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }
             // The output must match what is on screen.
             settle_editor_for_output(ed, &state.coordinator);
+            let out = match editor_output(ed) {
+                Ok(out) => out,
+                Err(e) => {
+                    ed.set_warning(super::beautify_panel::beautify_refusal("copy", e));
+                    return Task::none();
+                }
+            };
             ed.busy = true;
             ed.set_status(if ed.model.beautify().is_identity() {
                 "Copying…".to_string()
             } else {
                 "Copying beautified image…".to_string()
             });
-            let img = editor_output_image(ed);
-            Task::perform(copy_image_to_clipboard(img), |r| {
-                Message::EditorCopyImageDone(r.map_err(|e| e.to_string()))
-            })
+            Task::perform(
+                async move {
+                    let img = out.render_off_thread().await?;
+                    copy_image_to_clipboard(img)
+                        .await
+                        .map_err(|e| e.to_string())
+                },
+                Message::EditorCopyImageDone,
+            )
         }
         Message::EditorCopyImageDone(result) => {
             if let Some(ed) = state.editor.as_mut() {
@@ -2261,7 +2285,15 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }
             // The output must match what is on screen.
             settle_editor_for_output(ed, &state.coordinator);
-            let img = editor_output_image(ed);
+            // A pin opens at once, so its Beautify render stays here; the
+            // limit check keeps it within the document budget.
+            let img = match editor_output_image(ed) {
+                Ok(img) => img,
+                Err(e) => {
+                    ed.set_warning(super::beautify_panel::beautify_refusal("pin", e));
+                    return Task::none();
+                }
+            };
             let size = (img.width(), img.height());
             let handle = rgba_handle(img);
             // Close the editor window if any.

@@ -17,6 +17,43 @@ use crate::app::{App, Message};
 use crate::editor::{EditorSession, EyedropperState, EyedropperTarget};
 use crate::icons::AppIcon;
 
+/// Why a Beautify output over the document limits can't be made, and
+/// what to change. Shown inline in the panel.
+pub(crate) fn beautify_limit_reason(e: readshot_core::document::GeometryError) -> String {
+    use readshot_core::document::{GeometryError, MAX_DOC_PIXELS, MAX_DOC_SIDE};
+    const NEXT: &str = "Choose Auto or Social canvas, or lower the padding.";
+    match e {
+        GeometryError::TooLarge { width, height } if width == u32::MAX || height == u32::MAX => {
+            format!("This canvas is too large to make. {NEXT}")
+        }
+        GeometryError::TooLarge { width, height } => format!(
+            "This canvas would be {}\u{a0}×\u{a0}{}\u{a0}px, and the limit is {}\u{a0}px on a side. {NEXT}",
+            super::image_menu::group_digits(width.into()),
+            super::image_menu::group_digits(height.into()),
+            super::image_menu::group_digits(MAX_DOC_SIDE.into()),
+        ),
+        GeometryError::TooManyPixels { pixels, .. } => format!(
+            "This canvas would be {}\u{a0}px, over the {}\u{a0}px limit. {NEXT}",
+            super::image_menu::group_digits(pixels),
+            super::image_menu::group_digits(MAX_DOC_PIXELS),
+        ),
+        GeometryError::Empty => format!("This image has no content. {NEXT}"),
+    }
+}
+
+/// The status when Save, Copy or Pin refuses a canvas over the limits.
+pub(crate) fn beautify_refusal(action: &str, e: readshot_core::document::GeometryError) -> String {
+    format!("Couldn’t {action}. {}", beautify_limit_reason(e))
+}
+
+/// The panel's inline reason, when the current canvas can't be made.
+pub(crate) fn beautify_output_refusal(ed: &EditorSession) -> Option<String> {
+    let (w, h) = ed.effective_image_size();
+    readshot_core::beautify::checked_output_geometry(w, h, &ed.model.beautify())
+        .err()
+        .map(beautify_limit_reason)
+}
+
 fn set(ed: &mut EditorSession, s: readshot_core::beautify::BeautifySettings, what: &str) {
     if ed.model.set_beautify(s) {
         ed.clear_discard_confirmation();
@@ -401,11 +438,23 @@ pub(crate) fn beautify_tab<'a>(
             |v| BeautifyEdit::ShadowLevel(v as u8)
         ),
         section("Canvas size", canvas),
-        balance,
-        row![Space::new().width(Length::Fill), save],
     ]
-    .spacing(SP3)
-    .padding(SP3);
+    .spacing(SP3);
+    let body = match beautify_output_refusal(ed) {
+        Some(reason) => {
+            body.push(
+                text(reason)
+                    .size(TYPE_CAPTION)
+                    .style(move |_: &Theme| text::Style {
+                        color: Some(p.danger),
+                    }),
+            )
+        }
+        None => body,
+    };
+    let body = column![body, balance, row![Space::new().width(Length::Fill), save],]
+        .spacing(SP3)
+        .padding(SP3);
     iced::widget::scrollable(body).height(Length::Fill).into()
 }
 

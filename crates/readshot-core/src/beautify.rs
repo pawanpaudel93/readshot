@@ -8,6 +8,8 @@ use image::imageops::{self, FilterType};
 use image::{Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 
+use crate::document::{check_size, GeometryError};
+
 pub const MAX_PADDING: u32 = 200;
 pub const MAX_CORNER_RADIUS: u32 = 32;
 pub const MAX_SHADOW_LEVEL: u8 = 4;
@@ -452,15 +454,36 @@ pub fn output_geometry(w: u32, h: u32, s: &BeautifySettings) -> Option<OutputGeo
     })
 }
 
-/// The beautified output of `img`.
-pub fn render(img: &RgbaImage, s: &BeautifySettings) -> RgbaImage {
+/// `output_geometry`, held to the document limits
+/// (`document::check_size`: `MAX_DOC_SIDE` and `MAX_DOC_PIXELS`). The
+/// identity output is the image itself, so it allocates nothing new and
+/// always passes. An overflowing layout is `TooLarge`.
+pub fn checked_output_geometry(
+    w: u32,
+    h: u32,
+    s: &BeautifySettings,
+) -> Result<OutputGeometry, GeometryError> {
+    let s = &s.clamped();
+    let Some(g) = output_geometry(w, h, s) else {
+        return Err(GeometryError::TooLarge {
+            width: u32::MAX,
+            height: u32::MAX,
+        });
+    };
+    if !s.is_identity() {
+        check_size(g.width, g.height)?;
+    }
+    Ok(g)
+}
+
+/// The beautified output of `img`, or why it can't be made: an output
+/// over the document limits is refused before anything is allocated.
+pub fn render(img: &RgbaImage, s: &BeautifySettings) -> Result<RgbaImage, GeometryError> {
     let s = &s.clamped();
     if s.is_identity() {
-        return img.clone();
+        return Ok(img.clone());
     }
-    let Some(g) = output_geometry(img.width(), img.height(), s) else {
-        return img.clone();
-    };
+    let g = checked_output_geometry(img.width(), img.height(), s)?;
     let scaled;
     let src: &RgbaImage = if (g.image_w, g.image_h) != img.dimensions() && img.width() > 0 {
         scaled = imageops::resize(img, g.image_w, g.image_h, FilterType::Triangle);
@@ -509,7 +532,7 @@ pub fn render(img: &RgbaImage, s: &BeautifySettings) -> RgbaImage {
             border,
         );
     }
-    out
+    Ok(out)
 }
 
 fn fill_background(out: &mut RgbaImage, bg: Background) {
@@ -739,8 +762,41 @@ mod tests {
         assert_eq!((big.width, big.height), (1200, 675));
         assert_eq!(big.image_w, 1200 - 48);
         assert_eq!(big.image_h, 288); // 1000 * 1152 / 4000
-        let out = render(&img(4000, 1000), &s);
+        let out = render(&img(4000, 1000), &s).unwrap();
         assert_eq!(out.dimensions(), (1200, 675));
+    }
+
+    #[test]
+    fn a_ratio_canvas_over_the_document_limits_is_refused() {
+        use crate::document::{MAX_DOC_PIXELS, MAX_DOC_SIDE};
+        let mut s = BuiltinPreset::Minimal.settings();
+        s.padding = MAX_PADDING;
+        // 18 Retina captures combined below (2880 × 32400): 16:9 would be
+        // 58312 × 32800, about 7.6 GB of RGBA.
+        for canvas in [CanvasSize::Wide, CanvasSize::Standard, CanvasSize::Square] {
+            s.canvas = canvas;
+            let err = checked_output_geometry(2880, 32_400, &s).unwrap_err();
+            assert!(
+                matches!(err, GeometryError::TooLarge { .. }),
+                "{canvas:?}: {err:?}"
+            );
+        }
+        // Under the side limit but over the pixel budget: 5120 × 16384 at 16:9.
+        s.canvas = CanvasSize::Wide;
+        let err = checked_output_geometry(5120, 16_384, &s).unwrap_err();
+        assert!(
+            matches!(err, GeometryError::TooManyPixels { .. }),
+            "{err:?}"
+        );
+        // render refuses before it allocates the canvas.
+        let tall = RgbaImage::new(1, MAX_DOC_SIDE);
+        assert!(render(&tall, &s).is_err());
+        // Within the limits it still renders, and the identity is exempt.
+        s.canvas = CanvasSize::Auto;
+        let g = checked_output_geometry(2880, 1800, &s).unwrap();
+        assert!(u64::from(g.width) * u64::from(g.height) <= MAX_DOC_PIXELS);
+        let none = BuiltinPreset::None.settings();
+        assert!(checked_output_geometry(40_000, 40_000, &none).is_ok());
     }
 
     #[test]
@@ -750,7 +806,7 @@ mod tests {
             gradient: GRADIENTS[0],
         }));
         assert_eq!(s.padding, PADDING_WHEN_BACKGROUND_PICKED);
-        let out = render(&img(4, 4), &s);
+        let out = render(&img(4, 4), &s).unwrap();
         assert_eq!(out.get_pixel(0, 0).0, GRADIENTS[0].top);
         assert_eq!(out.get_pixel(0, out.height() - 1).0, GRADIENTS[0].bottom);
     }
@@ -842,7 +898,7 @@ mod tests {
         });
         let json = serde_json::to_string(&s).unwrap();
         let s: BeautifySettings = serde_json::from_str(&json).unwrap();
-        let out = render(&img(8, 8), &s);
+        let out = render(&img(8, 8), &s).unwrap();
         assert_eq!(out.width(), 8 + 2 * MAX_PADDING);
         for layers in [255, 256, 257, 512] {
             let mut s = BuiltinPreset::Soft.settings();
@@ -852,7 +908,7 @@ mod tests {
                 layers,
                 alpha: 42,
             });
-            let _ = render(&img(8, 8), &s);
+            let _ = render(&img(8, 8), &s).unwrap();
         }
         assert!(output_geometry(8, 8, &s).is_some());
     }

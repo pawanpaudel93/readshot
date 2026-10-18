@@ -2936,15 +2936,51 @@ fn history_list_task(coord: CaptureCoordinator) -> Task<Message> {
     )
 }
 
-fn editor_output_image(ed: &mut EditorSession) -> image::RgbaImage {
+/// The editor's output before Beautify: the model's flattened image of
+/// the present, plus the Beautify settings still to apply. Made only
+/// once the Beautify output is known to fit the document limits, so a
+/// canvas over them is refused before anything is allocated.
+pub(crate) struct EditorOutput {
+    flat: image::RgbaImage,
+    beautify: readshot_core::beautify::BeautifySettings,
+}
+
+impl EditorOutput {
+    /// Apply Beautify. Off the UI thread for Save and Copy
+    /// (`render_off_thread`); the size was checked when this was made.
+    fn render(self) -> Result<image::RgbaImage, readshot_core::document::GeometryError> {
+        if self.beautify.clamped().is_identity() {
+            return Ok(self.flat);
+        }
+        readshot_core::beautify::render(&self.flat, &self.beautify)
+    }
+
+    /// `render` on a blocking worker: a beautified canvas near the pixel
+    /// budget is a gigabyte to fill, which must not stall the UI thread.
+    async fn render_off_thread(self) -> Result<image::RgbaImage, String> {
+        tokio::task::spawn_blocking(move || self.render())
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| beautify_panel::beautify_refusal("make the image", e))
+    }
+}
+
+/// The output, or why its Beautify canvas can't be made.
+pub(crate) fn editor_output(
+    ed: &mut EditorSession,
+) -> Result<EditorOutput, readshot_core::document::GeometryError> {
+    let beautify = ed.model.beautify();
     // The model's flattened image of the present (rendered here if it
     // has none), never a display.
-    let img = ed.model.flatten();
-    let beautify = ed.model.beautify();
-    if beautify.clamped().is_identity() {
-        return img;
-    }
-    readshot_core::beautify::render(&img, &beautify)
+    let flat = ed.model.flatten();
+    readshot_core::beautify::checked_output_geometry(flat.width(), flat.height(), &beautify)?;
+    Ok(EditorOutput { flat, beautify })
+}
+
+fn editor_output_image(
+    ed: &mut EditorSession,
+) -> Result<image::RgbaImage, readshot_core::document::GeometryError> {
+    editor_output(ed)?.render()
 }
 
 fn can_preview_drag_annotation(annotations: &[readshot_core::Annotation], index: usize) -> bool {

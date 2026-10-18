@@ -3304,12 +3304,16 @@ fn width_popover<'a>(
 pub(crate) fn editor_size_label(ed: &crate::editor::EditorSession) -> String {
     let (w, h) = ed.effective_image_size();
     let s = ed.model.beautify();
-    match readshot_core::beautify::output_geometry(w, h, &s) {
-        Some(g) if !s.is_identity() => format!(
+    if s.is_identity() {
+        return format!("{w}\u{a0}×\u{a0}{h}\u{a0}px");
+    }
+    match readshot_core::beautify::checked_output_geometry(w, h, &s) {
+        Ok(g) => format!(
             "{w}\u{a0}×\u{a0}{h} → {}\u{a0}×\u{a0}{}\u{a0}px",
             g.width, g.height
         ),
-        _ => format!("{w}\u{a0}×\u{a0}{h}\u{a0}px"),
+        // The panel says why and what to change.
+        Err(_) => format!("{w}\u{a0}×\u{a0}{h}\u{a0}px → canvas too large"),
     }
 }
 

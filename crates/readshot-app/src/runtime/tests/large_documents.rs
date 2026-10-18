@@ -1204,7 +1204,7 @@ fn a_large_rotate_composes_off_thread_and_lands_as_one_undo_step() {
     assert_eq!(ed.model.annotations(), sync.model.annotations());
     assert!(*ed.model.base() == *sync.model.base(), "base");
     assert!(
-        editor_output_image(ed) == editor_output_image(&mut sync),
+        editor_output_image(ed).unwrap() == editor_output_image(&mut sync).unwrap(),
         "the output is the rotated document"
     );
 }
@@ -1232,7 +1232,7 @@ fn an_edit_before_a_large_rotate_lands_applies_it_first_and_drops_its_late_resul
     let mut sync = sync_editor();
     sync.model.rotate(true).unwrap();
     assert!(sync.model.delete_selected_annotation());
-    assert!(editor_output_image(ed) == editor_output_image(&mut sync));
+    assert!(editor_output_image(ed).unwrap() == editor_output_image(&mut sync).unwrap());
 }
 
 #[test]
@@ -1286,7 +1286,7 @@ fn rotate_flip_undo_and_redo_on_a_large_document_queue_and_land_in_order() {
         sync.model.geometry().transform
     );
     assert_eq!(ed.model.annotations(), sync.model.annotations());
-    assert!(editor_output_image(ed) == editor_output_image(&mut sync));
+    assert!(editor_output_image(ed).unwrap() == editor_output_image(&mut sync).unwrap());
 }
 
 #[test]
@@ -1317,7 +1317,7 @@ fn a_large_undo_and_redo_across_a_rotate_swap_the_cached_bases_in() {
         Some(format!("Undid edit. {REDO_HINT}").as_str())
     );
     let mut sync = sync_editor();
-    assert!(editor_output_image(ed) == editor_output_image(&mut sync));
+    assert!(editor_output_image(ed).unwrap() == editor_output_image(&mut sync).unwrap());
     let _ = update(&mut app, redo_msg());
     let job = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
     assert!(job.base.as_ref().is_some_and(|b| Arc::ptr_eq(b, &rotated)));
@@ -1438,7 +1438,7 @@ fn a_large_added_part_lands_as_one_undo_step_with_its_bake() {
         .unwrap();
     assert_eq!(ed.model.part_ids(), sync.model.part_ids());
     assert_eq!(ed.model.annotations(), sync.model.annotations());
-    assert!(editor_output_image(ed) == editor_output_image(&mut sync));
+    assert!(editor_output_image(ed).unwrap() == editor_output_image(&mut sync).unwrap());
     let _ = update(&mut app, undo_msg());
     finish_all(&mut app);
     let ed = app.editor.as_ref().unwrap();
@@ -1490,7 +1490,7 @@ fn cancelling_a_large_gap_preview_puts_the_baseline_back_without_a_render() {
     assert!(ed.compose_job.is_none(), "nothing to render");
     assert_eq!(ed.model.undo_depth(), depth);
     let mut sync = two_part_editor();
-    assert!(editor_output_image(ed) == editor_output_image(&mut sync));
+    assert!(editor_output_image(ed).unwrap() == editor_output_image(&mut sync).unwrap());
 }
 
 #[test]
@@ -1516,7 +1516,7 @@ fn an_annotation_commit_on_a_large_document_renders_off_the_ui_thread() {
     // An output meanwhile is the exact present document.
     let ed = app.editor.as_mut().unwrap();
     let expected = readshot_core::render(ed.model.base(), ed.model.annotations());
-    assert!(editor_output_image(ed) == expected);
+    assert!(editor_output_image(ed).unwrap() == expected);
     let landed = finish_compose(&app);
     let _ = update(&mut app, landed);
     let ed = app.editor.as_ref().unwrap();
@@ -1550,7 +1550,7 @@ fn an_output_takes_the_render_of_the_present_already_made() {
     assert!(!ed.display_dirty);
     assert!(ed.compose_job.is_none());
     let expected = readshot_core::render(ed.model.base(), ed.model.annotations());
-    assert!(editor_output_image(ed) == expected);
+    assert!(editor_output_image(ed).unwrap() == expected);
 }
 
 #[test]
@@ -2155,7 +2155,7 @@ fn a_large_editor_opens_on_a_placeholder_and_renders_off_the_ui_thread() {
     // placeholder.
     ed.model.commit_annotations(rect_at(5.0));
     let expected = readshot_core::render(ed.model.base(), ed.model.annotations());
-    assert!(editor_output_image(&mut ed) == expected);
+    assert!(editor_output_image(&mut ed).unwrap() == expected);
     app.editor = Some(crate::editor::EditorSession::new(ramp(4_000, 4_000)));
     let _ = update(&mut app, Message::EditorStatusTick);
     assert_eq!(job_kind(&app), Some(crate::editor::ComposeKind::Flatten));
