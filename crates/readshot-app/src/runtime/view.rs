@@ -1906,12 +1906,7 @@ pub(crate) fn history_selected_panel_style(theme: &Theme) -> iced::widget::conta
 }
 
 pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
-    use crate::editor::EditorPopover;
     use crate::icons::AppIcon;
-    use iced::widget::canvas::Canvas;
-    use iced::widget::tooltip::Position;
-    use iced::widget::{mouse_area, opaque, stack, Space as IcedSpace};
-    use readshot_ui::editor::canvas::EditorCanvas;
 
     let Some(ed) = state.editor.as_ref() else {
         return container(empty_state(
@@ -1935,25 +1930,47 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         .into();
     };
 
-    let active_tool = ed.model.active_tool();
-    let active_color = ed.model.current_color();
-    let line_width = ed.model.current_line_width();
-    let busy = ed.busy;
-    let has_selected_annotation = ed.model.selected_annotation().is_some();
-
     // ===== Chrome — floating bars over the stage =====
     // Title row (zoom), tool bar (tools · color · width), hint, action
     // bar (history · frame · outputs) and at most one popover all float
     // over the image as `stack!` layers. Color, width and frame live in
     // popovers, so both bars stay one row down to the 720 px minimum.
     let p = palette(state.theme_mode);
-    let mono = mono_font();
-    let dimmed = |c: Color| Color { a: c.a * 0.45, ..c };
-    let icon_color = |enabled: bool| if enabled { p.t2 } else { dimmed(p.t2) };
-    let popover = ed.popover;
-    // Queued steps count: the buttons show where undo / redo will be.
-    let (can_undo, can_redo) = super::compose_jobs::can_undo_redo(ed);
+    let mode = editor_panel_mode(state, ed);
+    let mut layers: Vec<Element<'_, Message>> = vec![
+        editor_stage(state, ed),
+        editor_title_layer(ed, p, mode),
+        editor_tool_layer(state, ed, p),
+        editor_options_layer(ed, p),
+    ];
+    if let Some(toast_layer) = editor_toast_layer(ed, p) {
+        layers.push(toast_layer);
+    }
+    layers.push(editor_action_layer(ed, p));
 
+    // --- Popover: a click-outside scrim, then the card ---
+    if let Some(which) = ed.popover {
+        editor_popover_layers(state, ed, p, which, &mut layers);
+    }
+    editor_with_panel(state, ed, p, mode, layers)
+}
+
+/// A disabled control's color: `c` at 45 % of its alpha.
+fn dimmed(c: Color) -> Color {
+    Color { a: c.a * 0.45, ..c }
+}
+
+/// The floating tool bar: every tool, in its groups.
+fn editor_tool_layer<'a>(
+    state: &'a App,
+    ed: &'a EditorSession,
+    p: &'static Palette,
+) -> Element<'a, Message> {
+    use crate::icons::AppIcon;
+    use iced::widget::tooltip::Position;
+
+    let active_tool = ed.model.active_tool();
+    let busy = ed.busy;
     // --- Tool bar ---
     let mut tool_bar = row![].spacing(2).align_y(Alignment::Center);
     for (i, group) in readshot_ui::editor::toolbar::TOOL_GROUPS.iter().enumerate() {
@@ -1999,7 +2016,26 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         })
         .align_x(Alignment::Center)
         .align_y(Alignment::Start);
+    tool_layer.into()
+}
 
+/// What the stage's canvas takes from this build of the view (computed
+/// once, not on every layout of the stage).
+struct StageCanvasInputs {
+    pending: Vec<readshot_core::Annotation>,
+    bubble_covers: Vec<readshot_core::RectLike>,
+    selected_preview: Option<readshot_core::Annotation>,
+    selected_preview_rendered: bool,
+    shift_held: bool,
+    text_hover: Option<readshot_core::RectLike>,
+    text_selected: Vec<readshot_core::RectLike>,
+    part_rects: Vec<readshot_core::RectLike>,
+}
+
+/// The stage: the letterboxed image with the annotation canvas over it,
+/// framed by Beautify, scrolled when it overflows, and inset clear of
+/// the floating bars.
+fn editor_stage<'a>(state: &'a App, ed: &'a EditorSession) -> Element<'a, Message> {
     // ===== Image area — letterboxed image with canvas overlay =====
     // Both layers share the same container; the canvas Program knows
     // the image's effective dimensions + crop offset so cursor maps
@@ -2018,10 +2054,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     let beautify = ed.model.beautify();
     let zoom = ed.zoom;
     let display_scale = ed.display_scale;
-    let next_pin_number = ed.next_pin_number;
-    let pending_text = ed.pending_text.clone();
     let editor_shift_held = state.editor_shift_held;
-    let drag_cancel_seq = ed.drag_cancel_seq;
     let selected_preview = ed
         .move_drag
         .as_ref()
@@ -2052,6 +2085,16 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         } else {
             Vec::new()
         }
+    };
+    let inputs = StageCanvasInputs {
+        pending,
+        bubble_covers,
+        selected_preview,
+        selected_preview_rendered,
+        shift_held: editor_shift_held,
+        text_hover,
+        text_selected,
+        part_rects,
     };
     let image_area_content = responsive(move |stage| {
         // The stage is already inset clear of the floating bars.
@@ -2107,168 +2150,22 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             image_offset,
         });
 
-        let image: Element<'_, Message> = match shown_part {
-            None => iced::widget::image(image_handle.clone())
-                .width(Length::Fixed(displayed_w))
-                .height(Length::Fixed(displayed_h))
-                .content_fit(iced::ContentFit::Contain)
-                .filter_method(filter)
-                .into(),
-            Some(None) => Space::new().into(),
-            Some(Some(part)) => iced::widget::pin(
-                iced::widget::image(image_handle.clone())
-                    .crop(part.region)
-                    .width(Length::Fixed(part.size.0 * scale))
-                    .height(Length::Fixed(part.size.1 * scale))
-                    .content_fit(iced::ContentFit::Fill)
-                    .filter_method(filter),
-            )
-            .x(part.at.0 * scale)
-            .y(part.at.1 * scale)
-            .width(Length::Fixed(displayed_w))
-            .height(Length::Fixed(displayed_h))
-            .into(),
-        };
-        let image_layer: Element<'_, Message> = container(image)
-            .width(Length::Fixed(displayed_w))
-            .height(Length::Fixed(displayed_h))
-            .into();
-
-        let canvas_program = EditorCanvas {
-            active_tool,
-            color: active_color,
-            line_width,
-            next_pin_number,
-            image_size: (image_w, image_h),
-            image_offset,
-            display_scale: Some(scale),
-            selected_bounds: editor_show_selection_chrome(has_selected_annotation)
-                .then(|| ed.model.selected_bounds())
-                .flatten(),
-            selected_annotation: editor_show_selection_chrome(has_selected_annotation)
-                .then(|| {
-                    ed.model
-                        .selected_annotation()
-                        .and_then(|idx| ed.model.annotations().get(idx).cloned())
-                })
-                .flatten(),
-            selected_handles: if editor_show_selection_chrome(has_selected_annotation) {
-                ed.model.selected_handles()
-            } else {
-                Vec::new()
-            },
-            selected_preview: selected_preview.clone(),
-            selected_preview_rendered,
-            pending: pending.clone(),
-            bubble_covers: bubble_covers.clone(),
-            shift_held: editor_shift_held,
-            cancel_seq: drag_cancel_seq,
-            style: ed.model.tool_style(),
-            eyedropper: ed.eyedropper.is_some(),
-            loupe: ed.eyedropper.as_ref().and_then(|e| e.loupe.clone()),
-            text_hover,
-            text_selected: text_selected.clone(),
-            // The old draft hides while a new drag replaces it.
-            crop_draft: if ed.canvas_drag_active {
-                None
-            } else {
-                ed.crop_draft
-            },
-            viewport,
-            parts: part_rects.clone(),
-            cache: ed.canvas_cache.clone(),
-        };
-        let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
-            .width(Length::Fixed(displayed_w))
-            .height(Length::Fixed(displayed_h))
-            .into();
-        let canvas: Element<'_, Message> = canvas.map(|a| Message::Editor(EditorMsg::Canvas(a)));
-        let canvas_layer = container(canvas)
-            .width(Length::Fixed(displayed_w))
-            .height(Length::Fixed(displayed_h));
-
-        let editable_layers: Element<'_, Message> = if let Some(pending) = pending_text.clone() {
-            let geom = inline_text_editor_geometry(
-                pending.origin,
-                (image_w, image_h),
-                image_offset,
-                scale,
-            );
-            let input: Element<'_, Message> = if busy {
-                let content = if pending.content.is_empty() {
-                    "Text draft paused while working…".to_string()
-                } else {
-                    pending.content.clone()
-                };
-                container(
-                    text(content)
-                        .size(TYPE_BODY)
-                        .style(text_t2)
-                        .wrapping(iced::widget::text::Wrapping::Word),
-                )
-                .padding(8)
-                .width(Length::Fill)
-                .style(disabled_text_input_style)
-                .into()
-            } else if let Some(content) = ed.text_edit_content.as_ref() {
-                // Multi-line text: `text_editor` lets Enter insert a
-                // newline. `key_binding` remaps Escape → cancel and
-                // Cmd/Ctrl+Enter → commit; plain Enter falls through to
-                // the default (newline). Clicking a button also commits
-                // / cancels (below).
-                iced::widget::text_editor(content)
-                    .placeholder(TEXT_PLACEHOLDER)
-                    .on_action(|a| Message::Editor(EditorMsg::TextAction(a)))
-                    .key_binding(editor_text_key_binding)
-                    .padding(8)
-                    .size(TYPE_BODY)
-                    .style(inline_text_editor_style)
-                    .into()
-            } else {
-                // `text_edit_content` is always `Some` while a draft is
-                // open; this fallback only guards a torn state.
-                container(
-                    text(pending.content.clone())
-                        .size(TYPE_BODY)
-                        .style(text_t1)
-                        .wrapping(iced::widget::text::Wrapping::Word),
-                )
-                .padding(8)
-                .width(Length::Fill)
-                .into()
-            };
-            let commit_label = editor_text_commit_label(pending.edit_index.is_some());
-            let mut commit = button(text(commit_label).size(TYPE_CAPTION))
-                .padding([SP2, SP3])
-                .style(|theme, status| action_button_style(theme, status, ActionKind::Primary));
-            if !busy {
-                commit = commit.on_press(Message::Editor(EditorMsg::TextCommit));
-            }
-            let mut cancel = button(text("Cancel").size(TYPE_CAPTION))
-                .padding([SP2, SP3])
-                .style(|theme, status| action_button_style(theme, status, ActionKind::Secondary));
-            if !busy {
-                cancel = cancel.on_press(Message::Editor(EditorMsg::TextCancel));
-            }
-            let editor = container(
-                row![input, commit, cancel]
-                    .spacing(SP2)
-                    .align_y(Alignment::Center),
-            )
-            .padding(SP2)
-            .width(Length::Fixed(geom.width))
-            .style(inline_text_box_style);
-            let inline_layer = container(column![
-                IcedSpace::new().height(Length::Fixed(geom.y)),
-                row![IcedSpace::new().width(Length::Fixed(geom.x)), editor]
-            ])
-            .width(Length::Fixed(displayed_w))
-            .height(Length::Fixed(displayed_h));
-
-            stack![image_layer, canvas_layer, inline_layer].into()
-        } else {
-            stack![image_layer, canvas_layer].into()
-        };
+        let image_layer = stage_image_layer(
+            &image_handle,
+            shown_part,
+            scale,
+            (displayed_w, displayed_h),
+            filter,
+        );
+        let canvas_layer =
+            stage_canvas_layer(ed, &inputs, scale, viewport, (displayed_w, displayed_h));
+        let editable_layers = stage_editable_layers(
+            ed,
+            image_layer,
+            canvas_layer,
+            scale,
+            (displayed_w, displayed_h),
+        );
 
         let editable_stack: Element<'_, Message> = container(editable_layers)
             .width(Length::Fixed(displayed_w))
@@ -2300,32 +2197,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             .center_x(Length::Fill)
             .center_y(Length::Fill);
 
-        if needs_horizontal_scroll || needs_vertical_scroll {
-            let scroll_direction = match (needs_horizontal_scroll, needs_vertical_scroll) {
-                (true, true) => iced::widget::scrollable::Direction::Both {
-                    vertical: slim_scrollbar(),
-                    horizontal: slim_scrollbar(),
-                },
-                (true, false) => iced::widget::scrollable::Direction::Horizontal(slim_scrollbar()),
-                (false, true) => iced::widget::scrollable::Direction::Vertical(slim_scrollbar()),
-                (false, false) => unreachable!("scroll layer only wraps overflowing content"),
-            };
-            scrollable(content)
-                .id(iced::widget::Id::new(EDITOR_STAGE_ID))
-                .direction(scroll_direction)
-                .on_scroll(|v| {
-                    let o = v.absolute_offset();
-                    Message::Window(WindowMsg::EditorStageScrolled(o.x, o.y))
-                })
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
-        } else {
-            container(content)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
-        }
+        stage_scroll_layer(content, needs_horizontal_scroll, needs_vertical_scroll)
     })
     .width(Length::Fill)
     .height(Length::Fill);
@@ -2339,7 +2211,257 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             right: EDITOR_STAGE_PAD_SIDE,
         })
         .style(bg_style);
+    stage.into()
+}
 
+/// The image on the stage: the present render, or the visible part of
+/// the previous one while a render is in flight.
+fn stage_image_layer<'a>(
+    image_handle: &iced::widget::image::Handle,
+    shown_part: Option<Option<ShownPart>>,
+    scale: f32,
+    (displayed_w, displayed_h): (f32, f32),
+    filter: iced::widget::image::FilterMethod,
+) -> Element<'a, Message> {
+    let image: Element<'_, Message> = match shown_part {
+        None => iced::widget::image(image_handle.clone())
+            .width(Length::Fixed(displayed_w))
+            .height(Length::Fixed(displayed_h))
+            .content_fit(iced::ContentFit::Contain)
+            .filter_method(filter)
+            .into(),
+        Some(None) => Space::new().into(),
+        Some(Some(part)) => iced::widget::pin(
+            iced::widget::image(image_handle.clone())
+                .crop(part.region)
+                .width(Length::Fixed(part.size.0 * scale))
+                .height(Length::Fixed(part.size.1 * scale))
+                .content_fit(iced::ContentFit::Fill)
+                .filter_method(filter),
+        )
+        .x(part.at.0 * scale)
+        .y(part.at.1 * scale)
+        .width(Length::Fixed(displayed_w))
+        .height(Length::Fixed(displayed_h))
+        .into(),
+    };
+    let image_layer: Element<'_, Message> = container(image)
+        .width(Length::Fixed(displayed_w))
+        .height(Length::Fixed(displayed_h))
+        .into();
+    image_layer
+}
+
+/// The annotation canvas over the stage's image, at `scale`.
+fn stage_canvas_layer<'a>(
+    ed: &'a EditorSession,
+    inputs: &StageCanvasInputs,
+    scale: f32,
+    viewport: Option<readshot_core::RectLike>,
+    (displayed_w, displayed_h): (f32, f32),
+) -> Element<'a, Message> {
+    use iced::widget::canvas::Canvas;
+    use readshot_ui::editor::canvas::EditorCanvas;
+
+    let has_selected_annotation = ed.model.selected_annotation().is_some();
+    let canvas_program = EditorCanvas {
+        active_tool: ed.model.active_tool(),
+        color: ed.model.current_color(),
+        line_width: ed.model.current_line_width(),
+        next_pin_number: ed.next_pin_number,
+        image_size: ed.effective_image_size(),
+        image_offset: ed.crop_offset(),
+        display_scale: Some(scale),
+        selected_bounds: editor_show_selection_chrome(has_selected_annotation)
+            .then(|| ed.model.selected_bounds())
+            .flatten(),
+        selected_annotation: editor_show_selection_chrome(has_selected_annotation)
+            .then(|| {
+                ed.model
+                    .selected_annotation()
+                    .and_then(|idx| ed.model.annotations().get(idx).cloned())
+            })
+            .flatten(),
+        selected_handles: if editor_show_selection_chrome(has_selected_annotation) {
+            ed.model.selected_handles()
+        } else {
+            Vec::new()
+        },
+        selected_preview: inputs.selected_preview.clone(),
+        selected_preview_rendered: inputs.selected_preview_rendered,
+        pending: inputs.pending.clone(),
+        bubble_covers: inputs.bubble_covers.clone(),
+        shift_held: inputs.shift_held,
+        cancel_seq: ed.drag_cancel_seq,
+        style: ed.model.tool_style(),
+        eyedropper: ed.eyedropper.is_some(),
+        loupe: ed.eyedropper.as_ref().and_then(|e| e.loupe.clone()),
+        text_hover: inputs.text_hover,
+        text_selected: inputs.text_selected.clone(),
+        // The old draft hides while a new drag replaces it.
+        crop_draft: if ed.canvas_drag_active {
+            None
+        } else {
+            ed.crop_draft
+        },
+        viewport,
+        parts: inputs.part_rects.clone(),
+        cache: ed.canvas_cache.clone(),
+    };
+    let canvas: Element<'_, readshot_ui::CanvasMessage> = Canvas::new(canvas_program)
+        .width(Length::Fixed(displayed_w))
+        .height(Length::Fixed(displayed_h))
+        .into();
+    let canvas: Element<'_, Message> = canvas.map(|a| Message::Editor(EditorMsg::Canvas(a)));
+    let canvas_layer = container(canvas)
+        .width(Length::Fixed(displayed_w))
+        .height(Length::Fixed(displayed_h));
+    canvas_layer.into()
+}
+
+/// The stage's image and canvas, with the inline text draft's editor
+/// over them while one is open.
+fn stage_editable_layers<'a>(
+    ed: &'a EditorSession,
+    image_layer: Element<'a, Message>,
+    canvas_layer: Element<'a, Message>,
+    scale: f32,
+    (displayed_w, displayed_h): (f32, f32),
+) -> Element<'a, Message> {
+    use iced::widget::{stack, Space as IcedSpace};
+
+    let (image_w, image_h) = ed.effective_image_size();
+    let image_offset = ed.crop_offset();
+    let busy = ed.busy;
+    if let Some(pending) = ed.pending_text.clone() {
+        let geom =
+            inline_text_editor_geometry(pending.origin, (image_w, image_h), image_offset, scale);
+        let input: Element<'_, Message> = if busy {
+            let content = if pending.content.is_empty() {
+                "Text draft paused while working…".to_string()
+            } else {
+                pending.content.clone()
+            };
+            container(
+                text(content)
+                    .size(TYPE_BODY)
+                    .style(text_t2)
+                    .wrapping(iced::widget::text::Wrapping::Word),
+            )
+            .padding(8)
+            .width(Length::Fill)
+            .style(disabled_text_input_style)
+            .into()
+        } else if let Some(content) = ed.text_edit_content.as_ref() {
+            // Multi-line text: `text_editor` lets Enter insert a
+            // newline. `key_binding` remaps Escape → cancel and
+            // Cmd/Ctrl+Enter → commit; plain Enter falls through to
+            // the default (newline). Clicking a button also commits
+            // / cancels (below).
+            iced::widget::text_editor(content)
+                .placeholder(TEXT_PLACEHOLDER)
+                .on_action(|a| Message::Editor(EditorMsg::TextAction(a)))
+                .key_binding(editor_text_key_binding)
+                .padding(8)
+                .size(TYPE_BODY)
+                .style(inline_text_editor_style)
+                .into()
+        } else {
+            // `text_edit_content` is always `Some` while a draft is
+            // open; this fallback only guards a torn state.
+            container(
+                text(pending.content.clone())
+                    .size(TYPE_BODY)
+                    .style(text_t1)
+                    .wrapping(iced::widget::text::Wrapping::Word),
+            )
+            .padding(8)
+            .width(Length::Fill)
+            .into()
+        };
+        let commit_label = editor_text_commit_label(pending.edit_index.is_some());
+        let mut commit = button(text(commit_label).size(TYPE_CAPTION))
+            .padding([SP2, SP3])
+            .style(|theme, status| action_button_style(theme, status, ActionKind::Primary));
+        if !busy {
+            commit = commit.on_press(Message::Editor(EditorMsg::TextCommit));
+        }
+        let mut cancel = button(text("Cancel").size(TYPE_CAPTION))
+            .padding([SP2, SP3])
+            .style(|theme, status| action_button_style(theme, status, ActionKind::Secondary));
+        if !busy {
+            cancel = cancel.on_press(Message::Editor(EditorMsg::TextCancel));
+        }
+        let editor = container(
+            row![input, commit, cancel]
+                .spacing(SP2)
+                .align_y(Alignment::Center),
+        )
+        .padding(SP2)
+        .width(Length::Fixed(geom.width))
+        .style(inline_text_box_style);
+        let inline_layer = container(column![
+            IcedSpace::new().height(Length::Fixed(geom.y)),
+            row![IcedSpace::new().width(Length::Fixed(geom.x)), editor]
+        ])
+        .width(Length::Fixed(displayed_w))
+        .height(Length::Fixed(displayed_h));
+
+        stack![image_layer, canvas_layer, inline_layer].into()
+    } else {
+        stack![image_layer, canvas_layer].into()
+    }
+}
+
+/// The stage's content in a scrollable when it overflows the stage.
+fn stage_scroll_layer<'a>(
+    content: iced::widget::Container<'a, Message>,
+    needs_horizontal_scroll: bool,
+    needs_vertical_scroll: bool,
+) -> Element<'a, Message> {
+    if needs_horizontal_scroll || needs_vertical_scroll {
+        let scroll_direction = match (needs_horizontal_scroll, needs_vertical_scroll) {
+            (true, true) => iced::widget::scrollable::Direction::Both {
+                vertical: slim_scrollbar(),
+                horizontal: slim_scrollbar(),
+            },
+            (true, false) => iced::widget::scrollable::Direction::Horizontal(slim_scrollbar()),
+            (false, true) => iced::widget::scrollable::Direction::Vertical(slim_scrollbar()),
+            (false, false) => unreachable!("scroll layer only wraps overflowing content"),
+        };
+        scrollable(content)
+            .id(iced::widget::Id::new(EDITOR_STAGE_ID))
+            .direction(scroll_direction)
+            .on_scroll(|v| {
+                let o = v.absolute_offset();
+                Message::Window(WindowMsg::EditorStageScrolled(o.x, o.y))
+            })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    } else {
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+}
+
+/// The title row: capture size, the Image menu, Show Panel and zoom.
+fn editor_title_layer<'a>(
+    ed: &'a EditorSession,
+    p: &'static Palette,
+    mode: PanelMode,
+) -> Element<'a, Message> {
+    use crate::editor::EditorPopover;
+    use crate::icons::AppIcon;
+    use iced::widget::tooltip::Position;
+
+    let mono = mono_font();
+    let busy = ed.busy;
+    let popover = ed.popover;
+    let zoom = ed.zoom;
+    let display_scale = ed.display_scale;
     // --- Title row: capture size + zoom ---
     let size_label = editor_size_label(ed);
     // In Fit mode the scale is only known once the stage has laid out
@@ -2348,7 +2470,6 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     // `responsive`, which runs during layout after the stage (the stack's
     // first layer) has recorded its scale.
     let live_scale = ed.render_scale.clone();
-    let mode = editor_panel_mode(state, ed);
     let panel_hidden = matches!(mode, PanelMode::Hidden | PanelMode::Collapsed);
     let image_menu_open = matches!(popover, Some(EditorPopover::Image | EditorPopover::Resize));
     let title_content = responsive(move |_size| {
@@ -2444,7 +2565,12 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     .width(Length::Fill)
     .height(Length::Fill)
     .align_y(Alignment::Start);
+    title_layer.into()
+}
 
+/// The options bar under the tool bar, or the hint line in its place.
+fn editor_options_layer<'a>(ed: &'a EditorSession, p: &'static Palette) -> Element<'a, Message> {
+    let active_tool = ed.model.active_tool();
     // --- Options bar under the tool bar (falls back to the hint line) ---
     let options_layer: Element<'_, Message> = if ed.eyedropper.is_some() {
         container(text(EYEDROPPER_HINT).size(TYPE_CAPTION).style(text_t2))
@@ -2488,7 +2614,17 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             }
         }
     };
+    options_layer
+}
 
+/// The status toast above the action bar, while a status is showing.
+fn editor_toast_layer<'a>(
+    ed: &'a EditorSession,
+    p: &'static Palette,
+) -> Option<Element<'a, Message>> {
+    use iced::widget::tooltip::Position;
+
+    let busy = ed.busy;
     // --- Status toast above the action bar ---
     // Auto-dismiss old success / info status text so the chrome
     // doesn't stay loud forever after a successful save / copy.
@@ -2584,7 +2720,18 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
             .align_x(Alignment::Center)
             .align_y(Alignment::End)
     });
+    toast_layer.map(Into::into)
+}
 
+/// The floating action bar: undo / redo, the outputs and Discard.
+fn editor_action_layer<'a>(ed: &'a EditorSession, p: &'static Palette) -> Element<'a, Message> {
+    use crate::icons::AppIcon;
+    use iced::widget::tooltip::Position;
+
+    let busy = ed.busy;
+    let icon_color = |enabled: bool| if enabled { p.t2 } else { dimmed(p.t2) };
+    // Queued steps count: the buttons show where undo / redo will be.
+    let (can_undo, can_redo) = super::compose_jobs::can_undo_redo(ed);
     // --- Action bar: history · outputs · discard ---
     let undo_enabled = !busy && can_undo;
     let redo_enabled = !busy && can_redo;
@@ -2691,71 +2838,84 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         })
         .align_x(Alignment::Center)
         .align_y(Alignment::End);
+    action_layer.into()
+}
 
-    let mut layers: Vec<Element<'_, Message>> = vec![
-        stage.into(),
-        title_layer.into(),
-        tool_layer.into(),
-        options_layer,
-    ];
-    if let Some(toast_layer) = toast_layer {
-        layers.push(toast_layer.into());
-    }
-    layers.push(action_layer.into());
+/// The open popover: a click-outside scrim, then the card.
+fn editor_popover_layers<'a>(
+    state: &'a App,
+    ed: &'a EditorSession,
+    p: &'static Palette,
+    which: crate::editor::EditorPopover,
+    layers: &mut Vec<Element<'a, Message>>,
+) {
+    use crate::editor::EditorPopover;
+    use iced::widget::{mouse_area, opaque, Space as IcedSpace};
 
-    // --- Popover: a click-outside scrim, then the card ---
-    if let Some(which) = popover {
-        layers.push(
-            mouse_area(IcedSpace::new().width(Length::Fill).height(Length::Fill))
-                .on_press(Message::Editor(EditorMsg::PopoverClosed))
-                .interaction(iced::mouse::Interaction::Idle)
-                .into(),
-        );
-        let body = match which {
-            EditorPopover::Color => color_popover(
-                ed.model.effective_color(),
-                &state.preferences.editor_recent_colors,
-                &ed.hex_draft,
-                busy,
-                p,
-            ),
-            EditorPopover::Width => width_popover(
-                ed.model.effective_line_width(),
-                ed.model.effective_color(),
-                busy,
-                mono,
-            ),
-            EditorPopover::Image => image_popover(ed, p),
-            EditorPopover::Resize => resize_popover(ed, p),
-        };
-        // `opaque` keeps clicks on the card's padding from reaching the
-        // scrim underneath (which would close it).
-        let card = opaque(container(body).padding(10).style(popover_style));
-        let placed = match which {
-            // Color and width open from the options bar: under it.
-            EditorPopover::Color | EditorPopover::Width => container(card)
-                .padding(iced::Padding {
-                    top: EDITOR_POPOVER_TOP,
-                    ..iced::Padding::ZERO
-                })
-                .align_y(Alignment::Start)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center),
-            // Image and Resize open under the title row, at the right.
-            EditorPopover::Image | EditorPopover::Resize => container(card)
-                .padding(iced::Padding {
-                    top: TITLEBAR_HEIGHT + 4.0,
-                    right: 12.0,
-                    ..iced::Padding::ZERO
-                })
-                .align_y(Alignment::Start)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::End),
-        };
-        layers.push(placed.into());
-    }
+    let mono = mono_font();
+    let busy = ed.busy;
+    layers.push(
+        mouse_area(IcedSpace::new().width(Length::Fill).height(Length::Fill))
+            .on_press(Message::Editor(EditorMsg::PopoverClosed))
+            .interaction(iced::mouse::Interaction::Idle)
+            .into(),
+    );
+    let body = match which {
+        EditorPopover::Color => color_popover(
+            ed.model.effective_color(),
+            &state.preferences.editor_recent_colors,
+            &ed.hex_draft,
+            busy,
+            p,
+        ),
+        EditorPopover::Width => width_popover(
+            ed.model.effective_line_width(),
+            ed.model.effective_color(),
+            busy,
+            mono,
+        ),
+        EditorPopover::Image => image_popover(ed, p),
+        EditorPopover::Resize => resize_popover(ed, p),
+    };
+    // `opaque` keeps clicks on the card's padding from reaching the
+    // scrim underneath (which would close it).
+    let card = opaque(container(body).padding(10).style(popover_style));
+    let placed = match which {
+        // Color and width open from the options bar: under it.
+        EditorPopover::Color | EditorPopover::Width => container(card)
+            .padding(iced::Padding {
+                top: EDITOR_POPOVER_TOP,
+                ..iced::Padding::ZERO
+            })
+            .align_y(Alignment::Start)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center),
+        // Image and Resize open under the title row, at the right.
+        EditorPopover::Image | EditorPopover::Resize => container(card)
+            .padding(iced::Padding {
+                top: TITLEBAR_HEIGHT + 4.0,
+                right: 12.0,
+                ..iced::Padding::ZERO
+            })
+            .align_y(Alignment::Start)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::End),
+    };
+    layers.push(placed.into());
+}
+
+/// The canvas area's layers with the side panel docked beside them, or
+/// floating over them, as the window's width allows.
+fn editor_with_panel<'a>(
+    state: &'a App,
+    ed: &'a EditorSession,
+    p: &'static Palette,
+    mode: PanelMode,
+    layers: Vec<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    use iced::widget::{mouse_area, opaque, stack, Space as IcedSpace};
 
     // Everything above is the canvas area. The side panel docks beside
     // it (the stack is narrower, so its centered bars follow the canvas).
