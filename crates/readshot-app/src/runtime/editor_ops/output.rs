@@ -353,10 +353,10 @@ pub(super) fn on_pin_requested(state: &mut App) -> Task<Message> {
         // A beautified canvas (up to the pixel budget) is filled
         // off the UI thread; the pin opens when it is ready.
         tasks.push(Task::perform(out.render_off_thread(), move |result| {
-            Message::Editor(EditorMsg::PinRendered {
+            Message::Editor(EditorMsg::Pin(PinMsg::Rendered {
                 result,
                 display_bounds,
-            })
+            }))
         }));
     }
     Task::batch(tasks)

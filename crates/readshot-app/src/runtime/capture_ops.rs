@@ -544,7 +544,7 @@ pub(super) fn on_region_captured(
                         .pins
                         .insert(id, crate::app::PinState::new(handle.clone()));
                     open_task.map(move |opened| {
-                        Message::Editor(EditorMsg::PinWindowReady(opened, handle.clone()))
+                        Message::Editor(EditorMsg::Pin(PinMsg::WindowReady(opened, handle.clone())))
                     })
                 }
                 crate::app::CaptureIntent::CliInteractive => {

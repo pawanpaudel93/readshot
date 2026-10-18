@@ -1065,24 +1065,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: EditorMsg) -> Task
         EditorMsg::ZoomFit => chrome::on_zoom_fit(state),
 
         EditorMsg::PinRequested => output::on_pin_requested(state),
-        EditorMsg::PinRendered {
-            result,
-            display_bounds,
-        } => pins::on_pin_rendered(state, result, display_bounds),
-        EditorMsg::PinWindowReady(id, handle) => pins::on_pin_window_ready(state, id, handle),
-        EditorMsg::PinClosePressed(id) => pins::on_pin_close_pressed(state, id),
-        EditorMsg::PinHovered(id, true) => pins::on_pin_hovered(state, id),
-        EditorMsg::PinHovered(id, false) => pins::on_pin_unhovered(state, id),
-        EditorMsg::PinDragRequested(id) => window::drag(id),
-        EditorMsg::PinOpacityChanged(id, opacity) => {
-            pins::on_pin_opacity_changed(state, id, opacity)
-        }
-        EditorMsg::PinLockToggled(id) => pins::on_pin_lock_toggled(state, id),
-        EditorMsg::PinKeyPressed {
-            window,
-            key,
-            modifiers,
-        } => pins::on_pin_key_pressed(state, window, key, modifiers),
+        EditorMsg::Pin(msg) => pins::handle_pin_message(state, msg),
         EditorMsg::TextPanel(msg) => super::text_panel::handle_text_panel_message(state, msg),
         EditorMsg::Beautify(msg) => super::beautify_panel::handle_beautify_message(state, msg),
         EditorMsg::Image(msg) => super::image_menu::handle_image_message(state, msg),
@@ -1160,7 +1143,9 @@ fn open_pin_window(
     state
         .pins
         .insert(id, crate::app::PinState::new(handle.clone()));
-    open_task.map(move |opened| Message::Editor(EditorMsg::PinWindowReady(opened, handle.clone())))
+    open_task.map(move |opened| {
+        Message::Editor(EditorMsg::Pin(PinMsg::WindowReady(opened, handle.clone())))
+    })
 }
 
 /// Ask iced whether the Beautify hex field has the caret before `key`

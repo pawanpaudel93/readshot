@@ -844,14 +844,14 @@ fn may_wait(message: &EditorMsg) -> (bool, bool) {
         // Discarding (or arming it) needs no pixels: a step still
         // composing is abandoned with the editor, never composed here.
         | EditorMsg::DiscardRequested
-        | EditorMsg::PinRendered { .. }
-        | EditorMsg::PinWindowReady(..)
-        | EditorMsg::PinClosePressed(..)
-        | EditorMsg::PinDragRequested(..)
-        | EditorMsg::PinOpacityChanged(..)
-        | EditorMsg::PinLockToggled(..)
-        | EditorMsg::PinHovered(..)
-        | EditorMsg::PinKeyPressed { .. } => (true, true),
+        | EditorMsg::Pin(PinMsg::Rendered { .. })
+        | EditorMsg::Pin(PinMsg::WindowReady(..))
+        | EditorMsg::Pin(PinMsg::ClosePressed(..))
+        | EditorMsg::Pin(PinMsg::DragRequested(..))
+        | EditorMsg::Pin(PinMsg::OpacityChanged(..))
+        | EditorMsg::Pin(PinMsg::LockToggled(..))
+        | EditorMsg::Pin(PinMsg::Hovered(..))
+        | EditorMsg::Pin(PinMsg::KeyPressed { .. }) => (true, true),
         // The gap slider's own ticks and release drive its compose.
         EditorMsg::Combine(CombineMsg::GapPreview(..))
         | EditorMsg::Combine(CombineMsg::GapFlush { .. })

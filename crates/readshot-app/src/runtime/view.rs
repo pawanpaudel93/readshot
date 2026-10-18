@@ -3105,12 +3105,13 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
     // the audit flagged the previous "double-click closes" as a
     // landmine because pin-positioning involves a lot of accidental
     // double-clicks. Close is the hover bar's close button or esc / ⌘W.
-    let drag_area = mouse_area(img).on_double_click(Message::Editor(EditorMsg::PinLockToggled(id)));
+    let drag_area =
+        mouse_area(img).on_double_click(Message::Editor(EditorMsg::Pin(PinMsg::LockToggled(id))));
     let drag_layer: Element<'_, Message> = if locked {
         drag_area.into()
     } else {
         drag_area
-            .on_press(Message::Editor(EditorMsg::PinDragRequested(id)))
+            .on_press(Message::Editor(EditorMsg::Pin(PinMsg::DragRequested(id))))
             .interaction(iced::mouse::Interaction::Grab)
             .into()
     };
@@ -3130,7 +3131,7 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
             DARK.t1,
             lock_name,
             Some("L"),
-            Some(Message::Editor(EditorMsg::PinLockToggled(id))),
+            Some(Message::Editor(EditorMsg::Pin(PinMsg::LockToggled(id)))),
             locked,
             ICON_BTN_SM,
             pos,
@@ -3164,16 +3165,16 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
             DARK.t1,
             "Close",
             Some(ESC_KEY),
-            Some(Message::Editor(EditorMsg::PinClosePressed(id))),
+            Some(Message::Editor(EditorMsg::Pin(PinMsg::ClosePressed(id)))),
             false,
             ICON_BTN_SM,
             pos,
         );
         let step = |delta: f32| {
-            Message::Editor(EditorMsg::PinOpacityChanged(
+            Message::Editor(EditorMsg::Pin(PinMsg::OpacityChanged(
                 id,
                 (opacity + delta).clamp(PIN_OPACITY_MIN, PIN_OPACITY_MAX),
-            ))
+            )))
         };
         let bar: Element<'_, Message> =
             if !pin_hover_controls(locked, available.width).contains(&PinControl::Opacity) {
@@ -3240,8 +3241,8 @@ pub(crate) fn pin_view(state: &App, id: window::Id) -> Element<'_, Message> {
             .width(Length::Fill)
             .height(Length::Fill),
     )
-    .on_enter(Message::Editor(EditorMsg::PinHovered(id, true)))
-    .on_exit(Message::Editor(EditorMsg::PinHovered(id, false)))
+    .on_enter(Message::Editor(EditorMsg::Pin(PinMsg::Hovered(id, true))))
+    .on_exit(Message::Editor(EditorMsg::Pin(PinMsg::Hovered(id, false))))
     .into()
 }
 

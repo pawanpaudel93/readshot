@@ -189,7 +189,7 @@ pub(super) fn on_pin_ready(
                 .pins
                 .insert(wid, crate::app::PinState::new(handle.clone()));
             open_task.map(move |opened| {
-                Message::Editor(EditorMsg::PinWindowReady(opened, handle.clone()))
+                Message::Editor(EditorMsg::Pin(PinMsg::WindowReady(opened, handle.clone())))
             })
         }
         Err(e) => {

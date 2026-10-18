@@ -357,8 +357,8 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 
 use crate::app::{
     App, AppMsg, BeautifyMsg, CaptureMsg, CombineMsg, EditorMsg, FocusMsg, GlobalHotkeyAction,
-    HistoryKeyboardAction, HistoryMsg, ImageMsg, Message, ScrollMsg, SettingsMsg, TextPanelMsg,
-    TickMsg, WelcomeMsg, WindowKind, WindowMsg,
+    HistoryKeyboardAction, HistoryMsg, ImageMsg, Message, PinMsg, ScrollMsg, SettingsMsg,
+    TextPanelMsg, TickMsg, WelcomeMsg, WindowKind, WindowMsg,
 };
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
@@ -867,11 +867,11 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         subs.push(iced::event::listen_with(|event, _status, window| {
             use iced::keyboard::Event as KbEvent;
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                return Some(Message::Editor(EditorMsg::PinKeyPressed {
+                return Some(Message::Editor(EditorMsg::Pin(PinMsg::KeyPressed {
                     window,
                     key,
                     modifiers,
-                }));
+                })));
             }
             None
         }));

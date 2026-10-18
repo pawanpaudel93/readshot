@@ -963,10 +963,10 @@ fn a_beautified_pin_renders_off_the_ui_thread() {
     assert!(app.pins.is_empty(), "no pin until the render lands");
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::PinRendered {
+        Message::Editor(EditorMsg::Pin(PinMsg::Rendered {
             result: Ok(solid(80, 80)),
             display_bounds: None,
-        }),
+        })),
     );
     assert_eq!(app.pins.len(), 1);
 

@@ -268,6 +268,8 @@ pub enum Message {
 /// `runtime::editor_ops::handle_editor_message`.
 #[derive(Clone, Debug)]
 pub enum EditorMsg {
+    /// Pin window messages (`runtime::editor_ops::pins`).
+    Pin(PinMsg),
     /// Keyboard focus-zone chords (`runtime::key_focus`).
     Focus(FocusMsg),
     /// Add Capture / Add Image and layout messages (`runtime::combine`).
@@ -331,37 +333,6 @@ pub enum EditorMsg {
     /// open a borderless always-on-top "pin" window with that
     /// image, and close the editor.
     PinRequested,
-    /// A pin's beautified image, rendered off the UI thread after Pin
-    /// closed the editor; opens the pin window (`display_bounds`: the
-    /// editor's source display, for placing it).
-    PinRendered {
-        result: Result<image::RgbaImage, String>,
-        display_bounds: Option<(f32, f32, f32, f32)>,
-    },
-    /// First view of a freshly-opened pin window — used to record
-    /// its `window::Id` against its image state in `App::pins`.
-    PinWindowReady(iced::window::Id, iced::widget::image::Handle),
-    /// User pressed the close `×` on a pin window. Closes the
-    /// window and removes its entry from `App::pins`.
-    PinClosePressed(iced::window::Id),
-    /// User mouse-pressed inside the body of a pin window — kicks
-    /// off a native window-drag so the pin can be repositioned.
-    PinDragRequested(iced::window::Id),
-    /// User adjusted a pin's image opacity.
-    PinOpacityChanged(iced::window::Id, f32),
-    /// User toggled whether a pin should stay put when clicked.
-    PinLockToggled(iced::window::Id),
-    /// Pointer entered (`true`) or left (`false`) a pin window.
-    PinHovered(iced::window::Id, bool),
-    /// Keyboard event observed while at least one pin window is open.
-    /// iced 0.14 buttons can't take focus, so the runtime taps keys
-    /// globally and validates `window` against `App::pins` before
-    /// acting (close / lock / opacity / nudge). WCAG 2.1.1.
-    PinKeyPressed {
-        window: iced::window::Id,
-        key: iced::keyboard::Key,
-        modifiers: iced::keyboard::Modifiers,
-    },
     /// Bump the editor's line width by `delta` (positive grows,
     /// negative shrinks). Triggered by `[` / `]` keyboard
     /// shortcuts; the runtime resolves the new width against the
@@ -463,6 +434,44 @@ pub enum EditorMsg {
     /// Turn the eyedropper on or off (I, or the button in the color
     /// popover). While on, a click on the image picks its color.
     EyedropperToggled,
+}
+
+/// Pin window messages: the pin rendered after the editor closed, and
+/// each pin window's controls and keys. Handled by
+/// `runtime::editor_ops::pins::handle_pin_message`.
+#[derive(Clone, Debug)]
+pub enum PinMsg {
+    /// A pin's beautified image, rendered off the UI thread after Pin
+    /// closed the editor; opens the pin window (`display_bounds`: the
+    /// editor's source display, for placing it).
+    Rendered {
+        result: Result<image::RgbaImage, String>,
+        display_bounds: Option<(f32, f32, f32, f32)>,
+    },
+    /// First view of a freshly-opened pin window — used to record
+    /// its `window::Id` against its image state in `App::pins`.
+    WindowReady(iced::window::Id, iced::widget::image::Handle),
+    /// User pressed the close `×` on a pin window. Closes the
+    /// window and removes its entry from `App::pins`.
+    ClosePressed(iced::window::Id),
+    /// User mouse-pressed inside the body of a pin window — kicks
+    /// off a native window-drag so the pin can be repositioned.
+    DragRequested(iced::window::Id),
+    /// User adjusted a pin's image opacity.
+    OpacityChanged(iced::window::Id, f32),
+    /// User toggled whether a pin should stay put when clicked.
+    LockToggled(iced::window::Id),
+    /// Pointer entered (`true`) or left (`false`) a pin window.
+    Hovered(iced::window::Id, bool),
+    /// Keyboard event observed while at least one pin window is open.
+    /// iced 0.14 buttons can't take focus, so the runtime taps keys
+    /// globally and validates `window` against `App::pins` before
+    /// acting (close / lock / opacity / nudge). WCAG 2.1.1.
+    KeyPressed {
+        window: iced::window::Id,
+        key: iced::keyboard::Key,
+        modifiers: iced::keyboard::Modifiers,
+    },
 }
 
 /// Keyboard chords that move the editor's focus zone: into the Image
