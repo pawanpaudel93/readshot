@@ -448,7 +448,7 @@ pub(crate) struct RevealCommand {
     pub(crate) args: Vec<String>,
 }
 
-pub(crate) fn reveal_command_for_path(path: &Path) -> RevealCommand {
+pub(crate) fn reveal_command_for_path(path: &std::path::Path) -> RevealCommand {
     let path_string = path.to_string_lossy().to_string();
     #[cfg(target_os = "macos")]
     {
@@ -480,7 +480,7 @@ pub(crate) fn reveal_command_for_path(path: &Path) -> RevealCommand {
     }
 }
 
-pub(crate) fn reveal_path(path: &Path) -> Result<(), std::io::Error> {
+pub(crate) fn reveal_path(path: &std::path::Path) -> Result<(), std::io::Error> {
     let command = reveal_command_for_path(path);
     std::process::Command::new(command.program)
         .args(command.args)
@@ -494,7 +494,7 @@ pub(crate) struct OpenFolderCommand {
     pub(crate) args: Vec<String>,
 }
 
-pub(crate) fn open_folder_command_for_path(path: &Path) -> OpenFolderCommand {
+pub(crate) fn open_folder_command_for_path(path: &std::path::Path) -> OpenFolderCommand {
     let path_string = path.to_string_lossy().to_string();
     #[cfg(target_os = "macos")]
     {
@@ -519,7 +519,7 @@ pub(crate) fn open_folder_command_for_path(path: &Path) -> OpenFolderCommand {
     }
 }
 
-pub(crate) fn open_folder_path(path: &Path) -> Result<(), std::io::Error> {
+pub(crate) fn open_folder_path(path: &std::path::Path) -> Result<(), std::io::Error> {
     let command = open_folder_command_for_path(path);
     std::process::Command::new(command.program)
         .args(command.args)
