@@ -1103,3 +1103,65 @@ fn an_unbundled_notification_shows_in_the_editor() {
     assert!(!app.notifications_off_told);
     assert!(!notifications_off());
 }
+
+/// Once a notification is accepted again (or the tray item's check finds
+/// them allowed), the "notifications are off" state ends: capture
+/// problems go back to notifications, and a later refusal tells the user
+/// again.
+#[test]
+fn notifications_that_work_again_end_the_off_state() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    record_undelivered(NotShownReason::NotificationsOff, "Couldn’t capture.");
+    let _ = update(&mut app, Message::TrayTick);
+    assert!(app.notifications_off_told);
+    assert!(notifications_off());
+    record_notifications_on();
+    let _ = update(&mut app, Message::TrayTick);
+    assert!(!app.notifications_off_told, "the tray item goes");
+    assert!(!notifications_off());
+    assert_eq!(capture_problem_route(), CAPTURE_PROBLEM_ROUTE);
+    // Off again: said again.
+    record_undelivered(NotShownReason::NotificationsOff, "Couldn’t capture.");
+    let _ = update(&mut app, Message::TrayTick);
+    assert!(app.notifications_off_told);
+}
+
+/// Without a tray (it failed to install) there is no `TrayTick`: the URL
+/// tick, which always runs on macOS, shows the notices instead.
+#[test]
+fn without_a_tray_undelivered_notices_still_reach_the_editor() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    assert!(app.tray.is_none());
+    app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+    record_undelivered(
+        NotShownReason::NotificationsOff,
+        "Couldn’t save the capture.",
+    );
+    let _ = update(&mut app, Message::UrlTick);
+    let status = app
+        .editor
+        .as_ref()
+        .unwrap()
+        .status_text()
+        .unwrap()
+        .to_owned();
+    assert!(status.starts_with("Couldn’t save the capture."), "{status}");
+    assert!(app.notifications_off_told);
+    assert!(take_undelivered_notices().is_empty());
+}
+
+/// Nothing may drain the queue for a long time: it keeps the newest
+/// notices only.
+#[test]
+fn the_undelivered_queue_keeps_only_the_newest_notices() {
+    for i in 0..MAX_UNDELIVERED + 10 {
+        record_undelivered(NotShownReason::NotBundled, &format!("notice {i}"));
+    }
+    let kept = take_undelivered_notices();
+    assert_eq!(kept.len(), MAX_UNDELIVERED);
+    assert_eq!(kept.first().unwrap().text, "notice 10");
+    assert_eq!(
+        kept.last().unwrap().text,
+        format!("notice {}", MAX_UNDELIVERED + 9)
+    );
+}

@@ -1089,10 +1089,26 @@ pub(crate) fn capture_problem_route() -> CaptureProblemRoute {
     }
 }
 
+/// The notification path's news, on a tick: notices it could not show go
+/// into the app ([`surface_undelivered_notices`]), and once notifications
+/// work again the tray's "Notifications Are Off" item goes, so the next
+/// time they are off it is shown again.
+pub(crate) fn process_notices(state: &mut App) -> Task<Message> {
+    let task = surface_undelivered_notices(state, take_undelivered_notices());
+    if state.notifications_off_told && !notifications_off() {
+        state.notifications_off_told = false;
+        if let Some(tray) = &state.tray {
+            tray.hide_notifications_off();
+        }
+    }
+    task
+}
+
 /// Show in the app what a notification could not: in the editor's toast
 /// when an editor is open, or in the Welcome window when it is the capture
-/// problem it shows. The first time notifications turn out to be off, the
-/// tray menu also gains an item saying so that opens the setting.
+/// problem it shows. When notifications turn out to be off (the first
+/// time, or again after they worked), the tray menu also gains an item
+/// saying so that opens the setting.
 pub(crate) fn surface_undelivered_notices(
     state: &mut App,
     notices: Vec<UndeliveredNotice>,
@@ -1157,7 +1173,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
 
         Message::TrayTick => tick_ops::on_tray_tick(state),
 
-        Message::UrlTick => tick_ops::on_url_tick(),
+        Message::UrlTick => tick_ops::on_url_tick(state),
 
         Message::AppReopenTick => tick_ops::on_app_reopen_tick(),
 

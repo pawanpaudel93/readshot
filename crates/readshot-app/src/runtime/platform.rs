@@ -497,6 +497,11 @@ fn with_notifications_off<R>(f: impl FnOnce(&std::sync::atomic::AtomicBool) -> R
     }
 }
 
+/// The most notices kept for the runtime to show; older ones are dropped
+/// first. Nothing drains the queue while no tick runs, and a notice is
+/// only worth showing while it is recent.
+pub(crate) const MAX_UNDELIVERED: usize = 16;
+
 /// Queue `text` for the runtime ([`take_undelivered_notices`]): the
 /// notification path learns about a denial asynchronously, off the main
 /// thread, so it cannot touch the app state itself.
@@ -507,12 +512,24 @@ pub(crate) fn record_undelivered(reason: NotShownReason, text: &str) {
     }
     with_undelivered(|queue| {
         if let Ok(mut queue) = queue.lock() {
+            if queue.len() >= MAX_UNDELIVERED {
+                queue.remove(0);
+            }
             queue.push(UndeliveredNotice {
                 reason,
                 text: text.to_string(),
             });
         }
     });
+}
+
+/// Readshot's notifications work again: a post was accepted, or a check
+/// found them allowed. Capture problems go back to notifications, and the
+/// runtime takes the tray's "Notifications Are Off" item down
+/// ([`process_notices`](super::process_notices)).
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn record_notifications_on() {
+    with_notifications_off(|off| off.store(false, std::sync::atomic::Ordering::Relaxed));
 }
 
 /// The notices queued since the last call.
@@ -534,6 +551,27 @@ pub(crate) fn notifications_off() -> bool {
 /// Where the user turns Readshot's notifications back on.
 pub(crate) const NOTIFICATIONS_OFF_HINT: &str =
     "Notifications are off for Readshot. Turn them on in System Settings › Notifications › Readshot.";
+
+/// The tray's "Notifications Are Off" item: if the user has turned
+/// Readshot's notifications back on meanwhile, the item goes (as after any
+/// accepted post); otherwise System Settings › Notifications opens. The
+/// answer comes asynchronously, from the notification center.
+pub(crate) fn recheck_notifications_or_open_settings() {
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        // SAFETY: the callback is a plain `extern "C"` function with the
+        // signature the shim declares; the shim takes no other pointer.
+        let status = unsafe { readshot_notify_check(Some(notification_check_callback)) };
+        if status != 0 {
+            // Not running from Readshot.app: nothing to ask.
+            open_notification_settings();
+        }
+    }
+    #[cfg(not(all(target_os = "macos", not(test))))]
+    {
+        open_notification_settings();
+    }
+}
 
 /// Open System Settings › Notifications (macOS); a no-op elsewhere.
 pub(crate) fn open_notification_settings() {
@@ -618,10 +656,26 @@ extern "C" fn notification_log_callback(level: i32, message: *const std::ffi::c_
             "notifications are off for Readshot; not shown: {message}"
         );
         record_undelivered(NotShownReason::NotificationsOff, &message);
+    } else if level == 3 {
+        record_notifications_on();
     } else if level == 0 {
         tracing::info!(target: readshot_core::log::cat::APP, "{message}");
     } else {
         tracing::warn!(target: readshot_core::log::cat::APP, "{message}");
+    }
+}
+
+/// [`recheck_notifications_or_open_settings`]'s answer: 3 = on, 4 = still
+/// off (then the setting opens).
+#[cfg(all(target_os = "macos", not(test)))]
+extern "C" fn notification_check_callback(level: i32, _message: *const std::ffi::c_char) {
+    match level {
+        3 => {
+            tracing::info!(target: readshot_core::log::cat::APP, "notifications are on again");
+            record_notifications_on();
+        }
+        4 => open_notification_settings(),
+        _ => {}
     }
 }
 
@@ -630,13 +684,19 @@ unsafe extern "C" {
     /// `src/macos_notify.swift`. Returns 0 when handed to the notification
     /// center, 1 when not running from an app bundle (nothing posted), 2
     /// for a null argument. `log` receives `(0 = info | 1 = warn, text)`,
-    /// or `(2, body)` when notifications are off for Readshot, possibly
-    /// later and on another thread.
+    /// `(2, body)` when notifications are off for Readshot, or `(3, "")`
+    /// once the post was accepted, possibly later and on another thread.
     fn readshot_notify_post(
         title: *const std::ffi::c_char,
         body: *const std::ffi::c_char,
         log: Option<extern "C" fn(i32, *const std::ffi::c_char)>,
     ) -> i32;
+    /// `src/macos_notify.swift`. Asks whether notifications are allowed;
+    /// `log` receives `(3, "")` if they are, `(4, "")` if not, later and on
+    /// another thread. Returns 0, or 1 when not running from an app bundle
+    /// (nothing asked). Tests never ask (`recheck_notifications_or_open_settings`).
+    #[cfg_attr(test, allow(dead_code))]
+    fn readshot_notify_check(log: Option<extern "C" fn(i32, *const std::ffi::c_char)>) -> i32;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

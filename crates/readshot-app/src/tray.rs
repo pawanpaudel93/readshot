@@ -217,9 +217,10 @@ impl TrayController {
         self.item_retake_last_region.set_enabled(enabled);
     }
 
-    /// Tell the user, once, that Readshot's notifications are off: an item
-    /// above Quit that opens System Settings › Notifications. Shown the
-    /// next time they open the menu; later calls do nothing.
+    /// Tell the user that Readshot's notifications are off: an item above
+    /// Quit that opens System Settings › Notifications. Shown the next
+    /// time they open the menu; later calls do nothing until
+    /// [`Self::hide_notifications_off`].
     pub fn show_notifications_off(&self) {
         if self.notifications_off_shown.replace(true) {
             return;
@@ -228,6 +229,17 @@ impl TrayController {
         let position = self.menu.items().len().saturating_sub(2);
         if let Err(e) = self.menu.insert(&self.item_notifications_off, position) {
             tracing::warn!(target: readshot_core::log::cat::TRAY, "menu insert failed: {e}");
+        }
+    }
+
+    /// Take the "Notifications Are Off" item down: they work again. A
+    /// later refusal shows it again.
+    pub fn hide_notifications_off(&self) {
+        if !self.notifications_off_shown.replace(false) {
+            return;
+        }
+        if let Err(e) = self.menu.remove(&self.item_notifications_off) {
+            tracing::warn!(target: readshot_core::log::cat::TRAY, "menu remove failed: {e}");
         }
     }
 

@@ -11,9 +11,11 @@ import UserNotifications
 
 /// Rust's logger: `(level, message)`, level 0 = info, 1 = warn, 2 = the
 /// notification was not shown because notifications are off for Readshot
-/// (`message` is then the body, which Rust shows in the app). Called from
-/// UserNotifications' completion queues, so it must be thread-safe (it is:
-/// it only forwards to `tracing`).
+/// (`message` is then the body, which Rust shows in the app), 3 =
+/// notifications are on (a post was accepted, or a check found them
+/// allowed; `message` is empty), 4 = a check found them still off. Called
+/// from UserNotifications' completion queues, so it must be thread-safe
+/// (it is: it only forwards to `tracing` and atomics).
 public typealias ReadshotNotifyLog = @convention(c) (Int32, UnsafePointer<CChar>?) -> Void
 
 /// Posts were handed to the notification center (authorization is checked,
@@ -24,6 +26,10 @@ private let posted: Int32 = 0
 private let unbundled: Int32 = 1
 /// A null title or body.
 private let invalidArgument: Int32 = 2
+
+private let levelOff: Int32 = 2
+private let levelOn: Int32 = 3
+private let levelStillOff: Int32 = 4
 
 /// Shows banners even while Readshot is the active app (its Welcome or
 /// Settings window has focus): by default the system silently files them
@@ -83,6 +89,8 @@ public func readshotNotifyPost(
         center.add(request) { error in
             if let error {
                 emit(log, 1, "could not post notification \"\(titleText)\": \(error.localizedDescription)")
+            } else {
+                emit(log, levelOn, "")
             }
         }
     }
@@ -101,12 +109,32 @@ public func readshotNotifyPost(
                     if let error {
                         emit(log, 0, "notification authorization failed: \(error.localizedDescription)")
                     }
-                    emit(log, 2, bodyText)
+                    emit(log, levelOff, bodyText)
                 }
             }
         default:
             // Denied in System Settings › Notifications: respect it.
-            emit(log, 2, bodyText)
+            emit(log, levelOff, bodyText)
+        }
+    }
+    return posted
+}
+
+/// Ask whether Readshot's notifications are allowed now (the user may have
+/// turned them back on in System Settings): `log` gets level 3 if they
+/// are, 4 if not. Never prompts. Returns 0, or 1 outside an app bundle
+/// (nothing checked).
+@_cdecl("readshot_notify_check")
+public func readshotNotifyCheck(_ log: ReadshotNotifyLog?) -> Int32 {
+    guard runningFromAppBundle() else {
+        return unbundled
+    }
+    UNUserNotificationCenter.current().getNotificationSettings { settings in
+        switch settings.authorizationStatus {
+        case .authorized, .provisional:
+            emit(log, levelOn, "")
+        default:
+            emit(log, levelStillOff, "")
         }
     }
     return posted

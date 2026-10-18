@@ -55,9 +55,10 @@ pub(super) fn on_hotkey_tick(state: &mut App) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::TrayTick`: drain tray clicks and undelivered notices.
+/// `Message::TrayTick`: drain tray clicks and the notification path's
+/// news ([`process_notices`]).
 pub(super) fn on_tray_tick(state: &mut App) -> Task<Message> {
-    let undelivered = surface_undelivered_notices(state, take_undelivered_notices());
+    let undelivered = process_notices(state);
     let actions = match &state.tray {
         Some(t) => t.drain(),
         None => Vec::new(),
@@ -73,11 +74,18 @@ pub(super) fn on_tray_tick(state: &mut App) -> Task<Message> {
     Task::batch(tasks)
 }
 
-/// `Message::UrlTick`: drain `readshot://` actions.
-pub(super) fn on_url_tick() -> Task<Message> {
+/// `Message::UrlTick`: drain `readshot://` actions, and, with no tray (it
+/// failed to install) and so no `TrayTick`, the notification path's news.
+pub(super) fn on_url_tick(state: &mut App) -> Task<Message> {
+    let notices = if state.tray.is_none() {
+        process_notices(state)
+    } else {
+        Task::none()
+    };
     let tasks: Vec<Task<Message>> = crate::url_events::drain_actions()
         .into_iter()
         .map(|action| Task::done(Message::UrlActionReceived(action)))
+        .chain(std::iter::once(notices))
         .collect();
     Task::batch(tasks)
 }
@@ -150,7 +158,7 @@ pub(super) fn on_tray_action(state: &mut App, action: crate::tray::TrayAction) -
             Task::none()
         }
         crate::tray::TrayAction::NotificationSettings => {
-            open_notification_settings();
+            recheck_notifications_or_open_settings();
             Task::none()
         }
         crate::tray::TrayAction::About => {
