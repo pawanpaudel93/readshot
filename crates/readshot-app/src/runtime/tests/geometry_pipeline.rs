@@ -258,3 +258,94 @@ fn a_kept_gap_lands_as_a_step_whether_or_not_it_composed_off_thread() {
     step_both(&mut sync, &mut async_, "undo the gap", &[undo_msg()]);
     assert_eq!(sync.editor.as_ref().unwrap().model.geometry().gap, 0);
 }
+
+/// The status a no-op or refused step must not take down unless it
+/// replaces it: work in flight that the step has nothing to do with.
+const IN_FLIGHT: &str = "Recognizing text…";
+
+/// [`step_both`] for a step that lands nothing (no change, or refused):
+/// both editors start with work in flight on the status line and a
+/// filled loupe, then must agree, document, pixels and status included.
+fn step_both_unlanded(sync: &mut App, async_: &mut App, what: &str, messages: &[Message]) {
+    for app in [&mut *sync, &mut *async_] {
+        if app
+            .editor
+            .as_ref()
+            .is_some_and(|ed| ed.eyedropper.is_none())
+        {
+            let _ = update(app, Message::EditorEyedropperToggled);
+        }
+        let _ = update(
+            app,
+            Message::EditorCanvas(readshot_ui::CanvasMessage::EyedropperHover(PointLike::new(
+                3.5, 4.5,
+            ))),
+        );
+        if let Some(ed) = app.editor.as_mut() {
+            ed.set_status(crate::editor::StatusTone::Progress, IN_FLIGHT);
+        }
+        for m in messages {
+            let _ = update(app, m.clone());
+        }
+        finish_all(app);
+    }
+    let ((a, a_doc, a_pixels), (b, b_doc, b_pixels)) = (landed(sync), landed(async_));
+    assert_eq!(a, b, "{what}: sync and async disagree");
+    assert!(
+        same_document(&a_doc, &b_doc),
+        "{what}: the documents differ"
+    );
+    assert!(a_pixels == b_pixels, "{what}: the flattened pixels differ");
+}
+
+/// A document with no edits: nothing to undo or redo.
+fn fresh_editor() -> crate::editor::EditorSession {
+    crate::editor::EditorSession::new(ramp(40, 20))
+}
+
+#[test]
+fn steps_that_change_nothing_leave_work_in_flight_on_the_status_line() {
+    let (mut sync, mut async_) = twins_of(fresh_editor);
+    for (what, messages) in [
+        ("undo with nothing to undo", vec![undo_msg()]),
+        ("redo with nothing to redo", vec![redo_msg()]),
+        ("resize to the same size", resize_to("40")),
+    ] {
+        step_both_unlanded(&mut sync, &mut async_, what, &messages);
+        let ed = sync.editor.as_ref().unwrap();
+        assert_eq!(ed.status_text(), Some(IN_FLIGHT), "{what}");
+        assert_eq!(ed.model.undo_depth(), 0, "{what}: no undo step");
+    }
+    let (mut sync, mut async_) = twins_of(two_part_editor);
+    step_both_unlanded(
+        &mut sync,
+        &mut async_,
+        "align to the current alignment",
+        &[Message::EditorLayoutAlign(Align::Start)],
+    );
+    let ed = sync.editor.as_ref().unwrap();
+    assert_eq!(ed.status_text(), Some(IN_FLIGHT));
+}
+
+#[test]
+fn a_refused_step_reports_the_same_refusal_on_both_paths() {
+    let (mut sync, mut async_) = twin_apps();
+    let depth = sync.editor.as_ref().unwrap().model.undo_depth();
+    // Joined below, a part this wide is past the side limit.
+    let wide = readshot_core::document::MAX_DOC_SIDE + 1;
+    step_both_unlanded(
+        &mut sync,
+        &mut async_,
+        "add a capture that is too wide",
+        &[
+            Message::EditorCombineCaptureRequested(Join::Below),
+            Message::RegionCaptureCompleted(Ok(ramp(wide, 1))),
+        ],
+    );
+    let ed = sync.editor.as_ref().unwrap();
+    assert_eq!(ed.model.undo_depth(), depth, "nothing landed");
+    assert!(ed.status_is_error(), "{:?}", ed.status);
+    assert!(ed
+        .status_text()
+        .is_some_and(|s| s.starts_with("Couldn’t add the capture")));
+}

@@ -1371,12 +1371,11 @@ pub(crate) fn apply_step_now(
     part: Option<Arc<image::RgbaImage>>,
 ) -> StepOutcome {
     let (outcome, bake) = apply_on_model(ed, kind, part);
-    let landed: &[LandedStep] = if outcome == StepOutcome::Applied {
-        &[LandedStep { kind, bake }]
-    } else {
-        &[]
-    };
-    land_now(ed, Some(coord), landed);
+    // A step that changed nothing, or was refused (its status says why),
+    // leaves the status line alone: no "…ing" status was set for it.
+    if outcome == StepOutcome::Applied {
+        land(ed, Some(coord), &[LandedStep { kind, bake }], None);
+    }
     outcome
 }
 
@@ -1431,9 +1430,9 @@ fn apply_on_model(
     }
 }
 
-/// Steps applied on the UI thread: landed with a fresh render, or, when
-/// none applied, a "…ing" status the queue set is dropped (nothing to
-/// report).
+/// Queued steps redone on the UI thread ([`replay_steps`]): landed with
+/// a fresh render, or, when none applied, the "…ing" status the queue
+/// set for them is dropped (nothing to report).
 fn land_now(
     ed: &mut EditorSession,
     coord: Option<&crate::coordinator::CaptureCoordinator>,
