@@ -642,6 +642,18 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
                     }
                     Task::none()
                 }
+                Some(Err(crate::coordinator::HistoryRewriteError::Unreadable)) => {
+                    // Unknown on disk, so nothing was changed. Not final:
+                    // the next sync rewrites the whole record again.
+                    if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
+                        ed.history_scrubbed = true;
+                        ed.history_frame_written = crate::editor::HistoryFrame::Unknown;
+                        ed.set_warning(
+                            "Couldn’t read this capture’s History record, so it wasn’t changed. Readshot tries again with your next edit.",
+                        );
+                    }
+                    Task::none()
+                }
                 Some(Err(crate::coordinator::HistoryRewriteError::Failed(e))) => {
                     tracing::warn!(target: readshot_core::log::cat::HISTORY, "history rewrite failed: {e}");
                     if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {

@@ -65,7 +65,9 @@ pub struct CaptureCoordinator {
 
 /// Message for the background history writer thread.
 enum HistoryUpdate {
-    Write(CaptureRecord),
+    /// A plain sidecar update, and its place among the record's
+    /// outstanding writes ([`WriteTracker`]).
+    Write(CaptureRecord, Option<PendingWrite>),
     /// Replace a record's image and sidecar (the editor's History scrub
     /// and its restore). See [`HistoryRewrite`].
     Rewrite(Box<HistoryRewrite>),
@@ -85,6 +87,11 @@ pub enum HistoryRewriteError {
     /// good, History keeps the redacted record.
     #[error("the capture is redacted in History by another window")]
     RedactedElsewhere,
+    /// An unredacted rewrite of a record whose History sidecar couldn't
+    /// be read: its state is unknown, so it is treated as redacted and
+    /// not changed. Not final: a later write tries again.
+    #[error("couldn’t read this capture’s History record")]
+    Unreadable,
 }
 
 /// Outcome of a queued [`CaptureCoordinator::rewrite_history_async`].
@@ -114,6 +121,9 @@ struct HistoryRewrite {
     done: Option<iced::futures::channel::oneshot::Sender<HistoryRewriteResult>>,
     /// Failed attempts so far (drives the retry backoff).
     attempt: u32,
+    /// Outstanding until it lands, goes stale, is refused or first fails
+    /// (a retry is no longer waited for); see [`WriteTracker`].
+    pending: Option<PendingWrite>,
 }
 
 /// Coordinator-owned History scrub state, shared with the writer
@@ -132,6 +142,78 @@ struct HistoryRewrite {
 struct Scrubs {
     book: std::sync::Mutex<ScrubBook>,
     state: std::sync::Mutex<ScrubState>,
+    /// Outstanding History writes per record ([`WriteTracker`]).
+    writes: Arc<WriteTracker>,
+}
+
+/// The History writes still outstanding for each record, so a caller can
+/// wait until every write queued for a record is done (landed, stale,
+/// refused or failed) with no timeout, and learn which failed. Each
+/// queued write holds a [`PendingWrite`]; dropping it marks it done,
+/// whichever way the message goes (written, coalesced away, stale).
+#[derive(Default)]
+struct WriteTracker {
+    state: std::sync::Mutex<TrackedWrites>,
+    done: std::sync::Condvar,
+}
+
+#[derive(Default)]
+struct TrackedWrites {
+    outstanding: std::collections::HashMap<readshot_core::Uuid, usize>,
+    /// Why writes of a record failed or were refused since its last
+    /// successful one.
+    failures: std::collections::HashMap<readshot_core::Uuid, Vec<String>>,
+}
+
+/// One outstanding History write of `id`; done when dropped.
+struct PendingWrite {
+    id: readshot_core::Uuid,
+    tracker: Arc<WriteTracker>,
+}
+
+impl Drop for PendingWrite {
+    fn drop(&mut self) {
+        let mut st = lock(&self.tracker.state);
+        if let Some(n) = st.outstanding.get_mut(&self.id) {
+            *n -= 1;
+            if *n == 0 {
+                st.outstanding.remove(&self.id);
+            }
+        }
+        drop(st);
+        self.tracker.done.notify_all();
+    }
+}
+
+impl WriteTracker {
+    fn begin(self: &Arc<Self>, id: readshot_core::Uuid) -> PendingWrite {
+        *lock(&self.state).outstanding.entry(id).or_insert(0) += 1;
+        PendingWrite {
+            id,
+            tracker: Arc::clone(self),
+        }
+    }
+
+    fn failed(&self, id: readshot_core::Uuid, why: String) {
+        lock(&self.state).failures.entry(id).or_default().push(why);
+    }
+
+    fn succeeded(&self, id: readshot_core::Uuid) {
+        lock(&self.state).failures.remove(&id);
+    }
+
+    /// Block until no write of `id` is outstanding; the failures since
+    /// its last successful write (taken).
+    fn wait(&self, id: readshot_core::Uuid) -> Vec<String> {
+        let mut st = lock(&self.state);
+        while st.outstanding.contains_key(&id) {
+            st = self
+                .done
+                .wait(st)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        st.failures.remove(&id).unwrap_or_default()
+    }
 }
 
 #[derive(Default)]
@@ -254,7 +336,7 @@ impl Scrubs {
 impl HistoryUpdate {
     fn record_id(&self) -> Option<readshot_core::Uuid> {
         match self {
-            Self::Write(r) => Some(r.id),
+            Self::Write(r, _) => Some(r.id),
             Self::Rewrite(rw) => Some(rw.job.record.id),
             Self::Flush(_) => None,
         }
@@ -275,7 +357,7 @@ fn coalesce(batch: Vec<HistoryUpdate>) -> Vec<HistoryUpdate> {
     for msg in batch.into_iter().rev() {
         let keep = match (&msg, msg.record_id()) {
             (HistoryUpdate::Rewrite(_), Some(id)) => seen_rewrite.insert(id),
-            (HistoryUpdate::Write(_), Some(id)) => {
+            (HistoryUpdate::Write(..), Some(id)) => {
                 !seen_rewrite.contains(&id) && seen_write.insert(id)
             }
             _ => true,
@@ -310,9 +392,9 @@ enum Outcome {
     Missing,
     /// A newer request for the record exists; nothing was written.
     Stale,
-    /// A restore over a record redacted by someone else; nothing was
-    /// written, and it is never retried.
-    Refused,
+    /// A restore over a record that is (or may be) redacted; nothing was
+    /// written, and it is not retried.
+    Refused(HistoryRewriteError),
     Failed(String),
 }
 
@@ -341,13 +423,19 @@ fn apply_rewrite(
     }
     // A restore nobody here may make over a redacted record (its scrub
     // came from an earlier run, or the sidecar can't be read): dropped.
-    if !record.redacted && !job.may_unredact && !matches!(store.stored_redacted(record), Ok(false))
-    {
-        tracing::warn!(
-            target: readshot_core::log::cat::HISTORY,
-            "dropped a restore of record {id}: it is redacted on disk"
-        );
-        return Outcome::Refused;
+    if !record.redacted && !job.may_unredact {
+        let refused = match store.stored_redacted(record) {
+            Ok(false) => None,
+            Ok(true) => Some(HistoryRewriteError::RedactedElsewhere),
+            Err(_) => Some(HistoryRewriteError::Unreadable),
+        };
+        if let Some(why) = refused {
+            tracing::warn!(
+                target: readshot_core::log::cat::HISTORY,
+                "dropped a restore of record {id}: {why}"
+            );
+            return Outcome::Refused(why);
+        }
     }
     match store.commit_rewrite(record, staged) {
         Ok(true) => {
@@ -422,22 +510,29 @@ fn run_rewrite(
             Outcome::Failed(e)
         }
     };
+    let id = rewrite.job.record.id;
     match outcome {
         Outcome::Done => {
+            scrubs.writes.succeeded(id);
             if let Some(done) = rewrite.done.take() {
                 let _ = done.send(Ok(()));
             }
             None
         }
         Outcome::Missing | Outcome::Stale => None,
-        Outcome::Refused => {
+        Outcome::Refused(e) => {
+            scrubs.writes.failed(id, e.to_string());
             if let Some(done) = rewrite.done.take() {
-                let _ = done.send(Err(HistoryRewriteError::RedactedElsewhere));
+                let _ = done.send(Err(e));
             }
             None
         }
         Outcome::Failed(e) => {
             tracing::warn!(target: readshot_core::log::cat::HISTORY, "history rewrite failed: {e}");
+            if rewrite.pending.take().is_some() {
+                // Its first failure ends the wait; the retry goes on.
+                scrubs.writes.failed(id, e.clone());
+            }
             if let Some(done) = rewrite.done.take() {
                 let _ = done.send(Err(HistoryRewriteError::Failed(e)));
             }
@@ -454,13 +549,16 @@ fn run_update(
     msg: HistoryUpdate,
 ) -> Option<(std::time::Instant, Box<HistoryRewrite>)> {
     match msg {
-        HistoryUpdate::Write(record) => {
+        HistoryUpdate::Write(record, pending) => {
             if let Err(e) = store.update(&record) {
                 tracing::warn!(
                     target: readshot_core::log::cat::HISTORY,
                     "background history update failed: {e}"
                 );
+                scrubs.writes.failed(record.id, e.to_string());
             }
+            // Written (or failed): no longer outstanding.
+            drop(pending);
             None
         }
         HistoryUpdate::Rewrite(rewrite) => run_rewrite(store, scrubs, rewrite),
@@ -645,10 +743,13 @@ impl CaptureCoordinator {
     /// is wired.
     pub fn update_history_async(&self, record: CaptureRecord) {
         let record = match &self.history_update_tx {
-            Some(tx) => match tx.send(HistoryUpdate::Write(record)) {
+            Some(tx) => match tx.send(HistoryUpdate::Write(
+                record.clone(),
+                Some(self.scrubs.writes.begin(record.id)),
+            )) {
                 Ok(()) => return,
                 Err(std::sync::mpsc::SendError(msg)) => match msg {
-                    HistoryUpdate::Write(record) => record,
+                    HistoryUpdate::Write(record, _) => record,
                     HistoryUpdate::Rewrite(_) | HistoryUpdate::Flush(_) => return,
                 },
             },
@@ -861,6 +962,14 @@ impl CaptureCoordinator {
         lock(&self.scrubs.book).parked.len()
     }
 
+    /// Block until every History write queued for record `id` so far is
+    /// done (landed, stale, refused, or failed once), with no timeout.
+    /// Returns why any failed or was refused since its last successful
+    /// write. Call off the UI thread.
+    pub fn wait_for_record_writes(&self, id: readshot_core::Uuid) -> Vec<String> {
+        self.scrubs.writes.wait(id)
+    }
+
     /// Hand a rewrite to the writer thread (or write it inline when there
     /// is none) and return its receiver.
     fn queue_rewrite(
@@ -872,10 +981,12 @@ impl CaptureCoordinator {
         let Some(store) = &self.history else {
             return rx;
         };
+        let pending = Some(self.scrubs.writes.begin(job.record.id));
         let msg = HistoryUpdate::Rewrite(Box::new(HistoryRewrite {
             job,
             done: Some(tx),
             attempt: 0,
+            pending,
         }));
         let msg = match &self.history_update_tx {
             Some(sender) => match sender.send(msg) {
@@ -1276,6 +1387,7 @@ mod tests {
             },
             done: None,
             attempt: 0,
+            pending: None,
         }))
     }
 
@@ -1283,7 +1395,7 @@ mod tests {
         batch
             .iter()
             .map(|m| match m {
-                HistoryUpdate::Write(r) => format!("W:{}", r.ocr_text.as_deref().unwrap()),
+                HistoryUpdate::Write(r, _) => format!("W:{}", r.ocr_text.as_deref().unwrap()),
                 HistoryUpdate::Rewrite(rw) => {
                     format!("R:{}", rw.job.record.ocr_text.as_deref().unwrap())
                 }
@@ -1305,13 +1417,13 @@ mod tests {
         let b = readshot_core::Uuid::new_v4();
         let (ack, _rx) = std::sync::mpsc::sync_channel(1);
         let batch = vec![
-            HistoryUpdate::Write(tagged(a, "w1")),
+            HistoryUpdate::Write(tagged(a, "w1"), None),
             rewrite(a, "r1"),
-            HistoryUpdate::Write(tagged(b, "b1")),
-            HistoryUpdate::Write(tagged(a, "w2")),
-            HistoryUpdate::Write(tagged(a, "w3")),
+            HistoryUpdate::Write(tagged(b, "b1"), None),
+            HistoryUpdate::Write(tagged(a, "w2"), None),
+            HistoryUpdate::Write(tagged(a, "w3"), None),
             HistoryUpdate::Flush(ack),
-            HistoryUpdate::Write(tagged(b, "b2")),
+            HistoryUpdate::Write(tagged(b, "b2"), None),
         ];
         // A rewrite supersedes every earlier write of its record; a
         // plain write only earlier plain writes after the last rewrite
@@ -1813,7 +1925,7 @@ mod tests {
             (std::time::Instant::now(), rw)
         };
         let mut retries = vec![retry(id), retry(other)];
-        drop_superseded_retries(&mut retries, &[HistoryUpdate::Write(tagged(id, "w"))]);
+        drop_superseded_retries(&mut retries, &[HistoryUpdate::Write(tagged(id, "w"), None)]);
         assert_eq!(retries.len(), 2, "a plain write carries no image");
         drop_superseded_retries(&mut retries, &[rewrite(id, "newer")]);
         assert_eq!(retries.len(), 1);

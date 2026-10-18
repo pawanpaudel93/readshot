@@ -824,21 +824,32 @@ impl FsHistoryStore {
     /// resolves outside the history root — a symlinked `YYYY/MM`, or a
     /// root that can't be resolved. `None` when they can be removed (or
     /// a path is malformed: a tampered entry, dropped with a log).
-    fn removal_refused(&self, entry: &HistoryIndexEntry) -> Option<String> {
+    fn removal_refused(&self, entry: &HistoryIndexEntry) -> Option<HistoryError> {
         let thumb = self
             .root
             .join(Self::thumbnail_path(&Self::record_for_paths(entry)));
-        [&entry.png_path, &entry.json_path]
+        let path = [&entry.png_path, &entry.json_path]
             .into_iter()
             .filter_map(|rel| safe_relative_join(&self.root, rel))
             .chain(std::iter::once(thumb))
-            .find(|p| !self.resolves_inside_root(p))
-            .map(|p| {
-                format!(
-                    "the folder of {} resolves outside the history root (a symlink, or a root that can't be resolved)",
-                    p.display()
-                )
-            })
+            .find(|p| !self.resolves_inside_root(p))?;
+        // Say which it is: a folder that can't be read is not a link.
+        if let Err(e) = fs::canonicalize(&self.root) {
+            return Some(HistoryError::Io(format!(
+                "the history folder {} can't be resolved: {e}",
+                self.root.display()
+            )));
+        }
+        if let Some(Err(e)) = path.parent().map(fs::canonicalize) {
+            return Some(HistoryError::Io(format!(
+                "the folder of {} can't be resolved: {e}",
+                path.display()
+            )));
+        }
+        Some(HistoryError::OutsideRoot(format!(
+            "the folder of {} resolves outside the history root (a symlink)",
+            path.display()
+        )))
     }
 
     /// The fields of a record its file paths are derived from.
@@ -1405,7 +1416,7 @@ impl HistoryStore for FsHistoryStore {
                 target: crate::log::cat::HISTORY,
                 "not deleting history record {id}: {why}"
             );
-            return Err(HistoryError::OutsideRoot(why));
+            return Err(why);
         }
         let entry = index.records.remove(pos);
         self.remove_entry_files(&entry);
@@ -1523,6 +1534,30 @@ pub fn record_matches_query(record: &CaptureRecord, q: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A record whose folder can't be read keeps its entry on delete, and
+    /// the error says the folder can't be resolved, not that it is a link
+    /// outside History.
+    #[cfg(unix)]
+    #[test]
+    fn a_delete_in_an_unreadable_folder_is_not_called_a_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("h");
+        let store = FsHistoryStore::new(root.clone());
+        let png = crate::encode_png(&image::RgbaImage::new(4, 4)).unwrap();
+        let record = CaptureRecord::new(Utc::now(), 4, 4, "d");
+        store.save(&record, &png).unwrap();
+        let year = root.join(FsHistoryStore::png_path(&record).iter().next().unwrap());
+        std::fs::set_permissions(&year, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = store.delete(record.id);
+        std::fs::set_permissions(&year, std::fs::Permissions::from_mode(0o755)).unwrap();
+        match result {
+            Err(HistoryError::Io(msg)) => assert!(msg.contains("can't be resolved"), "{msg}"),
+            other => panic!("expected an io error, got {other:?}"),
+        }
+        assert_eq!(store.list().unwrap().len(), 1, "the record is kept");
+    }
 
     /// A save that fails at the index write leaves none of its files
     /// behind: the user is told the capture isn't in History, and an

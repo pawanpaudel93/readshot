@@ -1387,3 +1387,33 @@ fn a_refused_restore_tells_the_editor_and_unbinds_it() {
     assert!(status.contains("redacted in another window"), "{status}");
     assert!(status.contains(super::super::keys::SAVE_KEY), "{status}");
 }
+
+/// A restore refused because the record's sidecar couldn't be read says
+/// exactly that, keeps the editor bound and rewrites again next time.
+#[test]
+fn an_unreadable_record_refusal_is_reported_as_such_and_not_final() {
+    let (_dir, _store, mut app) = scrub_app(true);
+    let session = app.editor.as_ref().unwrap().session_id;
+    let _ = update(
+        &mut app,
+        Message::EditorHistoryWritten {
+            session,
+            result: Some(Err(crate::coordinator::HistoryRewriteError::Unreadable)),
+        },
+    );
+    let ed = app.editor.as_ref().unwrap();
+    assert!(
+        ed.source_record.is_some(),
+        "still bound: a later write retries"
+    );
+    assert!(
+        ed.history_scrubbed,
+        "the next sync rewrites the whole record"
+    );
+    let status = ed.status.clone().unwrap_or_default();
+    assert!(
+        status.starts_with("Couldn’t read this capture’s History record"),
+        "{status}"
+    );
+    assert!(!status.contains("another window"), "{status}");
+}
