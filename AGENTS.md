@@ -121,6 +121,9 @@ packages beyond a stable Rust toolchain.
 | Settings window                     | `readshot-app::runtime::{settings_ops,view}` (`settings_view`), `readshot-ui::settings` |
 | Scrolling capture                   | `readshot-app::runtime::scroll`, `readshot-core::scroll_stitch` |
 | Look and feel (colors, controls)    | `readshot-app::runtime::{tokens,ui_kit}`, `readshot-app::icons` |
+| In-app glyph (toolbar, buttons)     | `readshot-app::icons` (shared actions go through `icons::action`; the tests rasterise every glyph, `READSHOT_ICON_SHEET_DIR=dir` dumps them as PNGs) |
+| App / brand icon                    | `packaging/macos/icon.svg` (+ `icon-small.svg` for ≤32 px), then run `packaging/render-icons.sh` to regenerate every committed raster (in-app, Linux hicolor, Windows `.ico`/`.res`, website) |
+| macOS notifications                 | `readshot-app::runtime::platform` (`show_macos_notification`) → `readshot-app/src/macos_notify.swift` (built by `build.rs`) |
 | New OCR engine option               | `readshot-ocr` + `default_engine` switch       |
 | New capture backend                 | `readshot-capture` (mind the `Capturer` trait) |
 | New CLI subcommand                  | `readshot-app::cli`                            |
