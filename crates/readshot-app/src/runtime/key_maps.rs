@@ -40,7 +40,9 @@ pub(crate) fn editor_key_message(
     let cmd = modifiers.command();
     // ⌃Tab / F6 walk the keyboard focus zones, even from a text field.
     if let Some(forward) = zone_cycle_key(&key, modifiers) {
-        return Some(Message::Editor(EditorMsg::FocusZoneCycle(forward)));
+        return Some(Message::Editor(EditorMsg::Focus(FocusMsg::ZoneCycle(
+            forward,
+        ))));
     }
     // ⌥⌘P / ⌥⌘I / ⌥⌘T / ⌥⌘B on macOS; Ctrl+Shift+P / R / T / B elsewhere,
     // where Ctrl+Alt is AltGr on many layouts and a desktop chord
@@ -57,20 +59,20 @@ pub(crate) fn editor_key_message(
     // (`status_ignored` false): a field's own ⇧⌘V pastes, and must not
     // also flip the image.
     if status_ignored && editor_alt_chord(&key, modifiers, "t") {
-        return Some(Message::Editor(EditorMsg::PanelTabKey(
+        return Some(Message::Editor(EditorMsg::Focus(FocusMsg::PanelTabKey(
             crate::editor::PanelTab::Text,
-        )));
+        ))));
     }
     if status_ignored && editor_alt_chord(&key, modifiers, "b") {
-        return Some(Message::Editor(EditorMsg::PanelTabKey(
+        return Some(Message::Editor(EditorMsg::Focus(FocusMsg::PanelTabKey(
             crate::editor::PanelTab::Beautify,
-        )));
+        ))));
     }
     match (&key, cmd, modifiers.shift()) {
         (Key::Character(c), true, true)
             if status_ignored && !modifiers.alt() && c.eq_ignore_ascii_case("i") =>
         {
-            return Some(Message::Editor(EditorMsg::ImageMenuKey));
+            return Some(Message::Editor(EditorMsg::Focus(FocusMsg::ImageMenuKey)));
         }
         (Key::Character(c), true, true)
             if status_ignored && !modifiers.alt() && c.eq_ignore_ascii_case("h") =>

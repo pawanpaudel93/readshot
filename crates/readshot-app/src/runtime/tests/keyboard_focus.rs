@@ -152,7 +152,7 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
         (
             ch("i"),
             mods(true, true, false, false),
-            "Editor(ImageMenuKey)",
+            "Editor(Focus(ImageMenuKey))",
         ),
         (
             ch("h"),
@@ -164,11 +164,15 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
             mods(true, true, false, false),
             "Editor(Image(Flip(Vertical)))",
         ),
-        (ch("t"), editor_alt_modifiers(), "Editor(PanelTabKey(Text))"),
+        (
+            ch("t"),
+            editor_alt_modifiers(),
+            "Editor(Focus(PanelTabKey(Text)))",
+        ),
         (
             ch("b"),
             editor_alt_modifiers(),
-            "Editor(PanelTabKey(Beautify))",
+            "Editor(Focus(PanelTabKey(Beautify)))",
         ),
         (named(Named::Tab), plain(), "Editor(CycleSelection(1))"),
         (
@@ -176,11 +180,11 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
             mods(false, true, false, false),
             "Editor(CycleSelection(-1))",
         ),
-        (named(Named::F6), plain(), "Editor(FocusZoneCycle(true))"),
+        (named(Named::F6), plain(), "Editor(Focus(ZoneCycle(true)))"),
         (
             named(Named::F6),
             mods(false, true, false, false),
-            "Editor(FocusZoneCycle(false))",
+            "Editor(Focus(ZoneCycle(false)))",
         ),
         (
             named(Named::ArrowRight),
@@ -221,7 +225,7 @@ fn control_tab_walks_the_focus_zones() {
     // It works from a text field too (the subscription sees it either way).
     assert!(matches!(
         editor_key_message(named(Named::Tab), ctrl, false),
-        Some(Message::Editor(EditorMsg::FocusZoneCycle(true)))
+        Some(Message::Editor(EditorMsg::Focus(FocusMsg::ZoneCycle(true))))
     ));
 }
 

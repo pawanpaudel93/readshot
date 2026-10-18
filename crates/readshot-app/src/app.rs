@@ -268,6 +268,8 @@ pub enum Message {
 /// `runtime::editor_ops::handle_editor_message`.
 #[derive(Clone, Debug)]
 pub enum EditorMsg {
+    /// Keyboard focus-zone chords (`runtime::key_focus`).
+    Focus(FocusMsg),
     /// Add Capture / Add Image and layout messages (`runtime::combine`).
     Combine(CombineMsg),
     /// Image menu messages: rotate, flip and Resize (`runtime::image_menu`).
@@ -410,14 +412,6 @@ pub enum EditorMsg {
     NudgeSelected(f32, f32),
     /// Edit the selected text annotation, if one is selected.
     EditSelectedText,
-    /// ⇧⌘I: open (or close) the Image menu with its first row focused.
-    ImageMenuKey,
-    /// ⌥⌘T / ⌥⌘B (Ctrl+Shift+T / B off macOS): show the side panel on
-    /// that tab, its tabs focused.
-    PanelTabKey(crate::editor::PanelTab),
-    /// ⌃Tab / F6 (`true`) or ⌃⇧Tab / ⇧F6: move the keyboard focus to the
-    /// next (previous) zone: canvas → options bar → side panel.
-    FocusZoneCycle(bool),
     /// Tab / ⇧Tab on the canvas: select the next (`1`) or previous (`-1`)
     /// annotation, so arrows, ⌫ and ↵ reach it without a click.
     CycleSelection(i32),
@@ -469,6 +463,21 @@ pub enum EditorMsg {
     /// Turn the eyedropper on or off (I, or the button in the color
     /// popover). While on, a click on the image picks its color.
     EyedropperToggled,
+}
+
+/// Keyboard chords that move the editor's focus zone: into the Image
+/// menu, onto a side-panel tab, or to the next zone. Handled by
+/// `runtime::key_focus::handle_focus_message`.
+#[derive(Clone, Debug)]
+pub enum FocusMsg {
+    /// ⇧⌘I: open (or close) the Image menu with its first row focused.
+    ImageMenuKey,
+    /// ⌥⌘T / ⌥⌘B (Ctrl+Shift+T / B off macOS): show the side panel on
+    /// that tab, its tabs focused.
+    PanelTabKey(crate::editor::PanelTab),
+    /// ⌃Tab / F6 (`true`) or ⌃⇧Tab / ⇧F6: move the keyboard focus to the
+    /// next (previous) zone: canvas → options bar → side panel.
+    ZoneCycle(bool),
 }
 
 /// Image › Add Capture / Add Image from File, and the combined image's

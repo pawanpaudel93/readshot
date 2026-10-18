@@ -1092,9 +1092,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: EditorMsg) -> Task
             seq,
             output,
         } => super::compose_jobs::handle_composed(state, session, seq, output),
-        msg @ (EditorMsg::ImageMenuKey
-        | EditorMsg::PanelTabKey(..)
-        | EditorMsg::FocusZoneCycle(..)) => super::key_focus::handle_focus_message(state, msg),
+        EditorMsg::Focus(msg) => super::key_focus::handle_focus_message(state, msg),
         EditorMsg::CycleSelection(step) => keyboard::on_cycle_selection(state, step),
         EditorMsg::FieldKeyResolved {
             session,

@@ -937,11 +937,11 @@ pub(crate) fn zone_hint(zone: FocusZone) -> String {
     )
 }
 
-/// The editor's focus messages (`EditorImageMenuKey`, `EditorPanelTabKey`,
-/// `EditorFocusZoneCycle`).
-pub(crate) fn handle_focus_message(state: &mut App, message: EditorMsg) -> Task<Message> {
+/// Every [`FocusMsg`]: `handle_editor_message` hands each
+/// `EditorMsg::Focus` here.
+pub(crate) fn handle_focus_message(state: &mut App, message: FocusMsg) -> Task<Message> {
     match message {
-        EditorMsg::ImageMenuKey => {
+        FocusMsg::ImageMenuKey => {
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
             };
@@ -963,7 +963,7 @@ pub(crate) fn handle_focus_message(state: &mut App, message: EditorMsg) -> Task<
             );
             unfocus_text_fields()
         }
-        EditorMsg::PanelTabKey(tab) => {
+        FocusMsg::PanelTabKey(tab) => {
             let Some(ed) = state.editor.as_ref() else {
                 return Task::none();
             };
@@ -992,7 +992,7 @@ pub(crate) fn handle_focus_message(state: &mut App, message: EditorMsg) -> Task<
             tasks.push(unfocus_text_fields());
             Task::batch(tasks)
         }
-        EditorMsg::FocusZoneCycle(forward) => {
+        FocusMsg::ZoneCycle(forward) => {
             let Some(ed) = state.editor.as_ref() else {
                 return Task::none();
             };
@@ -1016,6 +1016,5 @@ pub(crate) fn handle_focus_message(state: &mut App, message: EditorMsg) -> Task<
             }
             caret_task(next)
         }
-        other => unreachable!("non-focus message routed to the focus handler: {other:?}"),
     }
 }

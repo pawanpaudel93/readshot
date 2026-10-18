@@ -356,7 +356,7 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 }
 
 use crate::app::{
-    App, AppMsg, BeautifyMsg, CaptureMsg, CombineMsg, EditorMsg, GlobalHotkeyAction,
+    App, AppMsg, BeautifyMsg, CaptureMsg, CombineMsg, EditorMsg, FocusMsg, GlobalHotkeyAction,
     HistoryKeyboardAction, HistoryMsg, ImageMsg, Message, ScrollMsg, SettingsMsg, TextPanelMsg,
     TickMsg, WelcomeMsg, WindowKind, WindowMsg,
 };
