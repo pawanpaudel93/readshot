@@ -853,8 +853,8 @@ fn may_wait(message: &EditorMsg) -> (bool, bool) {
         | EditorMsg::PinHovered(..)
         | EditorMsg::PinKeyPressed { .. } => (true, true),
         // The gap slider's own ticks and release drive its compose.
-        EditorMsg::LayoutGapPreview(..)
-        | EditorMsg::LayoutGapFlush { .. }
+        EditorMsg::Combine(CombineMsg::GapPreview(..))
+        | EditorMsg::Combine(CombineMsg::GapFlush { .. })
         | EditorMsg::SnapshotSliderCommit => (false, true),
         _ => (false, false),
     }

@@ -480,9 +480,11 @@ pub(crate) fn release_gap_slider(
     Task::none()
 }
 
-pub(crate) fn handle_combine_message(state: &mut App, message: EditorMsg) -> Task<Message> {
+/// Every [`CombineMsg`]: `handle_editor_message` hands each
+/// `EditorMsg::Combine` here.
+pub(crate) fn handle_combine_message(state: &mut App, message: CombineMsg) -> Task<Message> {
     match message {
-        EditorMsg::CombineCaptureRequested(join) => {
+        CombineMsg::CaptureRequested(join) => {
             if state.welcome.should_show()
                 || state.capture_in_flight
                 || state.overlay_opening
@@ -515,7 +517,7 @@ pub(crate) fn handle_combine_message(state: &mut App, message: EditorMsg) -> Tas
                 CaptureMsg::OpenOverlayRequested,
             )))
         }
-        EditorMsg::AddImageFromFile => {
+        CombineMsg::AddImageFromFile => {
             let coord = state.coordinator.clone();
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
@@ -529,10 +531,13 @@ pub(crate) fn handle_combine_message(state: &mut App, message: EditorMsg) -> Tas
             let session = ed.session_id;
             let budget = PartBudget::below(ed.model.geometry());
             Task::perform(pick_and_decode_image(budget), move |result| {
-                Message::Editor(EditorMsg::PartLoaded { session, result })
+                Message::Editor(EditorMsg::Combine(CombineMsg::PartLoaded {
+                    session,
+                    result,
+                }))
             })
         }
-        EditorMsg::PartLoaded { session, result } => {
+        CombineMsg::PartLoaded { session, result } => {
             let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) else {
                 return Task::none();
             };
@@ -549,7 +554,7 @@ pub(crate) fn handle_combine_message(state: &mut App, message: EditorMsg) -> Tas
                 }
             }
         }
-        EditorMsg::LayoutGapPreview(gap) => {
+        CombineMsg::GapPreview(gap) => {
             let coord = state.coordinator.clone();
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
@@ -585,7 +590,7 @@ pub(crate) fn handle_combine_message(state: &mut App, message: EditorMsg) -> Tas
                         // Lazily: the timer is made when the task runs.
                         let wait = async move { tokio::time::sleep(wait).await };
                         return Task::perform(wait, move |_| {
-                            Message::Editor(EditorMsg::LayoutGapFlush { session })
+                            Message::Editor(EditorMsg::Combine(CombineMsg::GapFlush { session }))
                         });
                     }
                 }
@@ -596,7 +601,7 @@ pub(crate) fn handle_combine_message(state: &mut App, message: EditorMsg) -> Tas
             }
             Task::none()
         }
-        EditorMsg::LayoutGapFlush { session } => {
+        CombineMsg::GapFlush { session } => {
             match state
                 .editor
                 .as_mut()
@@ -606,7 +611,7 @@ pub(crate) fn handle_combine_message(state: &mut App, message: EditorMsg) -> Tas
                 None => Task::none(),
             }
         }
-        EditorMsg::LayoutAlign(align) => {
+        CombineMsg::Align(align) => {
             let coord = state.coordinator.clone();
             let Some(ed) = state.editor.as_mut() else {
                 return Task::none();
@@ -636,6 +641,5 @@ pub(crate) fn handle_combine_message(state: &mut App, message: EditorMsg) -> Tas
             super::compose_jobs::apply_step_now(ed, &coord, kind, None);
             Task::none()
         }
-        other => unreachable!("non-combine message routed to the combine handler: {other:?}"),
     }
 }

@@ -928,7 +928,10 @@ fn gap_drag_composing(app: &mut App) -> (usize, u64) {
     app.editor = Some(async_compose(two_part_editor()));
     let ed = app.editor.as_ref().unwrap();
     let (depth, session) = (ed.model.undo_depth(), ed.session_id);
-    let _ = update(app, Message::Editor(EditorMsg::LayoutGapPreview(10)));
+    let _ = update(
+        app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(10))),
+    );
     assert!(matches!(
         app.editor
             .as_ref()
@@ -987,9 +990,9 @@ fn start_add_capture(app: &mut App) {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 32)));
     let _ = update(
         app,
-        Message::Editor(EditorMsg::CombineCaptureRequested(
+        Message::Editor(EditorMsg::Combine(CombineMsg::CaptureRequested(
             readshot_core::document::Join::Below,
-        )),
+        ))),
     );
     assert!(app.combine_capture.is_some(), "Add Capture started");
 }

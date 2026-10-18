@@ -1086,12 +1086,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: EditorMsg) -> Task
         EditorMsg::TextPanel(msg) => super::text_panel::handle_text_panel_message(state, msg),
         EditorMsg::Beautify(msg) => super::beautify_panel::handle_beautify_message(state, msg),
         EditorMsg::Image(msg) => super::image_menu::handle_image_message(state, msg),
-        msg @ (EditorMsg::CombineCaptureRequested(..)
-        | EditorMsg::AddImageFromFile
-        | EditorMsg::PartLoaded { .. }
-        | EditorMsg::LayoutGapPreview(..)
-        | EditorMsg::LayoutGapFlush { .. }
-        | EditorMsg::LayoutAlign(..)) => super::combine::handle_combine_message(state, msg),
+        EditorMsg::Combine(msg) => super::combine::handle_combine_message(state, msg),
         EditorMsg::Composed {
             session,
             seq,

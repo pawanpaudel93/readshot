@@ -185,13 +185,17 @@ fn sync_and_async_steps_land_in_the_same_editor_state() {
         (
             "add a capture (bakes the turned document)",
             vec![
-                Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
+                Message::Editor(EditorMsg::Combine(CombineMsg::CaptureRequested(
+                    Join::Below,
+                ))),
                 Message::Capture(CaptureMsg::RegionCaptured(Ok(ramp(24, 12)))),
             ],
         ),
         (
             "align",
-            vec![Message::Editor(EditorMsg::LayoutAlign(Align::Center))],
+            vec![Message::Editor(EditorMsg::Combine(CombineMsg::Align(
+                Align::Center,
+            )))],
         ),
         ("undo", vec![undo_msg()]),
         ("undo again", vec![undo_msg()]),
@@ -239,7 +243,9 @@ fn a_sync_added_part_is_recognized_through_the_owed_flag_as_a_queued_one_is() {
         &mut async_,
         "add a capture",
         &[
-            Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
+            Message::Editor(EditorMsg::Combine(CombineMsg::CaptureRequested(
+                Join::Below,
+            ))),
             Message::Capture(CaptureMsg::RegionCaptured(Ok(ramp(24, 12)))),
         ],
     );
@@ -262,7 +268,7 @@ fn a_kept_gap_lands_as_a_step_whether_or_not_it_composed_off_thread() {
         &mut async_,
         "gap drag released",
         &[
-            Message::Editor(EditorMsg::LayoutGapPreview(10)),
+            Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(10))),
             Message::Editor(EditorMsg::SnapshotSliderCommit),
         ],
     );
@@ -338,7 +344,9 @@ fn steps_that_change_nothing_leave_work_in_flight_on_the_status_line() {
         &mut sync,
         &mut async_,
         "align to the current alignment",
-        &[Message::Editor(EditorMsg::LayoutAlign(Align::Start))],
+        &[Message::Editor(EditorMsg::Combine(CombineMsg::Align(
+            Align::Start,
+        )))],
     );
     let ed = sync.editor.as_ref().unwrap();
     assert_eq!(ed.status_text(), Some(IN_FLIGHT));
@@ -355,7 +363,9 @@ fn a_refused_step_reports_the_same_refusal_on_both_paths() {
         &mut async_,
         "add a capture that is too wide",
         &[
-            Message::Editor(EditorMsg::CombineCaptureRequested(Join::Below)),
+            Message::Editor(EditorMsg::Combine(CombineMsg::CaptureRequested(
+                Join::Below,
+            ))),
             Message::Capture(CaptureMsg::RegionCaptured(Ok(ramp(wide, 1)))),
         ],
     );

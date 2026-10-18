@@ -374,8 +374,8 @@ pub(crate) fn image_popover<'a>(
             AppIcon::AddBelow,
             "Add Capture Below…",
             None,
-            on(Message::Editor(EditorMsg::CombineCaptureRequested(
-                Join::Below
+            on(Message::Editor(EditorMsg::Combine(
+                CombineMsg::CaptureRequested(Join::Below)
             ))),
             lit(F::MenuAddBelow),
             p
@@ -384,8 +384,8 @@ pub(crate) fn image_popover<'a>(
             AppIcon::AddBeside,
             "Add Capture Beside…",
             None,
-            on(Message::Editor(EditorMsg::CombineCaptureRequested(
-                Join::Beside
+            on(Message::Editor(EditorMsg::Combine(
+                CombineMsg::CaptureRequested(Join::Beside)
             ))),
             lit(F::MenuAddBeside),
             p
@@ -394,7 +394,9 @@ pub(crate) fn image_popover<'a>(
             AppIcon::Image,
             "Add Image from File…",
             None,
-            on(Message::Editor(EditorMsg::AddImageFromFile)),
+            on(Message::Editor(EditorMsg::Combine(
+                CombineMsg::AddImageFromFile
+            ))),
             lit(F::MenuAddImage),
             p
         ),
@@ -430,7 +432,7 @@ fn layout_section<'a>(ed: &'a EditorSession) -> Element<'a, Message> {
                     .style(text_t2)
                     .width(Length::Fixed(52.0)),
                 iced::widget::slider(0.0..=MAX_GAP as f32, gap as f32, |v| {
-                    Message::Editor(EditorMsg::LayoutGapPreview(v.round() as u32))
+                    Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(v.round() as u32)))
                 })
                 .step(1.0_f32)
                 .on_release(Message::Editor(EditorMsg::SnapshotSliderCommit))
@@ -450,7 +452,7 @@ fn layout_section<'a>(ed: &'a EditorSession) -> Element<'a, Message> {
                     .style(text_t2)
                     .width(Length::Fixed(52.0)),
                 text_segment(&Align::ALL.map(|a| (a.label(), a)), g.align, |a| {
-                    (!ed.busy).then_some(Message::Editor(EditorMsg::LayoutAlign(a)))
+                    (!ed.busy).then_some(Message::Editor(EditorMsg::Combine(CombineMsg::Align(a))))
                 }),
             ]
             .spacing(SP2)

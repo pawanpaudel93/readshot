@@ -222,10 +222,10 @@ fn a_press_that_lands_a_pending_combine_is_still_dropped() {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::PartLoaded {
+        Message::Editor(EditorMsg::Combine(CombineMsg::PartLoaded {
             session,
             result: Ok(Some(Arc::new(ramp(20, 10)))),
-        }),
+        })),
     );
     assert_eq!(app.editor.as_ref().unwrap().model.part_ids().len(), 1);
     for msg in [
@@ -517,7 +517,10 @@ fn a_busy_action_after_apply_keeps_the_resize() {
     apply_resize_width(&mut app, "80");
     let late = finish_compose(&app);
     // Add Image from File sets `busy` while its picker is open.
-    let _ = update(&mut app, Message::Editor(EditorMsg::AddImageFromFile));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::AddImageFromFile)),
+    );
     let _ = update(&mut app, late);
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.image_size(), (80, 40));
@@ -673,7 +676,10 @@ fn a_released_gap_drag_is_synced_to_history_when_the_window_closes() {
         write_editor_history(ed, &coord);
     }
     let before = compose_stored_record(&store, &app).geometry_id;
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(10)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(10))),
+    );
     let _ = update(&mut app, Message::Editor(EditorMsg::SnapshotSliderCommit));
     assert!(app.editor.as_ref().unwrap().gap_commit_on_land);
     let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
@@ -707,7 +713,10 @@ fn a_released_gap_drag_is_synced_to_history_before_a_pin() {
         ed.refresh_image();
         write_editor_history(ed, &coord);
     }
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(10)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(10))),
+    );
     let _ = update(&mut app, Message::Editor(EditorMsg::SnapshotSliderCommit));
     let _ = update(&mut app, Message::Editor(EditorMsg::PinRequested));
     assert!(app.editor.is_none());
@@ -730,7 +739,10 @@ fn a_select_drag_after_a_gap_release_waits_for_a_press_on_the_settled_frame() {
     ed.model.clear_selection();
     app.editor = Some(ed);
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(10)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(10))),
+    );
     let late = finish_compose(&app);
     let _ = update(&mut app, Message::Editor(EditorMsg::SnapshotSliderCommit));
     // The first press lands the gap. It was aimed at the frame shown
@@ -778,7 +790,10 @@ fn a_same_batch_drag_over_another_part_moves_with_the_press_map() {
     });
     ed.model.clear_selection();
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(10)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(10))),
+    );
     let _ = update(&mut app, Message::Editor(EditorMsg::SnapshotSliderCommit));
     select_drag(&mut app, (4.0, 14.0), (4.0, 4.0));
     let ed = app.editor.as_ref().unwrap();
@@ -839,10 +854,10 @@ fn a_press_after_a_same_batch_frame_change_is_mapped_or_dropped() {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::PartLoaded {
+        Message::Editor(EditorMsg::Combine(CombineMsg::PartLoaded {
             session,
             result: Ok(Some(Arc::new(solid(20, 10)))),
-        }),
+        })),
     );
     assert_eq!(app.editor.as_ref().unwrap().model.part_ids().len(), 2);
     press(&mut app);
@@ -912,7 +927,10 @@ fn a_gap_tick_after_apply_settles_the_resize_first() {
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
     apply_resize_width(&mut app, "80");
     let late = finish_compose(&app);
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(10)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(10))),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.image_size(), (80, 40), "resized before the drag");
     assert_eq!(ed.model.undo_depth(), depth + 1);
@@ -937,7 +955,7 @@ fn a_large_alignment_lands_as_one_undo_step() {
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::LayoutAlign(Align::End)),
+        Message::Editor(EditorMsg::Combine(CombineMsg::Align(Align::End))),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.geometry().align, Align::Start);
@@ -957,10 +975,13 @@ fn large_gap_previews_coalesce_to_the_newest_value_and_commit_once() {
     // Ticks while it composes: throttled, then queued (one compose at
     // a time); the newest wins.
     for g in [14, 18, 22] {
-        let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(g)));
         let _ = update(
             &mut app,
-            Message::Editor(EditorMsg::LayoutGapFlush { session }),
+            Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(g))),
+        );
+        let _ = update(
+            &mut app,
+            Message::Editor(EditorMsg::Combine(CombineMsg::GapFlush { session })),
         );
     }
     let ed = app.editor.as_ref().unwrap();
@@ -1089,10 +1110,13 @@ fn an_output_mid_compose_keeps_the_newest_gap_now() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let (depth, session) = gap_drag_composing(&mut app);
     let late = finish_compose(&app);
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(16)));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::LayoutGapFlush { session }),
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(16))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapFlush { session })),
     );
     let coord = app.coordinator.clone();
     let ed = app.editor.as_mut().unwrap();
@@ -1110,10 +1134,16 @@ fn an_output_mid_compose_keeps_the_newest_gap_now() {
 fn gap_ticks_inside_the_throttle_are_coalesced_not_recomposed() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(two_part_editor());
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(4)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(4))),
+    );
     assert_eq!(app.editor.as_ref().unwrap().image_size(), (40, 24));
     // Within the throttle interval: kept, not composed.
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(8)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(8))),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.image_size(), (40, 24));
     assert_eq!(ed.layout_gap_pending, Some(8));
@@ -1121,7 +1151,7 @@ fn gap_ticks_inside_the_throttle_are_coalesced_not_recomposed() {
     let session = ed.session_id;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::LayoutGapFlush { session }),
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapFlush { session })),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.image_size(), (40, 28));
@@ -1133,13 +1163,19 @@ fn undo_mid_gap_drag_cancels_only_the_drag_and_held_ticks_are_ignored() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(two_part_editor());
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(4)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(4))),
+    );
     // The mouse is down: this is a held slider drag.
     let _ = update(
         &mut app,
         Message::Window(WindowMsg::EditorPointerButton(true, None)),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(9)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(9))),
+    );
     let _ = update(
         &mut app,
         Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
@@ -1154,9 +1190,12 @@ fn undo_mid_gap_drag_cancels_only_the_drag_and_held_ticks_are_ignored() {
     let session = ed.session_id;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::LayoutGapFlush { session }),
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapFlush { session })),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(12)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(12))),
+    );
     assert_eq!(app.editor.as_ref().unwrap().image_size(), (40, 20));
     let _ = update(&mut app, Message::Editor(EditorMsg::SnapshotSliderCommit));
     let ed = app.editor.as_ref().unwrap();
@@ -1169,8 +1208,14 @@ fn copy_keeps_a_coalesced_gap_value_as_one_undo_step() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(two_part_editor());
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(4)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(12)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(4))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(12))),
+    );
     let _ = update(&mut app, Message::Editor(EditorMsg::CopyImageRequested));
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.image_size(), (40, 32), "the slider’s value is output");
@@ -1536,10 +1581,10 @@ fn a_large_added_part_lands_as_one_undo_step_with_its_bake() {
     let before = composes(&app);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::PartLoaded {
+        Message::Editor(EditorMsg::Combine(CombineMsg::PartLoaded {
             session,
             result: Ok(Some(Arc::new(ramp(20, 10)))),
-        }),
+        })),
     );
     assert_eq!(composes(&app), before, "the bake reused the cached base");
     assert!(matches!(
@@ -1589,10 +1634,10 @@ fn an_edit_before_a_large_added_part_lands_applies_it_first() {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::PartLoaded {
+        Message::Editor(EditorMsg::Combine(CombineMsg::PartLoaded {
             session,
             result: Ok(Some(Arc::new(ramp(20, 10)))),
-        }),
+        })),
     );
     let late = finish_compose(&app);
     let _ = update(&mut app, Message::Editor(EditorMsg::DeleteSelected));
@@ -1852,10 +1897,13 @@ fn undo_during_a_held_large_gap_drag_cancels_it_without_composing_its_value() {
     let first = finish_compose(&app);
     let _ = update(&mut app, first);
     // A newer value waits on the throttle; the slider is still held.
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(30)));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::LayoutGapFlush { session }),
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(30))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapFlush { session })),
     );
     let before = composes(&app);
     let _ = update(&mut app, undo_msg());
@@ -1881,7 +1929,10 @@ fn a_new_gap_drag_after_a_release_keeps_the_released_value_with_its_compose() {
         .run(|| super::super::compose_jobs::compose_with(job.next.clone(), job.base.clone()));
     let before = composes(&app);
     // The next drag starts before the released one landed.
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(4)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(4))),
+    );
     assert_eq!(composes(&app), before, "the running compose was reused");
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
@@ -2172,10 +2223,13 @@ fn esc_during_a_held_large_gap_drag_never_composes_its_value() {
     app.editor.as_mut().unwrap().window_id = Some(window);
     let first = finish_compose(&app);
     let _ = update(&mut app, first);
-    let _ = update(&mut app, Message::Editor(EditorMsg::LayoutGapPreview(30)));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::LayoutGapFlush { session }),
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(30))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapFlush { session })),
     );
     let before = composes(&app);
     let mut esc = key_press(window, Key::Named(Named::Escape), false);
@@ -2415,10 +2469,10 @@ fn ui_thread_time_of_rotate_and_undo_at_96_mp() {
     step(
         &mut app,
         "add part (12000 x 1000)",
-        Message::Editor(EditorMsg::PartLoaded {
+        Message::Editor(EditorMsg::Combine(CombineMsg::PartLoaded {
             session,
             result: Ok(Some(Arc::new(solid(12_000, 1_000)))),
-        }),
+        })),
     );
     step(&mut app, "undo the part", undo_msg());
 }

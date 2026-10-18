@@ -268,6 +268,8 @@ pub enum Message {
 /// `runtime::editor_ops::handle_editor_message`.
 #[derive(Clone, Debug)]
 pub enum EditorMsg {
+    /// Add Capture / Add Image and layout messages (`runtime::combine`).
+    Combine(CombineMsg),
     /// Image menu messages: rotate, flip and Resize (`runtime::image_menu`).
     Image(ImageMsg),
     /// Beautify tab messages (`runtime::beautify_panel`).
@@ -363,23 +365,6 @@ pub enum EditorMsg {
     /// shortcuts; the runtime resolves the new width against the
     /// current model state and clamps to the published range.
     WidthBump(f32),
-    /// Image › Add Capture Below… / Beside…
-    CombineCaptureRequested(readshot_core::document::Join),
-    /// Image › Add Image from File…
-    AddImageFromFile,
-    /// A picked file decoded (`Ok(None)` = the picker was cancelled).
-    PartLoaded {
-        session: u64,
-        result: Result<Option<std::sync::Arc<image::RgbaImage>>, String>,
-    },
-    /// Image › Layout gap slider (preview; release commits).
-    LayoutGapPreview(u32),
-    /// A coalesced gap slider value is due (trailing edge of the
-    /// preview throttle).
-    LayoutGapFlush {
-        session: u64,
-    },
-    LayoutAlign(readshot_core::document::Align),
     /// An off-thread document compose (large resize, alignment or gap
     /// preview) finished; applied only when `seq` is still the newest
     /// request of `session` and nothing moved meanwhile.
@@ -484,6 +469,29 @@ pub enum EditorMsg {
     /// Turn the eyedropper on or off (I, or the button in the color
     /// popover). While on, a click on the image picks its color.
     EyedropperToggled,
+}
+
+/// Image › Add Capture / Add Image from File, and the combined image's
+/// gap and alignment. Handled by `runtime::combine::handle_combine_message`.
+#[derive(Clone, Debug)]
+pub enum CombineMsg {
+    /// Image › Add Capture Below… / Beside…
+    CaptureRequested(readshot_core::document::Join),
+    /// Image › Add Image from File…
+    AddImageFromFile,
+    /// A picked file decoded (`Ok(None)` = the picker was cancelled).
+    PartLoaded {
+        session: u64,
+        result: Result<Option<std::sync::Arc<image::RgbaImage>>, String>,
+    },
+    /// Image › Layout gap slider (preview; release commits).
+    GapPreview(u32),
+    /// A coalesced gap slider value is due (trailing edge of the
+    /// preview throttle).
+    GapFlush {
+        session: u64,
+    },
+    Align(readshot_core::document::Align),
 }
 
 /// Image menu messages: rotate, flip and the Resize dialog. Handled by

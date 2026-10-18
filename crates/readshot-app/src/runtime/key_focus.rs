@@ -593,13 +593,15 @@ fn activate(state: &mut App, focus: KeyFocus, pos: usize) -> Task<Message> {
         F::MenuFlipV => Some(Message::Editor(EditorMsg::Image(ImageMsg::Flip(
             FlipAxis::Vertical,
         )))),
-        F::MenuAddBelow => Some(Message::Editor(EditorMsg::CombineCaptureRequested(
-            Join::Below,
+        F::MenuAddBelow => Some(Message::Editor(EditorMsg::Combine(
+            CombineMsg::CaptureRequested(Join::Below),
         ))),
-        F::MenuAddBeside => Some(Message::Editor(EditorMsg::CombineCaptureRequested(
-            Join::Beside,
+        F::MenuAddBeside => Some(Message::Editor(EditorMsg::Combine(
+            CombineMsg::CaptureRequested(Join::Beside),
         ))),
-        F::MenuAddImage => Some(Message::Editor(EditorMsg::AddImageFromFile)),
+        F::MenuAddImage => Some(Message::Editor(EditorMsg::Combine(
+            CombineMsg::AddImageFromFile,
+        ))),
         F::Option(OptionControl::Color) | F::Option(OptionControl::Width) => {
             let which = if focus.item == F::Option(OptionControl::Color) {
                 EditorPopover::Color
@@ -904,7 +906,7 @@ fn gap_messages(state: &App, step: i32) -> Vec<Message> {
         return Vec::new();
     }
     vec![
-        Message::Editor(EditorMsg::LayoutGapPreview(next)),
+        Message::Editor(EditorMsg::Combine(CombineMsg::GapPreview(next))),
         Message::Editor(EditorMsg::SnapshotSliderCommit),
     ]
 }
@@ -915,10 +917,8 @@ fn align_message(state: &App, dir: i32) -> Option<Message> {
     if ed.busy || g.parts.len() < 2 {
         return None;
     }
-    Some(Message::Editor(EditorMsg::LayoutAlign(cycle(
-        &Align::ALL,
-        g.align,
-        dir,
+    Some(Message::Editor(EditorMsg::Combine(CombineMsg::Align(
+        cycle(&Align::ALL, g.align, dir),
     ))))
 }
 
