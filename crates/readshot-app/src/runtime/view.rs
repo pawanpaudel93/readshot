@@ -2647,19 +2647,15 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
     .width(Length::Fill)
     .height(Length::Fixed(TITLEBAR_HEIGHT));
     // The transparent title bar is covered by our content, so the row's
-    // empty background is the window's drag handle.
-    let mut drag_handle = mouse_area(
-        IcedSpace::new()
-            .width(Length::Fill)
-            .height(Length::Fixed(TITLEBAR_HEIGHT)),
-    );
-    if let Some(id) = ed.window_id {
-        drag_handle = drag_handle.on_press(Message::WindowDragRequested(id));
-    }
-    let title_layer = container(stack![drag_handle, title_content])
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .align_y(Alignment::Start);
+    // empty background is the window's drag handle (the shared title row;
+    // it holds controls, so it stays on every platform).
+    let title_layer = container(super::window_settings::title_drag_row(
+        title_content,
+        ed.window_id,
+    ))
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_y(Alignment::Start);
 
     // --- Options bar under the tool bar (falls back to the hint line) ---
     let options_layer: Element<'_, Message> = if ed.eyedropper.is_some() {

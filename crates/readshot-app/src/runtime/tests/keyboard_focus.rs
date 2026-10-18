@@ -119,7 +119,11 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
             mods(true, false, false, false),
             "EditorDiscardRequested",
         ),
-        (ch(RESIZE_LETTER), editor_alt_modifiers(), "EditorResizeOpen"),
+        (
+            ch(RESIZE_LETTER),
+            editor_alt_modifiers(),
+            "EditorResizeOpen",
+        ),
         (ch("["), mods(true, false, false, false), "clockwise: false"),
         (ch("]"), mods(true, false, false, false), "clockwise: true"),
         (ch("="), mods(true, false, false, false), "EditorZoomIn"),
@@ -153,7 +157,11 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
             "EditorFlip(Vertical)",
         ),
         (ch("t"), editor_alt_modifiers(), "EditorPanelTabKey(Text)"),
-        (ch("b"), editor_alt_modifiers(), "EditorPanelTabKey(Beautify)"),
+        (
+            ch("b"),
+            editor_alt_modifiers(),
+            "EditorPanelTabKey(Beautify)",
+        ),
         (named(Named::Tab), plain(), "EditorCycleSelection(1)"),
         (
             named(Named::Tab),
