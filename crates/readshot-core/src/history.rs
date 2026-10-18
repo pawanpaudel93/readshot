@@ -176,6 +176,35 @@ pub fn text_allowed(record: &CaptureRecord) -> bool {
     !record.redacted || record.redactions_complete
 }
 
+/// Whether `a` survives a sidecar round trip. serde_json writes a
+/// non-finite `f32` (NaN, ∞) as `null`, which then fails to load and would
+/// make the whole record vanish from History and MCP.
+fn loads_back(a: &Annotation) -> bool {
+    serde_json::to_value(a)
+        .ok()
+        .and_then(|v| serde_json::from_value::<Annotation>(v).ok())
+        .is_some()
+}
+
+/// Drop annotations that wouldn't load back ([`loads_back`]). A
+/// redaction list that loses one no longer lists every redaction, so it
+/// stops being complete (and its text goes: fail closed).
+fn drop_unloadable_annotations(record: &mut CaptureRecord) {
+    let (anns, redactions) = (record.annotation_model.len(), record.redactions.len());
+    record.annotation_model.retain(loads_back);
+    record.redactions.retain(loads_back);
+    if record.redactions.len() != redactions {
+        record.redactions_complete = false;
+    }
+    if record.annotation_model.len() != anns || record.redactions.len() != redactions {
+        tracing::warn!(
+            target: crate::log::cat::HISTORY,
+            "history record {}: dropped annotations with non-finite values",
+            record.id
+        );
+    }
+}
+
 /// Drop the text of a record that may not hold any ([`text_allowed`]).
 /// `true` when something was dropped.
 fn drop_unknown_text(record: &mut CaptureRecord) -> bool {
@@ -680,16 +709,34 @@ impl FsHistoryStore {
         Ok(())
     }
 
-    fn read_sidecar(&self, record: &CaptureRecord) -> Option<CaptureRecord> {
-        fs::read_to_string(self.root.join(Self::json_path(record)))
-            .ok()
-            .and_then(|s| serde_json::from_str::<CaptureRecord>(&s).ok())
+    /// `record`'s stored sidecar: `Ok(None)` when there is none, `Err`
+    /// when it exists but can't be read or parsed (logged). Guards must
+    /// fail closed on `Err` — treat the record as scrubbed and refuse to
+    /// write text or pixels over it — never take it for "no record".
+    fn read_sidecar(&self, record: &CaptureRecord) -> Result<Option<CaptureRecord>, HistoryError> {
+        let unreadable = |e: HistoryError| {
+            tracing::warn!(
+                target: crate::log::cat::HISTORY,
+                "history record {} has an unreadable sidecar; treating it as redacted: {e}",
+                record.id
+            );
+            e
+        };
+        let text = match fs::read_to_string(self.root.join(Self::json_path(record))) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(unreadable(e.into())),
+        };
+        serde_json::from_str::<CaptureRecord>(&text)
+            .map(Some)
+            .map_err(|e| unreadable(e.into()))
     }
 
     /// Write `record`'s sidecar — without text when it may hold none
     /// ([`text_allowed`]).
     fn write_sidecar(&self, record: &CaptureRecord) -> Result<(), HistoryError> {
         let mut record = record.clone();
+        drop_unloadable_annotations(&mut record);
         drop_unknown_text(&mut record);
         let json_content = serde_json::to_string_pretty(&record)?;
         write_atomic(
@@ -709,7 +756,10 @@ impl FsHistoryStore {
         if record.ocr_text.is_some() {
             return record.ocr_text.clone();
         }
+        // An unreadable sidecar keeps no text (fail closed).
         self.read_sidecar(record)
+            .ok()
+            .flatten()
             .filter(|stored| {
                 stored.redacted
                     && stored.redactions_complete
@@ -733,7 +783,12 @@ impl FsHistoryStore {
         if !self.root.join(Self::json_path(migrated)).exists() {
             return None;
         }
-        let mut stored = self.read_sidecar(migrated)?;
+        let mut stored = match self.read_sidecar(migrated) {
+            Ok(Some(stored)) => stored,
+            Ok(None) => return None,
+            // Unreadable now: serve the record already migrated in memory.
+            Err(_) => return Some(migrated.clone()),
+        };
         if migrate_legacy_record(&mut stored) {
             if let Err(e) = self.write_sidecar(&stored) {
                 tracing::warn!(
@@ -762,6 +817,24 @@ impl FsHistoryStore {
         let png = remove_if_exists(&self.root.join(Self::png_path(record)));
         thumb.and(png)?;
         Ok(true)
+    }
+
+    /// Remove an index entry's PNG and sidecar, only where their stored
+    /// paths stay inside the root ([`safe_relative_join`]): a tampered
+    /// index must not be able to delete arbitrary files.
+    fn remove_entry_files(&self, entry: &HistoryIndexEntry) {
+        for rel in [&entry.png_path, &entry.json_path] {
+            match safe_relative_join(&self.root, rel) {
+                Some(path) => {
+                    let _ = fs::remove_file(path);
+                }
+                None => tracing::warn!(
+                    target: crate::log::cat::HISTORY,
+                    "not removing a path of history entry {} that escapes the history root",
+                    entry.id
+                ),
+            }
+        }
     }
 
     /// Absolute path of a record's PNG under `root`. Shared by the
@@ -882,9 +955,11 @@ impl HistoryStore for FsHistoryStore {
         // Never put unredacted content back over a scrubbed record: an
         // unredacted save onto one only (re)registers the index entry
         // (the staged files are dropped).
+        // An unreadable sidecar may be a scrubbed record: refuse (fail
+        // closed).
         let keep_scrubbed = !record.redacted
             && self
-                .read_sidecar(record)
+                .read_sidecar(record)?
                 .is_some_and(|stored| stored.redacted);
         if !keep_scrubbed {
             self.place_staged(record, &staged)?;
@@ -970,7 +1045,16 @@ impl HistoryStore for FsHistoryStore {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            if let Ok(mut record) = serde_json::from_str::<CaptureRecord>(&content) {
+            let parsed = serde_json::from_str::<CaptureRecord>(&content);
+            if let Err(e) = &parsed {
+                // Not served (it may be a scrubbed record): skipped, logged.
+                tracing::warn!(
+                    target: crate::log::cat::HISTORY,
+                    "skipping history record {} whose sidecar can't be parsed: {e}",
+                    entry.id
+                );
+            }
+            if let Ok(mut record) = parsed {
                 // Written by an older build: migrated before it is
                 // served, so its old text never leaves this function.
                 if migrate_legacy_record(&mut record) {
@@ -1024,8 +1108,7 @@ impl HistoryStore for FsHistoryStore {
         let kept_ids: std::collections::HashSet<Uuid> = kept.iter().map(|e| e.id).collect();
         for entry in &index.records {
             if !kept_ids.contains(&entry.id) {
-                let _ = fs::remove_file(self.root.join(&entry.png_path));
-                let _ = fs::remove_file(self.root.join(&entry.json_path));
+                self.remove_entry_files(entry);
                 let record_for_path = CaptureRecord {
                     id: entry.id,
                     captured_at: entry.captured_at,
@@ -1080,9 +1163,9 @@ impl HistoryStore for FsHistoryStore {
         // predates the background OCR pass) must not wipe text another
         // writer already persisted. Merging here, under the index lock,
         // keeps the two writers race-free in-process.
-        let prev = fs::read_to_string(&abs_json)
-            .ok()
-            .and_then(|s| serde_json::from_str::<CaptureRecord>(&s).ok());
+        // An unreadable sidecar may be a scrubbed record, and nothing
+        // tells which frame it holds: refuse every write (fail closed).
+        let prev = self.read_sidecar(record)?;
         // A scrubbed record is only ever changed by a writer that knows
         // it is scrubbed (`rewrite`, or an update carrying
         // `redacted: true`). A late writer that doesn't — the capture's
@@ -1129,7 +1212,9 @@ impl HistoryStore for FsHistoryStore {
             if !self.begin_scrub_locked(record)? {
                 return Ok(false);
             }
-        } else if !self.root.join(Self::json_path(record)).exists() {
+        } else if self.read_sidecar(record)?.is_none() {
+            // Gone, or (`Err`) unreadable and so maybe scrubbed: an
+            // unredacted image never goes over it.
             return Ok(false);
         }
         self.place_staged(record, &staged)?;
@@ -1150,7 +1235,7 @@ impl HistoryStore for FsHistoryStore {
     ) -> Result<(), HistoryError> {
         use crate::scrub::{has_redaction, masked_text};
         let _index_guard = self.lock_index()?;
-        let Some(mut stored) = self.read_sidecar(record) else {
+        let Some(mut stored) = self.read_sidecar(record)? else {
             return Ok(());
         };
         // Text recognized for one document frame must never be masked
@@ -1193,8 +1278,7 @@ impl HistoryStore for FsHistoryStore {
             return Ok(());
         };
         let entry = index.records.remove(pos);
-        let _ = fs::remove_file(self.root.join(&entry.png_path));
-        let _ = fs::remove_file(self.root.join(&entry.json_path));
+        self.remove_entry_files(&entry);
         let record_for_path = CaptureRecord {
             id,
             captured_at: entry.captured_at,
@@ -1916,7 +2000,7 @@ mod tests {
         fs::remove_file(&png).unwrap();
         fs::create_dir(&png).unwrap();
         assert!(s.rewrite(&scrubbed_of(&r), &black_png(4, 4).1).is_err());
-        let stored = s.read_sidecar(&r).unwrap();
+        let stored = s.read_sidecar(&r).unwrap().unwrap();
         assert_eq!(stored.ocr_text.as_deref(), Some("masked"));
         assert!(stored.redacted && stored.scrub_pending);
         assert!(!thumb.exists());
@@ -2016,6 +2100,108 @@ mod tests {
             s.list().unwrap()[0].ocr_text.as_deref(),
             Some("pin ████ ok")
         );
+    }
+
+    /// A scrubbed record whose sidecar then can't be parsed (a transient
+    /// read error, or a newer build's enum value): returns the store, the
+    /// record, and the sidecar and PNG bytes on disk.
+    fn scrubbed_with_unreadable_sidecar(
+    ) -> (TempDir, FsHistoryStore, CaptureRecord, Vec<u8>, Vec<u8>) {
+        let (dir, s) = store();
+        let mut r = record_at(Utc::now());
+        r.ocr_text = Some("secret 4821".into());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let (_, redacted_png) = black_png(4, 4);
+        s.rewrite(&scrubbed_of(&r), &redacted_png).unwrap();
+        let json = s.root().join(FsHistoryStore::json_path(&r));
+        fs::write(&json, b"{\"id\": \"not a record\"").unwrap();
+        let png = fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap();
+        (dir, s, r, fs::read(&json).unwrap(), png)
+    }
+
+    #[test]
+    fn an_unreadable_sidecar_counts_as_scrubbed_for_every_guard() {
+        let (_dir, s, r, sidecar, png) = scrubbed_with_unreadable_sidecar();
+        let json = s.root().join(FsHistoryStore::json_path(&r));
+        let png_path = s.root().join(FsHistoryStore::png_path(&r));
+        let unchanged = |what: &str| {
+            assert_eq!(fs::read(&json).unwrap(), sidecar, "{what}: sidecar");
+            assert_eq!(fs::read(&png_path).unwrap(), png, "{what}: png");
+        };
+        // The capture's late background OCR (an unredacted writer).
+        assert!(s.update(&r).is_err());
+        unchanged("update");
+        // An unredacted save of the same record.
+        assert!(s.save(&r, &valid_png(4, 4)).is_err());
+        unchanged("save");
+        // Recognized text, even when asked to fill an unredacted record.
+        let doc = TextDocument::from_plain("secret 4821");
+        assert!(s.record_recognized_text(&r, &doc, true).is_err());
+        unchanged("recognized text");
+        // An unredacted rewrite (a restore).
+        assert!(s.rewrite(&r, &valid_png(4, 4)).is_err());
+        unchanged("rewrite");
+    }
+
+    #[test]
+    fn retention_and_delete_never_touch_paths_outside_the_root() {
+        let (dir, s) = store();
+        let outside = dir.path().join("outside.txt");
+        fs::write(&outside, b"keep me").unwrap();
+        let old = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
+        let mut index = s.read_index().unwrap();
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        for id in [a, b] {
+            index.records.push(HistoryIndexEntry {
+                id,
+                captured_at: old,
+                png_path: PathBuf::from("../outside.txt"),
+                json_path: outside.clone(),
+            });
+        }
+        s.write_index(&index).unwrap();
+        s.delete(a).unwrap();
+        assert!(outside.exists(), "delete escaped the root");
+        s.apply_retention(HistoryRetention::Last30Days, Utc::now())
+            .unwrap();
+        assert!(outside.exists(), "retention escaped the root");
+        assert!(s.read_index().unwrap().records.is_empty());
+    }
+
+    #[test]
+    fn a_non_finite_annotation_never_hides_the_record() {
+        // serde_json writes NaN as `null`, which then fails to load: the
+        // whole record used to vanish from History and MCP.
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        r.ocr_text = Some("hello".into());
+        let nan = crate::RectLike::new(f32::NAN, 0.0, 2.0, 2.0);
+        r.annotation_model = vec![
+            Annotation::Blur {
+                rect: nan,
+                radius: 2.0,
+            },
+            Annotation::Blur {
+                rect: crate::RectLike::new(0.0, 0.0, 2.0, 2.0),
+                radius: 2.0,
+            },
+        ];
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let listed = s.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].annotation_model.len(), 1);
+        // A redaction list that loses one can't be complete: its text
+        // goes (fail closed), the record stays.
+        let mut scrubbed = scrubbed_of(&r);
+        scrubbed.redactions = vec![Annotation::Pixelate {
+            rect: nan,
+            block_size: f32::INFINITY,
+        }];
+        s.rewrite(&scrubbed, &valid_png(4, 4)).unwrap();
+        let listed = s.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].redacted && !listed[0].redactions_complete);
+        assert_eq!(listed[0].ocr_text, None);
     }
 
     #[test]

@@ -145,6 +145,10 @@ Over-masking is acceptable, under-masking never:
   (Windows/Linux OCR) a redaction makes the text unmaskable:
   `hidden_spans` returns `None` and the text is withheld (History stores
   none, MCP serves `null`, Copy Lines refuses).
+* History fails closed: a sidecar that exists but can't be read or
+  parsed counts as scrubbed for every guard (no text or unredacted PNG
+  is written over it), and index paths are only ever used inside the
+  history root.
 * Redaction guards (`redactions_complete`, `drawn_annotations()`, the
   canvas's opaque cover for redactions not rendered yet) must not be
   weakened.
