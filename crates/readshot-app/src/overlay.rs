@@ -836,6 +836,10 @@ impl Program<Message> for OverlayProgram {
                             );
                         }
                         OverlayShortcut::Intent(intent) => {
+                            // A one-shot (CLI) overlay has no toolbar and
+                            // one outcome: ⌘C, ⌘S, ⌘P or ⌘R confirms with
+                            // it, like Enter, never another action.
+                            let intent = self.auto_confirm_intent.unwrap_or(intent);
                             if let Some(domain) = rect_to_domain(sel) {
                                 state.selection = None;
                                 return Some(
@@ -1221,6 +1225,96 @@ mod tests {
         let badge = badge_for(bounds, sel);
         assert!(!badge.intersects(&bar));
         assert_eq!(badge.y, bar.y + bar.height + 6.0);
+    }
+
+    fn press(
+        program: &OverlayProgram,
+        state: &mut OverlayState,
+        key: Key,
+        m: keyboard::Modifiers,
+    ) -> Option<Message> {
+        let event = Event::Keyboard(keyboard::Event::KeyPressed {
+            modified_key: key.clone(),
+            key,
+            physical_key: keyboard::key::Physical::Unidentified(
+                keyboard::key::NativeCode::Unidentified,
+            ),
+            location: keyboard::Location::Standard,
+            modifiers: m,
+            text: None,
+            repeat: false,
+        });
+        let bounds = rect(0.0, 0.0, 800.0, 600.0);
+        let action = program.update(state, &event, bounds, mouse::Cursor::Unavailable)?;
+        action.into_inner().0
+    }
+
+    /// In a one-shot CLI overlay, a keyboard selection confirmed with ⌘C
+    /// (or ⌘S, ⌘P, ⌘R) uses the CLI's intent: the image is written where
+    /// the CLI asked and the process can exit.
+    #[test]
+    fn cli_overlay_intent_keys_confirm_with_the_cli_intent() {
+        use crate::app::CaptureIntent as I;
+        let program = OverlayProgram {
+            display_id: "d".into(),
+            scale: 1.0,
+            auto_confirm_intent: Some(I::CliInteractive),
+            shift_held: false,
+        };
+        for letter in ["c", "s", "p", "r"] {
+            let mut state = OverlayState::default();
+            let started = press(
+                &program,
+                &mut state,
+                Key::Named(Named::ArrowRight),
+                keyboard::Modifiers::empty(),
+            );
+            assert!(matches!(
+                started,
+                Some(Message::OverlaySelectionChanged { .. })
+            ));
+            let confirmed = press(
+                &program,
+                &mut state,
+                Key::Character(letter.into()),
+                keyboard::Modifiers::COMMAND,
+            );
+            assert!(
+                matches!(
+                    confirmed,
+                    Some(Message::OverlaySelected {
+                        intent: I::CliInteractive,
+                        ..
+                    })
+                ),
+                "⌘{letter}: {confirmed:?}"
+            );
+        }
+        // The interactive overlay keeps its shortcuts.
+        let program = OverlayProgram {
+            auto_confirm_intent: None,
+            ..program
+        };
+        let mut state = OverlayState::default();
+        let _ = press(
+            &program,
+            &mut state,
+            Key::Named(Named::ArrowRight),
+            keyboard::Modifiers::empty(),
+        );
+        let copied = press(
+            &program,
+            &mut state,
+            Key::Character("c".into()),
+            keyboard::Modifiers::COMMAND,
+        );
+        assert!(matches!(
+            copied,
+            Some(Message::OverlaySelected {
+                intent: I::CopyToClipboard,
+                ..
+            })
+        ));
     }
 
     #[test]
