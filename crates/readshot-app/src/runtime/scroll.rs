@@ -34,6 +34,11 @@ pub(crate) const PREVIEW_STRIP_W: u32 = 340;
 /// Height cap (px) of the preview strip. Only the newest rows are kept,
 /// so a long page doesn't shrink the preview to a sliver.
 pub(crate) const PREVIEW_STRIP_MAX_H: u32 = 4096;
+/// Frames accepted this soon after a first Cancel are the scroll that was
+/// already under way (trackpad momentum keeps producing frames for a
+/// second or so), not the user carrying on: they don't disarm it, so
+/// the second click can reach Discard.
+pub(crate) const SCROLL_CANCEL_MOMENTUM_GRACE: Duration = Duration::from_millis(1500);
 /// How many recent frame joins the window remembers for its join ticks.
 pub(crate) const RECENT_JOINS_MAX: usize = 64;
 
@@ -93,7 +98,8 @@ fn keep_tail(img: image::RgbaImage) -> image::RgbaImage {
 }
 
 /// True after a first Cancel until it is answered: Discard (a second
-/// press), Keep Going, or a new frame (the user carried on scrolling).
+/// press), Keep Going, or a new frame once the momentum grace is over
+/// (the user carried on scrolling; [`SCROLL_CANCEL_MOMENTUM_GRACE`]).
 /// There is no time limit (WCAG 2.2.1): a slow pointer or switch user
 /// can always reach Discard.
 pub(crate) fn cancel_armed(session: &crate::app::ScrollSession) -> bool {
@@ -208,8 +214,14 @@ pub(crate) fn accept_scroll_frame(
         .stitched_rows
         .saturating_add(offset.unwrap_or(image.height()));
     session.no_motion_count = 0;
-    // Scrolling on answers an armed Cancel with "keep going".
-    session.cancel_armed_at = None;
+    // Scrolling on answers an armed Cancel with "keep going"; momentum
+    // frames right after the click don't.
+    if session
+        .cancel_armed_at
+        .is_some_and(|at| at.elapsed() >= SCROLL_CANCEL_MOMENTUM_GRACE)
+    {
+        session.cancel_armed_at = None;
+    }
     session.frames.push(std::sync::Arc::new(image));
     session.frame_tick = session.frame_tick.wrapping_add(1);
     session.last_frame_at = Some(std::time::Instant::now());

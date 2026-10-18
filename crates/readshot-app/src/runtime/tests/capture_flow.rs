@@ -307,13 +307,51 @@ fn a_new_frame_answers_an_armed_cancel() {
     app.scroll_session = Some(session);
     let _ = update(&mut app, Message::ScrollCaptureCancelRequested);
     assert!(cancel_armed(app.scroll_session.as_ref().unwrap()));
+    // Momentum frames right after the click keep it armed.
     accept_scroll_frame(
         app.scroll_session.as_mut().unwrap(),
         scrolling_texture(80, 120, 20),
         None,
         Some(10),
     );
+    assert!(
+        cancel_armed(app.scroll_session.as_ref().unwrap()),
+        "an inertia frame is not an answer"
+    );
+    // Scrolling on later answers it.
+    app.scroll_session.as_mut().unwrap().cancel_armed_at =
+        Some(std::time::Instant::now() - SCROLL_CANCEL_MOMENTUM_GRACE);
+    accept_scroll_frame(
+        app.scroll_session.as_mut().unwrap(),
+        scrolling_texture(80, 120, 30),
+        None,
+        Some(10),
+    );
     assert!(!cancel_armed(app.scroll_session.as_ref().unwrap()));
+}
+
+/// The second Cancel click lands while trackpad momentum still yields
+/// frames: it discards, it doesn't re-arm.
+#[test]
+fn a_second_cancel_during_momentum_discards() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let mut session = test_session();
+    session.frames.push(Arc::new(scrolling_texture(80, 120, 0)));
+    session
+        .frames
+        .push(Arc::new(scrolling_texture(80, 120, 10)));
+    app.scroll_session = Some(session);
+    let _ = update(&mut app, Message::ScrollCaptureCancelRequested);
+    for offset in [20, 30, 40] {
+        accept_scroll_frame(
+            app.scroll_session.as_mut().unwrap(),
+            scrolling_texture(80, 120, offset),
+            None,
+            Some(10),
+        );
+    }
+    let _ = update(&mut app, Message::ScrollCaptureCancelRequested);
+    assert!(app.scroll_session.is_none(), "discarded");
 }
 
 #[test]
