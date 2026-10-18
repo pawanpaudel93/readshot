@@ -1936,6 +1936,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             if state.history_window_id == Some(id) {
                 state.history_window_id = None;
                 state.history_records.clear();
+                history_images::trim_history_image_cache();
                 state.history_status = None;
                 state.history_search.clear();
                 state.history_selected_id = None;

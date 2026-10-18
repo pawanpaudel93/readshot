@@ -111,10 +111,20 @@ impl HandleCache {
     }
 
     /// A new view build starts: entries of earlier builds become
-    /// evictable. Eviction runs only when an entry is added, so a build
-    /// that asks for the same handles as the last one finds them all.
+    /// evictable. Builds older than the last one are brought within the
+    /// budgets now (not only when an entry is added, so nothing lingers);
+    /// the last build's entries stay until this build has asked for what
+    /// it needs, so a build asking for the same handles finds them all.
     fn begin_build(&mut self) {
         self.generation += 1;
+        self.evict_before(self.generation.saturating_sub(1));
+    }
+
+    /// No History view is shown any more (the window closed): every
+    /// entry is evictable, and the cache is brought within its budgets.
+    fn trim(&mut self) {
+        self.generation += 1;
+        self.evict();
     }
 
     fn handle(&mut self, path: &Path) -> Handle {
@@ -168,26 +178,31 @@ impl HandleCache {
         }
     }
 
-    /// The least recently used entry of an earlier build, of the given
-    /// size class.
-    fn oldest_evictable(&self, full: bool) -> Option<PathBuf> {
+    /// The least recently used entry of a build before `before`, of the
+    /// given size class.
+    fn oldest_evictable(&self, full: bool, before: u64) -> Option<PathBuf> {
         self.entries
             .iter()
-            .filter(|(_, e)| e.full == full && e.generation < self.generation)
+            .filter(|(_, e)| e.full == full && e.generation < before)
             .min_by_key(|(_, e)| e.used)
             .map(|(p, _)| p.clone())
     }
 
     /// Bring earlier builds' entries within budget; this build's stay.
     fn evict(&mut self) {
+        self.evict_before(self.generation);
+    }
+
+    /// Bring entries of builds before `before` within budget.
+    fn evict_before(&mut self, before: u64) {
         while self.full_bytes > self.max_bytes {
-            match self.oldest_evictable(true) {
+            match self.oldest_evictable(true, before) {
                 Some(p) => self.remove(&p),
                 None => break,
             }
         }
         while self.thumbs > self.max_entries {
-            match self.oldest_evictable(false) {
+            match self.oldest_evictable(false, before) {
                 Some(p) => self.remove(&p),
                 None => break,
             }
@@ -208,6 +223,14 @@ pub(crate) fn begin_history_view_build() {
     }
 }
 
+/// The History window closed: hold the cache to its budgets now rather
+/// than until the next History view adds an entry.
+pub(crate) fn trim_history_image_cache() {
+    if let Ok(mut cache) = cache().lock() {
+        cache.trim();
+    }
+}
+
 /// A handle showing `path` as it is on disk now: the same handle while
 /// the file is unchanged, a new one (new id) once it was replaced.
 pub(crate) fn history_image_handle(path: &Path) -> Handle {
@@ -220,6 +243,34 @@ pub(crate) fn history_image_handle(path: &Path) -> Handle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What an earlier build left over budget doesn't wait for an insert:
+    /// the next build start trims builds before the last one, and closing
+    /// History trims everything to the budgets.
+    #[test]
+    fn the_cache_is_held_to_its_budgets_without_an_insert() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let full = files(dir.path(), "full", 4, 400);
+        let mut cache = HandleCache::new(500, 256);
+        cache.begin_build();
+        full.iter().for_each(|p| {
+            cache.handle(p);
+        });
+        assert_eq!(cache.full_bytes, 1600, "a build keeps all it shows");
+        // The next build may need the same handles: kept for it.
+        cache.begin_build();
+        assert_eq!(cache.full_bytes, 1600);
+        // A build later (nothing asked for them again): trimmed now.
+        cache.begin_build();
+        assert!(cache.full_bytes <= 500, "{}", cache.full_bytes);
+        // Closing History trims what the last build showed.
+        cache.begin_build();
+        full.iter().for_each(|p| {
+            cache.handle(p);
+        });
+        cache.trim();
+        assert!(cache.full_bytes <= 500, "{}", cache.full_bytes);
+    }
 
     #[test]
     fn a_replaced_file_gets_a_new_handle() {

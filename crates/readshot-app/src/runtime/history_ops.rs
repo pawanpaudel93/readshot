@@ -127,6 +127,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
         Message::HistoryClosed => {
             let id = state.history_window_id.take();
             state.history_records.clear();
+            super::history_images::trim_history_image_cache();
             state.history_status = None;
             state.history_selected_id = None;
             state.history_delete_pending = None;
