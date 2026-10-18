@@ -144,7 +144,10 @@ Over-masking is acceptable, under-masking never:
   make a position inside the line untrustworthy). Without word positions
   (Windows/Linux OCR) a redaction makes the text unmaskable:
   `hidden_spans` returns `None` and the text is withheld (History stores
-  none, MCP serves `null`, Copy Lines refuses).
+  none, MCP serves `null`, Copy Lines refuses). A magnifier bubble whose
+  source shows a redaction counts as hidden too
+  (`scrub::magnified_redactions`: Copy All adds it, and a scrub stores it
+  with the record's redactions for every later reader).
 * History fails closed: a sidecar that exists but can't be read or
   parsed counts as scrubbed for every guard (no text or unredacted PNG
   is written over it), index paths are only ever used inside the

@@ -692,10 +692,16 @@ impl CaptureCoordinator {
         if record.redacted {
             // Redactions the caller says are already in `base` (a
             // reopened scrubbed record's, mapped into this frame), then
-            // the ones baked now.
+            // the ones baked now, then a cover over every magnifier bubble
+            // baked now that shows any of them: the stored image has that
+            // magnified copy of weakly hidden text in it, and recognition
+            // of a reopened record would read it.
+            let shown: Vec<_> = record.redactions.iter().chain(&bake).cloned().collect();
+            let magnified = readshot_core::scrub::magnified_redactions(&shown);
             record
                 .redactions
                 .extend(bake.iter().filter(|a| a.is_redaction()).cloned());
+            record.redactions.extend(magnified);
         }
         // The stored image is `bake` rendered onto `base`: a baked Crop
         // makes it the crop. The record then describes that image, not the

@@ -1286,3 +1286,80 @@ fn copy_all_masks_a_magnifier_bubble_that_shows_a_redaction() {
         Some("██████")
     );
 }
+
+#[tokio::test]
+async fn a_reopened_record_with_a_baked_bubble_masks_the_bubble_word_everywhere() {
+    use super::super::editor_ops::{copy_all_mask, CopyAllMask};
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+    let mut app = build_app_with_positions_and_history(store.clone());
+    let img = solid(200, 120);
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 200, 120, "d");
+    store
+        .save(&record, &readshot_core::encode_png(&img).unwrap())
+        .unwrap();
+    // Scrub: a weak blur over the word, and a magnifier whose bubble
+    // (centre (100, 60), radius 20) shows the blurred word enlarged.
+    let mut ed = crate::editor::EditorSession::from_history(img.clone(), record.clone());
+    ed.model
+        .commit_annotation(word_blur(RectLike::new(0.0, 0.0, 30.0, 10.0)));
+    ed.model.commit_annotation(Annotation::Magnifier {
+        source: PointLike::new(15.0, 5.0),
+        radius: 10.0,
+        bubble: PointLike::new(100.0, 60.0),
+        zoom: 2.0,
+        shape: Default::default(),
+        color: Rgba::OPAQUE_BLACK,
+    });
+    sync_editor_history(&mut ed, &app.coordinator);
+    app.coordinator.flush_history_updates();
+    let stored = stored_record(&store, record.id);
+    assert!(stored.redacted && stored.redactions_complete);
+
+    // Reopen it: recognition of the baked image reads the word in the
+    // bubble.
+    app.editor = Some(crate::editor::EditorSession::from_history(
+        img,
+        stored.clone(),
+    ));
+    let in_bubble = positioned_doc(&hidden_word(), RectLike::new(85.0, 55.0, 30.0, 10.0));
+    recognized(
+        &mut app,
+        readshot_core::document::ORIGINAL_PART,
+        in_bubble.clone(),
+    );
+    let ed = app.editor.as_ref().unwrap();
+    let masked = "█".repeat(6);
+    // 1. Copy Lines.
+    assert_eq!(
+        super::super::text_panel::copy_lines_text(ed, &[0], false).as_deref(),
+        Some(masked.as_str())
+    );
+    // 2. Copy All.
+    let CopyAllMask::Hide(hide) = copy_all_mask(ed) else {
+        panic!("a reopened scrub must be masked");
+    };
+    assert_eq!(
+        readshot_core::scrub::masked_text(&in_bubble, &hide).as_deref(),
+        Some(masked.as_str())
+    );
+    // 3. History text recognized for the reopened record.
+    let (target, cut) = super::super::text_panel::recognition_history_target(ed);
+    let target = target.expect("redactions known: text may be stored");
+    let _ = super::super::text_panel::store_recognized_text(
+        &app.coordinator,
+        &target,
+        cut.as_ref(),
+        Ok(in_bubble.clone()),
+    )
+    .await;
+    assert_eq!(
+        stored_record(&store, record.id).ocr_text,
+        Some(masked.clone())
+    );
+    // 4. A further scrub of the reopened record.
+    let ed = app.editor.as_mut().unwrap();
+    ed.model
+        .commit_annotation(word_blur(RectLike::new(150.0, 100.0, 10.0, 10.0)));
+    assert_eq!(scrubbed_history_text(ed), Some(masked));
+}
