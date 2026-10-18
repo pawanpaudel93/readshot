@@ -945,21 +945,58 @@ impl FsHistoryStore {
         pending.scrub_pending = true;
         pending.ocr_text = self.scrub_text(record);
         pending.pending_image = Some(pending_on(on_disk, record));
-        // Mark first: from this write on, nothing of it is served.
+        // The thumbnail first (derived; rebuilt from the redacted image),
+        // so none of the unredacted image outlives the mark, whatever
+        // happens after it.
+        remove_if_exists(&self.root.join(Self::thumbnail_path(record)))?;
+        // Mark: from this write on, nothing of it is served.
         self.write_sidecar(&pending)?;
         // Then set the unredacted image aside (it replaces an older one
-        // set aside, which is older still), and drop its thumbnail
-        // (derived; rebuilt from the redacted image).
+        // set aside, which is older still).
         let png = self.root.join(Self::png_path(record));
         let set_aside = match fs::rename(&png, self.root.join(Self::withheld_path(record))) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(HistoryError::from(e)),
         };
-        let thumb = remove_if_exists(&self.root.join(Self::thumbnail_path(record)));
         crate::fs_atomic::sync_parent_dir(&png);
-        set_aside.and(thumb)?;
+        set_aside?;
         Ok(true)
+    }
+
+    /// Remove every set-aside image whose record is gone (no sidecar): a
+    /// crash in a delete or retention pass, or an older build's, must not
+    /// leave an unredacted copy on disk for good.
+    fn remove_orphaned_withheld(&self) {
+        let Ok(_index_guard) = self.lock_index() else {
+            return;
+        };
+        let Ok(years) = fs::read_dir(&self.root) else {
+            return;
+        };
+        for year in years.flatten().filter(|e| e.path().is_dir()) {
+            let Ok(months) = fs::read_dir(year.path()) else {
+                continue;
+            };
+            for month in months.flatten().filter(|e| e.path().is_dir()) {
+                let Ok(files) = fs::read_dir(month.path()) else {
+                    continue;
+                };
+                for file in files.flatten() {
+                    let name = file.file_name();
+                    let Some(id) = name
+                        .to_string_lossy()
+                        .strip_suffix(".withheld.png")
+                        .map(String::from)
+                    else {
+                        continue;
+                    };
+                    if !month.path().join(format!("{id}.json")).exists() {
+                        let _ = fs::remove_file(file.path());
+                    }
+                }
+            }
+        }
     }
 
     /// Remove a set-aside image once a newer image is in place.
@@ -987,6 +1024,8 @@ impl FsHistoryStore {
             }
             return Ok(false);
         }
+        // No thumbnail of the image it hides, even if this can't finish.
+        let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&paths)));
         // Marked but not yet set aside (a crash between the two): the
         // image at its own path is the one to draw on.
         let source = if withheld.exists() {
@@ -1498,7 +1537,6 @@ impl HistoryStore for FsHistoryStore {
                         entry.id
                     );
                 }
-                self.remove_entry_files(entry);
                 let record_for_path = CaptureRecord {
                     id: entry.id,
                     captured_at: entry.captured_at,
@@ -1514,7 +1552,10 @@ impl HistoryStore for FsHistoryStore {
                     pending_image: None,
                     geometry_id: None,
                 };
+                // Image files (a set-aside unredacted copy among them)
+                // before the sidecar: a crash between leaves none behind.
                 self.remove_derived_files(&record_for_path);
+                self.remove_entry_files(entry);
             }
         }
 
@@ -1638,6 +1679,7 @@ impl HistoryStore for FsHistoryStore {
     }
 
     fn finish_pending_scrubs(&self) -> usize {
+        self.remove_orphaned_withheld();
         let Ok(index) = self.read_index() else {
             return 0;
         };
@@ -1716,7 +1758,6 @@ impl HistoryStore for FsHistoryStore {
             return Err(why);
         }
         let entry = index.records.remove(pos);
-        self.remove_entry_files(&entry);
         let record_for_path = CaptureRecord {
             id,
             captured_at: entry.captured_at,
@@ -1732,7 +1773,10 @@ impl HistoryStore for FsHistoryStore {
             pending_image: None,
             geometry_id: None,
         };
+        // Image files (a set-aside unredacted copy among them) before the
+        // sidecar: a crash between leaves none behind.
         self.remove_derived_files(&record_for_path);
+        self.remove_entry_files(&entry);
         index.updated_at = Some(Utc::now());
         self.write_index(&index)?;
         Ok(())
@@ -2743,6 +2787,43 @@ mod tests {
         assert_eq!(s.finish_pending_scrubs(), 0);
         assert_eq!(fs::read(&png).unwrap(), before, "recovery wrote over it");
         assert!(s.stored_redacted(&r).is_err(), "unknown counts as redacted");
+    }
+
+    /// Fix-5 review M-1: a set-aside image whose record is gone (a crash
+    /// in a delete or retention pass after its sidecar went) is removed
+    /// at the next launch: no unredacted copy outlives its record.
+    #[test]
+    fn a_set_aside_image_without_a_record_is_removed_at_launch() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        assert!(s.begin_scrub(&scrubbed_of(&r)).unwrap());
+        let withheld = s.root().join(FsHistoryStore::withheld_path(&r));
+        assert!(withheld.exists());
+        fs::remove_file(s.root().join(FsHistoryStore::json_path(&r))).unwrap();
+        s.finish_pending_scrubs();
+        assert!(!withheld.exists(), "an unredacted copy outlived its record");
+    }
+
+    /// Fix-5 review M-3: a record marked pending whose image is still at
+    /// its path (a crash between marking and setting it aside) and can't
+    /// be drawn on keeps no thumbnail of the unredacted image.
+    #[test]
+    fn a_pending_scrub_that_cant_be_drawn_keeps_no_thumbnail() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let thumb = s.root().join(FsHistoryStore::thumbnail_path(&r));
+        assert!(thumb.exists());
+        let json = s.root().join(FsHistoryStore::json_path(&r));
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&json).unwrap()).unwrap();
+        raw["redacted"] = true.into();
+        raw["scrub_pending"] = true.into();
+        fs::write(&json, raw.to_string()).unwrap();
+        fs::write(s.root().join(FsHistoryStore::png_path(&r)), b"not a png").unwrap();
+        assert_eq!(s.finish_pending_scrubs(), 0);
+        assert!(!thumb.exists(), "the unredacted thumbnail stayed");
     }
 
     /// Redactions that can't be placed on the set-aside image (another

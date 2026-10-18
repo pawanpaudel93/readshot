@@ -223,15 +223,22 @@ Over-masking is acceptable, under-masking never:
   weakened.
 * A History record's image is never absent and its unredacted pixels are
   never served. The store's write order (`readshot-core::history`) is:
-  1. **Mark first.** Phase one of a scrub (`begin_scrub`) writes the
-     sidecar with `scrub_pending` and `pending_image`: the redactions to
-     draw, in the px of the image on disk (a whole-image cover when they
-     can't be placed on it). From then on the record is **withheld**:
-     `list` serves no text for it, and History, MCP and search serve no
-     image.
+  1. **Mark first.** Phase one of a scrub (`begin_scrub`) removes the
+     thumbnail, then writes the sidecar with `scrub_pending` and
+     `pending_image`: what the scrub bakes (its redactions and the
+     annotations drawn with them), in the px of the image on disk, and
+     whether that image is already redacted. An already-redacted image
+     with nothing new redacted is recorded as safe as it is (a failed
+     rotate of a redacted capture never blacks it out); only new
+     redactions that can't be placed on it (another frame or size), or an
+     unredacted image with nothing to hide it, become a whole-image cover.
+     From then on the record is **withheld**: `list` serves no text for
+     it, and History, MCP and search serve no image.
   2. **Set aside, never delete.** The unredacted PNG is renamed to
      `<id>.withheld.png` in the same folder, so nothing is left at its
-     image path, and its thumbnail is removed.
+     image path. Delete and retention remove image files before the
+     sidecar, and launch removes any set-aside image whose record is
+     gone.
   3. **Replace atomically.** Every image write (scrub, restore, frame
      rewrite, crop) is staged and fsynced, then renamed over the image
      path. Only then does the sidecar change (`scrub_pending` cleared),
@@ -239,13 +246,15 @@ Over-masking is acceptable, under-masking never:
      the new image.
 * **Recovery.** A record still withheld because its redaction never
   landed (a crash, a quit, a write cancelled by an open) is finished by
-  `finish_pending_scrub`: its pending redactions are drawn onto the
-  set-aside image with the core render, then swapped in as in step 3.
+  `finish_pending_scrub`: what is pending is drawn onto the set-aside
+  image with the core render (as the scrub would have baked it), then
+  swapped in as in step 3. If it can't be drawn (a decode error) the
+  record stays withheld, without a thumbnail, and is tried again later.
   This runs at launch (the coordinator's writer, `finish_pending_scrubs`)
   and when the record is opened in an editor (`load_after_writes`), so
-  the editor gets the image with the pending redactions applied. The
-  result is redacted, keeps no text, and is in the frame of the image it
-  was drawn on.
+  the editor gets the image with what was pending applied. The result is
+  redacted, keeps no text, and is in the frame of the image it was drawn
+  on.
 * Every editor open of a record passes `settle_record_writes` first. A
   write queued before the open either landed or is cancelled for good;
   a cancel loses nothing, because of the order above. Only the editor
