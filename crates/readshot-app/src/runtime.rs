@@ -577,6 +577,27 @@ fn focus_scroll_hud(state: &App) -> Task<Message> {
 /// + app/window keyboard shortcuts.
 pub fn subscription(state: &App) -> Subscription<Message> {
     let mut subs = Vec::new();
+    background_subscriptions(state, &mut subs);
+    capture_subscriptions(state, &mut subs);
+    editor_subscriptions(state, &mut subs);
+    window_key_subscriptions(state, &mut subs);
+    // Watch for the OS X-button closing any tracked window. Without
+    // this, `state.windows` accumulates stale ids, and helpers like
+    // `show_or_focus_welcome` end up calling `gain_focus` on dead
+    // windows (silent no-op) instead of opening a fresh one.
+    subs.push(window::close_events().map(|a| Message::Window(WindowMsg::Closed(a))));
+    // The editor window opts out of iced's auto-close
+    // (`exit_on_close_request: false`) so an OS close (red X / ⌘W) can
+    // be routed through the unsaved-work confirmation. Every other
+    // window auto-closes and only needs `close_events`; this handler
+    // ignores them.
+    subs.push(window::close_requests().map(|a| Message::Window(WindowMsg::CloseRequested(a))));
+    Subscription::batch(subs)
+}
+
+/// The appearance poll, the permission poll and the OS-event drains
+/// (hotkeys, tray, `readshot://` URLs, reopen).
+fn background_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
     subs.push(iced::system::theme_changes().map(|a| Message::Tick(TickMsg::SystemThemeChanged(a))));
     // iced pins each open window's appearance to its theme, so winit
     // suppresses theme-change events for those windows; poll the OS too.
@@ -640,6 +661,11 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                 .map(|_| Message::Tick(TickMsg::AppReopen)),
         );
     }
+}
+
+/// The scrolling capture's frame loop and Esc keys, and the Shift
+/// watcher the overlay and the scrolling capture use.
+fn capture_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
     if state.scroll_session.is_some() {
         // Drive the scrolling-capture frame loop. The capture
         // coordinator's async future is debounced inside the session
@@ -693,6 +719,11 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             }
         }));
     }
+}
+
+/// The open editor's ticks (status auto-dismiss, recognizing skeleton),
+/// keys, modifiers, pointer button and window size.
+fn editor_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
     if state
         .editor
         .as_ref()
@@ -799,6 +830,11 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             }
         }));
     }
+}
+
+/// The shortcut recorder, the app-wide shortcuts, and the History,
+/// Settings, pin and Welcome windows' key maps.
+fn window_key_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
     if state.settings_recording_hotkey {
         subs.push(iced::event::listen_with(|event, _status, _window| {
             use iced::keyboard::Event as KbEvent;
@@ -890,18 +926,6 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             None
         }));
     }
-    // Watch for the OS X-button closing any tracked window. Without
-    // this, `state.windows` accumulates stale ids, and helpers like
-    // `show_or_focus_welcome` end up calling `gain_focus` on dead
-    // windows (silent no-op) instead of opening a fresh one.
-    subs.push(window::close_events().map(|a| Message::Window(WindowMsg::Closed(a))));
-    // The editor window opts out of iced's auto-close
-    // (`exit_on_close_request: false`) so an OS close (red X / ⌘W) can
-    // be routed through the unsaved-work confirmation. Every other
-    // window auto-closes and only needs `close_events`; this handler
-    // ignores them.
-    subs.push(window::close_requests().map(|a| Message::Window(WindowMsg::CloseRequested(a))));
-    Subscription::batch(subs)
 }
 
 /// Map a key press in the History window to a message. `status_ignored`
