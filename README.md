@@ -190,7 +190,11 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   session runs, `esc` and `⇧esc` work from any app, so you don't have to
   click the window first. This reserves `esc` and `⇧esc` system-wide for
   the length of the session: other apps don't receive them until it stops
-  or is discarded.
+  or is discarded. They are registered only while frames are being
+  captured and released the moment that ends, whichever way it ends (Stop,
+  the stitch finishing or failing, Discard, or the capture window
+  closing). Scrolling on after the first Discard press counts as Keep
+  Going, except for the trackpad's momentum in the first 1.5 seconds.
 - **Pinned windows:** `esc` / `⌘W` close, `L` lock, `-` / `+` adjust opacity,
   arrow keys move the window by 1 pixel (hold `⇧` for 10).
 - **Welcome screen:** `↵` triggers the primary action (Allow / Open System

@@ -266,6 +266,95 @@ fn scroll_capture_registers_esc_globally_only_while_it_runs() {
     assert!(app.scroll_escape_hotkeys.is_empty());
 }
 
+/// Every way a scrolling capture ends releases the global esc / ⇧esc:
+/// Stop (released as it starts stitching), the stitch landing or
+/// failing, Cancel (at once or confirmed), and the HUD or region window
+/// closing. `update` syncs the registration after every message; the
+/// sync here stands in for its OS calls.
+#[test]
+fn every_scroll_capture_exit_releases_the_global_esc() {
+    use std::cell::RefCell;
+    let registered: RefCell<Vec<global_hotkey::hotkey::HotKey>> = RefCell::new(Vec::new());
+    let sync = |app: &mut App| {
+        sync_scroll_escape_hotkeys_with(
+            app,
+            |h| {
+                registered.borrow_mut().push(h);
+                Ok(())
+            },
+            |h| registered.borrow_mut().retain(|x| *x != h),
+        )
+    };
+    let two_frames = |app: &mut App| {
+        let s = app.scroll_session.as_mut().unwrap();
+        s.frames.push(Arc::new(scrolling_texture(80, 120, 0)));
+        s.frames.push(Arc::new(scrolling_texture(80, 120, 10)));
+    };
+    type Exit = fn(&mut App, window::Id, window::Id, &dyn Fn(&mut App));
+    let exits: [(&str, Exit); 7] = [
+        ("stop, then the stitch lands", |app, _, _, frames| {
+            frames(app);
+            let _ = update(app, Message::ScrollCaptureStopRequested);
+            assert!(app.scroll_session.as_ref().unwrap().stopping);
+            let _ = update(
+                app,
+                Message::ScrollCaptureStitched(Ok(scrolling_texture(80, 130, 0))),
+            );
+        }),
+        ("stop, then the stitch fails", |app, _, _, frames| {
+            frames(app);
+            let _ = update(app, Message::ScrollCaptureStopRequested);
+            let _ = update(app, Message::ScrollCaptureStitched(Err("boom".into())));
+        }),
+        ("cancel with nothing captured", |app, _, _, _| {
+            let _ = update(app, Message::ScrollCaptureCancelRequested);
+        }),
+        ("cancel, confirmed", |app, _, _, frames| {
+            frames(app);
+            let _ = update(app, Message::ScrollCaptureCancelRequested);
+            assert!(app.scroll_session.is_some(), "armed");
+            let _ = update(app, Message::ScrollCaptureCancelRequested);
+        }),
+        ("stop with nothing captured", |app, _, _, _| {
+            let _ = update(app, Message::ScrollCaptureStopRequested);
+        }),
+        ("the HUD window closes", |app, hud, _, _| {
+            let _ = update(app, Message::WindowClosed(hud));
+        }),
+        ("the region window closes", |app, _, region, _| {
+            let _ = update(app, Message::WindowClosed(region));
+        }),
+    ];
+    for (label, exit) in exits {
+        let (mut app, hud, region) = app_with_scroll_windows(false);
+        sync(&mut app);
+        assert_eq!(
+            registered.borrow().len(),
+            2,
+            "{label}: registered while it runs"
+        );
+        exit(&mut app, hud, region, &two_frames);
+        sync(&mut app);
+        assert!(registered.borrow().is_empty(), "{label}: still registered");
+        assert!(app.scroll_escape_hotkeys.is_empty(), "{label}");
+        assert!(
+            !app.hotkey_actions.values().any(|a| matches!(
+                a,
+                crate::app::GlobalHotkeyAction::ScrollStop
+                    | crate::app::GlobalHotkeyAction::ScrollDiscard
+            )),
+            "{label}: an esc action left behind"
+        );
+        // A later session registers them again.
+        app.scroll_session = Some(test_session());
+        sync(&mut app);
+        assert_eq!(registered.borrow().len(), 2, "{label}: next session");
+        app.scroll_session = None;
+        sync(&mut app);
+        assert!(registered.borrow().is_empty());
+    }
+}
+
 #[test]
 fn keep_going_disarms_cancel() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
