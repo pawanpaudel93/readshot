@@ -108,17 +108,17 @@ mod platform {
                 if let Some(url) = unsafe { url_from_apple_event(event) } {
                     match super::deliver_url_string(&url) {
                         Ok(()) => tracing::info!(
-                            target: "readshot::url",
+                            target: readshot_core::log::cat::URL,
                             "queued readshot:// AppleEvent action",
                         ),
                         Err(e) => tracing::warn!(
-                            target: "readshot::url",
+                            target: readshot_core::log::cat::URL,
                             "ignoring AppleEvent URL `{url}`: {e}",
                         ),
                     }
                 } else {
                     tracing::warn!(
-                        target: "readshot::url",
+                        target: readshot_core::log::cat::URL,
                         "ignoring AppleEvent without a direct-object URL",
                     );
                 }
@@ -174,7 +174,7 @@ mod platform {
             }
         }
 
-        tracing::info!(target: "readshot::url", "registered readshot:// AppleEvent handler");
+        tracing::info!(target: readshot_core::log::cat::URL, "registered readshot:// AppleEvent handler");
         Ok(())
     }
 

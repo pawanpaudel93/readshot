@@ -2717,7 +2717,7 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 && !ed.status_is_sticky()
                 && t.elapsed() > crate::editor::STATUS_AUTO_DISMISS =>
         {
-            tracing::trace!(target: "readshot::editor", "auto-dismissed status: {s}");
+            tracing::trace!(target: readshot_core::log::cat::EDITOR, "auto-dismissed status: {s}");
             None
         }
         (s, _) => s,

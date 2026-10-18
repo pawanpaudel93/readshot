@@ -355,9 +355,11 @@ pub(crate) async fn store_recognized_text(
         match written {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
-                tracing::warn!(target: "readshot::history", "scrubbed text update failed: {e}")
+                tracing::warn!(target: readshot_core::log::cat::HISTORY, "scrubbed text update failed: {e}")
             }
-            Err(e) => tracing::warn!(target: "readshot::history", "scrubbed text worker: {e}"),
+            Err(e) => {
+                tracing::warn!(target: readshot_core::log::cat::HISTORY, "scrubbed text worker: {e}")
+            }
         }
     }
     result
@@ -448,12 +450,12 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
                 }
                 Err(e) if other_running => {
                     tracing::warn!(
-                        target: "readshot::editor",
+                        target: readshot_core::log::cat::EDITOR,
                         "text recognition of part {part} failed: {e}"
                     );
                 }
                 Err(e) => {
-                    tracing::warn!(target: "readshot::editor", "text recognition failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::EDITOR, "text recognition failed: {e}");
                     ed.text_panel.recognizing_part = None;
                     ed.text_panel.recognition = TextRecognition::Failed(e.clone());
                     // Don't clobber a Saving…/Copying… toast; the panel's
@@ -587,7 +589,7 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
                 ed.set_status(match result {
                     Ok(n) => format!("Copied {}.", counted(n, "line", "lines")),
                     Err(e) => {
-                        tracing::warn!(target: "readshot::editor", "copy lines failed: {e}");
+                        tracing::warn!(target: readshot_core::log::cat::EDITOR, "copy lines failed: {e}");
                         super::history_ops::friendly_string_error_with(
                             "copy the text",
                             &e,
@@ -624,7 +626,7 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
                     }
                 }
                 Some(Err(e)) => {
-                    tracing::warn!(target: "readshot::history", "history rewrite failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "history rewrite failed: {e}");
                     if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
                         // What's on disk is unknown now: the next sync
                         // rewrites the whole record again.

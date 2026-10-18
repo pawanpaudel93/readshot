@@ -329,7 +329,7 @@ pub(crate) fn launch(ed: &mut EditorSession) -> Task<Message> {
         })
         .await
         {
-            tracing::warn!(target: "readshot::editor", "compose worker: {e}");
+            tracing::warn!(target: readshot_core::log::cat::EDITOR, "compose worker: {e}");
         }
     };
     Task::perform(work, move |()| Message::EditorComposed {
@@ -1089,7 +1089,7 @@ pub(crate) fn drop_retiring_editors_of(state: &mut App, id: readshot_core::Uuid)
     state.retiring_editors = kept;
     for ed in dropped {
         tracing::warn!(
-            target: "readshot::history",
+            target: readshot_core::log::cat::HISTORY,
             "record {id} reopened while an earlier editor of it was still composing; \
              that editor's pending changes were not written to History"
         );
@@ -1332,7 +1332,7 @@ fn land_steps(
             }
             Ok(false) => replay_steps(ed, coord, landed),
             Err(e) => {
-                tracing::warn!(target: "readshot::editor", "landed compose refused: {e}");
+                tracing::warn!(target: readshot_core::log::cat::EDITOR, "landed compose refused: {e}");
                 replay_steps(ed, coord, landed);
             }
         }

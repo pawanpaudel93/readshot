@@ -46,7 +46,7 @@ impl PermissionsProvider for MacOsPermissions {
             Ok(_) => PermissionStatus::Granted,
             Err(e) => {
                 tracing::trace!(
-                    target: "readshot::permissions",
+                    target: readshot_core::log::cat::PERMS,
                     "SCK probe denied: {e:?}",
                 );
                 PermissionStatus::Denied
@@ -68,7 +68,7 @@ impl PermissionsProvider for MacOsPermissions {
         // privacy panes both showing Readshot, each requiring its
         // own toggle. SCK-only registration consolidates to one.
         tracing::debug!(
-            target: "readshot::permissions",
+            target: readshot_core::log::cat::PERMS,
             "request() — no-op on macOS; SCK does registration via the coordinator",
         );
     }
@@ -92,11 +92,11 @@ impl PermissionsProvider for MacOsPermissions {
             .status();
         match status {
             Ok(s) if s.success() => tracing::info!(
-                target: "readshot::permissions",
+                target: readshot_core::log::cat::PERMS,
                 "reset stored Screen Recording decision",
             ),
             _ => tracing::warn!(
-                target: "readshot::permissions",
+                target: readshot_core::log::cat::PERMS,
                 "could not reset Screen Recording decision via tccutil",
             ),
         }
@@ -115,7 +115,7 @@ impl PermissionsProvider for MacOsPermissions {
         // away from whatever pane the user is on or double-stack.
         if system_settings_is_running() {
             tracing::info!(
-                target: "readshot::permissions",
+                target: readshot_core::log::cat::PERMS,
                 "System Settings already running — skipping deep-link",
             );
             return;
@@ -123,7 +123,7 @@ impl PermissionsProvider for MacOsPermissions {
         let status = std::process::Command::new("open").arg(URL).status();
         if !matches!(status, Ok(s) if s.success()) {
             tracing::warn!(
-                target: "readshot::permissions",
+                target: readshot_core::log::cat::PERMS,
                 "could not open Screen Recording pane — `open {URL}` failed",
             );
         }

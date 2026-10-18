@@ -63,7 +63,9 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 // and its text won't change, so there's nothing to
                 // refresh here.
                 Ok(false) => {}
-                Err(e) => tracing::warn!(target: "readshot::history", "persist failed: {e}"),
+                Err(e) => {
+                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "persist failed: {e}")
+                }
             }
             Task::none()
         }
@@ -112,7 +114,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 Err(e) => {
                     state.history_records.clear();
                     state.history_selected_id = None;
-                    tracing::warn!(target: "readshot::history", "history list failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "history list failed: {e}");
                     state.history_status = Some(friendly_string_error_with(
                         "read the history",
                         &e,
@@ -308,7 +310,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             state.history_clear_all_pending = false;
             state.history_delete_pending = None;
             if let Err(e) = state.coordinator.clear_history() {
-                tracing::warn!(target: "readshot::history", "clear history failed: {e}");
+                tracing::warn!(target: readshot_core::log::cat::HISTORY, "clear history failed: {e}");
                 state.history_status = Some(friendly_history_error("clear the history", &e));
                 return Task::none();
             }
@@ -348,7 +350,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 open_editor_window_replacing(state, editor, None)
             }
             Err(e) => {
-                tracing::warn!(target: "readshot::history", "open in editor failed: {e}");
+                tracing::warn!(target: readshot_core::log::cat::HISTORY, "open in editor failed: {e}");
                 state.history_status = Some(friendly_string_error_with(
                     "open the capture",
                     &e,
@@ -369,7 +371,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 return Task::none();
             };
             if let Err(e) = reveal_path(&path) {
-                tracing::warn!(target: "readshot::history", "reveal failed: {e}");
+                tracing::warn!(target: readshot_core::log::cat::HISTORY, "reveal failed: {e}");
                 state.history_status = Some(friendly_string_error_with(
                     "reveal the file",
                     &e.to_string(),
@@ -403,7 +405,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             state.history_status = Some(match result {
                 Ok(()) => "Copied image to clipboard.".into(),
                 Err(e) => {
-                    tracing::warn!(target: "readshot::history", "copy image failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "copy image failed: {e}");
                     friendly_string_error("copy the image to the clipboard", &e)
                 }
             });
@@ -452,7 +454,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                     format!("Copied {} of text.", counted(n, "character", "characters"))
                 }
                 Err(e) => {
-                    tracing::warn!(target: "readshot::history", "copy text failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "copy text failed: {e}");
                     friendly_string_error_with("copy the text", &e, Some(RETRY_HINT))
                 }
             });
@@ -482,7 +484,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                     counted(count, "capture", "captures")
                 ),
                 Err(e) => {
-                    tracing::warn!(target: "readshot::history", "copy visible text failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "copy visible text failed: {e}");
                     friendly_string_error_with("copy the visible text", &e, Some(RETRY_HINT))
                 }
             });
@@ -515,7 +517,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 open_task.map(move |opened| Message::PinWindowReady(opened, handle.clone()))
             }
             Err(e) => {
-                tracing::warn!(target: "readshot::history", "pin failed: {e}");
+                tracing::warn!(target: readshot_core::log::cat::HISTORY, "pin failed: {e}");
                 state.history_status = Some(friendly_string_error_with(
                     "pin the capture",
                     &e,
@@ -557,7 +559,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
 fn delete_history_record(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
     state.history_delete_pending = None;
     if let Err(e) = state.coordinator.delete_history(id) {
-        tracing::warn!(target: "readshot::history", "delete failed: {e}");
+        tracing::warn!(target: readshot_core::log::cat::HISTORY, "delete failed: {e}");
         state.history_status = Some(friendly_history_error("delete this capture", &e));
         return Task::none();
     }

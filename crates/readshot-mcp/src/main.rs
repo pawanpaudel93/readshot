@@ -215,7 +215,7 @@ async fn serve_stdio(server: McpServer) -> std::io::Result<()> {
     let mut stdout = tokio::io::stdout();
 
     tracing::info!(
-        target: "readshot::mcp",
+        target: readshot_core::log::cat::MCP,
         "readshot-mcp {version} ready on stdio",
         version = env!("CARGO_PKG_VERSION"),
     );
@@ -226,7 +226,7 @@ async fn serve_stdio(server: McpServer) -> std::io::Result<()> {
             LineRead::Eof => break,
             LineRead::Overflow => {
                 tracing::warn!(
-                    target: "readshot::mcp",
+                    target: readshot_core::log::cat::MCP,
                     "rejected oversized request line (> {MAX_LINE_BYTES} bytes)"
                 );
                 // Reply with a JSON-RPC parse error but keep serving.

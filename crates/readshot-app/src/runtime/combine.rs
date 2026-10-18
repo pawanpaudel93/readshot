@@ -167,7 +167,7 @@ pub(crate) fn load_part_file(
 ) -> Result<image::RgbaImage, String> {
     use std::io::Read;
     let io_err = |what: &str, e: std::io::Error| {
-        tracing::warn!(target: "readshot::editor", "add image: {what}: {e}");
+        tracing::warn!(target: readshot_core::log::cat::EDITOR, "add image: {what}: {e}");
         let reason =
             history_ops::io_reason_hint(&e.to_string()).unwrap_or("the file couldn’t be read");
         format!("{reason}. {CHOOSE_ANOTHER}")
@@ -256,12 +256,12 @@ pub(crate) fn decode_part_image(
         image::ImageReader::new(std::io::Cursor::new(bytes))
             .with_guessed_format()
             .map_err(|e| {
-                tracing::warn!(target: "readshot::editor", "add image: format: {e}");
+                tracing::warn!(target: readshot_core::log::cat::EDITOR, "add image: format: {e}");
                 not_an_image()
             })
     };
     let (w, h) = reader()?.into_dimensions().map_err(|e| {
-        tracing::warn!(target: "readshot::editor", "add image: header: {e}");
+        tracing::warn!(target: readshot_core::log::cat::EDITOR, "add image: header: {e}");
         not_an_image()
     })?;
     if w == 0 || h == 0 {
@@ -293,7 +293,7 @@ pub(crate) fn decode_part_image(
     let mut decoder = reader()?;
     decoder.limits(limits);
     let img = decoder.decode().map_err(|e| {
-        tracing::warn!(target: "readshot::editor", "add image: decode: {e}");
+        tracing::warn!(target: readshot_core::log::cat::EDITOR, "add image: decode: {e}");
         match e {
             image::ImageError::Limits(_) => {
                 format!("the image is too large to open. {CHOOSE_SMALLER}")
@@ -342,7 +342,7 @@ async fn pick_and_decode_image(
     })
     .await
     .map_err(|e| {
-        tracing::warn!(target: "readshot::editor", "add image worker: {e}");
+        tracing::warn!(target: readshot_core::log::cat::EDITOR, "add image worker: {e}");
         format!("the file couldn’t be read. {CHOOSE_ANOTHER}")
     })?
 }

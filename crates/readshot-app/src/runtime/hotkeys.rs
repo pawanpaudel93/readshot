@@ -194,7 +194,7 @@ pub(crate) fn register_default_hotkey(prefs: &Preferences) -> Option<HotkeyRegis
     let manager = match GlobalHotKeyManager::new() {
         Ok(m) => m,
         Err(e) => {
-            tracing::warn!(target: "readshot::hotkey", "GlobalHotKeyManager init failed: {e}");
+            tracing::warn!(target: readshot_core::log::cat::HOTKEY, "GlobalHotKeyManager init failed: {e}");
             return None;
         }
     };
@@ -266,7 +266,7 @@ where
                 // clobber) a reserved fixed hotkey — the fixed ones below
                 // must keep working. The settings notice explains why.
                 tracing::warn!(
-                    target: "readshot::hotkey",
+                    target: readshot_core::log::cat::HOTKEY,
                     "capture hotkey `{}` conflicts with the {reserved} shortcut; not registering",
                     prefs.capture_hotkey,
                 );
@@ -278,14 +278,14 @@ where
                         actions.insert(id, GlobalHotkeyAction::Capture);
                         capture_registered = true;
                         tracing::info!(
-                            target: "readshot::hotkey",
+                            target: readshot_core::log::cat::HOTKEY,
                             "registered global hotkey: {}",
                             prefs.capture_hotkey,
                         );
                     }
                     Err(e) => {
                         tracing::warn!(
-                            target: "readshot::hotkey",
+                            target: readshot_core::log::cat::HOTKEY,
                             "failed to register `{}`: {e}",
                             prefs.capture_hotkey,
                         );
@@ -295,7 +295,7 @@ where
         }
         Err(e) => {
             tracing::warn!(
-                target: "readshot::hotkey",
+                target: readshot_core::log::cat::HOTKEY,
                 "could not parse capture_hotkey `{}`: {e}",
                 prefs.capture_hotkey,
             );
@@ -338,14 +338,14 @@ where
     F: FnMut(HotKey) -> Result<(), String>,
 {
     let Ok(spec) = hotkey::parse(hotkey_string) else {
-        tracing::warn!(target: "readshot::hotkey", "fixed hotkey `{hotkey_string}` did not parse");
+        tracing::warn!(target: readshot_core::log::cat::HOTKEY, "fixed hotkey `{hotkey_string}` did not parse");
         return false;
     };
     let hotkey = spec.to_global_hotkey();
     let id = hotkey.id();
     if let Err(e) = register(hotkey) {
         tracing::warn!(
-            target: "readshot::hotkey",
+            target: readshot_core::log::cat::HOTKEY,
             "failed to register fixed hotkey `{hotkey_string}`: {e}",
         );
         return false;
@@ -436,7 +436,7 @@ pub(crate) fn sync_scroll_escape_hotkeys_with<R, U>(
                     state.scroll_escape_hotkeys.push(hotkey);
                 }
                 Err(e) => tracing::warn!(
-                    target: "readshot::hotkey",
+                    target: readshot_core::log::cat::HOTKEY,
                     "couldn't register the scrolling-capture esc key: {e}"
                 ),
             }

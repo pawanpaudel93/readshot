@@ -1237,7 +1237,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     Ok(Some(p)) => format!("Saved to {}.", p.display()),
                     Ok(None) => "Save cancelled.".into(),
                     Err(e) => {
-                        tracing::warn!(target: "readshot::editor", "save failed: {e}");
+                        tracing::warn!(target: readshot_core::log::cat::EDITOR, "save failed: {e}");
                         super::history_ops::friendly_string_error_with(
                             "save the image",
                             &e,
@@ -1292,7 +1292,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 ed.set_status(match result {
                     Ok(()) => "Copied image to clipboard.".into(),
                     Err(e) => {
-                        tracing::warn!(target: "readshot::editor", "copy image failed: {e}");
+                        tracing::warn!(target: readshot_core::log::cat::EDITOR, "copy image failed: {e}");
                         super::history_ops::friendly_string_error_with(
                             "copy to the clipboard",
                             &e,
@@ -1401,7 +1401,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         counted(text.chars().count(), "character", "characters")
                     ),
                     Err(e) => {
-                        tracing::warn!(target: "readshot::editor", "copy text failed: {e}");
+                        tracing::warn!(target: readshot_core::log::cat::EDITOR, "copy text failed: {e}");
                         super::history_ops::friendly_string_error_with(
                             "copy the text",
                             &e,
@@ -2393,7 +2393,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         } => match result {
             Ok(img) => open_pin_window(state, img, display_bounds),
             Err(e) => {
-                tracing::warn!(target: "readshot::editor", "pin render failed: {e}");
+                tracing::warn!(target: readshot_core::log::cat::EDITOR, "pin render failed: {e}");
                 state.last_capture_status = Some(e);
                 Task::none()
             }

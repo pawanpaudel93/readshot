@@ -273,7 +273,7 @@ fn load_emoji_bitmaps(
         .find_map(|path| std::fs::read(path).ok())
         .and_then(|bytes| FontVec::try_from_vec_and_index(bytes, 0).ok());
     let Some(font) = font else {
-        tracing::debug!(target: "readshot::render", "no emoji rasterizer or font; emoji stamps draw a placeholder");
+        tracing::debug!(target: crate::log::cat::EDITOR, "no emoji rasterizer or font; emoji stamps draw a placeholder");
         return kinds.into_iter().map(|k| (k, None)).collect();
     };
     // `font` (the whole file) drops when this returns; only the small

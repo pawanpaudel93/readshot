@@ -1465,7 +1465,7 @@ impl App {
         };
         if let Err(e) = self.preferences.save(path) {
             tracing::warn!(
-                target: "readshot::preferences",
+                target: readshot_core::log::cat::PREFERENCES,
                 "save failed: {e}",
             );
         }

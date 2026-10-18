@@ -455,7 +455,7 @@ pub(crate) fn configure_overlay_window_after_open(id: window::Id) -> Task<Messag
         window::run(id, |window| {
             if let Err(e) = set_macos_capture_overlay_level(window) {
                 tracing::warn!(
-                    target: "readshot::overlay",
+                    target: readshot_core::log::cat::CAPTURE,
                     "could not raise capture overlay above macOS system UI: {e}"
                 );
             }

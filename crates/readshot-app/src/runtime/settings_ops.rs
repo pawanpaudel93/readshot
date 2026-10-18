@@ -37,7 +37,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             if let Some(enabled) = launch_at_login {
                 if let Err(e) = crate::startup::set_launch_at_login(enabled) {
                     tracing::warn!(
-                        target: "readshot::startup",
+                        target: readshot_core::log::cat::APP,
                         "launch-at-login update failed: {e}",
                     );
                     state.update_sync(Message::Settings(SettingsMessage::SetLaunchAtLogin(
@@ -84,7 +84,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             state.settings_status = Some(match result {
                 Ok(()) => "Opened save folder.".to_string(),
                 Err(e) => {
-                    tracing::warn!(target: "readshot::settings", "open save folder failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::PREFERENCES, "open save folder failed: {e}");
                     super::history_ops::friendly_string_error("open the save folder", &e)
                 }
             });
@@ -159,7 +159,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             if old_launch_at_login {
                 if let Err(e) = crate::startup::set_launch_at_login(false) {
                     tracing::warn!(
-                        target: "readshot::startup",
+                        target: readshot_core::log::cat::APP,
                         "launch-at-login reset failed: {e}",
                     );
                     state.update_sync(Message::Settings(SettingsMessage::SetLaunchAtLogin(true)));
@@ -191,12 +191,12 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
                         for report in &reports {
                             match &report.outcome {
                                 Ok(status) => tracing::info!(
-                                    target: "readshot::uninstall",
+                                    target: readshot_core::log::cat::APP,
                                     "{}: {status:?}",
                                     report.action.describe(),
                                 ),
                                 Err(e) => tracing::warn!(
-                                    target: "readshot::uninstall",
+                                    target: readshot_core::log::cat::APP,
                                     "{} failed: {e}",
                                     report.action.describe(),
                                 ),
@@ -357,7 +357,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
                     shell.label()
                 ),
                 Err(e) => {
-                    tracing::warn!(target: "readshot::settings", "copy cli commands failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::PREFERENCES, "copy cli commands failed: {e}");
                     super::history_ops::friendly_string_error_with(
                         "copy the commands",
                         &e,

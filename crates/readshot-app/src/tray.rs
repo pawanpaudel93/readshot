@@ -128,7 +128,7 @@ fn capture_menu_accelerator(raw_hotkey: Option<&str>) -> Option<Accelerator> {
         Ok(accelerator) => Some(accelerator),
         Err(e) => {
             tracing::debug!(
-                target: "readshot::tray",
+                target: readshot_core::log::cat::TRAY,
                 "could not parse tray accelerator `{raw_hotkey}`: {e}",
             );
             None
@@ -188,10 +188,10 @@ impl TrayController {
             .item_capture
             .set_accelerator(capture_menu_accelerator(raw_hotkey))
         {
-            tracing::debug!(target: "readshot::tray", "set capture accelerator failed: {e}");
+            tracing::debug!(target: readshot_core::log::cat::TRAY, "set capture accelerator failed: {e}");
         }
         if let Err(e) = self.tray.set_tooltip(Some(tray_tooltip(hotkey_label))) {
-            tracing::debug!(target: "readshot::tray", "set_tooltip failed: {e}");
+            tracing::debug!(target: readshot_core::log::cat::TRAY, "set_tooltip failed: {e}");
         }
     }
 
@@ -254,7 +254,7 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
     let icon = match build_icon(32) {
         Ok(i) => i,
         Err(e) => {
-            tracing::warn!(target: "readshot::tray", "icon build failed: {e}");
+            tracing::warn!(target: readshot_core::log::cat::TRAY, "icon build failed: {e}");
             return None;
         }
     };
@@ -310,16 +310,16 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
         &item_history,
         &item_settings,
     ]) {
-        tracing::warn!(target: "readshot::tray", "menu build failed: {e}");
+        tracing::warn!(target: readshot_core::log::cat::TRAY, "menu build failed: {e}");
         return None;
     }
     #[cfg(target_os = "macos")]
     if let Err(e) = menu.append(&item_check_updates) {
-        tracing::warn!(target: "readshot::tray", "menu build failed: {e}");
+        tracing::warn!(target: readshot_core::log::cat::TRAY, "menu build failed: {e}");
         return None;
     }
     if let Err(e) = menu.append_items(&[&PredefinedMenuItem::separator(), &item_quit]) {
-        tracing::warn!(target: "readshot::tray", "menu build failed: {e}");
+        tracing::warn!(target: readshot_core::log::cat::TRAY, "menu build failed: {e}");
         return None;
     }
 
@@ -335,12 +335,12 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
     {
         Ok(t) => t,
         Err(e) => {
-            tracing::warn!(target: "readshot::tray", "TrayIconBuilder failed: {e}");
+            tracing::warn!(target: readshot_core::log::cat::TRAY, "TrayIconBuilder failed: {e}");
             return None;
         }
     };
 
-    tracing::info!(target: "readshot::tray", "tray icon installed");
+    tracing::info!(target: readshot_core::log::cat::TRAY, "tray icon installed");
     Some(TrayController {
         tray,
         item_capture,

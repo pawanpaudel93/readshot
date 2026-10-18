@@ -41,6 +41,14 @@ pub mod cat {
     pub const UPDATER: &str = concat!("np.com.pawanpaudel.readshot", "::updater");
     pub const CLI: &str = concat!("np.com.pawanpaudel.readshot", "::cli");
     pub const MCP: &str = concat!("np.com.pawanpaudel.readshot", "::mcp");
+    /// App lifecycle: startup, app events, notifications, uninstall.
+    pub const APP: &str = concat!("np.com.pawanpaudel.readshot", "::app");
+    pub const TRAY: &str = concat!("np.com.pawanpaudel.readshot", "::tray");
+    pub const HOTKEY: &str = concat!("np.com.pawanpaudel.readshot", "::hotkey");
+    /// The `readshot://` URL scheme.
+    pub const URL: &str = concat!("np.com.pawanpaudel.readshot", "::url");
+    /// Preferences and the Settings window.
+    pub const PREFERENCES: &str = concat!("np.com.pawanpaudel.readshot", "::preferences");
 }
 
 #[cfg(test)]
@@ -63,6 +71,11 @@ mod tests {
             cat::UPDATER,
             cat::CLI,
             cat::MCP,
+            cat::APP,
+            cat::TRAY,
+            cat::HOTKEY,
+            cat::URL,
+            cat::PREFERENCES,
         ] {
             assert!(
                 c.starts_with(LOG_TARGET),

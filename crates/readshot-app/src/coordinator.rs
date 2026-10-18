@@ -328,7 +328,7 @@ fn apply_rewrite(
     if !record.redacted && !job.may_unredact && !matches!(store.stored_redacted(record), Ok(false))
     {
         tracing::warn!(
-            target: "readshot::history",
+            target: readshot_core::log::cat::HISTORY,
             "dropped a restore of record {id}: it is redacted on disk"
         );
         return Outcome::Stale;
@@ -415,7 +415,7 @@ fn run_rewrite(
         }
         Outcome::Missing | Outcome::Stale => None,
         Outcome::Failed(e) => {
-            tracing::warn!(target: "readshot::history", "history rewrite failed: {e}");
+            tracing::warn!(target: readshot_core::log::cat::HISTORY, "history rewrite failed: {e}");
             if let Some(done) = rewrite.done.take() {
                 let _ = done.send(Err(e));
             }
@@ -435,7 +435,7 @@ fn run_update(
         HistoryUpdate::Write(record) => {
             if let Err(e) = store.update(&record) {
                 tracing::warn!(
-                    target: "readshot::history",
+                    target: readshot_core::log::cat::HISTORY,
                     "background history update failed: {e}"
                 );
             }
@@ -633,7 +633,7 @@ impl CaptureCoordinator {
             None => record,
         };
         if let Err(e) = self.update_history(&record) {
-            tracing::warn!(target: "readshot::history", "history update failed: {e}");
+            tracing::warn!(target: readshot_core::log::cat::HISTORY, "history update failed: {e}");
         }
     }
 
@@ -746,7 +746,7 @@ impl CaptureCoordinator {
             let may_unredact = match st.scrub_owners.get(&id) {
                 Some(scrubber) if *scrubber != owner => {
                     tracing::warn!(
-                        target: "readshot::history",
+                        target: readshot_core::log::cat::HISTORY,
                         "dropped a restore of record {id}: another editor redacted it"
                     );
                     return rx;
@@ -805,7 +805,7 @@ impl CaptureCoordinator {
                 }
                 Err(e) => {
                     tracing::warn!(
-                        target: "readshot::history",
+                        target: readshot_core::log::cat::HISTORY,
                         "history scrub (phase one) failed: {e}"
                     );
                     // On-disk state unknown: phase one is redone next time.
@@ -922,7 +922,7 @@ impl CaptureCoordinator {
                     }
                 }
                 Err(e) => tracing::warn!(
-                    target: "readshot::history",
+                    target: readshot_core::log::cat::HISTORY,
                     "history scrub (phase one) failed again: {e}"
                 ),
             }

@@ -170,7 +170,7 @@ pub(crate) fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession)
                 );
             }
             Err(e) => {
-                tracing::warn!(target: "readshot::scroll", "frame capture failed: {e}");
+                tracing::warn!(target: readshot_core::log::cat::CAPTURE, "frame capture failed: {e}");
                 session.no_motion_count += 1;
             }
         }
@@ -529,7 +529,7 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
             // No session means it was torn down while stitching (e.g.
             // cancelled out-of-band): the result is stale, drop it.
             let Some(session) = state.scroll_session.take() else {
-                tracing::debug!(target: "readshot::scroll", "dropping stitch result: no session");
+                tracing::debug!(target: readshot_core::log::cat::CAPTURE, "dropping stitch result: no session");
                 return Task::none();
             };
             let display_scale = session.scale;
@@ -558,7 +558,7 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: Message) -> Task<M
                             &e.to_string(),
                             Some(SCROLL_RETRY_HINT),
                         ));
-                    tracing::warn!(target: "readshot::scroll", "stitch failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::CAPTURE, "stitch failed: {e}");
                     close_hud
                 }
             }

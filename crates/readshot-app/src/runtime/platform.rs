@@ -144,7 +144,7 @@ pub(crate) fn quit_readshot(coord: &crate::coordinator::CaptureCoordinator) -> T
         // after iced has closed its windows/tray. A stale process makes
         // the next Finder/open launch deliver a reopen AppleEvent to a
         // non-visible instance instead of starting cleanly.
-        tracing::info!(target: "readshot::lifecycle", "quit requested; terminating process");
+        tracing::info!(target: readshot_core::log::cat::APP, "quit requested; terminating process");
         disarm_relaunch_on_system_quit();
         std::process::exit(0);
     }
@@ -383,7 +383,7 @@ pub(crate) fn notify_update_check_failed(e: &crate::updater::UpdaterError) {
     #[cfg(not(target_os = "macos"))]
     {
         tracing::warn!(
-            target: "readshot::updater",
+            target: readshot_core::log::cat::UPDATER,
             "{}",
             update_check_failure_message(e)
         );
@@ -402,7 +402,7 @@ pub(crate) fn show_macos_notification(title: &str, body: &str) {
         .spawn();
     if let Err(e) = spawn {
         tracing::warn!(
-            target: "readshot::notify",
+            target: readshot_core::log::cat::APP,
             "osascript spawn failed: {e}"
         );
     }

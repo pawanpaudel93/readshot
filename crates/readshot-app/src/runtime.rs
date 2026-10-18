@@ -390,7 +390,7 @@ pub fn start() -> (App, Task<Message>) {
     // Already probed once in `App::new`; don't probe (and maybe prompt) again.
     let initial_permission = app.permission_status;
     tracing::info!(
-        target: "readshot::permissions",
+        target: readshot_core::log::cat::PERMS,
         "initial status: {:?}",
         initial_permission,
     );
@@ -422,20 +422,20 @@ pub fn start() -> (App, Task<Message>) {
     }
     if app.preferences.launch_at_login {
         if let Err(e) = crate::startup::set_launch_at_login(true) {
-            tracing::warn!(target: "readshot::startup", "launch-at-login setup failed: {e}");
+            tracing::warn!(target: readshot_core::log::cat::APP, "launch-at-login setup failed: {e}");
         }
     }
     #[cfg(target_os = "macos")]
     if let Err(e) = crate::url_events::install_platform_handler() {
-        tracing::warn!(target: "readshot::url", "running-app URL handler unavailable: {e}");
+        tracing::warn!(target: readshot_core::log::cat::URL, "running-app URL handler unavailable: {e}");
     }
     #[cfg(target_os = "macos")]
     if let Err(e) = crate::app_events::install_platform_handler() {
-        tracing::warn!(target: "readshot::app-events", "app reopen handler unavailable: {e}");
+        tracing::warn!(target: readshot_core::log::cat::APP, "app reopen handler unavailable: {e}");
     }
     #[cfg(target_os = "macos")]
     if let Err(e) = crate::updater::install() {
-        tracing::warn!(target: "readshot::updater", "Sparkle updater unavailable: {e}");
+        tracing::warn!(target: readshot_core::log::cat::UPDATER, "Sparkle updater unavailable: {e}");
     }
     // Same fail-soft contract for the tray. Linux without an
     // appindicator daemon, or a Windows session without a Shell_Notify
@@ -1295,7 +1295,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             crate::tray::TrayAction::CheckForUpdates => {
                 notify_update_check_started();
                 if let Err(e) = crate::updater::check_for_updates() {
-                    tracing::warn!(target: "readshot::updater", "manual update check failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::UPDATER, "manual update check failed: {e}");
                     notify_update_check_failed(&e);
                 }
                 Task::none()
@@ -1408,7 +1408,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         Message::OverlayDisplaysListed(Err(e)) => {
             state.overlay_opening = false;
             clear_pending_capture_state(state);
-            tracing::warn!(target: "readshot::capture", "could not list displays: {e}");
+            tracing::warn!(target: readshot_core::log::cat::CAPTURE, "could not list displays: {e}");
             state.last_capture_status = Some(history_ops::friendly_capture_error(&e));
             let restore = abort_combine_capture(state, Some(&combine_capture_failed_status(&e)));
             if state.cli_interactive_output.is_some() {
@@ -1426,7 +1426,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             state.overlay_opening = false;
             if displays.is_empty() {
                 clear_pending_capture_state(state);
-                tracing::warn!(target: "readshot::capture", "no displays detected");
+                tracing::warn!(target: readshot_core::log::cat::CAPTURE, "no displays detected");
                 state.last_capture_status =
                     Some("Couldn’t capture — no display was detected.".into());
                 let restore = abort_combine_capture(
@@ -1668,7 +1668,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                 return match result {
                     Ok(image) => finish_combine_capture(state, image),
                     Err(e) => {
-                        tracing::warn!(target: "readshot::capture", "region capture failed: {e}");
+                        tracing::warn!(target: readshot_core::log::cat::CAPTURE, "region capture failed: {e}");
                         let status = combine_capture_failed_status(&e);
                         fail_combine_capture(state, Some(&status))
                     }
@@ -1833,7 +1833,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                     Task::batch([history_task, intent_task])
                 }
                 Err(e) => {
-                    tracing::warn!(target: "readshot::capture", "region capture failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::CAPTURE, "region capture failed: {e}");
                     state.last_capture_status = Some(history_ops::friendly_capture_error(&e));
                     if state.cli_interactive_output.is_some() {
                         Task::done(Message::CliInteractiveWritten(Err(e)))
@@ -2208,7 +2208,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             state.last_capture_status = Some(match result {
                 Ok(()) => "Copied image to clipboard.".into(),
                 Err(e) => {
-                    tracing::warn!(target: "readshot::overlay", "copy image failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::CAPTURE, "copy image failed: {e}");
                     history_ops::friendly_string_error_with(
                         "copy to the clipboard",
                         &e,
@@ -2228,7 +2228,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                 Ok(Some(p)) => format!("Saved to {}.", p.display()),
                 Ok(None) => "Save cancelled.".into(),
                 Err(e) => {
-                    tracing::warn!(target: "readshot::overlay", "save failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::CAPTURE, "save failed: {e}");
                     history_ops::friendly_string_error_with(
                         "save the image",
                         &e,
@@ -2246,7 +2246,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                     format!("Copied {} of text.", counted(n, "character", "characters"))
                 }
                 Err(e) => {
-                    tracing::warn!(target: "readshot::overlay", "copy text failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::CAPTURE, "copy text failed: {e}");
                     history_ops::friendly_string_error_with(
                         "copy the text",
                         &e,
@@ -2258,7 +2258,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::CliInteractiveWritten(result) => {
             if let Err(e) = result {
-                tracing::warn!(target: "readshot::cli", "interactive capture failed: {e}");
+                tracing::warn!(target: readshot_core::log::cat::CLI, "interactive capture failed: {e}");
             }
             state.cli_interactive_output = None;
             state.overlay_opening = false;
@@ -2289,7 +2289,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             state.last_capture_status = Some(match &result {
                 Ok(path) => format!("Saved to {}.", path.display()),
                 Err(e) => {
-                    tracing::warn!(target: "readshot::capture", "capture failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::CAPTURE, "capture failed: {e}");
                     history_ops::friendly_capture_error(e)
                 }
             });
@@ -2318,7 +2318,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::UrlActionReceived(action) => match action {
             UrlAction::NewCapture => {
-                tracing::info!(target: "readshot::url", "readshot:// → opening overlay");
+                tracing::info!(target: readshot_core::log::cat::URL, "readshot:// → opening overlay");
                 if state.welcome.should_show() {
                     state.pending_url_after_permission = Some(UrlAction::NewCapture);
                     return show_or_focus_welcome(state);
@@ -2326,7 +2326,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                 update(state, Message::OpenOverlayRequested)
             }
             UrlAction::Unknown(path) => {
-                tracing::warn!(target: "readshot::url", "ignoring unknown readshot:// path: {path}");
+                tracing::warn!(target: readshot_core::log::cat::URL, "ignoring unknown readshot:// path: {path}");
                 Task::none()
             }
         },
@@ -2346,14 +2346,14 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                 disarm_relaunch_on_system_quit();
                 match relaunch_via_launch_services() {
                     Ok(()) => {
-                        tracing::info!(target: "readshot::permissions", "respawned via Launch Services; exiting");
+                        tracing::info!(target: readshot_core::log::cat::PERMS, "respawned via Launch Services; exiting");
                         // Tiny sleep so `open -n` definitely got the
                         // request through before this PID disappears.
                         std::thread::sleep(Duration::from_millis(150));
                         std::process::exit(0);
                     }
                     Err(e) => {
-                        tracing::warn!(target: "readshot::permissions", "relaunch failed: {e}");
+                        tracing::warn!(target: readshot_core::log::cat::PERMS, "relaunch failed: {e}");
                     }
                 }
             }
@@ -2611,7 +2611,7 @@ pub fn load_preferences(path: Option<&Path>) -> Preferences {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(
-                target: "readshot::preferences",
+                target: readshot_core::log::cat::PREFERENCES,
                 "load failed for {}: {e} — using first-launch defaults",
                 path.display(),
             );
@@ -2760,11 +2760,11 @@ async fn persist_history(
             let buf = match encoded {
                 Ok(Ok(buf)) => buf,
                 Ok(Err(e)) => {
-                    tracing::warn!(target: "readshot::history", "png encode: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "png encode: {e}");
                     return false;
                 }
                 Err(e) => {
-                    tracing::warn!(target: "readshot::history", "png encode worker: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "png encode worker: {e}");
                     return false;
                 }
             };
@@ -2802,17 +2802,17 @@ async fn persist_history(
             match written {
                 Ok(Ok(())) => true,
                 Ok(Err(e)) => {
-                    tracing::warn!(target: "readshot::history", "ocr update failed: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "ocr update failed: {e}");
                     false
                 }
                 Err(e) => {
-                    tracing::warn!(target: "readshot::history", "ocr update worker: {e}");
+                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "ocr update worker: {e}");
                     false
                 }
             }
         }
         Err(e) => {
-            tracing::warn!(target: "readshot::history", "ocr failed: {e}");
+            tracing::warn!(target: readshot_core::log::cat::HISTORY, "ocr failed: {e}");
             false
         }
     };

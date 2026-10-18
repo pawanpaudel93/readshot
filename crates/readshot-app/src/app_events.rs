@@ -72,7 +72,7 @@ mod platform {
             #[unsafe(method(handleReopenEvent:withReplyEvent:))]
             unsafe fn handle_reopen_event(&self, _event: &AnyObject, _reply_event: &AnyObject) {
                 super::queue_reopen_request();
-                tracing::info!(target: "readshot::app-events", "queued reopen AppleEvent");
+                tracing::info!(target: readshot_core::log::cat::APP, "queued reopen AppleEvent");
             }
         }
     );
@@ -125,7 +125,7 @@ mod platform {
             }
         }
 
-        tracing::info!(target: "readshot::app-events", "registered reopen AppleEvent handler");
+        tracing::info!(target: readshot_core::log::cat::APP, "registered reopen AppleEvent handler");
         Ok(())
     }
 }
