@@ -88,6 +88,10 @@ struct RewriteJob {
     record: CaptureRecord,
     base: Arc<RgbaImage>,
     bake: Vec<readshot_core::Annotation>,
+    /// A restore whose requester owns the record's newest scrub (the
+    /// editor session undoing its own redaction): it may replace a
+    /// redacted record. Any other restore never does ([`apply_rewrite`]).
+    may_unredact: bool,
 }
 
 /// A queued rewrite. Rendering and encoding run on the writer thread,
@@ -136,6 +140,9 @@ struct ScrubState {
     /// removed) is on disk, per record, with the document frame they are
     /// in: the same redactions in another frame cover other pixels.
     secured: std::collections::HashMap<readshot_core::Uuid, SecuredScrub>,
+    /// The editor session that requested the newest scrub of each record
+    /// (`None`: a caller without one). Only that session may restore it.
+    scrub_owners: std::collections::HashMap<readshot_core::Uuid, Option<u64>>,
 }
 
 /// A secured scrub's document frame (`CaptureRecord::geometry_id`) and
@@ -315,6 +322,16 @@ fn apply_rewrite(
     let mut b = lock(&scrubs.book);
     if scrubs.is_stale(id, job.seq) {
         return Outcome::Stale; // `staged` drops: its files are removed
+    }
+    // A restore nobody here may make over a redacted record (its scrub
+    // came from an earlier run, or the sidecar can't be read): dropped.
+    if !record.redacted && !job.may_unredact && !matches!(store.stored_redacted(record), Ok(false))
+    {
+        tracing::warn!(
+            target: "readshot::history",
+            "dropped a restore of record {id}: it is redacted on disk"
+        );
+        return Outcome::Stale;
     }
     match store.commit_rewrite(record, staged) {
         Ok(true) => {
@@ -645,6 +662,24 @@ impl CaptureCoordinator {
     /// A restore (`redacted: false`) cancels any parked or pending scrub.
     pub fn rewrite_history_async(
         &self,
+        record: CaptureRecord,
+        base: Arc<RgbaImage>,
+        bake: Vec<readshot_core::Annotation>,
+    ) -> iced::futures::channel::oneshot::Receiver<HistoryRewriteResult> {
+        self.rewrite_history_as(None, record, base, bake)
+    }
+
+    /// [`Self::rewrite_history_async`] for the editor session `owner`.
+    /// A restore (`redacted: false`) only ever replaces a redacted
+    /// record when `owner` requested that record's newest scrub (it is
+    /// undoing its own redaction). Any other restore of a record with a
+    /// scrub on record is dropped here, unwritten; one of a record nobody
+    /// here scrubbed is dropped at commit if the record is redacted on
+    /// disk. A late writer (an editor closed mid-compose, a second editor
+    /// of the same record) thus never un-redacts.
+    pub fn rewrite_history_as(
+        &self,
+        owner: Option<u64>,
         mut record: CaptureRecord,
         base: Arc<RgbaImage>,
         bake: Vec<readshot_core::Annotation>,
@@ -702,6 +737,18 @@ impl CaptureCoordinator {
             // already holding the gate has finished.
             let mut b = lock(&self.scrubs.book);
             let mut st = lock(&self.scrubs.state);
+            let may_unredact = match st.scrub_owners.get(&id) {
+                Some(scrubber) if *scrubber != owner => {
+                    tracing::warn!(
+                        target: "readshot::history",
+                        "dropped a restore of record {id}: another editor redacted it"
+                    );
+                    return rx;
+                }
+                Some(_) => true,
+                None => false,
+            };
+            st.scrub_owners.remove(&id);
             let seq = next_rewrite_seq();
             st.latest.insert(id, seq);
             st.secured.remove(&id);
@@ -714,6 +761,7 @@ impl CaptureCoordinator {
                 record,
                 base,
                 bake,
+                may_unredact,
             };
             return self.queue_rewrite(job, tx, rx);
         }
@@ -723,6 +771,7 @@ impl CaptureCoordinator {
             let mut st = lock(&self.scrubs.state);
             let seq = next_rewrite_seq();
             st.latest.insert(id, seq);
+            st.scrub_owners.insert(id, owner);
             let phase_one = st.secured.get(&id) != Some(&secured_key(&record));
             (seq, phase_one)
         };
@@ -731,6 +780,7 @@ impl CaptureCoordinator {
             record: record.clone(),
             base,
             bake,
+            may_unredact: false,
         };
         if phase_one {
             // Phase one: a small sidecar write plus two removals. The
@@ -1172,6 +1222,7 @@ mod tests {
                 record: tagged(id, tag),
                 base: Arc::new(image::RgbaImage::new(1, 1)),
                 bake: Vec::new(),
+                may_unredact: false,
             },
             done: None,
             attempt: 0,
@@ -1392,6 +1443,52 @@ mod tests {
             .unwrap()
     }
 
+    /// A restore (unredacted rewrite) never replaces a redacted record
+    /// unless it comes from the editor session whose scrub it undoes:
+    /// another session's late restore is dropped, and so is one with no
+    /// known owner over a record that is redacted on disk.
+    #[test]
+    fn only_the_scrubbing_session_may_restore_a_redacted_record() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let coord = history_coord(store.clone());
+        let base = Arc::new(white(8, 8));
+        let record = CaptureRecord::new(chrono::Utc::now(), 8, 8, "d");
+        store
+            .save(&record, &readshot_core::encode_png(&base).unwrap())
+            .unwrap();
+        let (a, b) = (Some(1), Some(2));
+        drop(coord.rewrite_history_as(b, scrubbed(&record), Arc::clone(&base), pixelate()));
+        coord.flush_history_updates();
+        assert!(sidecar(&store, &record).redacted);
+        // Session A (not the scrub's owner) restores: refused.
+        drop(coord.rewrite_history_as(a, record.clone(), Arc::clone(&base), Vec::new()));
+        coord.flush_history_updates();
+        assert!(
+            sidecar(&store, &record).redacted,
+            "another session un-redacted it"
+        );
+        // A restart: nobody owns the scrub on disk; a restore is refused.
+        let fresh = history_coord(store.clone());
+        drop(fresh.rewrite_history_as(b, record.clone(), Arc::clone(&base), Vec::new()));
+        fresh.flush_history_updates();
+        assert!(
+            sidecar(&store, &record).redacted,
+            "an ownerless restore un-redacted it"
+        );
+        // B, whose scrub it is, undoes it: allowed.
+        drop(coord.rewrite_history_as(b, record.clone(), Arc::clone(&base), Vec::new()));
+        coord.flush_history_updates();
+        assert!(
+            !sidecar(&store, &record).redacted,
+            "the owner's undo restores"
+        );
+        // Unredacted on disk now: any session may rewrite its frame.
+        drop(coord.rewrite_history_as(a, record.clone(), Arc::clone(&base), Vec::new()));
+        coord.flush_history_updates();
+        assert!(!sidecar(&store, &record).redacted);
+    }
+
     #[tokio::test]
     async fn a_scrub_of_a_record_not_saved_yet_is_applied_when_the_save_lands() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -1567,6 +1664,7 @@ mod tests {
             record: stale.clone(),
             base: Arc::new(white(8, 8)),
             bake: Vec::new(),
+            may_unredact: false,
         };
         let png = readshot_core::encode_png(&white(8, 8)).unwrap();
         let outcome = apply_rewrite(&store, &scrubs, &job, &stale, &png, None);
@@ -1595,6 +1693,7 @@ mod tests {
             record: scrubbed(&record),
             base: Arc::new(white(8, 8)),
             bake: pixelate(),
+            may_unredact: false,
         };
         fail_closed(&store, &scrubs, &job);
         assert!(

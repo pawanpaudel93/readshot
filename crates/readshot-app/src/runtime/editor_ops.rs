@@ -528,8 +528,12 @@ pub(crate) fn write_editor_history(
         let bake = ed.model.drawn_annotations();
         ed.history_scrubbed = true;
         ed.history_frame_written = known;
-        ed.history_write =
-            Some(coord.rewrite_history_async(scrubbed, ed.model.shared_base(), bake));
+        ed.history_write = Some(coord.rewrite_history_as(
+            Some(ed.session_id),
+            scrubbed,
+            ed.model.shared_base(),
+            bake,
+        ));
     } else if ed.history_scrubbed || ed.history_frame_written != known {
         // Restore after a scrub, or the frame changed: the image itself
         // must change, with the annotations still editable.
@@ -539,8 +543,12 @@ pub(crate) fn write_editor_history(
         // its image still has the redactions baked in.
         ed.history_scrubbed = false;
         ed.history_frame_written = known;
-        ed.history_write =
-            Some(coord.rewrite_history_async(restored, ed.model.shared_base(), Vec::new()));
+        ed.history_write = Some(coord.rewrite_history_as(
+            Some(ed.session_id),
+            restored,
+            ed.model.shared_base(),
+            Vec::new(),
+        ));
     } else {
         // `None` keeps the stored text: it may be the merged text of
         // several parts, or text masked since the editor opened.

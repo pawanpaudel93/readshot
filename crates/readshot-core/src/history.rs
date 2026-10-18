@@ -415,6 +415,14 @@ pub trait HistoryStore: Send + Sync {
     /// Remove staging files a crash left behind (older than a few
     /// minutes, so another process's in-flight write is left alone).
     fn sweep_staging(&self) {}
+    /// Whether `record` is redacted as stored (`Ok(false)` when it isn't
+    /// stored). An error means its state is unknown: callers treat it as
+    /// redacted (fail closed). The default (a store with no scrubs)
+    /// reports `false`.
+    fn stored_redacted(&self, record: &CaptureRecord) -> Result<bool, HistoryError> {
+        let _ = record;
+        Ok(false)
+    }
     /// Phase one of a scrub, cheap (no image encode): write `record`'s
     /// sidecar (masked text, `redacted`) with `scrub_pending` set, then
     /// remove the unredacted PNG and thumbnail. From then on History and
@@ -1022,6 +1030,13 @@ impl HistoryStore for FsHistoryStore {
             }
         }
         Ok(staged)
+    }
+
+    fn stored_redacted(&self, record: &CaptureRecord) -> Result<bool, HistoryError> {
+        let _index_guard = self.lock_index()?;
+        Ok(self
+            .read_sidecar(record)?
+            .is_some_and(|stored| stored.redacted))
     }
 
     fn commit_save(&self, record: &CaptureRecord, staged: StagedImage) -> Result<(), HistoryError> {

@@ -2335,3 +2335,65 @@ fn closing_the_editor_mid_compose_never_composes_here_and_still_syncs_history() 
         "the rotate reached History"
     );
 }
+
+/// Editor A rotates a large capture and is replaced (by reopening the
+/// same record from History) while the rotate composes. Editor B redacts
+/// and closes: History is scrubbed. A's rotate then lands; its late
+/// History sync must never put the unredacted record back.
+#[test]
+fn a_retiring_editors_late_sync_never_unredacts_a_newer_scrub() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+    let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+    let img = ramp(40, 20);
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+    store
+        .save(&record, &readshot_core::encode_png(&img).unwrap())
+        .unwrap();
+    let mut a = async_compose(crate::editor::EditorSession::from_history(
+        img.clone(),
+        record.clone(),
+    ));
+    let id_a = iced::window::Id::unique();
+    a.window_id = Some(id_a);
+    app.editor = Some(a);
+    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    let session_a = app.editor.as_ref().unwrap().session_id;
+    let job_a = app.editor.as_ref().unwrap().compose_job.clone().unwrap();
+
+    // Reopen the record from History while A's rotate composes.
+    let stored = store.list().unwrap().into_iter().next().unwrap();
+    let _ = update(
+        &mut app,
+        Message::HistoryOpenInEditorReady(Ok((img.clone(), stored))),
+    );
+    assert!(
+        app.retiring_editors.is_empty(),
+        "A, an editor of the reopened record, is dropped unsynced"
+    );
+    let id_b = iced::window::Id::unique();
+    {
+        let coord = app.coordinator.clone();
+        let b = app.editor.as_mut().unwrap();
+        assert_ne!(b.session_id, session_a);
+        b.window_id = Some(id_b);
+        app.windows.register(id_b, WindowKind::Editor);
+        b.model.commit_annotation(Annotation::Blur {
+            rect: RectLike::new(4.0, 4.0, 10.0, 10.0),
+            radius: 4.0,
+        });
+        write_editor_history(b, &coord);
+    }
+    let _ = update(&mut app, Message::WindowClosed(id_b));
+    app.coordinator.flush_history_updates();
+    let stored = store.list().unwrap().into_iter().next().unwrap();
+    assert!(stored.redacted, "B's scrub landed");
+
+    // A's rotate lands now (if A is still around to land it).
+    let _ = update(&mut app, compose_result(session_a, &job_a));
+    app.coordinator.flush_history_updates();
+    let stored = store.list().unwrap().into_iter().next().unwrap();
+    assert!(stored.redacted, "a late sync un-redacted the record");
+    assert_eq!((stored.width_px, stored.height_px), (40, 20));
+    assert!(app.retiring_editors.is_empty());
+}

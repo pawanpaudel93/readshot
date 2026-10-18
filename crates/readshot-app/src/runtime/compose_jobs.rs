@@ -1055,6 +1055,26 @@ fn finish_retiring(mut ed: EditorSession, coord: &crate::coordinator::CaptureCoo
     drop_editor(ed);
 }
 
+/// Drop every retiring editor of History record `id`, its pending steps
+/// and its owed History sync with it: another editor opened that record,
+/// and a late sync from the old one would overwrite (or un-redact) what
+/// the new one writes. Privacy over completeness: its unsynced steps are
+/// lost, and logged.
+pub(crate) fn drop_retiring_editors_of(state: &mut App, id: readshot_core::Uuid) {
+    let (dropped, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut state.retiring_editors)
+        .into_iter()
+        .partition(|ed| ed.source_record.as_ref().is_some_and(|r| r.id == id));
+    state.retiring_editors = kept;
+    for ed in dropped {
+        tracing::warn!(
+            target: "readshot::history",
+            "record {id} reopened while an earlier editor of it was still composing; \
+             that editor's pending changes were not written to History"
+        );
+        drop_editor(ed);
+    }
+}
+
 /// Let go of an editor nobody will use again (discarded, pinned or
 /// retired): its request still queued or composing is abandoned (never
 /// started, or freed by its worker) and its big images are freed on the
