@@ -137,7 +137,7 @@ fn the_theme_poll_runs_only_on_macos() {
 fn opening_a_system_themed_window_reads_the_os_mode() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.theme_mode = ThemeMode::Light;
-    let _ = update(&mut app, Message::OpenSettingsRequested);
+    let _ = update(&mut app, Message::Settings(SettingsMsg::OpenRequested));
     // Off the main thread (tests) `os_theme_mode` reports Dark.
     assert_eq!(app.theme_mode, os_theme_mode());
     assert_eq!(app.theme_mode, ThemeMode::Dark);
@@ -153,7 +153,7 @@ fn opening_a_window_keeps_the_reported_system_mode_off_macos() {
         &mut app,
         Message::Tick(TickMsg::SystemThemeChanged(iced::theme::Mode::Light)),
     );
-    let _ = update(&mut app, Message::OpenSettingsRequested);
+    let _ = update(&mut app, Message::Settings(SettingsMsg::OpenRequested));
     assert_eq!(app.theme_mode, ThemeMode::Light);
 }
 

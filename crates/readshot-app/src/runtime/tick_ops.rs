@@ -52,7 +52,7 @@ pub(super) fn on_hotkey_tick(state: &mut App) -> Task<Message> {
         return update(state, Message::Scroll(ScrollMsg::StopRequested));
     }
     if settings {
-        return update(state, Message::OpenSettingsRequested);
+        return update(state, Message::Settings(SettingsMsg::OpenRequested));
     }
     if history {
         if state.welcome.should_show() {
@@ -169,7 +169,7 @@ pub(super) fn on_tray_action(state: &mut App, action: crate::tray::TrayAction) -
             // Settings doesn't gate on permission — the user
             // might want to flip preferences before granting
             // Screen Recording.
-            update(state, Message::OpenSettingsRequested)
+            update(state, Message::Settings(SettingsMsg::OpenRequested))
         }
         crate::tray::TrayAction::CheckForUpdates => {
             notify_update_check_started();

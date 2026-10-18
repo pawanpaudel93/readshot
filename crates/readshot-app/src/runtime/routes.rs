@@ -144,35 +144,3 @@ macro_rules! editor_messages {
             | Message::EditorHistoryWritten { .. })
     };
 }
-
-/// Every message the Settings handler
-/// (`settings_ops::handle_settings_message`) takes.
-macro_rules! settings_messages {
-    () => {
-        (Message::Settings(..)
-            | Message::OpenSettingsRequested
-            | Message::SettingsChooseSaveFolderRequested
-            | Message::SettingsSaveFolderPicked(..)
-            | Message::SettingsOpenSaveFolderRequested
-            | Message::SettingsOpenSaveFolderDone(..)
-            | Message::SettingsStartHotkeyRecording
-            | Message::SettingsHotkeyRecorded(..)
-            | Message::SettingsHotkeyRecordingInvalid
-            | Message::SettingsHotkeyRecordingCancelled
-            | Message::SettingsResetAllRequested
-            | Message::SettingsResetAllCancelled
-            | Message::SettingsResetAllConfirmed
-            | Message::SettingsUninstallRequested
-            | Message::SettingsUninstallCancelled
-            | Message::SettingsUninstallPurgeToggled(..)
-            | Message::SettingsUninstallConfirmed
-            | Message::SettingsUninstallFinished
-            | Message::SettingsWindowReady(..)
-            | Message::SettingsPaneSelected(..)
-            | Message::SettingsKeyPressed { .. }
-            | Message::OpenCliToolsRequested
-            | Message::CliToolsWindowReady(..)
-            | Message::CliToolsCopyRequested(..)
-            | Message::CliToolsCopyDone(..))
-    };
-}

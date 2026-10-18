@@ -887,7 +887,7 @@ pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
             format!("For {}", shell.label()),
             Some((
                 format!("Copy {} Commands", shell.label()),
-                Message::CliToolsCopyRequested(shell),
+                Message::Settings(SettingsMsg::CliToolsCopyRequested(shell)),
             )),
             crate::cli_tools::shell_commands(shell),
         ));
@@ -3810,7 +3810,7 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             .height(Length::Fixed(32.0))
             .padding([0, 10])
             .style(move |t, s| settings_nav_style(t, s, selected))
-            .on_press(Message::SettingsPaneSelected(pane));
+            .on_press(Message::Settings(SettingsMsg::PaneSelected(pane)));
         nav = nav.push(tooltip_with_key(
             entry,
             pane.label(),
@@ -4228,14 +4228,14 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
             button(text("Cancel").size(TYPE_BODY))
                 .padding([6, 12])
                 .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                .on_press(Message::SettingsHotkeyRecordingCancelled)
+                .on_press(Message::Settings(SettingsMsg::HotkeyRecordingCancelled))
                 .into()
         } else {
             tooltip_with_key(
                 button(text("Record").size(TYPE_BODY))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                    .on_press(Message::SettingsStartHotkeyRecording),
+                    .on_press(Message::Settings(SettingsMsg::StartHotkeyRecording)),
                 "Record New Shortcut",
                 Some(SETTINGS_RECORD_HOTKEY_KEY),
                 Position::Top,
@@ -4247,9 +4247,9 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
                 button(text("Reset").size(TYPE_BODY))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                    .on_press(Message::Settings(SettingsMessage::SetCaptureHotkey(
-                        default_capture_hotkey().into()
-                    ),)),
+                    .on_press(Message::Settings(SettingsMsg::Edit(
+                        SettingsMessage::SetCaptureHotkey(default_capture_hotkey().into()),
+                    ))),
                 lit_reset
             ),
         ]
@@ -4285,7 +4285,7 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
             pick_list(
                 &RETENTION_OPTIONS[..],
                 Some(state.preferences.history_retention),
-                |r| Message::Settings(SettingsMessage::SetHistoryRetention(r)),
+                |r| Message::Settings(SettingsMsg::Edit(SettingsMessage::SetHistoryRetention(r))),
             )
             .text_size(TYPE_BODY)
             .padding([7, 10]),
@@ -4334,22 +4334,22 @@ fn settings_files_pane(state: &App) -> Vec<Element<'_, Message>> {
                 button(text("Choose").size(TYPE_BODY))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                    .on_press(Message::SettingsChooseSaveFolderRequested),
+                    .on_press(Message::Settings(SettingsMsg::ChooseSaveFolderRequested)),
                 settings_lit(state, crate::app::SettingsFocus::FolderChoose)
             ),
             focus_ring(
                 button(text("Open").size(TYPE_BODY))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                    .on_press(Message::SettingsOpenSaveFolderRequested),
+                    .on_press(Message::Settings(SettingsMsg::OpenSaveFolderRequested)),
                 settings_lit(state, crate::app::SettingsFocus::FolderOpen)
             ),
             focus_ring(
                 button(text("Reset").size(TYPE_BODY))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                    .on_press(Message::Settings(SettingsMessage::SetSaveFolder(
-                        PathBuf::new()
+                    .on_press(Message::Settings(SettingsMsg::Edit(
+                        SettingsMessage::SetSaveFolder(PathBuf::new())
                     ))),
                 settings_lit(state, crate::app::SettingsFocus::FolderReset)
             ),
@@ -4368,7 +4368,9 @@ fn settings_files_pane(state: &App) -> Vec<Element<'_, Message>> {
     let filename_input = focus_ring(
         text_input("Screenshot {YYYY-MM-DD at HH.mm.ss}", &filename_template)
             .id(iced::widget::Id::new(settings_ops::SETTINGS_FILENAME_ID))
-            .on_input(|s| Message::Settings(SettingsMessage::SetFilenameTemplate(s)))
+            .on_input(|s| {
+                Message::Settings(SettingsMsg::Edit(SettingsMessage::SetFilenameTemplate(s)))
+            })
             .size(TYPE_BODY)
             .padding([8, 10])
             .style(text_input_style),
@@ -4412,7 +4414,7 @@ fn settings_ocr_pane(state: &App) -> Vec<Element<'_, Message>> {
             pick_list(
                 &ENGINE_OPTIONS[..],
                 Some(state.preferences.ocr_engine_choice),
-                |c| Message::Settings(SettingsMessage::SetOcrEngine(c)),
+                |c| Message::Settings(SettingsMsg::Edit(SettingsMessage::SetOcrEngine(c))),
             )
             .text_size(TYPE_BODY)
             .padding([7, 10]),
@@ -4459,7 +4461,7 @@ fn settings_export_pane(state: &App) -> Vec<Element<'_, Message>> {
             pick_list(
                 &FORMAT_OPTIONS[..],
                 Some(state.preferences.default_format),
-                |f| Message::Settings(SettingsMessage::SetDefaultFormat(f)),
+                |f| Message::Settings(SettingsMsg::Edit(SettingsMessage::SetDefaultFormat(f))),
             )
             .text_size(TYPE_BODY)
             .padding([7, 10]),
@@ -4488,8 +4490,9 @@ fn settings_diagnostics_pane(state: &App) -> Vec<Element<'_, Message>> {
     // Stable/Beta choice would change nothing.
     let debug_toggle = focus_ring(
         tooltip_with_key(
-            toggler(state.preferences.debug_logging)
-                .on_toggle(|v| Message::Settings(SettingsMessage::SetDebugLogging(v))),
+            toggler(state.preferences.debug_logging).on_toggle(|v| {
+                Message::Settings(SettingsMsg::Edit(SettingsMessage::SetDebugLogging(v)))
+            }),
             "Toggle Debug Logging",
             Some(SETTINGS_DEBUG_LOGGING_KEY),
             Position::Top,
@@ -4513,8 +4516,9 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
     use crate::app::SettingsFocus as F;
     let startup_toggle = focus_ring(
         tooltip_with_key(
-            toggler(state.preferences.launch_at_login)
-                .on_toggle(|v| Message::Settings(SettingsMessage::SetLaunchAtLogin(v))),
+            toggler(state.preferences.launch_at_login).on_toggle(|v| {
+                Message::Settings(SettingsMsg::Edit(SettingsMessage::SetLaunchAtLogin(v)))
+            }),
             "Toggle Open at Login",
             Some(SETTINGS_LAUNCH_AT_LOGIN_KEY),
             Position::Top,
@@ -4535,7 +4539,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                         button(text("Confirm Reset").size(TYPE_BODY))
                             .padding([6, 12])
                             .style(|t, s| action_button_style(t, s, ActionKind::Danger))
-                            .on_press(Message::SettingsResetAllConfirmed),
+                            .on_press(Message::Settings(SettingsMsg::ResetAllConfirmed)),
                         "Confirm Reset",
                         Some(SETTINGS_RESET_ALL_KEY),
                         Position::Top,
@@ -4546,7 +4550,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                     button(text("Cancel").size(TYPE_BODY))
                         .padding([6, 12])
                         .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                        .on_press(Message::SettingsResetAllCancelled),
+                        .on_press(Message::Settings(SettingsMsg::ResetAllCancelled)),
                     settings_lit(state, F::ResetCancel)
                 ),
             ]
@@ -4568,7 +4572,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                     button(text("Reset…").size(TYPE_BODY))
                         .padding([6, 12])
                         .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
-                        .on_press(Message::SettingsResetAllRequested),
+                        .on_press(Message::Settings(SettingsMsg::ResetAllRequested)),
                     "Reset All Settings",
                     Some(SETTINGS_RESET_ALL_KEY),
                     Position::Top,
@@ -4585,7 +4589,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                     .label("Also delete history and preferences")
                     .size(16)
                     .text_size(TYPE_BODY)
-                    .on_toggle(Message::SettingsUninstallPurgeToggled),
+                    .on_toggle(|a| Message::Settings(SettingsMsg::UninstallPurgeToggled(a))),
             )
             .padding([2, 4]),
             settings_lit(state, F::UninstallPurge),
@@ -4596,7 +4600,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                     button(text("Uninstall").size(TYPE_BODY))
                         .padding([6, 12])
                         .style(|t, s| action_button_style(t, s, ActionKind::Danger))
-                        .on_press(Message::SettingsUninstallConfirmed),
+                        .on_press(Message::Settings(SettingsMsg::UninstallConfirmed)),
                     "Confirm Uninstall",
                     Some(SETTINGS_UNINSTALL_KEY),
                     Position::Top,
@@ -4607,7 +4611,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                 button(text("Cancel").size(TYPE_BODY))
                     .padding([6, 12])
                     .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                    .on_press(Message::SettingsUninstallCancelled),
+                    .on_press(Message::Settings(SettingsMsg::UninstallCancelled)),
                 settings_lit(state, F::UninstallCancel)
             ),
         ]
@@ -4628,7 +4632,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
                     button(text("Uninstall…").size(TYPE_BODY))
                         .padding([6, 12])
                         .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
-                        .on_press(Message::SettingsUninstallRequested),
+                        .on_press(Message::Settings(SettingsMsg::UninstallRequested)),
                     "Uninstall Readshot",
                     Some(SETTINGS_UNINSTALL_KEY),
                     Position::Top,
@@ -4690,7 +4694,7 @@ pub(crate) fn ocr_language_control(
                         } else {
                             next.retain(|l| l != &toggle_lang);
                         }
-                        Message::Settings(SettingsMessage::SetOcrLanguages(next))
+                        Message::Settings(SettingsMsg::Edit(SettingsMessage::SetOcrLanguages(next)))
                     }),
             )
             .padding([2, 4]),
@@ -4922,7 +4926,7 @@ pub(crate) fn welcome_view(state: &App) -> Element<'_, Message> {
                         ButtonSize::Md,
                         None,
                         p,
-                        Some(Message::OpenSettingsRequested),
+                        Some(Message::Settings(SettingsMsg::OpenRequested)),
                     ),
                 ]
                 .spacing(SP2),

@@ -423,9 +423,11 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
         Message::EditorOpenTextSettings => {
             let _ = update(
                 state,
-                Message::SettingsPaneSelected(crate::app::SettingsPane::TextRecognition),
+                Message::Settings(SettingsMsg::PaneSelected(
+                    crate::app::SettingsPane::TextRecognition,
+                )),
             );
-            update(state, Message::OpenSettingsRequested)
+            update(state, Message::Settings(SettingsMsg::OpenRequested))
         }
         Message::EditorTextLineClicked(index) => on_text_line_clicked(state, index),
         Message::EditorCopyLines => on_copy_lines(state),

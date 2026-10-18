@@ -6,42 +6,37 @@ use super::*;
 use crate::app::{SettingsFocus, SettingsPane};
 use crate::permissions::PermissionStatus;
 
-/// Every settings message arm, extracted from `runtime::update` so the
-/// top-level dispatcher stays navigable. Settings
-/// mutations are mostly synchronous (the apply fn is pure on
+/// Every [`SettingsMsg`]: `update` hands each `Message::Settings` here.
+/// Settings mutations are mostly synchronous (the apply fn is pure on
 /// `Preferences`) but a hotkey change has a side-effect — the OS-level
 /// chord registration must be re-issued — handled inside the
-/// `Message::Settings` arm so the side-effect lives next to the state
-/// update. Routed from `update`'s
-/// grouped arm; the trailing `unreachable!` only fires if a
-/// non-settings message is mis-routed here.
-pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task<Message> {
+/// `SettingsMsg::Edit` arm so the side-effect lives next to the state
+/// update.
+pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> Task<Message> {
     match message {
-        Message::Settings(submsg) => on_settings(state, submsg),
+        SettingsMsg::Edit(submsg) => on_settings(state, submsg),
 
-        Message::OpenSettingsRequested => on_open_settings(state),
-        Message::SettingsChooseSaveFolderRequested => {
-            Task::perform(pick_settings_save_folder(), |r| {
-                Message::SettingsSaveFolderPicked(r.map_err(|e| e.to_string()))
-            })
-        }
-        Message::SettingsSaveFolderPicked(result) => {
+        SettingsMsg::OpenRequested => on_open_settings(state),
+        SettingsMsg::ChooseSaveFolderRequested => Task::perform(pick_settings_save_folder(), |r| {
+            Message::Settings(SettingsMsg::SaveFolderPicked(r.map_err(|e| e.to_string())))
+        }),
+        SettingsMsg::SaveFolderPicked(result) => {
             if let Ok(Some(path)) = result {
                 return update(
                     state,
-                    Message::Settings(SettingsMessage::SetSaveFolder(path)),
+                    Message::Settings(SettingsMsg::Edit(SettingsMessage::SetSaveFolder(path))),
                 );
             }
             Task::none()
         }
-        Message::SettingsOpenSaveFolderRequested => {
+        SettingsMsg::OpenSaveFolderRequested => {
             let folder = settings_save_folder_to_open(&state.preferences);
             Task::perform(
                 async move { open_folder_path(&folder).map_err(|e| e.to_string()) },
-                Message::SettingsOpenSaveFolderDone,
+                |a| Message::Settings(SettingsMsg::OpenSaveFolderDone(a)),
             )
         }
-        Message::SettingsOpenSaveFolderDone(result) => {
+        SettingsMsg::OpenSaveFolderDone(result) => {
             state.settings_status = Some(match result {
                 Ok(()) => "Opened save folder.".to_string(),
                 Err(e) => {
@@ -51,7 +46,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             });
             Task::none()
         }
-        Message::SettingsStartHotkeyRecording => {
+        SettingsMsg::StartHotkeyRecording => {
             state.settings_recording_hotkey = true;
             state.settings_hotkey_error = None;
             state.settings_hotkey_status = None;
@@ -59,8 +54,8 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             state.settings_reset_all_pending = false;
             Task::none()
         }
-        Message::SettingsHotkeyRecorded(shortcut) => on_hotkey_recorded(state, shortcut),
-        Message::SettingsHotkeyRecordingInvalid => {
+        SettingsMsg::HotkeyRecorded(shortcut) => on_hotkey_recorded(state, shortcut),
+        SettingsMsg::HotkeyRecordingInvalid => {
             state.settings_recording_hotkey = true;
             state.settings_hotkey_status = None;
             state.settings_hotkey_error = Some(
@@ -70,13 +65,13 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             );
             Task::none()
         }
-        Message::SettingsHotkeyRecordingCancelled => {
+        SettingsMsg::HotkeyRecordingCancelled => {
             state.settings_recording_hotkey = false;
             state.settings_hotkey_error = None;
             state.settings_hotkey_status = None;
             Task::none()
         }
-        Message::SettingsResetAllRequested => {
+        SettingsMsg::ResetAllRequested => {
             state.settings_reset_all_pending = true;
             state.settings_uninstall_pending = false;
             state.settings_hotkey_error = None;
@@ -84,39 +79,39 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             state.settings_status = None;
             Task::none()
         }
-        Message::SettingsResetAllCancelled => {
+        SettingsMsg::ResetAllCancelled => {
             state.settings_reset_all_pending = false;
             Task::none()
         }
-        Message::SettingsResetAllConfirmed => on_reset_all_confirmed(state),
-        Message::SettingsUninstallRequested
-        | Message::SettingsUninstallCancelled
-        | Message::SettingsUninstallPurgeToggled(_) => {
+        SettingsMsg::ResetAllConfirmed => on_reset_all_confirmed(state),
+        SettingsMsg::UninstallRequested
+        | SettingsMsg::UninstallCancelled
+        | SettingsMsg::UninstallPurgeToggled(_) => {
             // Pure arming / cancel / checkbox transitions — handled in
             // `App::update_sync` so the state machine is unit-testable.
-            state.update_sync(message);
+            state.update_sync(Message::Settings(message));
             Task::none()
         }
-        Message::SettingsUninstallConfirmed => on_uninstall_confirmed(state),
-        Message::SettingsUninstallFinished => {
+        SettingsMsg::UninstallConfirmed => on_uninstall_confirmed(state),
+        SettingsMsg::UninstallFinished => {
             // Use the existing quit path so the relaunch-on-system-quit
             // safety net is disarmed before the process exits.
             quit_readshot(&state.coordinator)
         }
-        Message::SettingsWindowReady(id) => {
+        SettingsMsg::WindowReady(id) => {
             // Belt-and-braces: window-open already records the id, but
             // iced may hand back a different one in some platforms.
             state.settings_window_id = Some(id);
             window::gain_focus(id)
         }
-        Message::SettingsPaneSelected(pane) => on_pane_selected(state, pane),
-        Message::SettingsKeyPressed {
+        SettingsMsg::PaneSelected(pane) => on_pane_selected(state, pane),
+        SettingsMsg::KeyPressed {
             window,
             key,
             modifiers,
             captured,
         } => on_settings_key_pressed(state, window, key, modifiers, captured),
-        Message::OpenCliToolsRequested => {
+        SettingsMsg::OpenCliToolsRequested => {
             if let Some(id) = state.cli_tools_window_id {
                 return window::gain_focus(id);
             }
@@ -124,18 +119,24 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             let (id, open_task) = window::open(cli_tools_window_settings());
             register_window(state, id, WindowKind::CliTools);
             state.cli_tools_window_id = Some(id);
-            open_task.map(Message::CliToolsWindowReady)
+            open_task.map(|a| Message::Settings(SettingsMsg::CliToolsWindowReady(a)))
         }
-        Message::CliToolsWindowReady(id) => {
+        SettingsMsg::CliToolsWindowReady(id) => {
             state.cli_tools_window_id = Some(id);
             Task::none()
         }
-        Message::CliToolsCopyRequested(shell) => Task::perform(
+        SettingsMsg::CliToolsCopyRequested(shell) => Task::perform(
             copy_text_to_clipboard(cli_tools_setup_commands(shell)),
-            move |result| Message::CliToolsCopyDone(shell, result.map_err(|e| e.to_string())),
+            move |result| {
+                Message::Settings(SettingsMsg::CliToolsCopyDone(
+                    shell,
+                    result.map_err(|e| e.to_string()),
+                ))
+            },
         ),
-        Message::CliToolsCopyDone(shell, result) => on_cli_tools_copy_done(state, shell, result),
-        other => unreachable!("non-settings message routed to the settings handler: {other:?}"),
+        SettingsMsg::CliToolsCopyDone(shell, result) => {
+            on_cli_tools_copy_done(state, shell, result)
+        }
     }
 }
 
@@ -323,7 +324,7 @@ fn adjust_settings_item(state: &mut App, item: SettingsFocus, step: i32) -> Task
         F::OcrLanguage(_) | F::UninstallPurge => return activate_settings_item(state, item),
         _ => return Task::none(),
     };
-    let task = update(state, Message::Settings(msg));
+    let task = update(state, Message::Settings(SettingsMsg::Edit(msg)));
     state.settings_key_feedback = Some(feedback);
     task
 }
@@ -357,15 +358,17 @@ fn activate_settings_item(state: &mut App, item: SettingsFocus) -> Task<Message>
         F::PermissionReset => Message::App(AppMsg::ResetPermissionRequested),
         F::PermissionOpen => Message::App(AppMsg::OpenPermissionSettingsRequested),
         F::HotkeyRecord if state.settings_recording_hotkey => {
-            Message::SettingsHotkeyRecordingCancelled
+            Message::Settings(SettingsMsg::HotkeyRecordingCancelled)
         }
-        F::HotkeyRecord => Message::SettingsStartHotkeyRecording,
-        F::HotkeyReset => Message::Settings(SettingsMessage::SetCaptureHotkey(
+        F::HotkeyRecord => Message::Settings(SettingsMsg::StartHotkeyRecording),
+        F::HotkeyReset => Message::Settings(SettingsMsg::Edit(SettingsMessage::SetCaptureHotkey(
             default_capture_hotkey().into(),
-        )),
-        F::FolderChoose => Message::SettingsChooseSaveFolderRequested,
-        F::FolderOpen => Message::SettingsOpenSaveFolderRequested,
-        F::FolderReset => Message::Settings(SettingsMessage::SetSaveFolder(PathBuf::new())),
+        ))),
+        F::FolderChoose => Message::Settings(SettingsMsg::ChooseSaveFolderRequested),
+        F::FolderOpen => Message::Settings(SettingsMsg::OpenSaveFolderRequested),
+        F::FolderReset => Message::Settings(SettingsMsg::Edit(SettingsMessage::SetSaveFolder(
+            PathBuf::new(),
+        ))),
         F::FilenameField => return settings_caret(Some(item)),
         F::OcrLanguage(i) => {
             let supported = state.coordinator.supported_languages();
@@ -382,20 +385,20 @@ fn activate_settings_item(state: &mut App, item: SettingsFocus) -> Task<Message>
             let name = ocr_language_display_name(lang);
             let task = update(
                 state,
-                Message::Settings(SettingsMessage::SetOcrLanguages(next)),
+                Message::Settings(SettingsMsg::Edit(SettingsMessage::SetOcrLanguages(next))),
             );
             state.settings_key_feedback = Some(format!("{name}: {}", on_off(on)));
             return task;
         }
-        F::ResetAll => Message::SettingsResetAllRequested,
-        F::ResetConfirm => Message::SettingsResetAllConfirmed,
-        F::ResetCancel => Message::SettingsResetAllCancelled,
-        F::Uninstall => Message::SettingsUninstallRequested,
-        F::UninstallPurge => {
-            Message::SettingsUninstallPurgeToggled(!state.settings_uninstall_purge)
-        }
-        F::UninstallConfirm => Message::SettingsUninstallConfirmed,
-        F::UninstallCancel => Message::SettingsUninstallCancelled,
+        F::ResetAll => Message::Settings(SettingsMsg::ResetAllRequested),
+        F::ResetConfirm => Message::Settings(SettingsMsg::ResetAllConfirmed),
+        F::ResetCancel => Message::Settings(SettingsMsg::ResetAllCancelled),
+        F::Uninstall => Message::Settings(SettingsMsg::UninstallRequested),
+        F::UninstallPurge => Message::Settings(SettingsMsg::UninstallPurgeToggled(
+            !state.settings_uninstall_purge,
+        )),
+        F::UninstallConfirm => Message::Settings(SettingsMsg::UninstallConfirmed),
+        F::UninstallCancel => Message::Settings(SettingsMsg::UninstallCancelled),
         F::Retention | F::OcrEngine | F::Format | F::LaunchAtLogin | F::DebugLogging => {
             return adjust_settings_item(state, item, 1)
         }
@@ -417,7 +420,7 @@ fn activate_settings_item(state: &mut App, item: SettingsFocus) -> Task<Message>
     task
 }
 
-/// `Message::Settings`: a Settings control changed.
+/// `SettingsMsg::Edit`: a Settings control changed.
 fn on_settings(state: &mut App, submsg: SettingsMessage) -> Task<Message> {
     let needs_rehotkey = matches!(submsg, SettingsMessage::SetCaptureHotkey(_));
     let launch_at_login = match &submsg {
@@ -429,7 +432,7 @@ fn on_settings(state: &mut App, submsg: SettingsMessage) -> Task<Message> {
     }
     state.settings_reset_all_pending = false;
     state.settings_uninstall_pending = false;
-    state.update_sync(Message::Settings(submsg));
+    state.update_sync(Message::Settings(SettingsMsg::Edit(submsg)));
     if needs_rehotkey {
         refresh_hotkey_registration(state);
         set_hotkey_registration_notice(state);
@@ -441,15 +444,15 @@ fn on_settings(state: &mut App, submsg: SettingsMessage) -> Task<Message> {
                 target: readshot_core::log::cat::APP,
                 "launch-at-login update failed: {e}",
             );
-            state.update_sync(Message::Settings(SettingsMessage::SetLaunchAtLogin(
-                !enabled,
+            state.update_sync(Message::Settings(SettingsMsg::Edit(
+                SettingsMessage::SetLaunchAtLogin(!enabled),
             )));
         }
     }
     Task::none()
 }
 
-/// `Message::OpenSettingsRequested`.
+/// `SettingsMsg::OpenRequested`.
 fn on_open_settings(state: &mut App) -> Task<Message> {
     // Single-instance — focus the existing window if one is
     // already up.
@@ -459,10 +462,10 @@ fn on_open_settings(state: &mut App) -> Task<Message> {
     let (id, open_task) = window::open(settings_window_settings());
     register_window(state, id, WindowKind::Settings);
     state.settings_window_id = Some(id);
-    open_task.map(Message::SettingsWindowReady)
+    open_task.map(|a| Message::Settings(SettingsMsg::WindowReady(a)))
 }
 
-/// `Message::SettingsHotkeyRecorded`.
+/// `SettingsMsg::HotkeyRecorded`.
 fn on_hotkey_recorded(state: &mut App, shortcut: String) -> Task<Message> {
     state.settings_recording_hotkey = false;
     // Reject a chord that collides with a reserved fixed hotkey
@@ -479,11 +482,13 @@ fn on_hotkey_recorded(state: &mut App, shortcut: String) -> Task<Message> {
     state.settings_hotkey_error = None;
     update(
         state,
-        Message::Settings(SettingsMessage::SetCaptureHotkey(shortcut)),
+        Message::Settings(SettingsMsg::Edit(SettingsMessage::SetCaptureHotkey(
+            shortcut,
+        ))),
     )
 }
 
-/// `Message::SettingsResetAllConfirmed`.
+/// `SettingsMsg::ResetAllConfirmed`.
 fn on_reset_all_confirmed(state: &mut App) -> Task<Message> {
     state.settings_reset_all_pending = false;
     state.settings_recording_hotkey = false;
@@ -501,13 +506,15 @@ fn on_reset_all_confirmed(state: &mut App) -> Task<Message> {
                 target: readshot_core::log::cat::APP,
                 "launch-at-login reset failed: {e}",
             );
-            state.update_sync(Message::Settings(SettingsMessage::SetLaunchAtLogin(true)));
+            state.update_sync(Message::Settings(SettingsMsg::Edit(
+                SettingsMessage::SetLaunchAtLogin(true),
+            )));
         }
     }
     Task::none()
 }
 
-/// `Message::SettingsUninstallConfirmed`.
+/// `SettingsMsg::UninstallConfirmed`.
 fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
     state.settings_uninstall_pending = false;
     // Build the plan on the UI thread (read-only, fast), then run
@@ -537,17 +544,20 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
             })
             .await;
         },
-        |()| Message::SettingsUninstallFinished,
+        |()| Message::Settings(SettingsMsg::UninstallFinished),
     )
 }
 
-/// `Message::SettingsPaneSelected`.
+/// `SettingsMsg::PaneSelected`.
 fn on_pane_selected(state: &mut App, pane: SettingsPane) -> Task<Message> {
     // A recording armed on Capture must not keep listening once
     // its prompt is off-screen, or the next chord would silently
     // become the capture hotkey.
     if pane != SettingsPane::Capture && state.settings_recording_hotkey {
-        let _ = update(state, Message::SettingsHotkeyRecordingCancelled);
+        let _ = update(
+            state,
+            Message::Settings(SettingsMsg::HotkeyRecordingCancelled),
+        );
     }
     if state.settings_pane != pane {
         state.settings_focus = None;
@@ -557,7 +567,7 @@ fn on_pane_selected(state: &mut App, pane: SettingsPane) -> Task<Message> {
     Task::none()
 }
 
-/// `Message::SettingsKeyPressed`: the Settings window's keys.
+/// `SettingsMsg::KeyPressed`: the Settings window's keys.
 fn on_settings_key_pressed(
     state: &mut App,
     window: iced::window::Id,
@@ -600,7 +610,7 @@ fn on_settings_key_pressed(
     let prompt_visible = state.settings_pane == SettingsPane::App;
     if let Some(pane) = action.owning_pane() {
         if state.settings_pane != pane {
-            let _ = update(state, Message::SettingsPaneSelected(pane));
+            let _ = update(state, Message::Settings(SettingsMsg::PaneSelected(pane)));
         }
     }
     match action {
@@ -626,7 +636,7 @@ fn on_settings_key_pressed(
             if state.settings_recording_hotkey {
                 Task::none()
             } else {
-                update(state, Message::SettingsStartHotkeyRecording)
+                update(state, Message::Settings(SettingsMsg::StartHotkeyRecording))
             }
         }
         // Destructive: the key arms the two-stage prompt, and a
@@ -638,26 +648,28 @@ fn on_settings_key_pressed(
                 if !prompt_visible {
                     return Task::none();
                 }
-                update(state, Message::SettingsResetAllConfirmed)
+                update(state, Message::Settings(SettingsMsg::ResetAllConfirmed))
             } else {
-                update(state, Message::SettingsResetAllRequested)
+                update(state, Message::Settings(SettingsMsg::ResetAllRequested))
             }
         }
-        SettingsKeyAction::SelectPane(pane) => update(state, Message::SettingsPaneSelected(pane)),
+        SettingsKeyAction::SelectPane(pane) => {
+            update(state, Message::Settings(SettingsMsg::PaneSelected(pane)))
+        }
         SettingsKeyAction::Uninstall => {
             if state.settings_uninstall_pending {
                 if !prompt_visible {
                     return Task::none();
                 }
-                update(state, Message::SettingsUninstallConfirmed)
+                update(state, Message::Settings(SettingsMsg::UninstallConfirmed))
             } else {
-                update(state, Message::SettingsUninstallRequested)
+                update(state, Message::Settings(SettingsMsg::UninstallRequested))
             }
         }
     }
 }
 
-/// `Message::CliToolsCopyDone`.
+/// `SettingsMsg::CliToolsCopyDone`.
 fn on_cli_tools_copy_done(
     state: &mut App,
     shell: crate::cli_tools::Shell,

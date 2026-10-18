@@ -357,7 +357,7 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 
 use crate::app::{
     App, AppMsg, CaptureMsg, GlobalHotkeyAction, HistoryKeyboardAction, Message, ScrollMsg,
-    TickMsg, WelcomeMsg, WindowKind, WindowMsg,
+    SettingsMsg, TickMsg, WelcomeMsg, WindowKind, WindowMsg,
 };
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
@@ -804,7 +804,7 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             use iced::keyboard::Event as KbEvent;
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
                 if shortcut_cancelled_by_keypress(&key, modifiers) {
-                    return Some(Message::SettingsHotkeyRecordingCancelled);
+                    return Some(Message::Settings(SettingsMsg::HotkeyRecordingCancelled));
                 }
                 // Ignore bare modifier presses: the user is mid-chord,
                 // holding Cmd/Ctrl/Shift before the real key. Reporting
@@ -814,8 +814,8 @@ pub fn subscription(state: &App) -> Subscription<Message> {
                 }
                 return Some(
                     shortcut_string_from_keypress(&key, modifiers)
-                        .map(Message::SettingsHotkeyRecorded)
-                        .unwrap_or(Message::SettingsHotkeyRecordingInvalid),
+                        .map(|a| Message::Settings(SettingsMsg::HotkeyRecorded(a)))
+                        .unwrap_or(Message::Settings(SettingsMsg::HotkeyRecordingInvalid)),
                 );
             }
             None
@@ -848,12 +848,12 @@ pub fn subscription(state: &App) -> Subscription<Message> {
         subs.push(iced::event::listen_with(|event, status, window| {
             use iced::keyboard::Event as KbEvent;
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                return Some(Message::SettingsKeyPressed {
+                return Some(Message::Settings(SettingsMsg::KeyPressed {
                     window,
                     key,
                     modifiers,
                     captured: status == iced::event::Status::Captured,
-                });
+                }));
             }
             None
         }));
@@ -1035,7 +1035,7 @@ fn app_window_shortcut_message(
     }
     match key {
         Key::Character(c) if c.eq_ignore_ascii_case("y") => Some(Message::OpenHistoryRequested),
-        Key::Character(c) if c == "," => Some(Message::OpenSettingsRequested),
+        Key::Character(c) if c == "," => Some(Message::Settings(SettingsMsg::OpenRequested)),
         _ => None,
     }
 }
@@ -1189,7 +1189,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
 
         Message::Scroll(msg) => scroll::handle_scroll_message(state, msg),
 
-        msg @ settings_messages!() => settings_ops::handle_settings_message(state, msg),
+        Message::Settings(msg) => settings_ops::handle_settings_message(state, msg),
     }
 }
 
@@ -1395,35 +1395,35 @@ fn first_launch_preferences() -> Preferences {
 
 fn reset_settings_to_defaults(state: &mut App) {
     let defaults = first_launch_preferences();
-    state.update_sync(Message::Settings(SettingsMessage::SetCaptureHotkey(
-        defaults.capture_hotkey,
+    state.update_sync(Message::Settings(SettingsMsg::Edit(
+        SettingsMessage::SetCaptureHotkey(defaults.capture_hotkey),
     )));
-    state.update_sync(Message::Settings(SettingsMessage::SetSaveFolder(
-        defaults.save_folder,
+    state.update_sync(Message::Settings(SettingsMsg::Edit(
+        SettingsMessage::SetSaveFolder(defaults.save_folder),
     )));
-    state.update_sync(Message::Settings(SettingsMessage::SetFilenameTemplate(
-        defaults.filename_template,
+    state.update_sync(Message::Settings(SettingsMsg::Edit(
+        SettingsMessage::SetFilenameTemplate(defaults.filename_template),
     )));
-    state.update_sync(Message::Settings(SettingsMessage::SetDefaultFormat(
-        defaults.default_format,
+    state.update_sync(Message::Settings(SettingsMsg::Edit(
+        SettingsMessage::SetDefaultFormat(defaults.default_format),
     )));
-    state.update_sync(Message::Settings(SettingsMessage::SetHistoryRetention(
-        defaults.history_retention,
+    state.update_sync(Message::Settings(SettingsMsg::Edit(
+        SettingsMessage::SetHistoryRetention(defaults.history_retention),
     )));
-    state.update_sync(Message::Settings(SettingsMessage::SetOcrLanguages(
-        defaults.ocr_languages,
+    state.update_sync(Message::Settings(SettingsMsg::Edit(
+        SettingsMessage::SetOcrLanguages(defaults.ocr_languages),
     )));
-    state.update_sync(Message::Settings(SettingsMessage::SetOcrEngine(
-        defaults.ocr_engine_choice,
+    state.update_sync(Message::Settings(SettingsMsg::Edit(
+        SettingsMessage::SetOcrEngine(defaults.ocr_engine_choice),
     )));
-    state.update_sync(Message::Settings(SettingsMessage::SetLaunchAtLogin(
-        defaults.launch_at_login,
+    state.update_sync(Message::Settings(SettingsMsg::Edit(
+        SettingsMessage::SetLaunchAtLogin(defaults.launch_at_login),
     )));
-    state.update_sync(Message::Settings(SettingsMessage::SetUpdateChannel(
-        defaults.update_channel,
+    state.update_sync(Message::Settings(SettingsMsg::Edit(
+        SettingsMessage::SetUpdateChannel(defaults.update_channel),
     )));
-    state.update_sync(Message::Settings(SettingsMessage::SetDebugLogging(
-        defaults.debug_logging,
+    state.update_sync(Message::Settings(SettingsMsg::Edit(
+        SettingsMessage::SetDebugLogging(defaults.debug_logging),
     )));
 }
 

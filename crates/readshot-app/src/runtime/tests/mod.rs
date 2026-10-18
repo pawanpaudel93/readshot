@@ -274,12 +274,12 @@ fn press_settings_key(app: &mut App, id: iced::window::Id, key: &str, shift: boo
     }
     let _ = update(
         app,
-        Message::SettingsKeyPressed {
+        Message::Settings(SettingsMsg::KeyPressed {
             window: id,
             key: iced::keyboard::Key::Character(key.into()),
             modifiers,
             captured: false,
-        },
+        }),
     );
 }
 

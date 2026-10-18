@@ -578,7 +578,7 @@ fn app_window_shortcuts_open_history_and_settings() {
     ));
     assert!(matches!(
         app_window_shortcut_message(iced::keyboard::Key::Character(",".into()), modifiers),
-        Some(Message::OpenSettingsRequested)
+        Some(Message::Settings(SettingsMsg::OpenRequested))
     ));
 }
 
@@ -776,7 +776,9 @@ fn update_settings_hotkey_change_persists_value_when_reregister_fails() {
     // again. Fixed app hotkeys may still be registered.
     let _ = update(
         &mut app,
-        Message::Settings(SettingsMessage::SetCaptureHotkey("not-a-real-chord".into())),
+        Message::Settings(SettingsMsg::Edit(SettingsMessage::SetCaptureHotkey(
+            "not-a-real-chord".into(),
+        ))),
     );
     assert_eq!(app.preferences.capture_hotkey, "not-a-real-chord");
     assert!(!app.capture_hotkey_registered);
@@ -794,7 +796,7 @@ fn update_settings_non_hotkey_does_not_re_register() {
     // changes specifically.
     let _ = update(
         &mut app,
-        Message::Settings(SettingsMessage::SetDebugLogging(true)),
+        Message::Settings(SettingsMsg::Edit(SettingsMessage::SetDebugLogging(true))),
     );
     assert!(app.preferences.debug_logging);
     // Manager stays None because we never tried to register, and

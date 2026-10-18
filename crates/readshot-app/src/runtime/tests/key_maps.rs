@@ -354,7 +354,7 @@ fn selecting_a_pane_is_remembered() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let _ = update(
         &mut app,
-        Message::SettingsPaneSelected(SettingsPane::Export),
+        Message::Settings(SettingsMsg::PaneSelected(SettingsPane::Export)),
     );
     assert_eq!(app.settings_pane, SettingsPane::Export);
 }
@@ -429,10 +429,13 @@ fn leaving_capture_pane_cancels_hotkey_recording() {
     app.settings_recording_hotkey = true;
     let _ = update(
         &mut app,
-        Message::SettingsPaneSelected(SettingsPane::Capture),
+        Message::Settings(SettingsMsg::PaneSelected(SettingsPane::Capture)),
     );
     assert!(app.settings_recording_hotkey, "staying on Capture keeps it");
-    let _ = update(&mut app, Message::SettingsPaneSelected(SettingsPane::Files));
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::PaneSelected(SettingsPane::Files)),
+    );
     assert!(!app.settings_recording_hotkey);
     assert_eq!(app.settings_pane, SettingsPane::Files);
 }
@@ -444,23 +447,23 @@ fn command_digit_in_settings_window_switches_pane() {
     app.settings_window_id = Some(id);
     let _ = update(
         &mut app,
-        Message::SettingsKeyPressed {
+        Message::Settings(SettingsMsg::KeyPressed {
             window: id,
             key: iced::keyboard::Key::Character("3".into()),
             modifiers: command_modifiers(),
             captured: false,
-        },
+        }),
     );
     assert_eq!(app.settings_pane, SettingsPane::Files);
     // Another window's key press is ignored.
     let _ = update(
         &mut app,
-        Message::SettingsKeyPressed {
+        Message::Settings(SettingsMsg::KeyPressed {
             window: iced::window::Id::unique(),
             key: iced::keyboard::Key::Character("7".into()),
             modifiers: command_modifiers(),
             captured: false,
-        },
+        }),
     );
     assert_eq!(app.settings_pane, SettingsPane::Files);
 }

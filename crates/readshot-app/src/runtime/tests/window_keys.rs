@@ -128,12 +128,12 @@ fn moving_past_the_page_shows_more() {
 fn settings_key(app: &mut App, id: iced::window::Id, key: Key, m: Modifiers, captured: bool) {
     let _ = update(
         app,
-        Message::SettingsKeyPressed {
+        Message::Settings(SettingsMsg::KeyPressed {
             window: id,
             key,
             modifiers: m,
             captured,
-        },
+        }),
     );
 }
 

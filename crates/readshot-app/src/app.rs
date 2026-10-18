@@ -232,6 +232,8 @@ impl SettingsPane {
 /// or background task funnels through this enum.
 #[derive(Clone, Debug)]
 pub enum Message {
+    /// Settings and command-line setup window messages (`runtime::settings_ops`).
+    Settings(SettingsMsg),
     /// Scrolling-capture messages (`runtime::scroll`).
     Scroll(ScrollMsg),
     /// Window lifecycle, and the editor window's pointer, modifier, hover,
@@ -250,7 +252,6 @@ pub enum Message {
     App(AppMsg),
     EditorCanvas(CanvasMessage),
     EditorToolbar(ToolbarMessage),
-    Settings(SettingsMessage),
     /// Slow tick (~1 s) that fires while the editor is open AND the
     /// status pill is showing a dismissable message. Purely drives a
     /// re-render so the view fn can re-check the status's age
@@ -649,55 +650,62 @@ pub enum Message {
     /// Turn the eyedropper on or off (I, or the button in the color
     /// popover). While on, a click on the image picks its color.
     EditorEyedropperToggled,
+}
+
+/// Settings and command-line setup window messages. Handled by
+/// `runtime::settings_ops::handle_settings_message`.
+#[derive(Clone, Debug)]
+pub enum SettingsMsg {
+    Edit(SettingsMessage),
     /// User asked for the settings window — tray "Settings…" entry or
     /// (future) a "Settings" command from elsewhere. Single-instance:
     /// focuses the existing window if one is already open.
-    OpenSettingsRequested,
+    OpenRequested,
     /// User clicked the native folder picker button in Settings.
-    SettingsChooseSaveFolderRequested,
+    ChooseSaveFolderRequested,
     /// Native folder picker completed. `Ok(None)` means cancelled.
-    SettingsSaveFolderPicked(Result<Option<std::path::PathBuf>, String>),
+    SaveFolderPicked(Result<Option<std::path::PathBuf>, String>),
     /// User clicked "Open" for the configured save folder in Settings.
-    SettingsOpenSaveFolderRequested,
+    OpenSaveFolderRequested,
     /// Opening the configured save folder completed.
-    SettingsOpenSaveFolderDone(Result<(), String>),
+    OpenSaveFolderDone(Result<(), String>),
     /// User clicked "Record shortcut" in Settings.
-    SettingsStartHotkeyRecording,
+    StartHotkeyRecording,
     /// Settings shortcut recorder captured a valid key combination.
-    SettingsHotkeyRecorded(String),
+    HotkeyRecorded(String),
     /// Settings shortcut recorder captured a key that is not valid as
     /// a global shortcut.
-    SettingsHotkeyRecordingInvalid,
+    HotkeyRecordingInvalid,
     /// Settings shortcut recorder was cancelled or captured an invalid key.
-    SettingsHotkeyRecordingCancelled,
+    HotkeyRecordingCancelled,
     /// User clicked the reset-all-settings button.
-    SettingsResetAllRequested,
+    ResetAllRequested,
     /// User confirmed reset-all-settings.
-    SettingsResetAllConfirmed,
+    ResetAllConfirmed,
     /// User cancelled reset-all-settings.
-    SettingsResetAllCancelled,
+    ResetAllCancelled,
     /// User clicked "Uninstall Readshot…" — arms the confirm prompt.
-    SettingsUninstallRequested,
+    UninstallRequested,
     /// User cancelled the armed uninstall prompt.
-    SettingsUninstallCancelled,
+    UninstallCancelled,
     /// User toggled the "Also delete history and preferences" checkbox
     /// in the armed uninstall prompt.
-    SettingsUninstallPurgeToggled(bool),
+    UninstallPurgeToggled(bool),
     /// User confirmed the uninstall — runs the executor off the UI
     /// thread, then quits.
-    SettingsUninstallConfirmed,
+    UninstallConfirmed,
     /// The uninstall executor finished; drives the app quit.
-    SettingsUninstallFinished,
+    UninstallFinished,
     /// First `view` call after the settings window is opened. Records
     /// the `window::Id` so close + focus paths work.
-    SettingsWindowReady(iced::window::Id),
+    WindowReady(iced::window::Id),
     /// User picked a page in the Settings sidebar (click or ⌘1–⌘7).
-    SettingsPaneSelected(SettingsPane),
+    PaneSelected(SettingsPane),
     /// Keyboard event observed while the settings window is open. iced
     /// 0.14 buttons / togglers / pick-lists can't take focus, so the
     /// runtime taps keys globally and validates `window` against
     /// `App::settings_window_id` before acting. WCAG 2.1.1.
-    SettingsKeyPressed {
+    KeyPressed {
         window: iced::window::Id,
         key: iced::keyboard::Key,
         modifiers: iced::keyboard::Modifiers,
@@ -1166,7 +1174,7 @@ pub struct App {
     /// scans every record.
     pub history_page_limit: usize,
     /// On-disk path the user's preferences are read from at startup
-    /// and written back to whenever a `Message::Settings` mutation
+    /// and written back to whenever a `SettingsMsg::Edit` mutation
     /// flips a field. `None` in tests and when the OS can't supply a
     /// config dir; in that case settings changes stay in-memory only.
     pub preferences_path: Option<std::path::PathBuf>,
@@ -1701,25 +1709,25 @@ impl App {
                 self.welcome = WelcomeState::AwaitingGrant;
                 true
             }
-            Message::Settings(msg) => {
+            Message::Settings(SettingsMsg::Edit(msg)) => {
                 let changed = readshot_ui::settings::apply(&mut self.preferences, msg);
                 if changed {
                     self.persist_preferences_if_configured();
                 }
                 changed
             }
-            Message::SettingsUninstallRequested => {
+            Message::Settings(SettingsMsg::UninstallRequested) => {
                 // Only one destructive prompt armed at a time.
                 self.settings_reset_all_pending = false;
                 self.settings_uninstall_pending = true;
                 true
             }
-            Message::SettingsUninstallCancelled => {
+            Message::Settings(SettingsMsg::UninstallCancelled) => {
                 let was_armed = self.settings_uninstall_pending;
                 self.settings_uninstall_pending = false;
                 was_armed
             }
-            Message::SettingsUninstallPurgeToggled(purge) => {
+            Message::Settings(SettingsMsg::UninstallPurgeToggled(purge)) => {
                 let changed = self.settings_uninstall_purge != purge;
                 self.settings_uninstall_purge = purge;
                 changed
@@ -1814,31 +1822,33 @@ mod tests {
 
         // Arming an uninstall clears any reset prompt and sets pending.
         app.settings_reset_all_pending = true;
-        let changed = app.update_sync(Message::SettingsUninstallRequested);
+        let changed = app.update_sync(Message::Settings(SettingsMsg::UninstallRequested));
         assert!(changed);
         assert!(app.settings_uninstall_pending);
         assert!(!app.settings_reset_all_pending);
 
         // The purge checkbox toggles independently of the armed state.
-        let changed = app.update_sync(Message::SettingsUninstallPurgeToggled(true));
+        let changed = app.update_sync(Message::Settings(SettingsMsg::UninstallPurgeToggled(true)));
         assert!(changed);
         assert!(app.settings_uninstall_purge);
         // Toggling to the same value reports no change.
-        assert!(!app.update_sync(Message::SettingsUninstallPurgeToggled(true)));
+        assert!(!app.update_sync(Message::Settings(SettingsMsg::UninstallPurgeToggled(true))));
 
         // Cancelling disarms without touching anything else.
-        let changed = app.update_sync(Message::SettingsUninstallCancelled);
+        let changed = app.update_sync(Message::Settings(SettingsMsg::UninstallCancelled));
         assert!(changed);
         assert!(!app.settings_uninstall_pending);
         // A second cancel is a no-op.
-        assert!(!app.update_sync(Message::SettingsUninstallCancelled));
+        assert!(!app.update_sync(Message::Settings(SettingsMsg::UninstallCancelled)));
     }
 
     #[test]
     fn settings_message_applies_to_preferences() {
         let (mut app, _) = build_app(Arc::new(FakePermissions::granted()));
         assert!(!app.preferences.debug_logging);
-        let changed = app.update_sync(Message::Settings(SettingsMessage::SetDebugLogging(true)));
+        let changed = app.update_sync(Message::Settings(SettingsMsg::Edit(
+            SettingsMessage::SetDebugLogging(true),
+        )));
         assert!(changed);
         assert!(app.preferences.debug_logging);
     }
@@ -1853,7 +1863,9 @@ mod tests {
         // Sanity: nothing on disk yet.
         assert!(!path.exists());
 
-        let changed = app.update_sync(Message::Settings(SettingsMessage::SetDebugLogging(true)));
+        let changed = app.update_sync(Message::Settings(SettingsMsg::Edit(
+            SettingsMessage::SetDebugLogging(true),
+        )));
         assert!(changed);
 
         // The mutation should have been written to disk; reading it
@@ -1867,7 +1879,9 @@ mod tests {
         let (mut app, _) = build_app(Arc::new(FakePermissions::granted()));
         // No preferences_path configured (matches CLI / test invocations).
         assert!(app.preferences_path.is_none());
-        let changed = app.update_sync(Message::Settings(SettingsMessage::SetDebugLogging(true)));
+        let changed = app.update_sync(Message::Settings(SettingsMsg::Edit(
+            SettingsMessage::SetDebugLogging(true),
+        )));
         // In-memory mutation still works; we just don't write to disk.
         assert!(changed);
         assert!(app.preferences.debug_logging);
