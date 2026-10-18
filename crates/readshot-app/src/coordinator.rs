@@ -647,6 +647,20 @@ fn drop_superseded_retries(retries: &mut Vec<Retry>, batch: &[HistoryUpdate]) {
     retries.retain(|(_, rw)| !fresh.contains(&rw.job.record.id));
 }
 
+/// A plain sidecar sync of a record whose rewrite (in the same document
+/// frame) waits for a retry: that retry carries the record's whole state
+/// and lands after it, so it takes the sync's annotations, rather than
+/// putting older ones back. (While the rewrite hasn't landed, the sync
+/// itself may be dropped by the store's frame guard.)
+fn fold_into_retries(retries: &mut [Retry], record: &CaptureRecord) {
+    for (_, rw) in retries.iter_mut() {
+        let job = &mut rw.job.record;
+        if job.id == record.id && !job.redacted && job.geometry_id == record.geometry_id {
+            job.annotation_model = record.annotation_model.clone();
+        }
+    }
+}
+
 /// The writer thread: drain what queued up while the last write ran,
 /// coalesce it (only the newest rewrite of a record pays for a render +
 /// PNG encode), run it, and retry failed rewrites with backoff until
@@ -694,7 +708,8 @@ fn writer_loop(
                     let _ = ack.send(retries.len());
                     continue;
                 }
-                HistoryUpdate::Write(..) | HistoryUpdate::Rewrite(_) => {}
+                HistoryUpdate::Write(ref record, _) => fold_into_retries(&mut retries, record),
+                HistoryUpdate::Rewrite(_) => {}
             }
             if let Some(retry) = run_update(store, scrubs, msg) {
                 retries.push(retry);
@@ -2474,6 +2489,34 @@ mod tests {
         );
         assert!(sidecar(&store.inner, &record).redacted);
         assert!(!coord.settle_record_writes(record.id).redaction_due);
+    }
+
+    /// An editor rotates (the frame rewrite fails once and waits for its
+    /// retry), then annotates: that sync is for the new frame, which isn't
+    /// stored yet, so the store drops it. The retry must carry the
+    /// annotation, not put the record back without it.
+    #[test]
+    fn a_retried_rewrite_keeps_the_syncs_made_after_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let store = flaky(dir.path(), 1);
+        let coord = history_coord(store.clone());
+        let mut rotated = record.clone();
+        rotated.geometry_id = Some("rotated".into());
+        drop(coord.rewrite_history_as(Some(1), rotated.clone(), Arc::new(white(6, 4)), Vec::new()));
+        let mut annotated = rotated;
+        annotated.width_px = 6;
+        annotated.height_px = 4;
+        annotated.annotation_model = pixelate();
+        coord.update_history_async(annotated);
+        coord.drain_history_writes();
+        let now = sidecar(&store.inner, &record);
+        assert_eq!(now.geometry_id.as_deref(), Some("rotated"));
+        assert_eq!(
+            now.annotation_model.len(),
+            1,
+            "the retry dropped the later sync"
+        );
     }
 
     /// Never stores anything: every image fails to stage.
