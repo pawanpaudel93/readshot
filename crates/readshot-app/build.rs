@@ -9,6 +9,8 @@
 //!   `readshot-ocr` builds its Vision shim, and repeats `readshot-capture`'s
 //!   Swift-runtime rpaths, which `screencapturekit` needs and Cargo's
 //!   `rustc-link-arg` does not propagate across crates.
+//! * Windows: links `packaging/windows/readshot.res` (the multi-size app
+//!   icon) into the `readshot` executable.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -16,8 +18,37 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        macos();
+    match env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("macos") => macos(),
+        Ok("windows") => windows(),
+        _ => {}
+    }
+}
+
+fn windows() {
+    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let res = manifest.join("../../packaging/windows/readshot.res");
+    println!("cargo:rerun-if-changed={}", res.display());
+    if !res.is_file() {
+        panic!(
+            "{} is missing: run packaging/windows/render-icon.sh",
+            res.display()
+        );
+    }
+    match env::var("CARGO_CFG_TARGET_ENV").as_deref() {
+        // link.exe (and lld-link) take a compiled .res as an input file and
+        // embed its resources: the icon Explorer, the taskbar and shortcuts
+        // show for readshot.exe. Only the binary gets it: a .res linked into
+        // a library or a test harness would be dead weight.
+        Ok("msvc") => println!("cargo:rustc-link-arg-bins={}", res.display()),
+        // GNU ld cannot read a .res; it needs a COFF object from windres,
+        // and no release or CI job builds the GNU target (test.yml's
+        // windows-latest job and every packaging path use MSVC). A GNU
+        // build therefore gets the window and tray icons (set at runtime)
+        // but no file icon in Explorer.
+        _ => println!(
+            "cargo:warning=readshot.exe gets no file icon on this Windows target (only MSVC links packaging/windows/readshot.res)"
+        ),
     }
 }
 

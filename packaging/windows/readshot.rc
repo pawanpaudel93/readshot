@@ -1,0 +1,5 @@
+// Readshot's Windows resources: the .exe icon Explorer, the taskbar and
+// shortcuts show. Compiled to readshot.res by render-icon.sh (committed so
+// builds need no resource compiler); crates/readshot-app/build.rs links it.
+// The lowest icon id is the one Explorer uses for the file.
+1 ICON "readshot.ico"
