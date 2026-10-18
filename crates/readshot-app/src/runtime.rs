@@ -2768,11 +2768,13 @@ async fn persist_history(
                     return false;
                 }
             };
+            let record_id = record.id;
             if let Err(e) = coord.record_history(record, buf, policy, now).await {
                 // Not saved: no success signal, no text step.
                 let _ = output
                     .send(Message::HistoryRecordSaveFailed {
                         session: editor_session,
+                        record_id,
                         error: e.to_string(),
                     })
                     .await;

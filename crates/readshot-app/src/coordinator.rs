@@ -811,6 +811,27 @@ impl CaptureCoordinator {
         self.queue_rewrite(job, tx, rx)
     }
 
+    /// A capture whose History save failed: it will never be on disk, so
+    /// whatever was parked for its save is dropped (each holds a document
+    /// image), and any rewrite still queued for it is made stale, so it
+    /// can't park again.
+    pub fn forget_unsaved_record(&self, id: readshot_core::Uuid) {
+        let mut b = lock(&self.scrubs.book);
+        let mut st = lock(&self.scrubs.state);
+        st.latest.insert(id, next_rewrite_seq());
+        st.secured.remove(&id);
+        st.scrub_owners.remove(&id);
+        drop(st);
+        b.parked.remove(&id);
+        b.unsecured.remove(&id);
+    }
+
+    /// How many rewrites wait for a record's save (tests).
+    #[cfg(test)]
+    pub(crate) fn parked_rewrites(&self) -> usize {
+        lock(&self.scrubs.book).parked.len()
+    }
+
     /// Hand a rewrite to the writer thread (or write it inline when there
     /// is none) and return its receiver.
     fn queue_rewrite(
@@ -1441,6 +1462,20 @@ mod tests {
             .into_iter()
             .find(|x| x.id == r.id)
             .unwrap()
+    }
+
+    /// A capture whose save failed: what was parked for it goes.
+    #[test]
+    fn forgetting_an_unsaved_record_drops_what_waits_for_its_save() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+        let coord = history_coord(store);
+        let record = CaptureRecord::new(chrono::Utc::now(), 8, 8, "d");
+        drop(coord.rewrite_history_async(scrubbed(&record), Arc::new(white(8, 8)), pixelate()));
+        coord.flush_history_updates();
+        assert_eq!(coord.parked_rewrites(), 1);
+        coord.forget_unsaved_record(record.id);
+        assert_eq!(coord.parked_rewrites(), 0);
     }
 
     /// A restore (unredacted rewrite) never replaces a redacted record

@@ -494,6 +494,9 @@ pub enum Message {
     /// History; the user is told so and what to do.
     HistoryRecordSaveFailed {
         session: Option<u64>,
+        /// The record that isn't in History: editors drop their link to
+        /// it and the coordinator its parked rewrites.
+        record_id: readshot_core::Uuid,
         error: String,
     },
     /// User clicked "Show More" in the history browser — reveal the

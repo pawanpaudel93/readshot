@@ -17,7 +17,24 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             }
             Task::none()
         }
-        Message::HistoryRecordSaveFailed { session, error } => {
+        Message::HistoryRecordSaveFailed {
+            session,
+            record_id,
+            error,
+        } => {
+            // The record will never exist: no editor writes to it any more,
+            // and nothing parked for its save (a frame rewrite, a scrub,
+            // each holding a document image) waits for it until quit.
+            state.coordinator.forget_unsaved_record(record_id);
+            for ed in state
+                .editor
+                .iter_mut()
+                .chain(state.retiring_editors.iter_mut())
+            {
+                if ed.source_record.as_ref().is_some_and(|r| r.id == record_id) {
+                    ed.source_record = None;
+                }
+            }
             // Tell the user where they are looking: the editor opened for
             // this capture, else the capture status (menu bar,
             // notification).

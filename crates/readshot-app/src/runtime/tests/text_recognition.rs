@@ -1216,12 +1216,24 @@ async fn a_history_save_that_fails_is_reported_never_as_success() {
         .expect("the failure is reported");
 
     // In the editor opened for the capture: a warning with the way out.
+    let record = match &failed {
+        Message::HistoryRecordSaveFailed { record_id, .. } => {
+            let mut r = readshot_core::CaptureRecord::new(chrono::Utc::now(), 16, 16, "fake-0");
+            r.id = *record_id;
+            r
+        }
+        _ => unreachable!(),
+    };
     let mut app = App::new(coord, perms, Preferences::default());
-    let mut ed = crate::editor::EditorSession::new(img);
+    let mut ed = crate::editor::EditorSession::from_history(img, record);
     ed.session_id = session;
     app.editor = Some(ed);
     let _ = update(&mut app, failed.clone());
     let ed = app.editor.as_ref().unwrap();
+    assert!(
+        ed.source_record.is_none(),
+        "the editor no longer writes to it"
+    );
     let status = ed.status.clone().unwrap();
     assert!(
         status.starts_with("Couldn’t save the capture to History"),
