@@ -319,6 +319,8 @@ impl UninstallSystem for RealSystem {
             // `bootout` is the modern per-GUI-session API; fall back to
             // the older `unload` for good measure. Both are best-effort:
             // an agent that isn't currently loaded just returns non-zero.
+            // SAFETY: `getuid` takes no arguments, cannot fail and has
+            // no side effects.
             let uid = unsafe { libc::getuid() };
             let domain = format!("gui/{uid}/{label}");
             let booted = std::process::Command::new("/bin/launchctl")

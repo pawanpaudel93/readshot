@@ -98,6 +98,8 @@ mod platform {
         // handler registration runs during iced startup on the app
         // thread, before reopen events are delivered.
         let manager: *mut AnyObject = unsafe { msg_send![manager_class, sharedAppleEventManager] };
+        // SAFETY: `manager` is null or the live singleton just returned;
+        // `as_ref` maps null to `None`.
         let manager =
             unsafe { manager.as_ref() }.ok_or(AppEventInstallError::NilAppleEventManager)?;
 

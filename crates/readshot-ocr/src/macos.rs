@@ -58,6 +58,9 @@ impl OCREngine for AppleVisionEngine {
         // (`.accurate`) so the list reflects what `recognise` will use.
         let request = VNRecognizeTextRequest::new();
         request.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
+        // SAFETY: `request` is a live VNRecognizeTextRequest owned here;
+        // the call only reads its configuration and returns an owned
+        // NSArray (or an error), never retained past this expression.
         unsafe {
             request
                 .supportedRecognitionLanguagesAndReturnError()
@@ -211,6 +214,10 @@ fn recognise_with_native_vision(
         language_ptrs.as_ptr()
     };
 
+    // SAFETY: `png_bytes` and `language_ptrs` (each pointing into a
+    // `CString` in `language_strings`) outlive the call, and their lengths are
+    // passed with them; the out-pointers are valid locals the Swift side
+    // fills with strings it allocated, freed below by `take_vision_string`.
     let status = unsafe {
         readshot_vision_recognize_png(
             png_bytes.as_ptr(),
@@ -224,11 +231,15 @@ fn recognise_with_native_vision(
     };
 
     if status != 0 {
+        // SAFETY: `out_error` is null or a string the Swift side
+        // allocated for this call, taken (and freed) once.
         let message = unsafe { take_vision_string(out_error) }
             .unwrap_or_else(|| "Vision OCR failed without an error message".to_string());
         return Err(OCRError::Backend(message));
     }
 
+    // SAFETY: `out_json` is null or a string the Swift side allocated
+    // for this call, taken (and freed) once.
     let json = unsafe { take_vision_string(out_json) }
         .ok_or_else(|| OCRError::Backend("Vision OCR returned no result payload".to_string()))?;
     let payload: VisionPayload = serde_json::from_str(&json)
@@ -236,6 +247,12 @@ fn recognise_with_native_vision(
     Ok(payload.into())
 }
 
+/// Copy out and free a string the Swift Vision bridge allocated.
+///
+/// # Safety
+///
+/// `ptr` must be null or a NUL-terminated string from
+/// `readshot_vision_recognize_png` not freed yet; it is freed here.
 unsafe fn take_vision_string(ptr: *mut c_char) -> Option<String> {
     if ptr.is_null() {
         return None;

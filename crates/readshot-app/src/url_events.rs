@@ -105,6 +105,9 @@ mod platform {
         impl UrlEventHandler {
             #[unsafe(method(handleGetURLEvent:withReplyEvent:))]
             unsafe fn handle_get_url_event(&self, event: &AnyObject, _reply_event: &AnyObject) {
+                // SAFETY: AppKit calls this handler with the
+                // NSAppleEventDescriptor of a GURL event, which is what
+                // `url_from_apple_event` requires.
                 if let Some(url) = unsafe { url_from_apple_event(event) } {
                     match super::deliver_url_string(&url) {
                         Ok(()) => tracing::info!(
@@ -147,6 +150,8 @@ mod platform {
         // handler registration runs during iced startup on the app
         // thread, before URL events are delivered.
         let manager: *mut AnyObject = unsafe { msg_send![manager_class, sharedAppleEventManager] };
+        // SAFETY: `manager` is null or the live singleton just returned;
+        // `as_ref` maps null to `None`.
         let manager =
             unsafe { manager.as_ref() }.ok_or(UrlEventInstallError::NilAppleEventManager)?;
 
@@ -184,11 +189,15 @@ mod platform {
         // direct-object descriptor that contains the URL string.
         let descriptor: *mut AnyObject =
             unsafe { msg_send![event, descriptorForKeyword: KEY_DIRECT_OBJECT] };
+        // SAFETY: null or an autoreleased descriptor alive for this
+        // callback; `as_ref` maps null to `None`.
         let descriptor = unsafe { descriptor.as_ref()? };
 
         // SAFETY: `stringValue` returns an autoreleased NSString for
         // text descriptors. We use it only during this callback.
         let string: *mut AnyObject = unsafe { msg_send![descriptor, stringValue] };
+        // SAFETY: null or an autoreleased NSString alive for this
+        // callback; `as_ref` maps null to `None`.
         let string = unsafe { string.as_ref()? };
 
         // SAFETY: `UTF8String` returns a NUL-terminated pointer valid
@@ -199,6 +208,8 @@ mod platform {
             return None;
         }
         Some(
+            // SAFETY: `bytes` is non-null (checked above) and
+            // NUL-terminated, valid while `string` lives.
             unsafe { CStr::from_ptr(bytes) }
                 .to_string_lossy()
                 .into_owned(),

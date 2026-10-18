@@ -400,6 +400,8 @@ fn find_window<'a>(windows: &'a [SCWindow], requested_id: &WindowId) -> Option<&
 /// rather than wrong.
 fn primary_display_id() -> u32 {
     use core_graphics::display::CGMainDisplayID;
+    // SAFETY: `CGMainDisplayID` takes no arguments and only reads the
+    // display configuration; it returns 0 when there is no display.
     unsafe { CGMainDisplayID() }
 }
 
