@@ -422,6 +422,117 @@ pub(crate) fn notify_update_check_failed(e: &crate::updater::UpdaterError) {
     }
 }
 
+/// Why a notification's text did not reach the user as a notification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NotShownReason {
+    /// The user turned Readshot's notifications off (or declined the
+    /// one-time prompt).
+    NotificationsOff,
+    /// Not running from Readshot.app (`cargo run`), so nothing can post.
+    // Only the macOS notification path produces notices.
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    NotBundled,
+}
+
+/// A notification that was not shown, to be shown in the app instead.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UndeliveredNotice {
+    pub(crate) reason: NotShownReason,
+    pub(crate) text: String,
+}
+
+// Process-wide in the app; per test thread under `cfg(test)`, so one
+// test's refusal cannot reroute another test's capture problems.
+#[cfg(not(test))]
+static UNDELIVERED: std::sync::Mutex<Vec<UndeliveredNotice>> = std::sync::Mutex::new(Vec::new());
+#[cfg(not(test))]
+static NOTIFICATIONS_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+thread_local! {
+    static UNDELIVERED: std::sync::Mutex<Vec<UndeliveredNotice>> = const { std::sync::Mutex::new(Vec::new()) };
+    static NOTIFICATIONS_OFF: std::sync::atomic::AtomicBool = const { std::sync::atomic::AtomicBool::new(false) };
+}
+
+fn with_undelivered<R>(f: impl FnOnce(&std::sync::Mutex<Vec<UndeliveredNotice>>) -> R) -> R {
+    #[cfg(not(test))]
+    {
+        f(&UNDELIVERED)
+    }
+    #[cfg(test)]
+    {
+        UNDELIVERED.with(f)
+    }
+}
+
+fn with_notifications_off<R>(f: impl FnOnce(&std::sync::atomic::AtomicBool) -> R) -> R {
+    #[cfg(not(test))]
+    {
+        f(&NOTIFICATIONS_OFF)
+    }
+    #[cfg(test)]
+    {
+        NOTIFICATIONS_OFF.with(f)
+    }
+}
+
+/// Queue `text` for the runtime ([`take_undelivered_notices`]): the
+/// notification path learns about a denial asynchronously, off the main
+/// thread, so it cannot touch the app state itself.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn record_undelivered(reason: NotShownReason, text: &str) {
+    if reason == NotShownReason::NotificationsOff {
+        with_notifications_off(|off| off.store(true, std::sync::atomic::Ordering::Relaxed));
+    }
+    with_undelivered(|queue| {
+        if let Ok(mut queue) = queue.lock() {
+            queue.push(UndeliveredNotice {
+                reason,
+                text: text.to_string(),
+            });
+        }
+    });
+}
+
+/// The notices queued since the last call.
+pub(crate) fn take_undelivered_notices() -> Vec<UndeliveredNotice> {
+    with_undelivered(|queue| {
+        queue
+            .lock()
+            .map(|mut queue| std::mem::take(&mut *queue))
+            .unwrap_or_default()
+    })
+}
+
+/// Whether a notification has been refused because Readshot's
+/// notifications are off (this run).
+pub(crate) fn notifications_off() -> bool {
+    with_notifications_off(|off| off.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Where the user turns Readshot's notifications back on.
+pub(crate) const NOTIFICATIONS_OFF_HINT: &str =
+    "Notifications are off for Readshot. Turn them on in System Settings › Notifications › Readshot.";
+
+/// Open System Settings › Notifications (macOS); a no-op elsewhere.
+pub(crate) fn open_notification_settings() {
+    #[cfg(target_os = "macos")]
+    {
+        let url = "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=np.com.pawanpaudel.readshot";
+        if let Err(e) = std::process::Command::new("open")
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            tracing::warn!(
+                target: readshot_core::log::cat::APP,
+                "could not open Notifications settings: {e}"
+            );
+        }
+    }
+}
+
 /// Post a notification as Readshot (its name and icon, listed under
 /// Readshot in System Settings › Notifications) through
 /// UNUserNotificationCenter, via the Swift shim `src/macos_notify.swift`.
@@ -445,10 +556,13 @@ pub(crate) fn show_macos_notification(title: &str, body: &str) {
     };
     match status {
         0 => {}
-        1 => tracing::info!(
-            target: readshot_core::log::cat::APP,
-            "not running from Readshot.app, so no notification: {title} — {body}"
-        ),
+        1 => {
+            tracing::info!(
+                target: readshot_core::log::cat::APP,
+                "not running from Readshot.app, so no notification: {title} — {body}"
+            );
+            record_undelivered(NotShownReason::NotBundled, body);
+        }
         other => tracing::warn!(
             target: readshot_core::log::cat::APP,
             "notification shim refused \"{title}\" (status {other})"
@@ -476,7 +590,13 @@ extern "C" fn notification_log_callback(level: i32, message: *const std::ffi::c_
     // SAFETY: the shim passes a NUL-terminated string that stays valid for
     // the duration of this call.
     let message = unsafe { std::ffi::CStr::from_ptr(message) }.to_string_lossy();
-    if level == 0 {
+    if level == 2 {
+        tracing::info!(
+            target: readshot_core::log::cat::APP,
+            "notifications are off for Readshot; not shown: {message}"
+        );
+        record_undelivered(NotShownReason::NotificationsOff, &message);
+    } else if level == 0 {
         tracing::info!(target: readshot_core::log::cat::APP, "{message}");
     } else {
         tracing::warn!(target: readshot_core::log::cat::APP, "{message}");
@@ -488,7 +608,8 @@ unsafe extern "C" {
     /// `src/macos_notify.swift`. Returns 0 when handed to the notification
     /// center, 1 when not running from an app bundle (nothing posted), 2
     /// for a null argument. `log` receives `(0 = info | 1 = warn, text)`,
-    /// possibly later and on another thread.
+    /// or `(2, body)` when notifications are off for Readshot, possibly
+    /// later and on another thread.
     fn readshot_notify_post(
         title: *const std::ffi::c_char,
         body: *const std::ffi::c_char,

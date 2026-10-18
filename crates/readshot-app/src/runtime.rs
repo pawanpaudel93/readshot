@@ -1068,7 +1068,48 @@ fn announce_capture_status(state: &mut App) -> Task<Message> {
     if welcome_open || !capture_status_is_problem(&status) {
         return Task::none();
     }
-    surface_capture_problem(state, &status, CAPTURE_PROBLEM_ROUTE)
+    surface_capture_problem(state, &status, capture_problem_route())
+}
+
+/// [`CAPTURE_PROBLEM_ROUTE`], except that once a notification has been
+/// refused because Readshot's notifications are off, capture problems go
+/// to the Welcome window, which shows them.
+pub(crate) fn capture_problem_route() -> CaptureProblemRoute {
+    if CAPTURE_PROBLEM_ROUTE == CaptureProblemRoute::Notification && notifications_off() {
+        CaptureProblemRoute::WelcomeWindow
+    } else {
+        CAPTURE_PROBLEM_ROUTE
+    }
+}
+
+/// Show in the app what a notification could not: in the editor's toast
+/// when an editor is open, or in the Welcome window when it is the capture
+/// problem it shows. The first time notifications turn out to be off, the
+/// tray menu also gains an item saying so that opens the setting.
+pub(crate) fn surface_undelivered_notices(
+    state: &mut App,
+    notices: Vec<UndeliveredNotice>,
+) -> Task<Message> {
+    let mut tasks = Vec::new();
+    for notice in notices {
+        let off = notice.reason == NotShownReason::NotificationsOff;
+        if let Some(editor) = state.editor.as_mut() {
+            if off {
+                editor.set_status(format!("{} {NOTIFICATIONS_OFF_HINT}", notice.text));
+            } else {
+                editor.set_status(notice.text.clone());
+            }
+        } else if state.last_capture_status.as_deref() == Some(notice.text.as_str()) {
+            tasks.push(show_or_focus_welcome(state));
+        }
+        if off && !state.notifications_off_told {
+            state.notifications_off_told = true;
+            if let Some(tray) = &state.tray {
+                tray.show_notifications_off();
+            }
+        }
+    }
+    Task::batch(tasks)
 }
 
 pub(crate) fn surface_capture_problem(
@@ -1219,6 +1260,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
         }
 
         Message::TrayTick => {
+            let undelivered = surface_undelivered_notices(state, take_undelivered_notices());
             let actions = match &state.tray {
                 Some(t) => t.drain(),
                 None => Vec::new(),
@@ -1229,6 +1271,7 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
             let tasks: Vec<Task<Message>> = actions
                 .into_iter()
                 .map(|a| Task::done(Message::TrayActionPerformed(a)))
+                .chain(std::iter::once(undelivered))
                 .collect();
             Task::batch(tasks)
         }
@@ -1305,6 +1348,10 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                     tracing::warn!(target: readshot_core::log::cat::UPDATER, "manual update check failed: {e}");
                     notify_update_check_failed(&e);
                 }
+                Task::none()
+            }
+            crate::tray::TrayAction::NotificationSettings => {
+                open_notification_settings();
                 Task::none()
             }
             crate::tray::TrayAction::About => {

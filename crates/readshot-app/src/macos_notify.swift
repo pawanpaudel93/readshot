@@ -9,7 +9,9 @@
 import Foundation
 import UserNotifications
 
-/// Rust's logger: `(level, message)`, level 0 = info, 1 = warn. Called from
+/// Rust's logger: `(level, message)`, level 0 = info, 1 = warn, 2 = the
+/// notification was not shown because notifications are off for Readshot
+/// (`message` is then the body, which Rust shows in the app). Called from
 /// UserNotifications' completion queues, so it must be thread-safe (it is:
 /// it only forwards to `tracing`).
 public typealias ReadshotNotifyLog = @convention(c) (Int32, UnsafePointer<CChar>?) -> Void
@@ -96,13 +98,15 @@ public func readshotNotifyPost(
                 if granted {
                     add()
                 } else {
-                    let reason = error.map { ": \($0.localizedDescription)" } ?? ""
-                    emit(log, 0, "notifications not allowed\(reason); not shown: \(titleText) — \(bodyText)")
+                    if let error {
+                        emit(log, 0, "notification authorization failed: \(error.localizedDescription)")
+                    }
+                    emit(log, 2, bodyText)
                 }
             }
         default:
             // Denied in System Settings › Notifications: respect it.
-            emit(log, 0, "notifications are turned off for Readshot; not shown: \(titleText) — \(bodyText)")
+            emit(log, 2, bodyText)
         }
     }
     return posted

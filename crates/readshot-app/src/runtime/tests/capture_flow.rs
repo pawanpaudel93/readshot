@@ -1038,3 +1038,56 @@ fn a_refused_scroll_esc_is_tried_once_and_the_other_still_works() {
     sync(&mut app);
     assert_eq!(tries.get(), 4);
 }
+
+/// A notification refused because Readshot's notifications are off is
+/// shown in the open editor's toast, with how to turn them back on.
+#[test]
+fn a_refused_notification_shows_in_the_editor_with_the_way_back() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+    record_undelivered(
+        NotShownReason::NotificationsOff,
+        "Couldn’t save the capture.",
+    );
+    let _ = update(&mut app, Message::TrayTick);
+    let status = app.editor.as_ref().unwrap().status.clone().unwrap();
+    assert!(status.starts_with("Couldn’t save the capture."), "{status}");
+    assert!(status.contains(NOTIFICATIONS_OFF_HINT), "{status}");
+    assert!(app.notifications_off_told);
+    // The queue is drained: the next tick shows nothing new.
+    assert!(take_undelivered_notices().is_empty());
+}
+
+/// Without an editor, a refused capture-problem notification opens the
+/// Welcome window, which shows the status; from then on capture problems
+/// go there directly instead of to a notification that cannot show.
+#[test]
+fn with_notifications_off_capture_problems_open_the_welcome_window() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let _ = update(&mut app, Message::RetakeLastRegionRequested);
+    let status = app.last_capture_status.clone().expect("a status");
+    if CAPTURE_PROBLEM_ROUTE == CaptureProblemRoute::WelcomeWindow {
+        // Off macOS capture problems open Welcome already.
+        return;
+    }
+    assert!(!app.windows.kinds().any(|k| k == WindowKind::Welcome));
+    record_undelivered(NotShownReason::NotificationsOff, &status);
+    let _ = update(&mut app, Message::TrayTick);
+    assert!(app.windows.kinds().any(|k| k == WindowKind::Welcome));
+    assert!(notifications_off());
+    assert_eq!(capture_problem_route(), CaptureProblemRoute::WelcomeWindow);
+}
+
+/// A dev run outside Readshot.app cannot post: the text still reaches an
+/// open editor, without the "turn notifications on" hint.
+#[test]
+fn an_unbundled_notification_shows_in_the_editor() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
+    record_undelivered(NotShownReason::NotBundled, "Checking for updates…");
+    let _ = update(&mut app, Message::TrayTick);
+    let status = app.editor.as_ref().unwrap().status.clone().unwrap();
+    assert_eq!(status, "Checking for updates…");
+    assert!(!app.notifications_off_told);
+    assert!(!notifications_off());
+}

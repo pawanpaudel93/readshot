@@ -51,6 +51,9 @@ pub enum TrayAction {
     Settings,
     CheckForUpdates,
     About,
+    /// "Notifications Are Off…": open System Settings › Notifications.
+    /// Only in the menu once a notification was refused.
+    NotificationSettings,
     Quit,
 }
 
@@ -173,8 +176,11 @@ fn normalize_hotkey_for_menu(raw_hotkey: &str) -> Option<String> {
 /// system tray entry disappears.
 pub struct TrayController {
     tray: TrayIcon,
+    menu: Menu,
     item_capture: MenuItem,
     item_retake_last_region: MenuItem,
+    item_notifications_off: MenuItem,
+    notifications_off_shown: std::cell::Cell<bool>,
     menu_ids: HashMap<MenuId, TrayAction>,
 }
 
@@ -209,6 +215,20 @@ impl TrayController {
 
     pub fn set_retake_last_region_enabled(&self, enabled: bool) {
         self.item_retake_last_region.set_enabled(enabled);
+    }
+
+    /// Tell the user, once, that Readshot's notifications are off: an item
+    /// above Quit that opens System Settings › Notifications. Shown the
+    /// next time they open the menu; later calls do nothing.
+    pub fn show_notifications_off(&self) {
+        if self.notifications_off_shown.replace(true) {
+            return;
+        }
+        // Above the separator and Quit, the last two items.
+        let position = self.menu.items().len().saturating_sub(2);
+        if let Err(e) = self.menu.insert(&self.item_notifications_off, position) {
+            tracing::warn!(target: readshot_core::log::cat::TRAY, "menu insert failed: {e}");
+        }
     }
 
     /// Pop any pending tray + menu events off the static crossbeam
@@ -303,6 +323,9 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
     #[cfg(target_os = "macos")]
     let item_about = MenuItem::new("About Readshot", true, None);
     let item_quit = MenuItem::new("Quit Readshot", true, None);
+    // Not in the menu until a notification is refused
+    // (`TrayController::show_notifications_off`).
+    let item_notifications_off = MenuItem::new(NOTIFICATIONS_OFF_LABEL, true, None);
 
     let mut menu_ids = HashMap::new();
     menu_ids.insert(item_capture.id().clone(), TrayAction::Capture);
@@ -318,6 +341,10 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
     #[cfg(target_os = "macos")]
     menu_ids.insert(item_about.id().clone(), TrayAction::About);
     menu_ids.insert(item_quit.id().clone(), TrayAction::Quit);
+    menu_ids.insert(
+        item_notifications_off.id().clone(),
+        TrayAction::NotificationSettings,
+    );
 
     if let Err(e) = menu.append_items(&[
         &item_capture,
@@ -339,6 +366,7 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
         return None;
     }
 
+    let menu_handle = menu.clone();
     let tray = match TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         // A left click captures (`tray_click_action`); only a right click
@@ -361,11 +389,17 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
     tracing::info!(target: readshot_core::log::cat::TRAY, "tray icon installed");
     Some(TrayController {
         tray,
+        menu: menu_handle,
         item_capture,
         item_retake_last_region,
+        item_notifications_off,
+        notifications_off_shown: std::cell::Cell::new(false),
         menu_ids,
     })
 }
+
+/// The tray item shown once notifications turn out to be off.
+pub(crate) const NOTIFICATIONS_OFF_LABEL: &str = "Notifications Are Off — Turn On…";
 
 /// tray-icon draws the macOS status item 18 pt tall: a 36 px bitmap is
 /// pixel-exact on Retina (a 32 px one was upscaled and soft).

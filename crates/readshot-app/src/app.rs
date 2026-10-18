@@ -934,6 +934,9 @@ pub struct App {
     /// The last capture status raised as a system notification, so a
     /// status is announced once however many nested updates see it.
     pub announced_capture_status: Option<String>,
+    /// The user has been told (once, in the tray menu) that Readshot's
+    /// notifications are off and how to turn them on.
+    pub notifications_off_told: bool,
     /// Live `GlobalHotKeyManager` for the registered capture shortcut.
     /// Held here so it isn't dropped (which unregisters the hotkey).
     /// Tests and CLI invocations leave this `None`.
@@ -1415,6 +1418,7 @@ impl App {
             capture_in_flight: false,
             last_capture_status: None,
             announced_capture_status: None,
+            notifications_off_told: false,
             hotkey_manager: None,
             hotkey_actions: HashMap::new(),
             scroll_escape_hotkeys: Vec::new(),
