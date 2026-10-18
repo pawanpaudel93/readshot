@@ -80,10 +80,16 @@ pub mod action {
     /// Open a capture in the editor: the capture overlay's Edit and
     /// History's Open in Editor.
     pub const OPEN_IN_EDITOR: AppIcon = AppIcon::Edit;
-    /// Throw a capture away: History's Delete and the editor's Discard.
+    /// Delete something saved, for good: History's Delete Capture and
+    /// Beautify's Remove Preset.
     pub const DELETE: AppIcon = AppIcon::Trash;
     /// Dismiss, cancel or close something without losing work.
     pub const DISMISS: AppIcon = AppIcon::Close;
+    /// The editor's Discard: close the editor without keeping its edits.
+    /// The × of closing, not the trash: the capture itself stays in
+    /// History, so a trash can would promise a deletion that does not
+    /// happen. It deliberately shares [`DISMISS`]'s glyph (both close).
+    pub const DISCARD: AppIcon = AppIcon::Close;
     /// Pick a colour from the image: the colour popover and Beautify.
     pub const PICK_COLOR: AppIcon = AppIcon::Dropper;
     /// The Screen Recording permission: Welcome and the Settings pane.
@@ -107,6 +113,7 @@ pub mod action {
         ("open in editor", OPEN_IN_EDITOR),
         ("delete", DELETE),
         ("dismiss", DISMISS),
+        ("discard", DISCARD),
         ("pick color", PICK_COLOR),
         ("screen recording", SCREEN_RECORDING),
         ("redact", REDACT),
@@ -752,30 +759,44 @@ fn shapes(icon: AppIcon) -> &'static [Shape] {
             Line(10.75, 12.0, 13.25, 12.0),
             Line(18.5, 12.0, 21.0, 12.0),
         ],
-        AppIcon::LineStraight => &[Line(5.0, 19.0, 19.0, 5.0)],
-        AppIcon::LineCurved => &[Poly(
-            &[
-                (4.0, 19.0),
-                (6.0, 14.0),
-                (9.0, 10.0),
-                (13.0, 7.5),
-                (17.0, 6.0),
-                (20.0, 5.5),
-            ],
-            false,
-        )],
-        AppIcon::LineSketch => &[Poly(
-            &[
-                (4.0, 18.0),
-                (7.0, 15.0),
-                (9.0, 16.0),
-                (12.0, 12.0),
-                (14.0, 13.0),
-                (17.0, 8.0),
-                (20.0, 6.0),
-            ],
-            false,
-        )],
+        // The line-path options draw the path between two end handles, so
+        // "Straight" is not the Line tool's glyph (the toolbar shows that
+        // at the same time, meaning "draw a line").
+        AppIcon::LineStraight => &[
+            Circle(5.0, 19.0, 2.0),
+            Circle(19.0, 5.0, 2.0),
+            Line(6.5, 17.5, 17.5, 6.5),
+        ],
+        AppIcon::LineCurved => &[
+            Circle(5.0, 19.0, 2.0),
+            Circle(19.0, 5.0, 2.0),
+            Poly(
+                &[
+                    (5.6, 17.1),
+                    (7.0, 13.8),
+                    (9.5, 10.5),
+                    (13.0, 8.0),
+                    (17.1, 5.6),
+                ],
+                false,
+            ),
+        ],
+        AppIcon::LineSketch => &[
+            Circle(5.0, 19.0, 2.0),
+            Circle(19.0, 5.0, 2.0),
+            Poly(
+                &[
+                    (6.4, 17.6),
+                    (8.0, 15.5),
+                    (10.0, 16.0),
+                    (12.0, 12.5),
+                    (14.0, 13.0),
+                    (15.5, 9.0),
+                    (17.6, 6.4),
+                ],
+                false,
+            ),
+        ],
         // An eyedropper: squeeze bulb, collar, and a glass tube tapering
         // to the tip (a stick with a ring read as a pin or a match).
         AppIcon::Dropper => &[
@@ -1181,10 +1202,10 @@ mod tests {
     }
 
     /// Glyph pairs that are deliberately the same picture: a horizontal
-    /// rule is both "solid line" (line style) and "minus" (zoom out), and
-    /// the straight line path is the Line tool's stroke. Each pair sits on
-    /// a different surface with its own tooltip.
-    const SAME_PICTURE: &[(&str, &str)] = &[("SolidLine", "Minus"), ("Tool-Line", "LineStraight")];
+    /// rule is both "solid line" (line style) and "minus" (zoom out). They
+    /// sit on different surfaces, never beside a tool glyph, each with its
+    /// own tooltip.
+    const SAME_PICTURE: &[(&str, &str)] = &[("SolidLine", "Minus")];
 
     /// Fewest differing pixels (at 24 px) for two glyphs to count as
     /// different pictures: a feature about as big as a short stroke.
@@ -1208,6 +1229,35 @@ mod tests {
             }
         }
         assert!(clashes.is_empty(), "near-identical glyphs: {clashes:#?}");
+    }
+
+    /// The options bar shows beside the toolbar: no option segment may look
+    /// like a tool glyph, or choosing an option reads as switching tools.
+    /// (Comparing variants is not enough: "Straight" once drew the Line
+    /// tool's picture under another name.)
+    #[test]
+    fn no_option_segment_looks_like_a_tool_glyph() {
+        use crate::runtime::{
+            ARROW_HEAD_SEGMENTS, DASH_SEGMENTS, LINE_PATH_SEGMENTS, MAGNIFIER_SHAPE_SEGMENTS,
+            SPOTLIGHT_SHAPE_SEGMENTS,
+        };
+        let mut options: Vec<AppIcon> = Vec::new();
+        options.extend(DASH_SEGMENTS.iter().map(|s| s.0));
+        options.extend(LINE_PATH_SEGMENTS.iter().map(|s| s.0));
+        options.extend(ARROW_HEAD_SEGMENTS.iter().map(|s| s.0));
+        options.extend(SPOTLIGHT_SHAPE_SEGMENTS.iter().map(|s| s.0));
+        options.extend(MAGNIFIER_SHAPE_SEGMENTS.iter().map(|s| s.0));
+        for option in options {
+            let mask = ink(&rasterize(option, 24));
+            for tool in TOOLS {
+                let d = difference(&mask, &ink(&rasterize(AppIcon::Tool(tool), 24)));
+                assert!(
+                    d >= MIN_DIFFERENCE,
+                    "{} looks like the {tool:?} tool ({d} px apart)",
+                    name(option)
+                );
+            }
+        }
     }
 
     #[test]
@@ -1240,19 +1290,32 @@ mod tests {
         assert!(alpha(31, 6) < 64, "gap between teeth");
     }
 
+    /// Actions that deliberately share a glyph, with the reason in
+    /// [`action`]: Discard and Dismiss both close without deleting.
+    const SHARED_ACTION_GLYPHS: &[(&str, &str)] = &[("dismiss", "discard")];
+
     #[test]
     fn each_action_has_one_glyph_and_actions_do_not_share() {
         let all = action::ALL;
         for (i, &(a, ga)) in all.iter().enumerate() {
             for &(b, gb) in &all[i + 1..] {
-                assert_ne!(ga, gb, "{a} and {b} share a glyph");
+                let shared = SHARED_ACTION_GLYPHS
+                    .iter()
+                    .any(|&(x, y)| (a, b) == (x, y) || (a, b) == (y, x));
+                if shared {
+                    assert_eq!(ga, gb, "{a} and {b} are meant to share a glyph");
+                } else {
+                    assert_ne!(ga, gb, "{a} and {b} share a glyph");
+                }
             }
         }
         // The overlay's Edit and History's Open in Editor open the same
         // editor: the pencil, never the external-link box.
         assert_eq!(action::OPEN_IN_EDITOR, AppIcon::Edit);
-        // Discarding the editor's capture is destructive: the trash.
+        // Deleting is the trash; Discard only closes the editor, so it is
+        // never the trash.
         assert_eq!(action::DELETE, AppIcon::Trash);
+        assert_ne!(action::DISCARD, action::DELETE);
         assert_ne!(action::REDACT, action::SCREEN_RECORDING);
     }
 

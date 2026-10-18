@@ -15,7 +15,6 @@ use readshot_core::beautify::{
 
 use crate::app::{App, Message};
 use crate::editor::{EditorSession, EyedropperState, EyedropperTarget};
-use crate::icons::AppIcon;
 
 /// Why a Beautify output over the document limits can't be made, and
 /// what to change. Shown inline in the panel.
@@ -312,7 +311,7 @@ pub(crate) fn beautify_tab<'a>(
                 ),
                 focus_ring(
                     icon_button(
-                        AppIcon::Close,
+                        crate::icons::action::DELETE,
                         p.t3,
                         "Remove Preset",
                         None,

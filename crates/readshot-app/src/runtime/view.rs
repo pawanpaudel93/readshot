@@ -2662,10 +2662,10 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         ),
         copy_image,
         vsep(),
-        // Discard throws the capture away: the trash, not the × that
-        // dismisses and cancels everywhere else.
+        // Discard closes the editor without its edits; the capture stays
+        // in History, so the ×, not the trash (see `action::DISCARD`).
         icon_button(
-            crate::icons::action::DELETE,
+            crate::icons::action::DISCARD,
             icon_color(!busy),
             "Discard",
             Some(CLOSE_KEY),
