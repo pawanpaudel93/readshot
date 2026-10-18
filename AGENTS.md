@@ -63,6 +63,17 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 ```
 
+One test is ignored on purpose: `ui_thread_time_of_rotate_and_undo_at_96_mp`
+(`readshot-app/src/runtime/tests/large_documents.rs`) is a manual
+benchmark. It asserts nothing and prints how long rotate, undo, redo,
+an annotation and an added part keep the UI thread busy on a ~96 MP
+document. Run it in release when a change touches `compose_jobs` or the
+editor's render path, and compare against a run on `main`:
+
+```bash
+cargo test --release -p readshot-app --lib ui_thread_time -- --ignored --nocapture
+```
+
 System dependencies on Linux (matched to `.github/workflows/test.yml`):
 `libxcb`, `libxkbcommon`, `wayland`, `dbus`, `fontconfig`,
 `libayatana-appindicator3-dev`, `gtk3`, `libpipewire-0.3-dev`
@@ -97,18 +108,55 @@ packages beyond a stable Rust toolchain.
 | Editor message handling             | `readshot-app::runtime::editor_ops`, `readshot-app::editor` |
 | Image menu (resize, rotate, flip)   | `readshot-app::runtime::image_menu`, `readshot-core::document` |
 | Combine (add capture / image file)  | `readshot-app::runtime::combine`, `readshot-core::document` |
+| Any history step (geometry, undo)   | `readshot-app::runtime::compose_jobs` (`apply_step_now` / `queue_step`, one landing hook) |
 | Crop presets, tool options bar      | `readshot-ui::editor::style`, `readshot-app::runtime::editor_options` |
 | Magnifier                           | `readshot-core::magnifier`, `readshot-ui::editor::canvas` |
-| Beautify (background, shadow, …)    | `readshot-core::beautify`, `readshot-app::runtime::beautify_panel` |
-| Side panel Text tab, Redact         | `readshot-app::runtime::text_panel`, `readshot-core::{redact,scrub,text_lines}` |
+| Stamps (emoji on macOS)             | `readshot-core::stamp`, `readshot-app::emoji_macos` |
+| Eyedropper, color presets           | `readshot-core::eyedropper`, `readshot-app::runtime::editor_options` |
+| Beautify (background, shadow, …)    | `readshot-core::beautify`, `readshot-app::runtime::{beautify_panel,beautify_preview}` |
+| Side panel, Text tab, Redact        | `readshot-app::runtime::{side_panel,text_panel}`, `readshot-core::{redact,scrub,text_lines}` |
 | Large-document responsiveness       | `readshot-app::runtime::compose_jobs`          |
+| Editor status line and toasts       | `readshot-app::editor` (`set_status` …), `readshot-app::runtime::toast` |
+| History window                      | `readshot-app::runtime::{history_ops,history_select,history_images}`, `readshot-core::history` |
+| Settings window                     | `readshot-app::runtime::{settings_ops,view}` (`settings_view`), `readshot-ui::settings` |
+| Scrolling capture                   | `readshot-app::runtime::scroll`, `readshot-core::scroll_stitch` |
+| Look and feel (colors, controls)    | `readshot-app::runtime::{tokens,ui_kit}`, `readshot-app::icons` |
 | New OCR engine option               | `readshot-ocr` + `default_engine` switch       |
 | New capture backend                 | `readshot-capture` (mind the `Capturer` trait) |
 | New CLI subcommand                  | `readshot-app::cli`                            |
 | New MCP tool                        | `readshot-mcp` (lib.rs `tool_*` + descriptors) |
 | New preference field                | `readshot-core::preferences` (mind round-trip) |
-| New keyboard shortcut               | `readshot-ui::hotkey` + `readshot-app::app`    |
+| New in-app keyboard shortcut        | `readshot-app::runtime::key_maps` (editor and window key maps; History's is `history_key_message` in `runtime.rs`), `readshot-app::runtime::key_focus` (focus zones, chords), `readshot-app::runtime::keys` (labels, tested per platform), README §Accessibility |
+| Global capture hotkey               | `readshot-ui::hotkey` (parsing), `readshot-app::runtime::hotkeys` |
 | Per-OS packaging tweak              | `packaging/<os>/` and `release.yml`            |
+
+### `readshot-app::runtime` modules
+
+| Module               | What it holds                                                     |
+|----------------------|-------------------------------------------------------------------|
+| `view`               | Every window's view functions                                     |
+| `editor_ops`         | Editor message handling, annotation edits, History sync           |
+| `compose_jobs`       | The history-step pipeline, off-thread composes and flattens       |
+| `image_menu`         | Image menu, Resize dialog, refused-change statuses                |
+| `combine`            | Add Capture / Add Image, gap and alignment                        |
+| `editor_options`     | Tool options bar, color and width popovers                        |
+| `side_panel`         | Side panel frame and tabs                                         |
+| `text_panel`         | Text tab: recognition, line selection, copy, smart redact         |
+| `beautify_panel`     | Beautify tab controls                                             |
+| `beautify_preview`   | Live Beautify canvas preview                                      |
+| `key_maps`           | Editor key map and the pin / Settings / Welcome / scroll key maps |
+| `key_focus`          | Editor keyboard focus zones and chords                            |
+| `keys`               | Platform key labels (one constant per key)                        |
+| `toast`              | Toast kind, button and dismissal rules                            |
+| `history_ops`        | History window messages                                           |
+| `history_select`     | History visibility, search and selection                          |
+| `history_images`     | History thumbnail and preview image handles                       |
+| `settings_ops`       | Settings and CLI-tools window messages                            |
+| `window_settings`    | Window sizes and levels per window kind                           |
+| `hotkeys`            | Global hotkey registration                                        |
+| `scroll`             | Scrolling capture session                                         |
+| `platform`           | OS integration: appearance, relaunch, reveal / open folder        |
+| `tokens`, `ui_kit`   | Design tokens and shared controls                                 |
 
 ## The editor at a glance
 
@@ -125,9 +173,22 @@ Free / 16:9 / 4:3 / 1:1 presets) it has:
   (background, padding, corners, shadow, canvas size, presets), which
   replaced the old Frame styles (`tests/beautify_parity.rs` keeps the
   built-in presets byte-identical to them);
+* an eyedropper (`I`) and a color popover with presets and recent
+  colors; the highlighter's Snap to text, which follows recognized text
+  lines;
+* keyboard focus zones (`runtime::key_focus`): the options bar, the
+  side panel, the Image menu and the Resize dialog are reachable with
+  F6, Tab and the chords listed in README §Accessibility, since iced
+  widgets can't take focus themselves;
 * off-UI-thread composing for documents of 16 MP and more
   (`compose_jobs`): pending steps settle before any interaction or
-  output, so nothing lands under an open drag.
+  output, so nothing lands under an open drag. Small and large documents
+  share one pipeline: every history step (rotate, flip, resize, align,
+  gap, added part, undo, redo) is a `ComposeKind` applied on the UI
+  thread (`apply_step_now`) or composed off it (`queue_step`), and both
+  land through the same hook (status, bake bookkeeping, recognition,
+  loupe and Discard clears, History sync). Only where the pixels are
+  composed differs.
 
 Privacy rule: after a redaction, nothing persisted or served — History
 text, images, thumbnails and search, the MCP server, the CLI, clipboard
@@ -185,8 +246,12 @@ Over-masking is acceptable, under-masking never:
 
 ## Things to avoid
 
-* Reaching for `unsafe` outside the `readshot-capture` /
-  `readshot-ocr` per-OS backends.
+* `unsafe` anywhere but platform FFI: the per-OS backends of
+  `readshot-capture` and `readshot-ocr`, and the macOS glue in
+  `readshot-app` (`app_events`, `url_events`, `updater`, `uninstall`,
+  `emoji_macos`, `runtime::platform`, `runtime::window_settings`). Every
+  unsafe block carries a `// SAFETY:` comment saying why it is sound;
+  those three crates deny `clippy::undocumented_unsafe_blocks`.
 * Re-introducing `anyhow` as a public type.
 * Mocking the database / filesystem in integration tests where a
   `tempfile::TempDir` works (it does, and we use it everywhere).

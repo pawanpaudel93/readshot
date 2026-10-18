@@ -27,9 +27,10 @@ file in sync when the rules change.
 
 ## Where to look first
 
-* Architecture overview, build/test commands, common-change matrix,
-  the editor's features at a glance and the redaction privacy rule:
-  see `AGENTS.md`.
+* Architecture overview, build/test commands (including the one
+  ignored test, a manual benchmark), common-change matrix, the
+  `runtime` module map, the editor's features at a glance, the
+  redaction privacy rule and where `unsafe` is allowed: see `AGENTS.md`.
 * End-user install instructions: `docs/INSTALL.md`.
 * Maintainer release runbook: `docs/RELEASING.md`.
 * Wiring the MCP server into Claude Desktop / Cursor / OpenAI:
@@ -42,9 +43,17 @@ file in sync when the rules change.
 | GUI behaviour            | `crates/readshot-ui/src/`, `crates/readshot-app/src/app.rs` |
 | Editor interactions      | `crates/readshot-app/src/runtime/editor_ops.rs`, `crates/readshot-ui/src/editor/` |
 | Image menu / combine     | `crates/readshot-app/src/runtime/{image_menu,combine}.rs`, `crates/readshot-core/src/document.rs` |
-| Beautify                 | `crates/readshot-core/src/beautify.rs`, `crates/readshot-app/src/runtime/beautify_panel.rs` |
-| Text panel / Redact      | `crates/readshot-app/src/runtime/text_panel.rs`, `crates/readshot-core/src/{redact,scrub}.rs` |
+| Undo / any history step  | `crates/readshot-app/src/runtime/compose_jobs.rs` (`apply_step_now`, `queue_step`, one landing hook) |
+| Crop, tool options bar   | `crates/readshot-ui/src/editor/style.rs`, `crates/readshot-app/src/runtime/editor_options.rs` |
+| Magnifier                | `crates/readshot-core/src/magnifier.rs`, `crates/readshot-ui/src/editor/canvas.rs` |
+| Stamps                   | `crates/readshot-core/src/stamp.rs`, `crates/readshot-app/src/emoji_macos.rs` |
+| Beautify                 | `crates/readshot-core/src/beautify.rs`, `crates/readshot-app/src/runtime/{beautify_panel,beautify_preview}.rs` |
+| Side panel / Text / Redact | `crates/readshot-app/src/runtime/{side_panel,text_panel}.rs`, `crates/readshot-core/src/{redact,scrub}.rs` |
 | Large documents          | `crates/readshot-app/src/runtime/compose_jobs.rs`         |
+| Keyboard shortcuts       | `crates/readshot-app/src/runtime/{key_maps,key_focus,keys}.rs`, README §Accessibility |
+| Status line / toasts     | `crates/readshot-app/src/editor.rs` (`set_status` …), `crates/readshot-app/src/runtime/toast.rs` |
+| History window           | `crates/readshot-app/src/runtime/{history_ops,history_select,history_images}.rs` |
+| UI theme / look          | `crates/readshot-app/src/runtime/{tokens,ui_kit}.rs`, `crates/readshot-app/src/icons.rs` |
 | Region capture           | `crates/readshot-capture/src/lib.rs` + per-OS `*.rs`     |
 | OCR                      | `crates/readshot-ocr/src/lib.rs` + per-OS `*.rs`         |
 | CLI                      | `crates/readshot-app/src/cli.rs`                         |

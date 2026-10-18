@@ -2216,8 +2216,10 @@ fn a_placeholder_is_cut_to_a_crop_frame_at_its_own_scale() {
 /// UI-thread time of rotate, undo, redo and an annotation commit at
 /// ~96 MP: the message itself, then the landing of its off-thread
 /// result (the worker's compose is run untimed, as on its thread).
-/// Release build: `cargo test --release -p readshot-app --lib
-/// ui_thread_time -- --ignored --nocapture`.
+/// A manual benchmark: it asserts nothing and prints its timings, to
+/// compare a change's UI-thread cost by hand. Release build: `cargo test
+/// --release -p readshot-app --lib ui_thread_time -- --ignored
+/// --nocapture`.
 #[test]
 #[ignore = "measurement; run in release"]
 fn ui_thread_time_of_rotate_and_undo_at_96_mp() {
