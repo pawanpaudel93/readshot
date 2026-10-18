@@ -1411,6 +1411,26 @@ mod tests {
             }
             self.inner.begin_scrub(r)
         }
+        fn sweep_staging(&self) {
+            self.inner.sweep_staging()
+        }
+        fn stored_redacted(&self, r: &CaptureRecord) -> Result<bool, readshot_core::HistoryError> {
+            self.inner.stored_redacted(r)
+        }
+        fn record_recognized_text(
+            &self,
+            r: &CaptureRecord,
+            doc: &readshot_core::text_lines::TextDocument,
+            fill_unredacted: bool,
+        ) -> Result<(), readshot_core::HistoryError> {
+            self.inner.record_recognized_text(r, doc, fill_unredacted)
+        }
+        fn contains(&self, r: &CaptureRecord) -> bool {
+            self.inner.contains(r)
+        }
+        fn delete(&self, id: readshot_core::Uuid) -> Result<(), readshot_core::HistoryError> {
+            self.inner.delete(id)
+        }
     }
 
     fn history_coord(store: Arc<dyn HistoryStore>) -> CaptureCoordinator {
@@ -1826,6 +1846,36 @@ mod tests {
         ) -> Result<bool, readshot_core::HistoryError> {
             self.wait_if(&self.block_commit);
             self.inner.commit_rewrite(r, staged)
+        }
+        fn update(&self, r: &CaptureRecord) -> Result<(), readshot_core::HistoryError> {
+            self.inner.update(r)
+        }
+        fn commit_save(
+            &self,
+            r: &CaptureRecord,
+            staged: readshot_core::StagedImage,
+        ) -> Result<(), readshot_core::HistoryError> {
+            self.inner.commit_save(r, staged)
+        }
+        fn sweep_staging(&self) {
+            self.inner.sweep_staging()
+        }
+        fn stored_redacted(&self, r: &CaptureRecord) -> Result<bool, readshot_core::HistoryError> {
+            self.inner.stored_redacted(r)
+        }
+        fn record_recognized_text(
+            &self,
+            r: &CaptureRecord,
+            doc: &readshot_core::text_lines::TextDocument,
+            fill_unredacted: bool,
+        ) -> Result<(), readshot_core::HistoryError> {
+            self.inner.record_recognized_text(r, doc, fill_unredacted)
+        }
+        fn contains(&self, r: &CaptureRecord) -> bool {
+            self.inner.contains(r)
+        }
+        fn delete(&self, id: readshot_core::Uuid) -> Result<(), readshot_core::HistoryError> {
+            self.inner.delete(id)
         }
     }
 

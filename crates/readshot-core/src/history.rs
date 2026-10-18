@@ -342,13 +342,9 @@ pub trait HistoryStore: Send + Sync {
     /// `redacted: true` is ignored: only a writer that knows the record
     /// was scrubbed may change it (see [`Self::rewrite`]).
     ///
-    /// Best-effort by default: a record that's been retention-pruned
-    /// before `update` runs is silently ignored. Implementations that
-    /// can do better should override.
-    fn update(&self, record: &CaptureRecord) -> Result<(), HistoryError> {
-        let _ = record;
-        Ok(())
-    }
+    /// Best-effort: a record that's been retention-pruned before
+    /// `update` runs is silently ignored.
+    fn update(&self, record: &CaptureRecord) -> Result<(), HistoryError>;
     /// Replace an existing record wholesale: its PNG (atomically), its
     /// thumbnail (regenerated from `png`) and its sidecar, written
     /// exactly as given — unlike [`Self::update`], `ocr_text: None`
@@ -386,12 +382,7 @@ pub trait HistoryStore: Send + Sync {
         record: &CaptureRecord,
         png: &[u8],
         thumb: Option<&[u8]>,
-    ) -> Result<StagedImage, HistoryError> {
-        let _ = (record, png, thumb);
-        Err(HistoryError::Io(
-            "this history store can't stage images".into(),
-        ))
-    }
+    ) -> Result<StagedImage, HistoryError>;
     /// The quick part of [`Self::rewrite`]: under the index lock, rename
     /// `staged` into place and write the sidecar (see `rewrite` for the
     /// fail-closed order of a scrub). `Ok(false)` when the record doesn't
@@ -400,38 +391,25 @@ pub trait HistoryStore: Send + Sync {
         &self,
         record: &CaptureRecord,
         staged: StagedImage,
-    ) -> Result<bool, HistoryError> {
-        let _ = (record, staged);
-        Ok(false)
-    }
+    ) -> Result<bool, HistoryError>;
     /// The quick part of [`Self::save`]: under the index lock, rename
     /// `staged` into place and write the sidecar and index entry. An
     /// unredacted save onto a record stored as redacted only registers
     /// the index entry.
-    fn commit_save(&self, record: &CaptureRecord, staged: StagedImage) -> Result<(), HistoryError> {
-        let _ = (record, staged);
-        Ok(())
-    }
+    fn commit_save(&self, record: &CaptureRecord, staged: StagedImage) -> Result<(), HistoryError>;
     /// Remove staging files a crash left behind (older than a few
     /// minutes, so another process's in-flight write is left alone).
-    fn sweep_staging(&self) {}
+    fn sweep_staging(&self);
     /// Whether `record` is redacted as stored (`Ok(false)` when it isn't
     /// stored). An error means its state is unknown: callers treat it as
-    /// redacted (fail closed). The default (a store with no scrubs)
-    /// reports `false`.
-    fn stored_redacted(&self, record: &CaptureRecord) -> Result<bool, HistoryError> {
-        let _ = record;
-        Ok(false)
-    }
+    /// redacted (fail closed).
+    fn stored_redacted(&self, record: &CaptureRecord) -> Result<bool, HistoryError>;
     /// Phase one of a scrub, cheap (no image encode): write `record`'s
     /// sidecar (masked text, `redacted`) with `scrub_pending` set, then
     /// remove the unredacted PNG and thumbnail. From then on History and
     /// MCP serve no unredacted content for this record. `Ok(false)` when
     /// the record doesn't exist.
-    fn begin_scrub(&self, record: &CaptureRecord) -> Result<bool, HistoryError> {
-        let _ = record;
-        Ok(false)
-    }
+    fn begin_scrub(&self, record: &CaptureRecord) -> Result<bool, HistoryError>;
     /// Store recognized text for `record`. A scrubbed record gets `doc`
     /// masked with its stored redactions (only when `doc` has positions or
     /// no text is stored yet, and never without stored redactions — the
@@ -446,22 +424,13 @@ pub trait HistoryStore: Send + Sync {
         record: &CaptureRecord,
         doc: &TextDocument,
         fill_unredacted: bool,
-    ) -> Result<(), HistoryError> {
-        let _ = (record, doc, fill_unredacted);
-        Ok(())
-    }
+    ) -> Result<(), HistoryError>;
     /// Whether `record` exists (its sidecar is on disk).
-    fn contains(&self, record: &CaptureRecord) -> bool {
-        let _ = record;
-        false
-    }
+    fn contains(&self, record: &CaptureRecord) -> bool;
     /// Hard-delete a single record by id (PNG + sidecar JSON + index
     /// entry). Best-effort: deleting a record that's already gone is
     /// not an error.
-    fn delete(&self, id: Uuid) -> Result<(), HistoryError> {
-        let _ = id;
-        Ok(())
-    }
+    fn delete(&self, id: Uuid) -> Result<(), HistoryError>;
 }
 
 /// Image files written by [`HistoryStore::stage_image`], waiting to be
