@@ -263,6 +263,14 @@ pub(crate) fn editor_text_commit_label(is_editing: bool) -> &'static str {
     }
 }
 
+/// Whether an options-bar or Beautify slider preview is live (held,
+/// or moved by key or Ctrl+wheel and not committed yet). An Escape
+/// cancels it and does nothing else.
+fn slider_preview_live(ed: &crate::editor::EditorSession) -> bool {
+    ed.style_drag_baseline.is_some()
+        || (ed.snapshot_drag_baseline.is_some() && !ed.gap_commit_on_land)
+}
+
 pub(crate) fn cancel_editor_previews(ed: &mut crate::editor::EditorSession) {
     // A gap drag already released (its commit waiting on an off-thread
     // compose) is kept, not cancelled: settled now as its step, with the
@@ -1743,7 +1751,14 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 readshot_ui::CanvasMessage::Cancelled => {
                     ed.canvas_drag_active = false;
                     ed.drag_started_in = None;
+                    // One Esc = one step: a live slider preview cancelled
+                    // here is this Escape's step, so its key press (which
+                    // follows) must not go on to the selection or draft.
+                    let slider = slider_preview_live(ed);
                     cancel_editor_previews(ed);
+                    if slider {
+                        ed.escape_ended_drag = Some(crate::editor::EscapeSeenBy::Canvas);
+                    }
                 }
                 readshot_ui::CanvasMessage::DragEscaped => {
                     ed.drag_started_in = None;
@@ -2155,9 +2170,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 }
                 // One Esc = one step: a live options-bar slider drag is
                 // cancelled on its own, keeping the selection (and the bar).
-                if ed.style_drag_baseline.is_some()
-                    || (ed.snapshot_drag_baseline.is_some() && !ed.gap_commit_on_land)
-                {
+                if slider_preview_live(ed) {
                     cancel_editor_previews(ed);
                     return Task::none();
                 }

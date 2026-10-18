@@ -391,6 +391,81 @@ fn esc_during_a_slider_drag_only_cancels_the_drag() {
     );
 }
 
+/// The real delivery of one Esc (canvas `Cancelled`, then the key)
+/// during a slider preview is one step: the preview is reverted and the
+/// selection and an open text draft stay.
+#[test]
+fn one_real_escape_during_a_slider_preview_is_one_step() {
+    use readshot_core::beautify::BeautifyEdit;
+    use readshot_ui::editor::StyleMessage;
+    let previews = [
+        Message::EditorStylePreview(StyleMessage::CornerRadius(20.0)),
+        Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(40)),
+    ];
+    for preview in previews {
+        let label = format!("{preview:?}");
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+        let id = iced::window::Id::unique();
+        ed.window_id = Some(id);
+        ed.model.commit_annotation(Annotation::Rectangle {
+            rect: RectLike::new(0.0, 0.0, 40.0, 40.0),
+            color: Rgba::OPAQUE_BLACK,
+            line_width: 2.0,
+            style: Default::default(),
+        });
+        app.editor = Some(ed);
+        let _ = update(&mut app, preview);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(
+            ed.style_drag_baseline.is_some() || ed.snapshot_drag_baseline.is_some(),
+            "{label}: a preview is live"
+        );
+        press_escape(&mut app, id);
+        let ed = app.editor.as_ref().unwrap();
+        assert!(ed.style_drag_baseline.is_none(), "{label}");
+        assert!(ed.snapshot_drag_baseline.is_none(), "{label}");
+        assert_eq!(ed.model.beautify().padding, 0, "{label}: reverted");
+        assert!(matches!(
+            &ed.model.annotations()[0],
+            Annotation::Rectangle { style, .. } if style.corner_radius == 0.0
+        ));
+        assert_eq!(ed.model.selected_annotation(), Some(0), "{label}: kept");
+        // The next Esc clears the selection, as before.
+        press_escape(&mut app, id);
+        assert_eq!(
+            app.editor.as_ref().unwrap().model.selected_annotation(),
+            None,
+            "{label}"
+        );
+    }
+
+    // A Beautify slider can preview with a text draft open: one Esc
+    // reverts the slider and keeps the typed draft.
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let mut ed = crate::editor::EditorSession::new(solid(64, 64));
+    let id = iced::window::Id::unique();
+    ed.window_id = Some(id);
+    ed.begin_text_edit(crate::editor::PendingText {
+        origin: PointLike::new(10.0, 10.0),
+        content: "draft".into(),
+        edit_index: None,
+    });
+    app.editor = Some(ed);
+    let _ = update(
+        &mut app,
+        Message::EditorBeautifySliderPreview(BeautifyEdit::Padding(40)),
+    );
+    press_escape(&mut app, id);
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.model.beautify().padding, 0);
+    assert_eq!(
+        ed.pending_text.as_ref().map(|p| p.content.as_str()),
+        Some("draft"),
+        "the draft survives the Esc that reverted the slider"
+    );
+}
+
 #[test]
 fn i_toggles_the_eyedropper_but_not_while_typing() {
     let toggled = editor_key_message(

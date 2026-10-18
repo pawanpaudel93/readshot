@@ -239,11 +239,12 @@ pub fn same_frame(
     std::sync::Arc::ptr_eq(a, b) || **a == **b
 }
 
-/// Which message of an Escape that ended a canvas drag was handled
-/// first ([`EditorSession::escape_ended_drag`]).
+/// Which message of an Escape that ended a canvas drag (or a slider
+/// preview) was handled first ([`EditorSession::escape_ended_drag`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EscapeSeenBy {
-    /// The canvas's `DragEscaped`; the key press is still to come.
+    /// The canvas's `DragEscaped`, or its `Cancelled` that cancelled a
+    /// slider preview; the key press is still to come.
     Canvas,
     /// The key press; the canvas's `DragEscaped` is still to come.
     Key,
