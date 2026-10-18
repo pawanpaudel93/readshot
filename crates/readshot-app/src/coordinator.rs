@@ -72,8 +72,9 @@ enum HistoryUpdate {
     /// and its restore). See [`HistoryRewrite`].
     Rewrite(Box<HistoryRewrite>),
     /// Rendezvous: acknowledged once everything queued before it has
-    /// been written. Lets shutdown (and tests) wait for durability.
-    Flush(std::sync::mpsc::SyncSender<()>),
+    /// been written. Lets shutdown (and tests) wait for durability. The
+    /// answer is how many failed rewrites still wait for a retry.
+    Flush(std::sync::mpsc::SyncSender<usize>),
 }
 
 /// Why a queued History rewrite didn't land.
@@ -121,8 +122,10 @@ struct HistoryRewrite {
     done: Option<iced::futures::channel::oneshot::Sender<HistoryRewriteResult>>,
     /// Failed attempts so far (drives the retry backoff).
     attempt: u32,
-    /// Outstanding until it lands, goes stale, is refused or first fails
-    /// (a retry is no longer waited for); see [`WriteTracker`].
+    /// Outstanding until it lands, goes stale, is refused or first fails;
+    /// see [`WriteTracker`]. Its retry is not waited for: the wait that
+    /// sees the failure cancels it
+    /// ([`CaptureCoordinator::settle_record_writes`]).
     pending: Option<PendingWrite>,
 }
 
@@ -150,7 +153,10 @@ struct Scrubs {
 /// wait until every write queued for a record is done (landed, stale,
 /// refused or failed) with no timeout, and learn which failed. Each
 /// queued write holds a [`PendingWrite`]; dropping it marks it done,
-/// whichever way the message goes (written, coalesced away, stale).
+/// whichever way the message goes (written, coalesced away, stale). A
+/// failed write reports its reason through [`PendingWrite::fail`], which
+/// records it *before* the write stops being outstanding, so a waiter
+/// woken by it always sees why.
 #[derive(Default)]
 struct WriteTracker {
     state: std::sync::Mutex<TrackedWrites>,
@@ -185,6 +191,14 @@ impl Drop for PendingWrite {
     }
 }
 
+impl PendingWrite {
+    /// Done, and failed for `why`: recorded first, then released.
+    fn fail(self, why: String) {
+        self.tracker.failed(self.id, why);
+        // `self` drops here: no longer outstanding.
+    }
+}
+
 impl WriteTracker {
     fn begin(self: &Arc<Self>, id: readshot_core::Uuid) -> PendingWrite {
         *lock(&self.state).outstanding.entry(id).or_insert(0) += 1;
@@ -202,9 +216,8 @@ impl WriteTracker {
         lock(&self.state).failures.remove(&id);
     }
 
-    /// Block until no write of `id` is outstanding; the failures since
-    /// its last successful write (taken).
-    fn wait(&self, id: readshot_core::Uuid) -> Vec<String> {
+    /// Block until no write of `id` is outstanding.
+    fn wait_idle(&self, id: readshot_core::Uuid) {
         let mut st = lock(&self.state);
         while st.outstanding.contains_key(&id) {
             st = self
@@ -212,8 +225,29 @@ impl WriteTracker {
                 .wait(st)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        st.failures.remove(&id).unwrap_or_default()
     }
+
+    fn is_outstanding(&self, id: readshot_core::Uuid) -> bool {
+        lock(&self.state).outstanding.contains_key(&id)
+    }
+}
+
+/// What [`CaptureCoordinator::settle_record_writes`] found.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SettledWrites {
+    /// Why writes of the record failed or were refused since its last
+    /// successful write. Each failed write is cancelled: it never lands.
+    pub failures: Vec<String>,
+    /// The record's newest request is a redaction whose first phase
+    /// (hiding the unredacted image) still couldn't be written: History
+    /// may still hold the unredacted image, so it must not be opened.
+    pub exposed: bool,
+    /// The record's newest request is a redaction whose image failed to
+    /// write and waits for a retry. Its first phase removed the
+    /// unredacted image, so History has no image to open until it lands;
+    /// it is not cancelled (that would lose the image for good), so the
+    /// record must not be opened now.
+    pub redaction_due: bool,
 }
 
 #[derive(Default)]
@@ -238,6 +272,11 @@ struct ScrubState {
     /// The editor session that requested the newest scrub of each record
     /// (`None`: a caller without one). Only that session may restore it.
     scrub_owners: std::collections::HashMap<readshot_core::Uuid, Option<u64>>,
+    /// Records whose newest request is a scrub (by its seq) whose image is
+    /// still to be written: queued, or failed and waiting for a retry.
+    /// Its phase one removed the unredacted image, so until it lands the
+    /// record has none.
+    image_due: std::collections::HashMap<readshot_core::Uuid, u64>,
 }
 
 /// A secured scrub's document frame (`CaptureRecord::geometry_id`) and
@@ -329,6 +368,16 @@ impl Scrubs {
         let mut st = lock(&self.state);
         if st.latest.get(&id) == Some(&seq) {
             st.secured.insert(id, secured_key(record));
+        }
+    }
+
+    /// Request `seq` of record `id` is finished for good (written,
+    /// refused, or parked for the record's save): a scrub of that request
+    /// is no longer due.
+    fn finished(&self, id: readshot_core::Uuid, seq: u64) {
+        let mut st = lock(&self.state);
+        if st.image_due.get(&id) == Some(&seq) {
+            st.image_due.remove(&id);
         }
     }
 }
@@ -434,6 +483,7 @@ fn apply_rewrite(
                 target: readshot_core::log::cat::HISTORY,
                 "dropped a restore of record {id}: {why}"
             );
+            scrubs.finished(id, job.seq);
             return Outcome::Refused(why);
         }
     }
@@ -443,6 +493,10 @@ fn apply_rewrite(
                 scrubs.mark_secured(id, job.seq, record);
             }
             b.unsecured.remove(&id);
+            // Under the commit gate, so a settle (which takes the gate)
+            // never reports a failure this write has since made good.
+            scrubs.writes.succeeded(id);
+            scrubs.finished(id, job.seq);
             Outcome::Done
         }
         Ok(false) => {
@@ -451,6 +505,7 @@ fn apply_rewrite(
             if record.redacted || record.geometry_id.is_some() {
                 b.parked.insert(id, job.clone());
             }
+            scrubs.finished(id, job.seq);
             Outcome::Missing
         }
         Err(e) => {
@@ -482,6 +537,7 @@ fn fail_closed(store: &dyn HistoryStore, scrubs: &Scrubs, job: &RewriteJob) {
         }
         Ok(false) => {
             b.parked.insert(id, job.clone());
+            scrubs.finished(id, job.seq);
         }
         Err(_) => {
             lock(&scrubs.state).secured.remove(&id);
@@ -513,7 +569,6 @@ fn run_rewrite(
     let id = rewrite.job.record.id;
     match outcome {
         Outcome::Done => {
-            scrubs.writes.succeeded(id);
             if let Some(done) = rewrite.done.take() {
                 let _ = done.send(Ok(()));
             }
@@ -521,7 +576,10 @@ fn run_rewrite(
         }
         Outcome::Missing | Outcome::Stale => None,
         Outcome::Refused(e) => {
-            scrubs.writes.failed(id, e.to_string());
+            match rewrite.pending.take() {
+                Some(pending) => pending.fail(e.to_string()),
+                None => scrubs.writes.failed(id, e.to_string()),
+            }
             if let Some(done) = rewrite.done.take() {
                 let _ = done.send(Err(e));
             }
@@ -529,9 +587,11 @@ fn run_rewrite(
         }
         Outcome::Failed(e) => {
             tracing::warn!(target: readshot_core::log::cat::HISTORY, "history rewrite failed: {e}");
-            if rewrite.pending.take().is_some() {
-                // Its first failure ends the wait; the retry goes on.
-                scrubs.writes.failed(id, e.clone());
+            // Its first failure ends the wait (the reason is recorded
+            // before it does); the retry goes on until it lands, a newer
+            // rewrite replaces it, or a settle cancels it.
+            if let Some(pending) = rewrite.pending.take() {
+                pending.fail(e.clone());
             }
             if let Some(done) = rewrite.done.take() {
                 let _ = done.send(Err(HistoryRewriteError::Failed(e)));
@@ -555,15 +615,17 @@ fn run_update(
                     target: readshot_core::log::cat::HISTORY,
                     "background history update failed: {e}"
                 );
-                scrubs.writes.failed(record.id, e.to_string());
+                match pending {
+                    Some(pending) => pending.fail(e.to_string()),
+                    None => scrubs.writes.failed(record.id, e.to_string()),
+                }
             }
             // Written (or failed): no longer outstanding.
-            drop(pending);
             None
         }
         HistoryUpdate::Rewrite(rewrite) => run_rewrite(store, scrubs, rewrite),
         HistoryUpdate::Flush(ack) => {
-            let _ = ack.send(());
+            let _ = ack.send(0);
             None
         }
     }
@@ -627,6 +689,13 @@ fn writer_loop(
         }
         drop_superseded_retries(&mut retries, &batch);
         for msg in coalesce(batch) {
+            match msg {
+                HistoryUpdate::Flush(ack) => {
+                    let _ = ack.send(retries.len());
+                    continue;
+                }
+                HistoryUpdate::Write(..) | HistoryUpdate::Rewrite(_) => {}
+            }
             if let Some(retry) = run_update(store, scrubs, msg) {
                 retries.push(retry);
             }
@@ -812,6 +881,11 @@ impl CaptureCoordinator {
             return rx;
         };
         let id = record.id;
+        // Outstanding from before its sequence number is taken, so a
+        // settle never makes a request it hasn't seen stale
+        // ([`Self::settle_record_writes`]). Dropped (done) on every early
+        // return below.
+        let pending = self.scrubs.writes.begin(id);
         if record.redacted {
             // Redactions the caller says are already in `base` (a
             // reopened scrubbed record's, mapped into this frame), then
@@ -879,6 +953,7 @@ impl CaptureCoordinator {
                 None => false,
             };
             st.scrub_owners.remove(&id);
+            st.image_due.remove(&id);
             let seq = next_rewrite_seq();
             st.latest.insert(id, seq);
             st.secured.remove(&id);
@@ -893,7 +968,7 @@ impl CaptureCoordinator {
                 bake,
                 may_unredact,
             };
-            return self.queue_rewrite(job, tx, rx);
+            return self.queue_rewrite(job, pending, tx, rx);
         }
         // A scrub. Bookkeeping only (no I/O): the UI thread never waits
         // on a write here unless phase one is actually needed.
@@ -902,6 +977,7 @@ impl CaptureCoordinator {
             let seq = next_rewrite_seq();
             st.latest.insert(id, seq);
             st.scrub_owners.insert(id, owner);
+            st.image_due.insert(id, seq);
             let phase_one = st.secured.get(&id) != Some(&secured_key(&record));
             (seq, phase_one)
         };
@@ -925,6 +1001,8 @@ impl CaptureCoordinator {
                 }
                 Ok(false) => {
                     b.parked.insert(id, job);
+                    drop(b);
+                    self.scrubs.finished(id, seq);
                     return rx;
                 }
                 Err(e) => {
@@ -938,7 +1016,7 @@ impl CaptureCoordinator {
                 }
             }
         }
-        self.queue_rewrite(job, tx, rx)
+        self.queue_rewrite(job, pending, tx, rx)
     }
 
     /// A capture whose History save failed: it will never be on disk, so
@@ -951,6 +1029,7 @@ impl CaptureCoordinator {
         st.latest.insert(id, next_rewrite_seq());
         st.secured.remove(&id);
         st.scrub_owners.remove(&id);
+        st.image_due.remove(&id);
         drop(st);
         b.parked.remove(&id);
         b.unsecured.remove(&id);
@@ -962,12 +1041,114 @@ impl CaptureCoordinator {
         lock(&self.scrubs.book).parked.len()
     }
 
-    /// Block until every History write queued for record `id` so far is
-    /// done (landed, stale, refused, or failed once), with no timeout.
-    /// Returns why any failed or was refused since its last successful
-    /// write. Call off the UI thread.
-    pub fn wait_for_record_writes(&self, id: readshot_core::Uuid) -> Vec<String> {
-        self.scrubs.writes.wait(id)
+    /// The barrier every editor open of History record `id` passes
+    /// before it reads the record (`history_ops::load_after_writes`).
+    /// Blocks, with no timeout, until every History write queued for `id`
+    /// so far is done: landed, stale, refused, or failed. Call it off the
+    /// UI thread; with nothing outstanding it returns at once.
+    ///
+    /// **Invariant: a write of `id` queued before this call never lands
+    /// after it returns.** Each such write has either landed already, or
+    /// is cancelled here for good. This is the one place that enforces
+    /// it: under the commit gate, with nothing outstanding, the record's
+    /// newest request sequence is bumped, so a failed rewrite still
+    /// waiting for its retry (its reason is in `failures`) is stale and
+    /// its retry exits without writing, and one mid-commit has already
+    /// finished (commits hold the gate). So an editor opened on what this
+    /// returns is never overwritten by an earlier editor's late write,
+    /// and a restore that failed never un-redacts a record opened
+    /// redacted afterwards.
+    ///
+    /// The one exception is a redaction still due (`redaction_due`): its
+    /// failed write is kept retrying, because its phase one already
+    /// removed the unredacted image and cancelling it would leave the
+    /// record with no image at all. The caller must then not open (or
+    /// read) the record, so the invariant still holds: nothing reads it
+    /// before that write lands. Such a late write only ever makes History
+    /// more redacted, never less.
+    ///
+    /// A redaction whose first phase (hiding the unredacted image) is
+    /// still pending is retried here, at once; if it still can't be
+    /// written, `exposed` says the record must not be opened.
+    pub fn settle_record_writes(&self, id: readshot_core::Uuid) -> SettledWrites {
+        loop {
+            self.scrubs.writes.wait_idle(id);
+            // Lock order: the commit gate, request state, then the tracker.
+            let mut b = lock(&self.scrubs.book);
+            let mut st = lock(&self.scrubs.state);
+            let mut tracked = lock(&self.scrubs.writes.state);
+            if tracked.outstanding.contains_key(&id) {
+                continue; // queued meanwhile: wait for it too
+            }
+            let failures = tracked.failures.remove(&id).unwrap_or_default();
+            drop(tracked);
+            let redaction_due = st.image_due.contains_key(&id);
+            let seq = match redaction_due {
+                // Kept: the newest request stays the newest.
+                true => st.latest.get(&id).copied().unwrap_or(0),
+                // Every earlier request is stale from here on.
+                false => {
+                    let seq = next_rewrite_seq();
+                    st.latest.insert(id, seq);
+                    seq
+                }
+            };
+            drop(st);
+            let mut exposed = false;
+            if let Some(entry) = b.unsecured.get_mut(&id) {
+                // Still the record's newest request: kept retrying.
+                entry.0 = seq;
+                let record = entry.1.clone();
+                let secured = self
+                    .history
+                    .as_ref()
+                    .map(|store| store.begin_scrub(&record));
+                match secured {
+                    Some(Ok(found)) => {
+                        b.unsecured.remove(&id);
+                        if found {
+                            self.scrubs.mark_secured(id, seq, &record);
+                        }
+                    }
+                    _ => exposed = true,
+                }
+            }
+            return SettledWrites {
+                failures,
+                exposed,
+                redaction_due,
+            };
+        }
+    }
+
+    /// Whether any History write of record `id` is queued or being
+    /// written right now (never blocks).
+    pub fn record_writes_outstanding(&self, id: readshot_core::Uuid) -> bool {
+        self.scrubs.writes.is_outstanding(id)
+    }
+
+    /// Flush the writer, then wait until no failed rewrite waits for a
+    /// retry (tests: every write has drained).
+    #[cfg(test)]
+    pub(crate) fn drain_history_writes(&self) {
+        let Some(tx) = &self.history_update_tx else {
+            return;
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel(1);
+            if tx.send(HistoryUpdate::Flush(ack_tx)).is_err() {
+                return;
+            }
+            if ack_rx.recv().unwrap_or(0) == 0 {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "History writes never drained"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     /// Hand a rewrite to the writer thread (or write it inline when there
@@ -975,18 +1156,18 @@ impl CaptureCoordinator {
     fn queue_rewrite(
         &self,
         job: RewriteJob,
+        pending: PendingWrite,
         tx: iced::futures::channel::oneshot::Sender<HistoryRewriteResult>,
         rx: iced::futures::channel::oneshot::Receiver<HistoryRewriteResult>,
     ) -> iced::futures::channel::oneshot::Receiver<HistoryRewriteResult> {
         let Some(store) = &self.history else {
             return rx;
         };
-        let pending = Some(self.scrubs.writes.begin(job.record.id));
         let msg = HistoryUpdate::Rewrite(Box::new(HistoryRewrite {
             job,
             done: Some(tx),
             attempt: 0,
-            pending,
+            pending: Some(pending),
         }));
         let msg = match &self.history_update_tx {
             Some(sender) => match sender.send(msg) {
@@ -2179,5 +2360,212 @@ mod tests {
         );
         let _ = release.send(());
         coord.flush_history_updates();
+    }
+
+    fn flaky(dir: &std::path::Path, fail_rewrites: usize) -> Arc<FlakyStore> {
+        Arc::new(FlakyStore {
+            inner: readshot_core::FsHistoryStore::new(dir.join("h")),
+            fail_rewrites: std::sync::atomic::AtomicUsize::new(fail_rewrites),
+            fail_begins: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    /// Longer than any retry backoff a test sees (10 ms, then 20 ms…).
+    fn past_the_retry() {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+
+    /// Fix-3 review I-1: a frame rewrite fails once, a reopen waits and
+    /// is told so, and the new editor writes to what History has. The
+    /// failed write's retry must never land after that: it would put the
+    /// old editor's state back over the new editor's edits (and every
+    /// later sync of the new editor would be dropped by the frame guard).
+    #[test]
+    fn a_failed_write_a_reopen_was_told_about_never_lands_after_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let store = flaky(dir.path(), 1);
+        let coord = history_coord(store.clone());
+        // Editor A rotates: its frame rewrite fails once.
+        let mut rotated = record.clone();
+        rotated.geometry_id = Some("rotated".into());
+        drop(coord.rewrite_history_as(Some(1), rotated, Arc::new(white(6, 4)), Vec::new()));
+        let failures = coord.settle_record_writes(record.id).failures;
+        assert!(!failures.is_empty(), "the reopen is told the write failed");
+        // Editor B opens what History has, and annotates it.
+        let mut b = sidecar(&store.inner, &record);
+        assert_eq!(
+            (b.width_px, b.height_px, b.geometry_id.clone()),
+            (8, 8, None)
+        );
+        b.annotation_model = pixelate();
+        coord.update_history_async(b);
+        past_the_retry();
+        coord.flush_history_updates();
+        let now = sidecar(&store.inner, &record);
+        assert_eq!(
+            (now.width_px, now.height_px, now.geometry_id.clone()),
+            (8, 8, None),
+            "A's retry landed after the reopen"
+        );
+        assert_eq!(now.annotation_model.len(), 1, "B's edit was overwritten");
+    }
+
+    /// Fix-3 review I-1, privacy: editor A redacts, then undoes it; the
+    /// restore fails once. The reopen opens the redacted copy (and says
+    /// the last edits weren't saved). A's retried restore must never
+    /// un-redact History after that.
+    #[test]
+    fn a_failed_restore_a_reopen_was_told_about_never_unredacts_after_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let store = flaky(dir.path(), 0);
+        let coord = history_coord(store.clone());
+        let base = Arc::new(white(8, 8));
+        let a = Some(1);
+        drop(coord.rewrite_history_as(a, scrubbed(&record), Arc::clone(&base), pixelate()));
+        coord.flush_history_updates();
+        assert!(sidecar(&store.inner, &record).redacted);
+        // A undoes its redaction; the restore fails once.
+        store
+            .fail_rewrites
+            .store(1, std::sync::atomic::Ordering::SeqCst);
+        drop(coord.rewrite_history_as(a, record.clone(), Arc::clone(&base), Vec::new()));
+        let failures = coord.settle_record_writes(record.id).failures;
+        assert!(!failures.is_empty());
+        // B opens the redacted copy.
+        assert!(sidecar(&store.inner, &record).redacted);
+        past_the_retry();
+        coord.flush_history_updates();
+        assert!(
+            sidecar(&store.inner, &record).redacted,
+            "A's retried restore un-redacted a record B opened redacted"
+        );
+    }
+
+    /// A redaction whose image write failed is not cancelled by a settle
+    /// (its first phase already removed the unredacted image: cancelling
+    /// it would leave the record with none). The settle says it is due,
+    /// and the retry still lands, redacted.
+    #[test]
+    fn a_settle_keeps_a_failed_redaction_and_says_it_is_due() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let store = flaky(dir.path(), 1);
+        let coord = history_coord(store.clone());
+        drop(coord.rewrite_history_as(
+            Some(1),
+            scrubbed(&record),
+            Arc::new(white(8, 8)),
+            pixelate(),
+        ));
+        let settled = coord.settle_record_writes(record.id);
+        assert!(settled.redaction_due);
+        assert!(!settled.exposed);
+        assert_eq!(settled.failures, ["history io: disk full"]);
+        assert!(
+            png_on_disk(&store.inner, &record).is_none(),
+            "phase one ran"
+        );
+        coord.drain_history_writes();
+        assert!(
+            png_on_disk(&store.inner, &record).is_some(),
+            "the retry landed"
+        );
+        assert!(sidecar(&store.inner, &record).redacted);
+        assert!(!coord.settle_record_writes(record.id).redaction_due);
+    }
+
+    /// Never stores anything: every image fails to stage.
+    struct FailingStore;
+
+    impl HistoryStore for FailingStore {
+        fn save(&self, _: &CaptureRecord, _: &[u8]) -> Result<(), readshot_core::HistoryError> {
+            Ok(())
+        }
+        fn list(&self) -> Result<Vec<CaptureRecord>, readshot_core::HistoryError> {
+            Ok(Vec::new())
+        }
+        fn apply_retention(
+            &self,
+            _: HistoryRetention,
+            _: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), readshot_core::HistoryError> {
+            Ok(())
+        }
+        fn clear_all(&self) -> Result<(), readshot_core::HistoryError> {
+            Ok(())
+        }
+        fn update(&self, _: &CaptureRecord) -> Result<(), readshot_core::HistoryError> {
+            Ok(())
+        }
+        fn stage_image(
+            &self,
+            _: &CaptureRecord,
+            _: &[u8],
+            _: Option<&[u8]>,
+        ) -> Result<readshot_core::StagedImage, readshot_core::HistoryError> {
+            Err(readshot_core::HistoryError::Io("disk full".into()))
+        }
+        fn commit_rewrite(
+            &self,
+            _: &CaptureRecord,
+            _: readshot_core::StagedImage,
+        ) -> Result<bool, readshot_core::HistoryError> {
+            Ok(false)
+        }
+        fn commit_save(
+            &self,
+            _: &CaptureRecord,
+            _: readshot_core::StagedImage,
+        ) -> Result<(), readshot_core::HistoryError> {
+            Ok(())
+        }
+        fn begin_scrub(&self, _: &CaptureRecord) -> Result<bool, readshot_core::HistoryError> {
+            Ok(false)
+        }
+        fn sweep_staging(&self) {}
+        fn stored_redacted(&self, _: &CaptureRecord) -> Result<bool, readshot_core::HistoryError> {
+            Ok(false)
+        }
+        fn record_recognized_text(
+            &self,
+            _: &CaptureRecord,
+            _: &readshot_core::text_lines::TextDocument,
+            _: bool,
+        ) -> Result<(), readshot_core::HistoryError> {
+            Ok(())
+        }
+        fn contains(&self, _: &CaptureRecord) -> bool {
+            false
+        }
+        fn delete(&self, _: readshot_core::Uuid) -> Result<(), readshot_core::HistoryError> {
+            Ok(())
+        }
+    }
+
+    /// Fix-3 review m-1: a write's failure is recorded before it stops
+    /// being outstanding, so a wait that ends on it always sees it. This
+    /// watches the tracker the way a waiter does, from the first moment
+    /// the write is no longer outstanding (the race the review found
+    /// showed in about 1% of real waits).
+    #[test]
+    fn a_failure_is_recorded_before_the_write_stops_being_outstanding() {
+        let coord = history_coord(Arc::new(FailingStore));
+        let base = Arc::new(white(1, 1));
+        for i in 0..200 {
+            let record = CaptureRecord::new(chrono::Utc::now(), 1, 1, "d");
+            drop(coord.rewrite_history_as(None, record.clone(), Arc::clone(&base), Vec::new()));
+            let seen = loop {
+                let st = lock(&coord.scrubs.writes.state);
+                if !st.outstanding.contains_key(&record.id) {
+                    break st.failures.contains_key(&record.id);
+                }
+            };
+            assert!(
+                seen,
+                "write {i} stopped being outstanding before its failure was recorded"
+            );
+        }
     }
 }

@@ -395,6 +395,13 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             state.history_status = None;
             let loaded = match result {
                 Ok(loaded) => loaded,
+                Err(e) if e == REDACTION_NOT_SAVED => {
+                    state.history_status = Some(format!(
+                        "Couldn’t open the capture yet — History is still saving its redaction{}. Readshot keeps trying; open it again in a moment.",
+                        unsaved.as_ref().map_or(String::new(), |r| format!(" ({r})"))
+                    ));
+                    return Task::none();
+                }
                 Err(e) => {
                     tracing::warn!(target: readshot_core::log::cat::HISTORY, "reopen failed: {e}");
                     state.history_status = Some(format!(
@@ -830,6 +837,10 @@ fn focus_history_search() -> Task<Message> {
     ))
 }
 
+/// Why [`load_after_writes`] didn't open a record: its newest redaction
+/// isn't fully written to History yet (the write is retried).
+pub(crate) const REDACTION_NOT_SAVED: &str = "redaction not saved to History yet";
+
 /// Open History record `id` once every History write queued for it is
 /// done ([`load_after_writes`]), off the UI thread; the answer is
 /// `HistoryReopenedAfterSync`.
@@ -850,10 +861,13 @@ pub(crate) fn reopen_after_sync(state: &mut App, id: readshot_core::Uuid) -> Tas
     )
 }
 
-/// Wait (no timeout) until every History write queued for record `id` is
-/// done — landed, stale, refused or failed — then read the record and its
-/// image from disk, so an editor opened on it starts from those edits.
-/// The second value names writes that failed or were refused. Blocking.
+/// Read History record `id` and its image for an editor, once every
+/// History write queued for it is done or cancelled
+/// ([`crate::coordinator::CaptureCoordinator::settle_record_writes`]: none
+/// of them lands after this read). Blocking, no timeout: run it off the UI
+/// thread. The second value names writes that failed or were refused
+/// (they never land now). A redaction whose unredacted image History
+/// couldn't hide yet is never opened.
 pub(crate) fn load_after_writes(
     coord: &crate::coordinator::CaptureCoordinator,
     root: Option<std::path::PathBuf>,
@@ -862,8 +876,11 @@ pub(crate) fn load_after_writes(
     Result<(image::RgbaImage, readshot_core::CaptureRecord), String>,
     Option<String>,
 ) {
-    let failures = coord.wait_for_record_writes(id);
-    let unsaved = (!failures.is_empty()).then(|| failures.join("; "));
+    let settled = coord.settle_record_writes(id);
+    let unsaved = (!settled.failures.is_empty()).then(|| settled.failures.join("; "));
+    if settled.exposed || settled.redaction_due {
+        return (Err(REDACTION_NOT_SAVED.to_string()), unsaved);
+    }
     let loaded = (|| {
         let record = coord
             .history_list()
