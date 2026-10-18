@@ -2405,7 +2405,9 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
                 p.t2,
                 "Show Panel",
                 Some(super::key_focus::key_label(super::key_focus::KEY_PANEL)),
-                Some(Message::Editor(EditorMsg::PanelToggled)),
+                Some(Message::Editor(EditorMsg::TextPanel(
+                    TextPanelMsg::PanelToggled,
+                ))),
                 false,
                 ICON_BTN_SM,
                 Position::Bottom,
@@ -2792,7 +2794,9 @@ pub(crate) fn editor_view(state: &App) -> Element<'_, Message> {
         }
         PanelMode::Overlay => stack![
             canvas_area,
-            scrim(Message::Editor(EditorMsg::PanelOverlayDismissed)),
+            scrim(Message::Editor(EditorMsg::TextPanel(
+                TextPanelMsg::PanelOverlayDismissed
+            ))),
             container(opaque(side_panel(state, ed, p, true)))
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -5594,7 +5598,9 @@ mod tests {
         assert_eq!(label, "Retry");
         assert!(matches!(
             msg,
-            crate::app::Message::Editor(crate::app::EditorMsg::TextRecognize)
+            crate::app::Message::Editor(crate::app::EditorMsg::TextPanel(
+                crate::app::TextPanelMsg::Recognize
+            ))
         ));
     }
 }

@@ -385,15 +385,18 @@ fn sample_doc() -> readshot_core::text_lines::TextDocument {
 /// An editor whose Text panel finished recognizing `sample_doc()`.
 fn ready_editor(app: &mut App) {
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
-    let _ = update(app, Message::Editor(EditorMsg::TextRecognize));
+    let _ = update(
+        app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognize)),
+    );
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part: 0,
             result: Ok(sample_doc()),
-        }),
+        })),
     );
 }
 
@@ -499,11 +502,11 @@ fn scrub_app(save: bool) -> (tempfile::TempDir, Arc<FsHistoryStore>, App) {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part: 0,
             result: Ok(sample_doc()),
-        }),
+        })),
     );
     (dir, store, app)
 }
@@ -698,11 +701,11 @@ fn recognized(
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part,
             result: Ok(doc),
-        }),
+        })),
     );
 }
 

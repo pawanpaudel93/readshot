@@ -5,7 +5,10 @@ use super::*;
 #[test]
 fn redact_all_scrubs_the_history_image_and_text() {
     let (_dir, store, mut app) = scrub_app(true);
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     app.coordinator.flush_history_updates();
     let (record, png) = stored(&store);
     let text = record.ocr_text.clone().unwrap();
@@ -26,7 +29,10 @@ fn redact_all_scrubs_the_history_image_and_text() {
 fn undoing_every_redaction_restores_the_original_record() {
     let (_dir, store, mut app) = scrub_app(true);
     let original = sample_doc().layout_text;
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let _ = update(
         &mut app,
         Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
@@ -104,7 +110,10 @@ fn without_positions_a_redaction_withholds_the_stored_text() {
 #[tokio::test]
 async fn a_capture_saved_after_the_editor_closed_is_still_scrubbed() {
     let (_dir, store, mut app) = scrub_app(false);
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let expected = app.editor.as_mut().unwrap().model.flatten();
     let record = app.editor.as_ref().unwrap().source_record.clone().unwrap();
     // The editor goes away before the capture's save lands.
@@ -198,12 +207,12 @@ fn a_failed_history_write_shows_an_error_and_forces_a_full_rewrite_next() {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::HistoryWritten {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::HistoryWritten {
             session,
             result: Some(Err(crate::coordinator::HistoryRewriteError::Failed(
                 "No space left on device".into(),
             ))),
-        }),
+        })),
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.status_is_error(), "{:?}", ed.status);
@@ -221,10 +230,10 @@ fn a_failed_history_write_shows_an_error_and_forces_a_full_rewrite_next() {
     let _ = update(&mut app, Message::Editor(EditorMsg::StatusDismissed));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::HistoryWritten {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::HistoryWritten {
             session,
             result: None,
-        }),
+        })),
     );
     assert_eq!(app.editor.as_ref().unwrap().status, None);
 }
@@ -234,10 +243,10 @@ fn a_successful_history_write_reloads_an_open_history_window() {
     let (_dir, _store, mut app) = scrub_app(true);
     let session = app.editor.as_ref().unwrap().session_id;
     let msg = || {
-        Message::Editor(EditorMsg::HistoryWritten {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::HistoryWritten {
             session,
             result: Some(Ok(())),
-        })
+        }))
     };
     assert_eq!(update(&mut app, msg()).units(), 0);
     app.history_window_id = Some(iced::window::Id::unique());
@@ -253,7 +262,10 @@ fn copy_lines_masks_redacted_words() {
         super::super::text_panel::copy_lines_text(ed, &[1], false).as_deref(),
         Some(format!("Email {EMAIL}").as_str())
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
         super::super::text_panel::copy_lines_text(ed, &[0, 1], false).as_deref(),
@@ -272,14 +284,14 @@ fn text_boxes_follow_a_rotation() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part: readshot_core::document::ORIGINAL_PART,
             result: Ok(positioned_doc(
                 "Example",
                 RectLike::new(2.0, 4.0, 10.0, 3.0),
             )),
-        }),
+        })),
     );
     let ed = app.editor.as_mut().unwrap();
     ed.model.rotate(true).unwrap();
@@ -305,11 +317,11 @@ fn an_added_part_needs_its_own_recognition_and_the_scrub_fails_closed_until_then
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part: readshot_core::document::ORIGINAL_PART,
             result: Ok(positioned_doc("first", RectLike::new(1.0, 1.0, 10.0, 4.0))),
-        }),
+        })),
     );
     let ed = app.editor.as_mut().unwrap();
     let id = ed
@@ -337,11 +349,11 @@ fn an_added_part_needs_its_own_recognition_and_the_scrub_fails_closed_until_then
     );
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part: id,
             result: Ok(positioned_doc("second", RectLike::new(1.0, 1.0, 10.0, 4.0))),
-        }),
+        })),
     );
     let ed = app.editor.as_ref().unwrap();
     let doc = ed
@@ -1057,7 +1069,10 @@ fn redact_after_a_cancelled_geometry_preview_places_rects_in_the_restored_frame(
     ed.snapshot_drag_baseline = Some(baseline);
     refresh_text_for_geometry(&mut ed);
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.model.geometry().is_original(), "preview cancelled");
     let rects: Vec<RectLike> = ed
@@ -1095,11 +1110,11 @@ fn a_late_failure_for_another_part_leaves_the_running_recognition_alone() {
     app.editor = Some(ed);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part: readshot_core::document::ORIGINAL_PART,
             result: Err("late".into()),
-        }),
+        })),
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(matches!(
@@ -1212,8 +1227,14 @@ fn copy_lines_on_a_reopened_scrub_masks_its_baked_in_redactions() {
     let text = super::super::text_panel::copy_lines_text(ed, &[0], false).unwrap();
     assert_eq!(text, "█".repeat(6));
     // Through the message too.
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextLineClicked(0)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::CopyLines));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::LineClicked(0))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::CopyLines)),
+    );
     assert_eq!(
         app.editor.as_ref().unwrap().status_text(),
         Some("Copying text…")
@@ -1262,8 +1283,14 @@ fn copies_of_a_reopened_scrub_with_unknown_redactions_are_withheld() {
         .unwrap_or_default();
     assert!(status.starts_with("Text hidden"), "{status}");
     assert!(!app.editor.as_ref().unwrap().busy);
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextLineClicked(0)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::CopyLines));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::LineClicked(0))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::CopyLines)),
+    );
     let status = app
         .editor
         .as_ref()
@@ -1385,12 +1412,12 @@ fn a_refused_restore_tells_the_editor_and_unbinds_it() {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::HistoryWritten {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::HistoryWritten {
             session,
             result: Some(Err(
                 crate::coordinator::HistoryRewriteError::RedactedElsewhere,
             )),
-        }),
+        })),
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.source_record.is_none(), "no more writes to that record");
@@ -1407,10 +1434,10 @@ fn an_unreadable_record_refusal_is_reported_as_such_and_not_final() {
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::HistoryWritten {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::HistoryWritten {
             session,
             result: Some(Err(crate::coordinator::HistoryRewriteError::Unreadable)),
-        }),
+        })),
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(

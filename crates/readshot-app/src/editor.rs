@@ -414,7 +414,7 @@ pub struct TextPanelState {
     pub redact_style: readshot_core::redact::RedactStyle,
     /// Sensitive spans found when recognition returned positions.
     pub matches: Vec<readshot_core::redact::RedactMatch>,
-    /// Recognition was asked for through `EditorMsg::TextRecognize`
+    /// Recognition was asked for through `TextPanelMsg::Recognize`
     /// (panel, Retry) since the last result. A failure toasts only then
     /// or while the panel is open; a background (history) OCR failure
     /// with the panel closed just marks the panel Failed.
@@ -1225,7 +1225,7 @@ pub struct EditorSession {
     /// The frame History's image was last written in by this session.
     pub history_frame_written: HistoryFrame,
     /// Outcome of the newest queued History rewrite, taken by the runtime
-    /// and turned into `EditorMsg::HistoryWritten`.
+    /// and turned into `TextPanelMsg::HistoryWritten`.
     pub history_write:
         Option<iced::futures::channel::oneshot::Receiver<crate::coordinator::HistoryRewriteResult>>,
 }

@@ -357,7 +357,7 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 
 use crate::app::{
     App, AppMsg, CaptureMsg, EditorMsg, GlobalHotkeyAction, HistoryKeyboardAction, HistoryMsg,
-    Message, ScrollMsg, SettingsMsg, TickMsg, WelcomeMsg, WindowKind, WindowMsg,
+    Message, ScrollMsg, SettingsMsg, TextPanelMsg, TickMsg, WelcomeMsg, WindowKind, WindowMsg,
 };
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
@@ -1462,7 +1462,7 @@ fn persist_history_task(
 /// Body of [`persist_history_task`], separate so tests can drive it.
 ///
 /// Messages:
-/// * [`EditorMsg::TextRecognized`] when `editor_session` is set, the
+/// * [`TextPanelMsg::Recognized`] when `editor_session` is set, the
 ///   moment OCR resolves (not after the slower PNG encode / save): the
 ///   same OCR feeds that editor's Text panel (one OCR per capture),
 ///   errors included so the editor never stays Recognizing. Engines map
@@ -1504,11 +1504,13 @@ async fn persist_history(
                     Err(e) => Err(e.to_string()),
                 };
                 let _ = output
-                    .send(Message::Editor(EditorMsg::TextRecognized {
-                        session,
-                        part: readshot_core::document::ORIGINAL_PART,
-                        result,
-                    }))
+                    .send(Message::Editor(EditorMsg::TextPanel(
+                        TextPanelMsg::Recognized {
+                            session,
+                            part: readshot_core::document::ORIGINAL_PART,
+                            result,
+                        },
+                    )))
                     .await;
             }
             doc

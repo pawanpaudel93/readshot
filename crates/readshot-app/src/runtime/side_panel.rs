@@ -142,7 +142,9 @@ pub(crate) fn side_panel<'a>(
             .padding([0.0, 10.0])
             .style(move |t, s| panel_tab_style(t, s, selected));
         if !selected {
-            b = b.on_press(Message::Editor(EditorMsg::PanelTabSelected(tab)));
+            b = b.on_press(Message::Editor(EditorMsg::TextPanel(
+                TextPanelMsg::PanelTabSelected(tab),
+            )));
         }
         tabs = tabs.push(b);
     }
@@ -171,7 +173,9 @@ pub(crate) fn side_panel<'a>(
             p.t2,
             "Hide Panel",
             Some(super::key_focus::key_label(super::key_focus::KEY_PANEL)),
-            Some(Message::Editor(EditorMsg::PanelToggled)),
+            Some(Message::Editor(EditorMsg::TextPanel(
+                TextPanelMsg::PanelToggled
+            ))),
             false,
             ICON_BTN_SM,
             Position::Bottom,

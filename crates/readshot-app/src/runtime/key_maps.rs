@@ -46,7 +46,9 @@ pub(crate) fn editor_key_message(
     // where Ctrl+Alt is AltGr on many layouts and a desktop chord
     // (Ctrl+Alt+T opens a terminal on GNOME and KDE).
     if editor_alt_chord(&key, modifiers, "p") {
-        return Some(Message::Editor(EditorMsg::PanelToggled));
+        return Some(Message::Editor(EditorMsg::TextPanel(
+            TextPanelMsg::PanelToggled,
+        )));
     }
     if editor_alt_chord(&key, modifiers, RESIZE_LETTER) {
         return Some(Message::Editor(EditorMsg::ResizeOpen));

@@ -516,7 +516,7 @@ pub(crate) fn sync_editor_history(
 /// Everything is queued on the coordinator's ordered background writer
 /// (the writes fsync, and this runs on every commit/undo/redo); rapid
 /// rewrites coalesce to the newest. A rewrite's outcome comes back as
-/// `EditorMsg::HistoryWritten` via [`history_write_followups`].
+/// `TextPanelMsg::HistoryWritten` via [`history_write_followups`].
 pub(crate) fn write_editor_history(
     ed: &mut crate::editor::EditorSession,
     coord: &CaptureCoordinator,
@@ -787,10 +787,10 @@ pub(crate) fn history_write_followups(state: &mut App) -> Task<Message> {
     if let Some(rx) = ed.history_write.take() {
         let session = ed.session_id;
         tasks.push(Task::perform(rx, move |r| {
-            Message::Editor(EditorMsg::HistoryWritten {
+            Message::Editor(EditorMsg::TextPanel(TextPanelMsg::HistoryWritten {
                 session,
                 result: r.ok(),
-            })
+            }))
         }));
     }
     // Idle: never recognized. Failed: retried whenever a scrub is
@@ -1083,22 +1083,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: EditorMsg) -> Task
             key,
             modifiers,
         } => pins::on_pin_key_pressed(state, window, key, modifiers),
-        msg @ (EditorMsg::TextRecognize
-        | EditorMsg::TextRecognized { .. }
-        | EditorMsg::PanelToggled
-        | EditorMsg::PanelTabSelected(..)
-        | EditorMsg::PanelOverlayDismissed
-        | EditorMsg::OpenTextSettings
-        | EditorMsg::TextLineClicked(..)
-        | EditorMsg::CopyLines
-        | EditorMsg::CopyLinesDone(..)
-        | EditorMsg::RemoveLineBreaksToggled(..)
-        | EditorMsg::RedactStyleChanged(..)
-        | EditorMsg::RedactAll
-        | EditorMsg::RedactLine(..)
-        | EditorMsg::HistoryWritten { .. }) => {
-            super::text_panel::handle_text_panel_message(state, msg)
-        }
+        EditorMsg::TextPanel(msg) => super::text_panel::handle_text_panel_message(state, msg),
         msg @ (EditorMsg::BeautifySavedPresetApplied(..)
         | EditorMsg::BeautifyEdit(..)
         | EditorMsg::BeautifySliderPreview(..)

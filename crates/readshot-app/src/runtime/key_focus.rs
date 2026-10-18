@@ -530,10 +530,16 @@ pub(crate) fn handle_focus_key(
                     ed.text_panel.anchor = Some(i);
                 }
             }
-            update(state, Message::Editor(EditorMsg::CopyLines))
+            update(
+                state,
+                Message::Editor(EditorMsg::TextPanel(TextPanelMsg::CopyLines)),
+            )
         }
         FocusKey::LineRedact => match state.editor.as_ref()?.text_panel.cursor {
-            Some(i) => update(state, Message::Editor(EditorMsg::RedactLine(i))),
+            Some(i) => update(
+                state,
+                Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactLine(i))),
+            ),
             None => Task::none(),
         },
         FocusKey::Leave => unreachable!("handled above"),
@@ -613,9 +619,9 @@ fn activate(state: &mut App, focus: KeyFocus, pos: usize) -> Task<Message> {
         F::Option(OptionControl::CropApply) => Some(Message::Editor(EditorMsg::CropApply)),
         F::PanelTabs => {
             let current = PanelTab::from_id(&state.preferences.editor_panel_tab);
-            Some(Message::Editor(EditorMsg::PanelTabSelected(other_tab(
-                current,
-            ))))
+            Some(Message::Editor(EditorMsg::TextPanel(
+                TextPanelMsg::PanelTabSelected(other_tab(current)),
+            )))
         }
         F::BeautifyPreset(p) => Some(Message::Editor(EditorMsg::BeautifyPreset(p))),
         F::BeautifySaved(i) => Some(Message::Editor(EditorMsg::BeautifySavedPresetApplied(i))),
@@ -623,10 +629,18 @@ fn activate(state: &mut App, focus: KeyFocus, pos: usize) -> Task<Message> {
         F::BeautifyHex => return focus_field(BEAUTIFY_HEX_ID),
         F::BeautifyPick => Some(Message::Editor(EditorMsg::BeautifyPickBackground)),
         F::BeautifySave => Some(Message::Editor(EditorMsg::BeautifySavePreset)),
-        F::TextRetry => Some(Message::Editor(EditorMsg::TextRecognize)),
-        F::TextOpenSettings => Some(Message::Editor(EditorMsg::OpenTextSettings)),
-        F::TextRedactAll => Some(Message::Editor(EditorMsg::RedactAll)),
-        F::TextCopyLines => Some(Message::Editor(EditorMsg::CopyLines)),
+        F::TextRetry => Some(Message::Editor(EditorMsg::TextPanel(
+            TextPanelMsg::Recognize,
+        ))),
+        F::TextOpenSettings => Some(Message::Editor(EditorMsg::TextPanel(
+            TextPanelMsg::OpenTextSettings,
+        ))),
+        F::TextRedactAll => Some(Message::Editor(EditorMsg::TextPanel(
+            TextPanelMsg::RedactAll,
+        ))),
+        F::TextCopyLines => Some(Message::Editor(EditorMsg::TextPanel(
+            TextPanelMsg::CopyLines,
+        ))),
         F::TextCopyAll => Some(Message::Editor(EditorMsg::CopyTextRequested)),
         F::ResizeWidth | F::ResizeHeight => {
             return field_id(focus.item).map_or_else(Task::none, focus_field)
@@ -786,8 +800,8 @@ fn adjust_message(state: &App, item: FocusItem, step: i32) -> Option<Vec<Message
         },
         F::PanelTabs => {
             let current = PanelTab::from_id(&state.preferences.editor_panel_tab);
-            Some(vec![Message::Editor(EditorMsg::PanelTabSelected(
-                other_tab(current),
+            Some(vec![Message::Editor(EditorMsg::TextPanel(
+                TextPanelMsg::PanelTabSelected(other_tab(current)),
             ))])
         }
         F::BeautifyBackground => {
@@ -822,13 +836,17 @@ fn adjust_message(state: &App, item: FocusItem, step: i32) -> Option<Vec<Message
             dir,
         ))),
         F::BeautifyBalance => b(BeautifyEdit::Balance(!ed.model.beautify().balance)),
-        F::TextRedactStyle => Some(vec![Message::Editor(EditorMsg::RedactStyleChanged(cycle(
-            &readshot_core::redact::RedactStyle::ALL,
-            ed.text_panel.redact_style,
-            dir,
-        )))]),
-        F::TextLineBreaks => Some(vec![Message::Editor(EditorMsg::RemoveLineBreaksToggled(
-            !state.preferences.editor_copy_remove_line_breaks,
+        F::TextRedactStyle => Some(vec![Message::Editor(EditorMsg::TextPanel(
+            TextPanelMsg::RedactStyleChanged(cycle(
+                &readshot_core::redact::RedactStyle::ALL,
+                ed.text_panel.redact_style,
+                dir,
+            )),
+        ))]),
+        F::TextLineBreaks => Some(vec![Message::Editor(EditorMsg::TextPanel(
+            TextPanelMsg::RemoveLineBreaksToggled(
+                !state.preferences.editor_copy_remove_line_breaks,
+            ),
         ))]),
         F::ResizeUnit => {
             let d = ed.resize_draft.as_ref()?;
@@ -928,11 +946,14 @@ pub(crate) fn handle_focus_message(state: &mut App, message: EditorMsg) -> Task<
             let mode = editor_panel_mode(state, ed);
             let mut tasks = Vec::new();
             if matches!(mode, PanelMode::Hidden | PanelMode::Collapsed) {
-                tasks.push(update(state, Message::Editor(EditorMsg::PanelToggled)));
+                tasks.push(update(
+                    state,
+                    Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelToggled)),
+                ));
             }
             tasks.push(update(
                 state,
-                Message::Editor(EditorMsg::PanelTabSelected(tab)),
+                Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelTabSelected(tab))),
             ));
             if let Some(ed) = state.editor.as_mut() {
                 close_editor_popover(ed);

@@ -84,7 +84,10 @@ fn choosing_the_highlighter_without_line_positions_does_not_recognize() {
 fn text_recognition_result_for_the_current_session_is_kept() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextRecognize));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognize)),
+    );
     assert!(matches!(
         app.editor.as_ref().unwrap().text_panel.recognition,
         crate::editor::TextRecognition::Recognizing { .. }
@@ -100,15 +103,18 @@ fn text_recognition_result_for_the_current_session_is_kept() {
 fn stale_text_recognition_result_is_dropped() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextRecognize));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognize)),
+    );
     let session = app.editor.as_ref().unwrap().session_id + 1000;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part: 0,
             result: Ok(sample_doc()),
-        }),
+        })),
     );
     assert!(matches!(
         app.editor.as_ref().unwrap().text_panel.recognition,
@@ -120,15 +126,18 @@ fn stale_text_recognition_result_is_dropped() {
 fn failed_recognition_toasts_retry_and_retry_restarts() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextRecognize));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognize)),
+    );
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part: 0,
             result: Err("Vision OCR timed out".into()),
-        }),
+        })),
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(matches!(
@@ -141,7 +150,10 @@ fn failed_recognition_toasts_retry_and_retry_restarts() {
         Some(crate::editor::EditorToastAction::RetryRecognition)
     );
 
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextRecognize));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognize)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert!(matches!(
         ed.text_panel.recognition,
@@ -154,7 +166,10 @@ fn failed_recognition_toasts_retry_and_retry_restarts() {
 fn recognition_is_not_restarted_once_ready() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     ready_editor(&mut app);
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextRecognize));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognize)),
+    );
     assert!(app.editor.as_ref().unwrap().text_panel.document().is_some());
 }
 
@@ -249,11 +264,11 @@ fn background_recognition_failure_is_quiet_with_the_panel_closed() {
     // A history-shared OCR nobody asked for fails: no toast.
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part: 0,
             result: Err("no models".into()),
-        }),
+        })),
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(matches!(
@@ -263,14 +278,17 @@ fn background_recognition_failure_is_quiet_with_the_panel_closed() {
     assert!(ed.status.is_none() && ed.toast_action().is_none());
 
     // Asked for explicitly: the failure toasts with Retry.
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextRecognize));
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognize)),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part: 0,
             result: Err("no models".into()),
-        }),
+        })),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
@@ -290,11 +308,11 @@ async fn history_ocr_feeds_the_editor_first_and_stores_the_layout_text() {
     // OCR resolves before the PNG encode / save, so the panel isn't
     // held back by them.
     match &msgs[0] {
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session: 7,
             part: 0,
             result: Ok(doc),
-        }) => {
+        })) => {
             assert_eq!(doc.layout_text, "one\n\ntwo");
         }
         other => panic!("expected EditorTextRecognized first, got {other:?}"),
@@ -313,9 +331,10 @@ async fn history_ocr_feeds_the_editor_first_and_stores_the_layout_text() {
     // No editor session: nothing is sent to an editor.
     let (msgs, _, _, _dir) =
         run_persist_history(FakeOcrEngine::with_text("hi"), solid(16, 16), None).await;
-    assert!(!msgs
-        .iter()
-        .any(|m| matches!(m, Message::Editor(EditorMsg::TextRecognized { .. }))));
+    assert!(!msgs.iter().any(|m| matches!(
+        m,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized { .. }))
+    )));
 }
 
 #[tokio::test]
@@ -324,11 +343,11 @@ async fn history_ocr_errors_reach_the_editor_even_when_the_save_fails() {
         run_persist_history(FakeOcrEngine::failing("boom"), solid(16, 16), Some(3)).await;
     assert!(matches!(
         &msgs[0],
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session: 3,
             part: 0,
             result: Err(_)
-        })
+        }))
     ));
     assert!(matches!(
         msgs.last(),
@@ -346,11 +365,13 @@ async fn history_ocr_errors_reach_the_editor_even_when_the_save_fails() {
     assert!(
         matches!(
             &msgs[..],
-            [Message::Editor(EditorMsg::TextRecognized {
-                session: 4,
-                part: 0,
-                result: Ok(_)
-            })]
+            [Message::Editor(EditorMsg::TextPanel(
+                TextPanelMsg::Recognized {
+                    session: 4,
+                    part: 0,
+                    result: Ok(_)
+                }
+            ))]
         ),
         "{msgs:?}"
     );
@@ -364,7 +385,9 @@ fn option_command_p_toggles_the_panel_and_command_p_still_pins() {
     for ignored in [true, false] {
         assert!(matches!(
             editor_key_message(Key::Character("p".into()), alt_cmd, ignored),
-            Some(Message::Editor(EditorMsg::PanelToggled))
+            Some(Message::Editor(EditorMsg::TextPanel(
+                TextPanelMsg::PanelToggled
+            )))
         ));
     }
     assert!(matches!(
@@ -378,13 +401,19 @@ fn toggling_the_panel_is_remembered_and_starts_recognition() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.preferences.editor_panel_open = false;
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelToggled));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelToggled)),
+    );
     assert!(app.preferences.editor_panel_open);
     assert!(matches!(
         app.editor.as_ref().unwrap().text_panel.recognition,
         crate::editor::TextRecognition::Recognizing { .. }
     ));
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelToggled));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelToggled)),
+    );
     assert!(!app.preferences.editor_panel_open);
 }
 
@@ -399,7 +428,10 @@ fn narrow_window_opens_a_temporary_overlay_that_closes_three_ways() {
         editor_panel_mode(&app, app.editor.as_ref().unwrap()),
         PanelMode::Collapsed
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelToggled));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelToggled)),
+    );
     assert!(overlay(&app));
     assert!(
         app.preferences.editor_panel_open,
@@ -413,12 +445,24 @@ fn narrow_window_opens_a_temporary_overlay_that_closes_three_ways() {
     let _ = update(&mut app, Message::Editor(EditorMsg::TextCancel));
     assert!(!overlay(&app));
     // click outside
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelToggled));
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelOverlayDismissed));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelToggled)),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelOverlayDismissed)),
+    );
     assert!(!overlay(&app));
     // ⌥⌘P again
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelToggled));
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelToggled));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelToggled)),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelToggled)),
+    );
     assert!(!overlay(&app));
     assert!(app.preferences.editor_panel_open);
 }
@@ -459,10 +503,15 @@ fn panel_tab_is_remembered_and_no_text_links_to_text_recognition_settings() {
     app.preferences.editor_panel_tab = "beautify".into();
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::PanelTabSelected(crate::editor::PanelTab::Text)),
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelTabSelected(
+            crate::editor::PanelTab::Text,
+        ))),
     );
     assert_eq!(app.preferences.editor_panel_tab, "text");
-    let _ = update(&mut app, Message::Editor(EditorMsg::OpenTextSettings));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::OpenTextSettings)),
+    );
     assert_eq!(app.settings_pane, crate::app::SettingsPane::TextRecognition);
     assert!(app.settings_window_id.is_some());
 }
@@ -510,14 +559,20 @@ fn an_overlay_widened_into_the_dock_hides_with_one_toggle() {
     let mut ed = crate::editor::EditorSession::new(solid(64, 64));
     ed.window_width = 800.0;
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelToggled));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelToggled)),
+    );
     app.editor.as_mut().unwrap().window_width = 1200.0;
     assert_eq!(
         editor_panel_mode(&app, app.editor.as_ref().unwrap()),
         PanelMode::Docked
     );
     // "Hide Panel" on what is shown hides it, not re-opens it.
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelToggled));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelToggled)),
+    );
     assert_eq!(
         editor_panel_mode(&app, app.editor.as_ref().unwrap()),
         PanelMode::Hidden
@@ -534,7 +589,10 @@ fn widening_the_window_folds_an_open_overlay_into_the_docked_preference() {
     ed.window_id = Some(id);
     ed.window_width = 800.0;
     app.editor = Some(ed);
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelToggled));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelToggled)),
+    );
     assert!(app.editor.as_ref().unwrap().panel_overlay_open);
     let _ = update(
         &mut app,
@@ -590,7 +648,10 @@ fn opening_the_panel_closes_an_open_popover() {
         )),
     );
     assert!(app.editor.as_ref().unwrap().popover.is_some());
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelToggled));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelToggled)),
+    );
     assert!(app.preferences.editor_panel_open);
     assert_eq!(app.editor.as_ref().unwrap().popover, None);
     // Narrow-window overlay too.
@@ -602,7 +663,10 @@ fn opening_the_panel_closes_an_open_popover() {
             crate::editor::EditorPopover::Color,
         )),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelToggled));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelToggled)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.panel_overlay_open);
     assert_eq!(ed.popover, None);
@@ -616,13 +680,19 @@ fn dismissing_no_overlay_keeps_the_hovered_line() {
         &mut app,
         Message::Window(WindowMsg::EditorTextLineHovered(1)),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelOverlayDismissed));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelOverlayDismissed)),
+    );
     assert_eq!(app.editor.as_ref().unwrap().text_panel.hovered, Some(1));
     // An open overlay that closes does drop the hover.
     let ed = app.editor.as_mut().unwrap();
     ed.window_width = 800.0;
     ed.panel_overlay_open = true;
-    let _ = update(&mut app, Message::Editor(EditorMsg::PanelOverlayDismissed));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelOverlayDismissed)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert!(!ed.panel_overlay_open);
     assert_eq!(ed.text_panel.hovered, None);
@@ -786,13 +856,19 @@ fn panel_line_clicks_follow_shift_and_command() {
             .copied()
             .collect()
     };
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextLineClicked(0)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::LineClicked(0))),
+    );
     assert_eq!(selected(&app), [0]);
     let _ = update(
         &mut app,
         Message::Window(WindowMsg::EditorShiftChanged(true)),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextLineClicked(2)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::LineClicked(2))),
+    );
     assert_eq!(selected(&app), [0, 1, 2]);
     let _ = update(
         &mut app,
@@ -802,9 +878,15 @@ fn panel_line_clicks_follow_shift_and_command() {
         &mut app,
         Message::Window(WindowMsg::EditorCommandChanged(true)),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextLineClicked(1)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::LineClicked(1))),
+    );
     assert_eq!(selected(&app), [0, 2]);
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextLineClicked(9)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::LineClicked(9))),
+    );
     assert_eq!(selected(&app), [0, 2], "out-of-range clicks are ignored");
 }
 
@@ -837,9 +919,15 @@ fn hover_tracks_the_line_under_the_pointer() {
 fn copy_lines_is_ignored_while_busy() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     ready_editor(&mut app);
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextLineClicked(0)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::LineClicked(0))),
+    );
     app.editor.as_mut().unwrap().busy = true;
-    let _ = update(&mut app, Message::Editor(EditorMsg::CopyLines));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::CopyLines)),
+    );
     assert!(app.editor.as_ref().unwrap().status.is_none());
 }
 
@@ -847,15 +935,27 @@ fn copy_lines_is_ignored_while_busy() {
 fn copy_lines_needs_a_selection_and_reports_the_count() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     ready_editor(&mut app);
-    let _ = update(&mut app, Message::Editor(EditorMsg::CopyLines));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::CopyLines)),
+    );
     assert!(app.editor.as_ref().unwrap().status.is_none());
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextLineClicked(0)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::CopyLines));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::LineClicked(0))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::CopyLines)),
+    );
     assert_eq!(
         app.editor.as_ref().unwrap().status_text(),
         Some("Copying text…")
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::CopyLinesDone(Ok(2))));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::CopyLinesDone(Ok(2)))),
+    );
     assert_eq!(
         app.editor.as_ref().unwrap().status_text(),
         Some("Copied 2 lines.")
@@ -868,7 +968,9 @@ fn remove_line_breaks_toggle_is_remembered() {
     ready_editor(&mut app);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::RemoveLineBreaksToggled(true)),
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RemoveLineBreaksToggled(
+            true,
+        ))),
     );
     assert!(app.preferences.editor_copy_remove_line_breaks);
 }
@@ -877,7 +979,10 @@ fn remove_line_breaks_toggle_is_remembered() {
 fn esc_clears_the_panel_selection_last() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     ready_editor(&mut app);
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextLineClicked(1)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::LineClicked(1))),
+    );
     // commit_annotation selects the new annotation.
     app.editor
         .as_mut()
@@ -906,7 +1011,10 @@ fn text_marks_follow_hover_and_selection_only_with_positions() {
         &mut app,
         Message::Window(WindowMsg::EditorTextLineHovered(1)),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextLineClicked(0)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::LineClicked(0))),
+    );
     let ed = app.editor.as_ref().unwrap();
     let doc = ed.text_panel.document().unwrap();
     let (hover, selected) = text_marks(ed, true);
@@ -927,7 +1035,10 @@ fn redact_all_adds_one_block_per_item_as_one_undo_step() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     ready_editor(&mut app);
     let depth = app.editor.as_ref().unwrap().model.undo_depth();
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let ed = app.editor.as_ref().unwrap();
     let anns = ed.model.annotations();
     assert_eq!(anns.len(), 2);
@@ -950,7 +1061,10 @@ fn redact_all_adds_one_block_per_item_as_one_undo_step() {
         other => panic!("{other:?}"),
     }
 
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
         ed.model.annotations().len(),
@@ -972,11 +1086,14 @@ fn redact_line_uses_the_chosen_style() {
     ready_editor(&mut app);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::RedactStyleChanged(
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactStyleChanged(
             readshot_core::redact::RedactStyle::Pixelate,
-        )),
+        ))),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactLine(2)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactLine(2))),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.annotations().len(), 1);
     assert!(matches!(
@@ -984,7 +1101,10 @@ fn redact_line_uses_the_chosen_style() {
         Annotation::Pixelate { .. }
     ));
     assert_eq!(ed.status_text(), Some("Redacted 1 item."));
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactLine(0)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactLine(0))),
+    );
     assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 1);
 }
 
@@ -992,20 +1112,26 @@ fn redact_line_uses_the_chosen_style() {
 fn redaction_needs_line_positions() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
-    let _ = update(&mut app, Message::Editor(EditorMsg::TextRecognize));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognize)),
+    );
     let session = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part: 0,
             result: Ok(readshot_core::text_lines::TextDocument::from_plain(
                 "Email priya@example.com",
             )),
-        }),
+        })),
     );
     assert!(app.editor.as_ref().unwrap().text_panel.matches.is_empty());
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     assert!(app.editor.as_ref().unwrap().model.annotations().is_empty());
 }
 
@@ -1031,7 +1157,10 @@ fn unlocatable_items_are_reported_not_dropped() {
         1
     );
 
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.annotations().len(), 2);
     assert_eq!(
@@ -1040,7 +1169,10 @@ fn unlocatable_items_are_reported_not_dropped() {
     );
     assert!(ed.visible_toast_action().is_some());
 
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(
         ed.status_text(),
@@ -1053,7 +1185,10 @@ fn unlocatable_items_are_reported_not_dropped() {
 fn redaction_undo_is_dropped_by_any_other_history_change() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     ready_editor(&mut app);
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let _ = update(
         &mut app,
         Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
@@ -1075,7 +1210,10 @@ fn redaction_undo_is_dropped_by_any_other_history_change() {
         &mut app,
         Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let coord = app.coordinator.clone();
     let ed = app.editor.as_mut().unwrap();
     assert!(ed.visible_toast_action().is_some());
@@ -1089,7 +1227,10 @@ fn redaction_undo_is_dropped_by_any_other_history_change() {
 fn arming_discard_drops_the_redaction_undo() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     ready_editor(&mut app);
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.discard_armed());
@@ -1103,27 +1244,40 @@ fn a_blur_redaction_does_not_count_as_solid() {
     ready_editor(&mut app);
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::RedactStyleChanged(RedactStyle::Blur)),
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactStyleChanged(
+            RedactStyle::Blur,
+        ))),
     );
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.annotations().len(), 2);
     let rs = super::super::text_panel::redact_state(ed);
     assert!(rs.pending.is_empty(), "Blur chosen: blurred items are done");
     assert_eq!(rs.weak.len(), 2);
     // Blur again: no duplicates.
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     assert_eq!(app.editor.as_ref().unwrap().model.annotations().len(), 2);
 
     // Switch to Solid: the blurred items are pending again and Redact
     // All puts a solid block on top of each.
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::RedactStyleChanged(RedactStyle::Solid)),
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactStyleChanged(
+            RedactStyle::Solid,
+        ))),
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(super::super::text_panel::redact_state(ed).pending.len(), 2);
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.status_text(), Some("Redacted 2 items."));
     let anns = ed.model.annotations();
@@ -1150,7 +1304,10 @@ fn a_weak_manual_blur_is_not_reported_as_redacted() {
     let rs = super::super::text_panel::redact_state(ed);
     assert_eq!(rs.pending.len(), 2, "Solid (default) still offers both");
     assert_eq!(rs.weak.len(), 2);
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.annotations().len(), 3);
     assert!(super::super::text_panel::redact_state(ed)
@@ -1162,7 +1319,10 @@ fn a_weak_manual_blur_is_not_reported_as_redacted() {
 fn copy_all_after_a_redaction_recognizes_the_output() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     ready_editor(&mut app);
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let _ = update(&mut app, Message::Editor(EditorMsg::CopyTextRequested));
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.busy);
@@ -1195,7 +1355,10 @@ fn the_redaction_undo_hides_after_a_newer_edit_at_the_history_cap() {
             readshot_ui::editor::undo::MAX_HISTORY
         );
     }
-    let _ = update(&mut app, Message::Editor(EditorMsg::RedactAll));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
     let ed = app.editor.as_mut().unwrap();
     assert!(ed.visible_toast_action().is_some());
     let last = ed.model.annotations().len() - 1;

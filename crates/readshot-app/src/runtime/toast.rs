@@ -16,7 +16,11 @@ pub(crate) fn toast_action_parts(
             Some(UNDO_KEY),
             Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)),
         ),
-        A::RetryRecognition => ("Retry", None, Message::Editor(EditorMsg::TextRecognize)),
+        A::RetryRecognition => (
+            "Retry",
+            None,
+            Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognize)),
+        ),
         A::RestorePreset => (
             "Undo",
             None,

@@ -108,7 +108,11 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
             mods(true, false, false, false),
             "Editor(PinRequested)",
         ),
-        (ch("p"), editor_alt_modifiers(), "Editor(PanelToggled)"),
+        (
+            ch("p"),
+            editor_alt_modifiers(),
+            "Editor(TextPanel(PanelToggled))",
+        ),
         (
             ch("s"),
             mods(true, false, false, false),

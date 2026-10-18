@@ -268,6 +268,8 @@ pub enum Message {
 /// `runtime::editor_ops::handle_editor_message`.
 #[derive(Clone, Debug)]
 pub enum EditorMsg {
+    /// Side panel and Text tab messages (`runtime::text_panel`).
+    TextPanel(TextPanelMsg),
     Canvas(CanvasMessage),
     Toolbar(ToolbarMessage),
     /// Slow tick (~1 s) that fires while the editor is open AND the
@@ -325,47 +327,6 @@ pub enum EditorMsg {
         session: u64,
         result: Result<String, String>,
     },
-    /// Start (or retry) recognizing the editor's base image for the Text
-    /// panel. No-op while recognizing or once ready.
-    TextRecognize,
-    /// Text-panel recognition of part `part` (in that part's pixels)
-    /// finished for editor session `session`.
-    TextRecognized {
-        session: u64,
-        part: readshot_core::document::PartId,
-        result: Result<readshot_core::text_lines::TextDocument, String>,
-    },
-    /// The newest History rewrite (scrub after a redaction, or restore)
-    /// queued by editor session `session` finished. `None` when a newer
-    /// rewrite of the same record superseded it before it ran.
-    HistoryWritten {
-        session: u64,
-        result: Option<crate::coordinator::HistoryRewriteResult>,
-    },
-    /// Show / hide the editor side panel (⌥⌘P; Ctrl+Shift+P off macOS; or
-    /// the panel buttons). In
-    /// narrow windows this opens / closes the temporary overlay instead.
-    PanelToggled,
-    /// A side-panel tab was chosen.
-    PanelTabSelected(crate::editor::PanelTab),
-    /// Click outside the narrow-window overlay panel.
-    PanelOverlayDismissed,
-    /// "Open Settings" on the Text tab's no-text state.
-    OpenTextSettings,
-    /// Click on Text-panel line `index` (⇧ range, ⌘ toggle).
-    TextLineClicked(usize),
-    /// Copy the selected Text-panel lines.
-    CopyLines,
-    /// Copy N Lines finished: `Ok(n)` lines copied.
-    CopyLinesDone(Result<usize, String>),
-    /// "Remove line breaks when copying" toggled.
-    RemoveLineBreaksToggled(bool),
-    /// Smart-redact style (Solid block / Pixelate / Blur).
-    RedactStyleChanged(readshot_core::redact::RedactStyle),
-    /// Redact every pending sensitive item as one undo step.
-    RedactAll,
-    /// Redact the pending sensitive items in Text-panel line `index`.
-    RedactLine(usize),
     /// User clicked Discard. Closes the editor window.
     DiscardRequested,
     /// "Keep Editing" on the armed-discard toast: back out of Discard.
@@ -550,6 +511,54 @@ pub enum EditorMsg {
     /// Turn the eyedropper on or off (I, or the button in the color
     /// popover). While on, a click on the image picks its color.
     EyedropperToggled,
+}
+
+/// Editor side panel and Text tab messages: recognition, line selection
+/// and copy, smart redaction, and the History rewrite a redaction queues.
+/// Handled by `runtime::text_panel::handle_text_panel_message`.
+#[derive(Clone, Debug)]
+pub enum TextPanelMsg {
+    /// Start (or retry) recognizing the editor's base image for the Text
+    /// panel. No-op while recognizing or once ready.
+    Recognize,
+    /// Text-panel recognition of part `part` (in that part's pixels)
+    /// finished for editor session `session`.
+    Recognized {
+        session: u64,
+        part: readshot_core::document::PartId,
+        result: Result<readshot_core::text_lines::TextDocument, String>,
+    },
+    /// The newest History rewrite (scrub after a redaction, or restore)
+    /// queued by editor session `session` finished. `None` when a newer
+    /// rewrite of the same record superseded it before it ran.
+    HistoryWritten {
+        session: u64,
+        result: Option<crate::coordinator::HistoryRewriteResult>,
+    },
+    /// Show / hide the editor side panel (⌥⌘P; Ctrl+Shift+P off macOS; or
+    /// the panel buttons). In
+    /// narrow windows this opens / closes the temporary overlay instead.
+    PanelToggled,
+    /// A side-panel tab was chosen.
+    PanelTabSelected(crate::editor::PanelTab),
+    /// Click outside the narrow-window overlay panel.
+    PanelOverlayDismissed,
+    /// "Open Settings" on the Text tab's no-text state.
+    OpenTextSettings,
+    /// Click on Text-panel line `index` (⇧ range, ⌘ toggle).
+    LineClicked(usize),
+    /// Copy the selected Text-panel lines.
+    CopyLines,
+    /// Copy N Lines finished: `Ok(n)` lines copied.
+    CopyLinesDone(Result<usize, String>),
+    /// "Remove line breaks when copying" toggled.
+    RemoveLineBreaksToggled(bool),
+    /// Smart-redact style (Solid block / Pixelate / Blur).
+    RedactStyleChanged(readshot_core::redact::RedactStyle),
+    /// Redact every pending sensitive item as one undo step.
+    RedactAll,
+    /// Redact the pending sensitive items in Text-panel line `index`.
+    RedactLine(usize),
 }
 
 /// History browser messages, and the completions of History writes made

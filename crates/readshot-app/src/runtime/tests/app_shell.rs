@@ -488,9 +488,9 @@ fn the_beautify_hex_field_follows_the_solid_background_unless_mid_edit() {
     );
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::PanelTabSelected(
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelTabSelected(
             crate::editor::PanelTab::Beautify,
-        )),
+        ))),
     );
     assert_eq!(hex(&app), "#E5EAF0");
     // Changed elsewhere (a swatch, a preset): the field follows.
@@ -534,9 +534,9 @@ fn the_beautify_hex_field_follows_the_solid_background_unless_mid_edit() {
     );
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::PanelTabSelected(
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::PanelTabSelected(
             crate::editor::PanelTab::Beautify,
-        )),
+        ))),
     );
     assert_eq!(hex(&app), "#E5EAF0");
 }

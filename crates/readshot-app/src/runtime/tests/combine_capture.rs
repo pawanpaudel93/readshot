@@ -223,11 +223,11 @@ fn a_bake_before_recognition_recognizes_the_source_part_upright() {
     );
     let _ = update(
         &mut app,
-        Message::Editor(EditorMsg::TextRecognized {
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
             session,
             part: ORIGINAL_PART,
             result: Ok(positioned_doc("first", RectLike::new(2.0, 4.0, 10.0, 3.0))),
-        }),
+        })),
     );
     let ed = app.editor.as_ref().unwrap();
     assert!(ed.text_panel.part_docs.contains_key(&ids[0]));
@@ -274,11 +274,11 @@ async fn a_combined_record_stores_no_text_until_every_part_is_recognized() {
     for (part, text) in [(ids[0], "first"), (ids[1], "second")] {
         let _ = update(
             &mut app,
-            Message::Editor(EditorMsg::TextRecognized {
+            Message::Editor(EditorMsg::TextPanel(TextPanelMsg::Recognized {
                 session,
                 part,
                 result: Ok(readshot_core::text_lines::TextDocument::from_plain(text)),
-            }),
+            })),
         );
     }
     app.coordinator.flush_history_updates();

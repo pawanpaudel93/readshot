@@ -827,15 +827,15 @@ fn may_wait(message: &EditorMsg) -> (bool, bool) {
         | EditorMsg::Saved { .. }
         | EditorMsg::CopyImageDone { .. }
         | EditorMsg::CopyTextDone { .. }
-        | EditorMsg::CopyLinesDone(..)
-        | EditorMsg::HistoryWritten { .. }
-        | EditorMsg::TextRecognized { .. }
+        | EditorMsg::TextPanel(TextPanelMsg::CopyLinesDone(..))
+        | EditorMsg::TextPanel(TextPanelMsg::HistoryWritten { .. })
+        | EditorMsg::TextPanel(TextPanelMsg::Recognized { .. })
         | EditorMsg::Canvas(CanvasMessage::EyedropperHover(_))
         | EditorMsg::ZoomIn
         | EditorMsg::ZoomOut
         | EditorMsg::ZoomActual
         | EditorMsg::ZoomFit
-        | EditorMsg::PanelTabSelected(..)
+        | EditorMsg::TextPanel(TextPanelMsg::PanelTabSelected(..))
         | EditorMsg::ResizeWidthChanged(..)
         | EditorMsg::ResizeHeightChanged(..)
         | EditorMsg::ResizeUnitChanged(..)
