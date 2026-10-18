@@ -196,7 +196,9 @@ fn a_failed_history_write_shows_an_error_and_forces_a_full_rewrite_next() {
         &mut app,
         Message::EditorHistoryWritten {
             session,
-            result: Some(Err("No space left on device".into())),
+            result: Some(Err(crate::coordinator::HistoryRewriteError::Failed(
+                "No space left on device".into(),
+            ))),
         },
     );
     let ed = app.editor.as_ref().unwrap();
@@ -1362,4 +1364,26 @@ async fn a_reopened_record_with_a_baked_bubble_masks_the_bubble_word_everywhere(
     ed.model
         .commit_annotation(word_blur(RectLike::new(150.0, 100.0, 10.0, 10.0)));
     assert_eq!(scrubbed_history_text(ed), Some(masked));
+}
+
+/// A restore History refused (another window redacted the record): the
+/// editor says so, stops writing to the record and offers Save.
+#[test]
+fn a_refused_restore_tells_the_editor_and_unbinds_it() {
+    let (_dir, _store, mut app) = scrub_app(true);
+    let session = app.editor.as_ref().unwrap().session_id;
+    let _ = update(
+        &mut app,
+        Message::EditorHistoryWritten {
+            session,
+            result: Some(Err(
+                crate::coordinator::HistoryRewriteError::RedactedElsewhere,
+            )),
+        },
+    );
+    let ed = app.editor.as_ref().unwrap();
+    assert!(ed.source_record.is_none(), "no more writes to that record");
+    let status = ed.status.clone().unwrap_or_default();
+    assert!(status.contains("redacted in another window"), "{status}");
+    assert!(status.contains(super::super::keys::SAVE_KEY), "{status}");
 }

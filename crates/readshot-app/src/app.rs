@@ -571,7 +571,7 @@ pub enum Message {
     /// rewrite of the same record superseded it before it ran.
     EditorHistoryWritten {
         session: u64,
-        result: Option<Result<(), String>>,
+        result: Option<crate::coordinator::HistoryRewriteResult>,
     },
     /// Show / hide the editor side panel (⌥⌘P; Ctrl+Shift+P off macOS; or
     /// the panel buttons). In

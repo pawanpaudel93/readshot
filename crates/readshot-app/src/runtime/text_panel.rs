@@ -628,7 +628,21 @@ pub(crate) fn handle_text_panel_message(state: &mut App, message: Message) -> Ta
                         Task::none()
                     }
                 }
-                Some(Err(e)) => {
+                Some(Err(crate::coordinator::HistoryRewriteError::RedactedElsewhere)) => {
+                    // History keeps the redacted record another window
+                    // made; this editor can never write it back unredacted.
+                    // It stops writing to it, and says how to keep its
+                    // own version.
+                    if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
+                        ed.source_record = None;
+                        ed.set_warning(format!(
+                            "History keeps the redacted version of this capture (it was redacted in another window), so this change wasn’t stored there. Press {} to save this version to a file.",
+                            super::keys::SAVE_KEY
+                        ));
+                    }
+                    Task::none()
+                }
+                Some(Err(crate::coordinator::HistoryRewriteError::Failed(e))) => {
                     tracing::warn!(target: readshot_core::log::cat::HISTORY, "history rewrite failed: {e}");
                     if let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) {
                         // What's on disk is unknown now: the next sync

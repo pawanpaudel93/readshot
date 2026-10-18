@@ -74,10 +74,23 @@ enum HistoryUpdate {
     Flush(std::sync::mpsc::SyncSender<()>),
 }
 
-/// Outcome of a queued [`CaptureCoordinator::rewrite_history_async`]:
-/// `Err` carries a user-presentable reason. A rewrite superseded by a
-/// newer one for the same record never runs; its receiver is cancelled.
-pub type HistoryRewriteResult = Result<(), String>;
+/// Why a queued History rewrite didn't land.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum HistoryRewriteError {
+    /// The write failed (it is retried); the reason, user-presentable.
+    #[error("{0}")]
+    Failed(String),
+    /// An unredacted rewrite of a record that is redacted in History by
+    /// someone else (another editor, or an earlier run): refused for
+    /// good, History keeps the redacted record.
+    #[error("the capture is redacted in History by another window")]
+    RedactedElsewhere,
+}
+
+/// Outcome of a queued [`CaptureCoordinator::rewrite_history_async`].
+/// A rewrite superseded by a newer one for the same record never runs;
+/// its receiver is cancelled.
+pub type HistoryRewriteResult = Result<(), HistoryRewriteError>;
 
 /// One full record replacement: the PNG is `bake` rendered onto `base`
 /// (or `base` itself when `bake` is empty).
@@ -297,6 +310,9 @@ enum Outcome {
     Missing,
     /// A newer request for the record exists; nothing was written.
     Stale,
+    /// A restore over a record redacted by someone else; nothing was
+    /// written, and it is never retried.
+    Refused,
     Failed(String),
 }
 
@@ -331,7 +347,7 @@ fn apply_rewrite(
             target: readshot_core::log::cat::HISTORY,
             "dropped a restore of record {id}: it is redacted on disk"
         );
-        return Outcome::Stale;
+        return Outcome::Refused;
     }
     match store.commit_rewrite(record, staged) {
         Ok(true) => {
@@ -414,10 +430,16 @@ fn run_rewrite(
             None
         }
         Outcome::Missing | Outcome::Stale => None,
+        Outcome::Refused => {
+            if let Some(done) = rewrite.done.take() {
+                let _ = done.send(Err(HistoryRewriteError::RedactedElsewhere));
+            }
+            None
+        }
         Outcome::Failed(e) => {
             tracing::warn!(target: readshot_core::log::cat::HISTORY, "history rewrite failed: {e}");
             if let Some(done) = rewrite.done.take() {
-                let _ = done.send(Err(e));
+                let _ = done.send(Err(HistoryRewriteError::Failed(e)));
             }
             rewrite.attempt += 1;
             let due = std::time::Instant::now() + retry_delay(rewrite.attempt);
@@ -749,6 +771,7 @@ impl CaptureCoordinator {
                         target: readshot_core::log::cat::HISTORY,
                         "dropped a restore of record {id}: another editor redacted it"
                     );
+                    let _ = tx.send(Err(HistoryRewriteError::RedactedElsewhere));
                     return rx;
                 }
                 Some(_) => true,
@@ -1523,19 +1546,29 @@ mod tests {
         coord.flush_history_updates();
         assert!(sidecar(&store, &record).redacted);
         // Session A (not the scrub's owner) restores: refused.
-        drop(coord.rewrite_history_as(a, record.clone(), Arc::clone(&base), Vec::new()));
+        let mut refused =
+            coord.rewrite_history_as(a, record.clone(), Arc::clone(&base), Vec::new());
         coord.flush_history_updates();
         assert!(
             sidecar(&store, &record).redacted,
             "another session un-redacted it"
         );
+        assert_eq!(
+            refused.try_recv(),
+            Ok(Some(Err(HistoryRewriteError::RedactedElsewhere)))
+        );
         // A restart: nobody owns the scrub on disk; a restore is refused.
         let fresh = history_coord(store.clone());
-        drop(fresh.rewrite_history_as(b, record.clone(), Arc::clone(&base), Vec::new()));
+        let mut refused =
+            fresh.rewrite_history_as(b, record.clone(), Arc::clone(&base), Vec::new());
         fresh.flush_history_updates();
         assert!(
             sidecar(&store, &record).redacted,
             "an ownerless restore un-redacted it"
+        );
+        assert_eq!(
+            refused.try_recv(),
+            Ok(Some(Err(HistoryRewriteError::RedactedElsewhere)))
         );
         // B, whose scrub it is, undoes it: allowed.
         drop(coord.rewrite_history_as(b, record.clone(), Arc::clone(&base), Vec::new()));
