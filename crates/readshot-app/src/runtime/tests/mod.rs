@@ -1125,6 +1125,8 @@ mod copy_conventions;
 mod editor_drafts;
 /// Rotate, flip, resize and crop.
 mod geometry_and_crop;
+/// Sync and async geometry steps land in the same editor state.
+mod geometry_pipeline;
 /// History browser, statuses, friendly errors and platform commands.
 mod history_browser;
 /// History scrub after a redaction (B10).

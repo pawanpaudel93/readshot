@@ -5,6 +5,15 @@
 //! output pixels ([`EditorSession::is_large`]) that work runs on a
 //! blocking worker instead; smaller ones stay synchronous.
 //!
+//! Both sizes are one pipeline. A history step is a [`ComposeKind`]: it
+//! is applied on the UI thread ([`apply_step_now`]) or queued
+//! ([`queue_step`]) and landed composed, and either way it ends in the
+//! same post-step hook (`land`): the new image shown, an added part's
+//! bake sources and owed recognition, the loupe and discard clears, the
+//! status, and the History sync. Only where the pixels are composed
+//! differs. What every step does first is
+//! [`super::image_menu::before_geometry_change`].
+//!
 //! One request runs at a time ([`EditorSession::compose_job`]), of three
 //! kinds:
 //!
@@ -407,7 +416,6 @@ fn start_steps(ed: &mut EditorSession, steps: Vec<QueuedStep>) -> Task<Message> 
 pub(crate) fn queue_geometry_step(
     ed: &mut EditorSession,
     kind: ComposeKind,
-    action: &str,
     next_geometry: impl FnOnce(
         &readshot_core::document::DocGeometry,
     ) -> readshot_core::document::DocGeometry,
@@ -433,7 +441,7 @@ pub(crate) fn queue_geometry_step(
                 .annotations
                 .iter()
                 .any(|a| matches!(a, readshot_core::Annotation::Crop { .. }));
-            ed.set_status(geometry_error_status(action, cropped, e));
+            ed.set_status(geometry_refused_status(kind, cropped, e));
             Some(Task::none())
         }
         _ => None,
@@ -519,11 +527,7 @@ pub(crate) fn queue_add_part(
                 .annotations
                 .iter()
                 .any(|a| matches!(a, readshot_core::Annotation::Crop { .. }));
-            ed.set_status(geometry_error_status(
-                &format!("add the {what}"),
-                cropped,
-                e,
-            ));
+            ed.set_status(geometry_refused_status(kind, cropped, e));
             Some(Task::none())
         }
     }
@@ -1202,7 +1206,7 @@ pub(crate) fn queue_released_gap(ed: &mut EditorSession) {
             // The newest value is refused (it was never shown): keep the
             // value on screen, as a commit after a refused tick does.
             let cropped = ed.last_crop().is_some();
-            ed.set_status(geometry_error_status("change the gap", cropped, e));
+            ed.set_status(geometry_refused_status(ComposeKind::Gap(gap), cropped, e));
             if ed.model.commit_preview_snapshot(baseline) {
                 ed.clear_discard_confirmation();
                 ed.refresh_image();
@@ -1323,8 +1327,8 @@ fn land_steps(
         {
             Ok(true) => {
                 let handle = ed.model.flattened_handle();
-                ed.install_image(handle);
-                after_steps_landed(ed, coord, &landed);
+                let steps: Vec<LandedStep> = landed.iter().map(LandedStep::from).collect();
+                land(ed, coord, &steps, Some(handle));
             }
             Ok(false) => replay_steps(ed, coord, landed),
             Err(e) => {
@@ -1349,78 +1353,158 @@ fn replay_steps(
     coord: Option<&crate::coordinator::CaptureCoordinator>,
     steps: Vec<QueuedStep>,
 ) {
-    let mut applied: Vec<QueuedStep> = Vec::new();
-    for step in steps {
-        let cropped = ed.last_crop().is_some();
-        let old = Arc::clone(ed.model.geometry());
-        let result = match step.kind {
-            ComposeKind::Resize { sx, sy, .. } => ed.model.scale_by(sx, sy),
-            ComposeKind::Align(align) => {
-                let gap = ed.model.geometry().gap;
-                ed.model.set_layout(gap, align)
-            }
-            ComposeKind::Gap(gap) => {
-                let align = ed.model.geometry().align;
-                ed.model.set_layout(gap, align)
-            }
-            ComposeKind::Rotate { clockwise } => ed.model.rotate(clockwise),
-            ComposeKind::Flip(axis) => ed.model.flip(axis),
-            ComposeKind::AddPart { join, .. } => match step.part.clone() {
-                Some(image) => ed
-                    .model
-                    .add_part(Arc::unwrap_or_clone(image), join)
-                    .map(|_| true),
-                None => Ok(false),
-            },
-            ComposeKind::Undo => Ok(ed.model.undo()),
-            ComposeKind::Redo => Ok(ed.model.redo()),
-            ComposeKind::GapPreview(_) | ComposeKind::Flatten => Ok(false),
-        };
-        match result {
-            Ok(true) => {
-                let mut step = step;
-                // A bake made now is of the document as it is now.
-                step.bake = (matches!(step.kind, ComposeKind::AddPart { .. })
-                    && !old.transform.is_identity())
-                .then(|| ed.model.geometry().parts.first().map(|p| p.id))
-                .flatten()
-                .map(|id| (id, old));
-                applied.push(step);
-            }
-            Ok(false) => {}
-            Err(e) => {
-                let action = match step.kind {
-                    ComposeKind::Resize { .. } => "resize".to_string(),
-                    ComposeKind::Align(_) => "align".to_string(),
-                    ComposeKind::Gap(_) => "change the gap".to_string(),
-                    ComposeKind::Rotate { .. } => "rotate".to_string(),
-                    ComposeKind::Flip(_) => "flip".to_string(),
-                    ComposeKind::AddPart { what, .. } => format!("add the {what}"),
-                    _ => "change the image".to_string(),
-                };
-                ed.set_status(geometry_error_status(&action, cropped, e));
-            }
+    let applied: Vec<LandedStep> = steps
+        .into_iter()
+        .filter_map(|step| match apply_on_model(ed, step.kind, step.part) {
+            (StepOutcome::Applied, bake) => Some(LandedStep {
+                kind: step.kind,
+                bake,
+            }),
+            _ => None,
+        })
+        .collect();
+    land_now(ed, coord, &applied);
+}
+
+/// What a history step applied on the UI thread came to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StepOutcome {
+    /// The document changed: one undo step (or one undo / redo).
+    Applied,
+    /// Nothing to do (a no-op change, nothing to undo or redo).
+    Unchanged,
+    /// The change was refused; the status says why.
+    Refused,
+}
+
+/// Apply one history step (`kind`; `part` for an added part) on the UI
+/// thread. This is the small-document half of the one geometry pipeline:
+/// large documents queue the same step ([`queue_step`]) and land it
+/// composed, or redo it here ([`replay_steps`]). Either way it lands
+/// through [`land`], so the status, bake bookkeeping, recognition, the
+/// loupe and discard clears and the History sync are the same; only
+/// where the pixels are composed differs.
+pub(crate) fn apply_step_now(
+    ed: &mut EditorSession,
+    coord: &crate::coordinator::CaptureCoordinator,
+    kind: ComposeKind,
+    part: Option<Arc<image::RgbaImage>>,
+) -> StepOutcome {
+    let (outcome, bake) = apply_on_model(ed, kind, part);
+    let landed: &[LandedStep] = if outcome == StepOutcome::Applied {
+        &[LandedStep { kind, bake }]
+    } else {
+        &[]
+    };
+    land_now(ed, Some(coord), landed);
+    outcome
+}
+
+/// Make `kind` on the model (composing on this thread). A refused change
+/// sets its status. An added part over a transformed document returns
+/// its bake: the baked part's id and the geometry it was baked from.
+fn apply_on_model(
+    ed: &mut EditorSession,
+    kind: ComposeKind,
+    part: Option<Arc<image::RgbaImage>>,
+) -> (StepOutcome, Option<Bake>) {
+    let cropped = ed.last_crop().is_some();
+    let old = Arc::clone(ed.model.geometry());
+    let result = match kind {
+        ComposeKind::Resize { sx, sy, .. } => ed.model.scale_by(sx, sy),
+        ComposeKind::Align(align) => {
+            let gap = ed.model.geometry().gap;
+            ed.model.set_layout(gap, align)
+        }
+        ComposeKind::Gap(gap) => {
+            let align = ed.model.geometry().align;
+            ed.model.set_layout(gap, align)
+        }
+        ComposeKind::Rotate { clockwise } => ed.model.rotate(clockwise),
+        ComposeKind::Flip(axis) => ed.model.flip(axis),
+        ComposeKind::AddPart { join, .. } => match part {
+            Some(image) => ed
+                .model
+                .add_part(Arc::unwrap_or_clone(image), join)
+                .map(|_| true),
+            None => Ok(false),
+        },
+        ComposeKind::Undo => Ok(ed.model.undo()),
+        ComposeKind::Redo => Ok(ed.model.redo()),
+        ComposeKind::GapPreview(_) | ComposeKind::Flatten => Ok(false),
+    };
+    match result {
+        Ok(true) => {
+            // A bake made now is of the document as it is now.
+            let bake = (matches!(kind, ComposeKind::AddPart { .. })
+                && !old.transform.is_identity())
+            .then(|| ed.model.geometry().parts.first().map(|p| p.id))
+            .flatten()
+            .map(|id| (id, old));
+            (StepOutcome::Applied, bake)
+        }
+        Ok(false) => (StepOutcome::Unchanged, None),
+        Err(e) => {
+            ed.set_status(geometry_refused_status(kind, cropped, e));
+            (StepOutcome::Refused, None)
         }
     }
+}
+
+/// Steps applied on the UI thread: landed with a fresh render, or, when
+/// none applied, a "…ing" status the queue set is dropped (nothing to
+/// report).
+fn land_now(
+    ed: &mut EditorSession,
+    coord: Option<&crate::coordinator::CaptureCoordinator>,
+    applied: &[LandedStep],
+) {
     if applied.is_empty() {
-        // Nothing to report: drop a "…ing" status the queue set.
         if ed.status_is_in_progress() {
-            ed.status = None;
-            ed.status_set_at = None;
+            ed.clear_status();
         }
         return;
     }
-    ed.refresh_image();
-    after_steps_landed(ed, coord, &applied);
+    land(ed, coord, applied, None);
 }
 
-/// What a synchronous step does after the image refresh: the Text
-/// panel's bake sources for an added part, the status, the History sync.
-fn after_steps_landed(
+/// An added part's bake: the baked part's id and the geometry it was
+/// baked from (the Text panel maps the old recognitions through it).
+type Bake = (
+    readshot_core::document::PartId,
+    Arc<readshot_core::document::DocGeometry>,
+);
+
+/// A history step that is now on the model, as landing needs it.
+pub(crate) struct LandedStep {
+    kind: ComposeKind,
+    bake: Option<Bake>,
+}
+
+impl From<&QueuedStep> for LandedStep {
+    fn from(step: &QueuedStep) -> Self {
+        Self {
+            kind: step.kind,
+            bake: step.bake.clone(),
+        }
+    }
+}
+
+/// The one post-step hook of every history step, sync or async: show
+/// the new document (`composed`, the handle of a render made off the UI
+/// thread, or a render here), then the Text panel's bake sources and
+/// recognition of an added part, the loupe and discard clears, the
+/// status, and the History sync (owed without `coord`).
+fn land(
     ed: &mut EditorSession,
     coord: Option<&crate::coordinator::CaptureCoordinator>,
-    landed: &[QueuedStep],
+    landed: &[LandedStep],
+    composed: Option<iced::widget::image::Handle>,
 ) {
+    match composed {
+        Some(handle) => ed.install_image(handle),
+        None => ed.refresh_image(),
+    }
     note_parts_added(ed, landed);
     let Some(last) = landed.last() else {
         return;
@@ -1435,9 +1519,27 @@ fn after_steps_landed(
     }
 }
 
+/// A slider-previewed gap kept on the UI thread (its drag released, or
+/// settled before an output): lands as the step it is.
+pub(crate) fn land_gap_commit(
+    ed: &mut EditorSession,
+    coord: &crate::coordinator::CaptureCoordinator,
+    gap: u32,
+) {
+    land(
+        ed,
+        Some(coord),
+        &[LandedStep {
+            kind: ComposeKind::Gap(gap),
+            bake: None,
+        }],
+        None,
+    );
+}
+
 /// An added part's bookkeeping: a bake's source geometry for the Text
 /// panel, and recognition of the new part ([`after_update`]).
-fn note_parts_added(ed: &mut EditorSession, landed: &[QueuedStep]) {
+fn note_parts_added(ed: &mut EditorSession, landed: &[LandedStep]) {
     let mut added = false;
     for step in landed {
         if !matches!(step.kind, ComposeKind::AddPart { .. }) {
@@ -1577,12 +1679,9 @@ mod tests {
         ed.async_compose_min_pixels = 0;
         ed.refresh_image();
         // A rotate: its turned base was never composed (no cached base).
-        let _ = queue_geometry_step(
-            &mut ed,
-            ComposeKind::Rotate { clockwise: true },
-            "rotate",
-            |g| EditorState::rotated_geometry(g, true),
-        )
+        let _ = queue_geometry_step(&mut ed, ComposeKind::Rotate { clockwise: true }, |g| {
+            EditorState::rotated_geometry(g, true)
+        })
         .expect("queued");
         let request = ed.compose_job.take().expect("queued");
         assert!(request.base.is_none());

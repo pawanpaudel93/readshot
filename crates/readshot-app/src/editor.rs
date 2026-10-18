@@ -1587,6 +1587,27 @@ impl EditorSession {
         self.key_guide = Some((msg, guide));
     }
 
+    /// Take the status line down (nothing to report any more). A tone,
+    /// action or key guide left with the old text no longer matches any
+    /// status, so it is ignored until the next one is set.
+    pub fn clear_status(&mut self) {
+        self.status = None;
+        self.status_set_at = None;
+    }
+
+    /// Show the armed-Discard prompt: the toast that asks for a second
+    /// Discard. It is written here rather than through
+    /// [`Self::set_status`], which disarms Discard; the toast kind comes
+    /// from `discard_pending_at`. The old toast's button (a redaction's
+    /// Undo, say) must not come back under this text once the arm
+    /// expires, so it is dropped.
+    pub fn arm_discard_prompt(&mut self, now: std::time::Instant) {
+        self.discard_pending_at = Some(now);
+        self.toast_action = None;
+        self.status = Some("Unsaved edits. Press Discard again to close without saving.".into());
+        self.status_set_at = Some(now);
+    }
+
     /// `Some(live)` while the status is a key guide: whether what it
     /// explains is still going on.
     pub fn key_guide_live(&self) -> Option<bool> {

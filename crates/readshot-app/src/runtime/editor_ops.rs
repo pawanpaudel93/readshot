@@ -91,9 +91,11 @@ pub(crate) fn apply_editor_color(
     cancel_editor_previews(ed);
     ed.model.set_color(color);
     if ed.model.apply_color_to_selected(color) {
-        ed.refresh_image();
-        ed.set_status(format!("Updated selected annotation color. {UNDO_HINT}"));
-        sync_editor_history(ed, coord);
+        edit_landed(
+            ed,
+            coord,
+            Some(format!("Updated selected annotation color. {UNDO_HINT}")),
+        );
         return true;
     }
     false
@@ -107,9 +109,11 @@ pub(crate) fn apply_editor_line_width(
     cancel_editor_previews(ed);
     ed.model.set_line_width(width);
     if ed.model.apply_line_width_to_selected(width) {
-        ed.refresh_image();
-        ed.set_status(format!("Updated selected annotation size. {UNDO_HINT}"));
-        sync_editor_history(ed, coord);
+        edit_landed(
+            ed,
+            coord,
+            Some(format!("Updated selected annotation size. {UNDO_HINT}")),
+        );
     }
 }
 
@@ -136,9 +140,11 @@ pub(crate) fn apply_editor_style(
     cancel_editor_previews(ed);
     ed.model.set_style(msg);
     if ed.model.apply_style_to_selected(msg) {
-        ed.refresh_image();
-        ed.set_status(format!("Updated selected annotation. {UNDO_HINT}"));
-        sync_editor_history(ed, coord);
+        edit_landed(
+            ed,
+            coord,
+            Some(format!("Updated selected annotation. {UNDO_HINT}")),
+        );
     }
 }
 
@@ -199,12 +205,9 @@ pub(crate) fn apply_crop_draft(
     };
     ed.model
         .commit_annotation(readshot_core::Annotation::Crop { rect });
-    ed.refresh_image();
     let (w, h) = ed.effective_image_size();
-    ed.set_status(format!(
-        "Cropped to {w}\u{a0}×\u{a0}{h}\u{a0}px. {UNDO_HINT}"
-    ));
-    sync_editor_history(ed, coord);
+    let status = format!("Cropped to {w}\u{a0}×\u{a0}{h}\u{a0}px. {UNDO_HINT}");
+    edit_landed(ed, coord, Some(status));
     true
 }
 
@@ -224,9 +227,7 @@ pub(crate) fn commit_pending_editor_text(
     }
     if let Some(edit_index) = pending.edit_index {
         if ed.model.replace_text_at(edit_index, trimmed.to_string()) {
-            ed.refresh_image();
-            ed.set_status(format!("Updated text. {UNDO_HINT}"));
-            sync_editor_history(ed, coord);
+            edit_landed(ed, coord, Some(format!("Updated text. {UNDO_HINT}")));
             return true;
         }
         return false;
@@ -242,10 +243,23 @@ pub(crate) fn commit_pending_editor_text(
         style: style.text_style(),
     };
     ed.model.commit_annotation(annotation);
-    ed.refresh_image();
-    ed.set_status(format!("Added text. {UNDO_HINT}"));
-    sync_editor_history(ed, coord);
+    edit_landed(ed, coord, Some(format!("Added text. {UNDO_HINT}")));
     true
+}
+
+/// An annotation edit just became an undo step on the model: show it,
+/// say so (`None`: no toast, as for rapid arrow-key nudges) and write
+/// History. Geometry steps land through `compose_jobs` instead.
+pub(crate) fn edit_landed(
+    ed: &mut crate::editor::EditorSession,
+    coord: &CaptureCoordinator,
+    status: Option<String>,
+) {
+    ed.refresh_image();
+    if let Some(status) = status {
+        ed.set_status(status);
+    }
+    sync_editor_history(ed, coord);
 }
 
 pub(crate) fn editor_has_unsaved_work(ed: &crate::editor::EditorSession) -> bool {
@@ -341,10 +355,17 @@ pub(crate) fn commit_snapshot_drag(
     super::combine::flush_gap_preview(ed);
     ed.gap_commit_on_land = false;
     if let Some(baseline) = ed.snapshot_drag_baseline.take() {
+        // A kept gap is a geometry step: it lands as one, as it does when
+        // its drag is released while composing off the UI thread.
+        let gap = Some(ed.model.geometry().gap).filter(|g| *g != baseline.doc.geometry.gap);
         if ed.model.commit_preview_snapshot(baseline) {
-            ed.clear_discard_confirmation();
-            ed.refresh_image();
-            sync_editor_history(ed, coord);
+            match gap {
+                Some(gap) => super::compose_jobs::land_gap_commit(ed, coord, gap),
+                None => {
+                    ed.clear_discard_confirmation();
+                    edit_landed(ed, coord, None);
+                }
+            }
         }
     }
 }
@@ -1123,15 +1144,13 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         .status_set_at
                         .is_some_and(|t| t.elapsed() > crate::editor::STATUS_AUTO_DISMISS)
                 {
-                    ed.status = None;
-                    ed.status_set_at = None;
+                    ed.clear_status();
                     ed.toast_action = None;
                 }
                 // A key guide whose draft, zone or selection has ended
                 // goes with it.
                 if ed.key_guide_live() == Some(false) {
-                    ed.status = None;
-                    ed.status_set_at = None;
+                    ed.clear_status();
                     ed.key_guide = None;
                 }
             }
@@ -1397,16 +1416,14 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
         Message::EditorDiscardDisarmed => {
             if let Some(ed) = state.editor.as_mut() {
                 ed.discard_pending_at = None;
-                ed.status = None;
-                ed.status_set_at = None;
+                ed.clear_status();
                 ed.toast_action = None;
             }
             Task::none()
         }
         Message::EditorStatusDismissed => {
             if let Some(ed) = state.editor.as_mut() {
-                ed.status = None;
-                ed.status_set_at = None;
+                ed.clear_status();
                 ed.toast_action = None;
             }
             Task::none()
@@ -1430,15 +1447,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     let now = std::time::Instant::now();
                     let armed = ed.discard_pending_at.is_some();
                     if !armed {
-                        ed.discard_pending_at = Some(now);
-                        // The armed prompt replaces the toast; its old
-                        // button (e.g. a redaction's Undo) must not come
-                        // back under this text once the arm expires.
-                        ed.toast_action = None;
-                        ed.status = Some(
-                            "Unsaved edits. Press Discard again to close without saving.".into(),
-                        );
-                        ed.status_set_at = Some(now);
+                        ed.arm_discard_prompt(now);
                         return Task::none();
                     }
                 }
@@ -1538,36 +1547,20 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     ed.set_status("Cancelled the slider change.");
                 }
                 readshot_ui::ToolbarMessage::Undo => {
-                    ed.crop_draft = None;
-                    cancel_editor_previews(ed);
-                    commit_pending_editor_text(ed, &state.coordinator);
-                    if let Some(task) = super::compose_jobs::queue_history_move(
-                        ed,
-                        crate::editor::ComposeKind::Undo,
-                    ) {
+                    super::image_menu::before_geometry_change(ed, &state.coordinator);
+                    let kind = crate::editor::ComposeKind::Undo;
+                    if let Some(task) = super::compose_jobs::queue_history_move(ed, kind) {
                         return task;
                     }
-                    if ed.model.undo() {
-                        ed.refresh_image();
-                        ed.set_status(format!("Undid edit. {REDO_HINT}"));
-                        sync_editor_history(ed, &state.coordinator);
-                    }
+                    super::compose_jobs::apply_step_now(ed, &state.coordinator, kind, None);
                 }
                 readshot_ui::ToolbarMessage::Redo => {
-                    ed.crop_draft = None;
-                    cancel_editor_previews(ed);
-                    commit_pending_editor_text(ed, &state.coordinator);
-                    if let Some(task) = super::compose_jobs::queue_history_move(
-                        ed,
-                        crate::editor::ComposeKind::Redo,
-                    ) {
+                    super::image_menu::before_geometry_change(ed, &state.coordinator);
+                    let kind = crate::editor::ComposeKind::Redo;
+                    if let Some(task) = super::compose_jobs::queue_history_move(ed, kind) {
                         return task;
                     }
-                    if ed.model.redo() {
-                        ed.refresh_image();
-                        ed.set_status(format!("Redid edit. {UNDO_HINT}"));
-                        sync_editor_history(ed, &state.coordinator);
-                    }
+                    super::compose_jobs::apply_step_now(ed, &state.coordinator, kind, None);
                 }
             }
             // Only tools that show a "new" dot are worth remembering;
@@ -1612,9 +1605,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             }
             if let Some(baseline) = ed.width_drag_baseline.take() {
                 if ed.model.commit_preview_from_baseline(baseline) {
-                    ed.refresh_image();
-                    ed.set_status(format!("Updated selected annotation size. {UNDO_HINT}"));
-                    sync_editor_history(ed, &state.coordinator);
+                    edit_landed(
+                        ed,
+                        &state.coordinator,
+                        Some(format!("Updated selected annotation size. {UNDO_HINT}")),
+                    );
                 } else {
                     ed.refresh_image();
                 }
@@ -1970,13 +1965,12 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                         ed.refresh_image();
                         return Task::none();
                     }
-                    ed.refresh_image();
                     let verb = match drag.kind {
                         crate::editor::MoveDragKind::Move => "Moved",
                         crate::editor::MoveDragKind::Resize(_) => "Resized",
                     };
-                    ed.set_status(format!("{verb} annotation. {UNDO_HINT}"));
-                    sync_editor_history(ed, &state.coordinator);
+                    let status = format!("{verb} annotation. {UNDO_HINT}");
+                    edit_landed(ed, &state.coordinator, Some(status));
                 }
                 readshot_ui::CanvasMessage::RequestText(p) => {
                     cancel_editor_previews(ed);
@@ -2098,9 +2092,11 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                 ed.clear_text_edit();
             }
             if ed.model.delete_selected_annotation() {
-                ed.refresh_image();
-                ed.set_status(format!("Deleted annotation. {UNDO_HINT}"));
-                sync_editor_history(ed, &state.coordinator);
+                edit_landed(
+                    ed,
+                    &state.coordinator,
+                    Some(format!("Deleted annotation. {UNDO_HINT}")),
+                );
             }
             Task::none()
         }
@@ -2133,8 +2129,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // arrow presses are rapid and would spam the chrome.
             cancel_editor_previews(ed);
             if ed.model.nudge_selected(dx, dy) {
-                ed.refresh_image();
-                sync_editor_history(ed, &state.coordinator);
+                edit_landed(ed, &state.coordinator, None);
             }
             Task::none()
         }
@@ -2618,8 +2613,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             };
             cancel_editor_previews(ed);
             if ed.model.resize_selected_by(handle, dx, dy) {
-                ed.refresh_image();
-                sync_editor_history(ed, &state.coordinator);
+                edit_landed(ed, &state.coordinator, None);
             }
             Task::none()
         }

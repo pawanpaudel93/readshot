@@ -43,8 +43,9 @@ fn show_editor(id: Option<window::Id>) -> Task<Message> {
     }
 }
 
-/// Append `image` to the editor's document; returns follow-up tasks
-/// (recognition of the new part). `what` is "capture" or "image".
+/// Append `image` to the editor's document, as one history step through
+/// the shared geometry pipeline (`compose_jobs`). `what` is "capture" or
+/// "image".
 fn append(
     state: &mut App,
     image: image::RgbaImage,
@@ -52,7 +53,6 @@ fn append(
     what: &'static str,
 ) -> Task<Message> {
     let coord = state.coordinator.clone();
-    let panel_open = state.preferences.editor_panel_open;
     let Some(ed) = state.editor.as_mut() else {
         return Task::none();
     };
@@ -62,46 +62,11 @@ fn append(
     if let Some(task) = super::compose_jobs::queue_add_part(ed, &image, join, what) {
         return task;
     }
-    let image = Arc::unwrap_or_clone(image);
-    let old = Arc::clone(ed.model.geometry());
-    // Same test as `EditorState::add_part`: a transformed document is
-    // baked into one fresh part first (D4).
-    let baking = !old.transform.is_identity();
-    let cropped = ed.last_crop().is_some();
-    match ed.model.add_part(image, join) {
-        Ok(_) => {
-            if baking {
-                if let Some(baked) = ed.model.geometry().parts.first() {
-                    ed.text_panel.bake_sources.insert(baked.id, old);
-                }
-                let _ = super::text_panel::resolve_baked_docs(&mut ed.text_panel);
-            }
-            ed.refresh_image();
-            ed.clear_eyedropper_loupe();
-            ed.clear_discard_confirmation();
-            let side = match join {
-                Join::Below => "below",
-                Join::Beside => "beside",
-            };
-            ed.set_status(format!("Added {what} {side}. {UNDO_HINT}"));
-            // Rebuilds the word boxes for the new frame (no document while
-            // the new part is unrecognized) and rewrites History.
-            sync_editor_history(ed, &coord);
-            if part_recognition_wanted(ed, panel_open) {
-                super::text_panel::request_text_recognition(state)
-            } else {
-                Task::none()
-            }
-        }
-        Err(e) => {
-            ed.set_status(geometry_error_status(
-                &format!("add the {what}"),
-                cropped,
-                e,
-            ));
-            Task::none()
-        }
-    }
+    // Recognition of the new part is requested once it lands
+    // (`EditorSession::recognition_owed`), as for a queued one.
+    let kind = ComposeKind::AddPart { join, what };
+    super::compose_jobs::apply_step_now(ed, &coord, kind, Some(image));
+    Task::none()
 }
 
 /// Whether a newly added part is recognized: when text is in use (panel
@@ -405,12 +370,20 @@ pub(crate) fn preview_gap(ed: &mut EditorSession, gap: u32) -> Task<Message> {
         Ok(step) => {
             match ed.model.preview_snapshot(step) {
                 Ok(()) => ed.refresh_image(),
-                Err(e) => ed.set_status(geometry_error_status("change the gap", cropped, e)),
+                Err(e) => ed.set_status(geometry_refused_status(
+                    ComposeKind::GapPreview(gap),
+                    cropped,
+                    e,
+                )),
             }
             Task::none()
         }
         Err(e) => {
-            ed.set_status(geometry_error_status("change the gap", cropped, e));
+            ed.set_status(geometry_refused_status(
+                ComposeKind::GapPreview(gap),
+                cropped,
+                e,
+            ));
             Task::none()
         }
     }
@@ -425,7 +398,11 @@ fn preview_gap_now(ed: &mut EditorSession, gap: u32) {
     let cropped = ed.last_crop().is_some();
     match ed.model.preview_geometry(&base, next) {
         Ok(()) => ed.refresh_image(),
-        Err(e) => ed.set_status(geometry_error_status("change the gap", cropped, e)),
+        Err(e) => ed.set_status(geometry_refused_status(
+            ComposeKind::GapPreview(gap),
+            cropped,
+            e,
+        )),
     }
     ed.layout_gap_previewed_at = Some(Instant::now());
 }
@@ -564,8 +541,7 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
             match result {
                 Ok(Some(img)) => append(state, Arc::unwrap_or_clone(img), Join::Below, "image"),
                 Ok(None) => {
-                    ed.status = None;
-                    ed.status_set_at = None;
+                    ed.clear_status();
                     Task::none()
                 }
                 Err(e) => {
@@ -595,9 +571,7 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
             if ed.snapshot_drag_baseline.is_none() {
                 // Settle every other preview and draft before the baseline:
                 // the parts are about to move under them.
-                cancel_editor_previews(ed);
-                commit_pending_editor_text(ed, &coord);
-                ed.crop_draft = None;
+                super::image_menu::before_geometry_change(ed, &coord);
                 ed.snapshot_drag_baseline = Some(ed.model.snapshot());
                 ed.layout_gap_previewed_at = None;
                 ed.layout_gap_pending = None;
@@ -641,37 +615,26 @@ pub(crate) fn handle_combine_message(state: &mut App, message: Message) -> Task<
             if ed.busy {
                 return Task::none();
             }
-            cancel_editor_previews(ed);
+            super::image_menu::before_geometry_change(ed, &coord);
+            // An Align click is a new action, not a tick of a cancelled
+            // slider drag.
             ed.snapshot_drag_cancelled = false;
-            commit_pending_editor_text(ed, &coord);
-            ed.crop_draft = None;
+            let kind = ComposeKind::Align(align);
             let gap = ed.model.geometry().gap;
             let cropped = ed.last_crop().is_some();
             let next = ed.model.geometry().with_layout(gap, align);
             match ed.model.geometry_step(next) {
                 Ok(Some(step)) if ed.is_large() || super::compose_jobs::is_large(ed, &step) => {
                     ed.set_status("Aligning…");
-                    return super::compose_jobs::queue_push(ed, ComposeKind::Align(align), step);
+                    return super::compose_jobs::queue_push(ed, kind, step);
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    ed.set_status(geometry_error_status("align", cropped, e));
+                    ed.set_status(geometry_refused_status(kind, cropped, e));
                     return Task::none();
                 }
             }
-            match ed.model.set_layout(gap, align) {
-                Ok(true) => {
-                    ed.refresh_image();
-                    ed.clear_eyedropper_loupe();
-                    ed.set_status(format!(
-                        "Aligned to {}. {UNDO_HINT}",
-                        align.label().to_lowercase()
-                    ));
-                    sync_editor_history(ed, &coord);
-                }
-                Ok(false) => {}
-                Err(e) => ed.set_status(geometry_error_status("align", cropped, e)),
-            }
+            super::compose_jobs::apply_step_now(ed, &coord, kind, None);
             Task::none()
         }
         other => unreachable!("non-combine message routed to the combine handler: {other:?}"),

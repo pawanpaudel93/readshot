@@ -228,8 +228,7 @@ pub(crate) fn request_text_recognition(state: &mut App) -> Task<Message> {
     };
     ed.text_panel.recognizing_part = Some(part.id);
     if ed.toast_action == Some(EditorToastAction::RetryRecognition) {
-        ed.status = None;
-        ed.status_set_at = None;
+        ed.clear_status();
         ed.toast_action = None;
     }
     let session = ed.session_id;

@@ -21,27 +21,29 @@ use readshot_core::document::{
 };
 
 use crate::app::{App, Message};
-use crate::editor::{EditorPopover, EditorSession, ResizeDraft, ResizeUnit};
+use crate::editor::{ComposeKind, EditorPopover, EditorSession, ResizeDraft, ResizeUnit};
 use crate::icons::AppIcon;
 
-/// Commit the text draft, drop previews and the open popover: what every
-/// document-changing action does first.
-pub(crate) fn prepare(ed: &mut EditorSession, coord: &crate::coordinator::CaptureCoordinator) {
-    // Cancel previews first (as Undo does): a text commit moves the
-    // history generation, which would make an open slider preview stale
-    // and bake it into history instead of dropping it.
+/// What every history step (Image menu, combine, Undo / Redo) does
+/// before it changes the document: previews are cancelled first (as
+/// Undo does), then the text draft is committed, then the crop draft is
+/// dropped. A text commit moves the history generation, which would make
+/// an open slider preview stale and bake it into history instead of
+/// dropping it, so the order matters.
+pub(crate) fn before_geometry_change(
+    ed: &mut EditorSession,
+    coord: &crate::coordinator::CaptureCoordinator,
+) {
     cancel_editor_previews(ed);
     commit_pending_editor_text(ed, coord);
-    close_editor_popover(ed);
     ed.crop_draft = None;
 }
 
-fn changed(ed: &mut EditorSession, coord: &crate::coordinator::CaptureCoordinator, status: String) {
-    ed.refresh_image();
-    ed.clear_eyedropper_loupe();
-    ed.clear_discard_confirmation();
-    ed.set_status(status);
-    sync_editor_history(ed, coord);
+/// [`before_geometry_change`], and the open popover closed: what every
+/// Image menu action does first.
+pub(crate) fn prepare(ed: &mut EditorSession, coord: &crate::coordinator::CaptureCoordinator) {
+    before_geometry_change(ed, coord);
+    close_editor_popover(ed);
 }
 
 /// `n` with thousands separators ("268,435,456"), so a pixel limit can
@@ -58,21 +60,37 @@ pub(crate) fn group_digits(n: u64) -> String {
     out
 }
 
+/// What a refused `kind` was trying to do, as the verb of "Couldn’t …".
+fn refused_verb(kind: ComposeKind) -> std::borrow::Cow<'static, str> {
+    match kind {
+        ComposeKind::Resize { .. } => "resize".into(),
+        ComposeKind::Align(_) => "align".into(),
+        ComposeKind::Gap(_) | ComposeKind::GapPreview(_) => "change the gap".into(),
+        ComposeKind::Rotate { .. } => "rotate".into(),
+        ComposeKind::Flip(_) => "flip".into(),
+        ComposeKind::AddPart { what, .. } => format!("add the {what}").into(),
+        ComposeKind::Undo | ComposeKind::Redo | ComposeKind::Flatten => "change the image".into(),
+    }
+}
+
 /// What to do after a refused geometry change: every limit is on the
 /// whole (uncropped) document, so a smaller size is the way back.
-fn geometry_recovery(action: &str) -> &'static str {
-    match action {
-        "resize" => "Choose a smaller size.",
-        "change the gap" => "Choose a smaller gap.",
-        a if a.starts_with("add the") => "Resize the image smaller first, then add it again.",
+fn geometry_recovery(kind: ComposeKind) -> &'static str {
+    match kind {
+        ComposeKind::Resize { .. } => "Choose a smaller size.",
+        ComposeKind::Gap(_) | ComposeKind::GapPreview(_) => "Choose a smaller gap.",
+        ComposeKind::AddPart { .. } => "Resize the image smaller first, then add it again.",
         _ => "Resize the image smaller, then try again.",
     }
 }
 
-/// The status for a refused geometry change; `action` is the verb
-/// ("rotate", "flip", "resize"). It names the limit with grouped digits
-/// and the next step.
-pub(crate) fn geometry_error_status(action: &str, cropped: bool, e: GeometryError) -> String {
+/// The status for a refused geometry change of `kind`. It names the
+/// limit with grouped digits and the next step.
+pub(crate) fn geometry_refused_status(
+    kind: ComposeKind,
+    cropped: bool,
+    e: GeometryError,
+) -> String {
     // With a crop active the displayed size is the crop's, but the limit
     // applies to the whole document.
     let what = if cropped {
@@ -80,7 +98,8 @@ pub(crate) fn geometry_error_status(action: &str, cropped: bool, e: GeometryErro
     } else {
         "the image would be"
     };
-    let next = geometry_recovery(action);
+    let action = refused_verb(kind);
+    let next = geometry_recovery(kind);
     match e {
         GeometryError::TooLarge { width, height } => format!(
             "Couldn’t {action} — {what} {}\u{a0}×\u{a0}{}\u{a0}px, and the limit is {}\u{a0}px on a side. {next}",
@@ -97,6 +116,34 @@ pub(crate) fn geometry_error_status(action: &str, cropped: bool, e: GeometryErro
             "Couldn’t {action} — the image has no content. Undo the last change, then try again."
         ),
     }
+}
+
+/// [`geometry_refused_status`] for the action named by its verb, as the
+/// status tests spell it.
+#[cfg(test)]
+pub(crate) fn geometry_error_status(action: &str, cropped: bool, e: GeometryError) -> String {
+    let kind = match action {
+        "resize" => ComposeKind::Resize {
+            width: 1,
+            height: 1,
+            sx: 1.0,
+            sy: 1.0,
+        },
+        "align" => ComposeKind::Align(Align::Start),
+        "change the gap" => ComposeKind::Gap(0),
+        "rotate" => ComposeKind::Rotate { clockwise: true },
+        "flip" => ComposeKind::Flip(FlipAxis::Horizontal),
+        "add the image" => ComposeKind::AddPart {
+            join: Join::Below,
+            what: "image",
+        },
+        "add the capture" => ComposeKind::AddPart {
+            join: Join::Below,
+            what: "capture",
+        },
+        other => panic!("no geometry change is called {other:?}"),
+    };
+    geometry_refused_status(kind, cropped, e)
 }
 
 pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Message> {
@@ -123,42 +170,23 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
     match message {
         Message::EditorRotate { clockwise } => {
             prepare(ed, &coord);
-            let kind = crate::editor::ComposeKind::Rotate { clockwise };
-            if let Some(task) = super::compose_jobs::queue_geometry_step(ed, kind, "rotate", |g| {
+            let kind = ComposeKind::Rotate { clockwise };
+            if let Some(task) = super::compose_jobs::queue_geometry_step(ed, kind, |g| {
                 readshot_ui::editor::EditorState::rotated_geometry(g, clockwise)
             }) {
                 return task;
             }
-            let cropped = ed.last_crop().is_some();
-            match ed.model.rotate(clockwise) {
-                Ok(true) => {
-                    let dir = if clockwise { "right" } else { "left" };
-                    changed(ed, &coord, format!("Rotated {dir}. {UNDO_HINT}"));
-                }
-                Ok(false) => {}
-                Err(e) => ed.set_status(geometry_error_status("rotate", cropped, e)),
-            }
+            super::compose_jobs::apply_step_now(ed, &coord, kind, None);
         }
         Message::EditorFlip(axis) => {
             prepare(ed, &coord);
-            let kind = crate::editor::ComposeKind::Flip(axis);
-            if let Some(task) = super::compose_jobs::queue_geometry_step(ed, kind, "flip", |g| {
+            let kind = ComposeKind::Flip(axis);
+            if let Some(task) = super::compose_jobs::queue_geometry_step(ed, kind, |g| {
                 readshot_ui::editor::EditorState::flipped_geometry(g, axis)
             }) {
                 return task;
             }
-            let cropped = ed.last_crop().is_some();
-            match ed.model.flip(axis) {
-                Ok(true) => {
-                    let what = match axis {
-                        FlipAxis::Horizontal => "horizontally",
-                        FlipAxis::Vertical => "vertically",
-                    };
-                    changed(ed, &coord, format!("Flipped {what}. {UNDO_HINT}"));
-                }
-                Ok(false) => {}
-                Err(e) => ed.set_status(geometry_error_status("flip", cropped, e)),
-            }
+            super::compose_jobs::apply_step_now(ed, &coord, kind, None);
         }
         Message::EditorResizeOpen => {
             // Already open (⌥⌘I while typing in a field): keep the draft.
@@ -219,6 +247,12 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
             }
             let (bw, bh) = d.base;
             let (sx, sy) = (w as f32 / bw.max(1) as f32, h as f32 / bh.max(1) as f32);
+            let kind = ComposeKind::Resize {
+                width: w,
+                height: h,
+                sx,
+                sy,
+            };
             let cropped = ed.last_crop().is_some();
             let step = match ed.model.scaled_geometry(sx, sy) {
                 Some(next) => ed.model.geometry_step(next),
@@ -228,36 +262,18 @@ pub(crate) fn handle_image_message(state: &mut App, message: Message) -> Task<Me
                 Ok(Some(step)) if ed.is_large() || super::compose_jobs::is_large(ed, &step) => {
                     close_editor_popover(ed);
                     ed.set_status("Resizing…");
-                    return super::compose_jobs::queue_push(
-                        ed,
-                        crate::editor::ComposeKind::Resize {
-                            width: w,
-                            height: h,
-                            sx,
-                            sy,
-                        },
-                        step,
-                    );
+                    return super::compose_jobs::queue_push(ed, kind, step);
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    ed.set_status(geometry_error_status("resize", cropped, e));
+                    ed.set_status(geometry_refused_status(kind, cropped, e));
                     return Task::none();
                 }
             }
-            match ed.model.scale_by(sx, sy) {
-                Ok(true) => {
-                    close_editor_popover(ed);
-                    changed(
-                        ed,
-                        &coord,
-                        format!("Resized to {w}\u{a0}×\u{a0}{h}\u{a0}px. {UNDO_HINT}"),
-                    );
-                }
-                Ok(false) => {
-                    close_editor_popover(ed);
-                }
-                Err(e) => ed.set_status(geometry_error_status("resize", cropped, e)),
+            // A refused size keeps the dialog open, under its status.
+            let outcome = super::compose_jobs::apply_step_now(ed, &coord, kind, None);
+            if outcome != super::compose_jobs::StepOutcome::Refused {
+                close_editor_popover(ed);
             }
         }
         other => unreachable!("non-image message routed to the image menu: {other:?}"),
