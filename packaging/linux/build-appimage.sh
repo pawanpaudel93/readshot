@@ -41,7 +41,18 @@ cp packaging/linux/readshot.desktop \
 cp packaging/linux/readshot.png "${APP_DIR}/np.com.pawanpaudel.readshot.png" 2>/dev/null || \
   echo "warning: packaging/linux/readshot.png missing — AppImage will be iconless"
 # Every hicolor size plus the scalable SVG (packaging/render-icons.sh).
+# The parent must exist first: `cp -R src dst/` with a missing `dst`
+# creates `dst` as the copy, dropping the `hicolor/` level.
+mkdir -p "${APP_DIR}/usr/share/icons"
 cp -R packaging/linux/icons/hicolor "${APP_DIR}/usr/share/icons/"
+for icon in \
+  "${APP_DIR}/usr/share/icons/hicolor/256x256/apps/np.com.pawanpaudel.readshot.png" \
+  "${APP_DIR}/usr/share/icons/hicolor/scalable/apps/np.com.pawanpaudel.readshot.svg"; do
+  if [[ ! -f "${icon}" ]]; then
+    echo "error: ${icon} missing — the AppImage would ship without its hicolor icons" >&2
+    exit 1
+  fi
+done
 
 cat > "${APP_DIR}/AppRun" <<'EOF'
 #!/usr/bin/env bash
