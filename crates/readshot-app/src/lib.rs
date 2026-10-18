@@ -12,6 +12,10 @@
 //! pieces to the GUI runtime. `main.rs` is the binary entry that
 //! constructs the container and starts iced.
 
+// Unsafe is only for platform FFI, and each block says why it is
+// sound (AGENTS.md, "Things to avoid").
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 pub mod app;
 pub mod app_events;
 pub mod cli;

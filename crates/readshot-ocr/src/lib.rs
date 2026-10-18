@@ -16,6 +16,10 @@
 //! mapper and MCP error mapper match on its
 //! variants directly.
 
+// Unsafe is only for platform FFI, and each block says why it is
+// sound (AGENTS.md, "Things to avoid").
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use async_trait::async_trait;
 use image::RgbaImage;
 use readshot_core::error::OCRError;
