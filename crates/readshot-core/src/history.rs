@@ -821,11 +821,14 @@ impl FsHistoryStore {
     }
 
     /// Remove an index entry's PNG and sidecar, only where their stored
-    /// paths stay inside the root ([`safe_relative_join`]): a tampered
-    /// index must not be able to delete arbitrary files.
+    /// paths stay inside the root: lexically ([`safe_relative_join`]) and
+    /// on disk ([`Self::resolves_inside_root`], so a symlinked directory
+    /// inside the root is never followed out of it). A tampered index
+    /// must not be able to delete arbitrary files. A symlink at the leaf
+    /// is only unlinked (`remove_file` never follows it).
     fn remove_entry_files(&self, entry: &HistoryIndexEntry) {
         for rel in [&entry.png_path, &entry.json_path] {
-            match safe_relative_join(&self.root, rel) {
+            match safe_relative_join(&self.root, rel).filter(|p| self.resolves_inside_root(p)) {
                 Some(path) => {
                     let _ = fs::remove_file(path);
                 }
@@ -835,6 +838,31 @@ impl FsHistoryStore {
                     entry.id
                 ),
             }
+        }
+    }
+
+    /// Remove a deleted record's thumbnail and staging files, unless their
+    /// directory resolves outside the root (a symlinked `YYYY/MM`).
+    fn remove_derived_files(&self, record: &CaptureRecord) {
+        let thumb = self.root.join(Self::thumbnail_path(record));
+        if !self.resolves_inside_root(&thumb) {
+            return;
+        }
+        let _ = fs::remove_file(thumb);
+        self.remove_staging_for(record);
+    }
+
+    /// Whether `path`'s directory, with every symlink resolved, is still
+    /// inside the (resolved) root. A directory that doesn't exist holds
+    /// nothing to remove: `true` (the removal is then a no-op).
+    fn resolves_inside_root(&self, path: &Path) -> bool {
+        let Some(parent) = path.parent() else {
+            return false;
+        };
+        match (fs::canonicalize(parent), fs::canonicalize(&self.root)) {
+            (Ok(dir), Ok(root)) => dir.starts_with(root),
+            (Err(e), _) if e.kind() == std::io::ErrorKind::NotFound => true,
+            _ => false,
         }
     }
 
@@ -1170,8 +1198,7 @@ impl HistoryStore for FsHistoryStore {
                     scrub_pending: false,
                     geometry_id: None,
                 };
-                let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&record_for_path)));
-                self.remove_staging_for(&record_for_path);
+                self.remove_derived_files(&record_for_path);
             }
         }
 
@@ -1340,8 +1367,7 @@ impl HistoryStore for FsHistoryStore {
             scrub_pending: false,
             geometry_id: None,
         };
-        let _ = fs::remove_file(self.root.join(Self::thumbnail_path(&record_for_path)));
-        self.remove_staging_for(&record_for_path);
+        self.remove_derived_files(&record_for_path);
         index.updated_at = Some(Utc::now());
         self.write_index(&index)?;
         Ok(())
@@ -2333,6 +2359,49 @@ mod tests {
             .unwrap();
         assert!(outside.exists(), "retention escaped the root");
         assert!(s.read_index().unwrap().records.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retention_and_delete_never_follow_a_symlinked_directory_out_of_the_root() {
+        let (dir, s) = store();
+        let elsewhere = dir.path().join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let victim = elsewhere.join("file.png");
+        fs::write(&victim, b"keep me").unwrap();
+        fs::create_dir_all(s.root()).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, s.root().join("link")).unwrap();
+        let old = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
+        let mut index = s.read_index().unwrap();
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        for id in [a, b] {
+            index.records.push(HistoryIndexEntry {
+                id,
+                captured_at: old,
+                png_path: PathBuf::from("link/file.png"),
+                json_path: PathBuf::from("link/file.png"),
+            });
+        }
+        s.write_index(&index).unwrap();
+        s.delete(a).unwrap();
+        assert!(victim.exists(), "delete followed the symlink");
+        s.apply_retention(HistoryRetention::Last30Days, Utc::now())
+            .unwrap();
+        assert!(victim.exists(), "retention followed the symlink");
+        // A symlink at the leaf itself is only unlinked, never followed.
+        let leaf = s.root().join("leaf.png");
+        std::os::unix::fs::symlink(&victim, &leaf).unwrap();
+        let c = Uuid::new_v4();
+        let mut index = s.read_index().unwrap();
+        index.records.push(HistoryIndexEntry {
+            id: c,
+            captured_at: old,
+            png_path: PathBuf::from("leaf.png"),
+            json_path: PathBuf::from("leaf.png"),
+        });
+        s.write_index(&index).unwrap();
+        s.delete(c).unwrap();
+        assert!(victim.exists());
     }
 
     #[test]
