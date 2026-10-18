@@ -1059,7 +1059,6 @@ fn finish_retiring(state: &mut App, mut ed: EditorSession) -> Task<Message> {
     commit_pending_editor_text(&mut ed, &coord);
     super::editor_ops::sync_owed_history(&mut ed, &coord);
     let record = ed.source_record.as_ref().map(|r| r.id);
-    let write = ed.history_write.take();
     drop_editor(ed);
     let still_finishing = |state: &App, id| {
         state
@@ -1070,7 +1069,7 @@ fn finish_retiring(state: &mut App, mut ed: EditorSession) -> Task<Message> {
     match record {
         Some(id) if state.pending_history_open == Some(id) && !still_finishing(state, id) => {
             state.pending_history_open = None;
-            super::history_ops::reopen_after_sync(state, id, write)
+            super::history_ops::reopen_after_sync(state, id)
         }
         _ => Task::none(),
     }

@@ -1406,7 +1406,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
 
         Message::EditorDiscardDisarmed => {
             if let Some(ed) = state.editor.as_mut() {
-                ed.discard_pending_at = None;
+                ed.clear_discard_confirmation();
                 ed.clear_status();
                 ed.toast_action = None;
             }
@@ -1443,17 +1443,34 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     }
                 }
             }
+            // A History reopen that asked first: confirmed now.
+            let after = state.editor.as_mut().and_then(|ed| ed.after_discard.take());
+            if let Some(crate::editor::AfterDiscard::Reopen(record)) = after {
+                // Only what History doesn't keep is dropped: the editor's
+                // History edits are written before the record reopens.
+                return super::history_ops::begin_reopen(state, record);
+            }
             let id = state.editor.as_ref().and_then(|e| e.window_id);
             // A step still queued or composing is abandoned with it.
             if let Some(ed) = state.editor.take() {
                 super::compose_jobs::drop_editor(ed);
             }
             state.release_editor_modifiers();
-            if let Some(id) = id {
+            let close = if let Some(id) = id {
                 state.windows.forget(id);
                 window::close(id)
             } else {
                 Task::none()
+            };
+            match after {
+                Some(crate::editor::AfterDiscard::Open(loaded)) => {
+                    let (image, record, unsaved) = *loaded;
+                    Task::batch([
+                        close,
+                        super::history_ops::open_reopened(state, (image, record), unsaved),
+                    ])
+                }
+                _ => close,
             }
         }
 

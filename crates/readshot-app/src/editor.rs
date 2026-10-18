@@ -260,6 +260,24 @@ pub fn same_frame(
     std::sync::Arc::ptr_eq(a, b) || **a == **b
 }
 
+/// What a confirmed Discard does after closing the editor
+/// ([`EditorSession::after_discard`]).
+#[derive(Clone, Debug)]
+pub enum AfterDiscard {
+    /// Reopen this History record (its History-kept edits are written
+    /// first; only what History doesn't keep is dropped).
+    Reopen(readshot_core::Uuid),
+    /// Open this capture, loaded from History after a wait, with the
+    /// reason any earlier edits weren't saved.
+    Open(
+        Box<(
+            image::RgbaImage,
+            readshot_core::CaptureRecord,
+            Option<String>,
+        )>,
+    ),
+}
+
 /// Which message of an Escape that ended a canvas drag (or a slider
 /// preview) was handled first ([`EditorSession::escape_ended_drag`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1054,6 +1072,10 @@ pub struct EditorSession {
     /// checked. Later keys wait behind it, so a ⌘Z never runs after a key
     /// pressed after it.
     pub key_queue: std::collections::VecDeque<crate::app::Message>,
+    /// What the armed Discard prompt does once confirmed, besides closing
+    /// this editor (a History reopen that asked first). Cleared with the
+    /// prompt.
+    pub after_discard: Option<AfterDiscard>,
     /// The keyboard focus outside the canvas ([`KeyFocus`]); `None` is
     /// the canvas. Drawn as a focus ring on that control.
     pub key_focus: Option<KeyFocus>,
@@ -1396,6 +1418,7 @@ impl EditorSession {
             kept_display: None,
             beautify_hex_draft: None,
             key_queue: std::collections::VecDeque::new(),
+            after_discard: None,
             key_focus: None,
             key_focus_return: None,
             canvas_drag_active: false,
@@ -1486,6 +1509,7 @@ impl EditorSession {
             kept_display: None,
             beautify_hex_draft: None,
             key_queue: std::collections::VecDeque::new(),
+            after_discard: None,
             key_focus: None,
             key_focus_return: None,
             canvas_drag_active: false,
@@ -1540,6 +1564,7 @@ impl EditorSession {
         self.toned_status = None;
         self.removed_beautify_preset = None;
         self.discard_pending_at = None;
+        self.after_discard = None;
         self.status = Some(msg.into());
         self.status_set_at = Some(std::time::Instant::now());
     }
@@ -1745,6 +1770,17 @@ impl EditorSession {
 
     pub fn clear_discard_confirmation(&mut self) {
         self.discard_pending_at = None;
+        self.after_discard = None;
+    }
+
+    /// The armed-Discard prompt ([`Self::arm_discard_prompt`]) with
+    /// `text`; confirming it (Discard) closes this editor and then does
+    /// `after`.
+    pub fn arm_discard_prompt_then(&mut self, text: impl Into<String>, after: AfterDiscard) {
+        let now = std::time::Instant::now();
+        self.arm_discard_prompt(now);
+        self.status = Some(text.into());
+        self.after_discard = Some(after);
     }
 
     /// "In-progress" status strings the auto-dismiss logic must

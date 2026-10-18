@@ -2503,18 +2503,18 @@ fn reopening_a_record_waits_for_its_composing_editor_and_keeps_a_redone_redactio
     assert!(stored.redacted, "the redone redaction reached History");
     assert_eq!((stored.width_px, stored.height_px), (20, 40));
     // The open (from disk) lands: B starts from A's final state.
-    let png = image::open(
-        dir.path()
-            .join("h")
-            .join(readshot_core::FsHistoryStore::png_path(&stored)),
-    )
-    .unwrap()
-    .to_rgba8();
+    let (result, unsaved) = super::super::history_ops::load_after_writes(
+        &app.coordinator,
+        app.history_root.clone(),
+        record.id,
+    );
+    assert_eq!(unsaved, None);
     let _ = update(
         &mut app,
         Message::HistoryReopenedAfterSync {
-            result: Ok((png, stored)),
-            unsaved: None,
+            record_id: record.id,
+            result,
+            unsaved,
         },
     );
     let b = app.editor.as_ref().unwrap();
@@ -2530,9 +2530,11 @@ fn a_reopen_whose_previous_write_failed_says_so() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.history_status = Some("Finishing your previous edits to this capture…".into());
     let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+    app.awaiting_reopen = Some(record.id);
     let _ = update(
         &mut app,
         Message::HistoryReopenedAfterSync {
+            record_id: record.id,
             result: Ok((ramp(40, 20), record)),
             unsaved: Some("the disk is full".into()),
         },
@@ -2541,4 +2543,314 @@ fn a_reopen_whose_previous_write_failed_says_so() {
     let status = app.editor.as_ref().unwrap().status.clone().unwrap();
     assert!(status.contains("weren’t all saved to History"), "{status}");
     assert!(status.contains("the disk is full"), "{status}");
+}
+
+/// An FsHistoryStore whose image commits wait while `held` is set: a
+/// stand-in for a slow encode/write of a very large document.
+struct SlowCommitStore {
+    inner: readshot_core::FsHistoryStore,
+    held: std::sync::Mutex<bool>,
+    released: std::sync::Condvar,
+}
+
+impl SlowCommitStore {
+    fn release(&self) {
+        *self.held.lock().unwrap() = false;
+        self.released.notify_all();
+    }
+}
+
+impl readshot_core::HistoryStore for SlowCommitStore {
+    fn save(
+        &self,
+        r: &readshot_core::CaptureRecord,
+        png: &[u8],
+    ) -> Result<(), readshot_core::HistoryError> {
+        self.inner.save(r, png)
+    }
+    fn list(&self) -> Result<Vec<readshot_core::CaptureRecord>, readshot_core::HistoryError> {
+        self.inner.list()
+    }
+    fn apply_retention(
+        &self,
+        p: readshot_core::HistoryRetention,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), readshot_core::HistoryError> {
+        self.inner.apply_retention(p, now)
+    }
+    fn clear_all(&self) -> Result<(), readshot_core::HistoryError> {
+        self.inner.clear_all()
+    }
+    fn update(&self, r: &readshot_core::CaptureRecord) -> Result<(), readshot_core::HistoryError> {
+        self.inner.update(r)
+    }
+    fn stage_image(
+        &self,
+        r: &readshot_core::CaptureRecord,
+        png: &[u8],
+        thumb: Option<&[u8]>,
+    ) -> Result<readshot_core::StagedImage, readshot_core::HistoryError> {
+        self.inner.stage_image(r, png, thumb)
+    }
+    fn commit_rewrite(
+        &self,
+        r: &readshot_core::CaptureRecord,
+        staged: readshot_core::StagedImage,
+    ) -> Result<bool, readshot_core::HistoryError> {
+        let mut held = self.held.lock().unwrap();
+        while *held {
+            held = self.released.wait(held).unwrap();
+        }
+        drop(held);
+        self.inner.commit_rewrite(r, staged)
+    }
+    fn commit_save(
+        &self,
+        r: &readshot_core::CaptureRecord,
+        staged: readshot_core::StagedImage,
+    ) -> Result<(), readshot_core::HistoryError> {
+        self.inner.commit_save(r, staged)
+    }
+    fn sweep_staging(&self) {
+        self.inner.sweep_staging()
+    }
+    fn stored_redacted(
+        &self,
+        r: &readshot_core::CaptureRecord,
+    ) -> Result<bool, readshot_core::HistoryError> {
+        self.inner.stored_redacted(r)
+    }
+    fn begin_scrub(
+        &self,
+        r: &readshot_core::CaptureRecord,
+    ) -> Result<bool, readshot_core::HistoryError> {
+        self.inner.begin_scrub(r)
+    }
+    fn record_recognized_text(
+        &self,
+        r: &readshot_core::CaptureRecord,
+        doc: &readshot_core::text_lines::TextDocument,
+        fill: bool,
+    ) -> Result<(), readshot_core::HistoryError> {
+        self.inner.record_recognized_text(r, doc, fill)
+    }
+    fn contains(&self, r: &readshot_core::CaptureRecord) -> bool {
+        self.inner.contains(r)
+    }
+    fn delete(&self, id: readshot_core::Uuid) -> Result<(), readshot_core::HistoryError> {
+        self.inner.delete(id)
+    }
+}
+
+/// The fix-2 probe: a frame rewrite (a rotate that landed while the
+/// editor was open) is still being written when the record is reopened.
+/// The reopen waits for it, however long it takes, then opens the
+/// rotated record; later edits in the new editor persist.
+#[test]
+fn a_reopen_waits_for_every_write_of_the_record_with_no_timeout() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path().join("h");
+    let store = Arc::new(SlowCommitStore {
+        inner: readshot_core::FsHistoryStore::new(root.clone()),
+        held: std::sync::Mutex::new(false),
+        released: std::sync::Condvar::new(),
+    });
+    let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+    app.history_root = Some(root.clone());
+    app.history_window_id = Some(iced::window::Id::unique());
+    let img = ramp(40, 20);
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+    store
+        .save(&record, &readshot_core::encode_png(&img).unwrap())
+        .unwrap();
+    app.history_records = store.list().unwrap();
+    let mut a = crate::editor::EditorSession::from_history(img, record.clone());
+    let id_a = iced::window::Id::unique();
+    a.window_id = Some(id_a);
+    app.windows.register(id_a, WindowKind::Editor);
+    app.editor = Some(a);
+    // The rotate lands at once (a small document) and its frame rewrite
+    // is queued; its write is slow.
+    *store.held.lock().unwrap() = true;
+    let _ = update(&mut app, Message::EditorRotate { clockwise: true });
+    assert_eq!(app.editor.as_ref().unwrap().image_size(), (20, 40));
+
+    let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
+    assert!(app.editor.is_none());
+    assert_eq!(app.awaiting_reopen, Some(record.id));
+    assert_eq!(
+        app.history_status.as_deref(),
+        Some("Finishing your previous edits to this capture…")
+    );
+    // What the reopen task runs, off the UI thread: it must not finish
+    // while the write is outstanding.
+    let (tx, rx) = std::sync::mpsc::channel();
+    {
+        let coord = app.coordinator.clone();
+        let root = Some(root.clone());
+        let id = record.id;
+        std::thread::spawn(move || {
+            let _ = tx.send(super::super::history_ops::load_after_writes(
+                &coord, root, id,
+            ));
+        });
+    }
+    // Longer than the writer flush's 5 s timeout: there is none here.
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(5_500))
+            .is_err(),
+        "opened before the rewrite landed"
+    );
+    store.release();
+    let (result, unsaved) = rx
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("the wait ends once the write is done");
+    assert_eq!(unsaved, None);
+    let _ = update(
+        &mut app,
+        Message::HistoryReopenedAfterSync {
+            record_id: record.id,
+            result,
+            unsaved,
+        },
+    );
+    let b = app.editor.as_mut().unwrap();
+    assert_eq!(b.image_size(), (20, 40), "B opens on the rotated record");
+    // B's later edits persist.
+    let coord = app.coordinator.clone();
+    let b = app.editor.as_mut().unwrap();
+    b.model.commit_annotation(Annotation::Rectangle {
+        rect: RectLike::new(2.0, 2.0, 5.0, 5.0),
+        color: Rgba::OPAQUE_BLACK,
+        line_width: 1.0,
+        style: Default::default(),
+    });
+    super::super::editor_ops::sync_editor_history(b, &coord);
+    app.coordinator.flush_history_updates();
+    let stored = store.list().unwrap().into_iter().next().unwrap();
+    assert_eq!((stored.width_px, stored.height_px), (20, 40));
+    assert_eq!(stored.annotation_model.len(), 1, "B's edit is stored");
+}
+
+fn dirty_editor(app: &mut App) -> iced::window::Id {
+    let mut ed = crate::editor::EditorSession::new(solid(30, 30));
+    let id = iced::window::Id::unique();
+    ed.window_id = Some(id);
+    app.windows.register(id, WindowKind::Editor);
+    ed.model.commit_annotation(rect_at(3.0).remove(0));
+    app.editor = Some(ed);
+    id
+}
+
+/// A deferred open never replaces an editor with unsaved work that
+/// became current while it waited: it asks with the unsaved-work prompt,
+/// and opens only when Discard confirms.
+#[test]
+fn a_deferred_open_asks_before_replacing_unsaved_work() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.history_window_id = Some(iced::window::Id::unique());
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+    app.awaiting_reopen = Some(record.id);
+    let c = dirty_editor(&mut app);
+    let c_session = app.editor.as_ref().unwrap().session_id;
+    let _ = update(
+        &mut app,
+        Message::HistoryReopenedAfterSync {
+            record_id: record.id,
+            result: Ok((ramp(40, 20), record.clone())),
+            unsaved: None,
+        },
+    );
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.session_id, c_session, "C stays");
+    assert!(
+        ed.discard_pending_at.is_some(),
+        "the unsaved-work prompt is armed"
+    );
+    assert!(ed.status.as_deref().unwrap().contains("Press Discard"));
+    let _ = update(&mut app, Message::EditorDiscardRequested);
+    let ed = app.editor.as_ref().unwrap();
+    assert_ne!(ed.session_id, c_session);
+    assert_eq!(ed.source_record.as_ref().map(|r| r.id), Some(record.id));
+    assert_eq!(app.windows.kind(c), None, "C's window closed");
+}
+
+/// History closed during the wait: the open is cancelled and the
+/// capture status says so; no window pops up.
+#[test]
+fn a_deferred_open_is_cancelled_when_history_closed() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+    app.awaiting_reopen = Some(record.id);
+    let _ = update(&mut app, Message::HistoryClosed);
+    let _ = update(
+        &mut app,
+        Message::HistoryReopenedAfterSync {
+            record_id: record.id,
+            result: Ok((ramp(40, 20), record)),
+            unsaved: Some("the disk is full".into()),
+        },
+    );
+    assert!(app.editor.is_none());
+    let status = app.last_capture_status.clone().unwrap();
+    assert!(status.contains("History was closed"), "{status}");
+    assert!(status.contains("the disk is full"), "{status}");
+}
+
+/// A reopen that fails to load shows the failure and the reason edits
+/// weren't saved.
+#[test]
+fn a_failed_reopen_shows_why_and_what_wasnt_saved() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.history_window_id = Some(iced::window::Id::unique());
+    let id = readshot_core::Uuid::new_v4();
+    app.awaiting_reopen = Some(id);
+    let _ = update(
+        &mut app,
+        Message::HistoryReopenedAfterSync {
+            record_id: id,
+            result: Err("No such file or directory (os error 2)".into()),
+            unsaved: Some("the disk is full".into()),
+        },
+    );
+    assert!(app.editor.is_none());
+    let status = app.history_status.clone().unwrap();
+    assert!(status.starts_with("Couldn’t open the capture"), "{status}");
+    assert!(
+        status.contains("weren’t all saved to History (the disk is full)"),
+        "{status}"
+    );
+}
+
+/// Reopening the record open right now asks first when the window holds
+/// what History doesn't keep (Beautify here); Discard then reopens it,
+/// writing its History edits first.
+#[test]
+fn reopening_the_open_record_asks_before_dropping_beautify() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+    let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+    app.history_root = Some(dir.path().join("h"));
+    app.history_window_id = Some(iced::window::Id::unique());
+    let img = ramp(40, 20);
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+    store
+        .save(&record, &readshot_core::encode_png(&img).unwrap())
+        .unwrap();
+    let mut a = crate::editor::EditorSession::from_history(img, record.clone());
+    a.window_id = Some(iced::window::Id::unique());
+    a.model.set_beautify(BuiltinPreset::Soft.settings());
+    app.editor = Some(a);
+    let _ = update(&mut app, Message::HistoryOpenInEditor(record.id));
+    let ed = app.editor.as_ref().expect("asked first, nothing closed");
+    assert!(ed.discard_pending_at.is_some());
+    assert!(ed
+        .status
+        .as_deref()
+        .unwrap()
+        .contains("History doesn’t keep"));
+    assert_eq!(app.awaiting_reopen, None);
+    let _ = update(&mut app, Message::EditorDiscardRequested);
+    assert!(app.editor.is_none(), "closed (retired) for the reopen");
+    assert_eq!(app.awaiting_reopen, Some(record.id));
 }

@@ -1942,6 +1942,8 @@ fn update_message(state: &mut App, message: Message) -> Task<Message> {
                 state.history_window_id = None;
                 state.history_records.clear();
                 history_images::trim_history_image_cache();
+                // A deferred open from it is cancelled (said on arrival).
+                state.awaiting_reopen = None;
                 state.history_status = None;
                 state.history_search.clear();
                 state.history_selected_id = None;

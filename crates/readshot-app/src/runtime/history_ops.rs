@@ -128,6 +128,8 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             let id = state.history_window_id.take();
             state.history_records.clear();
             super::history_images::trim_history_image_cache();
+            // A deferred open from it is cancelled (said on arrival).
+            state.awaiting_reopen = None;
             state.history_status = None;
             state.history_selected_id = None;
             state.history_delete_pending = None;
@@ -336,22 +338,24 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
             };
             let open_here = state.editor.as_ref().is_some_and(of_record);
             if open_here || state.retiring_editors.iter().any(of_record) {
-                state.pending_history_open = Some(id);
-                state.history_status =
-                    Some("Finishing your previous edits to this capture…".into());
-                let mut tasks = Vec::new();
-                if let Some(ed) = state.editor.take_if(|ed| of_record(ed)) {
-                    if let Some(window) = ed.window_id {
-                        state.windows.forget(window);
-                        tasks.push(window::close(window));
-                    }
-                    state.release_editor_modifiers();
-                    tasks.push(super::compose_jobs::retire_editor(state, ed));
+                // The open editor holds what History doesn't keep: ask
+                // first (the unsaved-work prompt), then reopen.
+                if let Some(ed) = state
+                    .editor
+                    .as_mut()
+                    .filter(|ed| of_record(ed) && has_state_history_drops(ed))
+                {
+                    ed.arm_discard_prompt_then(
+                        "This window has changes History doesn’t keep (Beautify, or a crop not applied yet). Press Discard to drop them and reopen the capture from History, or keep editing.",
+                        crate::editor::AfterDiscard::Reopen(id),
+                    );
+                    return window_focus_of_editor(state);
                 }
-                return Task::batch(tasks);
+                return begin_reopen(state, id);
             }
             // Another record: any earlier wait is superseded.
             state.pending_history_open = None;
+            state.awaiting_reopen = None;
             let Some((path, record)) = state
                 .history_root
                 .as_ref()
@@ -366,15 +370,56 @@ pub(crate) fn handle_history_message(state: &mut App, message: Message) -> Task<
                 |r| Message::HistoryOpenInEditorReady(r.map_err(|e| e.to_string())),
             )
         }
-        Message::HistoryReopenedAfterSync { result, unsaved } => {
-            state.history_status = None;
-            let opened = update(state, Message::HistoryOpenInEditorReady(result));
-            if let (Some(reason), Some(ed)) = (unsaved, state.editor.as_mut()) {
-                ed.set_warning(format!(
-                    "Your last edits in the previous window weren’t all saved to History ({reason}). This is the capture as History has it."
-                ));
+        Message::HistoryReopenedAfterSync {
+            record_id,
+            result,
+            unsaved,
+        } => {
+            let not_saved = |reason: &Option<String>| {
+                reason.as_ref().map_or(String::new(), |r| {
+                    format!(" Your last edits to it weren’t all saved to History ({r}).")
+                })
+            };
+            if state.awaiting_reopen != Some(record_id) {
+                // Cancelled while it waited: never open a window the user
+                // walked away from.
+                if state.history_window_id.is_none() {
+                    state.last_capture_status = Some(format!(
+                        "Didn’t open the capture: History was closed while your previous edits were being saved.{}",
+                        not_saved(&unsaved)
+                    ));
+                }
+                return Task::none();
             }
-            opened
+            state.awaiting_reopen = None;
+            state.history_status = None;
+            let loaded = match result {
+                Ok(loaded) => loaded,
+                Err(e) => {
+                    tracing::warn!(target: readshot_core::log::cat::HISTORY, "reopen failed: {e}");
+                    state.history_status = Some(format!(
+                        "{}{}",
+                        friendly_string_error_with("open the capture", &e, Some(RETRY_HINT)),
+                        not_saved(&unsaved)
+                    ));
+                    return Task::none();
+                }
+            };
+            // Another editor became current meanwhile and has unsaved
+            // work: never replace it silently; ask first.
+            if let Some(ed) = state
+                .editor
+                .as_mut()
+                .filter(|ed| super::editor_ops::editor_has_unsaved_work(ed))
+            {
+                let (image, record) = loaded;
+                ed.arm_discard_prompt_then(
+                    "The capture from History is ready, but this window has unsaved edits. Press Discard to close them and open it, or keep editing.",
+                    crate::editor::AfterDiscard::Open(Box::new((image, record, unsaved))),
+                );
+                return Task::none();
+            }
+            open_reopened(state, loaded, unsaved)
         }
         Message::HistoryOpenInEditorReady(result) => match result {
             Ok((image, record)) => {
@@ -785,52 +830,115 @@ fn focus_history_search() -> Task<Message> {
     ))
 }
 
-/// Open History record `id` once an earlier editor's writes for it have
-/// landed: wait for its last rewrite (`write`, if any) and the History
-/// writer queue, then read the record and its image from disk, so the
-/// new editor starts from those edits. A failed write is reported with
-/// the open (`HistoryReopenedAfterSync::unsaved`).
-pub(crate) fn reopen_after_sync(
-    state: &mut App,
-    id: readshot_core::Uuid,
-    write: Option<
-        iced::futures::channel::oneshot::Receiver<crate::coordinator::HistoryRewriteResult>,
-    >,
-) -> Task<Message> {
+/// Open History record `id` once every History write queued for it is
+/// done ([`load_after_writes`]), off the UI thread; the answer is
+/// `HistoryReopenedAfterSync`.
+pub(crate) fn reopen_after_sync(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
     let coord = state.coordinator.clone();
     let root = state.history_root.clone();
     Task::perform(
         async move {
-            let unsaved = match write {
-                Some(rx) => match rx.await {
-                    Ok(Err(e)) => Some(e.to_string()),
-                    _ => None,
-                },
-                None => None,
-            };
-            let loaded = tokio::task::spawn_blocking(move || {
-                coord.flush_history_updates();
-                let record = coord
-                    .history_list()
-                    .map_err(|e| e.to_string())?
-                    .into_iter()
-                    .find(|r| r.id == id)
-                    .ok_or_else(|| "the capture is no longer in History".to_string())?;
-                let root = root.ok_or_else(|| "History isn’t available".to_string())?;
-                Ok::<_, String>((history_png_path(&root, &record), record))
-            })
-            .await
-            .map_err(|e| e.to_string())
-            .and_then(|r| r);
-            let result = match loaded {
-                Ok((path, record)) => load_png_async(path)
-                    .await
-                    .map(|img| (img, record))
-                    .map_err(|e| e.to_string()),
-                Err(e) => Err(e),
-            };
-            (result, unsaved)
+            tokio::task::spawn_blocking(move || load_after_writes(&coord, root, id))
+                .await
+                .unwrap_or_else(|e| (Err(e.to_string()), None))
         },
-        |(result, unsaved)| Message::HistoryReopenedAfterSync { result, unsaved },
+        move |(result, unsaved)| Message::HistoryReopenedAfterSync {
+            record_id: id,
+            result,
+            unsaved,
+        },
     )
+}
+
+/// Wait (no timeout) until every History write queued for record `id` is
+/// done — landed, stale, refused or failed — then read the record and its
+/// image from disk, so an editor opened on it starts from those edits.
+/// The second value names writes that failed or were refused. Blocking.
+pub(crate) fn load_after_writes(
+    coord: &crate::coordinator::CaptureCoordinator,
+    root: Option<std::path::PathBuf>,
+    id: readshot_core::Uuid,
+) -> (
+    Result<(image::RgbaImage, readshot_core::CaptureRecord), String>,
+    Option<String>,
+) {
+    let failures = coord.wait_for_record_writes(id);
+    let unsaved = (!failures.is_empty()).then(|| failures.join("; "));
+    let loaded = (|| {
+        let record = coord
+            .history_list()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|r| r.id == id)
+            .ok_or_else(|| "the capture is no longer in History".to_string())?;
+        let root = root.ok_or_else(|| "History isn’t available".to_string())?;
+        let img = image::ImageReader::open(history_png_path(&root, &record))
+            .map_err(|e| e.to_string())?
+            .with_guessed_format()
+            .map_err(|e| e.to_string())?
+            .decode()
+            .map_err(|e| e.to_string())?
+            .to_rgba8();
+        Ok((img, record))
+    })();
+    (loaded, unsaved)
+}
+
+/// State an editor holds that History doesn't store: Beautify settings
+/// not saved anywhere yet, or a crop draft not applied.
+fn has_state_history_drops(ed: &crate::editor::EditorSession) -> bool {
+    ed.crop_draft.is_some()
+        || (!ed.model.beautify().clamped().is_identity() && ed.has_output_changes())
+}
+
+fn window_focus_of_editor(state: &App) -> Task<Message> {
+    state
+        .editor
+        .as_ref()
+        .and_then(|ed| ed.window_id)
+        .map_or_else(Task::none, window::gain_focus)
+}
+
+/// Reopen History record `id` from disk once every editor of it has
+/// landed and written its edits: closes (retires) the open editor of it,
+/// shows "Finishing…" in History, and opens when they are done
+/// ([`reopen_after_sync`]).
+pub(crate) fn begin_reopen(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
+    let of_record =
+        |ed: &crate::editor::EditorSession| ed.source_record.as_ref().is_some_and(|r| r.id == id);
+    state.pending_history_open = Some(id);
+    state.awaiting_reopen = Some(id);
+    state.history_status = Some("Finishing your previous edits to this capture…".into());
+    let mut tasks = Vec::new();
+    if let Some(ed) = state.editor.take_if(|ed| of_record(ed)) {
+        if let Some(window) = ed.window_id {
+            state.windows.forget(window);
+            tasks.push(window::close(window));
+        }
+        state.release_editor_modifiers();
+        tasks.push(super::compose_jobs::retire_editor(state, ed));
+    }
+    // Nothing left to wait for (no editor of it, or it finished at once
+    // and already started the open): start it here.
+    if state.pending_history_open == Some(id) && !state.retiring_editors.iter().any(of_record) {
+        state.pending_history_open = None;
+        tasks.push(reopen_after_sync(state, id));
+    }
+    Task::batch(tasks)
+}
+
+/// Open a capture reopened after a wait, naming any edits that weren't
+/// saved to History.
+pub(crate) fn open_reopened(
+    state: &mut App,
+    loaded: (image::RgbaImage, readshot_core::CaptureRecord),
+    unsaved: Option<String>,
+) -> Task<Message> {
+    let opened = update(state, Message::HistoryOpenInEditorReady(Ok(loaded)));
+    if let (Some(reason), Some(ed)) = (unsaved, state.editor.as_mut()) {
+        ed.set_warning(format!(
+            "Your last edits in the previous window weren’t all saved to History ({reason}). This is the capture as History has it."
+        ));
+    }
+    opened
 }

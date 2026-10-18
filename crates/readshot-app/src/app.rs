@@ -457,6 +457,7 @@ pub enum Message {
     /// fresh from disk once that editor's History writes landed.
     /// `unsaved` names a write of those edits that failed.
     HistoryReopenedAfterSync {
+        record_id: readshot_core::Uuid,
         result: Result<(image::RgbaImage, readshot_core::CaptureRecord), String>,
         unsaved: Option<String>,
     },
@@ -1073,6 +1074,10 @@ pub struct App {
     /// of it was still composing: opened (from disk) once that editor has
     /// landed and its History sync is written. Edits are never dropped.
     pub pending_history_open: Option<readshot_core::Uuid>,
+    /// The History record whose deferred open is under way (waiting for
+    /// editors, writes, or the load). Cleared when History closes or
+    /// another capture is opened: the open is then cancelled on arrival.
+    pub awaiting_reopen: Option<readshot_core::Uuid>,
     /// Live search query in the history browser. Empty = show every
     /// record. Substring-matched (case-insensitive) against
     /// `ocr_text` and the formatted timestamp.
@@ -1444,6 +1449,7 @@ impl App {
             history_window_id: None,
             history_status: None,
             pending_history_open: None,
+            awaiting_reopen: None,
             history_search: String::new(),
             history_selected_id: None,
             history_delete_pending: None,
