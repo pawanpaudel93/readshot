@@ -117,8 +117,10 @@ impl TextLine {
     /// - every word box the span touches is covered **whole** (cutting a
     ///   box by character count can leak a glyph or two);
     /// - a touched word without a usable box (none reported, or one that
-    ///   clamped to zero area) is covered by a proportional slice of the
-    ///   line box, widened to whitespace and padded horizontally;
+    ///   clamped to zero area) has no trusted place inside its line: the
+    ///   line box is axis-aligned, and after a flip or a turn its text runs
+    ///   right to left or along y. So the **whole line box** is covered
+    ///   (`scrub` masks such words by the same rule);
     /// - `None` without a line box, for an empty or out-of-range span, or
     ///   when the result would have no area (callers can warn).
     pub fn span_rect(&self, span: Range<usize>) -> Option<RectLike> {
@@ -136,8 +138,8 @@ impl TextLine {
             .filter(|w| span.start < w.end && w.start < span.end)
             .map(|w| w.rect)
             .reduce(union);
-        // Widen the span to whitespace, then cover every token inside it
-        // that no usable word box accounts for.
+        // Widen the span to whitespace; any token inside it that usable
+        // word boxes don't wholly account for covers the line.
         let mut s = span.start;
         let mut e = span.end.min(n);
         while s > 0 && !chars[s - 1].is_whitespace() {
@@ -146,7 +148,6 @@ impl TextLine {
         while e < n && !chars[e].is_whitespace() {
             e += 1;
         }
-        let pad = line.height * 0.15;
         let mut i = s;
         while i < e {
             if chars[i].is_whitespace() {
@@ -157,19 +158,19 @@ impl TextLine {
             while i < e && !chars[i].is_whitespace() {
                 i += 1;
             }
-            let boxed = self
-                .words
-                .iter()
-                .filter(usable)
-                .any(|w| ts < w.end && w.start < i);
+            // Every char of the token in some usable box (an engine may box
+            // only part of a glued token): else its rest has no place.
+            let boxed = (ts..i).all(|c| {
+                self.words
+                    .iter()
+                    .filter(usable)
+                    .any(|w| w.start <= c && c < w.end)
+            });
             if boxed {
                 continue;
             }
-            let nf = n as f32;
-            let x0 = (line.x + line.width * ts as f32 / nf - pad).max(line.x);
-            let x1 = (line.x + line.width * i as f32 / nf + pad).min(line.x + line.width);
-            let r = RectLike::new(x0, line.y, x1 - x0, line.height);
-            acc = Some(acc.map_or(r, |a| union(a, r)));
+            acc = Some(acc.map_or(line, |a| union(a, line)));
+            break;
         }
         acc.filter(|r| r.width > 0.0 && r.height > 0.0)
     }
@@ -387,14 +388,13 @@ mod tests {
     }
 
     #[test]
-    fn span_rect_without_words_widens_to_whitespace_then_slices() {
+    fn span_rect_without_words_covers_the_whole_line() {
         let d = doc();
-        let line = &d.lines[1]; // "second line", 11 chars, (100, 200, 300, 20)
-                                // "ine" widens to "line" (chars 7..11).
-        let r = line.span_rect(8..11).unwrap();
-        // Padded by 0.15 x line height (3 px), clamped to the line box.
-        let x0 = 100.0 + 300.0 * 7.0 / 11.0 - 3.0;
-        assert!(rect_close(r, RectLike::new(x0, 200.0, 400.0 - x0, 20.0)));
+        let line = &d.lines[1]; // "second line", (100, 200, 300, 20)
+        assert!(rect_close(
+            line.span_rect(8..11).unwrap(),
+            RectLike::new(100.0, 200.0, 300.0, 20.0)
+        ));
         let plain = TextDocument::from_plain("abc");
         assert!(plain.lines[0].span_rect(0..1).is_none());
     }
@@ -500,15 +500,28 @@ mod tests {
     }
 
     #[test]
+    fn a_partly_boxed_glued_token_covers_the_line() {
+        // "key:Zx9Qw7": the engine boxed "key:" only (x 0–40).
+        let line = line_with(
+            "key:Zx9Qw7 next",
+            vec![WordRect {
+                start: 0,
+                end: 4,
+                rect: RectLike::new(0.0, 0.0, 40.0, 10.0),
+            }],
+        );
+        let r = line.span_rect(4..10).unwrap();
+        assert!(rect_close(r, RectLike::new(0.0, 0.0, 100.0, 10.0)), "{r:?}");
+    }
+
+    #[test]
     fn span_rect_counts_chars_not_bytes() {
-        // "Zürich ✓ token": 14 chars, "token" is chars 9..14 of 100 px.
+        // "Zürich ✓ token": 14 chars (17 bytes); "token" is chars 9..14,
+        // in range, so it is placed (on the whole line: no word boxes).
         let line = line_with("Zürich ✓ token", Vec::new());
         let r = line.span_rect(9..14).unwrap();
-        let x0 = 100.0 * 9.0 / 14.0 - 1.5;
-        assert!(
-            rect_close(r, RectLike::new(x0, 0.0, 100.0 - x0, 10.0)),
-            "{r:?}"
-        );
+        assert!(rect_close(r, RectLike::new(0.0, 0.0, 100.0, 10.0)), "{r:?}");
+        assert!(line.span_rect(14..17).is_none());
     }
 
     #[test]
@@ -581,5 +594,45 @@ mod tests {
         let mut line = line_with("abc", Vec::new());
         line.rect = Some(RectLike::new(0.0, 0.0, 0.0, 10.0));
         assert!(line.span_rect(0..3).is_none());
+    }
+
+    fn contains(outer: RectLike, inner: RectLike) -> bool {
+        let e = 0.01;
+        outer.x <= inner.x + e
+            && outer.y <= inner.y + e
+            && outer.x + outer.width + e >= inner.x + inner.width
+            && outer.y + outer.height + e >= inner.y + inner.height
+    }
+
+    #[test]
+    fn a_boxless_span_is_covered_whatever_the_orientation() {
+        use crate::document::{map_text_document, FlipAxis, Transform};
+        // "SECRET1234 and some other words here", line x 10–370 of a
+        // 400 × 50 image, no word boxes; the real glyphs of "SECRET1234"
+        // are x 10–110.
+        let d = TextDocument {
+            lines: vec![TextLine {
+                text: "SECRET1234 and some other words here".into(),
+                rect: Some(RectLike::new(10.0, 10.0, 360.0, 20.0)),
+                words: Vec::new(),
+            }],
+            positioned: true,
+            layout_text: String::new(),
+        };
+        let t = Transform::default();
+        for (name, t) in [
+            ("identity", t),
+            ("flip h", t.flipped(FlipAxis::Horizontal)),
+            ("flip v", t.flipped(FlipAxis::Vertical)),
+            ("turn 90", t.rotated_cw()),
+            ("turn 180", t.rotated_cw().rotated_cw()),
+            ("turn 270", t.rotated_ccw()),
+        ] {
+            let (m, _) = t.affine(400, 50);
+            let moved = map_text_document(&d, &m);
+            let real = m.map_rect(RectLike::new(10.0, 10.0, 100.0, 20.0));
+            let cover = moved.lines[0].span_rect(0..10).expect("placed");
+            assert!(contains(cover, real), "{name}: {cover:?} misses {real:?}");
+        }
     }
 }
