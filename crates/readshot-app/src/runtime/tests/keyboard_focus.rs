@@ -1058,9 +1058,11 @@ fn undo_and_up_down_in_a_hex_field_leave_the_document_alone() {
     let nudge = Box::new(Message::EditorNudgeSelected(0.0, 1.0));
     // The field has the caret: the keys are its own.
     for message in [undo.clone(), nudge.clone()] {
+        let sid = app.editor.as_ref().unwrap().session_id;
         let _ = update(
             &mut app,
             Message::EditorFieldKeyResolved {
+                session: sid,
                 message,
                 field_focused: true,
             },
@@ -1069,17 +1071,21 @@ fn undo_and_up_down_in_a_hex_field_leave_the_document_alone() {
     assert_eq!(app.editor.as_ref().unwrap().model.undo_depth(), depth);
     assert_eq!(first_rect_y(&app), 0.0);
     // It doesn't: they act on the document.
+    let sid = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
         Message::EditorFieldKeyResolved {
+            session: sid,
             message: nudge,
             field_focused: false,
         },
     );
     assert_eq!(first_rect_y(&app), 1.0, "nudged");
+    let sid = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
         Message::EditorFieldKeyResolved {
+            session: sid,
             message: undo,
             field_focused: false,
         },
@@ -1100,9 +1106,11 @@ fn keys_after_a_field_checked_undo_wait_their_turn() {
     let _ = update(&mut app, key_press(id, ch("z"), true));
     let _ = update(&mut app, key_press(id, named(Named::Delete), false));
     assert_eq!(count(&app), 2, "both keys wait for the field check");
+    let sid = app.editor.as_ref().unwrap().session_id;
     let _ = update(
         &mut app,
         Message::EditorFieldKeyResolved {
+            session: sid,
             message: Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
             field_focused: false,
         },
@@ -1110,4 +1118,56 @@ fn keys_after_a_field_checked_undo_wait_their_turn() {
     // Undo removed the second rect; then ⌫ deleted the selected first one.
     assert_eq!(count(&app), 0);
     assert!(app.editor.as_ref().unwrap().key_queue.is_empty());
+}
+
+/// Keys that waited behind a field check pass the same guards as fresh
+/// keys: once a field owns the keys (here the Color popover opened
+/// meanwhile), a waiting ⌘Z or ↓ is the field's, not the document's.
+#[test]
+fn queued_field_keys_pass_the_field_guards_when_they_run() {
+    let mut app = two_rects_first_selected();
+    let id = iced::window::Id::unique();
+    app.editor.as_mut().unwrap().window_id = Some(id);
+    beautify_shown(&mut app);
+    let depth = app.editor.as_ref().unwrap().model.undo_depth();
+    let _ = update(&mut app, key_press(id, ch("z"), true));
+    let _ = update(&mut app, key_press(id, named(Named::ArrowDown), false));
+    app.editor.as_mut().unwrap().popover = Some(crate::editor::EditorPopover::Color);
+    let sid = app.editor.as_ref().unwrap().session_id;
+    let _ = update(
+        &mut app,
+        Message::EditorFieldKeyResolved {
+            session: sid,
+            message: Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
+            field_focused: false,
+        },
+    );
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.model.undo_depth(), depth, "no undo under the popover");
+    assert_eq!(first_rect_y(&app), 0.0, "no nudge under the popover");
+    assert!(app.editor.as_ref().unwrap().key_queue.is_empty());
+}
+
+/// A field-check answer for an editor that is gone never touches the
+/// current editor's queue.
+#[test]
+fn a_field_check_answer_for_another_editor_is_dropped() {
+    let mut app = two_rects_first_selected();
+    let id = iced::window::Id::unique();
+    app.editor.as_mut().unwrap().window_id = Some(id);
+    beautify_shown(&mut app);
+    let depth = app.editor.as_ref().unwrap().model.undo_depth();
+    let _ = update(&mut app, key_press(id, ch("z"), true));
+    let sid = app.editor.as_ref().unwrap().session_id;
+    let _ = update(
+        &mut app,
+        Message::EditorFieldKeyResolved {
+            session: sid.wrapping_add(1000),
+            message: Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
+            field_focused: false,
+        },
+    );
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.model.undo_depth(), depth);
+    assert_eq!(ed.key_queue.len(), 1, "its own check is still out");
 }

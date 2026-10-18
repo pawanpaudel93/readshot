@@ -773,6 +773,8 @@ pub enum Message {
     /// (iced's text_input has no undo and ignores Up/Down, so they reach
     /// the editor) and does nothing; otherwise `message` runs.
     EditorFieldKeyResolved {
+        /// The editor that asked; an answer for another is dropped.
+        session: u64,
         message: Box<Message>,
         field_focused: bool,
     },

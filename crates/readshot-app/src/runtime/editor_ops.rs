@@ -1082,16 +1082,7 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             // field (or commit the draft and then undo it), and Up/Down
             // would move the selected annotation under the caret.
             if let Some(field_key) = message.as_ref().filter(|m| is_field_key(m)) {
-                if state.editor.as_ref().is_some_and(|ed| {
-                    matches!(
-                        ed.popover,
-                        Some(
-                            crate::editor::EditorPopover::Color
-                                | crate::editor::EditorPopover::Resize
-                        )
-                    ) || ed.pending_text.is_some()
-                        || ed.beautify_hex_draft.is_some()
-                }) {
+                if field_owns_keys(state) {
                     return Task::none();
                 }
                 // A click can leave the caret in the Beautify hex field
@@ -1100,8 +1091,8 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
                     let field_key = field_key.clone();
                     if let Some(ed) = state.editor.as_mut() {
                         ed.key_queue.push_back(field_key.clone());
+                        return ask_hex_field(ed.session_id, field_key);
                     }
-                    return ask_hex_field(field_key);
                 }
             }
             let task = match message {
@@ -2546,32 +2537,44 @@ pub(crate) fn handle_editor_message(state: &mut App, message: Message) -> Task<M
             cycle_selection_by_tab(state, step)
         }
         Message::EditorFieldKeyResolved {
+            session,
             message,
             field_focused,
         } => {
-            if let Some(ed) = state.editor.as_mut() {
-                ed.key_queue.pop_front();
-            }
+            // The answer belongs to the editor that asked; another one's
+            // queue is never touched (the asker's went with it).
+            let Some(ed) = state.editor.as_mut().filter(|ed| ed.session_id == session) else {
+                return Task::none();
+            };
+            ed.key_queue.pop_front();
             let mut tasks = Vec::new();
-            if !field_focused && is_field_key(&message) {
+            // A field may have taken the keys meanwhile (a key before
+            // this one opened a draft or popover): then it is the field's.
+            if !field_focused && is_field_key(&message) && !field_owns_keys(state) {
                 tasks.push(update(state, *message));
             }
-            // Then the keys that waited, in order, until one needs its own
-            // field check.
+            // Then the keys that waited, in order, through the same guards
+            // as a fresh key, until one needs its own field check.
             loop {
                 let Some(next) = state
                     .editor
                     .as_mut()
+                    .filter(|ed| ed.session_id == session)
                     .and_then(|ed| ed.key_queue.pop_front())
                 else {
                     break;
                 };
-                if is_field_key(&next) && beautify_hex_on_screen(state) {
-                    if let Some(ed) = state.editor.as_mut() {
-                        ed.key_queue.push_front(next.clone());
+                if is_field_key(&next) {
+                    if field_owns_keys(state) {
+                        continue;
                     }
-                    tasks.push(ask_hex_field(next));
-                    break;
+                    if beautify_hex_on_screen(state) {
+                        if let Some(ed) = state.editor.as_mut() {
+                            ed.key_queue.push_front(next.clone());
+                        }
+                        tasks.push(ask_hex_field(session, next));
+                        break;
+                    }
                 }
                 tasks.push(update(state, next));
             }
@@ -2681,12 +2684,26 @@ fn open_pin_window(
 /// (Undo, Redo, an Up/Down nudge) acts; the answer is
 /// `EditorFieldKeyResolved`. Collected, so a query no widget answers
 /// still resolves, as "not focused": a key is never dropped.
-fn ask_hex_field(key: Message) -> Task<Message> {
+fn ask_hex_field(session: u64, key: Message) -> Task<Message> {
     let message = Box::new(key);
     iced::widget::operation::is_focused(iced::widget::Id::new(super::key_focus::BEAUTIFY_HEX_ID))
         .collect()
         .map(move |answers| Message::EditorFieldKeyResolved {
+            session,
             message: message.clone(),
             field_focused: tab_field_focused(&answers),
         })
+}
+
+/// Whether a text field owns Undo, Redo and Up/Down now: the Color or
+/// Resize popover (its field may have focus), an inline text draft, or a
+/// typed Beautify hex draft.
+fn field_owns_keys(state: &App) -> bool {
+    state.editor.as_ref().is_some_and(|ed| {
+        matches!(
+            ed.popover,
+            Some(crate::editor::EditorPopover::Color | crate::editor::EditorPopover::Resize)
+        ) || ed.pending_text.is_some()
+            || ed.beautify_hex_draft.is_some()
+    })
 }

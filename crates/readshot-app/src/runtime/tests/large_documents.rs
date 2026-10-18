@@ -2415,9 +2415,11 @@ fn undo_through_the_hex_field_check_queues_behind_a_large_step() {
         key_press(id, iced::keyboard::Key::Character("z".into()), true),
     );
     for field_focused in [true, false] {
+        let sid = app.editor.as_ref().unwrap().session_id;
         let _ = update(
             &mut app,
             Message::EditorFieldKeyResolved {
+                session: sid,
                 message: Box::new(Message::EditorToolbar(readshot_ui::ToolbarMessage::Undo)),
                 field_focused,
             },

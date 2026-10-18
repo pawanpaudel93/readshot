@@ -804,6 +804,7 @@ fn may_wait(message: &Message) -> (bool, bool) {
         Message::EditorFieldKeyResolved {
             message,
             field_focused,
+            ..
         } => {
             if *field_focused {
                 (true, true)
