@@ -5,8 +5,9 @@
 //! usual one overlay per display with this program instead of the region
 //! selector. The window under the pointer is lit (the veil is cut away
 //! over it and it gets an outline and its name); a click captures it.
-//! From the keyboard, Tab / ⇧Tab and the arrow keys walk the windows on
-//! this display, ↵ or Space captures the lit one, esc cancels (WCAG
+//! From the keyboard, Tab / ⇧Tab and the arrow keys walk every pickable
+//! window on this display, covered ones included (the pointer can only
+//! reach the frontmost; the hint says so), ↵ or Space captures the lit one, esc cancels (WCAG
 //! 2.1.1). The captured image goes through the normal editor and History
 //! flow ([`CaptureMsg::WindowPicked`]).
 
@@ -117,7 +118,7 @@ fn step_pickable(from: Option<usize>, windows: &[PickableWindow], forward: bool)
 pub(crate) fn window_pick_hint_segments() -> Vec<HintSeg> {
     use HintSeg::*;
     vec![
-        Text("Click a window to capture it"),
+        Text("Click a window, or press Tab to reach every window"),
         Key("Tab"),
         Muted("Next window"),
         Key(crate::runtime::RETURN_KEY),
@@ -423,6 +424,19 @@ mod tests {
         assert_eq!(window_label("Safari", " "), "Safari");
         assert_eq!(window_label("", "Docs"), "Docs");
         assert_eq!(window_label("", ""), "Window");
+    }
+
+    #[test]
+    fn the_hint_says_the_keys_reach_every_window() {
+        // Tab walks every pickable window, covered ones included, so the
+        // instruction itself (never dropped when the pill is narrow)
+        // names it, not only clicking.
+        let segs = window_pick_hint_segments();
+        let HintSeg::Text(instruction) = segs[0] else {
+            panic!("the hint starts with its instruction");
+        };
+        assert!(instruction.contains("Tab"), "{instruction}");
+        assert!(instruction.contains("every window"), "{instruction}");
     }
 
     #[test]

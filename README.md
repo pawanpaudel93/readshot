@@ -138,7 +138,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   text / save / pin / start a scrolling capture, the arrow keys nudge it and
   `⌥` + arrow keys resize it from its bottom-right corner (`⇧` ×10).
 - **Window picker (Capture Window…):** `Tab` / `⇧Tab` or the arrow keys
-  move between the windows on that display, `↵` or `Space` captures the
+  move between all the windows on that display, including ones hidden
+  behind others that a click can't reach, `↵` or `Space` captures the
   lit one, `esc` cancels.
 - **Editor tools:** `V` select, `R` rectangle, `O` ellipse, `L` line,
   `A` arrow, `P` pen, `H` highlighter, `T` text, `B` blur, `X` pixelate,
