@@ -331,3 +331,45 @@ pub fn install() -> Result<(), UpdaterError> {
 pub fn check_for_updates() -> Result<(), UpdaterError> {
     platform::check_for_updates()
 }
+
+#[cfg(test)]
+mod bundle_tests {
+    /// The bundle's Info.plist, as `build-dmg.sh` copies it.
+    const INFO_PLIST: &str = include_str!("../../../packaging/macos/Info.plist");
+
+    /// The value element right after `<key>{key}</key>`.
+    fn value_of(key: &str) -> Option<&'static str> {
+        let after = INFO_PLIST.split_once(&format!("<key>{key}</key>"))?.1;
+        let start = after.find('<')?;
+        let rest = &after[start..];
+        let end = if rest.starts_with("<string>") {
+            rest.find("</string>")? + "</string>".len()
+        } else {
+            rest.find('>')? + 1
+        };
+        Some(&rest[..end])
+    }
+
+    /// UP-02: Sparkle never checks on its own: automatic checks are
+    /// off, no schedule or silent install is set, the feed is HTTPS and
+    /// updates are EdDSA-signed. TR-01: no Dock icon.
+    #[test]
+    fn the_bundle_never_checks_for_updates_on_its_own() {
+        assert_eq!(value_of("SUEnableAutomaticChecks"), Some("<false/>"));
+        for key in [
+            "SUAutomaticallyUpdate",
+            "SUScheduledCheckInterval",
+            "SUAllowsAutomaticUpdates",
+            "SUEnableSystemProfiling",
+        ] {
+            assert_eq!(value_of(key), None, "{key} must not be set");
+        }
+        let feed = value_of("SUFeedURL").unwrap();
+        assert!(
+            feed.starts_with("<string>https://") && feed.ends_with("/appcast.xml</string>"),
+            "{feed}"
+        );
+        assert!(value_of("SUPublicEDKey").is_some_and(|k| k.len() > "<string></string>".len()));
+        assert_eq!(value_of("LSUIElement"), Some("<true/>"));
+    }
+}

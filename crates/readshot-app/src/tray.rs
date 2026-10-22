@@ -776,6 +776,41 @@ mod tests {
         assert_eq!(tray_icon_event_action(&event, true), None);
     }
 
+    /// TR-03: only a left click's release captures; a right or middle
+    /// click (the menu, `with_menu_on_left_click(false)`), a press, and
+    /// a double click never do, so one click never both captures and
+    /// opens the menu.
+    #[test]
+    fn only_a_left_click_release_captures() {
+        let click = |button, button_state| TrayIconEvent::Click {
+            id: tray_icon::TrayIconId::new("readshot"),
+            position: tray_icon::dpi::PhysicalPosition::default(),
+            rect: tray_icon::Rect::default(),
+            button,
+            button_state,
+        };
+        use tray_icon::{MouseButton as B, MouseButtonState as S};
+        for (button, state) in [
+            (B::Right, S::Up),
+            (B::Right, S::Down),
+            (B::Middle, S::Up),
+            (B::Left, S::Down),
+        ] {
+            assert_eq!(
+                tray_icon_event_action(&click(button, state), false),
+                None,
+                "{button:?} {state:?}"
+            );
+        }
+        let double = TrayIconEvent::DoubleClick {
+            id: tray_icon::TrayIconId::new("readshot"),
+            position: tray_icon::dpi::PhysicalPosition::default(),
+            rect: tray_icon::Rect::default(),
+            button: B::Left,
+        };
+        assert_eq!(tray_icon_event_action(&double, false), None);
+    }
+
     #[test]
     fn icon_builder_produces_a_valid_buffer() {
         // Doesn't actually create a system tray; just exercises the
