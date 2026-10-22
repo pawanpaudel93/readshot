@@ -301,6 +301,9 @@ fn reset_all_puts_the_update_channel_back_to_stable() {
         readshot_core::UpdateChannel::Beta
     );
     let _ = update(&mut app, Message::Settings(SettingsMsg::ResetAllRequested));
+    // An earlier Open at login failure no longer describes the reset
+    // toggle (Off), so Reset All clears it.
+    app.settings_launch_at_login_error = Some("Couldn’t turn on Open at login.".into());
     let _ = update(&mut app, Message::Settings(SettingsMsg::ResetAllConfirmed));
     assert_eq!(
         app.preferences.update_channel,
@@ -309,6 +312,10 @@ fn reset_all_puts_the_update_channel_back_to_stable() {
     assert_eq!(
         saved(&dir).update_channel,
         readshot_core::UpdateChannel::Stable
+    );
+    assert_eq!(
+        app.settings_launch_at_login_error, None,
+        "stale error cleared"
     );
 }
 

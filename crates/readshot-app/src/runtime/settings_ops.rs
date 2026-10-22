@@ -600,6 +600,9 @@ fn on_reset_all_confirmed(state: &mut App) -> Task<Message> {
     state.settings_hotkey_status = None;
     state.settings_status = Some("Settings reset to defaults.".to_string());
     let old_launch_at_login = state.preferences.launch_at_login;
+    // Reset puts Open at login back to Off: an earlier failure no longer
+    // describes it (a failing turn-off below sets it again).
+    state.settings_launch_at_login_error = None;
     reset_settings_to_defaults(state);
     refresh_hotkey_registration(state);
     set_hotkey_registration_notice(state);
