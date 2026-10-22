@@ -127,7 +127,7 @@ pub enum Command {
     /// Capture a region (or full display) and write the image to a file.
     Capture {
         /// Target display id (as printed by `list-displays`). Defaults
-        /// to the first reported display.
+        /// to the primary display.
         #[arg(long)]
         display: Option<String>,
 
@@ -217,7 +217,7 @@ pub enum Command {
     /// Capture a region, run OCR, and write recognized text to stdout.
     CaptureText {
         /// Target display id (as printed by `list-displays`). Defaults
-        /// to the first reported display.
+        /// to the primary display.
         #[arg(long)]
         display: Option<String>,
 
@@ -263,9 +263,22 @@ pub enum Command {
         #[arg(long, value_delimiter = ',')]
         languages: Vec<String>,
 
-        /// Apply post-recognition language correction when supported.
-        #[arg(long, default_value_t = true)]
+        /// Apply post-recognition language correction when supported
+        /// (on by default; `--language-correction=false` or
+        /// `--no-language-correction` turns it off).
+        #[arg(
+            long,
+            num_args = 0..=1,
+            default_value_t = true,
+            default_missing_value = "true",
+            action = clap::ArgAction::Set,
+            overrides_with = "no_language_correction"
+        )]
         language_correction: bool,
+
+        /// Turn post-recognition language correction off.
+        #[arg(long, overrides_with = "language_correction")]
+        no_language_correction: bool,
     },
 
     /// Recognize text in an existing image.
@@ -286,19 +299,32 @@ pub enum Command {
         #[arg(long, conflicts_with = "clipboard")]
         json: bool,
 
-        /// BCP-47 language hints, comma-separated. Empty → engine default.
+        /// BCP-47 language hints, comma-separated. Empty → automatic detection.
         #[arg(long, value_delimiter = ',')]
         languages: Vec<String>,
 
-        /// Apply post-recognition language correction when supported.
-        #[arg(long, default_value_t = true)]
+        /// Apply post-recognition language correction when supported
+        /// (on by default; `--language-correction=false` or
+        /// `--no-language-correction` turns it off).
+        #[arg(
+            long,
+            num_args = 0..=1,
+            default_value_t = true,
+            default_missing_value = "true",
+            action = clap::ArgAction::Set,
+            overrides_with = "no_language_correction"
+        )]
         language_correction: bool,
+
+        /// Turn post-recognition language correction off.
+        #[arg(long, overrides_with = "language_correction")]
+        no_language_correction: bool,
     },
 
     /// Capture a region and recognize text in one shot.
     CaptureAndOcr {
         /// Target display id (as printed by `list-displays`). Defaults
-        /// to the first reported display.
+        /// to the primary display.
         #[arg(long)]
         display: Option<String>,
 
@@ -344,9 +370,22 @@ pub enum Command {
         #[arg(long, value_delimiter = ',')]
         languages: Vec<String>,
 
-        /// Apply post-recognition language correction when supported.
-        #[arg(long, default_value_t = true)]
+        /// Apply post-recognition language correction when supported
+        /// (on by default; `--language-correction=false` or
+        /// `--no-language-correction` turns it off).
+        #[arg(
+            long,
+            num_args = 0..=1,
+            default_value_t = true,
+            default_missing_value = "true",
+            action = clap::ArgAction::Set,
+            overrides_with = "no_language_correction"
+        )]
         language_correction: bool,
+
+        /// Turn post-recognition language correction off.
+        #[arg(long, overrides_with = "language_correction")]
+        no_language_correction: bool,
     },
 
     /// Print a ready-to-paste MCP stdio configuration snippet.
@@ -635,7 +674,9 @@ impl Cli {
                 output,
                 languages,
                 language_correction,
+                no_language_correction,
             } => {
+                let language_correction = language_correction && !no_language_correction;
                 maybe_delay(delay).await;
                 let (img, source) = if interactive {
                     (
@@ -692,7 +733,9 @@ impl Cli {
                 json,
                 languages,
                 language_correction,
+                no_language_correction,
             } => {
+                let language_correction = language_correction && !no_language_correction;
                 let img = read_image(&input)?;
                 let image_size = (img.width(), img.height());
                 let result = ocr
@@ -735,7 +778,9 @@ impl Cli {
                 also_image,
                 languages,
                 language_correction,
+                no_language_correction,
             } => {
+                let language_correction = language_correction && !no_language_correction;
                 ensure_combined_json_has_clean_stdout(json, also_image.as_deref())?;
                 maybe_delay(delay).await;
                 let (img, source) = if interactive {
@@ -1884,6 +1929,66 @@ mod tests {
         assert!(clipboard);
         assert_eq!(delay, 1.5);
         assert_eq!(format, ImageFormatChoice::Webp);
+    }
+
+    fn language_correction_of(args: &[&str]) -> bool {
+        let cli = Cli::try_parse_from(args.iter().copied()).unwrap();
+        match cli.command {
+            Some(
+                Command::Ocr {
+                    language_correction,
+                    no_language_correction,
+                    ..
+                }
+                | Command::CaptureText {
+                    language_correction,
+                    no_language_correction,
+                    ..
+                }
+                | Command::CaptureAndOcr {
+                    language_correction,
+                    no_language_correction,
+                    ..
+                },
+            ) => language_correction && !no_language_correction,
+            other => panic!("unexpected command {other:?}"),
+        }
+    }
+
+    #[test]
+    fn language_correction_is_on_by_default_and_can_be_turned_off() {
+        for cmd in [
+            &["readshot", "ocr", "-i", "a.png"][..],
+            &["readshot", "capture-text"][..],
+            &["readshot", "capture-and-ocr"][..],
+        ] {
+            assert!(language_correction_of(cmd), "{cmd:?}");
+            let with = |extra: &[&'static str]| {
+                let mut v = cmd.to_vec();
+                v.extend_from_slice(extra);
+                language_correction_of(&v)
+            };
+            assert!(with(&["--language-correction"]), "bare flag stays on");
+            assert!(with(&["--language-correction=true"]));
+            assert!(!with(&["--language-correction=false"]), "{cmd:?}");
+            assert!(!with(&["--language-correction", "false"]), "{cmd:?}");
+            assert!(!with(&["--no-language-correction"]), "{cmd:?}");
+        }
+    }
+
+    #[test]
+    fn display_help_says_the_primary_display_is_the_default() {
+        use clap::CommandFactory;
+        let mut cmd = Cli::command();
+        for sub in ["capture", "capture-text", "capture-and-ocr"] {
+            let help = cmd
+                .find_subcommand_mut(sub)
+                .unwrap()
+                .render_long_help()
+                .to_string();
+            assert!(help.contains("primary display"), "{sub}: {help}");
+            assert!(!help.contains("first reported"), "{sub}");
+        }
     }
 
     #[test]

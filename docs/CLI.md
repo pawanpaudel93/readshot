@@ -158,8 +158,14 @@ support explicit language hints. Leave it empty for automatic detection:
 readshot ocr --input capture.png --languages en-US,fr-FR
 ```
 
-`--language-correction` is enabled by default where the platform OCR
-engine supports it.
+Language correction is on by default where the platform OCR engine
+supports it (Apple Vision). Turn it off with `--no-language-correction`
+(or `--language-correction=false`), for example for codes, IDs or other
+text that isn't words:
+
+```bash
+readshot ocr --input capture.png --no-language-correction
+```
 
 ## Combined Image and OCR
 
