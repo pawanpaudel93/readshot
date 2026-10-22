@@ -60,7 +60,10 @@ pub struct CaptureRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowId(pub String);
 
-/// Information about a capturable window.
+/// Information about a capturable window. [`Capturer::list_windows`]
+/// returns them front to back where the backend knows the stacking
+/// order (macOS does), so the first window containing a point is the
+/// one the user sees there ([`topmost_window_at`]).
 #[derive(Clone, Debug)]
 pub struct WindowInfo {
     pub id: WindowId,
@@ -69,6 +72,27 @@ pub struct WindowInfo {
     pub display_id: DisplayId,
     /// Window bounds in logical pixels.
     pub bounds: Rect,
+}
+
+/// The frontmost window under a point in global logical coordinates:
+/// the first in a front-to-back list whose bounds contain it.
+pub fn topmost_window_at(windows: &[WindowInfo], x: f32, y: f32) -> Option<&WindowInfo> {
+    windows.iter().find(|w| {
+        let b = w.bounds;
+        x >= b.x() && x < b.right() && y >= b.y() && y < b.bottom()
+    })
+}
+
+/// Order `windows` front to back by `stacking`, the window ids from
+/// front to back as the window server reports them. Windows missing
+/// from it keep their relative order, behind the ones it names.
+pub fn order_front_to_back(windows: &mut [WindowInfo], stacking: &[String]) {
+    windows.sort_by_key(|w| {
+        stacking
+            .iter()
+            .position(|id| *id == w.id.0)
+            .unwrap_or(usize::MAX)
+    });
 }
 
 /// One window capture request from coordinator to capturer.
@@ -328,6 +352,50 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn window(id: &str, x: f32, y: f32, w: f32, h: f32) -> WindowInfo {
+        WindowInfo {
+            id: WindowId(id.into()),
+            title: String::new(),
+            app_name: String::new(),
+            display_id: "d".into(),
+            bounds: Rect::from_xywh(x, y, w, h).unwrap(),
+        }
+    }
+
+    #[test]
+    fn the_frontmost_window_under_a_point_wins() {
+        let windows = [
+            window("front", 50.0, 50.0, 100.0, 100.0),
+            window("back", 0.0, 0.0, 400.0, 300.0),
+        ];
+        assert_eq!(
+            topmost_window_at(&windows, 60.0, 60.0).unwrap().id.0,
+            "front"
+        );
+        assert_eq!(
+            topmost_window_at(&windows, 10.0, 10.0).unwrap().id.0,
+            "back"
+        );
+        // Right and bottom edges are outside.
+        assert_eq!(
+            topmost_window_at(&windows, 400.0, 10.0).map(|w| &w.id.0),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_sort_by_the_stacking_order_and_unknown_ones_go_last() {
+        let mut windows = [
+            window("a", 0.0, 0.0, 1.0, 1.0),
+            window("x", 0.0, 0.0, 1.0, 1.0),
+            window("b", 0.0, 0.0, 1.0, 1.0),
+            window("y", 0.0, 0.0, 1.0, 1.0),
+        ];
+        order_front_to_back(&mut windows, &["b".into(), "a".into()]);
+        let ids: Vec<&str> = windows.iter().map(|w| w.id.0.as_str()).collect();
+        assert_eq!(ids, ["b", "a", "x", "y"]);
+    }
 
     struct RegionOnlyCapturer;
 

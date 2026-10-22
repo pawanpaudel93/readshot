@@ -125,12 +125,24 @@ impl Capturer for ScreenCaptureKitCapturer {
                 .into_iter()
                 .map(|d| display_info_from_sc(d, primary))
                 .collect::<Vec<_>>();
-            Ok(content
+            // Readshot's own windows (editor, History, pins) are not
+            // offered: the GUI picker draws over them anyway.
+            let own_pid = std::process::id() as i32;
+            let mut windows: Vec<WindowInfo> = content
                 .windows()
                 .into_iter()
                 .filter(|window| window.is_on_screen() && window.window_layer() == 0)
+                .filter(|window| {
+                    window
+                        .owning_application()
+                        .is_none_or(|app| app.process_id() != own_pid)
+                })
                 .filter_map(|window| window_info_from_sc(&window, &displays))
-                .collect())
+                .collect();
+            // ScreenCaptureKit doesn't promise an order; the window
+            // server's on-screen list is front to back.
+            crate::order_front_to_back(&mut windows, &on_screen_stacking());
+            Ok(windows)
         })
         .await
     }
@@ -366,6 +378,22 @@ fn window_info_from_sc(window: &SCWindow, displays: &[DisplayInfo]) -> Option<Wi
         display_id,
         bounds,
     })
+}
+
+/// Ids of the on-screen windows, front to back
+/// (`CGWindowListCreate` documents that order). Empty if the window
+/// server returns nothing.
+fn on_screen_stacking() -> Vec<String> {
+    use core_graphics::window::{
+        create_window_list, kCGNullWindowID, kCGWindowListExcludeDesktopElements,
+        kCGWindowListOptionOnScreenOnly,
+    };
+    create_window_list(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID,
+    )
+    .map(|ids| ids.iter().map(|id| id.to_string()).collect())
+    .unwrap_or_default()
 }
 
 fn best_display_for_rect(rect: Rect, displays: &[DisplayInfo]) -> Option<&DisplayInfo> {

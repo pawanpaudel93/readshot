@@ -820,6 +820,20 @@ impl CaptureCoordinator {
         self.capturer.capture_region(req).await
     }
 
+    /// Capturable windows, front to back where the backend knows the
+    /// stacking order. `Unsupported` where the backend has no window
+    /// capture (Windows and Linux today).
+    pub async fn list_windows(&self) -> Result<Vec<readshot_capture::WindowInfo>, CaptureError> {
+        self.capturer.list_windows().await
+    }
+
+    pub async fn capture_window(
+        &self,
+        req: readshot_capture::WindowCaptureRequest,
+    ) -> Result<RgbaImage, CaptureError> {
+        self.capturer.capture_window(req).await
+    }
+
     /// OCR for the editor's Text panel: lines in reading order, with
     /// base-pixel boxes when the engine reports positions (Apple Vision
     /// today), plus the layout-aware text Copy Text has always produced.
