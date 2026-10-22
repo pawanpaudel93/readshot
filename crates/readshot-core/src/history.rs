@@ -945,12 +945,20 @@ impl FsHistoryStore {
         pending.scrub_pending = true;
         pending.ocr_text = self.scrub_text(record);
         pending.pending_image = Some(pending_on(on_disk, record));
-        // The thumbnail first (derived; rebuilt from the redacted image),
-        // so none of the unredacted image outlives the mark, whatever
-        // happens after it.
-        remove_if_exists(&self.root.join(Self::thumbnail_path(record)))?;
-        // Mark: from this write on, nothing of it is served.
+        // Mark first (atomic, fsynced): from this write on, nothing of it
+        // is served, whatever happens to the cleanup below. Nothing that
+        // can fail runs before it.
         self.write_sidecar(&pending)?;
+        // The thumbnail (derived; rebuilt from the redacted image). It is
+        // never served while the record is pending, and recovery removes
+        // it again: a failure here is only logged, never blocks the mark.
+        if let Err(e) = remove_if_exists(&self.root.join(Self::thumbnail_path(record))) {
+            tracing::warn!(
+                target: crate::log::cat::HISTORY,
+                "couldn't remove the thumbnail of history record {} being redacted: {e}",
+                record.id
+            );
+        }
         // Then set the unredacted image aside (it replaces an older one
         // set aside, which is older still).
         let png = self.root.join(Self::png_path(record));
@@ -2824,6 +2832,29 @@ mod tests {
         fs::write(s.root().join(FsHistoryStore::png_path(&r)), b"not a png").unwrap();
         assert_eq!(s.finish_pending_scrubs(), 0);
         assert!(!thumb.exists(), "the unredacted thumbnail stayed");
+    }
+
+    /// Fix-6 review: a thumbnail that can't be removed (locked, a sharing
+    /// violation, a directory in its place) never stops the mark. The
+    /// record is withheld first, whatever happens to the cleanup after.
+    #[test]
+    fn a_scrub_marks_first_even_when_its_thumbnail_cant_be_removed() {
+        let (_dir, s) = store();
+        let mut r = record_at(Utc::now());
+        r.ocr_text = Some("secret".into());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        let thumb = s.root().join(FsHistoryStore::thumbnail_path(&r));
+        fs::remove_file(&thumb).unwrap();
+        fs::create_dir(&thumb).unwrap();
+        fs::write(thumb.join("pinned"), b"x").unwrap();
+        let _ = s.begin_scrub(&scrubbed_of(&r));
+        let stored = s.read_sidecar(&r).unwrap().unwrap();
+        assert!(stored.scrub_pending && stored.redacted, "never marked");
+        assert_eq!(s.list().unwrap()[0].ocr_text, None, "its text is served");
+        assert!(
+            !s.root().join(FsHistoryStore::png_path(&r)).exists(),
+            "its unredacted image is served"
+        );
     }
 
     /// Redactions that can't be placed on the set-aside image (another
