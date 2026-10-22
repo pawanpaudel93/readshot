@@ -1181,3 +1181,22 @@ fn a_failed_cli_commands_copy_is_shown_as_an_error() {
     );
     assert!(!crate::runtime::view::cli_tools_status_is_error(&app));
 }
+
+/// A Settings uninstall that couldn't remove the program itself (Windows,
+/// Linux, a plain binary) says what is left instead of quitting silently.
+#[test]
+fn a_settings_uninstall_that_leaves_the_program_says_so_and_keeps_running() {
+    let (mut app, _) = settings_app();
+    app.settings_uninstall_pending = true;
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::UninstallFinished {
+            program_removed: false,
+            purge: false,
+        }),
+    );
+    let said = app.settings_status.clone().unwrap_or_default();
+    assert!(said.contains("still installed"), "{said}");
+    assert!(said.contains("Quit Readshot"), "{said}");
+    assert!(!app.settings_uninstall_pending);
+}

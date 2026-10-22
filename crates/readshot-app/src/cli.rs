@@ -923,7 +923,11 @@ fn run_uninstall(
             "{failures} step(s) could not be completed; see the list above"
         )));
     }
-    writeln!(stdout, "\n{}", crate::uninstall::completion_message(&plan))?;
+    writeln!(
+        stdout,
+        "\n{}",
+        crate::uninstall::completion_message(&plan, purge)
+    )?;
     Ok(())
 }
 

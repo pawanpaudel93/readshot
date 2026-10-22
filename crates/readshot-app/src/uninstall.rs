@@ -267,18 +267,56 @@ pub fn plan_uninstall(paths: &UninstallPaths, purge: bool) -> Vec<UninstallActio
     actions
 }
 
-/// The CLI's closing line after a clean run. Only a run that moved the
-/// app bundle to the Trash removed the program itself; otherwise (a
-/// Windows or Linux build, or a plain binary) say what remains.
-pub fn completion_message(actions: &[UninstallAction]) -> &'static str {
-    if actions
+/// The closing line after a clean run (CLI, and Settings off macOS).
+/// Only a run that moved the app bundle to the Trash removed the program
+/// itself; otherwise (a Windows or Linux build, or a plain binary) say
+/// what was removed and what remains. Data is named only under `purge`.
+pub fn completion_message(actions: &[UninstallAction], purge: bool) -> String {
+    if removes_program(actions) {
+        return "Readshot has been removed.".to_string();
+    }
+    let data = if purge {
+        ", and so were its history and preferences"
+    } else {
+        ""
+    };
+    format!(
+        "Readshot's login entry and command-line links (where there were any) were removed{data}. \
+         The readshot program itself is still installed: remove it the way you installed it."
+    )
+}
+
+/// Whether the plan moves the app bundle to the Trash.
+pub fn removes_program(actions: &[UninstallAction]) -> bool {
+    actions
         .iter()
         .any(|a| matches!(a, UninstallAction::TrashAppBundle { .. }))
-    {
-        "Readshot has been removed."
+}
+
+/// The Settings › App › Uninstall wording: the row's summary and the
+/// armed prompt's detail, for macOS or not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UninstallCopy {
+    pub summary: &'static str,
+    pub detail: &'static str,
+}
+
+/// See [`UninstallCopy`]. Off macOS there is no permission to reset and
+/// no bundle to trash: the program stays installed and the user removes
+/// it the way they installed it.
+pub fn settings_uninstall_copy(macos: bool) -> UninstallCopy {
+    if macos {
+        UninstallCopy {
+            summary: "Remove Readshot and its command-line tools from this Mac.",
+            detail: "Removes the launch-at-login item, the readshot command-line tools, and the \
+                     Screen Recording permission, then moves Readshot to the Trash.",
+        }
     } else {
-        "Readshot's login entry, command-line links and the data you chose were removed. \
-         The readshot program itself is still installed: remove it the way you installed it."
+        UninstallCopy {
+            summary: "Remove Readshot's Open at Login entry and its command-line links.",
+            detail: "Removes the Open at Login entry and the readshot command-line links. The \
+                     readshot program itself stays installed; remove it the way you installed it.",
+        }
     }
 }
 
@@ -809,11 +847,35 @@ mod tests {
         let bundle = root.path().join("Readshot.app");
         std::fs::create_dir_all(&bundle).unwrap();
         let with_app = plan_uninstall(&paths_in(root.path(), Some(bundle)), false);
-        assert_eq!(completion_message(&with_app), "Readshot has been removed.");
+        assert_eq!(
+            completion_message(&with_app, false),
+            "Readshot has been removed."
+        );
         let without = plan_uninstall(&paths_in(root.path(), None), false);
-        let msg = completion_message(&without);
+        let msg = completion_message(&without, false);
         assert!(msg.contains("still installed"), "{msg}");
         assert!(!msg.contains("Mac"), "{msg}");
+        // No --purge: no data is said to be removed.
+        assert!(!msg.contains("data") && !msg.contains("history"), "{msg}");
+        let purged = plan_uninstall(&paths_in(root.path(), None), true);
+        let msg = completion_message(&purged, true);
+        assert!(msg.contains("history and preferences"), "{msg}");
+    }
+
+    #[test]
+    fn the_settings_wording_matches_what_the_platform_removes() {
+        let mac = settings_uninstall_copy(true);
+        assert!(mac.summary.contains("this Mac"));
+        assert!(mac.detail.contains("Trash"));
+        assert!(mac.detail.contains("Screen Recording"));
+        let other = settings_uninstall_copy(false);
+        for text in [other.summary, other.detail] {
+            assert!(!text.contains("Mac"), "{text}");
+            assert!(!text.contains("Trash"), "{text}");
+            assert!(!text.contains("Screen Recording"), "{text}");
+        }
+        assert!(other.detail.contains("Open at Login"), "{}", other.detail);
+        assert!(other.detail.contains("stays installed"), "{}", other.detail);
     }
 
     #[test]

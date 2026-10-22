@@ -111,10 +111,26 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
             Task::none()
         }
         SettingsMsg::UninstallConfirmed => on_uninstall_confirmed(state),
-        SettingsMsg::UninstallFinished => {
+        SettingsMsg::UninstallFinished {
+            program_removed: true,
+            ..
+        } => {
             // Use the existing quit path so the relaunch-on-system-quit
             // safety net is disarmed before the process exits.
             quit_readshot(&state.coordinator)
+        }
+        SettingsMsg::UninstallFinished {
+            program_removed: false,
+            purge,
+        } => {
+            // Windows, Linux or a plain binary: the program stays. Say
+            // what was removed and what is left, instead of vanishing.
+            state.settings_uninstall_pending = false;
+            state.settings_status = Some(format!(
+                "{} Quit Readshot from its menu, then remove the program.",
+                crate::uninstall::completion_message(&[], purge)
+            ));
+            Task::none()
         }
         SettingsMsg::WindowReady(id) => {
             // Belt-and-braces: window-open already records the id, but
@@ -578,6 +594,7 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
     let purge = state.settings_uninstall_purge;
     let paths = crate::uninstall::default_uninstall_paths();
     let plan = crate::uninstall::plan_uninstall(&paths, purge);
+    let program_removed = crate::uninstall::removes_program(&plan);
     Task::perform(
         async move {
             let _ = tokio::task::spawn_blocking(move || {
@@ -599,7 +616,12 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
             })
             .await;
         },
-        |()| Message::Settings(SettingsMsg::UninstallFinished),
+        move |()| {
+            Message::Settings(SettingsMsg::UninstallFinished {
+                program_removed,
+                purge,
+            })
+        },
     )
 }
 

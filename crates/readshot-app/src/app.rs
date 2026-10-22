@@ -787,7 +787,12 @@ pub enum SettingsMsg {
     /// thread, then quits.
     UninstallConfirmed,
     /// The uninstall executor finished; drives the app quit.
-    UninstallFinished,
+    UninstallFinished {
+        /// The app bundle was moved to the Trash (macOS).
+        program_removed: bool,
+        /// History and preferences were deleted too.
+        purge: bool,
+    },
     /// First `view` call after the settings window is opened. Records
     /// the `window::Id` so close + focus paths work.
     WindowReady(iced::window::Id),
@@ -1916,7 +1921,7 @@ impl App {
             | SettingsMsg::ResetAllConfirmed
             | SettingsMsg::ResetAllCancelled
             | SettingsMsg::UninstallConfirmed
-            | SettingsMsg::UninstallFinished
+            | SettingsMsg::UninstallFinished { .. }
             | SettingsMsg::WindowReady(_)
             | SettingsMsg::PaneSelected(_)
             | SettingsMsg::KeyPressed { .. }

@@ -5007,14 +5007,13 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
         .align_y(Alignment::Center);
         settings_block(
             "Uninstall Readshot",
-            "Removes the launch-at-login item, the readshot command-line tools, and the \
-             Screen Recording permission, then moves Readshot to the Trash.",
+            crate::uninstall::settings_uninstall_copy(cfg!(target_os = "macos")).detail,
             column![purge_checkbox, actions].spacing(10).into(),
         )
     } else {
         group_row(
             "Uninstall Readshot",
-            "Remove Readshot and its command-line tools from this Mac.",
+            crate::uninstall::settings_uninstall_copy(cfg!(target_os = "macos")).summary,
             focus_ring(
                 tooltip_with_key(
                     button(text("Uninstall…").size(TYPE_BODY))
