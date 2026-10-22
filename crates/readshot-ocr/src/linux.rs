@@ -228,3 +228,90 @@ fn drop_alpha_channel(rgba: &image::RgbaImage) -> Vec<u8> {
     }
     rgb
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A models folder of its own under the temp dir, removed on drop.
+    struct ModelsDir(PathBuf);
+
+    impl ModelsDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("readshot-ocrs-test-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            Self(dir)
+        }
+    }
+
+    impl Drop for ModelsDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn request() -> OCRRequest {
+        OCRRequest {
+            image: image::RgbaImage::new(8, 8),
+            languages: vec!["fr".to_string()],
+            use_language_correction: true,
+        }
+    }
+
+    /// TX-03: without the two `.rten` files a recognition is a typed
+    /// Backend error naming the folder and both files, at once (not the
+    /// 30 s timeout).
+    #[tokio::test]
+    async fn missing_models_are_a_typed_error_naming_the_folder_and_files() {
+        let dir = ModelsDir::new("none");
+        let engine = OcrsEngine::new(dir.0.clone());
+        let started = std::time::Instant::now();
+        let Err(OCRError::Backend(msg)) = engine.recognise(request()).await else {
+            panic!("expected a backend error without models");
+        };
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(msg.starts_with("ocrs models missing under "), "{msg}");
+        assert!(msg.contains(&dir.0.display().to_string()), "{msg}");
+        assert!(msg.contains(DETECTION_FILENAME) && msg.contains(RECOGNITION_FILENAME));
+    }
+
+    /// TX-03: one model alone is still "missing", never a half-built
+    /// engine; and a failed load is retried on the next call.
+    #[tokio::test]
+    async fn one_model_alone_is_still_missing() {
+        let dir = ModelsDir::new("one");
+        std::fs::create_dir_all(&dir.0).unwrap();
+        std::fs::write(dir.0.join(DETECTION_FILENAME), b"not a model").unwrap();
+        let engine = OcrsEngine::new(dir.0.clone());
+        for _ in 0..2 {
+            let Err(OCRError::Backend(msg)) = engine.recognise(request()).await else {
+                panic!("expected a backend error with one model");
+            };
+            assert!(msg.starts_with("ocrs models missing under "), "{msg}");
+        }
+        assert!(engine.inner.get().is_none());
+    }
+
+    /// TX-03: English only, no positions (so the Text tab has no hover,
+    /// redact or snap), models under `<data_local_dir>/readshot/models`.
+    #[test]
+    fn english_only_without_positions_in_the_per_user_models_folder() {
+        let engine = OcrsEngine::with_default_models_dir();
+        assert_eq!(engine.supported_languages(), ["en"]);
+        assert!(!engine.reports_positions());
+        assert!(
+            engine.models_dir().ends_with("readshot/models"),
+            "{}",
+            engine.models_dir().display()
+        );
+    }
+
+    #[test]
+    fn alpha_is_dropped_pixel_by_pixel() {
+        let img = image::RgbaImage::from_fn(2, 1, |x, _| {
+            image::Rgba([x as u8, 10 + x as u8, 20 + x as u8, 99])
+        });
+        assert_eq!(drop_alpha_channel(&img), [0, 10, 20, 1, 11, 21]);
+    }
+}

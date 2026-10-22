@@ -167,3 +167,67 @@ fn engine_unavailable_error(err: windows::core::Error, requested: Option<&str>) 
         OCRError::Backend(format!("{base}: {err}"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TX-02: a missing language pack (a null engine, which windows-core
+    /// maps to an `S_OK` error with no message) names the language and
+    /// the fix.
+    #[test]
+    fn a_missing_language_pack_names_the_language_and_the_fix() {
+        let OCRError::Backend(named) =
+            engine_unavailable_error(windows::core::Error::empty(), Some("fr-FR"))
+        else {
+            panic!("not a backend error");
+        };
+        assert_eq!(
+            named,
+            "no OCR language pack installed for `fr-FR`; install a Windows OCR language pack \
+             (Settings \u{2192} Time & Language \u{2192} Language & region)"
+        );
+        let OCRError::Backend(none) = engine_unavailable_error(windows::core::Error::empty(), None)
+        else {
+            panic!("not a backend error");
+        };
+        assert!(
+            none.starts_with("no OCR language installed; install a Windows OCR language pack"),
+            "{none}"
+        );
+    }
+
+    /// TX-02: a real HRESULT failure keeps the OS message instead of
+    /// being reworded as a missing pack.
+    #[test]
+    fn a_real_failure_keeps_its_message() {
+        let e_fail =
+            windows::core::Error::from_hresult(windows::core::HRESULT(0x8000_4005_u32 as i32));
+        let OCRError::Backend(msg) = engine_unavailable_error(e_fail.clone(), Some("de-DE")) else {
+            panic!("not a backend error");
+        };
+        assert_eq!(
+            msg,
+            format!("no OCR language pack installed for `de-DE`: {e_fail}")
+        );
+        assert!(
+            !msg.contains("install a Windows OCR language pack"),
+            "{msg}"
+        );
+    }
+
+    /// TX-02: only the first preferred language is used. The first here
+    /// has no pack anywhere; were the rest tried, `en-US` (installed on
+    /// a stock Windows) would succeed instead of the error naming the
+    /// first.
+    #[test]
+    fn only_the_first_preferred_language_is_tried() {
+        let Err(OCRError::Backend(msg)) =
+            create_engine(&["zz-Fake".to_string(), "en-US".to_string()])
+        else {
+            panic!("expected a backend error for a language with no pack");
+        };
+        assert!(msg.contains("`zz-Fake`"), "{msg}");
+        assert!(!msg.contains("en-US"), "{msg}");
+    }
+}
