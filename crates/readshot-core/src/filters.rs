@@ -169,8 +169,9 @@ fn checked_average(acc: [u32; 4], count: u32) -> Option<[u8; 4]> {
 /// inside the rect with the cell's average colour. Cells that overlap the
 /// rect's edge are partially-clipped — the average is taken over only the
 /// pixels actually inside the rect — and a clipped cell only 1 px wide
-/// joins its neighbour (`cell_spans`), so no cell is a single pixel
-/// left as captured unless the whole rect is one pixel.
+/// joins its neighbour (`cell_spans`), so every cell averages at least
+/// two pixels. A visible part under 2 px across is filled solid from its
+/// neighbourhood (`fill_thin_region`). No captured pixel survives.
 pub fn pixelate_rect(
     pixmap: &mut Pixmap,
     rect_x: i32,
@@ -188,6 +189,13 @@ pub fn pixelate_rect(
     let x1 = rect_x.saturating_add(rect_w).min(pw);
     let y1 = rect_y.saturating_add(rect_h).min(ph);
     if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    // A visible part under 2 px across can't be a grid of cells of at
+    // least 2 pixels (a drawn rect can be larger, mostly off the image):
+    // fill it solid with its neighbourhood's average instead.
+    if x1 - x0 < 2 || y1 - y0 < 2 {
+        fill_thin_region(pixmap, x0, y0, x1, y1);
         return;
     }
     // Clamp the block to the rect span (a block larger than the rect is one
@@ -229,6 +237,38 @@ pub fn pixelate_rect(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Fill `[x0, x1) × [y0, y1)` with the average of that region grown by
+/// one pixel on every side (clamped to the image), so a single visible
+/// pixel is averaged with its neighbours. With no neighbour at all (a
+/// 1×1 image) it is filled opaque mid-grey: nothing captured survives.
+fn fill_thin_region(pixmap: &mut Pixmap, x0: i32, y0: i32, x1: i32, y1: i32) {
+    let pw = pixmap.width() as i32;
+    let ph = pixmap.height() as i32;
+    let data = pixmap.data_mut();
+    let mut acc = [0u32; 4];
+    let mut count = 0u32;
+    for y in (y0 - 1).max(0)..(y1 + 1).min(ph) {
+        for x in (x0 - 1).max(0)..(x1 + 1).min(pw) {
+            let i = (y * pw + x) as usize * 4;
+            for (a, v) in acc.iter_mut().zip(&data[i..i + 4]) {
+                *a += *v as u32;
+            }
+            count += 1;
+        }
+    }
+    let fill = if count >= 2 {
+        checked_average(acc, count).unwrap_or([128, 128, 128, 255])
+    } else {
+        [128, 128, 128, 255]
+    };
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * pw + x) as usize * 4;
+            data[i..i + 4].copy_from_slice(&fill);
         }
     }
 }
@@ -336,6 +376,48 @@ mod tests {
                             &[255, 255, 255, 255],
                             "block {block}, rect {w}x{h}: ({wx},{wy}) kept as captured"
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// W5d review m3: what matters is the *visible* (clipped) part. A
+    /// pixelate drawn mostly off the image, with only a 1-px row,
+    /// column or pixel on it, can't be a grid of 2-px cells, so it is
+    /// filled solid from its neighbourhood. Exhaustive over small
+    /// images, offsets (off every edge), sizes and blocks (fractional
+    /// too): one bright pixel at each visible position never survives.
+    #[test]
+    fn no_captured_pixel_survives_any_small_clipped_pixelate() {
+        let blocks = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 7.0];
+        for pw in 1..=5i32 {
+            for ph in 1..=5i32 {
+                for rx in -3..=pw {
+                    for ry in -3..=ph {
+                        for w in 1..=7 {
+                            for h in 1..=7 {
+                                let (x0, y0) = (rx.max(0), ry.max(0));
+                                let (x1, y1) = ((rx + w).min(pw), (ry + h).min(ph));
+                                for &block in &blocks {
+                                    for (bx, by) in
+                                        (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                                    {
+                                        let mut p =
+                                            solid_pixmap(pw as u32, ph as u32, [0, 0, 0, 255]);
+                                        let i = ((by * pw + bx) * 4) as usize;
+                                        p.data_mut()[i..i + 4]
+                                            .copy_from_slice(&[255, 255, 255, 255]);
+                                        pixelate_rect(&mut p, rx, ry, w, h, block);
+                                        assert_ne!(
+                                            &p.data()[i..i + 4],
+                                            &[255, 255, 255, 255],
+                                            "{pw}x{ph} image, rect ({rx},{ry},{w},{h}) block {block}: ({bx},{by}) kept"
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
