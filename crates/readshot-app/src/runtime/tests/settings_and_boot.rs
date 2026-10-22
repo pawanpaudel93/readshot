@@ -1271,6 +1271,22 @@ fn saved_launch_at_login(dir: &tempfile::TempDir) -> Option<bool> {
         .then(|| Preferences::load(&path).unwrap().launch_at_login)
 }
 
+/// W5a S3: a History write that lands after a purge removed the
+/// History folder (stuck past the bounded flush) fails rather than make
+/// the folder again. Without a purge nothing is sealed.
+#[test]
+fn a_late_history_write_never_brings_a_purged_folder_back() {
+    let (dir, mut app) = confirming_app(true, true);
+    let root = dir.path().join("data").join("history");
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 8, 8, "d");
+    let png = readshot_core::png::encode(&solid(8, 8)).unwrap();
+    FsHistoryStore::new(&root).save(&record, &png).unwrap();
+    let _ = update(&mut app, Message::Settings(SettingsMsg::UninstallConfirmed));
+    std::fs::remove_dir_all(dir.path().join("data")).unwrap();
+    assert!(app.coordinator.update_history(&record).is_err());
+    assert!(!root.exists(), "the purged History folder came back");
+}
+
 /// R2: confirming goes inert before any step runs, so nothing done
 /// meanwhile (a shortcut, a capture landing) writes into History.
 #[test]

@@ -599,6 +599,12 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
     // Inert from now, before any step runs: nothing done meanwhile can
     // write what the steps remove.
     let close_others = go_inert(state);
+    if purge {
+        // A History write stuck past the flush below (bounded at 5 s)
+        // can still finish after the purge; it must fail, not make the
+        // purged folder again.
+        state.coordinator.stop_creating_history_root();
+    }
     state.settings_uninstall_result =
         Some(Status::new(StatusTone::Progress, "Uninstalling Readshot…"));
     let coord = state.coordinator.clone();
@@ -606,7 +612,10 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
         async move {
             tokio::task::spawn_blocking(move || {
                 // Writes queued before the confirm land now, before a
-                // purge deletes their folder, never after it.
+                // purge deletes their folder. The flush waits at most
+                // 5 s; a write stuck longer that lands after the purge
+                // can't make the folder again (`stop_creating_history_root`
+                // above), so it fails instead.
                 let reports = crate::uninstall::execute_after_flush(
                     || coord.flush_history_updates(),
                     &plan,

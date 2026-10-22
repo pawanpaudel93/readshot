@@ -1380,6 +1380,15 @@ impl CaptureCoordinator {
         }
     }
 
+    /// An uninstall purge is about to remove History: no write from now
+    /// on (one stuck past the flush included) may create the folder
+    /// again ([`HistoryStore::stop_creating_root`]).
+    pub fn stop_creating_history_root(&self) {
+        if let Some(h) = &self.history {
+            h.stop_creating_root();
+        }
+    }
+
     /// Clear every persisted capture. No-op when no history store is wired.
     pub fn clear_history(&self) -> Result<(), readshot_core::HistoryError> {
         match &self.history {

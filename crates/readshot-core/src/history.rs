@@ -529,6 +529,10 @@ pub trait HistoryStore: Send + Sync {
         now: DateTime<Utc>,
     ) -> Result<(), HistoryError>;
     fn clear_all(&self) -> Result<(), HistoryError>;
+    /// From now on, never create the history root again (an uninstall
+    /// is removing it): writes still go into a root that exists, and
+    /// fail once it is gone. Stores without a root ignore it.
+    fn stop_creating_root(&self) {}
     /// Rewrite an existing record's sidecar JSON. The PNG is left
     /// alone — `update` is for filling in OCR text or annotations
     /// after the original capture has already landed.
@@ -709,6 +713,9 @@ const STALE_STAGING_AGE: std::time::Duration = std::time::Duration::from_secs(10
 pub struct FsHistoryStore {
     root: PathBuf,
     index_lock: Mutex<()>,
+    /// Set by [`HistoryStore::stop_creating_root`]: directories are
+    /// only ever made below an existing root, never the root itself.
+    root_sealed: std::sync::atomic::AtomicBool,
 }
 
 impl FsHistoryStore {
@@ -716,7 +723,40 @@ impl FsHistoryStore {
         Self {
             root: root.into(),
             index_lock: Mutex::new(()),
+            root_sealed: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Every directory the store makes goes through here. Normally
+    /// `create_dir_all`. Once sealed, `dir` must be the root or below
+    /// it, the root must exist, and what's missing below it is made one
+    /// level at a time with `create_dir`: if the root is removed
+    /// meanwhile (an uninstall purge), that fails instead of making the
+    /// root again.
+    fn create_dirs(&self, dir: &Path) -> std::io::Result<()> {
+        if !self.root_sealed.load(std::sync::atomic::Ordering::Acquire) {
+            return fs::create_dir_all(dir);
+        }
+        let refused = || {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "the history folder was removed and won't be created again",
+            )
+        };
+        let rel = dir.strip_prefix(&self.root).map_err(|_| refused())?;
+        if !self.root.is_dir() {
+            return Err(refused());
+        }
+        let mut at = self.root.clone();
+        for part in rel.components() {
+            at.push(part);
+            match fs::create_dir(&at) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
     }
 
     pub fn root(&self) -> &Path {
@@ -829,7 +869,7 @@ impl FsHistoryStore {
     }
 
     fn write_index(&self, index: &HistoryIndex) -> Result<(), HistoryError> {
-        fs::create_dir_all(&self.root)?;
+        self.create_dirs(&self.root)?;
         let content = serde_json::to_string_pretty(index)?;
         // Stage to a sibling `.tmp` and rename so a crash mid-write
         // cannot truncate or corrupt the index file. POSIX rename is
@@ -1375,7 +1415,7 @@ impl FsHistoryStore {
             return;
         };
         if let Some(parent) = abs_thumb.parent() {
-            let _ = fs::create_dir_all(parent);
+            let _ = self.create_dirs(parent);
         }
         let _ = write_atomic(&abs_thumb, &bytes);
     }
@@ -1401,7 +1441,7 @@ impl FsHistoryStore {
     /// write of `history.index.json` and lose entries.
     fn lock_index(&self) -> Result<IndexGuard<'_>, HistoryError> {
         let mutex = self.lock_mutex()?;
-        fs::create_dir_all(&self.root)?;
+        self.create_dirs(&self.root)?;
         let lock_path = self.root.join(HISTORY_LOCK_FILENAME);
         let file = fs::OpenOptions::new()
             .create(true)
@@ -1428,6 +1468,11 @@ struct IndexGuard<'a> {
 }
 
 impl HistoryStore for FsHistoryStore {
+    fn stop_creating_root(&self) {
+        self.root_sealed
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
     fn save(&self, record: &CaptureRecord, png: &[u8]) -> Result<(), HistoryError> {
         let thumb = thumbnail_png_from_bytes(png);
         let staged = self.stage_image(record, png, thumb.as_deref())?;
@@ -1443,7 +1488,7 @@ impl HistoryStore for FsHistoryStore {
         static STAGE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let abs_png = self.root.join(Self::png_path(record));
         let dir = abs_png.parent().unwrap_or(&self.root).to_path_buf();
-        fs::create_dir_all(&dir)?;
+        self.create_dirs(&dir)?;
         let n = STAGE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let stem = format!("{}.{}-{n}", record.id, std::process::id());
         let mut staged = StagedImage {
@@ -1688,6 +1733,12 @@ impl HistoryStore for FsHistoryStore {
 
     fn clear_all(&self) -> Result<(), HistoryError> {
         let _index_guard = self.lock_mutex()?;
+        if self.root_sealed.load(std::sync::atomic::Ordering::Acquire) {
+            // Clearing would make the root again.
+            return Err(HistoryError::Io(
+                "history is being removed by an uninstall".into(),
+            ));
+        }
         if self.root.exists() {
             fs::remove_dir_all(&self.root)?;
         }
@@ -2064,6 +2115,33 @@ mod tests {
         let root = dir.path().join("history");
         let s = FsHistoryStore::new(&root);
         (dir, s)
+    }
+
+    /// W5a S3: once an uninstall has begun, a History write that was
+    /// stuck past the flush and lands after the purge must not bring the
+    /// history folder back. A sealed store writes into an existing root
+    /// as before, but never creates the root again.
+    #[test]
+    fn a_sealed_store_never_recreates_its_root() {
+        let (_dir, s) = store();
+        let png = crate::png::encode(&image::RgbaImage::new(2, 2)).unwrap();
+        let first = record_at(Utc::now());
+        s.save(&first, &png).unwrap();
+        s.stop_creating_root();
+        let second = record_at(Utc::now());
+        s.save(&second, &png).unwrap();
+        assert_eq!(
+            s.list().unwrap().len(),
+            2,
+            "an existing root still takes writes"
+        );
+
+        fs::remove_dir_all(s.root()).unwrap();
+        let late = record_at(Utc::now());
+        assert!(s.save(&late, &png).is_err());
+        let _ = s.update(&first);
+        assert!(s.clear_all().is_err());
+        assert!(!s.root().exists(), "the purged folder came back");
     }
 
     fn record_at(t: DateTime<Utc>) -> CaptureRecord {

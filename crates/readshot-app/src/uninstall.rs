@@ -351,8 +351,10 @@ pub fn record_open_at_login_off_after(
 }
 
 /// Run `flush` (the History writer's queued writes), then the plan. A
-/// write queued before the uninstall must land before a purge deletes
-/// its folder, never after it (it would recreate the folder).
+/// write queued before the uninstall should land before a purge deletes
+/// its folder. The flush is bounded, so a write stuck past it can land
+/// after; the History store then refuses to make the folder again
+/// (`CaptureCoordinator::stop_creating_history_root`).
 pub fn execute_after_flush(
     flush: impl FnOnce(),
     actions: &[UninstallAction],
