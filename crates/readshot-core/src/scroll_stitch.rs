@@ -161,10 +161,11 @@ pub fn stitch_scrolling(
             .filter(|&dy| dy >= config.min_motion && dy <= max_motion)
             // A frame whose content sits *lower* than the reference's
             // (the page went back up) is not new content either, even
-            // when a repeating page lets it match some downward offset.
-            .filter(|_| {
+            // when a repeating page also lets it match a downward
+            // offset. As in the live judge, the shorter move wins.
+            .filter(|&dy| {
                 estimate_scroll(frame, prev, &sticky, &config)
-                    .is_none_or(|back| back < config.min_motion)
+                    .is_none_or(|back| back < config.min_motion || back >= dy)
             })
             .unwrap_or(0);
         if dy > 0 {
@@ -568,6 +569,27 @@ mod tests {
         let frames = [0, 12, 4, 24].map(|o| stripe_frame(32, 64, o));
         let out = stitch_scrolling(&frames, config).unwrap();
         assert_eq!(out, stripe_frame(32, 88, 0));
+    }
+
+    /// On a page that repeats every 40 rows, 12 px down and 28 px back
+    /// up look the same downward; the shorter move wins, so a real 12 px
+    /// scroll joins and a 12 px scroll back up is skipped.
+    #[test]
+    fn on_a_repeating_page_the_shorter_move_wins() {
+        let period = |o: u32| {
+            RgbaImage::from_fn(32, 64, |x, y| {
+                let v = ((y + o) % 40 * 6) as u8;
+                Rgba([v, v.wrapping_add(x as u8), 255 - v, 255])
+            })
+        };
+        let config = StitchConfig {
+            min_motion: 4,
+            ..StitchConfig::default()
+        };
+        let out = stitch_scrolling(&[period(0), period(12)], config).unwrap();
+        assert_eq!(out.height(), 76);
+        let out = stitch_scrolling(&[period(0), period(12), period(0)], config).unwrap();
+        assert_eq!(out.height(), 76, "the scroll back up is skipped");
     }
 
     /// A frame no offset explains (the content changed outright) is
