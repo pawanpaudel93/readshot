@@ -78,8 +78,8 @@ Rectangles are logical pixels in `x,y,width,height` form. If you need
 to override the display scale used by the backend, pass `--scale`.
 
 Limits: each `--rect` value is at most 16,384, `--scale` is at most 8,
-and one capture is at most 100 million pixels after scaling. `--delay`
-is at most 3600 seconds.
+and one display or region capture is at most 100 million pixels after
+scaling. `--delay` is at most 3600 seconds.
 
 For window captures, get the window id first:
 
@@ -313,7 +313,8 @@ option list.
 | 74 | Reading or writing a file, decoding an image, the clipboard, or an `uninstall` step failed. |
 | 77 | Screen Recording permission is missing, for interactive captures too. |
 
-Errors are printed to stderr as `readshot: <reason>`.
+Errors after parsing are printed to stderr as `readshot: <reason>`;
+argument errors (code 2) use clap's `error:` format.
 
 ## Logs
 

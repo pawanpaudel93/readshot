@@ -42,7 +42,8 @@ readshot-mcp --check
 It prints JSON with server version, stdio transport, advertised tool
 count, and history-directory writability. `ok` is `true` when tools are
 advertised and the history folder is writable; otherwise the command
-exits with code 70. Any other argument exits with code 64.
+exits with code 70. Any argument other than `--check` or `--help`
+exits with code 64.
 
 ## Tools exposed
 
@@ -106,6 +107,11 @@ schema says.
 
 When `display` is omitted, the primary display is used. When `rect`
 is omitted, the chosen display's full bounds are captured.
+
+Limits, the same as the CLI's: each `rect` value is at most 16,384,
+`scale` is at most 8, and one display or region capture is at most 100
+million pixels after scaling. A request over a limit is refused with
+`-32602`.
 
 Use `list_windows` to find capturable app windows. Pass the returned
 `id` as `window` to `capture_window`. A `capture_window.rect` is
@@ -257,9 +263,9 @@ errors are kept for protocol problems:
 | Code | When |
 |------|------|
 | `-32700` | The line isn't valid JSON, or it is longer than 8 MiB. The server answers and keeps reading. |
-| `-32600` | `jsonrpc` isn't `"2.0"`. |
+| `-32600` | The request is malformed: for example `jsonrpc` isn't `"2.0"`, `method` is missing, or `id` isn't a string, number or null. |
 | `-32601` | Unknown method, or `tools/call` names an unknown tool. |
-| `-32602` | Invalid arguments, including an argument the tool doesn't list. |
+| `-32602` | Invalid arguments, including an argument the tool doesn't list or a value over a limit. |
 
 ---
 

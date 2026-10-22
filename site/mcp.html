@@ -69,6 +69,7 @@
           <a href="#host-config">Host config</a>
           <a href="#tool-calls">Tool call examples</a>
           <a href="#permissions">Permissions</a>
+          <a href="#errors">Errors</a>
           <a href="#verify">Verify</a>
           <a href="#troubleshooting">Troubleshooting</a>
           </div>
@@ -292,6 +293,12 @@
                 </tr>
               </tbody>
             </table>
+            <p>
+              Limits, the same as the CLI’s: each <code translate="no">rect</code> value is at
+              most 16,384, <code translate="no">scale</code> is at most 8, and one display or
+              region capture is at most 100 million pixels after scaling. A request over a
+              limit is refused with <code translate="no">-32602</code>.
+            </p>
           </section>
 
           <section class="doc-section" id="host-config">
@@ -441,6 +448,45 @@ command = "/Applications/Readshot.app/Contents/MacOS/readshot-mcp"</code></pre>
               (<code translate="no">capture: screen capture permission denied</code>), as the MCP spec
               asks for errors raised while a tool runs, so the agent can show it to the user.
               JSON-RPC errors are only for protocol problems such as an unknown tool or invalid arguments.
+            </p>
+          </section>
+
+          <section class="doc-section" id="errors">
+            <h2>Errors</h2>
+            <p>
+              A tool that fails while running returns a normal result with
+              <code translate="no">isError: true</code>. JSON-RPC errors are for protocol problems:
+            </p>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>When</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code translate="no">-32700</code></td>
+                  <td>The line isn’t valid JSON, or it is longer than 8&nbsp;MiB. The server answers and keeps reading.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">-32600</code></td>
+                  <td>The request is malformed: for example <code translate="no">jsonrpc</code> isn’t <code translate="no">"2.0"</code>, <code translate="no">method</code> is missing, or <code translate="no">id</code> isn’t a string, number or null.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">-32601</code></td>
+                  <td>Unknown method, or <code translate="no">tools/call</code> names an unknown tool.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">-32602</code></td>
+                  <td>Invalid arguments, including an argument the tool doesn’t list or a value over a limit.</td>
+                </tr>
+              </tbody>
+            </table>
+            <p>
+              <code translate="no">readshot-mcp --check</code> exits with code 70 when no tools are
+              advertised or the history folder isn’t writable. Any argument other than
+              <code translate="no">--check</code> or <code translate="no">--help</code> exits with code 64.
             </p>
           </section>
 

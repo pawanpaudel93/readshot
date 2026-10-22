@@ -76,6 +76,7 @@
           <a href="#uninstall">Uninstall</a>
           <a href="#options">Timing, cursor, and window options</a>
           <a href="#destinations">Output destinations</a>
+          <a href="#exit-codes">Exit codes</a>
           </div>
         </aside>
 
@@ -182,7 +183,9 @@ readshot completions zsh</code></pre>
             <p>
               <code translate="no">--interactive</code> opens the same Readshot region selector used by the app.
               Drag a region and release to capture immediately. Press <code>Enter</code>
-              for the full display or <code>Esc</code> to cancel.
+              for the full display or <code>Esc</code> to cancel. A cancel exits with
+              code 64; missing Screen Recording permission exits 77, as it does for
+              any capture.
             </p>
             <div class="code-panel">
               <pre><code translate="no">readshot capture --interactive --output capture.png
@@ -201,6 +204,12 @@ readshot capture-and-ocr --interactive</code></pre>
               Display captures default to the primary display. Use
               <code translate="no">list-displays</code> to find display ids and
               <code translate="no">--rect x,y,width,height</code> to capture a region.
+            </p>
+            <p>
+              Limits: each <code translate="no">--rect</code> value is at most 16,384,
+              <code translate="no">--scale</code> is at most 8, and one display or region
+              capture is at most 100 million pixels after scaling.
+              <code translate="no">--delay</code> is at most 3600 seconds.
             </p>
             <div class="code-panel">
               <pre><code translate="no">readshot list-displays --json
@@ -423,6 +432,57 @@ readshot capture-window --window 11474 --no-window-shadow --output tight.png</co
                 </tr>
               </tbody>
             </table>
+          </section>
+
+          <section class="doc-section" id="exit-codes">
+            <h2>Exit codes</h2>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Meaning</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code translate="no">0</code></td>
+                  <td>Success.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">2</code></td>
+                  <td>Invalid arguments (unknown option, a bad <code translate="no">--rect</code> or <code translate="no">--delay</code>).</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">64</code></td>
+                  <td>Invalid input: a bad value found after parsing (such as <code translate="no">--scale</code>), a region outside the display, or a cancelled interactive capture.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">66</code></td>
+                  <td>The display or window id doesn’t exist, or no displays were found.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">70</code></td>
+                  <td>OCR failed.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">71</code></td>
+                  <td>Capture failed for another reason, including an interactive selector that failed or stopped unexpectedly.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">74</code></td>
+                  <td>Reading or writing a file, decoding an image, the clipboard, or an <code translate="no">uninstall</code> step failed.</td>
+                </tr>
+                <tr>
+                  <td><code translate="no">77</code></td>
+                  <td>Screen Recording permission is missing, for interactive captures too.</td>
+                </tr>
+              </tbody>
+            </table>
+            <p>
+              Errors after parsing are printed to stderr as
+              <code translate="no">readshot: &lt;reason&gt;</code>; argument errors (code 2)
+              use clap’s <code translate="no">error:</code> format.
+            </p>
           </section>
         </article>
 
