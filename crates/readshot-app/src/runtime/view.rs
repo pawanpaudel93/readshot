@@ -4437,9 +4437,6 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
     ]
 }
 
-/// Whether the capture-hotkey help line reports a problem (a rejected or
-/// unregistered chord, a fixed shortcut that failed) rather than help.
-/// Mirrors the branch order that builds the line.
 /// Whether the Settings recorder is armed for `target`.
 fn recording_target(state: &App, target: crate::app::HotkeyTarget) -> bool {
     state.settings_recording_hotkey && state.settings_recording_target == target
@@ -4486,6 +4483,9 @@ pub(crate) fn window_hotkey_hint(state: &App) -> (String, bool) {
     ("Opens the window picker from any app.".to_string(), false)
 }
 
+/// Whether the capture-hotkey help line reports a problem (a rejected or
+/// unregistered chord) rather than help. Mirrors the branch order that
+/// builds the line.
 pub(crate) fn capture_hotkey_hint_is_error(state: &App) -> bool {
     let chord = &state.preferences.capture_hotkey;
     state.settings_hotkey_error.is_some()
@@ -4820,7 +4820,7 @@ fn settings_ocr_pane(state: &App) -> Vec<Element<'_, Message>> {
     let ocr_supported = state.coordinator.supported_languages();
     let ocr_selected = state.preferences.ocr_languages.clone();
     vec![
-        settings_group_heading("Recognition languages", text_t3),
+        settings_group_heading("Text recognition", text_t3),
         settings_group(vec![settings_block(
             "Recognition languages",
             "Leave all off to let the recognizer choose. Applies to your next capture.",
