@@ -71,7 +71,7 @@ The installer downloads the latest matching DMG, verifies it, installs
 Manual DMG, first-launch, and uninstall details are in
 [docs/INSTALL.md](docs/INSTALL.md).
 
-To uninstall, use **Settings → Uninstall Readshot…**, or run
+To uninstall, use **Settings → App → Uninstall…** (under Danger zone), or run
 `readshot uninstall` (add `--purge` to also delete history and
 preferences).
 

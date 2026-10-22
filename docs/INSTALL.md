@@ -149,7 +149,13 @@ welcome window walks you through it on first launch:
 
 1. Click **Allow Screen Recording**.
 2. The system prompt opens; click **Allow**.
-3. The welcome window dismisses automatically.
+3. The welcome window turns into a **You're all set** card with
+   **Capture Screen**, **Show History** and **Open Settings**. Close it
+   when you're done; Readshot keeps running in the menu bar. (If you had
+   already finished this once and only granted the permission again, the
+   window closes by itself and a notification says Readshot is ready.)
+   If macOS asks you to quit and reopen Readshot first, use the welcome
+   window's **Restart** button.
 
 If you accidentally denied: open **System Settings → Privacy &
 Security → Screen Recording**, find Readshot, toggle it on, and
@@ -172,7 +178,8 @@ the launch-at-login item, and the Screen Recording permission).
 
 ### In the app
 
-Open **Settings → Uninstall → Uninstall Readshot…**. A confirmation
+Open **Settings → App** and, under **Danger zone**, click
+**Uninstall…** (or press `⇧⌘U`). A confirmation
 step appears with an **Also delete history and preferences** checkbox;
 tick it to remove your data too. Click **Uninstall** and Readshot
 performs the cleanup and quits.
