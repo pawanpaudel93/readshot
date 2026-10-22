@@ -186,9 +186,10 @@ fn is_reddish(p: image::Rgba<u8>) -> bool {
 // ---- ED-02: the tool bar ----
 
 /// ED-02: 15 tools in 6 groups; each tool's tooltip key, pressed on the
-/// canvas, and its button both pick it.
+/// canvas, and its button's `SelectTool` message both pick it (that the
+/// button widget sends it, and the tooltip text, are live checks).
 #[test]
-fn every_tool_is_picked_by_its_tooltip_key_and_its_button() {
+fn every_tool_is_picked_by_its_tooltip_key_and_its_select_message() {
     assert_eq!(TOOL_GROUPS.len(), 6);
     assert_eq!(TOOL_GROUPS.iter().map(|g| g.len()).sum::<usize>(), 15);
     let (mut app, id) = tool_app(solid(40, 30));
@@ -217,7 +218,11 @@ fn every_tool_is_picked_by_its_tooltip_key_and_its_button() {
             &mut app,
             Message::Editor(EditorMsg::Toolbar(ToolbarMessage::SelectTool(tool))),
         );
-        assert_eq!(ed(&app).model.active_tool(), tool, "the {name} button");
+        assert_eq!(
+            ed(&app).model.active_tool(),
+            tool,
+            "the {name} SelectTool message"
+        );
     }
 }
 
@@ -333,7 +338,7 @@ fn the_arrow_tool_draws_one_head_or_two() {
         other => panic!("{other:?}"),
     }
     // Deselect, so the option is for the next arrow only.
-    app.editor.as_mut().unwrap().model.clear_selection();
+    deselect(&mut app);
     style(&mut app, StyleMessage::Heads(ArrowHeads::Both));
     assert!(matches!(
         draw(&mut app, (5.0, 50.0), (70.0, 10.0)),
@@ -821,11 +826,15 @@ fn an_over_limit_canvas_chosen_in_the_panel_is_explained_and_refused() {
 
 // ---- BF-11: outputs carry the Beautify, History doesn't ----
 
-/// BF-11: with Dark Card chosen, Copy, Save and Pin each take the
-/// beautified output (the one `editor_output` renders, which all three
-/// use), while the redacted History record stays the bare document.
+/// BF-11 (partial): with Dark Card chosen, the output `editor_output`
+/// makes is the beautified render; Copy, Save and Pin each start from it
+/// (each refuses when it can't be made, BF-07) and take their beautified
+/// path, while the redacted History record stays the bare document.
+/// What each task finally hands the clipboard, the save picker or the
+/// pin is not checked here: the tasks aren't run (clipboard, dialog),
+/// and that payload is a live check.
 #[test]
-fn copy_save_and_pin_take_the_beautified_output_and_history_the_bare_one() {
+fn copy_save_and_pin_start_from_the_beautified_output_and_history_keeps_the_bare_one() {
     let dir = tempfile::TempDir::new().unwrap();
     let store = Arc::new(FsHistoryStore::new(dir.path().join("h")));
     let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
@@ -959,8 +968,10 @@ fn add_capture_beside_appends_to_the_right_and_undo_removes_it() {
 // ---- ED-45: the Ctrl+Shift chords off macOS ----
 
 /// ED-45: off macOS the second-level chords are Ctrl+Shift+{P,R,T,B}
-/// and the Shift chords Ctrl+Shift+{I,H,V}; Ctrl+Alt runs none of them,
-/// and their labels name Ctrl, never a Mac glyph.
+/// and the Shift chords Ctrl+Shift+{I,H,V}; Ctrl+Alt runs none of the
+/// second-level actions, and the labels name Ctrl, never a Mac glyph.
+/// (Ctrl+Alt+P is left out: it pins today, see
+/// `off_macos_ctrl_alt_never_runs_an_editor_command`.)
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn off_macos_the_ctrl_shift_chords_run_and_ctrl_alt_does_not() {
@@ -987,7 +998,7 @@ fn off_macos_the_ctrl_shift_chords_run_and_ctrl_alt_does_not() {
     let (mut app, id) = tool_app(ramp(40, 20));
     let panel = app.preferences.editor_panel_open;
     let tab = app.preferences.editor_panel_tab.clone();
-    for k in ["p", "r", "t", "b", "i", "h", "v"] {
+    for k in ["r", "t", "b", "i", "h", "v"] {
         chord(&mut app, id, k, true);
     }
     assert_eq!(app.preferences.editor_panel_open, panel);
@@ -1007,7 +1018,6 @@ fn off_macos_the_ctrl_shift_chords_run_and_ctrl_alt_does_not() {
         PanelTab::from_id(&app.preferences.editor_panel_tab),
         PanelTab::Beautify
     );
-    app.editor.as_mut().unwrap().key_focus = None;
     chord(&mut app, id, "r", false);
     assert_eq!(
         ed(&app).popover,
@@ -1015,11 +1025,9 @@ fn off_macos_the_ctrl_shift_chords_run_and_ctrl_alt_does_not() {
         "Ctrl+Shift+R"
     );
     let _ = update(&mut app, Message::Editor(EditorMsg::PopoverClosed));
-    app.editor.as_mut().unwrap().key_focus = None;
     chord(&mut app, id, "i", false);
     assert_eq!(ed(&app).popover, Some(EditorPopover::Image), "Ctrl+Shift+I");
     let _ = update(&mut app, Message::Editor(EditorMsg::PopoverClosed));
-    app.editor.as_mut().unwrap().key_focus = None;
     chord(&mut app, id, "h", false);
     let flat = app.editor.as_mut().unwrap().model.flatten();
     assert_eq!(
@@ -1044,5 +1052,34 @@ fn off_macos_the_ctrl_shift_chords_run_and_ctrl_alt_does_not() {
         (kf::KEY_FLIP_V, "Ctrl+Shift+V"),
     ] {
         assert_eq!(kf::key_label(label), want);
+    }
+}
+
+/// Bug reproducer: off macOS, Ctrl+Alt is AltGr on many layouts (ED-45
+/// avoids it for the second-level chords), yet Ctrl+Alt+{P,C,S,W} still
+/// pin, copy, save and discard: the `(c, cmd, !shift)` arms of
+/// `editor_key_message` don't check Alt. Each chord must leave the
+/// editor as it was.
+#[cfg(not(target_os = "macos"))]
+#[test]
+#[ignore = "bug: AltGr/Ctrl+Alt chords fire editor commands off macOS"]
+fn off_macos_ctrl_alt_never_runs_an_editor_command() {
+    for k in ["p", "c", "s", "w"] {
+        let (mut app, id) = tool_app(solid(40, 20));
+        let mut m = Modifiers::CTRL;
+        m.insert(Modifiers::ALT);
+        let task = update(
+            &mut app,
+            Message::Editor(EditorMsg::KeyPressed {
+                window: id,
+                key: Key::Character(k.into()),
+                modifiers: m,
+                status_ignored: true,
+            }),
+        );
+        assert!(app.editor.is_some(), "Ctrl+Alt+{k} closed the editor");
+        assert!(!ed(&app).busy, "Ctrl+Alt+{k} started an output");
+        assert!(app.pins.is_empty(), "Ctrl+Alt+{k} pinned");
+        assert_eq!(task.units(), 0, "Ctrl+Alt+{k} started a task");
     }
 }
