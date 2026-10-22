@@ -169,7 +169,7 @@ fn checked_average(acc: [u32; 4], count: u32) -> Option<[u8; 4]> {
 /// inside the rect with the cell's average colour. Cells that overlap the
 /// rect's edge are partially-clipped — the average is taken over only the
 /// pixels actually inside the rect — and a clipped cell only 1 px wide
-/// joins its neighbour ([`cell_spans`]), so no cell is a single pixel
+/// joins its neighbour (`cell_spans`), so no cell is a single pixel
 /// left as captured unless the whole rect is one pixel.
 pub fn pixelate_rect(
     pixmap: &mut Pixmap,
