@@ -85,6 +85,9 @@ Cargo features for tests:
 * `integration` (`readshot-capture`) enables tests that hit the real OS
   capture APIs. They need Screen Recording (macOS) or the portal dialog
   (Linux), so they are off by default.
+* `integration` (`readshot-ocr`) enables real-engine OCR fixture tests
+  (Apple Vision / Windows.Media.Ocr, or the downloaded ocrs `.rten`
+  model files on Linux). Off by default.
 
 System dependencies on Linux (matched to `.github/workflows/test.yml`):
 `libxcb`, `libxkbcommon`, `wayland`, `dbus`, `fontconfig`,
@@ -107,7 +110,7 @@ packages beyond a stable Rust toolchain.
   `runtime::cli_interactive_exit_code`); the parent exits with the
   same code. A crash (no exit code) counts as 71.
 * `--launched-at-login`: written into the login item (LaunchAgent plist,
-  XDG autostart entry, HKCU Run value, `runtime::startup`). It marks a
+  XDG autostart entry, HKCU Run value, `readshot_app::startup`). It marks a
   GUI launch that opens no window once permission is granted.
 * A `readshot://` URL as `argv[1]` (`url_scheme::parse`, only
   `readshot://` and `readshot://new` are actions). Clap is skipped and

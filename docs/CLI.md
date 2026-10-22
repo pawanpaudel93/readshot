@@ -143,8 +143,8 @@ The text is the same layout-aware text the app's Copy Text produces:
 aligned rows become a Markdown table, two-column text is read one
 column at a time, code goes in a fenced code block, and extra blank
 lines and trailing spaces are trimmed. The table, column, and code
-handling needs line positions, so it is macOS only. Recognition that hasn't finished after
-30 seconds fails with an error.
+handling needs line positions, so it is macOS only. Recognition that
+hasn't finished after 30 seconds fails with an error.
 
 Use `--clipboard` to copy text instead of printing it, or `--output` to
 write text to a file:

@@ -84,10 +84,11 @@ find it later by searching the text inside the screenshot.
   Capture is Last 50 captures by default; Last 30 days and Unlimited are
   the other limits, and Off saves no new captures but keeps the ones you
   have. Captures over the limit are deleted at the next capture, not
-  when you change the setting. Deleting is permanent (not the Trash). A redacted capture whose
-  redactions can't all be accounted for keeps no text, and neither does
-  a redacted capture on Windows or Linux (their OCR gives no word
-  positions to mask by); History says "Text hidden" for it.
+  when you change the setting. Deleting is permanent (not the Trash).
+  A redacted capture whose redactions can't all be accounted for keeps
+  no text, and neither does a redacted capture on Windows or Linux
+  (their OCR gives no word positions to mask by); History says "Text
+  hidden" for it.
 - Pin captures as always-on-top reference windows. Double-click a pin
   (or press `L`) to lock or unlock it; a locked pin can't be moved
   (by dragging or the arrow keys) and keeps its opacity. Opacity goes
@@ -193,9 +194,11 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   start a centred one; `↵` or `Space` captures the full display, or the
   selection if there is one, and opens it in the editor; `esc` cancels.
   A drag smaller than 4 pixels selects nothing and the hint asks for a
-  larger area. With a selection: `⌘C` / `⇧⌘C` / `⌘S` / `⌘P` / `⌘R` copy image / copy
-  text / save / pin / start a scrolling capture, the arrow keys nudge it and
-  `⌥` + arrow keys resize it from its bottom-right corner (`⇧` ×10).
+  larger area (from Scrolling Capture… or Add Capture, it cancels
+  instead). With a selection: `⌘C` / `⇧⌘C` / `⌘S` / `⌘P` / `⌘R` copy
+  image / copy text / save / pin / start a scrolling capture, the arrow
+  keys nudge it and `⌥` + arrow keys resize it from its bottom-right
+  corner (`⇧` ×10).
 - **Window picker (Capture Window…):** `Tab` / `⇧Tab` or the arrow keys
   move between all the windows on that display, including ones hidden
   behind others that a click can't reach, `↵` or `Space` captures the
@@ -217,7 +220,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
 - **Editor actions:** `⌘C` copy image, `⇧⌘C` copy all text (the side panel's Text tab also copies selected lines), `⌘S` save,
   `⌘P` pin, `⌥⌘P` show or hide the side panel, `⌘Z` / `⇧⌘Z` undo and
   redo, `⌘=` / `⌘-` zoom in / out, `⌘0` actual pixels (the title bar's
-  **1:1**; **Fit** fits the window), `⌘[` / `⌘]` rotate left / right, `⇧⌘H` / `⇧⌘V` flip horizontally /
+  **1:1**; **Fit** fits the window), `⌘[` / `⌘]` rotate left / right,
+  `⇧⌘H` / `⇧⌘V` flip horizontally /
   vertically, `⌥⌘I` resize (focus starts in Width; `Tab` moves between the
   fields, `⌥P` switches px / %, `⌥L` locks the aspect), `⇧⌘I` opens the Image
   menu (`↑` / `↓` choose a row, `↵` runs it; `-` / `+` change the gap and
