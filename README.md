@@ -184,9 +184,10 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   Color popover applies a typed hex (as `↵` does) and returns to the bar;
   `esc` cancels it.
 - **Any Readshot window:** `⌘Y` opens History and `⌘,` opens Settings.
-  These work only while a Readshot window is active; the capture shortcut
-  is the only one Readshot registers system-wide, so other apps keep their
-  own `⌘Y` and `⌘,`.
+  These work only while a Readshot window is active, so other apps keep
+  their own `⌘Y` and `⌘,`. Readshot registers only the capture shortcut
+  system-wide, plus the window-capture shortcut if you assign one (and,
+  while a scrolling capture runs, `esc` and `⇧esc`).
 - **History window:** `↑` / `↓` move between captures (moving past the
   last one shown loads more), `↵` opens the selected one, `⌘C` copies
   its image and `⇧⌘C` its text, `⌘P` pins it, `⌥⌘R` reveals it in Finder,
