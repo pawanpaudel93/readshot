@@ -153,11 +153,11 @@ pub enum Command {
         #[arg(long, conflicts_with = "hide_cursor")]
         show_cursor: bool,
 
-        /// Wait before capture, in seconds.
+        /// Wait before capture, in seconds (at most 3600).
         #[arg(long, default_value_t = 0.0, value_parser = parse_delay)]
         delay: f64,
 
-        /// Output image format.
+        /// Output image format. Not used with `--clipboard`.
         #[arg(long, value_enum, default_value_t = ImageFormatChoice::Png)]
         format: ImageFormatChoice,
 
@@ -185,11 +185,11 @@ pub enum Command {
         #[arg(long, value_parser = parse_rect)]
         rect: Option<Rect>,
 
-        /// Wait before capture, in seconds.
+        /// Wait before capture, in seconds (at most 3600).
         #[arg(long, default_value_t = 0.0, value_parser = parse_delay)]
         delay: f64,
 
-        /// Output image format.
+        /// Output image format. Not used with `--clipboard`.
         #[arg(long, value_enum, default_value_t = ImageFormatChoice::Png)]
         format: ImageFormatChoice,
 
@@ -244,7 +244,7 @@ pub enum Command {
         #[arg(long, conflicts_with = "hide_cursor")]
         show_cursor: bool,
 
-        /// Wait before capture, in seconds.
+        /// Wait before capture, in seconds (at most 3600).
         #[arg(long, default_value_t = 0.0, value_parser = parse_delay)]
         delay: f64,
 
@@ -351,7 +351,7 @@ pub enum Command {
         #[arg(long, conflicts_with = "hide_cursor")]
         show_cursor: bool,
 
-        /// Wait before capture, in seconds.
+        /// Wait before capture, in seconds (at most 3600).
         #[arg(long, default_value_t = 0.0, value_parser = parse_delay)]
         delay: f64,
 
