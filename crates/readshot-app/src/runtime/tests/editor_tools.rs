@@ -970,8 +970,6 @@ fn add_capture_beside_appends_to_the_right_and_undo_removes_it() {
 /// ED-45: off macOS the second-level chords are Ctrl+Shift+{P,R,T,B}
 /// and the Shift chords Ctrl+Shift+{I,H,V}; Ctrl+Alt runs none of the
 /// second-level actions, and the labels name Ctrl, never a Mac glyph.
-/// (Ctrl+Alt+P is left out: it pins today, see
-/// `off_macos_ctrl_alt_never_runs_an_editor_command`.)
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn off_macos_the_ctrl_shift_chords_run_and_ctrl_alt_does_not() {
@@ -998,7 +996,7 @@ fn off_macos_the_ctrl_shift_chords_run_and_ctrl_alt_does_not() {
     let (mut app, id) = tool_app(ramp(40, 20));
     let panel = app.preferences.editor_panel_open;
     let tab = app.preferences.editor_panel_tab.clone();
-    for k in ["r", "t", "b", "i", "h", "v"] {
+    for k in ["p", "r", "t", "b", "i", "h", "v"] {
         chord(&mut app, id, k, true);
     }
     assert_eq!(app.preferences.editor_panel_open, panel);
@@ -1055,14 +1053,11 @@ fn off_macos_the_ctrl_shift_chords_run_and_ctrl_alt_does_not() {
     }
 }
 
-/// Bug reproducer: off macOS, Ctrl+Alt is AltGr on many layouts (ED-45
-/// avoids it for the second-level chords), yet Ctrl+Alt+{P,C,S,W} still
-/// pin, copy, save and discard: the `(c, cmd, !shift)` arms of
-/// `editor_key_message` don't check Alt. Each chord must leave the
-/// editor as it was.
+/// Off macOS, Ctrl+Alt is AltGr on many layouts (ED-45 avoids it for the
+/// second-level chords), so Ctrl+Alt+{P,C,S,W} must not pin, copy, save
+/// or discard: each chord leaves the editor as it was.
 #[cfg(not(target_os = "macos"))]
 #[test]
-#[ignore = "bug: AltGr/Ctrl+Alt chords fire editor commands off macOS"]
 fn off_macos_ctrl_alt_never_runs_an_editor_command() {
     for k in ["p", "c", "s", "w"] {
         let (mut app, id) = tool_app(solid(40, 20));

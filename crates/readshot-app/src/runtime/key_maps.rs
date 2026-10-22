@@ -30,6 +30,13 @@ pub(crate) fn tool_for_key(c: &str) -> Option<readshot_ui::editor::ToolState> {
     }
 }
 
+/// True for Ctrl+Alt off macOS: AltGr on many keyboard layouts, which
+/// types characters and must never run a Ctrl command. Always false on
+/// macOS, where ⌥⌘ chords are ordinary shortcuts.
+pub(crate) fn altgr(modifiers: iced::keyboard::Modifiers) -> bool {
+    !cfg!(target_os = "macos") && modifiers.control() && modifiers.alt()
+}
+
 pub(crate) fn editor_key_message(
     key: iced::keyboard::Key,
     modifiers: iced::keyboard::Modifiers,
@@ -37,7 +44,9 @@ pub(crate) fn editor_key_message(
 ) -> Option<Message> {
     use iced::keyboard::{key::Named, Key};
 
-    let cmd = modifiers.command();
+    // Off macOS Ctrl+Alt is AltGr on many layouts (it types `@`, `€`,
+    // `[`…), so it is never the command modifier there.
+    let cmd = modifiers.command() && !altgr(modifiers);
     // ⌃Tab / F6 walk the keyboard focus zones, even from a text field.
     if let Some(forward) = zone_cycle_key(&key, modifiers) {
         return Some(Message::Editor(EditorMsg::Focus(FocusMsg::ZoneCycle(
@@ -265,7 +274,7 @@ pub(crate) fn pin_key_action(
     if matches!(key, Key::Named(Named::Escape)) {
         return Some(PinKeyAction::Close);
     }
-    if modifiers.command() {
+    if modifiers.command() && !altgr(modifiers) {
         // ⌘W closes; no other ⌘-chord is a pin command.
         if let Key::Character(c) = key {
             if c.eq_ignore_ascii_case("w") {
@@ -449,7 +458,7 @@ pub(crate) fn scroll_key_message(
             Some(Message::Scroll(ScrollMsg::CancelRequested))
         }
         Key::Named(Named::Escape) => Some(Message::Scroll(ScrollMsg::StopRequested)),
-        Key::Character(c) if c.as_str() == "." && modifiers.command() => {
+        Key::Character(c) if c.as_str() == "." && modifiers.command() && !altgr(modifiers) => {
             Some(Message::Scroll(ScrollMsg::CancelRequested))
         }
         _ => None,

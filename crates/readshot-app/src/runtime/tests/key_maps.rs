@@ -550,3 +550,35 @@ fn a_locked_pin_ignores_nudge_and_opacity_keys() {
     let _ = key(&mut app, Key::Character("-".into()));
     assert!(app.pins[&id].opacity < before);
 }
+
+/// Off macOS, Ctrl+Alt is AltGr: no character typed with it (Shift or
+/// not) may map to a command in the editor, a pin, the scroll HUD,
+/// Settings, Welcome or History. On macOS ⌥⌘ chords stay shortcuts.
+#[test]
+fn ctrl_alt_is_altgr_off_macos_and_runs_no_command() {
+    use iced::keyboard::{Key, Modifiers};
+    let ctrl_alt = Modifiers::CTRL | Modifiers::ALT;
+    assert_eq!(altgr(ctrl_alt), !cfg!(target_os = "macos"));
+    assert!(!altgr(Modifiers::CTRL));
+    assert!(!altgr(Modifiers::ALT));
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    let window = iced::window::Id::unique();
+    for m in [ctrl_alt, ctrl_alt | Modifiers::SHIFT] {
+        for c in r"abcdefghijklmnopqrstuvwxyz0123456789-=+[]./\;'`,".chars() {
+            let key = Key::Character(c.to_string().into());
+            assert!(
+                editor_key_message(key.clone(), m, true).is_none(),
+                "editor {m:?}+{c}"
+            );
+            assert!(pin_key_action(&key, m).is_none(), "pin {m:?}+{c}");
+            assert!(scroll_key_message(&key, m).is_none(), "scroll {m:?}+{c}");
+            assert!(settings_key_action(&key, m).is_none(), "settings {m:?}+{c}");
+            assert!(
+                history_key_message(window, &key, m, true).is_none(),
+                "history {m:?}+{c}"
+            );
+        }
+    }
+}
