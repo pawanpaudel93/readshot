@@ -237,6 +237,24 @@ pub fn set_cli_interactive_request(request: CliInteractiveRequest) {
     *slot.lock().expect("CLI_INTERACTIVE_REQUEST poisoned") = Some(request);
 }
 
+/// What the `__interactive-capture` child exits with when it wrote no
+/// image: a cancel unless a failure was recorded.
+static CLI_INTERACTIVE_EXIT: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(crate::cli::INTERACTIVE_CHILD_CANCELLED);
+
+/// The exit code for an interactive child that produced no image
+/// (`main.rs`): 64 for a cancel, 77 for missing permission, 71 else.
+pub fn cli_interactive_exit_code() -> i32 {
+    CLI_INTERACTIVE_EXIT.load(std::sync::atomic::Ordering::Acquire)
+}
+
+fn record_cli_interactive_failure(err: &str) {
+    CLI_INTERACTIVE_EXIT.store(
+        crate::cli::interactive_child_failure_code(err),
+        std::sync::atomic::Ordering::Release,
+    );
+}
+
 fn take_cli_interactive_request() -> Option<CliInteractiveRequest> {
     CLI_INTERACTIVE_REQUEST
         .get()

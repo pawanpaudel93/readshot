@@ -842,6 +842,7 @@ pub(super) fn on_cli_interactive_written(
 ) -> Task<Message> {
     if let Err(e) = result {
         tracing::warn!(target: readshot_core::log::cat::CLI, "interactive capture failed: {e}");
+        record_cli_interactive_failure(&e);
     }
     state.cli_interactive_output = None;
     state.overlay_opening = false;

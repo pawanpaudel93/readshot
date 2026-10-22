@@ -49,7 +49,8 @@ app. Drag a region and release to capture immediately. Press `Enter`
 (or `Space`) for the full display or `Esc` to cancel. A drag smaller
 than 4 pixels cancels too. A cancelled capture prints
 `readshot: invalid input: interactive capture cancelled` and exits
-with code 64.
+with code 64. Only a cancel exits 64: missing Screen Recording
+permission exits 77, and any other failure of the selector exits 71.
 
 Supported commands:
 
@@ -308,9 +309,9 @@ option list.
 | 64 | Invalid input: a bad value found after parsing (such as `--scale`), a region outside the display, or a cancelled interactive capture. |
 | 66 | The display or window id doesn't exist, or no displays were found. |
 | 70 | OCR failed. |
-| 71 | Capture failed for another reason. |
+| 71 | Capture failed for another reason, including an interactive selector that failed or stopped unexpectedly. |
 | 74 | Reading or writing a file, decoding an image, the clipboard, or an `uninstall` step failed. |
-| 77 | Screen Recording permission is missing. |
+| 77 | Screen Recording permission is missing, for interactive captures too. |
 
 Errors are printed to stderr as `readshot: <reason>`.
 

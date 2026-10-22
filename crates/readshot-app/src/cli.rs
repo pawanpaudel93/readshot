@@ -1045,7 +1045,7 @@ fn interactive_capture_blocking(show_cursor: bool) -> Result<RgbaImage, CliError
     let status = command.status()?;
     if !status.success() {
         let _ = std::fs::remove_dir_all(&dir);
-        return Err(interactive_capture_cancelled());
+        return Err(interactive_child_error(status.code()));
     }
 
     let result = read_interactive_capture_file(&path);
@@ -1147,6 +1147,41 @@ fn read_interactive_capture_file(path: &std::path::Path) -> Result<RgbaImage, Cl
 
 fn interactive_capture_cancelled() -> CliError {
     CliError::InvalidInput("interactive capture cancelled".into())
+}
+
+/// The `__interactive-capture` child's exit when the user cancelled
+/// (Esc, or a selection too small to capture).
+pub const INTERACTIVE_CHILD_CANCELLED: i32 = 64;
+/// The child's exit when Screen Recording permission is missing.
+pub const INTERACTIVE_CHILD_NO_PERMISSION: i32 = 77;
+/// The child's exit for any other failure (no display, capture error).
+pub const INTERACTIVE_CHILD_FAILED: i32 = 71;
+
+/// How the child reports a failure it saw (`err` is the runtime's
+/// message): permission problems get their own code, so the parent
+/// exits 77 for them as a non-interactive capture would.
+pub fn interactive_child_failure_code(err: &str) -> i32 {
+    let denied = CaptureError::PermissionDenied.to_string();
+    if err.contains(&denied) || err.contains("Screen Recording permission") {
+        INTERACTIVE_CHILD_NO_PERMISSION
+    } else {
+        INTERACTIVE_CHILD_FAILED
+    }
+}
+
+/// The parent's error for a child that wrote no image. Only a real
+/// cancel is "cancelled" (64); a crash (no code) is a capture failure.
+fn interactive_child_error(code: Option<i32>) -> CliError {
+    match code {
+        Some(INTERACTIVE_CHILD_CANCELLED) => interactive_capture_cancelled(),
+        Some(INTERACTIVE_CHILD_NO_PERMISSION) => CliError::Capture(CaptureError::PermissionDenied),
+        Some(code) => CliError::Capture(CaptureError::Backend(format!(
+            "interactive capture failed (exit {code})"
+        ))),
+        None => CliError::Capture(CaptureError::Backend(
+            "interactive capture stopped unexpectedly".into(),
+        )),
+    }
 }
 
 async fn build_capture_request(
@@ -2322,6 +2357,35 @@ mod tests {
 
         assert!(out.is_empty());
         assert_eq!(clipboard.image_size(), Some((256, 256)));
+    }
+
+    /// An interactive capture exits 64 only for a real cancel: a missing
+    /// permission inside the overlay child exits 77, and any other child
+    /// failure (or a crash) is a capture failure, 71.
+    #[test]
+    fn interactive_child_failures_keep_their_exit_codes() {
+        let code = |c| exit_code(&interactive_child_error(c));
+        assert_eq!(code(Some(INTERACTIVE_CHILD_CANCELLED)), 64);
+        assert_eq!(code(Some(INTERACTIVE_CHILD_NO_PERMISSION)), 77);
+        assert_eq!(code(Some(INTERACTIVE_CHILD_FAILED)), 71);
+        assert_eq!(code(Some(101)), 71);
+        assert_eq!(code(None), 71);
+        assert_eq!(
+            interactive_child_failure_code(
+                "Screen Recording permission is required for interactive capture"
+            ),
+            INTERACTIVE_CHILD_NO_PERMISSION
+        );
+        assert_eq!(
+            interactive_child_failure_code(
+                "could not list displays: screen capture permission denied"
+            ),
+            INTERACTIVE_CHILD_NO_PERMISSION
+        );
+        assert_eq!(
+            interactive_child_failure_code("no displays detected"),
+            INTERACTIVE_CHILD_FAILED
+        );
     }
 
     /// `--format` doesn't apply to `--clipboard` (the raw pixels go

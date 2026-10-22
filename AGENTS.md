@@ -101,8 +101,11 @@ packages beyond a stable Rust toolchain.
 * `readshot __interactive-capture --output PATH [--show-cursor]`: the
   CLI's `--interactive` re-runs its own executable with this to show the
   overlay in a GUI process, then reads the PNG back from a private temp
-  folder. Any non-zero exit of that child counts as "interactive capture
-  cancelled" (exit 64).
+  folder. The child exits 64 for a cancel, 77 when Screen Recording
+  permission is missing and 71 for any other failure
+  (`cli::INTERACTIVE_CHILD_*`, recorded by
+  `runtime::cli_interactive_exit_code`); the parent exits with the
+  same code. A crash (no exit code) counts as 71.
 * `--launched-at-login`: written into the login item (LaunchAgent plist,
   XDG autostart entry, HKCU Run value, `runtime::startup`). It marks a
   GUI launch that opens no window once permission is granted.

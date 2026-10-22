@@ -58,7 +58,9 @@ fn main() -> iced::Result {
                 .font(readshot_core::render::FONT_DATA)
                 .run();
             if !output.exists() || output.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
-                std::process::exit(64);
+                // 64 for a cancel, 77 for missing permission, 71 for any
+                // other failure; the parent CLI exits with the same.
+                std::process::exit(runtime::cli_interactive_exit_code());
             }
             return result;
         }

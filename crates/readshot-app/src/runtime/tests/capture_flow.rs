@@ -1527,3 +1527,25 @@ fn the_tray_item_and_the_shortcut_both_start_a_window_pick() {
     );
     assert!(app.overlay_opening);
 }
+
+/// The interactive CLI child exits 77 when permission is what stopped
+/// it, so the parent can tell that apart from a cancel (64).
+#[test]
+fn an_interactive_child_failure_sets_its_exit_code() {
+    assert_eq!(
+        cli_interactive_exit_code(),
+        crate::cli::INTERACTIVE_CHILD_CANCELLED
+    );
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.cli_interactive_output = Some(std::path::PathBuf::from("/nonexistent/out.png"));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::CliInteractiveWritten(Err(
+            "Screen Recording permission is required for interactive capture".into(),
+        ))),
+    );
+    assert_eq!(
+        cli_interactive_exit_code(),
+        crate::cli::INTERACTIVE_CHILD_NO_PERMISSION
+    );
+}
