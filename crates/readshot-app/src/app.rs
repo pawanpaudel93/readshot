@@ -98,6 +98,9 @@ pub enum HistoryKeyboardAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GlobalHotkeyAction {
     Capture,
+    /// The window-capture shortcut (Settings › Capture; unassigned by
+    /// default): open the window picker.
+    CaptureWindow,
     /// esc while a scrolling capture runs: Stop & Stitch, from any app.
     ScrollStop,
     /// ⇧esc while a scrolling capture runs: discard (arms, then confirms).
@@ -1016,6 +1019,22 @@ pub enum CaptureMsg {
     /// window with the captured pixels; `Err` toasts the failure on
     /// the welcome window.
     RegionCaptured(Result<image::RgbaImage, String>),
+    /// Tray "Capture Window…" or the window-capture shortcut: list the
+    /// windows, then open the overlay as a window picker.
+    WindowCaptureRequested,
+    /// The displays and windows (front to back) for the picker, or why
+    /// they couldn't be listed.
+    WindowPickerListed(
+        Result<
+            (
+                Vec<readshot_capture::DisplayInfo>,
+                Vec<readshot_capture::WindowInfo>,
+            ),
+            String,
+        >,
+    ),
+    /// A window was picked in the overlay: capture it into the editor.
+    WindowPicked(readshot_capture::WindowId),
     /// Background capture-and-save task finished. Carries the final
     /// PNG path or a stringified error.
     Saved(Result<PathBuf, String>),
@@ -1118,6 +1137,9 @@ pub struct App {
     /// flight. This closes the race where two hotkey/tray clicks can both
     /// enqueue `list_displays()` before any overlay window id exists.
     pub overlay_opening: bool,
+    /// The windows (front to back) while the overlay is a window picker
+    /// (Capture Window…); `None` for the region overlay.
+    pub window_pick: Option<Vec<readshot_capture::WindowInfo>>,
     /// Current system appearance (overlay-like windows ignore it).
     pub theme_mode: crate::runtime::ThemeMode,
     /// Live overlay selections per display. Drives the floating
@@ -1588,6 +1610,7 @@ impl App {
             retiring_editors: Vec::new(),
             overlay_displays: HashMap::new(),
             overlay_opening: false,
+            window_pick: None,
             theme_mode: Default::default(),
             overlay_selections: HashMap::new(),
             last_regions: HashMap::new(),

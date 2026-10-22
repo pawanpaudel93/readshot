@@ -3798,6 +3798,25 @@ pub(crate) fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> 
         .map(|d| d.display_id.clone())
         .unwrap_or_default();
     let scale = overlay_record.map(|d| d.scale).unwrap_or(1.0);
+    // Capture Window…: the overlay picks a window instead of a region.
+    if let (Some(windows), Some(d)) = (state.window_pick.as_ref(), overlay_record) {
+        let picker = Canvas::new(crate::overlay::WindowPickProgram {
+            windows: crate::overlay::pickable_windows(
+                windows,
+                (d.origin_x, d.origin_y, d.width, d.height),
+            ),
+        })
+        .width(Length::Fill)
+        .height(Length::Fill);
+        return container(picker)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|_theme| iced::widget::container::Style {
+                background: Some(Color::TRANSPARENT.into()),
+                ..Default::default()
+            })
+            .into();
+    }
     let auto_confirm_intent = overlay_auto_confirm_intent(state);
     let cli_interactive = auto_confirm_intent == Some(crate::app::CaptureIntent::CliInteractive);
 

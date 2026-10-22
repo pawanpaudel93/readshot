@@ -26,28 +26,26 @@ pub(super) fn handle_tick_message(state: &mut App, message: TickMsg) -> Task<Mes
 
 /// `TickMsg::Hotkey`: drain the global hotkey presses.
 pub(super) fn on_hotkey_tick(state: &mut App) -> Task<Message> {
-    // Drain anything the OS-side handler queued. We collapse
-    // repeated presses into one action per tick so a mashed
-    // hotkey doesn't stack pending windows/captures.
-    let mut capture = false;
-    let mut scroll_stop = false;
-    let mut scroll_discard = false;
     let receiver = GlobalHotKeyEvent::receiver();
+    let mut pressed = Vec::new();
     while let Ok(event) = receiver.try_recv() {
-        match global_hotkey_action(&event, &state.hotkey_actions) {
-            Some(GlobalHotkeyAction::Capture) => capture = true,
-            Some(GlobalHotkeyAction::ScrollStop) => scroll_stop = true,
-            Some(GlobalHotkeyAction::ScrollDiscard) => scroll_discard = true,
-            None => {}
-        }
+        pressed.extend(global_hotkey_action(&event, &state.hotkey_actions));
     }
-    if scroll_discard {
+    run_hotkey_actions(state, &pressed)
+}
+
+/// Act on one tick's hotkey presses. Repeated presses collapse into one
+/// action per tick so a mashed hotkey doesn't stack pending windows or
+/// captures; a scroll session's keys win over a new capture.
+pub(super) fn run_hotkey_actions(state: &mut App, pressed: &[GlobalHotkeyAction]) -> Task<Message> {
+    let has = |a: GlobalHotkeyAction| pressed.contains(&a);
+    if has(GlobalHotkeyAction::ScrollDiscard) {
         return update(state, Message::Scroll(ScrollMsg::CancelRequested));
     }
-    if scroll_stop {
+    if has(GlobalHotkeyAction::ScrollStop) {
         return update(state, Message::Scroll(ScrollMsg::StopRequested));
     }
-    if capture {
+    if has(GlobalHotkeyAction::Capture) {
         if state.welcome.should_show() {
             // Hotkey works the same as a tray click: when
             // permission isn't granted yet, point the user
@@ -57,6 +55,8 @@ pub(super) fn on_hotkey_tick(state: &mut App) -> Task<Message> {
         if !state.capture_in_flight {
             return update(state, Message::Capture(CaptureMsg::OpenOverlayRequested));
         }
+    } else if has(GlobalHotkeyAction::CaptureWindow) {
+        return update(state, Message::Capture(CaptureMsg::WindowCaptureRequested));
     }
     Task::none()
 }
@@ -137,6 +137,9 @@ pub(super) fn on_tray_action(state: &mut App, action: crate::tray::TrayAction) -
                 state.pending_intent = Some(crate::app::CaptureIntent::ScrollCapture);
                 update(state, Message::Capture(CaptureMsg::OpenOverlayRequested))
             }
+        }
+        crate::tray::TrayAction::CaptureWindow => {
+            update(state, Message::Capture(CaptureMsg::WindowCaptureRequested))
         }
         crate::tray::TrayAction::RetakeLastRegion => {
             state.pending_intent = Some(crate::app::CaptureIntent::Editor);

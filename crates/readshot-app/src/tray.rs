@@ -2,7 +2,7 @@
 //!
 //! Builds the tray icon (a runtime-drawn template mark on macOS, the
 //! colour brand mark elsewhere), registers it as a tray icon with the
-//! app's menu (Capture, Scrolling Capture, Retake Last Region, History,
+//! app's menu (Capture, Capture Window on macOS, Scrolling Capture, Retake Last Region, History,
 //! Settings, Check for Updates and About Readshot on macOS, Quit), and
 //! exposes a non-blocking [`TrayController::drain`] that the iced
 //! runtime polls every few ms to surface tray + menu events as typed
@@ -41,6 +41,9 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Capture,
+    /// "Capture Window…": open the overlay as a window picker. In the
+    /// menu only where the capture backend can capture a window (macOS).
+    CaptureWindow,
     /// Open the overlay pre-set to start a scrolling-capture session
     /// when the user confirms a region. Lets the user reach the
     /// feature without first picking a region and then hunting for
@@ -67,12 +70,19 @@ struct TrayMenuItem {
 
 #[cfg(test)]
 fn menu_items(_hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<TrayMenuItem> {
-    let mut items = vec![
-        TrayMenuItem {
-            label: capture_menu_label().to_string(),
+    let mut items = vec![TrayMenuItem {
+        label: capture_menu_label().to_string(),
+        enabled: true,
+        action: Some(TrayAction::Capture),
+    }];
+    if WINDOW_CAPTURE_IN_MENU {
+        items.push(TrayMenuItem {
+            label: "Capture Window…".to_string(),
             enabled: true,
-            action: Some(TrayAction::Capture),
-        },
+            action: Some(TrayAction::CaptureWindow),
+        });
+    }
+    items.extend([
         TrayMenuItem {
             label: "Scrolling Capture…".to_string(),
             enabled: true,
@@ -93,7 +103,7 @@ fn menu_items(_hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<
             enabled: true,
             action: Some(TrayAction::Settings),
         },
-    ];
+    ]);
 
     #[cfg(target_os = "macos")]
     items.extend([
@@ -124,6 +134,11 @@ fn menu_items(_hotkey_label: Option<&str>, can_retake_last_region: bool) -> Vec<
 
     items
 }
+
+/// Window capture needs a backend that lists and captures windows:
+/// ScreenCaptureKit on macOS. The xcap backend (Windows, Linux) has none
+/// yet, so the item stays out of their menu.
+pub(crate) const WINDOW_CAPTURE_IN_MENU: bool = cfg!(target_os = "macos");
 
 fn capture_menu_label() -> &'static str {
     // macOS convention: a trailing ellipsis marks a command that needs
@@ -309,6 +324,7 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
         true,
         capture_menu_accelerator(raw_hotkey),
     );
+    let item_capture_window = MenuItem::new("Capture Window…", true, None);
     let item_scroll_capture = MenuItem::new("Scrolling Capture…", true, None);
     let item_retake_last_region = MenuItem::new("Retake Last Region", false, None);
     // ⌘Y / ⌘, only render as hint text in the menu — muda doesn't
@@ -341,6 +357,7 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
 
     let mut menu_ids = HashMap::new();
     menu_ids.insert(item_capture.id().clone(), TrayAction::Capture);
+    menu_ids.insert(item_capture_window.id().clone(), TrayAction::CaptureWindow);
     menu_ids.insert(item_scroll_capture.id().clone(), TrayAction::ScrollCapture);
     menu_ids.insert(
         item_retake_last_region.id().clone(),
@@ -358,8 +375,17 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
         TrayAction::NotificationSettings,
     );
 
+    if let Err(e) = menu.append(&item_capture) {
+        tracing::warn!(target: readshot_core::log::cat::TRAY, "menu build failed: {e}");
+        return None;
+    }
+    if WINDOW_CAPTURE_IN_MENU {
+        if let Err(e) = menu.append(&item_capture_window) {
+            tracing::warn!(target: readshot_core::log::cat::TRAY, "menu build failed: {e}");
+            return None;
+        }
+    }
     if let Err(e) = menu.append_items(&[
-        &item_capture,
         &item_scroll_capture,
         &item_retake_last_region,
         &item_history,
@@ -597,13 +623,15 @@ mod tests {
         let items = menu_items(None, false);
         let actions: Vec<TrayAction> = items.iter().filter_map(|item| item.action).collect();
 
-        let mut expected = vec![
-            TrayAction::Capture,
+        let mut expected = vec![TrayAction::Capture];
+        #[cfg(target_os = "macos")]
+        expected.push(TrayAction::CaptureWindow);
+        expected.extend([
             TrayAction::ScrollCapture,
             TrayAction::RetakeLastRegion,
             TrayAction::History,
             TrayAction::Settings,
-        ];
+        ]);
         #[cfg(target_os = "macos")]
         expected.extend([TrayAction::CheckForUpdates, TrayAction::About]);
         expected.push(TrayAction::Quit);
@@ -621,6 +649,7 @@ mod tests {
             actions,
             vec![
                 TrayAction::Capture,
+                TrayAction::CaptureWindow,
                 TrayAction::ScrollCapture,
                 TrayAction::RetakeLastRegion,
                 TrayAction::History,

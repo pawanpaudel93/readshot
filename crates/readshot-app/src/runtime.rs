@@ -1346,6 +1346,8 @@ async fn write_cli_interactive_capture(
 /// display map. Any subsequent `OverlaySelected` for these ids is a
 /// no-op.
 fn close_all_overlays(state: &mut App) -> Vec<Task<Message>> {
+    // Whatever closed them, a window pick ends with its overlays.
+    state.window_pick = None;
     let overlay_ids: Vec<_> = state
         .windows
         .iter()

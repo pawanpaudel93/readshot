@@ -1323,3 +1323,169 @@ fn a_refused_notification_keeps_the_tone_it_was_posted_with() {
     );
     assert_eq!(posted_tone("never posted"), StatusTone::Notice);
 }
+
+// ---- Capture Window… (overlay window picker) ----
+
+fn picker_display(id: &str, x: f32) -> DisplayInfo {
+    DisplayInfo {
+        id: id.into(),
+        bounds: readshot_core::geom::Rect::from_xywh(x, 0.0, 800.0, 600.0).unwrap(),
+        scale: 2.0,
+        name: id.into(),
+        is_primary: x == 0.0,
+    }
+}
+
+fn picker_window(id: &str, display: &str, x: f32) -> readshot_capture::WindowInfo {
+    readshot_capture::WindowInfo {
+        id: readshot_capture::WindowId(id.into()),
+        title: "Docs".into(),
+        app_name: "Safari".into(),
+        display_id: display.into(),
+        bounds: readshot_core::geom::Rect::from_xywh(x, 40.0, 300.0, 200.0).unwrap(),
+    }
+}
+
+fn app_with_window_picker() -> App {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::WindowCaptureRequested),
+    );
+    assert!(app.overlay_opening, "the request lists windows first");
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::WindowPickerListed(Ok((
+            vec![picker_display("a", 0.0), picker_display("b", 800.0)],
+            vec![
+                picker_window("w1", "a", 10.0),
+                picker_window("w2", "b", 900.0),
+            ],
+        )))),
+    );
+    app
+}
+
+#[test]
+fn capture_window_opens_one_picker_overlay_per_display() {
+    let app = app_with_window_picker();
+    assert!(!app.overlay_opening);
+    assert_eq!(app.window_pick.as_ref().map(Vec::len), Some(2));
+    assert_eq!(
+        app.windows
+            .kinds()
+            .filter(|k| *k == WindowKind::Overlay)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn picking_a_window_captures_it_into_the_editor_on_its_display() {
+    let mut app = app_with_window_picker();
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::WindowPicked(readshot_capture::WindowId(
+            "w2".into(),
+        ))),
+    );
+    assert!(app.window_pick.is_none());
+    assert_eq!(
+        app.windows
+            .kinds()
+            .filter(|k| *k == WindowKind::Overlay)
+            .count(),
+        0
+    );
+    assert!(app.capture_in_flight);
+    assert_eq!(app.pending_intent, Some(crate::app::CaptureIntent::Editor));
+    assert_eq!(app.pending_display_id.as_deref(), Some("b"));
+    assert_eq!(app.pending_display_scale, Some(2.0));
+    // The capture lands like a region capture: an editor (History-backed
+    // when History is on) on that display.
+    app.preferences.history_retention = readshot_core::HistoryRetention::Last50;
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(30, 20)))),
+    );
+    let ed = app.editor.as_ref().expect("editor opened");
+    assert_eq!(ed.source_record.as_ref().unwrap().display_id, "b");
+}
+
+#[test]
+fn cancelling_the_picker_leaves_no_pick_behind() {
+    let mut app = app_with_window_picker();
+    let _ = update(&mut app, Message::Capture(CaptureMsg::OverlayCancelled));
+    assert!(app.window_pick.is_none());
+    assert!(!app.capture_in_flight);
+    assert_eq!(app.pending_intent, None);
+}
+
+#[test]
+fn window_capture_where_the_platform_has_none_says_so() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::WindowCaptureRequested),
+    );
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::WindowPickerListed(Err(
+            crate::runtime::capture_ops::WINDOW_CAPTURE_UNSUPPORTED.into(),
+        ))),
+    );
+    assert!(!app.overlay_opening);
+    assert!(app.window_pick.is_none());
+    let status = app.last_capture_status.as_ref().unwrap();
+    assert_eq!(status.tone, StatusTone::Warning);
+    assert!(status.text.contains("isn’t available"), "{}", status.text);
+}
+
+#[test]
+fn window_capture_with_no_windows_opens_nothing() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::WindowCaptureRequested),
+    );
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::WindowPickerListed(Ok((
+            vec![picker_display("a", 0.0)],
+            Vec::new(),
+        )))),
+    );
+    assert!(app.window_pick.is_none());
+    assert_eq!(app.windows.kinds().count(), 0);
+    assert_eq!(
+        app.last_capture_status.as_ref().unwrap().tone,
+        StatusTone::Warning
+    );
+}
+
+#[test]
+fn window_capture_waits_for_the_permission_like_any_capture() {
+    let mut app = build_app(Arc::new(FakePermissions::denied()));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::WindowCaptureRequested),
+    );
+    assert!(!app.overlay_opening);
+    assert!(app.window_pick.is_none());
+}
+
+#[test]
+fn the_tray_item_and_the_shortcut_both_start_a_window_pick() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let _ = update(
+        &mut app,
+        Message::Tick(TickMsg::TrayAction(crate::tray::TrayAction::CaptureWindow)),
+    );
+    assert!(app.overlay_opening);
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let _ = crate::runtime::tick_ops::run_hotkey_actions(
+        &mut app,
+        &[crate::app::GlobalHotkeyAction::CaptureWindow],
+    );
+    assert!(app.overlay_opening);
+}

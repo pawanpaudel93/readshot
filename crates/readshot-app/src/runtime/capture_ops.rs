@@ -44,7 +44,133 @@ pub(super) fn handle_capture_message(state: &mut App, message: CaptureMsg) -> Ta
         CaptureMsg::CliInteractiveWritten(result) => on_cli_interactive_written(state, result),
 
         CaptureMsg::Saved(result) => on_capture_saved(state, result),
+
+        CaptureMsg::WindowCaptureRequested => on_window_capture_requested(state),
+        CaptureMsg::WindowPickerListed(result) => on_window_picker_listed(state, result),
+        CaptureMsg::WindowPicked(id) => on_window_picked(state, id),
     }
+}
+
+/// What a window pick says where the capture backend has no window
+/// capture (Windows and Linux today).
+pub(super) const WINDOW_CAPTURE_UNSUPPORTED: &str =
+    "Window capture isn’t available on this platform yet. Drag a region around the window instead.";
+
+/// `CaptureMsg::WindowCaptureRequested`: list displays and windows, then
+/// open the overlay as a window picker. Gated like a region capture.
+pub(super) fn on_window_capture_requested(state: &mut App) -> Task<Message> {
+    if state.welcome.should_show() {
+        return show_or_focus_welcome(state);
+    }
+    let overlay_up =
+        state.overlay_opening || state.windows.kinds().any(|k| k == WindowKind::Overlay);
+    if state.capture_in_flight || overlay_up || state.combine_capture.is_some() {
+        return Task::none();
+    }
+    if state.scroll_session.is_some() {
+        return focus_scroll_hud(state);
+    }
+    state.overlay_opening = true;
+    let coord = state.coordinator.clone();
+    Task::perform(
+        async move {
+            let unsupported = |e: readshot_core::error::CaptureError| match e {
+                readshot_core::error::CaptureError::Unsupported(_) => {
+                    WINDOW_CAPTURE_UNSUPPORTED.to_string()
+                }
+                other => other.to_string(),
+            };
+            let windows = coord.list_windows().await.map_err(unsupported)?;
+            let displays = coord.list_displays().await.map_err(unsupported)?;
+            Ok((displays, windows))
+        },
+        |r| Message::Capture(CaptureMsg::WindowPickerListed(r)),
+    )
+}
+
+/// `CaptureMsg::WindowPickerListed`.
+pub(super) fn on_window_picker_listed(
+    state: &mut App,
+    result: Result<
+        (
+            Vec<readshot_capture::DisplayInfo>,
+            Vec<readshot_capture::WindowInfo>,
+        ),
+        String,
+    >,
+) -> Task<Message> {
+    match result {
+        Err(e) => {
+            state.overlay_opening = false;
+            state.last_capture_status = Some(if e == WINDOW_CAPTURE_UNSUPPORTED {
+                Status::new(StatusTone::Warning, e)
+            } else {
+                tracing::warn!(target: readshot_core::log::cat::CAPTURE, "could not list windows: {e}");
+                Status::new(StatusTone::Error, history_ops::friendly_capture_error(&e))
+            });
+            Task::none()
+        }
+        Ok((_, windows)) if windows.is_empty() => {
+            state.overlay_opening = false;
+            state.last_capture_status = Some(Status::new(
+                StatusTone::Warning,
+                "No windows to capture. Open the window first, then try again.",
+            ));
+            Task::none()
+        }
+        Ok((displays, windows)) => {
+            state.window_pick = Some(windows);
+            state.pending_intent = Some(crate::app::CaptureIntent::Editor);
+            let task = on_displays_listed(state, displays);
+            // No display: nothing opened, so nothing is being picked.
+            if !state.windows.kinds().any(|k| k == WindowKind::Overlay) {
+                state.window_pick = None;
+            }
+            task
+        }
+    }
+}
+
+/// `CaptureMsg::WindowPicked`: capture that window into the editor
+/// (and History), like a region capture of its display.
+pub(super) fn on_window_picked(
+    state: &mut App,
+    window_id: readshot_capture::WindowId,
+) -> Task<Message> {
+    let Some(windows) = state.window_pick.take() else {
+        return Task::none();
+    };
+    let picked = windows.into_iter().find(|w| w.id == window_id);
+    let display = picked.as_ref().and_then(|w| {
+        state
+            .overlay_displays
+            .values()
+            .find(|d| d.display_id == w.display_id)
+            .cloned()
+    });
+    state.overlay_selections.clear();
+    let mut tasks = close_all_overlays(state);
+    let Some(picked) = picked else {
+        clear_pending_capture_state(state);
+        return Task::batch(tasks);
+    };
+    state.pending_intent = Some(crate::app::CaptureIntent::Editor);
+    state.pending_display_id = Some(picked.display_id.clone());
+    state.pending_display_scale = Some(display.as_ref().map_or(1.0, |d| d.scale));
+    state.pending_display_bounds = display.map(|d| (d.origin_x, d.origin_y, d.width, d.height));
+    state.capture_in_flight = true;
+    state.last_capture_status = None;
+    let coord = state.coordinator.clone();
+    // The window as macOS shows it, shadow included (the CLI's default).
+    let req = readshot_capture::WindowCaptureRequest {
+        window_id,
+        ignore_shadows: false,
+    };
+    tasks.push(Task::perform(
+        async move { coord.capture_window(req).await },
+        |r| Message::Capture(CaptureMsg::RegionCaptured(r.map_err(|e| e.to_string()))),
+    ));
+    Task::batch(tasks)
 }
 
 /// `CaptureMsg::OverlayShiftChanged`.

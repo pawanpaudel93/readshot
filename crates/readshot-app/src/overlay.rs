@@ -32,8 +32,11 @@ use iced::widget::canvas::{
 use iced::{Color, Point, Rectangle, Renderer, Theme};
 
 use crate::app::{CaptureIntent, CaptureMsg, Message};
+
+mod window_pick;
 use readshot_capture::DisplayId;
 use readshot_core::geom::Rect;
+pub(crate) use window_pick::{pickable_windows, WindowPickProgram};
 
 /// Stateless drawing program. The transient drag/resize/move state is
 /// held in [`OverlayState`] and owned by the canvas widget.
