@@ -28,9 +28,12 @@ file in sync when the rules change.
 ## Where to look first
 
 * Architecture overview, build/test commands (including the one
-  ignored test, a manual benchmark), common-change matrix, the
-  `runtime` module map, the editor's features at a glance, the
-  redaction privacy rule and where `unsafe` is allowed: see `AGENTS.md`.
+  ignored test, a manual benchmark), the `test-fixtures` and
+  `integration` test features, internal argv routes
+  (`__interactive-capture`, `--launched-at-login`, `readshot://`) and
+  logging, common-change matrix, the `runtime` module map, the
+  editor's features at a glance, the redaction privacy rule and
+  where `unsafe` is allowed: see `AGENTS.md`.
 * End-user install instructions: `docs/INSTALL.md`.
 * Maintainer release runbook: `docs/RELEASING.md`.
 * Wiring the MCP server into Claude Desktop / Cursor / OpenAI:
@@ -60,6 +63,7 @@ file in sync when the rules change.
 | MCP server               | `crates/readshot-mcp/src/lib.rs`                         |
 | History / preferences    | `crates/readshot-core/src/{history,preferences}.rs`      |
 | Annotations / rendering  | `crates/readshot-core/src/{annotation,render}.rs`        |
+| Logs / RUST_LOG          | `crates/readshot-core/src/log.rs`, `crates/readshot-app/src/main.rs` (`init_logging`) |
 | Releases / packaging     | `.github/workflows/release.yml`, `packaging/`            |
 
 ## Things to confirm with the user before doing

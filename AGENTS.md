@@ -74,12 +74,51 @@ editor's render path, and compare against a run on `main`:
 cargo test --release -p readshot-app --lib ui_thread_time -- --ignored --nocapture
 ```
 
+Cargo features for tests:
+
+* `test-fixtures` (`readshot-core`, `readshot-capture`, `readshot-ocr`)
+  exposes `FakeCapturer` / `FakeOcrEngine` and core's
+  `skip_fsync_in_this_process` (History writes stay atomic but skip
+  `fsync`, for tests that write thousands of times). Higher crates turn
+  it on from their `[dev-dependencies]` only; release builds never have
+  it.
+* `integration` (`readshot-capture`) enables tests that hit the real OS
+  capture APIs. They need Screen Recording (macOS) or the portal dialog
+  (Linux), so they are off by default.
+
 System dependencies on Linux (matched to `.github/workflows/test.yml`):
 `libxcb`, `libxkbcommon`, `wayland`, `dbus`, `fontconfig`,
 `libayatana-appindicator3-dev`, `gtk3`, `libpipewire-0.3-dev`
 (newer than Ubuntu 22.04's 0.3.48; 24.04 works), `clang`/`libclang-dev`
 (bindgen), `libxdo-dev` and `libgbm-dev`. macOS and Windows need no extra system
 packages beyond a stable Rust toolchain.
+
+## Internal entry points and logs
+
+`main.rs` routes some argv shapes before clap, so they never show in
+`--help`:
+
+* `readshot __interactive-capture --output PATH [--show-cursor]`: the
+  CLI's `--interactive` re-runs its own executable with this to show the
+  overlay in a GUI process, then reads the PNG back from a private temp
+  folder. Any non-zero exit of that child counts as "interactive capture
+  cancelled" (exit 64).
+* `--launched-at-login`: written into the login item (LaunchAgent plist,
+  XDG autostart entry, HKCU Run value, `runtime::startup`). It marks a
+  GUI launch that opens no window once permission is granted.
+* A `readshot://` URL as `argv[1]` (`url_scheme::parse`, only
+  `readshot://` and `readshot://new` are actions). Clap is skipped and
+  the URL becomes the boot action. While the app runs, macOS delivers
+  URLs through `url_events` instead.
+
+Logging (`readshot_core::log` has the targets, all under
+`np.com.pawanpaudel.readshot::<category>`): the GUI logs to stderr and
+to `readshot.log` in `ProjectDirs::data_local_dir` (falling back to the
+temp dir), at info level, or debug when the Settings toggle was on at
+launch. The CLI logs to the same file only. `RUST_LOG` overrides both.
+`readshot-mcp` logs to stderr at info level and doesn't read
+`RUST_LOG`. Log calls never carry captured pixels, OCR text, paths
+under `$HOME` or typed strings (see the module doc).
 
 ## House style for code changes
 
@@ -130,7 +169,7 @@ packages beyond a stable Rust toolchain.
 | New MCP tool                        | `readshot-mcp` (lib.rs `tool_*` + descriptors) |
 | New preference field                | `readshot-core::preferences` (mind round-trip) |
 | New in-app keyboard shortcut        | `readshot-app::runtime::key_maps` (editor and window key maps; History's is `history_key_message` in `runtime.rs`), `readshot-app::runtime::key_focus` (focus zones, chords), `readshot-app::runtime::keys` (labels, tested per platform), README §Accessibility |
-| Global capture hotkey               | `readshot-ui::hotkey` (parsing), `readshot-app::runtime::hotkeys` |
+| Global capture hotkey               | `readshot-ui::hotkey` (parsing; accepts `cmd`/`command`/`meta`/`super`/`win`, `alt`/`opt`/`option`, `ctrl`/`control`, `enter`/`return`), `readshot-app::runtime::hotkeys` |
 | Per-OS packaging tweak              | `packaging/<os>/` and `release.yml`            |
 
 ### `readshot-app::runtime` modules
@@ -191,7 +230,9 @@ Free / 16:9 / 4:3 / Square presets) it has:
   thread (`apply_step_now`) or composed off it (`queue_step`), and both
   land through the same hook (status, bake bookkeeping, recognition,
   loupe and Discard clears, History sync). Only where the pixels are
-  composed differs.
+  composed differs. Separately, a redaction dragged on a document under
+  4 MP (`LIVE_REDACTION_MAX_PIXELS`) is re-rendered on every drag tick;
+  on a larger one the canvas covers it opaquely until the release.
 
 Privacy rule: after a redaction, nothing persisted or served — History
 text, images, thumbnails and search, the MCP server, the CLI, clipboard
