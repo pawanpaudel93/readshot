@@ -712,16 +712,24 @@ async fn scrolling_back_up_a_text_page_never_repeats_a_band() {
     let down = text_rows(60, 0, 400);
     assert_eq!(scroll_motion_offset(&top, &down), Some(60));
     assert!(frame_has_scroll_motion(&top, &down));
-    for (what, frame) in [
-        ("back up 60", text_rows(0, 0, 400)),
-        ("back up 20", text_rows(40, 0, 400)),
-        ("sideways 12", text_rows(60, 12, 400)),
+    // A scroll back up is told apart from a frame that can't be placed:
+    // only the latter counts towards the "scrolled too fast" hint.
+    use crate::runtime::scroll::{scroll_motion, ScrollMotion};
+    for (what, frame, verdict) in [
+        ("back up 60", text_rows(0, 0, 400), ScrollMotion::Back),
+        ("back up 20", text_rows(40, 0, 400), ScrollMotion::Back),
+        (
+            "sideways 12",
+            text_rows(60, 12, 400),
+            ScrollMotion::Unplaced,
+        ),
     ] {
         assert!(
             !frame_has_scroll_motion(&down, &frame),
             "{what}: offset {:?}",
             scroll_motion_offset(&down, &frame)
         );
+        assert_eq!(scroll_motion(&down, &frame), verdict, "{what}");
     }
     let stitched = stitch_frames_async(vec![
         Arc::new(top.clone()),
