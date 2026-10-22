@@ -885,6 +885,15 @@ fn cli_card<'a>(
         .into()
 }
 
+/// Whether the CLI tools window's status reports a failure (a copy that
+/// didn't reach the clipboard), drawn in the danger color.
+pub(crate) fn cli_tools_status_is_error(state: &App) -> bool {
+    state
+        .cli_tools_status
+        .as_ref()
+        .is_some_and(|s| s.tone == StatusTone::Error)
+}
+
 pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
     let status = state.cli_tools_status_text().unwrap_or("");
 
@@ -915,7 +924,12 @@ pub(crate) fn cli_tools_view(state: &App) -> Element<'_, Message> {
         ]
         .spacing(SP3);
     if !status.is_empty() {
-        cards = cards.push(text(status).size(TYPE_CAPTION).style(text_t2));
+        let style = if cli_tools_status_is_error(state) {
+            text_danger
+        } else {
+            text_t2
+        };
+        cards = cards.push(text(status).size(TYPE_CAPTION).style(style));
     }
     cards = cards.push(cli_card(
         "Run for every shell".to_string(),

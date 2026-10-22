@@ -1163,3 +1163,21 @@ fn clearing_and_resetting_unassign_the_window_shortcut() {
     let _ = update(&mut app, Message::Settings(SettingsMsg::ResetAllConfirmed));
     assert_eq!(app.preferences.window_capture_hotkey, "");
 }
+
+/// The CLI tools window shows a copy failure as a failure (red), not in
+/// the same grey as success (w4d review, Minor 5).
+#[test]
+fn a_failed_cli_commands_copy_is_shown_as_an_error() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let shell = crate::cli_tools::Shell::ALL[0];
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::CliToolsCopyDone(shell, Err("busy".into()))),
+    );
+    assert!(crate::runtime::view::cli_tools_status_is_error(&app));
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::CliToolsCopyDone(shell, Ok(()))),
+    );
+    assert!(!crate::runtime::view::cli_tools_status_is_error(&app));
+}
