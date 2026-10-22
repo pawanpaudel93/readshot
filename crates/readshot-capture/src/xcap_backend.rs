@@ -71,7 +71,15 @@ impl Capturer for XcapCapturer {
             let full = monitor.capture_image().map_err(map_err)?;
             let display = monitor_to_display_info(&monitor)?;
             let rect = rect_relative_to_display(req.rect, display.bounds);
-            crop_rgba(full, rect, req.scale)
+            // The image is the whole monitor at its own pixel ratio; the
+            // crop comes back at the requested scale.
+            crate::crop_display_capture(
+                &full,
+                display.bounds.width(),
+                display.bounds.height(),
+                rect,
+                req.scale,
+            )
         })
         .await
     }
@@ -119,24 +127,6 @@ fn logical_bounds(x: f32, y: f32, w: f32, h: f32, scale: f32) -> (f32, f32, f32,
 #[cfg(target_os = "linux")]
 fn logical_bounds(x: f32, y: f32, w: f32, h: f32, _scale: f32) -> (f32, f32, f32, f32) {
     (x, y, w, h)
-}
-
-/// Crop a full-monitor `RgbaImage` to the requested logical rect, scaled
-/// to physical pixels by `scale`. The result is what
-/// `Capturer::capture_region` is expected to return.
-fn crop_rgba(full: RgbaImage, rect_logical: Rect, scale: f32) -> Result<RgbaImage, CaptureError> {
-    let x0 = (rect_logical.x() * scale).round().max(0.0) as u32;
-    let y0 = (rect_logical.y() * scale).round().max(0.0) as u32;
-    let w_target = (rect_logical.width() * scale).round().max(1.0) as u32;
-    let h_target = (rect_logical.height() * scale).round().max(1.0) as u32;
-    let w = w_target.min(full.width().saturating_sub(x0));
-    let h = h_target.min(full.height().saturating_sub(y0));
-    if w == 0 || h == 0 {
-        return Err(CaptureError::InvalidRegion(
-            "region is outside the captured display bounds".to_string(),
-        ));
-    }
-    Ok(image::imageops::crop_imm(&full, x0, y0, w, h).to_image())
 }
 
 fn map_err(e: xcap::XCapError) -> CaptureError {

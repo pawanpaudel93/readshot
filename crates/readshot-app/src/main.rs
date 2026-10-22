@@ -98,6 +98,11 @@ fn main() -> iced::Result {
         let mut stdout = std::io::stdout().lock();
         let result = rt.block_on(cli.run(capturer, ocr, &mut stdout));
         if let Err(err) = result {
+            tracing::warn!(
+                target: readshot_core::log::cat::CLI,
+                exit_code = exit_code(&err),
+                "cli command failed"
+            );
             eprintln!("readshot: {err}");
             std::process::exit(exit_code(&err));
         }

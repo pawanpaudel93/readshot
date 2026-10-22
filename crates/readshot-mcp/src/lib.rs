@@ -85,7 +85,6 @@ pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 #[derive(Debug, Deserialize)]
 struct RpcRequest {
     jsonrpc: Option<String>,
-    id: Option<Value>,
     method: String,
     #[serde(default)]
     params: Value,
@@ -226,9 +225,11 @@ impl McpServer {
             }
         };
 
-        // Notifications carry no `id`; we still process them but
-        // never emit a reply (per JSON-RPC 2.0 §4.1).
-        let id = req.id.clone();
+        // Notifications carry no `id` member; we still process them but
+        // never emit a reply (per JSON-RPC 2.0 §4.1). An explicit
+        // `"id": null` is a request (serde reads it as `None`, so the
+        // raw member decides) and is answered with `id: null`.
+        let id = raw_id;
 
         if req.jsonrpc.as_deref() != Some("2.0") {
             // Even when id is missing the spec wants an error reply
@@ -442,6 +443,12 @@ impl McpServer {
 
     async fn tool_capture_window(&self, args: &Value) -> Result<Value, RpcErr> {
         validate_args_object(args, &["window", "rect", "ignore_shadows"])?;
+        if args.get("window").is_some_and(|w| !w.is_string()) {
+            return Err(RpcErr {
+                code: codes::INVALID_PARAMS,
+                message: "window must be a string (the id from list_windows)".into(),
+            });
+        }
         let window_id = args
             .get("window")
             .and_then(Value::as_str)
@@ -571,6 +578,9 @@ impl McpServer {
             });
         }
         validate_capture_pixels(rect, scale)?;
+        // Capture exactly the part of the rect on the display, as the
+        // CLI does; entirely off it is invalid params.
+        let rect = readshot_capture::clip_rect_to_display(rect, chosen).map_err(capture_to_rpc)?;
 
         Ok(CaptureRequest {
             display_id: chosen.id.clone(),
@@ -663,10 +673,14 @@ fn parse_rect_value(v: &Value) -> Result<Rect, RpcErr> {
             message: format!("rect coordinates must not exceed {MAX_RECT_DIM} logical pixels"),
         });
     }
-    Rect::from_xywh(x, y, w, h).ok_or_else(|| RpcErr {
+    let positive = || RpcErr {
         code: codes::INVALID_PARAMS,
         message: "rect must have positive width and height".into(),
-    })
+    };
+    if w <= 0.0 || h <= 0.0 {
+        return Err(positive());
+    }
+    Rect::from_xywh(x, y, w, h).ok_or_else(positive)
 }
 
 fn parse_optional_non_empty_str<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>, RpcErr> {
@@ -2066,5 +2080,107 @@ mod tests {
                 .unwrap()
                 .contains("missing `name`"));
         }
+    }
+
+    // ── W5f: end-to-end bugs ──
+
+    /// B7: an explicit `"id": null` is a request and gets a reply with
+    /// `id: null`; only a missing `id` is a notification.
+    #[tokio::test]
+    async fn a_null_id_is_a_request_not_a_notification() {
+        let s = server();
+        let resp = call(&s, r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#).await;
+        assert_eq!(resp["id"], Value::Null);
+        assert_eq!(resp["result"], json!({}));
+        let resp = call(&s, r#"{"jsonrpc":"2.0","id":null,"method":"nope"}"#).await;
+        assert_eq!(resp["id"], Value::Null);
+        assert_eq!(resp["error"]["code"], codes::METHOD_NOT_FOUND);
+        assert!(s
+            .handle(r#"{"jsonrpc":"2.0","method":"nope"}"#)
+            .await
+            .is_none());
+    }
+
+    /// B2, B3: a rect partly off the display captures exactly its
+    /// overlap; one entirely off is invalid params. B4: zero-sized
+    /// rects are invalid params, for display and window captures.
+    #[tokio::test]
+    async fn capture_rects_are_clipped_to_the_display_and_zero_sizes_rejected() {
+        // The fake display is 256x256.
+        for tool in ["capture_region", "capture_text", "capture_region_and_text"] {
+            for (rect, expected) in [
+                (
+                    json!({"x": -100, "y": 0, "width": 200, "height": 50}),
+                    (0.0, 0.0, 100.0, 50.0),
+                ),
+                (
+                    json!({"x": 200, "y": 240, "width": 100, "height": 100}),
+                    (200.0, 240.0, 56.0, 16.0),
+                ),
+            ] {
+                let (server, cap, _) = recording_server();
+                let resp = call(&server, &tool_call_line(tool, json!({"rect": rect}))).await;
+                assert_eq!(resp["result"]["isError"], false, "{tool} {rect}: {resp}");
+                let r = cap.regions.lock().unwrap()[0].rect;
+                assert_eq!(
+                    (r.x(), r.y(), r.width(), r.height()),
+                    expected,
+                    "{tool} {rect}"
+                );
+            }
+            for rect in [
+                json!({"x": 5000, "y": 5000, "width": 100, "height": 100}),
+                json!({"x": 0, "y": 0, "width": 0, "height": 10}),
+                json!({"x": 0, "y": 0, "width": 10, "height": 0}),
+            ] {
+                let (server, cap, _) = recording_server();
+                let resp = call(&server, &tool_call_line(tool, json!({"rect": rect}))).await;
+                assert_eq!(resp["error"]["code"], -32602, "{tool} {rect}: {resp}");
+                assert!(cap.regions.lock().unwrap().is_empty(), "{tool} {rect}");
+            }
+        }
+        let (server, _, _) = recording_server();
+        let resp = call(
+            &server,
+            &tool_call_line(
+                "capture_window",
+                json!({"window": "fake-window-0", "rect": {"x": 0, "y": 0, "width": 0, "height": 10}}),
+            ),
+        )
+        .await;
+        assert_eq!(resp["error"]["code"], -32602, "{resp}");
+        assert!(resp["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("positive width and height"));
+    }
+
+    /// A numeric window id is a type error, not a missing id.
+    #[tokio::test]
+    async fn a_numeric_window_id_says_it_must_be_a_string() {
+        let s = server();
+        let resp = call(
+            &s,
+            &tool_call_line("capture_window", json!({"window": 3170})),
+        )
+        .await;
+        assert_eq!(resp["error"]["code"], -32602, "{resp}");
+        assert!(resp["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("window must be a string"));
+    }
+
+    /// B9: a window on no display has `display_id: null`.
+    #[test]
+    fn a_window_on_no_display_has_a_null_display_id() {
+        let window = WindowInfo {
+            id: WindowId("6874".into()),
+            title: String::new(),
+            app_name: "Brave".into(),
+            display_id: None,
+            bounds: Rect::from_xywh(0.0, -72.0, 1512.0, 40.0).unwrap(),
+        };
+        assert_eq!(window_to_json(&window)["display_id"], Value::Null);
     }
 }

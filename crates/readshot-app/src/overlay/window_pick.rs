@@ -299,7 +299,7 @@ mod tests {
                 id: WindowId(id.into()),
                 title: format!("{id} title"),
                 app_name: "App".into(),
-                display_id: "d".into(),
+                display_id: Some("d".into()),
                 bounds: Rect::from_xywh(x, y, w, h).unwrap(),
             },
             pickable: true,

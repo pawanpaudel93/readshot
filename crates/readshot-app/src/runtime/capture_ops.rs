@@ -144,7 +144,7 @@ pub(super) fn on_window_picked(
         state
             .overlay_displays
             .values()
-            .find(|d| d.display_id == w.display_id)
+            .find(|d| w.display_id.as_ref() == Some(&d.display_id))
             .cloned()
     });
     state.overlay_selections.clear();
@@ -154,7 +154,7 @@ pub(super) fn on_window_picked(
         return Task::batch(tasks);
     };
     state.pending_intent = Some(crate::app::CaptureIntent::Editor);
-    state.pending_display_id = Some(picked.display_id.clone());
+    state.pending_display_id = picked.display_id.clone();
     state.pending_display_scale = Some(display.as_ref().map_or(1.0, |d| d.scale));
     state.pending_display_bounds = display.map(|d| (d.origin_x, d.origin_y, d.width, d.height));
     state.capture_in_flight = true;

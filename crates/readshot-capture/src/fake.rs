@@ -38,7 +38,7 @@ impl FakeCapturer {
                 id: WindowId("fake-window-0".to_string()),
                 title: "Fake Window".to_string(),
                 app_name: "Readshot Test".to_string(),
-                display_id,
+                display_id: Some(display_id),
                 bounds: Rect::from_xywh(0.0, 0.0, 256.0, 256.0)
                     .expect("fake window bounds are valid"),
             }],

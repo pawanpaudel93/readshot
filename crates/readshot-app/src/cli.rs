@@ -54,8 +54,8 @@ use std::time::{Duration, SystemTime};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use image::RgbaImage;
 use readshot_capture::{
-    crop_window_relative_rect, display_local_bounds, CaptureRequest, Capturer, DisplayInfo,
-    WindowCaptureRequest, WindowId, WindowInfo,
+    clip_rect_to_display, crop_window_relative_rect, display_local_bounds, CaptureRequest,
+    Capturer, DisplayInfo, WindowCaptureRequest, WindowId, WindowInfo,
 };
 use readshot_core::error::{CaptureError, OCRError};
 use readshot_core::geom::Rect;
@@ -431,6 +431,24 @@ pub enum Command {
     },
 }
 
+impl Command {
+    /// The subcommand as typed, for the log.
+    fn name(&self) -> &'static str {
+        match self {
+            Command::ListDisplays { .. } => "list-displays",
+            Command::ListWindows { .. } => "list-windows",
+            Command::Capture { .. } => "capture",
+            Command::CaptureWindow { .. } => "capture-window",
+            Command::CaptureText { .. } => "capture-text",
+            Command::Ocr { .. } => "ocr",
+            Command::CaptureAndOcr { .. } => "capture-and-ocr",
+            Command::McpConfig { .. } => "mcp-config",
+            Command::Completions { .. } => "completions",
+            Command::Uninstall { .. } => "uninstall",
+        }
+    }
+}
+
 /// Errors surfaced by the CLI. We map these to non-zero exit codes
 /// in `main`. Each variant wraps the underlying domain error so
 /// scripts can pattern-match on the printed reason.
@@ -524,6 +542,9 @@ fn parse_rect(s: &str) -> Result<Rect, String> {
             ));
         }
     }
+    if nums[2] <= 0.0 || nums[3] <= 0.0 {
+        return Err("rect must have positive width and height".into());
+    }
     Rect::from_xywh(nums[0], nums[1], nums[2], nums[3])
         .ok_or_else(|| format!("rect `{s}` has non-positive or non-finite dimensions"))
 }
@@ -551,6 +572,12 @@ impl Cli {
         let Some(command) = self.command else {
             return Ok(()); // no subcommand → caller falls back to GUI
         };
+        tracing::info!(
+            target: readshot_core::log::cat::CLI,
+            command = command.name(),
+            version = env!("CARGO_PKG_VERSION"),
+            "cli command"
+        );
         match command {
             Command::ListDisplays { json } => {
                 let displays = capturer.list_displays().await?;
@@ -600,8 +627,7 @@ impl Cli {
                         effective_hide_cursor(hide_cursor, show_cursor),
                     )
                     .await?;
-                    let source = capture_request_json(&req);
-                    (capturer.capture_region(req).await?, source)
+                    capture_region(&*capturer, req).await?
                 };
                 if use_clipboard {
                     clipboard.copy_image(&img)?;
@@ -697,8 +723,7 @@ impl Cli {
                         effective_hide_cursor(hide_cursor, show_cursor),
                     )
                     .await?;
-                    let source = capture_request_json(&req);
-                    (capturer.capture_region(req).await?, source)
+                    capture_region(&*capturer, req).await?
                 };
                 let image_size = (img.width(), img.height());
                 let result = ocr
@@ -785,7 +810,7 @@ impl Cli {
                 no_language_correction,
             } => {
                 let language_correction = language_correction && !no_language_correction;
-                ensure_combined_json_has_clean_stdout(json, also_image.as_deref())?;
+                ensure_combined_has_clean_stdout(json, also_image.as_deref(), &output)?;
                 maybe_delay(delay).await;
                 let (img, source) = if interactive {
                     (
@@ -804,8 +829,7 @@ impl Cli {
                         effective_hide_cursor(hide_cursor, show_cursor),
                     )
                     .await?;
-                    let source = capture_request_json(&req);
-                    (capturer.capture_region(req).await?, source)
+                    capture_region(&*capturer, req).await?
                 };
                 let image_size = (img.width(), img.height());
                 if let Some(path) = also_image.as_deref() {
@@ -1222,6 +1246,9 @@ async fn build_capture_request(
     let scale = scale.unwrap_or(chosen.scale);
     validate_scale(scale)?;
     validate_capture_pixels(rect, scale)?;
+    // The capture is the part of the rect on the display; the request
+    // (and so the JSON) says exactly that. Entirely off it is 64.
+    let rect = clip_rect_to_display(rect, chosen).map_err(limit_err_to_cli)?;
     Ok(CaptureRequest {
         display_id: chosen.id.clone(),
         rect,
@@ -1307,28 +1334,54 @@ fn write_displays_json(out: &mut dyn Write, displays: &[DisplayInfo]) -> std::io
     Ok(())
 }
 
+/// The display column for a window on no display.
+const NO_DISPLAY: &str = "-";
+
 fn write_windows_table(out: &mut dyn Write, windows: &[WindowInfo]) -> std::io::Result<()> {
-    writeln!(
-        out,
-        "{:<18}{:<18}{:<18}{:<22}title",
-        "id", "display", "bounds (x,y,w,h)", "app"
-    )?;
-    for window in windows {
-        writeln!(
-            out,
-            "{:<18}{:<18}{:<18}{:<22}{}",
-            window.id.0,
-            window.display_id,
-            format!(
-                "{},{},{},{}",
-                window.bounds.x() as i32,
-                window.bounds.y() as i32,
-                window.bounds.width() as i32,
-                window.bounds.height() as i32,
-            ),
-            window.app_name,
-            window.title,
-        )?;
+    let rows: Vec<[String; 5]> = windows
+        .iter()
+        .map(|window| {
+            [
+                window.id.0.clone(),
+                window
+                    .display_id
+                    .clone()
+                    .unwrap_or_else(|| NO_DISPLAY.into()),
+                format!(
+                    "{},{},{},{}",
+                    window.bounds.x() as i32,
+                    window.bounds.y() as i32,
+                    window.bounds.width() as i32,
+                    window.bounds.height() as i32,
+                ),
+                window.app_name.clone(),
+                window.title.clone(),
+            ]
+        })
+        .collect();
+    let header = ["id", "display", "bounds (x,y,w,h)", "app", "title"];
+    // Each column is as wide as its longest cell plus two spaces, so a
+    // long value never runs into the next column.
+    let width = |col: usize| {
+        rows.iter()
+            .map(|row| row[col].chars().count())
+            .chain([header[col].len()])
+            .max()
+            .unwrap_or(0)
+            + 2
+    };
+    let widths = [width(0), width(1), width(2), width(3)];
+    let mut line = |cells: [&str; 5]| {
+        let mut text = String::new();
+        for (cell, w) in cells[..4].iter().zip(widths) {
+            text.push_str(&format!("{cell:<w$}"));
+        }
+        text.push_str(cells[4]);
+        writeln!(out, "{}", text.trim_end())
+    };
+    line(header)?;
+    for row in &rows {
+        line([&row[0], &row[1], &row[2], &row[3], &row[4]])?;
     }
     Ok(())
 }
@@ -1370,14 +1423,20 @@ fn ensure_image_json_has_destination(
     Ok(())
 }
 
-fn ensure_combined_json_has_clean_stdout(
+/// `capture-and-ocr` writes the text (or JSON) to `--output` and the
+/// image to `--also-image`; both default to or may name stdout, which
+/// can carry only one of them.
+fn ensure_combined_has_clean_stdout(
     json: bool,
     also_image: Option<&std::path::Path>,
+    output: &std::path::Path,
 ) -> Result<(), CliError> {
-    if json && also_image == Some(std::path::Path::new("-")) {
-        return Err(CliError::InvalidInput(
-            "--json cannot be combined with --also-image -".into(),
-        ));
+    let stdout = std::path::Path::new("-");
+    if also_image == Some(stdout) && output == stdout {
+        let text = if json { "JSON" } else { "text" };
+        return Err(CliError::InvalidInput(format!(
+            "--also-image - needs --output FILE: stdout can't carry both the image and the {text}"
+        )));
     }
     Ok(())
 }
@@ -1391,14 +1450,44 @@ fn rect_json(rect: Rect) -> serde_json::Value {
     })
 }
 
-fn capture_request_json(req: &CaptureRequest) -> serde_json::Value {
+/// Capture `req` and describe it for the JSON `source`.
+async fn capture_region(
+    capturer: &dyn Capturer,
+    req: CaptureRequest,
+) -> Result<(RgbaImage, serde_json::Value), CliError> {
+    tracing::info!(
+        target: readshot_core::log::cat::CLI,
+        display = %req.display_id,
+        width = req.rect.width(),
+        height = req.rect.height(),
+        scale = req.scale,
+        "cli region capture"
+    );
+    let img = capturer.capture_region(req.clone()).await?;
+    let source = capture_request_json(&req, &img);
+    Ok((img, source))
+}
+
+fn capture_request_json(req: &CaptureRequest, img: &RgbaImage) -> serde_json::Value {
     serde_json::json!({
         "type": "display",
         "display_id": req.display_id,
         "rect": rect_json(req.rect),
-        "scale": req.scale,
+        "scale": output_scale(req, img),
         "hide_cursor": req.hide_cursor,
     })
+}
+
+/// The scale of the image a capture really produced: the requested one
+/// when the image is that size (to a pixel), else its measured ratio.
+fn output_scale(req: &CaptureRequest, img: &RgbaImage) -> f32 {
+    let width = req.rect.width();
+    let measured = img.width() as f32 / width;
+    if (img.width() as f32 - width * req.scale).abs() <= 1.0 {
+        req.scale
+    } else {
+        measured
+    }
 }
 
 /// `image.format` in capture JSON when the image went to the clipboard.
@@ -1566,7 +1655,11 @@ fn read_image(path: &std::path::Path) -> Result<RgbaImage, CliError> {
         let dyn_img = image::load_from_memory(&buf)?;
         Ok(dyn_img.to_rgba8())
     } else {
-        let dyn_img = image::open(path)?;
+        // By content, not extension: `--also-image x.jpg` writes PNG.
+        let dyn_img = image::ImageReader::open(path)
+            .and_then(image::ImageReader::with_guessed_format)
+            .map_err(image::ImageError::IoError)?
+            .decode()?;
         Ok(dyn_img.to_rgba8())
     }
 }
@@ -1687,7 +1780,7 @@ mod tests {
     #[test]
     fn parse_rect_rejects_negative_size() {
         let err = parse_rect("0,0,-10,600").unwrap_err();
-        assert!(err.contains("non-positive") || err.contains("non-finite"));
+        assert!(err.contains("positive width and height"), "{err}");
     }
 
     #[test]
@@ -3023,8 +3116,8 @@ mod tests {
                 req.rect.width(),
                 req.rect.height()
             ),
-            (-10.0, 5.0, 100.0, 50.0),
-            "negative x is allowed"
+            (0.0, 5.0, 90.0, 50.0),
+            "negative x is allowed and keeps only the part on the display"
         );
         assert_eq!(req.scale, 3.0);
     }
@@ -3351,5 +3444,260 @@ mod tests {
         #[cfg(target_os = "linux")]
         let expected = std::path::Path::new("readshot/history");
         assert!(root.ends_with(expected), "{}", root.display());
+    }
+
+    // ── W5f: end-to-end bugs B1–B9 ──
+
+    /// A capturer that, like macOS before B1, always returns the region
+    /// at a fixed 2x whatever scale was asked for.
+    struct FixedRatioCapturer;
+
+    #[async_trait::async_trait]
+    impl Capturer for FixedRatioCapturer {
+        async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
+            Ok(vec![DisplayInfo {
+                id: "main".into(),
+                bounds: Rect::from_xywh(0.0, 0.0, 1440.0, 900.0).unwrap(),
+                scale: 2.0,
+                name: "main".into(),
+                is_primary: true,
+            }])
+        }
+
+        async fn capture_region(&self, req: CaptureRequest) -> Result<RgbaImage, CaptureError> {
+            Ok(RgbaImage::new(
+                (req.rect.width() * 2.0) as u32,
+                (req.rect.height() * 2.0) as u32,
+            ))
+        }
+    }
+
+    /// B1: the JSON `scale` is the scale of the image really produced,
+    /// not just the one requested.
+    #[tokio::test]
+    async fn capture_json_reports_the_scale_the_image_really_has() {
+        let clipboard = FakeClipboard::default();
+        let mut out = Vec::new();
+        Cli::try_parse_from([
+            "readshot",
+            "capture",
+            "--rect",
+            "0,0,100,50",
+            "--scale",
+            "1",
+            "--clipboard",
+            "--json",
+        ])
+        .unwrap()
+        .run_with_clipboard(
+            Arc::new(FixedRatioCapturer),
+            Arc::new(FakeOcrEngine::with_text("x")),
+            &mut out,
+            &clipboard,
+        )
+        .await
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(value["image"]["width"], 200);
+        assert_eq!(value["source"]["scale"], 2.0);
+
+        // When the image matches the request, the requested scale stands.
+        let mut out = Vec::new();
+        Cli::try_parse_from([
+            "readshot",
+            "capture",
+            "--rect",
+            "0,0,100,50",
+            "--clipboard",
+            "--json",
+        ])
+        .unwrap()
+        .run_with_clipboard(
+            Arc::new(FixedRatioCapturer),
+            Arc::new(FakeOcrEngine::with_text("x")),
+            &mut out,
+            &clipboard,
+        )
+        .await
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(value["source"]["scale"], 2.0);
+    }
+
+    fn rect_tuple(r: Rect) -> (f32, f32, f32, f32) {
+        (r.x(), r.y(), r.width(), r.height())
+    }
+
+    /// B2, B3: a rect partly off the display captures exactly the part
+    /// on it, and the JSON reports that rect; one entirely off exits 64.
+    #[tokio::test]
+    async fn a_rect_partly_off_the_display_is_clipped_and_reported_truthfully() {
+        for (rect, expected) in [
+            ("--rect=-100,0,200,50", (0.0, 0.0, 100.0, 50.0)),
+            ("--rect=1400,850,100,100", (1400.0, 850.0, 40.0, 50.0)),
+        ] {
+            for cmd in ["capture", "capture-text", "capture-and-ocr"] {
+                let mut args = vec!["readshot", cmd, "--display", "main", rect, "--json"];
+                if cmd == "capture" {
+                    args.push("--clipboard");
+                }
+                let (result, out, cap, _, _) = run_recorded(&args).await;
+                result.unwrap();
+                assert_eq!(rect_tuple(cap.regions()[0].rect), expected, "{args:?}");
+                let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+                let r = &value["source"]["rect"];
+                assert_eq!(
+                    (
+                        r["x"].as_f64().unwrap() as f32,
+                        r["y"].as_f64().unwrap() as f32,
+                        r["width"].as_f64().unwrap() as f32,
+                        r["height"].as_f64().unwrap() as f32,
+                    ),
+                    expected,
+                    "{args:?}"
+                );
+            }
+        }
+
+        let (result, out, cap, _, _) = run_recorded(&[
+            "readshot",
+            "capture",
+            "--rect",
+            "5000,5000,100,100",
+            "--clipboard",
+        ])
+        .await;
+        let err = result.unwrap_err();
+        assert_eq!(exit_code(&err), 64, "{err:?}");
+        assert!(err.to_string().contains("outside"), "{err}");
+        assert!(cap.regions().is_empty() && out.is_empty());
+    }
+
+    /// B4: zero-width and zero-height rects are argument errors.
+    #[test]
+    fn zero_sized_rects_are_rejected() {
+        for rect in ["0,0,0,10", "0,0,10,0"] {
+            for cmd in ["capture", "capture-text", "capture-and-ocr"] {
+                assert!(
+                    Cli::try_parse_from(["readshot", cmd, "--rect", rect]).is_err(),
+                    "{cmd} {rect}"
+                );
+            }
+            let err = Cli::try_parse_from([
+                "readshot",
+                "capture-window",
+                "--window",
+                "1",
+                "--rect",
+                rect,
+            ])
+            .unwrap_err();
+            assert_eq!(err.exit_code(), 2);
+            assert!(err.to_string().contains("width and height"), "{err}");
+        }
+    }
+
+    /// B5: `ocr -i FILE` decodes by content, not by file extension.
+    #[tokio::test]
+    async fn ocr_input_is_decoded_by_content_not_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = readshot_core::encode_png(&image::RgbaImage::new(8, 6)).unwrap();
+        for name in ["png-named.jpg", "png-noext"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, &png).unwrap();
+            let (result, out, _, _, _) =
+                run_recorded(&["readshot", "ocr", "-i", path.to_str().unwrap(), "--json"]).await;
+            result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+            assert_eq!(value["image"]["width"], 8, "{name}");
+        }
+    }
+
+    /// B6: `--also-image -` needs the text (or JSON) to go to a file, so
+    /// stdout never mixes PNG bytes and text.
+    #[tokio::test]
+    async fn also_image_to_stdout_needs_the_text_in_a_file() {
+        for args in [
+            &["readshot", "capture-and-ocr", "--also-image", "-"][..],
+            &["readshot", "capture-and-ocr", "--also-image", "-", "--json"][..],
+        ] {
+            let (result, out, cap, _, _) = run_recorded(args).await;
+            let err = result.unwrap_err();
+            assert!(
+                matches!(err, CliError::InvalidInput(ref m) if m.contains("--also-image -")),
+                "{err:?}"
+            );
+            assert_eq!(exit_code(&err), 64);
+            assert!(out.is_empty() && cap.regions().is_empty(), "{args:?}");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let text = dir.path().join("t.txt");
+        for json in [false, true] {
+            let mut args = vec![
+                "readshot",
+                "capture-and-ocr",
+                "--also-image",
+                "-",
+                "-o",
+                text.to_str().unwrap(),
+            ];
+            if json {
+                args.push("--json");
+            }
+            let (result, out, _, _, _) = run_recorded(&args).await;
+            result.unwrap();
+            let img = image::load_from_memory(&out).expect("stdout is exactly one PNG");
+            assert_eq!((img.width(), img.height()), (256, 256));
+            let written = std::fs::read_to_string(&text).unwrap();
+            if json {
+                let value: serde_json::Value = serde_json::from_str(&written).unwrap();
+                assert_eq!(value["text"], "hello world");
+            } else {
+                assert_eq!(written, "hello world");
+            }
+        }
+    }
+
+    fn window_on(display_id: Option<&str>, bounds: (f32, f32, f32, f32)) -> WindowInfo {
+        WindowInfo {
+            id: WindowId("6874".into()),
+            title: "Title".into(),
+            app_name: "cmux".into(),
+            display_id: display_id.map(str::to_string),
+            bounds: Rect::from_xywh(bounds.0, bounds.1, bounds.2, bounds.3).unwrap(),
+        }
+    }
+
+    /// B9: a window on no display is listed with none (`-` in the table,
+    /// `null` in JSON), and long bounds never run into the app column.
+    #[test]
+    fn list_windows_shows_no_display_and_keeps_columns_apart() {
+        let windows = [
+            window_on(None, (0.0, -72.0, 1512.0, 40.0)),
+            window_on(Some("3"), (1512.0, -73.0, 1920.0, 1055.0)),
+        ];
+        let mut table = Vec::new();
+        write_windows_table(&mut table, &windows).unwrap();
+        let table = String::from_utf8(table).unwrap();
+        let rows: Vec<&str> = table.lines().collect();
+        assert!(
+            rows[1].split_whitespace().nth(1) == Some("-"),
+            "no display shows as -: {table}"
+        );
+        assert!(
+            rows[2].contains("1512,-73,1920,1055 ") && !rows[2].contains("1055cmux"),
+            "{table}"
+        );
+        // The app column starts at the same place on every row.
+        let app_at = |row: &str| row.find("cmux").unwrap();
+        assert_eq!(app_at(rows[1]), app_at(rows[2]), "{table}");
+        assert_eq!(rows[0].find("app").unwrap(), app_at(rows[1]), "{table}");
+
+        let mut json = Vec::new();
+        write_windows_json(&mut json, &windows).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(value[0]["display_id"], serde_json::Value::Null);
+        assert_eq!(value[1]["display_id"], "3");
     }
 }

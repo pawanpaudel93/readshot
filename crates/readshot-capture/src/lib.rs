@@ -69,7 +69,9 @@ pub struct WindowInfo {
     pub id: WindowId,
     pub title: String,
     pub app_name: String,
-    pub display_id: DisplayId,
+    /// The display the window overlaps most; `None` for a window on no
+    /// display (parked off screen).
+    pub display_id: Option<DisplayId>,
     /// Window bounds in logical pixels.
     pub bounds: Rect,
 }
@@ -160,28 +162,145 @@ pub struct WindowCaptureRequest {
 ///
 /// Window capture backends return physical pixels, while window metadata is
 /// reported in logical pixels. This helper derives the x/y scale from the
-/// captured image size and the reported window bounds, then crops and clamps
-/// the requested rect to the captured image. A rect fully outside the image is
+/// captured image size and the reported window bounds, then crops to exactly
+/// the part of the requested rect inside the window (a rect with a negative
+/// origin keeps only its overlap). A rect fully outside the image is
 /// rejected as a typed invalid-region error.
 pub fn crop_window_relative_rect(
     full: RgbaImage,
     window_bounds: Rect,
     rect_logical: Rect,
 ) -> Result<RgbaImage, CaptureError> {
-    let scale_x = capture_axis_scale(full.width(), window_bounds.width());
-    let scale_y = capture_axis_scale(full.height(), window_bounds.height());
-    let x0 = ((rect_logical.x() * scale_x).round().max(0.0) as u32).min(full.width());
-    let y0 = ((rect_logical.y() * scale_y).round().max(0.0) as u32).min(full.height());
-    let w_target = (rect_logical.width() * scale_x).round().max(1.0) as u32;
-    let h_target = (rect_logical.height() * scale_y).round().max(1.0) as u32;
-    let w = w_target.min(full.width().saturating_sub(x0));
-    let h = h_target.min(full.height().saturating_sub(y0));
-    if w == 0 || h == 0 {
-        return Err(CaptureError::InvalidRegion(
-            "window-relative rect is outside the captured window bounds".to_string(),
-        ));
+    crop_logical_rect(
+        &full,
+        window_bounds.width(),
+        window_bounds.height(),
+        rect_logical,
+        "window-relative rect is outside the captured window bounds",
+    )
+}
+
+/// Crop a display capture to `rect_logical` (display-local logical
+/// pixels) and return it at the requested output `scale`: the result
+/// is the overlap of the rect with the display, sized
+/// `overlap.width * scale` by `overlap.height * scale`.
+///
+/// `full` is the whole display as the backend captured it, covering
+/// `logical_w` by `logical_h` logical pixels at whatever pixel ratio
+/// the OS gave; that ratio is read from the image size. When it already
+/// matches `scale` the crop is returned untouched, otherwise it is
+/// resampled, so `--scale` / MCP `scale` mean the same on every backend.
+pub fn crop_display_capture(
+    full: &RgbaImage,
+    logical_w: f32,
+    logical_h: f32,
+    rect_logical: Rect,
+    scale: f32,
+) -> Result<RgbaImage, CaptureError> {
+    let outside =
+        || CaptureError::InvalidRegion("region is outside the captured display bounds".to_string());
+    let crop = crop_logical_rect(
+        full,
+        logical_w,
+        logical_h,
+        rect_logical,
+        "region is outside the captured display bounds",
+    )?;
+    let overlap = clip_rect(rect_logical, logical_w, logical_h).ok_or_else(outside)?;
+    let scale_x = capture_axis_scale(full.width(), logical_w);
+    let scale_y = capture_axis_scale(full.height(), logical_h);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Ok(crop);
     }
-    Ok(image::imageops::crop_imm(&full, x0, y0, w, h).to_image())
+    let close = |a: f32| (a - scale).abs() <= SCALE_EPSILON;
+    let target_w = if close(scale_x) {
+        crop.width()
+    } else {
+        (overlap.width() * scale).round().max(1.0) as u32
+    };
+    let target_h = if close(scale_y) {
+        crop.height()
+    } else {
+        (overlap.height() * scale).round().max(1.0) as u32
+    };
+    if (target_w, target_h) == crop.dimensions() {
+        return Ok(crop);
+    }
+    Ok(image::imageops::resize(
+        &crop,
+        target_w,
+        target_h,
+        image::imageops::FilterType::CatmullRom,
+    ))
+}
+
+/// Two pixel ratios closer than this are the same scale (no resample).
+const SCALE_EPSILON: f32 = 0.01;
+
+/// The part of `rect` inside the `0,0,width,height` area, or `None`
+/// when they don't overlap.
+pub fn clip_rect(rect: Rect, width: f32, height: f32) -> Option<Rect> {
+    let x0 = rect.x().max(0.0);
+    let y0 = rect.y().max(0.0);
+    let x1 = rect.right().min(width);
+    let y1 = rect.bottom().min(height);
+    if x1 > x0 && y1 > y0 {
+        Rect::from_ltrb(x0, y0, x1, y1)
+    } else {
+        None
+    }
+}
+
+/// The display-local part of a requested capture rect that lies on
+/// `display`: the rect a capture of it really returns. A rect partly
+/// off the display is clipped to the overlap; one entirely off it is
+/// a typed invalid-region error. Global rects that fit the display are
+/// accepted as in [`rect_relative_to_display`].
+pub fn clip_rect_to_display(rect: Rect, display: &DisplayInfo) -> Result<Rect, CaptureError> {
+    let local = rect_relative_to_display(rect, display.bounds);
+    clip_rect(local, display.bounds.width(), display.bounds.height()).ok_or_else(|| {
+        CaptureError::InvalidRegion("region is outside the captured display bounds".to_string())
+    })
+}
+
+/// Crop `full`, an image of a `logical_w` by `logical_h` logical area,
+/// to exactly the part of `rect_logical` inside it. Each axis scale is
+/// the image size over the logical size.
+fn crop_logical_rect(
+    full: &RgbaImage,
+    logical_w: f32,
+    logical_h: f32,
+    rect_logical: Rect,
+    outside: &str,
+) -> Result<RgbaImage, CaptureError> {
+    let scale_x = capture_axis_scale(full.width(), logical_w);
+    let scale_y = capture_axis_scale(full.height(), logical_h);
+    let span = |start: f32, end: f32, scale: f32, max: u32| -> Option<(u32, u32)> {
+        let a = (start * scale).max(0.0);
+        let b = (end * scale).min(max as f32);
+        if max == 0 || b.partial_cmp(&a) != Some(std::cmp::Ordering::Greater) {
+            return None;
+        }
+        let a = (a.round() as u32).min(max - 1);
+        let b = (b.round() as u32).clamp(a + 1, max);
+        Some((a, b - a))
+    };
+    let err = || CaptureError::InvalidRegion(outside.to_string());
+    let (x0, w) = span(
+        rect_logical.x(),
+        rect_logical.right(),
+        scale_x,
+        full.width(),
+    )
+    .ok_or_else(err)?;
+    let (y0, h) = span(
+        rect_logical.y(),
+        rect_logical.bottom(),
+        scale_y,
+        full.height(),
+    )
+    .ok_or_else(err)?;
+    Ok(image::imageops::crop_imm(full, x0, y0, w, h).to_image())
 }
 
 fn capture_axis_scale(image_pixels: u32, logical_extent: f32) -> f32 {
@@ -425,7 +544,7 @@ mod tests {
             id: WindowId(id.into()),
             title: String::new(),
             app_name: String::new(),
-            display_id: "d".into(),
+            display_id: Some("d".into()),
             bounds: Rect::from_xywh(x, y, w, h).unwrap(),
         }
     }
@@ -696,6 +815,132 @@ mod tests {
 
         assert_eq!(cropped.width(), 10);
         assert_eq!(cropped.height(), 10);
+    }
+
+    #[test]
+    fn crop_window_relative_rect_keeps_only_the_overlap_of_a_negative_origin() {
+        // B2: x = -10, width 30 covers window x 0..20 only.
+        let cropped = crop_window_relative_rect(
+            solid(100, 80),
+            rect(0.0, 0.0, 100.0, 80.0),
+            rect(-10.0, -5.0, 30.0, 25.0),
+        )
+        .unwrap();
+
+        assert_eq!(cropped.dimensions(), (20, 20));
+        assert_eq!(cropped.get_pixel(0, 0), &image::Rgba([0, 0, 0, 255]));
+    }
+
+    #[test]
+    fn display_crop_keeps_only_the_overlap_of_a_negative_origin() {
+        // B2: logical 200x150 display at 2x; x = -100, width 200 is the
+        // logical 0..100 overlap, not 0..200.
+        let cropped = crop_display_capture(
+            &solid(400, 300),
+            200.0,
+            150.0,
+            rect(-100.0, 10.0, 200.0, 50.0),
+            2.0,
+        )
+        .unwrap();
+
+        assert_eq!(cropped.dimensions(), (200, 100));
+        assert_eq!(cropped.get_pixel(0, 0), &image::Rgba([0, 20, 0, 255]));
+    }
+
+    #[test]
+    fn display_crop_honours_the_requested_scale() {
+        // B1: a 2x capture asked for at scale 1 comes back at 1x.
+        let cropped = crop_display_capture(
+            &solid(400, 300),
+            200.0,
+            150.0,
+            rect(10.0, 20.0, 30.0, 40.0),
+            1.0,
+        )
+        .unwrap();
+        assert_eq!(cropped.dimensions(), (30, 40));
+
+        // At the native ratio nothing is resampled.
+        let native = crop_display_capture(
+            &solid(400, 300),
+            200.0,
+            150.0,
+            rect(10.0, 20.0, 30.0, 40.0),
+            2.0,
+        )
+        .unwrap();
+        assert_eq!(native.dimensions(), (60, 80));
+        assert_eq!(native.get_pixel(0, 0), &image::Rgba([20, 40, 0, 255]));
+
+        // And upscaling works too.
+        let up = crop_display_capture(
+            &solid(200, 150),
+            200.0,
+            150.0,
+            rect(10.0, 20.0, 30.0, 40.0),
+            3.0,
+        )
+        .unwrap();
+        assert_eq!(up.dimensions(), (90, 120));
+    }
+
+    #[test]
+    fn display_crop_uses_independent_x_and_y_ratios() {
+        let cropped = crop_display_capture(
+            &solid(400, 300),
+            400.0,
+            200.0,
+            rect(10.0, 20.0, 30.0, 40.0),
+            1.0,
+        )
+        .unwrap();
+        // y is captured at 1.5x and resampled to the requested 1x.
+        assert_eq!(cropped.dimensions(), (30, 40));
+    }
+
+    #[test]
+    fn display_crop_rejects_a_rect_off_the_display() {
+        let err = crop_display_capture(
+            &solid(100, 100),
+            50.0,
+            50.0,
+            rect(51.0, 51.0, 10.0, 10.0),
+            2.0,
+        )
+        .unwrap_err();
+        assert!(matches!(err, CaptureError::InvalidRegion(_)));
+    }
+
+    #[test]
+    fn clip_rect_to_display_returns_the_overlap_or_an_error() {
+        let display = DisplayInfo {
+            id: "d".into(),
+            bounds: rect(1512.0, 0.0, 1920.0, 1080.0),
+            scale: 2.0,
+            name: String::new(),
+            is_primary: false,
+        };
+        // B3: partly off the display → the part on it.
+        assert_eq!(
+            clip_rect_to_display(rect(1900.0, 1060.0, 100.0, 100.0), &display).unwrap(),
+            rect(1900.0, 1060.0, 20.0, 20.0)
+        );
+        // B2: a negative origin keeps its overlap.
+        assert_eq!(
+            clip_rect_to_display(rect(-100.0, 0.0, 200.0, 50.0), &display).unwrap(),
+            rect(0.0, 0.0, 100.0, 50.0)
+        );
+        // Entirely off → invalid region.
+        assert!(matches!(
+            clip_rect_to_display(rect(5000.0, 5000.0, 100.0, 100.0), &display),
+            Err(CaptureError::InvalidRegion(_))
+        ));
+        // A global rect that fits the display still maps to local.
+        assert_eq!(
+            clip_rect_to_display(rect(3000.0, 100.0, 50.0, 50.0), &display).unwrap(),
+            rect(1488.0, 100.0, 50.0, 50.0)
+        );
     }
 
     #[test]

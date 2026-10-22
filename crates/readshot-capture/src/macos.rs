@@ -103,15 +103,21 @@ impl Capturer for ScreenCaptureKitCapturer {
                     "rgba_data length does not match width × height × 4".to_string(),
                 )
             })?;
-            let (scale_x, scale_y) =
-                capture_scales_for_image(display.display_id(), width, height, req.scale);
             let display_bounds = display_bounds_from_cg(
                 display.display_id(),
                 display.width() as f32,
                 display.height() as f32,
             );
             let rect = rect_relative_to_display(req.rect, display_bounds);
-            crop_rgba(full, rect, scale_x, scale_y)
+            // The capture is at the display's native pixel ratio; the
+            // crop comes back at the requested scale.
+            crate::crop_display_capture(
+                &full,
+                display_bounds.width(),
+                display_bounds.height(),
+                rect,
+                req.scale,
+            )
         })
         .await
     }
@@ -214,7 +220,7 @@ impl Capturer for ScreenCaptureKitCapturer {
                 .and_then(|info| {
                     displays
                         .iter()
-                        .find(|display| display.id == info.display_id)
+                        .find(|display| Some(&display.id) == info.display_id.as_ref())
                         .cloned()
                 })
                 .or_else(|| displays.iter().find(|display| display.is_primary).cloned())
@@ -270,66 +276,6 @@ fn unpremultiply(mut img: RgbaImage) -> RgbaImage {
         }
     }
     img
-}
-
-fn crop_rgba(
-    full: RgbaImage,
-    rect_logical: Rect,
-    scale_x: f32,
-    scale_y: f32,
-) -> Result<RgbaImage, CaptureError> {
-    let x0 = ((rect_logical.x() * scale_x).round().max(0.0) as u32).min(full.width());
-    let y0 = ((rect_logical.y() * scale_y).round().max(0.0) as u32).min(full.height());
-    let w_target = (rect_logical.width() * scale_x).round().max(1.0) as u32;
-    let h_target = (rect_logical.height() * scale_y).round().max(1.0) as u32;
-    let w = w_target.min(full.width().saturating_sub(x0));
-    let h = h_target.min(full.height().saturating_sub(y0));
-    if w == 0 || h == 0 {
-        return Err(CaptureError::InvalidRegion(
-            "region is outside the captured display bounds".to_string(),
-        ));
-    }
-    Ok(image::imageops::crop_imm(&full, x0, y0, w, h).to_image())
-}
-
-fn capture_scales_for_image(
-    display_id: u32,
-    image_width: u32,
-    image_height: u32,
-    fallback: f32,
-) -> (f32, f32) {
-    use core_graphics::display::CGDisplay;
-    let bounds = CGDisplay::new(display_id).bounds();
-    capture_scales_from_values(
-        bounds.size.width as f32,
-        bounds.size.height as f32,
-        image_width,
-        image_height,
-        fallback,
-    )
-}
-
-fn capture_scales_from_values(
-    logical_w: f32,
-    logical_h: f32,
-    image_width: u32,
-    image_height: u32,
-    fallback: f32,
-) -> (f32, f32) {
-    (
-        capture_axis_scale_from_values(logical_w, image_width, fallback),
-        capture_axis_scale_from_values(logical_h, image_height, fallback),
-    )
-}
-
-fn capture_axis_scale_from_values(logical_extent: f32, image_pixels: u32, fallback: f32) -> f32 {
-    if logical_extent.is_finite() && logical_extent > 0.0 && image_pixels > 0 {
-        image_pixels as f32 / logical_extent
-    } else if fallback.is_finite() && fallback > 0.0 {
-        fallback
-    } else {
-        1.0
-    }
 }
 
 fn native_capture_size(display_id: u32, fallback_w: u32, fallback_h: u32) -> (u32, u32) {
@@ -416,7 +362,8 @@ fn window_info_from_sc(window: &SCWindow, displays: &[DisplayInfo]) -> Option<Wi
         size.width as f32,
         size.height as f32,
     )?;
-    let display_id = best_display_for_rect(bounds, displays)?.id.clone();
+    // A window on no display (parked off screen) has no display.
+    let display_id = best_display_for_rect(bounds, displays).map(|d| d.id.clone());
     let app_name = window
         .owning_application()
         .map(|app| app.application_name())
@@ -471,12 +418,14 @@ fn on_screen_stack() -> Vec<(String, f64)> {
         .collect()
 }
 
+/// The display a rect overlaps most, or `None` when it overlaps none.
 fn best_display_for_rect(rect: Rect, displays: &[DisplayInfo]) -> Option<&DisplayInfo> {
-    displays.iter().max_by(|a, b| {
-        intersection_area(rect, a.bounds)
-            .partial_cmp(&intersection_area(rect, b.bounds))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    })
+    displays
+        .iter()
+        .map(|d| (d, intersection_area(rect, d.bounds)))
+        .filter(|(_, area)| *area > 0.0)
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(d, _)| d)
 }
 
 fn intersection_area(a: Rect, b: Rect) -> f32 {
@@ -543,10 +492,6 @@ fn map_err(e: SCError) -> CaptureError {
 mod tests {
     use super::*;
 
-    fn solid(w: u32, h: u32) -> RgbaImage {
-        RgbaImage::from_fn(w, h, |x, y| image::Rgba([x as u8, y as u8, 0, 255]))
-    }
-
     #[test]
     fn unpremultiply_restores_straight_alpha_and_leaves_opaque_untouched() {
         let mut img = RgbaImage::new(3, 1);
@@ -589,48 +534,6 @@ mod tests {
     }
 
     #[test]
-    fn crop_rgba_scales_logical_rect_to_physical_pixels() {
-        let cropped = crop_rgba(
-            solid(400, 300),
-            Rect::from_xywh(10.0, 20.0, 30.0, 40.0).unwrap(),
-            2.0,
-            2.0,
-        )
-        .unwrap();
-
-        assert_eq!(cropped.width(), 60);
-        assert_eq!(cropped.height(), 80);
-        assert_eq!(cropped.get_pixel(0, 0), &image::Rgba([20, 40, 0, 255]));
-    }
-
-    #[test]
-    fn crop_rgba_clamps_to_full_image_bounds() {
-        let cropped = crop_rgba(
-            solid(100, 100),
-            Rect::from_xywh(40.0, 40.0, 20.0, 20.0).unwrap(),
-            2.0,
-            2.0,
-        )
-        .unwrap();
-
-        assert_eq!(cropped.width(), 20);
-        assert_eq!(cropped.height(), 20);
-    }
-
-    #[test]
-    fn crop_rgba_handles_edge_rounding_outside_bounds() {
-        let err = crop_rgba(
-            solid(100, 100),
-            Rect::from_xywh(51.0, 51.0, 10.0, 10.0).unwrap(),
-            2.0,
-            2.0,
-        )
-        .unwrap_err();
-
-        assert!(matches!(err, CaptureError::InvalidRegion(_)));
-    }
-
-    #[test]
     fn native_capture_size_prefers_coregraphics_pixels_over_logical_scdisplay_size() {
         assert_eq!(
             native_capture_size_from_values(1512, 982, 3024, 1964),
@@ -658,30 +561,27 @@ mod tests {
         assert_eq!(display_scale_from_values(1920.0, 0), 1.0);
     }
 
-    #[test]
-    fn capture_scales_use_actual_image_size_over_expected_display_scale() {
-        assert_eq!(
-            capture_scales_from_values(1512.0, 982.0, 1512, 982, 2.0),
-            (1.0, 1.0)
-        );
-        assert_eq!(
-            capture_scales_from_values(1512.0, 982.0, 3024, 1964, 1.0),
-            (2.0, 2.0)
-        );
+    fn display(id: &str, x: f32, w: f32, h: f32) -> DisplayInfo {
+        DisplayInfo {
+            id: id.into(),
+            bounds: Rect::from_xywh(x, 0.0, w, h).unwrap(),
+            scale: 2.0,
+            name: String::new(),
+            is_primary: x == 0.0,
+        }
     }
 
     #[test]
-    fn crop_rgba_uses_independent_actual_x_and_y_scales() {
-        let cropped = crop_rgba(
-            solid(400, 300),
-            Rect::from_xywh(10.0, 20.0, 30.0, 40.0).unwrap(),
-            1.0,
-            1.5,
-        )
-        .unwrap();
-
-        assert_eq!(cropped.width(), 30);
-        assert_eq!(cropped.height(), 60);
-        assert_eq!(cropped.get_pixel(0, 0), &image::Rgba([10, 30, 0, 255]));
+    fn a_window_on_no_display_has_no_display() {
+        // B9: the last display used to win a tie of zero overlaps.
+        let displays = [
+            display("1", 0.0, 1512.0, 982.0),
+            display("3", 1512.0, 1920.0, 1080.0),
+            display("2", 3432.0, 1920.0, 1080.0),
+        ];
+        let off_screen = Rect::from_xywh(0.0, -72.0, 1512.0, 40.0).unwrap();
+        assert!(best_display_for_rect(off_screen, &displays).is_none());
+        let on_three = Rect::from_xywh(1400.0, 10.0, 600.0, 400.0).unwrap();
+        assert_eq!(best_display_for_rect(on_three, &displays).unwrap().id, "3");
     }
 }

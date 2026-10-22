@@ -1342,7 +1342,7 @@ fn picker_window(id: &str, display: &str, x: f32) -> readshot_capture::StackedWi
             id: readshot_capture::WindowId(id.into()),
             title: "Docs".into(),
             app_name: "Safari".into(),
-            display_id: display.into(),
+            display_id: Some(display.into()),
             bounds: readshot_core::geom::Rect::from_xywh(x, 40.0, 300.0, 200.0).unwrap(),
         },
         pickable: true,

@@ -174,7 +174,16 @@ fn argument_errors_exit_2_before_anything_runs() {
         ),
         (
             &["capture", "--rect", "0,0,-5,10", "-o", out],
-            "non-positive",
+            "positive width and height",
+        ),
+        // B4: a zero-sized rect is as bad as a negative one.
+        (
+            &["capture", "--rect", "0,0,0,10", "-o", out],
+            "positive width and height",
+        ),
+        (
+            &["capture-window", "--window", "1", "--rect", "0,0,10,0"],
+            "positive width and height",
         ),
         (
             &["capture", "--rect", "0,0,99999,10", "-o", out],
@@ -257,11 +266,13 @@ fn json_without_a_destination_exits_64_before_capturing() {
         64,
         "--json with image capture requires --output PATH or --clipboard",
     );
-    assert_cli_error(
-        &sandbox.run(&["capture-and-ocr", "--json", "--also-image", "-"]),
-        64,
-        "--json cannot be combined with --also-image -",
-    );
+    // B6: the image and the text (or JSON) can't share stdout.
+    for args in [
+        &["capture-and-ocr", "--json", "--also-image", "-"][..],
+        &["capture-and-ocr", "--also-image", "-"][..],
+    ] {
+        assert_cli_error(&sandbox.run(args), 64, "--also-image - needs --output FILE");
+    }
 }
 
 /// CLI-29: language correction can be turned off on the real binary
@@ -552,4 +563,11 @@ fn cli_logs_go_to_the_data_folder_file_not_stderr() {
     #[cfg(target_os = "linux")]
     let log = sandbox.home().join(".local/share/readshot/readshot.log");
     assert!(log.is_file(), "expected the CLI log at {}", log.display());
+    // The run is in it: the command, then its failure.
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        text.contains("cli command") && text.contains("command=\"capture\""),
+        "{text}"
+    );
+    assert!(text.contains("cli command failed"), "{text}");
 }

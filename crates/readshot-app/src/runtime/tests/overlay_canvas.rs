@@ -595,7 +595,7 @@ fn stacked(id: &str, display: &str, x: f32) -> readshot_capture::StackedWindow {
             id: readshot_capture::WindowId(id.into()),
             title: "Docs".into(),
             app_name: "Safari".into(),
-            display_id: display.into(),
+            display_id: Some(display.into()),
             bounds: r(x, 40.0, 300.0, 200.0),
         },
         pickable: true,
