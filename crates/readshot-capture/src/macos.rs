@@ -158,8 +158,13 @@ impl Capturer for ScreenCaptureKitCapturer {
                 .collect::<Vec<_>>();
             let own_pid = std::process::id() as i32;
             // Every on-screen layer at or above normal windows (panels,
-            // the Dock, the menu bar): they cover what is behind them.
-            // Negative layers are the desktop. Only layer 0 is offered.
+            // the Dock, the menu bar) may cover what is behind it.
+            // Negative layers are the desktop. Only layer 0 is offered;
+            // above it, only a visible, partial window blocks
+            // (`blocks_window_pick`): a transparent or display-sized
+            // overlay is seen through, so it is left out.
+            let stack = on_screen_stack();
+            let alpha_of = |id: &str| stack.iter().find(|(sid, _)| sid == id).map(|(_, a)| *a);
             let (infos, pickable): (Vec<WindowInfo>, Vec<(String, bool)>) = content
                 .windows()
                 .into_iter()
@@ -171,12 +176,23 @@ impl Capturer for ScreenCaptureKitCapturer {
                 })
                 .filter_map(|window| {
                     let info = window_info_from_sc(&window, &displays)?;
-                    let flag = (info.id.0.clone(), window.window_layer() == 0);
+                    let layer0 = window.window_layer() == 0;
+                    // Not in the window server's on-screen list: not seen.
+                    let alpha = alpha_of(&info.id.0)?;
+                    // An invisible window is neither picked nor in the way.
+                    if alpha <= 0.01 {
+                        return None;
+                    }
+                    if !layer0 && !crate::blocks_window_pick(alpha, info.bounds, &displays) {
+                        return None;
+                    }
+                    let flag = (info.id.0.clone(), layer0);
                     Some((info, flag))
                 })
                 .unzip();
             let mut infos = infos;
-            crate::order_front_to_back(&mut infos, &on_screen_stacking());
+            let order: Vec<String> = stack.iter().map(|(id, _)| id.clone()).collect();
+            crate::order_front_to_back(&mut infos, &order);
             Ok(infos
                 .into_iter()
                 .map(|info| {
@@ -425,16 +441,41 @@ fn window_info_from_sc(window: &SCWindow, displays: &[DisplayInfo]) -> Option<Wi
 /// (`CGWindowListCreate` documents that order). Empty if the window
 /// server returns nothing.
 fn on_screen_stacking() -> Vec<String> {
+    on_screen_stack().into_iter().map(|(id, _)| id).collect()
+}
+
+/// The on-screen windows front to back with their alpha
+/// (`kCGWindowAlpha`, 1.0 when the window server doesn't say).
+fn on_screen_stack() -> Vec<(String, f64)> {
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
     use core_graphics::window::{
-        create_window_list, kCGNullWindowID, kCGWindowListExcludeDesktopElements,
-        kCGWindowListOptionOnScreenOnly,
+        create_description_from_array, create_window_list, kCGNullWindowID,
+        kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
     };
-    create_window_list(
+    let Some(ids) = create_window_list(
         kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
         kCGNullWindowID,
-    )
-    .map(|ids| ids.iter().map(|id| id.to_string()).collect())
-    .unwrap_or_default()
+    ) else {
+        return Vec::new();
+    };
+    let Some(descriptions) = create_description_from_array(ids) else {
+        return Vec::new();
+    };
+    let number_key = CFString::from_static_string("kCGWindowNumber");
+    let alpha_key = CFString::from_static_string("kCGWindowAlpha");
+    descriptions
+        .iter()
+        .filter_map(|d| {
+            let id = d.find(&number_key)?.downcast::<CFNumber>()?.to_i64()?;
+            let alpha = d
+                .find(&alpha_key)
+                .and_then(|v| v.downcast::<CFNumber>())
+                .and_then(|n| n.to_f64())
+                .unwrap_or(1.0);
+            Some((id.to_string(), alpha))
+        })
+        .collect()
 }
 
 fn best_display_for_rect(rect: Rect, displays: &[DisplayInfo]) -> Option<&DisplayInfo> {

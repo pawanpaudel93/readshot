@@ -85,6 +85,27 @@ pub struct StackedWindow {
     pub pickable: bool,
 }
 
+/// Whether a window that can't be picked (a panel, the Dock, the menu
+/// bar) blocks a pick of what is behind it: only when it is visible
+/// (`alpha` above zero) and covers less than most of its display. A
+/// transparent or display-sized overlay (screen-share border, cursor
+/// highlighter, an invisible app strip) is see-through and must not stop
+/// the user picking the window they see through it.
+pub fn blocks_window_pick(alpha: f64, bounds: Rect, displays: &[DisplayInfo]) -> bool {
+    /// Covering this much of a display makes a window an overlay.
+    const OVERLAY_SHARE: f32 = 0.9;
+    if alpha <= 0.01 {
+        return false;
+    }
+    !displays.iter().any(|d| {
+        let b = d.bounds;
+        let w = (bounds.right().min(b.right()) - bounds.x().max(b.x())).max(0.0);
+        let h = (bounds.bottom().min(b.bottom()) - bounds.y().max(b.y())).max(0.0);
+        let area = b.width() * b.height();
+        area > 0.0 && w * h >= OVERLAY_SHARE * area
+    })
+}
+
 /// The frontmost window under a point in global logical coordinates:
 /// the first in a front-to-back list whose bounds contain it.
 pub fn topmost_window_at(windows: &[WindowInfo], x: f32, y: f32) -> Option<&WindowInfo> {
@@ -408,6 +429,51 @@ mod tests {
             topmost_window_at(&windows, 400.0, 10.0).map(|w| &w.id.0),
             None
         );
+    }
+
+    fn display(x: f32, w: f32, h: f32) -> DisplayInfo {
+        DisplayInfo {
+            id: format!("d{x}"),
+            bounds: Rect::from_xywh(x, 0.0, w, h).unwrap(),
+            scale: 2.0,
+            name: String::new(),
+            is_primary: x == 0.0,
+        }
+    }
+
+    #[test]
+    fn only_visible_partial_windows_block_a_pick() {
+        let displays = [display(0.0, 1512.0, 982.0), display(1512.0, 1920.0, 1080.0)];
+        // The Dock and an opaque floating panel block.
+        assert!(blocks_window_pick(
+            1.0,
+            rect(300.0, 920.0, 900.0, 62.0),
+            &displays
+        ));
+        assert!(blocks_window_pick(
+            1.0,
+            rect(100.0, 100.0, 300.0, 400.0),
+            &displays
+        ));
+        // An invisible window (alpha 0, e.g. a browser's menu-bar strip)
+        // never blocks.
+        assert!(!blocks_window_pick(
+            0.0,
+            rect(0.0, 0.0, 1512.0, 37.0),
+            &displays
+        ));
+        // A display-sized overlay (screen-share border, cursor
+        // highlighter, annotation layer) is see-through by nature.
+        assert!(!blocks_window_pick(
+            1.0,
+            rect(1512.0, 0.0, 1920.0, 1080.0),
+            &displays
+        ));
+        assert!(!blocks_window_pick(
+            1.0,
+            rect(0.0, 0.0, 1512.0, 982.0),
+            &displays
+        ));
     }
 
     #[tokio::test]
