@@ -1138,6 +1138,7 @@ fn uninstalled_app(purge: bool) -> (tempfile::TempDir, App) {
         Message::Settings(SettingsMsg::UninstallFinished {
             program_removed: false,
             purge,
+            failed: Vec::new(),
         }),
     );
     // The History writer's launch-time sweep has run (in the app it ran
@@ -1149,6 +1150,32 @@ fn uninstalled_app(purge: bool) -> (tempfile::TempDir, App) {
         let _ = std::fs::remove_dir_all(dir.path().join("config"));
     }
     (dir, app)
+}
+
+/// W5a S1: a Settings uninstall whose steps failed says so, in the
+/// error tone, naming each failed step, and never claims everything was
+/// removed. Even when the bundle went to the Trash, Readshot stays up to
+/// say it instead of quitting.
+#[test]
+fn a_settings_uninstall_with_failed_steps_names_them() {
+    for program_removed in [false, true] {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        app.settings_window_id = Some(iced::window::Id::unique());
+        let _ = update(
+            &mut app,
+            Message::Settings(SettingsMsg::UninstallFinished {
+                program_removed,
+                purge: false,
+                failed: vec!["Remove the Open at Login entry, if there is one".into()],
+            }),
+        );
+        let said = app.settings_uninstall_result.as_ref().expect("said");
+        assert_eq!(said.tone, StatusTone::Error, "{program_removed}");
+        assert!(said.text.contains("Open at Login entry"), "{}", said.text);
+        assert!(said.text.contains("1 step"), "{}", said.text);
+        assert!(!said.text.contains("were removed"), "{}", said.text);
+        assert!(app.uninstalled);
+    }
 }
 
 /// The completion is said under the Uninstall row, toned, with a way
@@ -1266,6 +1293,7 @@ fn confirming_an_uninstall_goes_inert_before_it_runs() {
         Message::Settings(SettingsMsg::UninstallFinished {
             program_removed: false,
             purge: true,
+            failed: Vec::new(),
         }),
     );
     assert_eq!(
@@ -1274,14 +1302,20 @@ fn confirming_an_uninstall_goes_inert_before_it_runs() {
     );
 }
 
-/// R1: kept preferences say Open at Login is off, so running the left-over
-/// program again doesn't register it again. A purged or never-written
-/// file is not created.
+/// R1 and W5a S2: kept preferences end up saying Open at Login is off,
+/// but only after the steps removed the entry
+/// (`uninstall::record_open_at_login_off_after`, tested there), never at
+/// confirm: if the removal then failed, the file would say off while
+/// the entry stays. A purged or never-written file is not created.
 #[test]
-fn a_kept_preferences_file_records_open_at_login_off() {
+fn a_kept_preferences_file_is_not_written_before_the_steps_run() {
     let (dir, mut app) = confirming_app(false, true);
     let _ = update(&mut app, Message::Settings(SettingsMsg::UninstallConfirmed));
-    assert_eq!(saved_launch_at_login(&dir), Some(false));
+    assert_eq!(
+        saved_launch_at_login(&dir),
+        Some(true),
+        "nothing recorded before the login entry is removed"
+    );
     assert!(!app.preferences.launch_at_login);
 
     let (dir, mut app) = confirming_app(false, false);

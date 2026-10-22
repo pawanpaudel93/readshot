@@ -286,6 +286,28 @@ pub fn completion_message(actions: &[UninstallAction], purge: bool) -> String {
     )
 }
 
+/// The described steps of `reports` that failed, in order.
+pub fn failed_steps(reports: &[ActionReport]) -> Vec<String> {
+    reports
+        .iter()
+        .filter(|r| r.outcome.is_err())
+        .map(|r| r.action.describe())
+        .collect()
+}
+
+/// What Settings says when steps failed (`failed` from
+/// [`failed_steps`]): how many, which, and to run it again. Every step
+/// tolerates what an earlier run already removed.
+pub fn failure_message(failed: &[String]) -> String {
+    let n = failed.len();
+    let steps = if n == 1 { "step" } else { "steps" };
+    format!(
+        "The uninstall didn't finish: {n} {steps} failed ({}). Run Uninstall again, \
+         or `readshot uninstall` in a terminal.",
+        failed.join("; ")
+    )
+}
+
 /// After an uninstall that keeps preferences (no purge), record Open at
 /// Login as off in the preferences file at `path`, so running the
 /// left-over program again doesn't register it again at startup.
@@ -302,6 +324,30 @@ pub fn record_open_at_login_off(path: &Path) -> Result<bool, readshot_core::Pref
     prefs.launch_at_login = false;
     prefs.save(path)?;
     Ok(true)
+}
+
+/// After the steps ran: record Open at Login as off in the kept
+/// preferences at `path` ([`record_open_at_login_off`]), but only when
+/// no step removing the login entry failed. Recording it first would
+/// leave the file saying off while the entry stays, and nothing would
+/// remove it on the next launch. Nothing is written under `purge` (the
+/// file was deleted) or without a path.
+pub fn record_open_at_login_off_after(
+    reports: &[ActionReport],
+    path: Option<&Path>,
+    purge: bool,
+) -> Result<bool, readshot_core::PreferencesError> {
+    let entry_kept = reports.iter().any(|r| {
+        r.outcome.is_err()
+            && matches!(
+                r.action,
+                UninstallAction::RemoveLoginItem { .. } | UninstallAction::DisableOpenAtLogin
+            )
+    });
+    match path {
+        Some(path) if !purge && !entry_kept => record_open_at_login_off(path),
+        _ => Ok(false),
+    }
 }
 
 /// Run `flush` (the History writer's queued writes), then the plan. A
@@ -911,6 +957,51 @@ mod tests {
         assert!(back.debug_logging, "the rest is kept");
         // Already off: nothing to write.
         assert!(!record_open_at_login_off(&path).unwrap());
+    }
+
+    /// W5a S2: Open at Login is recorded off only once the login entry
+    /// is actually gone. A failed removal leaves the preferences saying
+    /// on, so the next launch (or a rerun) still knows to remove it.
+    #[test]
+    fn open_at_login_is_recorded_off_only_after_the_entry_is_removed() {
+        struct Sys(bool);
+        impl UninstallSystem for Sys {
+            fn unload_login_item(&self, _: &str, _: &Path) -> io::Result<()> {
+                Ok(())
+            }
+            fn reset_screen_recording(&self, _: &str) -> io::Result<()> {
+                Ok(())
+            }
+            fn clear_defaults(&self, _: &str) -> io::Result<()> {
+                Ok(())
+            }
+            fn disable_open_at_login(&self) -> io::Result<()> {
+                if self.0 {
+                    Ok(())
+                } else {
+                    Err(io::Error::other("reg delete failed"))
+                }
+            }
+        }
+        let plan = vec![UninstallAction::DisableOpenAtLogin];
+        for removes in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("preferences.toml");
+            readshot_core::Preferences {
+                launch_at_login: true,
+                ..Default::default()
+            }
+            .save(&path)
+            .unwrap();
+            let reports = execute(&plan, &Sys(removes));
+            assert_eq!(failed_steps(&reports).len(), usize::from(!removes));
+            let changed = record_open_at_login_off_after(&reports, Some(&path), false).unwrap();
+            assert_eq!(changed, removes);
+            let back = readshot_core::Preferences::load(&path).unwrap();
+            assert_eq!(back.launch_at_login, !removes);
+            // Under purge nothing is written (the file is deleted).
+            assert!(!record_open_at_login_off_after(&reports, Some(&path), true).unwrap());
+        }
     }
 
     #[test]

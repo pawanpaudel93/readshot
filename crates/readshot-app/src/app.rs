@@ -790,6 +790,8 @@ pub enum SettingsMsg {
         program_removed: bool,
         /// History and preferences were deleted too.
         purge: bool,
+        /// The steps that failed, described (`UninstallAction::describe`).
+        failed: Vec<String>,
     },
     /// "Quit Readshot" under a finished uninstall that left the program.
     QuitAfterUninstall,

@@ -203,7 +203,10 @@ Open **Settings → App** and, under **Danger zone**, click
 **Uninstall…** (or press `⇧⌘U`). A confirmation
 step appears with an **Also delete history and preferences** checkbox;
 tick it to remove your data too. Click **Uninstall** and Readshot
-performs the cleanup and quits.
+performs the cleanup and quits. If a step fails, Readshot stays open
+and Settings names the steps that failed; run Uninstall again (or
+`readshot uninstall`) to finish; what the first run removed is
+already gone and is left alone.
 
 ### With the CLI
 

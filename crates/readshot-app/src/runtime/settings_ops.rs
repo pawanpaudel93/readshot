@@ -113,16 +113,18 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
         SettingsMsg::UninstallConfirmed => on_uninstall_confirmed(state),
         SettingsMsg::UninstallFinished {
             program_removed: true,
+            ref failed,
             ..
-        } => {
+        } if failed.is_empty() => {
             // Use the existing quit path so the relaunch-on-system-quit
             // safety net is disarmed before the process exits.
             quit_readshot(&state.coordinator)
         }
-        SettingsMsg::UninstallFinished {
-            program_removed: false,
-            purge,
-        } => enter_uninstalled(state, purge),
+        // A step failed (even if the bundle went to the Trash), or the
+        // program stays: Readshot stays up to say what happened.
+        SettingsMsg::UninstallFinished { purge, failed, .. } => {
+            enter_uninstalled(state, purge, &failed)
+        }
         // Not while the steps still run: quitting would cut them off.
         SettingsMsg::QuitAfterUninstall if uninstall_finished(state) => {
             quit_readshot(&state.coordinator)
@@ -590,16 +592,10 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
     let paths = crate::uninstall::default_uninstall_paths();
     let plan = crate::uninstall::plan_uninstall(&paths, purge);
     let program_removed = crate::uninstall::removes_program(&plan);
-    // Kept preferences say Open at Login is off (a purge deletes them;
-    // nothing is written into a file about to go, or created).
+    // Off in memory now; in the kept preferences file only once the
+    // steps removed the entry (`record_open_at_login_off_after`, below).
     state.preferences.launch_at_login = false;
-    if !purge {
-        if let Some(path) = state.preferences_path.clone() {
-            if let Err(e) = crate::uninstall::record_open_at_login_off(&path) {
-                tracing::warn!(target: readshot_core::log::cat::APP, "could not record Open at Login off: {e}");
-            }
-        }
-    }
+    let prefs_path = state.preferences_path.clone();
     // Inert from now, before any step runs: nothing done meanwhile can
     // write what the steps remove.
     let close_others = go_inert(state);
@@ -608,7 +604,7 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
     let coord = state.coordinator.clone();
     let run = Task::perform(
         async move {
-            let _ = tokio::task::spawn_blocking(move || {
+            tokio::task::spawn_blocking(move || {
                 // Writes queued before the confirm land now, before a
                 // purge deletes their folder, never after it.
                 let reports = crate::uninstall::execute_after_flush(
@@ -630,13 +626,24 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
                         ),
                     }
                 }
+                if let Err(e) = crate::uninstall::record_open_at_login_off_after(
+                    &reports,
+                    prefs_path.as_deref(),
+                    purge,
+                ) {
+                    tracing::warn!(target: readshot_core::log::cat::APP, "could not record Open at Login off: {e}");
+                }
+                crate::uninstall::failed_steps(&reports)
             })
-            .await;
+            .await
+            // The worker itself died: nothing says which steps ran.
+            .unwrap_or_else(|e| vec![format!("The uninstall stopped unexpectedly ({e})")])
         },
-        move |()| {
+        move |failed| {
             Message::Settings(SettingsMsg::UninstallFinished {
                 program_removed,
                 purge,
+                failed,
             })
         },
     );
@@ -648,12 +655,19 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
 /// the rest of the process, so nothing the uninstall removed (data,
 /// preferences, the Open at Login entry) is recreated before the user
 /// quits. Every other window closes without syncing to History.
-fn enter_uninstalled(state: &mut App, purge: bool) -> Task<Message> {
+///
+/// With failed steps it says which, in the error tone, the way the CLI
+/// counts them, and never that everything was removed.
+fn enter_uninstalled(state: &mut App, purge: bool, failed: &[String]) -> Task<Message> {
     let close_others = go_inert(state);
-    state.settings_uninstall_result = Some(Status::new(
-        StatusTone::Warning,
-        crate::uninstall::completion_message(&[], purge),
-    ));
+    state.settings_uninstall_result = Some(if failed.is_empty() {
+        Status::new(
+            StatusTone::Warning,
+            crate::uninstall::completion_message(&[], purge),
+        )
+    } else {
+        Status::new(StatusTone::Error, crate::uninstall::failure_message(failed))
+    });
     close_others
 }
 
