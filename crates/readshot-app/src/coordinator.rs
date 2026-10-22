@@ -691,6 +691,34 @@ fn fold_into_retries(retries: &mut [Retry], record: &CaptureRecord) {
     }
 }
 
+/// At launch: finish the redactions a crash or quit left half-written
+/// (phase one only), so no record stays withheld and none lost its image;
+/// and remove set-aside images whose record is gone. Only records this
+/// process has made no request for: a scrub requested since launch is
+/// this run's own, not left over, and its own write finishes it. Each is
+/// checked and finished under the commit gate, which every phase one and
+/// restore takes, so a request either comes after the record is finished
+/// (and works on it) or is seen here and the record is left to it.
+fn finish_left_pending(store: &dyn HistoryStore, scrubs: &Scrubs) {
+    store.sweep_withheld();
+    let Ok(records) = store.list() else {
+        return;
+    };
+    for record in records.iter().filter(|r| r.scrub_pending) {
+        let _gate = lock(&scrubs.book);
+        if lock(&scrubs.state).latest.contains_key(&record.id) {
+            continue;
+        }
+        if let Err(e) = store.finish_pending_scrub(record.id) {
+            tracing::warn!(
+                target: readshot_core::log::cat::HISTORY,
+                "couldn't finish the pending redaction of history record {}: {e}",
+                record.id
+            );
+        }
+    }
+}
+
 /// The writer thread: drain what queued up while the last write ran,
 /// coalesce it (only the newest rewrite of a record pays for a render +
 /// PNG encode), run it, and retry failed rewrites with backoff until
@@ -702,10 +730,7 @@ fn writer_loop(
 ) {
     use std::sync::mpsc::RecvTimeoutError;
     store.sweep_staging();
-    // Redactions a crash or quit left half-written (phase one only):
-    // finished before anything else is written, so no record stays
-    // withheld, and none ever lost its image.
-    store.finish_pending_scrubs();
+    finish_left_pending(store, scrubs);
     let mut retries: Vec<Retry> = Vec::new();
     loop {
         let next_due = retries.iter().map(|(due, _)| *due).min();
@@ -1812,6 +1837,9 @@ mod tests {
         ) -> Result<bool, readshot_core::HistoryError> {
             self.inner.finish_pending_scrub(id)
         }
+        fn sweep_withheld(&self) {
+            self.inner.sweep_withheld()
+        }
         fn finish_pending_scrubs(&self) -> usize {
             self.inner.finish_pending_scrubs()
         }
@@ -2284,6 +2312,9 @@ mod tests {
             id: readshot_core::Uuid,
         ) -> Result<bool, readshot_core::HistoryError> {
             self.inner.finish_pending_scrub(id)
+        }
+        fn sweep_withheld(&self) {
+            self.inner.sweep_withheld()
         }
         fn finish_pending_scrubs(&self) -> usize {
             self.inner.finish_pending_scrubs()
@@ -2796,6 +2827,43 @@ mod tests {
         assert!(coord.finish_pending_scrub(record.id));
         let png = png_on_disk(&store.inner, &record).unwrap();
         assert_eq!(png, landed, "{} of 49 pixels black", black_pixels(&png));
+    }
+
+    /// Fix-6 review P4: an outline drawn with a redaction whose write
+    /// failed, then deleted by the user (whose next write fails too), is
+    /// never baked: only the newest request is drawn, never a union. (The
+    /// outline sits clear of the redaction's stroke, which reaches x = 5.)
+    #[test]
+    fn an_annotation_deleted_after_a_failed_scrub_is_not_baked() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let record = saved_record(dir.path());
+        let store = flaky(dir.path(), 1000);
+        let coord = history_coord(store.clone());
+        let mut first = pixelate();
+        first.push(readshot_core::Annotation::Rectangle {
+            rect: readshot_core::RectLike::new(6.0, 1.0, 1.0, 1.0),
+            color: readshot_core::Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+            style: readshot_core::ShapeStyle::default(),
+        });
+        drop(coord.rewrite_history_as(Some(1), scrubbed(&record), Arc::new(white(8, 8)), first));
+        past_the_retry();
+        drop(coord.rewrite_history_as(
+            Some(1),
+            scrubbed(&record),
+            Arc::new(white(8, 8)),
+            pixelate(),
+        ));
+        past_the_retry();
+        coord.settle_record_writes(record.id);
+        assert!(coord.finish_pending_scrub(record.id));
+        let png = png_on_disk(&store.inner, &record).unwrap();
+        assert_eq!(png.get_pixel(1, 1).0, [0, 0, 0, 255], "the redaction");
+        assert_eq!(
+            png.get_pixel(6, 1).0,
+            [255, 255, 255, 255],
+            "the deleted outline"
+        );
     }
 
     /// A genuinely new redaction next to one already baked is still

@@ -592,6 +592,9 @@ pub trait HistoryStore: Send + Sync {
     }
     /// [`Self::finish_pending_scrub`] for every pending record (at
     /// launch: a crash or quit mid-scrub). Returns how many it finished.
+    /// Remove every set-aside image whose record is gone (no sidecar);
+    /// [`Self::finish_pending_scrubs`] does this first.
+    fn sweep_withheld(&self) {}
     fn finish_pending_scrubs(&self) -> usize {
         0
     }
@@ -1750,6 +1753,10 @@ impl HistoryStore for FsHistoryStore {
             Some(entry) => self.finish_pending_entry(entry),
             None => Ok(false),
         }
+    }
+
+    fn sweep_withheld(&self) {
+        self.remove_orphaned_withheld();
     }
 
     fn finish_pending_scrubs(&self) -> usize {

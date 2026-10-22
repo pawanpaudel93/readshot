@@ -11,6 +11,9 @@ struct GatedStore {
     held: std::sync::Mutex<bool>,
     released: std::sync::Condvar,
     fail_commits: std::sync::atomic::AtomicUsize,
+    /// While set, launch work (listing History, finishing what is
+    /// pending) waits: a writer thread that starts late.
+    launch_held: std::sync::Mutex<bool>,
 }
 
 impl GatedStore {
@@ -20,6 +23,7 @@ impl GatedStore {
             held: std::sync::Mutex::new(false),
             released: std::sync::Condvar::new(),
             fail_commits: std::sync::atomic::AtomicUsize::new(0),
+            launch_held: std::sync::Mutex::new(false),
         }
     }
 
@@ -29,6 +33,18 @@ impl GatedStore {
 
     fn release(&self) {
         *self.held.lock().unwrap() = false;
+        self.released.notify_all();
+    }
+
+    fn wait_for_launch(&self) {
+        let mut held = self.launch_held.lock().unwrap();
+        while *held {
+            held = self.released.wait(held).unwrap();
+        }
+    }
+
+    fn release_launch(&self) {
+        *self.launch_held.lock().unwrap() = false;
         self.released.notify_all();
     }
 
@@ -56,6 +72,7 @@ impl HistoryStore for GatedStore {
         self.inner.save(r, png)
     }
     fn list(&self) -> Result<Vec<readshot_core::CaptureRecord>, readshot_core::HistoryError> {
+        self.wait_for_launch();
         self.inner.list()
     }
     fn apply_retention(
@@ -118,7 +135,12 @@ impl HistoryStore for GatedStore {
     ) -> Result<bool, readshot_core::HistoryError> {
         self.inner.finish_pending_scrub(id)
     }
+    fn sweep_withheld(&self) {
+        self.wait_for_launch();
+        self.inner.sweep_withheld()
+    }
     fn finish_pending_scrubs(&self) -> usize {
+        self.wait_for_launch();
         self.inner.finish_pending_scrubs()
     }
     fn stored_redacted(
@@ -957,4 +979,53 @@ fn a_new_redaction_after_a_failed_rotate_is_still_hidden() {
     assert!(!stored
         .pixels()
         .any(|p| first.contains(p) || second.contains(p)));
+}
+
+/// Launch recovery finishes only what an earlier run left half-written,
+/// never a redaction this run has asked for: a writer thread that starts
+/// late (a busy machine) must not bake this run's pending request, which
+/// the user may still change (here: an outline deleted after it).
+#[test]
+fn launch_recovery_never_finishes_this_runs_own_redaction() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path().join("h");
+    let store = Arc::new(GatedStore::new(root.clone()));
+    let img = noise(9, 40, 20);
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+    store
+        .save(&record, &readshot_core::encode_png(&img).unwrap())
+        .unwrap();
+    *store.launch_held.lock().unwrap() = true;
+    let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+    app.history_root = Some(root);
+    let mut ed = crate::editor::EditorSession::from_history(img.clone(), record.clone());
+    ed.window_id = Some(iced::window::Id::unique());
+    app.editor = Some(ed);
+    store.fail_next_commits(1000);
+    let outline = Annotation::Rectangle {
+        rect: RectLike::new(30.0, 10.0, 4.0, 4.0),
+        color: Rgba::OPAQUE_BLACK,
+        line_width: 2.0,
+        style: Default::default(),
+    };
+    redact_and_sync(&mut app, solid_at(2.0, 2.0, 6.0, 6.0));
+    let coord = app.coordinator.clone();
+    let ed = app.editor.as_mut().unwrap();
+    ed.model.commit_annotation(outline);
+    super::super::editor_ops::sync_editor_history(ed, &coord);
+    // The writer starts now, and runs its launch work.
+    store.release_launch();
+    app.coordinator.flush_history_updates();
+    // The user deletes the outline; that write fails too.
+    let ed = app.editor.as_mut().unwrap();
+    assert!(ed.model.undo());
+    super::super::editor_ops::sync_editor_history(ed, &coord);
+    app.coordinator.flush_history_updates();
+    reopen(&mut app, &store, record.id);
+    let stored = stored_image(&store, record.id);
+    assert_eq!(
+        stored.get_pixel(30, 10),
+        img.get_pixel(30, 10),
+        "the deleted outline was baked"
+    );
 }

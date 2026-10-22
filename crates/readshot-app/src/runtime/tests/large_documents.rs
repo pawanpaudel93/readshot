@@ -2851,6 +2851,9 @@ impl readshot_core::HistoryStore for SlowCommitStore {
     ) -> Result<bool, readshot_core::HistoryError> {
         self.inner.finish_pending_scrub(id)
     }
+    fn sweep_withheld(&self) {
+        self.inner.sweep_withheld()
+    }
     fn finish_pending_scrubs(&self) -> usize {
         self.inner.finish_pending_scrubs()
     }
