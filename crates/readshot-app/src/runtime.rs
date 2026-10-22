@@ -1075,10 +1075,46 @@ fn app_window_shortcut_message(
 /// every message the editor's off-thread document work is started
 /// (`compose_jobs::after_update`).
 pub fn update(state: &mut App, message: Message) -> Task<Message> {
+    if state.uninstalled && !uninstalled_allows(&message) {
+        return Task::none();
+    }
     let task = update_message(state, message);
     sync_scroll_escape_hotkeys(state);
     let announce = announce_capture_status(state);
     Task::batch([task, announce, compose_jobs::after_update(state)])
+}
+
+/// What an uninstalled Readshot (`App::uninstalled`) still does: window
+/// events, showing Settings and its panes, the tray drain, theme, and
+/// quitting (the tray's Quit, Quit Readshot under the uninstall, the
+/// app's quit). Everything else, every capture, History, editor and
+/// preferences message, shortcut and URL, is dropped, so nothing the
+/// uninstall removed is recreated before the process ends.
+pub(crate) fn uninstalled_allows(message: &Message) -> bool {
+    match message {
+        Message::Window(_) | Message::NoOp => true,
+        Message::Settings(m) => matches!(
+            m,
+            SettingsMsg::OpenRequested
+                | SettingsMsg::WindowReady(_)
+                | SettingsMsg::PaneSelected(_)
+                | SettingsMsg::QuitAfterUninstall
+        ),
+        Message::Tick(t) => matches!(
+            t,
+            TickMsg::Tray
+                | TickMsg::AppReopen
+                | TickMsg::ThemePoll
+                | TickMsg::SystemThemeChanged(_)
+                | TickMsg::TrayAction(crate::tray::TrayAction::Quit)
+        ),
+        Message::App(m) => matches!(m, AppMsg::QuitRequested),
+        Message::Editor(_)
+        | Message::History(_)
+        | Message::Scroll(_)
+        | Message::Welcome(_)
+        | Message::Capture(_) => false,
+    }
 }
 
 /// Whether a capture status reports a problem worth a notification:

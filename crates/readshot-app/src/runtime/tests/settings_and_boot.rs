@@ -1208,21 +1208,96 @@ fn a_failed_cli_commands_copy_is_shown_as_an_error() {
     assert!(!crate::runtime::view::cli_tools_status_is_error(&app));
 }
 
-/// A Settings uninstall that couldn't remove the program itself (Windows,
-/// Linux, a plain binary) says what is left instead of quitting silently.
-#[test]
-fn a_settings_uninstall_that_leaves_the_program_says_so_and_keeps_running() {
-    let (mut app, _) = settings_app();
+/// An app left uninstalled (Windows, Linux, a plain binary: the
+/// program stays) after a purge. Its data and preferences dirs are gone.
+fn uninstalled_app(purge: bool) -> (tempfile::TempDir, App) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let history_root = dir.path().join("data").join("history");
+    let store: Arc<dyn HistoryStore> = Arc::new(FsHistoryStore::new(history_root));
+    let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store);
+    app.preferences_path = Some(dir.path().join("config").join("preferences.toml"));
+    app.preferences.history_retention = readshot_core::HistoryRetention::Last50;
+    app.preferences.launch_at_login = true;
+    app.hotkey_actions.insert(7, GlobalHotkeyAction::Capture);
+    app.settings_window_id = Some(iced::window::Id::unique());
     app.settings_uninstall_pending = true;
     let _ = update(
         &mut app,
         Message::Settings(SettingsMsg::UninstallFinished {
             program_removed: false,
-            purge: false,
+            purge,
         }),
     );
-    let said = app.settings_status.clone().unwrap_or_default();
-    assert!(said.contains("still installed"), "{said}");
-    assert!(said.contains("Quit Readshot"), "{said}");
+    // What the executor removed under purge.
+    if purge {
+        let _ = std::fs::remove_dir_all(dir.path().join("data"));
+        let _ = std::fs::remove_dir_all(dir.path().join("config"));
+    }
+    (dir, app)
+}
+
+/// The completion is said under the Uninstall row, toned, with a way
+/// to quit, never as another row's help text.
+#[test]
+fn a_settings_uninstall_that_leaves_the_program_says_what_is_left() {
+    let (_dir, app) = uninstalled_app(false);
+    let said = app.settings_uninstall_result.as_ref().expect("said");
+    assert!(said.text.contains("still installed"), "{}", said.text);
+    assert_eq!(said.tone, StatusTone::Warning);
+    assert!(app.settings_status.is_none(), "not under another row");
     assert!(!app.settings_uninstall_pending);
+}
+
+/// After it, Readshot is inert until it quits: no shortcut, no tray
+/// action but Quit, and no capture, History or preferences write can
+/// bring back what the uninstall removed.
+#[test]
+fn an_uninstalled_readshot_recreates_nothing_it_removed() {
+    let (dir, mut app) = uninstalled_app(true);
+    assert!(app.uninstalled);
+    assert!(app.hotkey_actions.is_empty(), "shortcuts unregistered");
+    assert!(app.hotkey_manager.is_none());
+    assert!(!app.preferences.launch_at_login, "in memory only");
+    assert!(
+        !dir.path().join("config").exists(),
+        "no preferences written"
+    );
+
+    // A capture landing now opens nothing and saves nothing.
+    let task = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(8, 8)))),
+    );
+    assert_eq!(task.units(), 0);
+    assert!(app.editor.is_none());
+    // Tray captures and shortcuts do nothing.
+    for action in [
+        crate::tray::TrayAction::Capture,
+        crate::tray::TrayAction::CaptureWindow,
+        crate::tray::TrayAction::ScrollCapture,
+        crate::tray::TrayAction::History,
+    ] {
+        let _ = update(&mut app, Message::Tick(TickMsg::TrayAction(action)));
+        assert!(!app.overlay_opening, "{action:?}");
+        assert!(app.history_window_id.is_none(), "{action:?}");
+    }
+    let _ = crate::runtime::tick_ops::run_hotkey_actions(&mut app, &[GlobalHotkeyAction::Capture]);
+    assert!(!app.overlay_opening);
+    // Settings edits don't write preferences, and Open at Login can't
+    // be turned back on (which would re-register the autostart entry).
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::Edit(SettingsMessage::SetDebugLogging(true))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::Edit(SettingsMessage::SetLaunchAtLogin(true))),
+    );
+    assert!(!app.preferences.launch_at_login);
+    assert!(!app.preferences.debug_logging);
+    assert!(
+        !dir.path().join("config").exists(),
+        "preferences dir recreated"
+    );
+    assert!(!dir.path().join("data").exists(), "history dir recreated");
 }

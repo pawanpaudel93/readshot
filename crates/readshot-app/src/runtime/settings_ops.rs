@@ -122,16 +122,8 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
         SettingsMsg::UninstallFinished {
             program_removed: false,
             purge,
-        } => {
-            // Windows, Linux or a plain binary: the program stays. Say
-            // what was removed and what is left, instead of vanishing.
-            state.settings_uninstall_pending = false;
-            state.settings_status = Some(format!(
-                "{} Quit Readshot from its menu, then remove the program.",
-                crate::uninstall::completion_message(&[], purge)
-            ));
-            Task::none()
-        }
+        } => enter_uninstalled(state, purge),
+        SettingsMsg::QuitAfterUninstall => quit_readshot(&state.coordinator),
         SettingsMsg::WindowReady(id) => {
             // Belt-and-braces: window-open already records the id, but
             // iced may hand back a different one in some platforms.
@@ -636,6 +628,52 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
             })
         },
     )
+}
+
+/// A Settings uninstall left the program installed (Windows, Linux, a
+/// plain binary). Readshot stays up only to say so: it goes inert for
+/// the rest of the process, so nothing the uninstall removed (data,
+/// preferences, the Open at Login entry) is recreated before the user
+/// quits. Every other window closes without syncing to History.
+fn enter_uninstalled(state: &mut App, purge: bool) -> Task<Message> {
+    state.uninstalled = true;
+    state.settings_uninstall_pending = false;
+    state.settings_recording_hotkey = false;
+    state.settings_status = None;
+    // System-wide shortcuts released (dropping the manager unregisters).
+    state.hotkey_manager = None;
+    state.hotkey_actions.clear();
+    state.scroll_escape_hotkeys.clear();
+    state.capture_hotkey_registered = false;
+    state.window_hotkey_registered = false;
+    // The entry is gone; never written back while this process lives
+    // (in memory only: the preferences file may have been purged).
+    state.preferences.launch_at_login = false;
+    state.scroll_session = None;
+    state.window_pick = None;
+    state.editor = None;
+    state.retiring_editors.clear();
+    state.combine_capture = None;
+    clear_pending_capture_state(state);
+    let others: Vec<window::Id> = state
+        .windows
+        .iter()
+        .filter_map(|(id, k)| (*k != WindowKind::Settings).then_some(*id))
+        .collect();
+    let mut tasks = Vec::with_capacity(others.len());
+    for id in others {
+        state.windows.forget(id);
+        state.overlay_displays.remove(&id);
+        state.pins.remove(&id);
+        tasks.push(window::close(id));
+    }
+    state.history_window_id = None;
+    state.cli_tools_window_id = None;
+    state.settings_uninstall_result = Some(Status::new(
+        StatusTone::Warning,
+        crate::uninstall::completion_message(&[], purge),
+    ));
+    Task::batch(tasks)
 }
 
 /// `SettingsMsg::PaneSelected`.

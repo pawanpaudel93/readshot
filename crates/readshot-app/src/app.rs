@@ -793,6 +793,8 @@ pub enum SettingsMsg {
         /// History and preferences were deleted too.
         purge: bool,
     },
+    /// "Quit Readshot" under a finished uninstall that left the program.
+    QuitAfterUninstall,
     /// First `view` call after the settings window is opened. Records
     /// the `window::Id` so close + focus paths work.
     WindowReady(iced::window::Id),
@@ -1294,6 +1296,15 @@ pub struct App {
     /// flips a field. `None` in tests and when the OS can't supply a
     /// config dir; in that case settings changes stay in-memory only.
     pub preferences_path: Option<std::path::PathBuf>,
+    /// A Settings uninstall finished but the program stays installed
+    /// (Windows, Linux, a plain binary). For the rest of this process
+    /// Readshot is inert (`runtime::uninstalled_allows`): no shortcut,
+    /// no capture, no History or preferences write, so nothing the
+    /// uninstall removed comes back. Only Quit (and Settings) respond.
+    pub uninstalled: bool,
+    /// What that uninstall did and what is left, shown under the
+    /// Uninstall row with a Quit button.
+    pub settings_uninstall_result: Option<crate::editor::Status>,
     /// `window::Id` of the live settings window, if any. Single
     /// instance — re-opening just refocuses the existing window.
     pub settings_window_id: Option<iced::window::Id>,
@@ -1669,6 +1680,8 @@ impl App {
             history_delete_pending: None,
             history_page_limit: HISTORY_PAGE_SIZE,
             preferences_path: None,
+            uninstalled: false,
+            settings_uninstall_result: None,
             settings_window_id: None,
             settings_recording_hotkey: false,
             settings_recording_target: HotkeyTarget::Capture,
@@ -1697,6 +1710,11 @@ impl App {
     /// IO failures are logged-and-swallowed: a full disk shouldn't
     /// kill the running app, and the in-memory state remains correct.
     fn persist_preferences_if_configured(&self) {
+        // Uninstalled: the preferences file may have been purged, and
+        // must not come back.
+        if self.uninstalled {
+            return;
+        }
         let Some(path) = self.preferences_path.as_ref() else {
             return;
         };
@@ -1923,6 +1941,7 @@ impl App {
             | SettingsMsg::ResetAllCancelled
             | SettingsMsg::UninstallConfirmed
             | SettingsMsg::UninstallFinished { .. }
+            | SettingsMsg::QuitAfterUninstall
             | SettingsMsg::WindowReady(_)
             | SettingsMsg::PaneSelected(_)
             | SettingsMsg::KeyPressed { .. }

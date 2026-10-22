@@ -5037,8 +5037,34 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
             startup_toggle,
         )]),
         settings_group_heading("Danger zone", text_danger),
-        settings_group(vec![reset_row, uninstall_row]),
+        settings_group(match uninstalled_row(state) {
+            // Uninstalled: only the outcome and Quit; nothing else to do.
+            Some(row) => vec![row],
+            None => vec![reset_row, uninstall_row],
+        }),
     ]
+}
+
+/// After an uninstall that left the program (`App::uninstalled`): what
+/// was removed and what is left, in its tone, under the Uninstall
+/// heading, with Quit Readshot.
+fn uninstalled_row(state: &App) -> Option<Element<'_, Message>> {
+    let result = state.settings_uninstall_result.as_ref()?;
+    let tone = match result.tone {
+        StatusTone::Error => palette(state.theme_mode).danger,
+        StatusTone::Warning => palette(state.theme_mode).warn,
+        _ => palette(state.theme_mode).t2,
+    };
+    Some(settings_block_with(
+        "Uninstall Readshot",
+        result.text.clone(),
+        Some(tone),
+        button(text("Quit Readshot").size(TYPE_BODY))
+            .padding([6, 12])
+            .style(|t, s| action_button_style(t, s, ActionKind::Primary))
+            .on_press(Message::Settings(SettingsMsg::QuitAfterUninstall))
+            .into(),
+    ))
 }
 
 /// Simple multi-select for OCR languages: one checkbox per language the
