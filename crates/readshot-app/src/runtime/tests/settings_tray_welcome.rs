@@ -146,10 +146,12 @@ fn the_permissions_pane_offers_what_the_status_allows() {
         1
     );
 
-    // Granted in System Settings: Recheck picks it up and the pane
-    // keeps only Open System Settings.
+    // Granted in System Settings: pressing Recheck picks it up and the
+    // pane keeps only Open System Settings.
     perms.flip_to_granted();
-    let _ = update(&mut app, Message::App(AppMsg::PermissionTick));
+    assert_eq!(app.permission_status, PermissionStatus::Denied);
+    app.settings_focus = Some(F::PermissionRecheck);
+    space(&mut app, id);
     assert_eq!(app.permission_status, PermissionStatus::Granted);
     assert_eq!(settings_focus_items(&app), vec![F::PermissionOpen]);
 
@@ -282,6 +284,12 @@ fn the_save_folder_is_picked_reset_and_opened_through_the_loop() {
 #[test]
 fn reset_all_puts_the_update_channel_back_to_stable() {
     let (dir, mut app, _) = settings_app_on_disk();
+    // Reset All turns a set Open at login off for real (it would remove
+    // the developer's own login item), so it must start off here.
+    assert!(
+        !app.preferences.launch_at_login,
+        "Reset All would remove the real login item"
+    );
     let _ = update(
         &mut app,
         Message::Settings(SettingsMsg::Edit(SettingsMessage::SetUpdateChannel(
