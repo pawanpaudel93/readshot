@@ -108,13 +108,17 @@ pub fn reconstruct(lines: &[RecognizedLine]) -> String {
     let rows = cluster_rows(&active, row_tol);
 
     let min_x = active.iter().map(|l| l.x).fold(f32::INFINITY, f32::min);
+    // Left edges closer than half a line height are the same edge:
+    // Vision's boxes jitter by several pixels, often more than half a
+    // character, and that must not read as a one-space indent.
+    let jitter = (med_h * 0.5).max(em * 0.5);
     if let Some(table) = render_markdown_table(&rows, em) {
         return table;
     }
-    if let Some(columns) = render_multi_column_text(&rows, em) {
+    if let Some(columns) = render_multi_column_text(&rows, em, jitter) {
         return columns;
     }
-    let plain = render_plain_text(&rows, min_x, em);
+    let plain = render_plain_text(&rows, min_x, em, jitter);
     if looks_like_code_block(&plain) {
         return fence_code_block(&plain);
     }
@@ -188,7 +192,7 @@ fn cluster_rows<'a>(active: &[&'a RecognizedLine], row_tol: f32) -> Vec<Row<'a>>
     rows
 }
 
-fn render_plain_text(rows: &[Row<'_>], min_x: f32, em: f32) -> String {
+fn render_plain_text(rows: &[Row<'_>], min_x: f32, em: f32, jitter: f32) -> String {
     let mut out = String::new();
     for (i, row) in rows.iter().enumerate() {
         if i > 0 {
@@ -198,7 +202,12 @@ fn render_plain_text(rows: &[Row<'_>], min_x: f32, em: f32) -> String {
 
         // Indent the row by the leftmost fragment's offset.
         let first = row[0];
-        let indent = ((first.x - min_x) / em).round().max(0.0) as usize;
+        let offset = first.x - min_x;
+        let indent = if offset < jitter {
+            0
+        } else {
+            (offset / em).round().max(0.0) as usize
+        };
         let indent = indent.min(80);
         for _ in 0..indent {
             out.push(' ');
@@ -266,7 +275,7 @@ fn render_markdown_table(rows: &[Row<'_>], em: f32) -> Option<String> {
     Some(out)
 }
 
-fn render_multi_column_text(rows: &[Row<'_>], em: f32) -> Option<String> {
+fn render_multi_column_text(rows: &[Row<'_>], em: f32, jitter: f32) -> Option<String> {
     if rows.len() < 2 {
         return None;
     }
@@ -307,7 +316,7 @@ fn render_multi_column_text(rows: &[Row<'_>], em: f32) -> Option<String> {
                 fragments: vec![fragment],
             })
             .collect();
-        columns.push(render_plain_text(&rows, min_x, em));
+        columns.push(render_plain_text(&rows, min_x, em, jitter));
     }
     Some(columns.join("\n\n"))
 }
@@ -636,6 +645,39 @@ mod tests {
             reconstruct(&lines),
             "Left column starts here\nLeft column continues\n\nRight column starts here\nRight column continues"
         );
+    }
+
+    #[test]
+    fn column_edge_jitter_does_not_indent_a_line() {
+        // B8: Vision's left edges for one column differ by ~8 px at
+        // 1400 px (0.006), more than half a character (em 0.008) but far
+        // less than a line height (0.017). That is jitter, not indent.
+        let lines = vec![
+            line("Left column has some words", 0.05, 0.10, 0.208, 0.017),
+            line("Right column has other words", 0.556, 0.10, 0.224, 0.017),
+            line("and more ordinary prose text", 0.05, 0.13, 0.224, 0.017),
+            line("and its second line of prose", 0.550, 0.13, 0.224, 0.017),
+        ];
+
+        assert_eq!(
+            reconstruct(&lines),
+            "Left column has some words\nand more ordinary prose text\n\nRight column has other words\nand its second line of prose"
+        );
+    }
+
+    #[test]
+    fn plain_text_edge_jitter_does_not_indent_but_real_indent_stays() {
+        let lines = vec![
+            line("let a = 1;", 0.050, 0.10, 0.080, 0.017),
+            line("let b = 2;", 0.056, 0.13, 0.080, 0.017),
+            line("nested(b);", 0.082, 0.16, 0.080, 0.017),
+        ];
+        let out = reconstruct(&lines);
+        // Code lines get fenced; the rows inside are what matter.
+        let rows: Vec<&str> = out.lines().filter(|l| *l != "```").collect();
+        assert_eq!(rows[0], "let a = 1;");
+        assert_eq!(rows[1], "let b = 2;", "{out:?}");
+        assert_eq!(rows[2], "    nested(b);", "{out:?}");
     }
 
     #[test]
