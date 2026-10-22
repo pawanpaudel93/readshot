@@ -384,6 +384,10 @@ fn noise(seed: u64, w: u32, h: u32) -> image::RgbaImage {
     })
 }
 
+/// A redaction, the colours it hid, and those a correct drawing of it
+/// still leaves as they are.
+type Secret = (Annotation, Vec<[u8; 4]>, Vec<[u8; 4]>);
+
 /// One History record edited, closed and reopened in random order while
 /// its writes fail or are slow. What the runtime would run as tasks is
 /// run here: a History open's load on its own thread, delivered later.
@@ -401,7 +405,7 @@ struct Interleaving {
     /// held when an open cancelled its writes: what History has must hide
     /// them from then on, however it came to be (landed, or finished from
     /// the set-aside image by recovery).
-    hidden_at_open: Vec<(Annotation, Vec<[u8; 4]>)>,
+    hidden_at_open: Vec<Secret>,
     log: Vec<&'static str>,
 }
 
@@ -510,7 +514,7 @@ impl Interleaving {
     }
 
     fn step(&mut self, rng: &mut Rng) {
-        match rng.below(14) {
+        match rng.below(15) {
             0 | 1 => {
                 self.log.push("edit");
                 let at = rng.below(20) as f32;
@@ -531,30 +535,75 @@ impl Interleaving {
                     })));
                 }
             }
+            14 => {
+                // A pixelate lands whose grid clips to a 1×1 far corner
+                // (sides 5, block 4); then the disk fails, and the user
+                // fixes that corner with the same tool and turns the
+                // image. The fix is in another frame than what is stored,
+                // and only an open (recovery) can finish it.
+                self.log.push("pixelate-lands-edge-fix-turn");
+                if self.editor_of_record().is_some() {
+                    self.store.release();
+                    self.store.fail_next_commits(0);
+                    let (x, y) = (rng.below(14) as f32, rng.below(14) as f32);
+                    self.sync_after(|ed| {
+                        ed.model.commit_annotation(Annotation::Pixelate {
+                            rect: RectLike::new(x, y, 5.0, 5.0),
+                            block_size: 4.0,
+                        })
+                    });
+                    self.app.coordinator.flush_history_updates();
+                    self.store.fail_next_commits(1000);
+                    if let Some(fix) = self.corner_fix() {
+                        self.sync_after(|ed| ed.model.commit_annotation(fix));
+                    }
+                    self.send(Message::Editor(EditorMsg::Image(ImageMsg::Rotate {
+                        clockwise: true,
+                    })));
+                }
+            }
             3 | 12 | 13 => {
                 self.log.push("redact");
                 // Anywhere in the (possibly turned) 40×20 or 20×40
                 // document, so a later redaction is usually new, not one
-                // already stored.
+                // already stored. A pixelate's sides are often 5 with a
+                // block of 4 (the least the editor keeps after a turn): its
+                // grid then clips to a 1×1 far corner, the cell a correct
+                // drawing leaves as captured.
                 let (x, y) = (rng.below(14) as f32, rng.below(14) as f32);
-                let (w, h) = (3.0 + rng.below(5) as f32, 3.0 + rng.below(5) as f32);
+                let mut side = || {
+                    if rng.below(2) == 0 {
+                        5.0
+                    } else {
+                        3.0 + rng.below(5) as f32
+                    }
+                };
+                let (w, h) = (side(), side());
+                let solid = |rect| Annotation::Rectangle {
+                    rect,
+                    color: Rgba::OPAQUE_BLACK,
+                    line_width: 0.0,
+                    style: readshot_core::ShapeStyle {
+                        fill: readshot_core::FillMode::Filled,
+                        ..Default::default()
+                    },
+                };
                 let rect = RectLike::new(x, y, w, h);
-                let redaction = match rng.below(3) {
+                let mut redaction = match rng.below(3) {
                     0 => Annotation::Blur { rect, radius: 4.0 },
                     1 => Annotation::Pixelate {
                         rect,
-                        block_size: 3.0,
+                        block_size: 4.0,
                     },
-                    _ => Annotation::Rectangle {
-                        rect,
-                        color: Rgba::OPAQUE_BLACK,
-                        line_width: 0.0,
-                        style: readshot_core::ShapeStyle {
-                            fill: readshot_core::FillMode::Filled,
-                            ..Default::default()
-                        },
-                    },
+                    _ => solid(rect),
                 };
+                // Sometimes the user fixes an edge of the last one with
+                // the same tool: a small box over its far corner.
+                if rng.below(3) == 0 {
+                    if let Some(fix) = self.corner_fix() {
+                        redaction = fix;
+                    }
+                }
                 self.sync_after(|ed| ed.model.commit_annotation(redaction));
             }
             4 => {
@@ -674,15 +723,14 @@ impl Interleaving {
         }
         let img = image::open(&png).expect("the stored image").to_rgba8();
         let present: std::collections::HashSet<[u8; 4]> = img.pixels().map(|p| p.0).collect();
-        for (redaction, secret) in checks {
-            let left = secret.iter().filter(|c| present.contains(*c)).count();
-            let allowed = if matches!(redaction, Annotation::Rectangle { .. }) {
-                0
-            } else {
-                3
-            };
-            assert!(
-                left <= allowed,
+        for (redaction, secret, may_stay) in checks {
+            let left = secret
+                .iter()
+                .filter(|c| present.contains(*c) && !may_stay.contains(*c))
+                .count();
+            assert_eq!(
+                left,
+                0,
                 "{left} of {} pixels under {redaction:?} are stored as captured after {log}",
                 secret.len()
             );
@@ -690,8 +738,26 @@ impl Interleaving {
     }
 
     /// The open editor's redactions, each with the colours under it in its
-    /// document that occur nowhere else there (seeded noise: almost all).
-    fn editor_secrets(&mut self) -> Vec<(Annotation, Vec<[u8; 4]>)> {
+    /// document that were in the capture and occur nowhere else there
+    /// (seeded noise: almost all), and those of them a correct drawing
+    /// still leaves as they are.
+    ///
+    /// That is exact, not a tolerance. A solid cover or a blur changes
+    /// every pixel it covers (a blur's average of random colours equals
+    /// the pixel's own only by chance, about 1 in 2^24). A pixelate
+    /// averages each cell of its grid, which starts at a corner of the
+    /// rect and clips the far cells: only a 1×1 cell keeps its pixel, and
+    /// there is one exactly when the rect's width and height are both 1
+    /// more than a multiple of the block. Which corner it is depends on
+    /// the frame the grid was drawn in (the image may be turned since),
+    /// so any of the four corners may keep its pixel then, and nothing
+    /// else may.
+    fn editor_secrets(&mut self) -> Vec<Secret> {
+        // Only what the capture showed counts: a colour some earlier
+        // redaction produced (a pixelate cell's average, say) hides
+        // nothing, wherever it turns up.
+        let captured: std::collections::HashSet<[u8; 4]> =
+            noise(self.seed, 40, 20).pixels().map(|p| p.0).collect();
         let Some(ed) = self.editor_of_record() else {
             return Vec::new();
         };
@@ -706,18 +772,58 @@ impl Interleaving {
             .iter()
             .filter(|a| a.is_redaction())
             .filter_map(|a| {
-                let r = a.redaction_rect()?;
+                let r = readshot_core::render::redaction_pixels(a.redaction_rect()?);
                 let (x0, y0) = (r.x.max(0.0) as u32, r.y.max(0.0) as u32);
                 let x1 = ((r.x + r.width) as u32).min(base.width());
                 let y1 = ((r.y + r.height) as u32).min(base.height());
+                if x1 <= x0 || y1 <= y0 {
+                    return None;
+                }
                 let secret = (y0..y1)
                     .flat_map(|y| (x0..x1).map(move |x| (x, y)))
                     .map(|(x, y)| base.get_pixel(x, y).0)
-                    .filter(|c| counts.get(c) == Some(&1))
+                    .filter(|c| counts.get(c) == Some(&1) && captured.contains(c))
                     .collect();
-                Some((a.clone(), secret))
+                let may_stay = match a {
+                    Annotation::Pixelate { block_size, .. } => {
+                        let (w, h) = (x1 - x0, y1 - y0);
+                        // As `filters::pixelate_rect` sizes its cells.
+                        let block = (block_size.round().max(2.0) as u32).min(w.max(h));
+                        if w % block == 1 && h % block == 1 {
+                            [(x0, y0), (x1 - 1, y0), (x0, y1 - 1), (x1 - 1, y1 - 1)]
+                                .iter()
+                                .map(|&(x, y)| base.get_pixel(x, y).0)
+                                .collect()
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    _ => Vec::new(),
+                };
+                Some((a.clone(), secret, may_stay))
             })
             .collect()
+    }
+
+    /// The last redaction of the open editor, redrawn over its far corner
+    /// (2×2) with the same tool and strength: the box a user draws to fix
+    /// an edge that still reads.
+    fn corner_fix(&mut self) -> Option<Annotation> {
+        let last = self.editor_of_record().and_then(|ed| {
+            ed.model
+                .annotations()
+                .iter()
+                .rev()
+                .find(|a| a.is_redaction())
+                .cloned()
+        })?;
+        let r = last.redaction_rect()?;
+        last.with_redaction_rect(RectLike::new(
+            r.x + r.width - 2.0,
+            r.y + r.height - 2.0,
+            2.0,
+            2.0,
+        ))
     }
 
     /// Open the record from History. The open cancels whatever the
