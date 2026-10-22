@@ -130,10 +130,9 @@ pub(super) fn on_tray_action(state: &mut App, action: crate::tray::TrayAction) -
                 // Pre-set the intent so the overlay's mouse-up /
                 // Enter confirm immediately starts a scroll
                 // session instead of routing to the editor. The
-                // quick-action toolbar still shows so the user
-                // can change their mind, but they no longer have
-                // to hunt for the Scrolling Capture button — the default
-                // matches the menu entry they clicked.
+                // overlay auto-confirms this intent, so no quick-action
+                // toolbar appears (`overlay_auto_confirm_intent`): the
+                // menu entry the user clicked is the choice.
                 state.pending_intent = Some(crate::app::CaptureIntent::ScrollCapture);
                 update(state, Message::Capture(CaptureMsg::OpenOverlayRequested))
             }

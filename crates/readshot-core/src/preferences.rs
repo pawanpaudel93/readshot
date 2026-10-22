@@ -47,8 +47,11 @@ impl fmt::Display for ExportFormat {
     }
 }
 
-/// Capture-history retention policy. `Off` is the default, matching the
-/// spec's privacy-first stance — the user has to opt in explicitly.
+/// Capture-history retention policy. `Off` is the type's default (what a
+/// `Preferences::default()` without a file gets: tests, the CLI). The
+/// app itself starts a new user on Last 50 (`first_launch_preferences`
+/// in readshot-app, also used by Reset All Settings), and Settings says
+/// so.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HistoryRetention {
@@ -112,8 +115,11 @@ pub struct Preferences {
 
     /// Stringified hotkey accepted by `global-hotkey` — e.g.
     /// `"ctrl+shift+x"` (Windows / Linux default) or
-    /// `"cmd+shift+x"` (macOS suggestion). Stored as a string so the
-    /// preferences format doesn't depend on the hotkey crate.
+    /// `"cmd+shift+x"` (macOS). `Preferences::default()` holds the
+    /// Ctrl form on every OS (this crate has no platform code); the app
+    /// writes the platform's own default at first launch and on Reset
+    /// (`default_capture_hotkey` in readshot-app). Stored as a string so
+    /// the preferences format doesn't depend on the hotkey crate.
     pub capture_hotkey: String,
 
     /// Shortcut for Capture Window… (same syntax as `capture_hotkey`).

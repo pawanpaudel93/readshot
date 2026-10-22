@@ -1,7 +1,9 @@
 //! First-run welcome window state.
 //!
-//! Shown on macOS (and Linux when the compositor is Wayland) before
-//! the user has granted Screen Recording permission. The window
+//! Shown on macOS before the user has granted Screen Recording
+//! permission (Windows and Linux report the permission as not
+//! applicable, so they only ever get the ready card on a manual launch;
+//! Wayland's portal consent happens at the first capture instead). The window
 //! explains what consent the app is about to ask for and provides a
 //! single "Grant Screen Recording Access" button.
 //!

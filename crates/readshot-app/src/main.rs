@@ -144,8 +144,9 @@ fn main() -> iced::Result {
 }
 
 /// Initialise tracing. We always log to stderr, and additionally to
-/// `~/Library/Logs/Readshot/readshot.log` on macOS / equivalent on
-/// other platforms — Launch Services-launched apps lose stderr to
+/// `readshot.log` in the platform data folder
+/// (`~/Library/Application Support/np.com.pawanpaudel.Readshot/` on
+/// macOS, `ProjectDirs::data_local_dir` elsewhere) — Launch Services-launched apps lose stderr to
 /// `/dev/null`, so the file fallback is what makes triage possible
 /// when the user double-clicks the bundle from Finder.
 fn init_app_logging() {

@@ -322,7 +322,7 @@ pub enum EditorMsg {
         result: Result<(), String>,
     },
     /// User selected a presentation frame for image outputs.
-    /// A built-in Beautify preset was chosen (Frame popover; Beautify tab).
+    /// A built-in Beautify preset was chosen (Beautify tab).
     BeautifyPreset(readshot_core::beautify::BuiltinPreset),
     /// A snapshot slider (Beautify, combine gap) was released: commit
     /// the preview as one undo step.
@@ -951,7 +951,8 @@ pub enum WelcomeMsg {
 #[derive(Clone, Debug)]
 pub enum TickMsg {
     /// 50 ms drain tick — runtime polls the global-hotkey receiver and
-    /// emits a `CaptureFullPrimaryRequested` if any events arrived.
+    /// acts on what arrived: the capture overlay, the window picker, or a
+    /// running scroll capture's stop / discard (`run_hotkey_actions`).
     Hotkey,
     /// 100 ms drain tick — runtime polls the tray + menu event channels.
     Tray,

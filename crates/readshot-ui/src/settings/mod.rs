@@ -42,11 +42,6 @@ pub enum SettingsMessage {
     SetLaunchAtLogin(bool),
     SetUpdateChannel(UpdateChannel),
     SetDebugLogging(bool),
-    /// "Clear History" button — emits a message because the actual
-    /// clear must touch the history store, not just preferences.
-    ClearHistoryRequested,
-    /// "About" button.
-    OpenAbout,
 }
 
 /// Apply a [`SettingsMessage`] to a [`Preferences`] in place.
@@ -55,14 +50,11 @@ pub enum SettingsMessage {
 /// otherwise. The caller uses the boolean to decide whether to
 /// persist via `Preferences::save`.
 ///
-/// `SwitchTab`, `ClearHistoryRequested`, and `OpenAbout` don't
-/// mutate `Preferences` — they're side-effect messages; this
-/// function returns `false` for them.
+/// `SwitchTab` doesn't mutate `Preferences`; this function returns
+/// `false` for it.
 pub fn apply(prefs: &mut Preferences, msg: SettingsMessage) -> bool {
     match msg {
-        SettingsMessage::SwitchTab(_)
-        | SettingsMessage::ClearHistoryRequested
-        | SettingsMessage::OpenAbout => false,
+        SettingsMessage::SwitchTab(_) => false,
         SettingsMessage::SetCaptureHotkey(s) => {
             if prefs.capture_hotkey == s {
                 false
@@ -217,16 +209,5 @@ mod tests {
         // Re-applying the same list is a no-op.
         let changed_again = apply(&mut p, SettingsMessage::SetOcrLanguages(new_list));
         assert!(!changed_again);
-    }
-
-    #[test]
-    fn clear_history_request_is_side_effect_only() {
-        let mut p = defaults();
-        // Mutate something so we can confirm clearing-history doesn't
-        // touch unrelated fields.
-        p.debug_logging = true;
-        let changed = apply(&mut p, SettingsMessage::ClearHistoryRequested);
-        assert!(!changed);
-        assert!(p.debug_logging);
     }
 }

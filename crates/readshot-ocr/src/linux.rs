@@ -21,8 +21,10 @@
 //!
 //! If the files are missing, the first call to [`recognise`] returns a
 //! typed [`OCRError::Backend`] explaining that the models need to be
-//! downloaded. The Linux package post-install hook handles
-//! the download for end users.
+//! downloaded. Nothing downloads them for the user yet (no Linux
+//! package ships, and Readshot makes no network call for this): place
+//! `text-detection.rten` and `text-recognition.rten` in that folder by
+//! hand.
 //!
 //! ## Languages
 //!
