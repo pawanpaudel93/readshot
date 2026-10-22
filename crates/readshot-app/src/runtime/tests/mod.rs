@@ -1180,6 +1180,8 @@ mod magnifier_tools;
 mod overlay_canvas;
 /// Capture to disk, CLI, hotkeys, preferences, boot and settings.
 mod settings_and_boot;
+/// Settings, the tray's History and Settings, reopen and the Permissions pane.
+mod settings_tray_welcome;
 /// Style sliders and the eyedropper.
 mod styles_and_eyedropper;
 /// OCR requests and layout, smart-redact marks, what counts as a
