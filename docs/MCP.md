@@ -73,15 +73,15 @@ Common region capture arguments:
 | Argument | Type | Notes |
 |----------|------|-------|
 | `display` | string | Display id from `list_displays`. Defaults to the primary display. |
-| `rect` | object | Display-relative region. Defaults to the full display. |
-| `scale` | number | Optional HiDPI scale override. Defaults to the display scale. |
+| `rect` | object | Display-relative region; `width` and `height` must be greater than zero. Defaults to the full display. A rect partly off the display captures only the part on it; one entirely off it is `-32602`. |
+| `scale` | number | Image pixels per logical pixel. Defaults to the display scale; `1` gives a 1x image on a Retina display. |
 | `hide_cursor` | boolean | Defaults to `true`. Set `false` to include the cursor when supported. |
 
 Window capture arguments:
 
 | Argument | Type | Notes |
 |----------|------|-------|
-| `window` | string | Required. Window id from `list_windows`. |
+| `window` | string | Required. Window id from `list_windows`, as a string (a number is `-32602`). |
 | `rect` | object | Window-relative region. Defaults to the full window. |
 | `ignore_shadows` | boolean | Defaults to `false`. Set `true` for tighter window-only captures when supported. |
 
@@ -112,6 +112,10 @@ Limits, the same as the CLI's: each `rect` value is at most 16,384,
 `scale` is at most 8, and one display or region capture is at most 100
 million pixels after scaling. A request over a limit is refused with
 `-32602`.
+
+Each `list_windows` entry has a `display_id`: the display the window
+overlaps most, or `null` for a window on no display (parked off
+screen).
 
 Use `list_windows` to find capturable app windows. Pass the returned
 `id` as `window` to `capture_window`. A `capture_window.rect` is
@@ -265,7 +269,14 @@ errors are kept for protocol problems:
 | `-32700` | The line isn't valid JSON, or it is longer than 8 MiB. The server answers and keeps reading. |
 | `-32600` | The request is malformed: for example `jsonrpc` isn't `"2.0"`, `method` is missing, or `id` isn't a string, number or null. |
 | `-32601` | Unknown method, or `tools/call` names an unknown tool. |
-| `-32602` | Invalid arguments, including an argument the tool doesn't list or a value over a limit. |
+| `-32602` | Invalid arguments, including an argument the tool doesn't list, a value over a limit, a `display` id or capture `id` that doesn't exist, and a `rect` entirely outside the display or window. |
+
+Everything else that fails while a tool runs is `isError: true`: a
+`window` id that doesn't exist, missing permission, a capture or OCR
+failure, a history problem.
+
+A request with `"id": null` is answered with `"id": null`; only a
+message without an `id` member is a notification.
 
 ---
 
@@ -377,7 +388,8 @@ Any MCP-compatible host needs three pieces:
 The server advertises protocol version `2024-11-05` and a single
 `tools` capability. No prompts, resources, or sampling. It answers
 `initialize`, `tools/list`, `tools/call`, `ping` and `shutdown` (the
-last two reply `{}`); any other method is `-32601`. Notifications get
+last two reply `{}`); any other method is `-32601`. `shutdown` only
+acknowledges: the server keeps answering until its stdin closes. Notifications get
 no reply. Log lines go to stderr at info level and never to stdout. Set
 `RUST_LOG` in the server's environment to change the level, for example
 `RUST_LOG=debug`.

@@ -29,7 +29,7 @@ readshot completions zsh
 | `readshot` | Launches the GUI. |
 | `readshot --version` | Prints the version, for example `readshot 0.8.1`. |
 | `readshot list-displays` | Lists displays with ids, bounds, and scale. |
-| `readshot list-windows` | Lists capturable windows with ids, app names, titles, display ids, and bounds. |
+| `readshot list-windows` | Lists capturable windows with ids, app names, titles, display ids, and bounds. A window on no display (parked off screen) shows display `-` (`null` in `--json`). |
 | `readshot capture` | Captures a display region or full display as an image. |
 | `readshot capture-window` | Captures a window or window-relative region. |
 | `readshot capture-text` | Captures a region and writes OCR text. |
@@ -74,11 +74,18 @@ readshot list-displays --json
 readshot capture --display 1 --rect 100,100,800,600 --output region.png
 ```
 
-Rectangles are logical pixels in `x,y,width,height` form. If you need
-to override the display scale used by the backend, pass `--scale`.
+Rectangles are logical pixels in `x,y,width,height` form; width and
+height must be greater than zero. A rectangle partly off the display
+captures only the part on it, and `--json` reports that part as
+`source.rect`; one entirely off the display exits 64.
 A rectangle that starts with `-` (a negative x) needs the `=` form,
 `--rect=-100,0,800,600`; written as `--rect -100,0,800,600` it is read
 as an unknown option.
+
+The image is `--scale` pixels per logical pixel. It defaults to the
+display's own scale (2 on a Retina display); `--scale 1` gives a 1x
+image, resampled from the display's pixels. `--json` reports the scale
+of the image produced as `source.scale`.
 
 Limits: each `--rect` value is at most 16,384, `--scale` is at most 8,
 and one display or region capture is at most 100 million pixels after
@@ -150,14 +157,19 @@ handling needs line positions, so it is macOS only. Recognition that
 hasn't finished after 30 seconds fails with an error.
 
 Use `--clipboard` to copy text instead of printing it, or `--output` to
-write text to a file:
+write text to a file. On stdout the text ends with a newline; in a
+file it is written exactly, with none added. For `ocr` and
+`capture-text`, `--clipboard` can't be combined with `--json` (an
+argument error, exit 2):
 
 ```bash
 readshot capture-text --interactive --output text.txt
 readshot ocr --input capture.png --clipboard
 ```
 
-Use `--input -` with `ocr` to read image bytes from stdin:
+`ocr --input FILE` reads the image format from the file's content, not
+its name, so a PNG saved as `capture.jpg` (as `--also-image` does)
+reads fine. Use `--input -` with `ocr` to read image bytes from stdin:
 
 ```bash
 cat capture.png | readshot ocr --input -
@@ -196,7 +208,8 @@ readshot ocr --input capture.png --no-language-correction
 
 `capture-and-ocr` prints or writes text and can save the captured image
 at the same time. `--also-image` always writes PNG, whatever the file
-name says:
+name says. `--also-image -` puts the PNG on stdout, so the text (or
+JSON) must go to a file with `--output FILE`; otherwise it exits 64:
 
 ```bash
 readshot capture-and-ocr --interactive --also-image capture.png --output text.txt
@@ -309,7 +322,7 @@ option list.
 |------|---------|
 | 0 | Success. |
 | 2 | Invalid arguments (unknown option, a bad `--rect` or `--delay`). |
-| 64 | Invalid input: a bad value found after parsing (such as `--scale`), a region outside the display, or a cancelled interactive capture. |
+| 64 | Invalid input: a bad value found after parsing (such as `--scale`), a region entirely outside the display, or a cancelled interactive capture. |
 | 66 | The display or window id doesn't exist, or no displays were found. |
 | 70 | OCR failed. |
 | 71 | Capture failed for another reason, including an interactive selector that failed or stopped unexpectedly. |
@@ -321,8 +334,10 @@ argument errors (code 2) use clap's `error:` format.
 
 ## Logs
 
-Commands print data to stdout and errors to stderr. Other log lines go
-to `readshot.log`, the same file the app writes:
+Commands print data to stdout and errors to stderr. Log lines go to
+`readshot.log`, the same file the app writes: each command run, each
+region capture (display id, size and scale) and, when a command fails,
+its exit code. They never contain image data, OCR text or file paths.
 
 | OS | Log file |
 |----|----------|
@@ -331,7 +346,10 @@ to `readshot.log`, the same file the app writes:
 | Windows | `%LOCALAPPDATA%\pawanpaudel\Readshot\data\readshot.log` |
 
 Set `RUST_LOG` to change the level, for example
-`RUST_LOG=debug readshot ocr --input capture.png`.
+`RUST_LOG=warn readshot ocr --input capture.png` to keep only failures.
+
+The CLI has no history commands: saved captures are reachable through
+the app's History window and the MCP server's history tools.
 
 ## JSON Output
 
@@ -389,6 +407,10 @@ type.
 | `interactive` | `show_cursor` |
 
 When `clipboard` is `true`, `output` is `null`.
+
+For a display capture, `source.rect` is the region captured: the part
+of the requested rectangle on the display. `source.scale` is the scale
+of the image produced (`image.width` over `rect.width`).
 
 ### OCR Metadata
 
@@ -450,5 +472,6 @@ readshot ocr --input capture.png --json --output ocr.json
 readshot capture-text --json --output capture-text.json
 ```
 
-For `capture-and-ocr`, `--also-image -` is rejected when `--json` is
-set because stdout is reserved for JSON.
+For `capture-and-ocr`, `--also-image -` needs `--output FILE`, with or
+without `--json`, because stdout can carry only one of the image and
+the text or JSON.
