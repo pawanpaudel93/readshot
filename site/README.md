@@ -14,7 +14,11 @@ Pages:
 Shared assets:
 
 - `styles.css` — site styling.
-- `script.js` — copy-button behavior.
+- `script.js` — copy-button behavior. When the browser blocks the
+  clipboard, the button turns into an error and a line under it says to
+  select the text and press ⌘C (macOS) or Ctrl+C, or just to select and
+  copy it on a touch-only device. The `.copy-status` live region
+  announces the same message.
 - `favicon.svg`, `favicon.ico`, `apple-touch-icon.png`, `icon-192.png`,
   `icon-512.png`, `site.webmanifest` — the app icon for browsers and home
   screens.
@@ -38,7 +42,9 @@ https://github.com/pawanpaudel93/readshot/releases/latest/download/install.sh
 Included configs:
 
 - `_redirects` for Netlify and Cloudflare Pages.
-- `vercel.json` for Vercel.
+- `vercel.json` for Vercel. It also sets `cleanUrls`: Vercel serves
+  `cli.html` at `/cli` and `mcp.html` at `/mcp`, and redirects the
+  `.html` addresses there.
 
 The public install command is:
 
