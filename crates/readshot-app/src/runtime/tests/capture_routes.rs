@@ -641,14 +641,12 @@ async fn downward_scrolling_is_motion_and_stitches_the_page() {
     assert_eq!(stitched, noise_rows(0, 0, 134));
 }
 
-/// SC-16 (bug): scrolling back up or sideways should not be motion, so
-/// those frames are dropped. The judge only searches downward offsets
-/// and keeps the cheapest one with no cost ceiling, so any other change
-/// of a busy page reads as a downward scroll (this page scrolled back
-/// up 14 px measures as 44 px down) and the stitch appends rows the page
-/// doesn't have (191 px tall instead of 134).
+/// SC-16: scrolling back up or sideways is not motion, so those frames
+/// are dropped. The judge used to search only downward offsets and keep
+/// the cheapest with no quality bar, so a page scrolled back up 14 px
+/// measured as 44 px down and the stitch appended rows the page doesn't
+/// have (191 px tall instead of 134).
 #[tokio::test]
-#[ignore = "bug: a backward or sideways scroll is judged as downward motion and stitched in (SC-16)"]
 async fn backward_or_sideways_scrolling_is_not_motion() {
     let (top, down) = (noise_page(0, 0), noise_page(14, 0));
     let back_up = noise_page(0, 0);
@@ -668,4 +666,81 @@ async fn backward_or_sideways_scrolling_is_not_motion() {
         .await
         .unwrap();
     assert_eq!(stitched.dimensions(), (80, 134));
+}
+
+/// A 300-wide view of a text page: white, with dark word runs on an
+/// 18 px line pitch (no two lines alike), scrolled down by `offset` px
+/// and right by `dx` px, `height` rows tall.
+fn text_rows(offset: u32, dx: u32, height: u32) -> image::RgbaImage {
+    let hash = |a: u32, b: u32| {
+        let mut h = u64::from(a).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ u64::from(b);
+        h ^= h >> 29;
+        h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        h ^ (h >> 32)
+    };
+    image::RgbaImage::from_fn(300, height, |x, y| {
+        let (py, px) = (y + offset, x + dx);
+        let (line, row) = (py / 18, py % 18);
+        if !(4..14).contains(&row) {
+            return image::Rgba([255, 255, 255, 255]);
+        }
+        // Words: runs of 12–43 px with 6 px gaps, laid out per line.
+        let mut start = 4 + (hash(line, 0) % 20) as u32;
+        let mut k = 1;
+        while start < 600 {
+            let len = 12 + (hash(line, k) % 32) as u32;
+            if (start..start + len).contains(&px) {
+                // Letter texture: a few light columns inside a word.
+                let ink = hash(line * 1000 + px, row) % 5 != 0;
+                let v = if ink { 30 } else { 230 };
+                return image::Rgba([v, v, v, 255]);
+            }
+            start += len + 6;
+            k += 1;
+        }
+        image::Rgba([255, 255, 255, 255])
+    })
+}
+
+/// SC-16 on a realistic page (the reviewer's case): 300 × 400 frames of
+/// text lines. Down 60 px is motion of exactly 60; back up 60 or 20 px
+/// and sideways are not; and a stitch of [top, down 60, back to top] is
+/// the 460 px page, not 616 px with a band repeated.
+#[tokio::test]
+async fn scrolling_back_up_a_text_page_never_repeats_a_band() {
+    let top = text_rows(0, 0, 400);
+    let down = text_rows(60, 0, 400);
+    assert_eq!(scroll_motion_offset(&top, &down), Some(60));
+    assert!(frame_has_scroll_motion(&top, &down));
+    for (what, frame) in [
+        ("back up 60", text_rows(0, 0, 400)),
+        ("back up 20", text_rows(40, 0, 400)),
+        ("sideways 12", text_rows(60, 12, 400)),
+    ] {
+        assert!(
+            !frame_has_scroll_motion(&down, &frame),
+            "{what}: offset {:?}",
+            scroll_motion_offset(&down, &frame)
+        );
+    }
+    let stitched = stitch_frames_async(vec![
+        Arc::new(top.clone()),
+        Arc::new(down.clone()),
+        Arc::new(top),
+    ])
+    .await
+    .unwrap();
+    assert_eq!(stitched.dimensions(), (300, 460));
+    assert_eq!(stitched, text_rows(0, 0, 460));
+    // Scrolling on after the detour joins at the right place.
+    let further = text_rows(120, 0, 400);
+    let stitched = stitch_frames_async(vec![
+        Arc::new(text_rows(0, 0, 400)),
+        Arc::new(down),
+        Arc::new(text_rows(20, 0, 400)),
+        Arc::new(further),
+    ])
+    .await
+    .unwrap();
+    assert_eq!(stitched, text_rows(0, 0, 520));
 }

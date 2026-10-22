@@ -17,8 +17,10 @@
 //!
 //! Limitations:
 //! - Vertical only — horizontal scroll is not handled.
-//! - Assumes monotonically increasing scroll. Backwards scroll
-//!   between two frames is detected as `< min_motion` and dropped.
+//! - Assumes monotonically increasing scroll. A frame that went back
+//!   up, moved sideways or can't be placed (no offset matches clearly;
+//!   [`match_stands_out`]) is skipped, and the next frame is measured
+//!   against the last frame that contributed rows.
 //! - Sticky detection is intensity-based (row-mean stability across
 //!   frames) and won't survive animated headers / blinking carets.
 //! - No SIFT / ORB feature matching — purely subsampled SAD. Fast
@@ -144,28 +146,32 @@ pub fn stitch_scrolling(
 
     let sticky = detect_sticky(frames, &config);
 
-    // Estimate scroll between consecutive frames.
-    let mut offsets: Vec<u32> = Vec::with_capacity(frames.len() - 1);
-    for pair in frames.windows(2) {
-        let dy = estimate_scroll(&pair[0], &pair[1], &sticky, &config).unwrap_or(0);
-        offsets.push(dy);
-    }
-
-    // Total height = base frame + sum of accepted offsets, minus the
-    // bottom sticky region of the base frame if subsequent frames
-    // contribute (so the sticky footer renders once at the very end).
+    // Measure each frame against the last frame that contributed rows,
+    // not against its neighbour: rows are pasted relative to that frame,
+    // so a dropped frame (a duplicate, a scroll back up, a sideways
+    // move, a change the matcher can't place) must not shift the
+    // reference. A frame that can't be placed is skipped, never
+    // mis-stitched.
     let max_motion = config.max_motion.min(h.saturating_sub(1));
-    let accepted: Vec<u32> = offsets
-        .iter()
-        .copied()
-        .map(|dy| {
-            if dy >= config.min_motion && dy <= max_motion {
-                dy
-            } else {
-                0
-            }
-        })
-        .collect();
+    let mut accepted: Vec<u32> = Vec::with_capacity(frames.len() - 1);
+    let mut reference = 0usize;
+    for (i, frame) in frames.iter().enumerate().skip(1) {
+        let prev = &frames[reference];
+        let dy = estimate_scroll(prev, frame, &sticky, &config)
+            .filter(|&dy| dy >= config.min_motion && dy <= max_motion)
+            // A frame whose content sits *lower* than the reference's
+            // (the page went back up) is not new content either, even
+            // when a repeating page lets it match some downward offset.
+            .filter(|_| {
+                estimate_scroll(frame, prev, &sticky, &config)
+                    .is_none_or(|back| back < config.min_motion)
+            })
+            .unwrap_or(0);
+        if dy > 0 {
+            reference = i;
+        }
+        accepted.push(dy);
+    }
     let extra: u32 = accepted.iter().sum();
     let total_h = h.saturating_add(extra);
     if total_h > config.max_output_height {
@@ -284,11 +290,43 @@ fn blend_channel(prev: u8, next: u8, prev_weight: u32, next_weight: u32, denom: 
     ((total + denom / 2) / denom) as u8
 }
 
+/// How many times better than the typical candidate a template match
+/// must be before it is trusted as the scroll offset. A real scroll
+/// matches (almost) exactly while every other offset doesn't; a page
+/// that moved sideways, went back up past the search window, or changed
+/// outright has no offset that stands out, and guessing one would
+/// stitch in rows the page doesn't have.
+pub const MATCH_DISTINCT_RATIO: u64 = 3;
+
+/// Mean per-channel difference (0-255) under which a match is close
+/// enough to trust whatever the other offsets cost: anti-aliasing and
+/// sub-pixel jitter between two captures of the same rows.
+pub const MATCH_EXACT_MEAN_DIFF: u64 = 2;
+
+/// True when the best template-match cost `best` (a sum of absolute
+/// channel differences over `samples` channel values) is trustworthy:
+/// near-exact, or at least [`MATCH_DISTINCT_RATIO`] times lower than the
+/// median cost of every candidate offset in `costs`. Shared by the
+/// stitcher and the scroll-capture judge so both trust the same matches.
+pub fn match_stands_out(best: u64, samples: u64, costs: &mut [u64]) -> bool {
+    if costs.is_empty() {
+        return false;
+    }
+    if best <= samples.saturating_mul(MATCH_EXACT_MEAN_DIFF) {
+        return true;
+    }
+    let mid = costs.len() / 2;
+    let (_, median, _) = costs.select_nth_unstable(mid);
+    best.saturating_mul(MATCH_DISTINCT_RATIO) <= *median
+}
+
 /// Estimate the downward scroll (in px) from `a` to `b`.
 ///
 /// Takes a horizontal strip from the bottom of `a` (above any sticky
 /// footer) and finds where it appears in `b`, scanning upward. The
-/// returned value is the number of rows the page moved.
+/// returned value is the number of rows the page moved. `None` when no
+/// offset matches clearly better than the rest ([`match_stands_out`]):
+/// the frame can't be placed and is skipped.
 fn estimate_scroll(
     a: &RgbaImage,
     b: &RgbaImage,
@@ -315,22 +353,27 @@ fn estimate_scroll(
         return None;
     }
     let stride = config.subsample.max(1);
+    let mut costs = Vec::with_capacity((hi_y_b - lo_y_b + 1) as usize);
     let mut best_cost = u64::MAX;
     let mut best_y_b = template_y;
-    let mut y_b = lo_y_b;
-    while y_b <= hi_y_b {
+    // Scan from no motion upward: equal-cost ties keep the smaller
+    // motion, so blank or repeated content does not look like a scroll.
+    let mut y_b = hi_y_b;
+    loop {
         let cost = sad_strip(a, template_y, b, y_b, w, strip_h, stride);
+        costs.push(cost);
         if cost < best_cost {
             best_cost = cost;
             best_y_b = y_b;
         }
-        y_b += 1;
+        if y_b == lo_y_b {
+            break;
+        }
+        y_b -= 1;
     }
-    // dy = template_y in `a` minus y_b in `b`. If y_b > template_y the
-    // page moved up (scrolled backwards) — return 0 so the caller
-    // drops the frame.
-    if best_y_b > template_y {
-        return Some(0);
+    let samples = u64::from(w.div_ceil(stride)) * u64::from(strip_h.div_ceil(stride)) * 3;
+    if !match_stands_out(best_cost, samples, &mut costs) {
+        return None;
     }
     Some(template_y - best_y_b)
 }
@@ -508,6 +551,40 @@ mod tests {
             "expected ~74, got {}",
             out.height()
         );
+    }
+
+    /// SC-16: a frame that went back up is skipped, and the next frame
+    /// is measured against the last frame that contributed rows, so the
+    /// stitch is the page with no band repeated or lost.
+    #[test]
+    fn a_scroll_back_up_is_skipped_and_the_next_frame_joins_the_last_kept_one() {
+        let config = StitchConfig {
+            min_motion: 4,
+            ..StitchConfig::default()
+        };
+        let frames = [0, 12, 0].map(|o| stripe_frame(32, 64, o));
+        let out = stitch_scrolling(&frames, config).unwrap();
+        assert_eq!(out, stripe_frame(32, 76, 0));
+        let frames = [0, 12, 4, 24].map(|o| stripe_frame(32, 64, o));
+        let out = stitch_scrolling(&frames, config).unwrap();
+        assert_eq!(out, stripe_frame(32, 88, 0));
+    }
+
+    /// A frame no offset explains (the content changed outright) is
+    /// skipped rather than stitched at the cheapest wrong offset.
+    #[test]
+    fn a_frame_that_matches_nowhere_is_skipped() {
+        let a = stripe_frame(32, 64, 0);
+        let b = RgbaImage::from_fn(32, 64, |x, y| {
+            let v = ((x * 97 + y * 31) ^ (x * y)) as u8;
+            Rgba([v, v.wrapping_mul(7), v.wrapping_add(90), 255])
+        });
+        assert_eq!(
+            estimate_scroll(&a, &b, &StickyMask::default(), &StitchConfig::default()),
+            None
+        );
+        let out = stitch_scrolling(&[a.clone(), b], StitchConfig::default()).unwrap();
+        assert_eq!(out, a);
     }
 
     #[test]

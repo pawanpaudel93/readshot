@@ -244,6 +244,13 @@ pub(crate) fn frame_has_scroll_motion(a: &image::RgbaImage, b: &image::RgbaImage
     scroll_motion_offset(a, b).is_some_and(|dy| dy >= SCROLL_MIN_ACCEPTED_MOTION_PX)
 }
 
+/// The downward scroll (px) from `a` to `b`, or `None` when `b` isn't
+/// `a` scrolled down: a different size, a scroll back up, a sideways
+/// move, or a change no offset explains clearly
+/// ([`readshot_core::scroll_stitch::match_stands_out`]). `Some(0)` is a
+/// still page. Only downward motion may join the stitch, so the strip is
+/// searched both ways and an upward best match is refused rather than
+/// read as the nearest downward one.
 pub(crate) fn scroll_motion_offset(a: &image::RgbaImage, b: &image::RgbaImage) -> Option<u32> {
     if a.dimensions() != b.dimensions() {
         return None;
@@ -257,30 +264,45 @@ pub(crate) fn scroll_motion_offset(a: &image::RgbaImage, b: &image::RgbaImage) -
         return None;
     }
     // Use the lower-middle content region. It usually avoids sticky
-    // headers while still leaving room below to detect downward scroll.
+    // headers while leaving room above it for downward scroll and
+    // below it to recognise a scroll back up.
     let template_y = ((h * 2) / 3).min(h.saturating_sub(strip_h));
-    let max_motion = (h / 2).max(SCROLL_MIN_ACCEPTED_MOTION_PX);
-    let lo_y_b = template_y.saturating_sub(max_motion);
-    let hi_y_b = template_y;
+    let max_down = (h / 2).max(SCROLL_MIN_ACCEPTED_MOTION_PX).min(template_y);
+    let max_up = h - strip_h - template_y;
     let stride_x: u32 = 4;
     let stride_y: u32 = 2;
-    let mut best_cost = u64::MAX;
-    let mut best_y_b = hi_y_b;
-    // Scan from no-motion upward. Equal-cost ties keep the smaller
+    let cost_at =
+        |y_b: u32| sad_scroll_strip(a, template_y, b, y_b, w, strip_h, (stride_x, stride_y));
+    let mut best_cost = cost_at(template_y);
+    let mut costs = vec![best_cost];
+    // Signed shift: positive = the page moved up the screen (scrolled
+    // down), negative = it moved down (scrolled back up).
+    let mut best_shift: i64 = 0;
+    // Scan outward from no motion. Equal-cost ties keep the smaller
     // motion, so blank/repeated content does not look like a scroll.
-    let mut y_b = hi_y_b;
-    loop {
-        let cost = sad_scroll_strip(a, template_y, b, y_b, w, strip_h, (stride_x, stride_y));
-        if cost < best_cost {
-            best_cost = cost;
-            best_y_b = y_b;
+    for k in 1..=max_down.max(max_up) {
+        if k <= max_down {
+            let cost = cost_at(template_y - k);
+            costs.push(cost);
+            if cost < best_cost {
+                best_cost = cost;
+                best_shift = i64::from(k);
+            }
         }
-        if y_b == lo_y_b {
-            break;
+        if k <= max_up {
+            let cost = cost_at(template_y + k);
+            costs.push(cost);
+            if cost < best_cost {
+                best_cost = cost;
+                best_shift = -i64::from(k);
+            }
         }
-        y_b -= 1;
     }
-    Some(template_y - best_y_b)
+    let samples = u64::from(w.div_ceil(stride_x)) * u64::from(strip_h.div_ceil(stride_y)) * 3;
+    if !readshot_core::scroll_stitch::match_stands_out(best_cost, samples, &mut costs) {
+        return None;
+    }
+    u32::try_from(best_shift).ok()
 }
 
 pub(crate) fn sad_scroll_strip(
