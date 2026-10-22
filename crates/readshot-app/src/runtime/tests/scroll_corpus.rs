@@ -273,10 +273,20 @@ fn an_animated_element_on_a_still_page_is_still() {
     let page = text_page(1400, 7);
     let base = frames_at(&page, &[300]).remove(0);
     let mut rng = Rng(99);
-    for top in [140u32, 150, 30, 200] {
+    // (top, height, left, right): across the template strip, high up,
+    // and a full-width video along the bottom, where the stitcher's own
+    // strip is.
+    for (top, height, left, right) in [
+        (140u32, 32u32, 60u32, 140u32),
+        (150, 32, 60, 140),
+        (30, 32, 60, 140),
+        (200, 32, 60, 140),
+        (170, 70, 0, W),
+    ] {
+        let top_ = top;
         let mut frame = base.clone();
-        for y in top..top + 32 {
-            for x in 60..140 {
+        for y in top..top + height {
+            for x in left..right {
                 let v = rng.r(256) as u8;
                 frame.put_pixel(x, y, Rgba([v, v, v, 255]));
             }
@@ -284,7 +294,7 @@ fn an_animated_element_on_a_still_page_is_still() {
         assert_eq!(
             scroll_motion(&base, &frame),
             ScrollMotion::Down(0),
-            "box at y {top}"
+            "box at y {top_}, {height} rows"
         );
     }
 }
@@ -356,5 +366,17 @@ fn the_too_fast_hint_shows_only_after_a_jump_past_any_overlap() {
         &shown[11..],
         &[false, true, true, true],
         "jump past any overlap: from the second unplaced frame"
+    );
+    // On this page, frames after a 250 px jump line their text lines up
+    // with the anchor's well enough to stand out as a scroll back up,
+    // but not exactly: they are still unplaced, and the hint stays.
+    let page = text_page(2000, 7);
+    let mut p = down.clone();
+    p.extend([650, 670, 690, 710, 730]);
+    let shown = hint_shown(&frames_at(&page, &p));
+    assert_eq!(
+        &shown[11..],
+        &[false, true, true, true, true],
+        "a look-alike back match never hides the hint"
     );
 }
