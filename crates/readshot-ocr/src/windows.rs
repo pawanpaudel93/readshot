@@ -33,6 +33,11 @@ use windows::Storage::Streams::DataWriter;
 
 use crate::{OCREngine, OCRRequest, OCRResult};
 
+/// Upper bound on one recognition, the same backstop as the macOS
+/// `VISION_TIMEOUT` and the Linux `OCRS_TIMEOUT`: against a wedged OS
+/// call, not a tuning knob.
+const WINDOWS_OCR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub struct WindowsMediaOcrEngine;
 
 impl WindowsMediaOcrEngine {
@@ -71,8 +76,13 @@ impl OCREngine for WindowsMediaOcrEngine {
         let async_op = engine
             .RecognizeAsync(&bitmap)
             .map_err(|e| OCRError::Backend(format!("RecognizeAsync: {e}")))?;
-        let result = async_op
+        let result = crate::deadline::with_deadline(async_op, WINDOWS_OCR_TIMEOUT)
             .await
+            .map_err(|_| {
+                OCRError::Backend(format!(
+                    "Windows OCR timed out after {WINDOWS_OCR_TIMEOUT:?}; the OS text-recognition call did not return"
+                ))
+            })?
             .map_err(|e| OCRError::Backend(format!("RecognizeAsync await: {e}")))?;
 
         let lines = result

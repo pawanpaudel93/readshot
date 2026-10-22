@@ -24,6 +24,8 @@ use async_trait::async_trait;
 use image::RgbaImage;
 use readshot_core::error::OCRError;
 
+#[cfg(any(test, target_os = "windows"))]
+mod deadline;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod fake;
 
