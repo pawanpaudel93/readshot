@@ -1847,4 +1847,224 @@ mod tests {
         let resp = call(&s, r#"{"jsonrpc":"2.0","id":12,"method":"ping"}"#).await;
         assert_eq!(resp["result"], serde_json::json!({}));
     }
+
+    // ── W5c: what each tool hands the capturer and the OCR engine ──
+    //
+    // This crate has no `async-trait` dependency, so the recorders spell
+    // out the boxed-future signatures the trait's macro generates.
+
+    type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
+    #[derive(Default)]
+    struct RecordingCapturer {
+        inner: FakeCapturer,
+        regions: std::sync::Mutex<Vec<CaptureRequest>>,
+        windows: std::sync::Mutex<Vec<WindowCaptureRequest>>,
+    }
+
+    impl Capturer for RecordingCapturer {
+        fn list_displays<'s, 'f>(&'s self) -> BoxFuture<'f, Result<Vec<DisplayInfo>, CaptureError>>
+        where
+            's: 'f,
+            Self: 'f,
+        {
+            self.inner.list_displays()
+        }
+
+        fn capture_region<'s, 'f>(
+            &'s self,
+            req: CaptureRequest,
+        ) -> BoxFuture<'f, Result<RgbaImage, CaptureError>>
+        where
+            's: 'f,
+            Self: 'f,
+        {
+            self.regions.lock().unwrap().push(req.clone());
+            self.inner.capture_region(req)
+        }
+
+        fn list_windows<'s, 'f>(&'s self) -> BoxFuture<'f, Result<Vec<WindowInfo>, CaptureError>>
+        where
+            's: 'f,
+            Self: 'f,
+        {
+            self.inner.list_windows()
+        }
+
+        fn capture_window<'s, 'f>(
+            &'s self,
+            req: WindowCaptureRequest,
+        ) -> BoxFuture<'f, Result<RgbaImage, CaptureError>>
+        where
+            's: 'f,
+            Self: 'f,
+        {
+            self.windows.lock().unwrap().push(req.clone());
+            self.inner.capture_window(req)
+        }
+    }
+
+    struct RecordingOcr {
+        inner: FakeOcrEngine,
+        requests: std::sync::Mutex<Vec<(Vec<String>, bool)>>,
+    }
+
+    impl OCREngine for RecordingOcr {
+        fn supported_languages(&self) -> Vec<String> {
+            self.inner.supported_languages()
+        }
+
+        fn recognise<'s, 'f>(
+            &'s self,
+            req: OCRRequest,
+        ) -> BoxFuture<'f, Result<readshot_ocr::OCRResult, OCRError>>
+        where
+            's: 'f,
+            Self: 'f,
+        {
+            self.requests
+                .lock()
+                .unwrap()
+                .push((req.languages.clone(), req.use_language_correction));
+            self.inner.recognise(req)
+        }
+    }
+
+    fn recording_server() -> (McpServer, Arc<RecordingCapturer>, Arc<RecordingOcr>) {
+        let cap = Arc::new(RecordingCapturer::default());
+        let ocr = Arc::new(RecordingOcr {
+            inner: FakeOcrEngine::with_text("hello mcp"),
+            requests: std::sync::Mutex::new(Vec::new()),
+        });
+        let server = McpServer::new(cap.clone(), ocr.clone());
+        (server, cap, ocr)
+    }
+
+    fn tool_call_line(name: &str, arguments: Value) -> String {
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        })
+        .to_string()
+    }
+
+    /// MCP-15, MCP-19: the cursor is hidden unless `hide_cursor: false`,
+    /// for every region tool; a non-bool is an invalid-params error.
+    #[tokio::test]
+    async fn hide_cursor_reaches_the_capture_request() {
+        for tool in ["capture_region", "capture_text", "capture_region_and_text"] {
+            for (args, hidden) in [
+                (json!({}), true),
+                (json!({"hide_cursor": true}), true),
+                (json!({"hide_cursor": false}), false),
+            ] {
+                let (server, cap, _) = recording_server();
+                let resp = call(&server, &tool_call_line(tool, args.clone())).await;
+                assert_eq!(resp["result"]["isError"], false, "{tool} {args}: {resp}");
+                let reqs = cap.regions.lock().unwrap().clone();
+                assert_eq!(reqs.len(), 1, "{tool}");
+                assert_eq!(reqs[0].hide_cursor, hidden, "{tool} {args}");
+                assert_eq!(reqs[0].display_id, "fake-0", "{tool}: the primary display");
+                assert_eq!(reqs[0].scale, 1.0, "{tool}: the display's scale");
+            }
+
+            let (server, cap, _) = recording_server();
+            let resp = call(&server, &tool_call_line(tool, json!({"hide_cursor": "no"}))).await;
+            assert_eq!(resp["error"]["code"], -32602, "{tool}: {resp}");
+            assert!(
+                cap.regions.lock().unwrap().is_empty(),
+                "{tool}: nothing captured"
+            );
+        }
+    }
+
+    /// MCP-26, MCP-27: languages and `language_correction` reach the OCR
+    /// request (correction is on by default and can be turned off); a
+    /// non-bool is an invalid-params error.
+    #[tokio::test]
+    async fn language_hints_and_correction_reach_the_ocr_request() {
+        for tool in ["capture_text", "capture_region_and_text"] {
+            for (args, expected) in [
+                (json!({}), (Vec::<String>::new(), true)),
+                (
+                    json!({"languages": ["en-US", "fr-FR"], "language_correction": false}),
+                    (vec!["en-US".to_string(), "fr-FR".to_string()], false),
+                ),
+                (json!({"language_correction": true}), (Vec::new(), true)),
+            ] {
+                let (server, _, ocr) = recording_server();
+                let resp = call(&server, &tool_call_line(tool, args.clone())).await;
+                assert_eq!(resp["result"]["isError"], false, "{tool} {args}: {resp}");
+                assert_eq!(
+                    ocr.requests.lock().unwrap().clone(),
+                    vec![expected],
+                    "{tool} {args}"
+                );
+            }
+
+            let (server, _, ocr) = recording_server();
+            let resp = call(
+                &server,
+                &tool_call_line(tool, json!({"language_correction": "off"})),
+            )
+            .await;
+            assert_eq!(resp["error"]["code"], -32602, "{tool}: {resp}");
+            assert!(ocr.requests.lock().unwrap().is_empty());
+        }
+    }
+
+    /// MCP-24: `ignore_shadows` defaults to false and reaches the window
+    /// capture; a non-bool is an invalid-params error.
+    #[tokio::test]
+    async fn ignore_shadows_reaches_the_window_request() {
+        for (args, ignore) in [
+            (json!({"window": "fake-window-0"}), false),
+            (
+                json!({"window": "fake-window-0", "ignore_shadows": false}),
+                false,
+            ),
+            (
+                json!({"window": "fake-window-0", "ignore_shadows": true}),
+                true,
+            ),
+        ] {
+            let (server, cap, _) = recording_server();
+            let resp = call(&server, &tool_call_line("capture_window", args.clone())).await;
+            assert_eq!(resp["result"]["isError"], false, "{args}: {resp}");
+            let reqs = cap.windows.lock().unwrap().clone();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].ignore_shadows, ignore, "{args}");
+        }
+
+        let (server, cap, _) = recording_server();
+        let resp = call(
+            &server,
+            &tool_call_line(
+                "capture_window",
+                json!({"window": "fake-window-0", "ignore_shadows": 1}),
+            ),
+        )
+        .await;
+        assert_eq!(resp["error"]["code"], -32602, "{resp}");
+        assert!(cap.windows.lock().unwrap().is_empty());
+    }
+
+    /// MCP-10: `tools/call` without a `name` is an invalid-params error.
+    #[tokio::test]
+    async fn tools_call_without_a_name_is_invalid_params() {
+        let s = server();
+        for params in [json!({}), json!({"name": 7}), json!({"arguments": {}})] {
+            let line = json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": params})
+                .to_string();
+            let resp = call(&s, &line).await;
+            assert_eq!(resp["id"], 3);
+            assert_eq!(resp["error"]["code"], -32602, "{params}: {resp}");
+            assert!(resp["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("missing `name`"));
+        }
+    }
 }
