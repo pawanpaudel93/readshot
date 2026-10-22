@@ -1146,6 +1146,8 @@ fn bubble_of_magnifier_at_7_6() -> RectLike {
 mod app_shell;
 /// Overlay, scroll capture, window placement, permission and pins.
 mod capture_flow;
+/// Tray and hotkey entries, the overlay's direct intents, pins, scroll limits.
+mod capture_routes;
 /// Combine: adding captures and files, bakes.
 mod combine_capture;
 /// Tooltip and toggle casing over the view sources.
