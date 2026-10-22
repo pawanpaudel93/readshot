@@ -1093,20 +1093,27 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
 pub(crate) fn uninstalled_allows(message: &Message) -> bool {
     match message {
         Message::Window(_) | Message::NoOp => true,
+        // KeyPressed takes the inert branch of the Settings key handler
+        // (Esc / ⌘W close, ↵ quits, nothing else).
         Message::Settings(m) => matches!(
             m,
             SettingsMsg::OpenRequested
                 | SettingsMsg::WindowReady(_)
                 | SettingsMsg::PaneSelected(_)
+                | SettingsMsg::KeyPressed { .. }
+                | SettingsMsg::UninstallFinished { .. }
                 | SettingsMsg::QuitAfterUninstall
         ),
+        // The tray's Settings… reopens Settings on the uninstall result.
         Message::Tick(t) => matches!(
             t,
             TickMsg::Tray
                 | TickMsg::AppReopen
                 | TickMsg::ThemePoll
                 | TickMsg::SystemThemeChanged(_)
-                | TickMsg::TrayAction(crate::tray::TrayAction::Quit)
+                | TickMsg::TrayAction(
+                    crate::tray::TrayAction::Quit | crate::tray::TrayAction::Settings
+                )
         ),
         Message::App(m) => matches!(m, AppMsg::QuitRequested),
         Message::Editor(_)

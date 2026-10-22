@@ -899,6 +899,16 @@ fn run_uninstall(
         }
     }
 
+    // Kept preferences say Open at Login is off, so running the
+    // left-over program again doesn't register it again at startup (a
+    // purge deletes the file; nothing is created).
+    if !purge {
+        if let Some(path) = crate::runtime::default_preferences_path() {
+            if let Err(e) = crate::uninstall::record_open_at_login_off(&path) {
+                writeln!(stdout, "  note     couldn't record Open at Login as off: {e}")?;
+            }
+        }
+    }
     let system = crate::uninstall::RealSystem;
     let reports = crate::uninstall::execute(&plan, &system);
     writeln!(stdout)?;

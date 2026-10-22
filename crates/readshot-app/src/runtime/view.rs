@@ -4171,6 +4171,8 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     // --- Selected pane -------------------------------------------------
     let pane = state.settings_pane;
     let body: Vec<Element<'_, Message>> = match pane {
+        // Uninstalled: nothing left to change; only the outcome and Quit.
+        _ if state.uninstalled => settings_app_pane(state),
         SettingsPane::Permissions => settings_permissions_pane(state),
         SettingsPane::Capture => settings_capture_pane(state),
         SettingsPane::Files => settings_files_pane(state),
@@ -4216,17 +4218,25 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     ))
     .height(Length::Fill);
 
-    container(row![
-        sidebar,
-        vhairline(),
-        column![title_row, pane_body]
-            .width(Length::Fill)
-            .height(Length::Fill),
-    ])
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .style(bg_style)
-    .into()
+    let content = column![title_row, pane_body]
+        .width(Length::Fill)
+        .height(Length::Fill);
+    let layout: Element<'_, Message> = if settings_sidebar_shown(state) {
+        row![sidebar, vhairline(), content].into()
+    } else {
+        content.into()
+    };
+    container(layout)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(bg_style)
+        .into()
+}
+
+/// The pane sidebar, hidden once Readshot is uninstalled: no other pane
+/// has anything left to change.
+pub(crate) fn settings_sidebar_shown(state: &App) -> bool {
+    !state.uninstalled
 }
 
 fn medium() -> iced::Font {
@@ -5029,6 +5039,12 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
         )
     };
 
+    if state.uninstalled {
+        return vec![
+            settings_group_heading("Danger zone", text_danger),
+            settings_group(uninstalled_row(state).into_iter().collect()),
+        ];
+    }
     vec![
         settings_group_heading("Startup", text_t3),
         settings_group(vec![group_row(
@@ -5059,11 +5075,17 @@ fn uninstalled_row(state: &App) -> Option<Element<'_, Message>> {
         "Uninstall Readshot",
         result.text.clone(),
         Some(tone),
-        button(text("Quit Readshot").size(TYPE_BODY))
-            .padding([6, 12])
-            .style(|t, s| action_button_style(t, s, ActionKind::Primary))
-            .on_press(Message::Settings(SettingsMsg::QuitAfterUninstall))
-            .into(),
+        // The default button (↵ presses it); disabled while the steps run.
+        focus_ring(
+            button(text("Quit Readshot").size(TYPE_BODY))
+                .padding([6, 12])
+                .style(|t, s| action_button_style(t, s, ActionKind::Primary))
+                .on_press_maybe(
+                    super::settings_ops::uninstall_finished(state)
+                        .then_some(Message::Settings(SettingsMsg::QuitAfterUninstall)),
+                ),
+            super::settings_ops::uninstall_finished(state),
+        ),
     ))
 }
 

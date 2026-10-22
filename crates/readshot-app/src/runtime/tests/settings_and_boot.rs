@@ -1304,3 +1304,149 @@ fn an_uninstalled_readshot_recreates_nothing_it_removed() {
     );
     assert!(!dir.path().join("data").exists(), "history dir recreated");
 }
+
+// ---- Uninstall, fix round 3 (R1–R4) ----
+
+fn confirming_app(purge: bool, prefs_on_disk: bool) -> (tempfile::TempDir, App) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store: Arc<dyn HistoryStore> =
+        Arc::new(FsHistoryStore::new(dir.path().join("data").join("history")));
+    let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store);
+    let path = dir.path().join("config").join("preferences.toml");
+    app.preferences.launch_at_login = true;
+    if prefs_on_disk {
+        app.preferences.save(&path).unwrap();
+    }
+    app.preferences_path = Some(path);
+    app.hotkey_actions.insert(7, GlobalHotkeyAction::Capture);
+    app.settings_window_id = Some(iced::window::Id::unique());
+    app.settings_uninstall_pending = true;
+    app.settings_uninstall_purge = purge;
+    app.coordinator.flush_history_updates();
+    (dir, app)
+}
+
+fn saved_launch_at_login(dir: &tempfile::TempDir) -> Option<bool> {
+    let path = dir.path().join("config").join("preferences.toml");
+    path.exists()
+        .then(|| Preferences::load(&path).unwrap().launch_at_login)
+}
+
+/// R2: confirming goes inert before any step runs, so nothing done
+/// meanwhile (a shortcut, a capture landing) writes into History.
+#[test]
+fn confirming_an_uninstall_goes_inert_before_it_runs() {
+    let (_dir, mut app) = confirming_app(true, true);
+    let _ = update(&mut app, Message::Settings(SettingsMsg::UninstallConfirmed));
+    assert!(app.uninstalled);
+    assert!(app.hotkey_actions.is_empty());
+    let progress = app.settings_uninstall_result.as_ref().expect("said");
+    assert_eq!(progress.tone, StatusTone::Progress);
+    let task = update(
+        &mut app,
+        Message::Capture(CaptureMsg::RegionCaptured(Ok(solid(8, 8)))),
+    );
+    assert_eq!(task.units(), 0);
+    assert!(app.editor.is_none());
+    // The steps' outcome still arrives and is said.
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::UninstallFinished {
+            program_removed: false,
+            purge: true,
+        }),
+    );
+    assert_eq!(
+        app.settings_uninstall_result.as_ref().unwrap().tone,
+        StatusTone::Warning
+    );
+}
+
+/// R1: kept preferences say Open at Login is off, so running the left-over
+/// program again doesn't register it again. A purged or never-written
+/// file is not created.
+#[test]
+fn a_kept_preferences_file_records_open_at_login_off() {
+    let (dir, mut app) = confirming_app(false, true);
+    let _ = update(&mut app, Message::Settings(SettingsMsg::UninstallConfirmed));
+    assert_eq!(saved_launch_at_login(&dir), Some(false));
+    assert!(!app.preferences.launch_at_login);
+
+    let (dir, mut app) = confirming_app(false, false);
+    let _ = update(&mut app, Message::Settings(SettingsMsg::UninstallConfirmed));
+    assert_eq!(saved_launch_at_login(&dir), None, "no file created");
+
+    let (dir, mut app) = confirming_app(true, true);
+    let _ = update(&mut app, Message::Settings(SettingsMsg::UninstallConfirmed));
+    assert_eq!(
+        saved_launch_at_login(&dir),
+        Some(true),
+        "a purge deletes the file; nothing is written into it first"
+    );
+}
+
+/// R3: in the inert state Esc / ⌘W close Settings and ↵ quits; no other
+/// Settings key does anything.
+#[test]
+fn an_uninstalled_settings_window_answers_esc_and_return_only() {
+    use crate::runtime::settings_ops::{uninstalled_settings_key, InertSettingsKey};
+    use iced::keyboard::{key::Named, Key, Modifiers};
+    assert_eq!(
+        uninstalled_settings_key(&Key::Named(Named::Escape), Modifiers::default()),
+        Some(InertSettingsKey::Close)
+    );
+    assert_eq!(
+        uninstalled_settings_key(&Key::Character("w".into()), Modifiers::COMMAND),
+        Some(InertSettingsKey::Close)
+    );
+    assert_eq!(
+        uninstalled_settings_key(&Key::Named(Named::Enter), Modifiers::default()),
+        Some(InertSettingsKey::Quit)
+    );
+    assert_eq!(
+        uninstalled_settings_key(&Key::Character("l".into()), Modifiers::COMMAND),
+        None,
+        "⌘L must not toggle Open at Login back on"
+    );
+
+    let (_dir, mut app) = uninstalled_app(false);
+    let id = app.settings_window_id.unwrap();
+    app.windows.register(id, WindowKind::Settings);
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::KeyPressed {
+            window: id,
+            key: Key::Character("l".into()),
+            modifiers: Modifiers::COMMAND,
+            captured: false,
+        }),
+    );
+    assert!(!app.preferences.launch_at_login);
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::KeyPressed {
+            window: id,
+            key: Key::Named(Named::Escape),
+            modifiers: Modifiers::default(),
+            captured: false,
+        }),
+    );
+    assert_eq!(app.windows.kind(id), None, "Esc closed Settings");
+}
+
+/// R4: the tray's Settings item reopens Settings on the uninstall result,
+/// and Settings shows nothing else to change.
+#[test]
+fn the_tray_reopens_settings_on_the_uninstall_result() {
+    let (_dir, mut app) = uninstalled_app(false);
+    app.settings_window_id = None;
+    app.settings_pane = SettingsPane::Capture;
+    let _ = update(
+        &mut app,
+        Message::Tick(TickMsg::TrayAction(crate::tray::TrayAction::Settings)),
+    );
+    assert!(app.settings_window_id.is_some());
+    assert_eq!(app.settings_pane, SettingsPane::App);
+    assert!(!crate::runtime::view::settings_sidebar_shown(&app));
+    assert!(app.settings_uninstall_result.is_some());
+}

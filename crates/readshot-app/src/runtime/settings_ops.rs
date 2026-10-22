@@ -123,7 +123,11 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
             program_removed: false,
             purge,
         } => enter_uninstalled(state, purge),
-        SettingsMsg::QuitAfterUninstall => quit_readshot(&state.coordinator),
+        // Not while the steps still run: quitting would cut them off.
+        SettingsMsg::QuitAfterUninstall if uninstall_finished(state) => {
+            quit_readshot(&state.coordinator)
+        }
+        SettingsMsg::QuitAfterUninstall => Task::none(),
         SettingsMsg::WindowReady(id) => {
             // Belt-and-braces: window-open already records the id, but
             // iced may hand back a different one in some platforms.
@@ -486,7 +490,19 @@ fn on_settings(state: &mut App, submsg: SettingsMessage) -> Task<Message> {
 }
 
 /// `SettingsMsg::OpenRequested`.
+/// The uninstall's steps are done (its result is no longer Progress).
+pub(crate) fn uninstall_finished(state: &App) -> bool {
+    state
+        .settings_uninstall_result
+        .as_ref()
+        .is_some_and(|r| r.tone != StatusTone::Progress)
+}
+
 fn on_open_settings(state: &mut App) -> Task<Message> {
+    if state.uninstalled {
+        // Only the uninstall's outcome is left to show.
+        state.settings_pane = SettingsPane::App;
+    }
     // The user is back in the app: notifications they turned on again
     // meanwhile end the off state, with or without a tray.
     recheck_notifications_quietly();
@@ -600,10 +616,32 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
     let paths = crate::uninstall::default_uninstall_paths();
     let plan = crate::uninstall::plan_uninstall(&paths, purge);
     let program_removed = crate::uninstall::removes_program(&plan);
-    Task::perform(
+    // Kept preferences say Open at Login is off (a purge deletes them;
+    // nothing is written into a file about to go, or created).
+    state.preferences.launch_at_login = false;
+    if !purge {
+        if let Some(path) = state.preferences_path.clone() {
+            if let Err(e) = crate::uninstall::record_open_at_login_off(&path) {
+                tracing::warn!(target: readshot_core::log::cat::APP, "could not record Open at Login off: {e}");
+            }
+        }
+    }
+    // Inert from now, before any step runs: nothing done meanwhile can
+    // write what the steps remove.
+    let close_others = go_inert(state);
+    state.settings_uninstall_result =
+        Some(Status::new(StatusTone::Progress, "Uninstalling Readshot…"));
+    let coord = state.coordinator.clone();
+    let run = Task::perform(
         async move {
             let _ = tokio::task::spawn_blocking(move || {
-                let reports = crate::uninstall::execute(&plan, &crate::uninstall::RealSystem);
+                // Writes queued before the confirm land now, before a
+                // purge deletes their folder, never after it.
+                let reports = crate::uninstall::execute_after_flush(
+                    || coord.flush_history_updates(),
+                    &plan,
+                    &crate::uninstall::RealSystem,
+                );
                 for report in &reports {
                     match &report.outcome {
                         Ok(status) => tracing::info!(
@@ -627,7 +665,8 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
                 purge,
             })
         },
-    )
+    );
+    Task::batch([close_others, run])
 }
 
 /// A Settings uninstall left the program installed (Windows, Linux, a
@@ -636,6 +675,18 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
 /// preferences, the Open at Login entry) is recreated before the user
 /// quits. Every other window closes without syncing to History.
 fn enter_uninstalled(state: &mut App, purge: bool) -> Task<Message> {
+    let close_others = go_inert(state);
+    state.settings_uninstall_result = Some(Status::new(
+        StatusTone::Warning,
+        crate::uninstall::completion_message(&[], purge),
+    ));
+    close_others
+}
+
+/// Make Readshot inert for the rest of the process (`App::uninstalled`):
+/// shortcuts released, other windows closed without a History sync,
+/// Open at Login off in memory. Idempotent.
+fn go_inert(state: &mut App) -> Task<Message> {
     state.uninstalled = true;
     state.settings_uninstall_pending = false;
     state.settings_recording_hotkey = false;
@@ -669,11 +720,41 @@ fn enter_uninstalled(state: &mut App, purge: bool) -> Task<Message> {
     }
     state.history_window_id = None;
     state.cli_tools_window_id = None;
-    state.settings_uninstall_result = Some(Status::new(
-        StatusTone::Warning,
-        crate::uninstall::completion_message(&[], purge),
-    ));
+    state.settings_pane = SettingsPane::App;
+    state.settings_focus = None;
     Task::batch(tasks)
+}
+
+/// What a key does in Settings once Readshot is uninstalled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InertSettingsKey {
+    /// Esc / ⌘W: close Settings.
+    Close,
+    /// ↵: Quit Readshot (the only button left).
+    Quit,
+}
+
+/// The only keys Settings answers when uninstalled; every other key
+/// (⌘L would turn Open at Login back on) is ignored.
+pub(crate) fn uninstalled_settings_key(
+    key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+) -> Option<InertSettingsKey> {
+    use iced::keyboard::{key::Named, Key};
+    let bare = !modifiers.command() && !modifiers.alt() && !modifiers.control();
+    match key {
+        Key::Named(Named::Escape) if bare => Some(InertSettingsKey::Close),
+        Key::Named(Named::Enter) if bare => Some(InertSettingsKey::Quit),
+        Key::Character(c)
+            if c.eq_ignore_ascii_case("w")
+                && modifiers.command()
+                && !modifiers.shift()
+                && !modifiers.alt() =>
+        {
+            Some(InertSettingsKey::Close)
+        }
+        _ => None,
+    }
 }
 
 /// `SettingsMsg::PaneSelected`.
@@ -707,6 +788,19 @@ fn on_settings_key_pressed(
     // act when the focused window is the settings window.
     if state.settings_window_id != Some(window) {
         return Task::none();
+    }
+    if state.uninstalled {
+        return match uninstalled_settings_key(&key, modifiers) {
+            Some(InertSettingsKey::Close) => {
+                state.windows.forget(window);
+                window::close(window)
+            }
+            // Not while the steps still run: quitting would cut them off.
+            Some(InertSettingsKey::Quit) if uninstall_finished(state) => {
+                quit_readshot(&state.coordinator)
+            }
+            Some(InertSettingsKey::Quit) | None => Task::none(),
+        };
     }
     // Esc steps back one level: out of the filename field (which
     // has already let go of the caret), then off the focus ring,

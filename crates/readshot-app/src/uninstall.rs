@@ -286,6 +286,36 @@ pub fn completion_message(actions: &[UninstallAction], purge: bool) -> String {
     )
 }
 
+/// After an uninstall that keeps preferences (no purge), record Open at
+/// Login as off in the preferences file at `path`, so running the
+/// left-over program again doesn't register it again at startup.
+/// Returns whether the file changed. Never creates a file that isn't
+/// there (a purge deletes it; a never-saved one has nothing to keep).
+pub fn record_open_at_login_off(path: &Path) -> Result<bool, readshot_core::PreferencesError> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let mut prefs = readshot_core::Preferences::load(path)?;
+    if !prefs.launch_at_login {
+        return Ok(false);
+    }
+    prefs.launch_at_login = false;
+    prefs.save(path)?;
+    Ok(true)
+}
+
+/// Run `flush` (the History writer's queued writes), then the plan. A
+/// write queued before the uninstall must land before a purge deletes
+/// its folder, never after it (it would recreate the folder).
+pub fn execute_after_flush(
+    flush: impl FnOnce(),
+    actions: &[UninstallAction],
+    system: &dyn UninstallSystem,
+) -> Vec<ActionReport> {
+    flush();
+    execute(actions, system)
+}
+
 /// Whether the plan moves the app bundle to the Trash.
 pub fn removes_program(actions: &[UninstallAction]) -> bool {
     actions
@@ -860,6 +890,53 @@ mod tests {
         let purged = plan_uninstall(&paths_in(root.path(), None), true);
         let msg = completion_message(&purged, true);
         assert!(msg.contains("history and preferences"), "{msg}");
+    }
+
+    #[test]
+    fn kept_preferences_record_open_at_login_off_and_nothing_is_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config").join("preferences.toml");
+        // No file: nothing to record, nothing created.
+        assert!(!record_open_at_login_off(&path).unwrap());
+        assert!(!path.exists());
+        let prefs = readshot_core::Preferences {
+            launch_at_login: true,
+            debug_logging: true,
+            ..Default::default()
+        };
+        prefs.save(&path).unwrap();
+        assert!(record_open_at_login_off(&path).unwrap());
+        let back = readshot_core::Preferences::load(&path).unwrap();
+        assert!(!back.launch_at_login);
+        assert!(back.debug_logging, "the rest is kept");
+        // Already off: nothing to write.
+        assert!(!record_open_at_login_off(&path).unwrap());
+    }
+
+    #[test]
+    fn queued_history_writes_are_flushed_before_any_step_runs() {
+        let order = Mutex::new(Vec::new());
+        let plan = vec![UninstallAction::DisableOpenAtLogin];
+        struct Sys<'a>(&'a Mutex<Vec<&'static str>>);
+        impl UninstallSystem for Sys<'_> {
+            fn unload_login_item(&self, _: &str, _: &Path) -> io::Result<()> {
+                Ok(())
+            }
+            fn reset_screen_recording(&self, _: &str) -> io::Result<()> {
+                Ok(())
+            }
+            fn clear_defaults(&self, _: &str) -> io::Result<()> {
+                Ok(())
+            }
+            fn disable_open_at_login(&self) -> io::Result<()> {
+                self.0.lock().unwrap().push("step");
+                Ok(())
+            }
+        }
+        let reports =
+            execute_after_flush(|| order.lock().unwrap().push("flush"), &plan, &Sys(&order));
+        assert_eq!(reports.len(), 1);
+        assert_eq!(*order.lock().unwrap(), ["flush", "step"]);
     }
 
     #[test]
