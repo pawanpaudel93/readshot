@@ -295,6 +295,16 @@ pub fn failed_steps(reports: &[ActionReport]) -> Vec<String> {
         .collect()
 }
 
+/// Whether the app bundle was actually moved to the Trash: its step
+/// ran and changed something (planned is not enough; a failed or
+/// skipped Trash step leaves the program where it was).
+pub fn program_trashed(reports: &[ActionReport]) -> bool {
+    reports.iter().any(|r| {
+        matches!(r.action, UninstallAction::TrashAppBundle { .. })
+            && matches!(r.outcome, Ok(ActionStatus::Done))
+    })
+}
+
 /// What Settings says when steps failed (`failed` from
 /// [`failed_steps`]): how many, which, and how to finish. Settings is
 /// inert by then (no Uninstall to press), so the advice is for after
@@ -1014,6 +1024,29 @@ mod tests {
             // Under purge nothing is written (the file is deleted).
             assert!(!record_open_at_login_off_after(&reports, Some(&path), true).unwrap());
         }
+    }
+
+    /// fix1 review n5: the program counts as removed only when its Trash
+    /// step actually ran, not merely when it was planned.
+    #[test]
+    fn the_program_is_removed_only_when_the_trash_step_succeeded() {
+        let step = || UninstallAction::TrashAppBundle {
+            bundle: PathBuf::from("/Applications/Readshot.app"),
+            trash_dir: PathBuf::from("/tmp/Trash"),
+        };
+        let report = |outcome| ActionReport {
+            action: step(),
+            outcome,
+        };
+        assert!(program_trashed(&[report(Ok(ActionStatus::Done))]));
+        assert!(!program_trashed(&[report(Err(UninstallError::Remove {
+            path: PathBuf::from("/Applications/Readshot.app"),
+            source: io::Error::other("permission denied"),
+        }))]));
+        assert!(!program_trashed(&[report(Ok(ActionStatus::Skipped(
+            "gone"
+        )))]));
+        assert!(!program_trashed(&[]));
     }
 
     #[test]

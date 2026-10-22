@@ -593,7 +593,6 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
     let purge = state.settings_uninstall_purge;
     let paths = crate::uninstall::default_uninstall_paths();
     let plan = crate::uninstall::plan_uninstall(&paths, purge);
-    let program_removed = crate::uninstall::removes_program(&plan);
     // Off in memory now; in the kept preferences file only once the
     // steps removed the entry (`record_open_at_login_off_after`, below).
     state.preferences.launch_at_login = false;
@@ -644,13 +643,24 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
                 ) {
                     tracing::warn!(target: readshot_core::log::cat::APP, "could not record Open at Login off: {e}");
                 }
-                crate::uninstall::failed_steps(&reports)
+                (
+                    crate::uninstall::failed_steps(&reports),
+                    // What happened, not what was planned: a Trash step
+                    // that failed leaves the program installed.
+                    crate::uninstall::program_trashed(&reports),
+                )
             })
             .await
-            // The worker itself died: nothing says which steps ran.
-            .unwrap_or_else(|e| vec![format!("The uninstall stopped unexpectedly ({e})")])
+            // The worker itself died: nothing says which steps ran, so
+            // nothing counts as removed.
+            .unwrap_or_else(|e| {
+                (
+                    vec![format!("The uninstall stopped unexpectedly ({e})")],
+                    false,
+                )
+            })
         },
-        move |failed| {
+        move |(failed, program_removed)| {
             Message::Settings(SettingsMsg::UninstallFinished {
                 program_removed,
                 purge,
