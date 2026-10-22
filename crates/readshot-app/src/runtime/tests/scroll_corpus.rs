@@ -1,0 +1,189 @@
+//! SC-16 corpus: forward scrolling over text pages must stitch exactly
+//! the page it showed, through the live judge and the stitcher alike,
+//! for uniform steps, mixed steps and a flick of more than half the
+//! region. Ported from the W5e review probe (fixed seeds, no I/O).
+
+use super::*;
+use image::{Rgba, RgbaImage};
+use readshot_core::scroll_stitch::{stitch_scrolling, StitchConfig};
+
+/// Frame width and height: small enough for a debug-build test, with
+/// the probe's text geometry (36 px line pitch, 20 px x-height).
+const W: u32 = 200;
+const VH: u32 = 240;
+
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u32 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 >> 16) as u32
+    }
+    fn r(&mut self, n: u32) -> u32 {
+        self.next() % n
+    }
+}
+
+fn fill(img: &mut RgbaImage, x: u32, y: u32, w: u32, h: u32, c: u8) {
+    for yy in y..(y + h).min(img.height()) {
+        for xx in x..(x + w).min(img.width()) {
+            img.put_pixel(xx, yy, Rgba([c, c, c, 255]));
+        }
+    }
+}
+
+/// A glyph-ish text line: words of stems and bars.
+fn text_line(img: &mut RgbaImage, rng: &mut Rng, y: u32, x1: u32) {
+    let mut x = 20;
+    while x < x1 {
+        for _ in 0..3 + rng.r(8) {
+            let gw = 6 + rng.r(8);
+            if x + gw > x1 {
+                return;
+            }
+            let asc = if rng.r(4) == 0 { 6 } else { 0 };
+            fill(img, x, y - asc, 2 + rng.r(3), 20 + asc, 20);
+            fill(img, x + gw / 2, y + rng.r(10), gw / 2, 2 + rng.r(3), 20);
+            x += gw + 2;
+        }
+        x += 10;
+    }
+}
+
+/// A page of paragraphs: 3–8 lines on a 36 px pitch, ragged last line.
+fn text_page(h: u32, seed: u64) -> RgbaImage {
+    let mut img = RgbaImage::from_pixel(W, h, Rgba([255, 255, 255, 255]));
+    let mut rng = Rng(seed);
+    let mut y = 40;
+    while y + 40 < h {
+        let lines = 3 + rng.r(6);
+        for i in 0..lines {
+            if y + 40 >= h {
+                break;
+            }
+            let x1 = if i == lines - 1 {
+                40 + rng.r(W - 80)
+            } else {
+                W - 20
+            };
+            text_line(&mut img, &mut rng, y, x1);
+            y += 36;
+        }
+        y += 30;
+    }
+    img
+}
+
+fn frames_at(page: &RgbaImage, positions: &[u32]) -> Vec<RgbaImage> {
+    positions
+        .iter()
+        .map(|&p| image::imageops::crop_imm(page, 0, p, W, VH).to_image())
+        .collect()
+}
+
+/// The live judge, as the session runs it: each frame against the last
+/// accepted one. The indexes of the frames it keeps.
+fn judged(frames: &[RgbaImage]) -> Vec<usize> {
+    let mut kept = vec![0];
+    for (i, f) in frames.iter().enumerate().skip(1) {
+        if frame_has_scroll_motion(&frames[*kept.last().unwrap()], f) {
+            kept.push(i);
+        }
+    }
+    kept
+}
+
+/// Stitch `frames` and require exactly the page from the first frame's
+/// top to the bottom of the frame at `positions[last]`.
+fn assert_stitches(what: &str, page: &RgbaImage, top: u32, last: u32, frames: &[RgbaImage]) {
+    let out = stitch_scrolling(frames, StitchConfig::default()).unwrap();
+    let want = image::imageops::crop_imm(page, 0, top, W, last + VH - top).to_image();
+    assert_eq!(out.height(), want.height(), "{what}: height");
+    assert!(out == want, "{what}: pixels differ");
+}
+
+/// The full pipeline: the judge never skips two frames in a row (it
+/// never stalls; a single skip is a sparse strip tying a short move with
+/// the true one, as it always has), and the kept frames stitch exactly
+/// the page up to the last one kept.
+fn assert_pipeline(
+    what: &str,
+    page: &RgbaImage,
+    positions: &[u32],
+    frames: &[RgbaImage],
+) -> Vec<usize> {
+    let kept = judged(frames);
+    let mut ends = kept.clone();
+    ends.push(frames.len());
+    assert!(
+        ends.windows(2).all(|w| w[1] - w[0] <= 2),
+        "{what}: the judge skipped two frames in a row (kept {kept:?} of {})",
+        frames.len()
+    );
+    let kept_frames: Vec<RgbaImage> = kept.iter().map(|&i| frames[i].clone()).collect();
+    let last = positions[*kept.last().unwrap()];
+    assert_stitches(
+        &format!("{what} (pipeline)"),
+        page,
+        positions[0],
+        last,
+        &kept_frames,
+    );
+    kept
+}
+
+/// Uniform steps from 10 px to two thirds of the region, over several
+/// pages: the stitcher alone on every frame, and the full pipeline.
+#[test]
+fn uniform_forward_scrolls_over_text_stitch_the_exact_page() {
+    for seed in [7u64, 11, 17] {
+        let page = text_page(1600, seed);
+        for step in (10..=VH * 2 / 3).step_by(15) {
+            // At most 8 frames a case keeps the debug build quick.
+            let positions: Vec<u32> = (0..=(1200 / step).min(7)).map(|i| i * step).collect();
+            let frames = frames_at(&page, &positions);
+            let what = format!("seed {seed} step {step}");
+            let last = *positions.last().unwrap();
+            assert_stitches(&format!("{what} (stitcher)"), &page, 0, last, &frames);
+            assert_pipeline(&what, &page, &positions, &frames);
+        }
+    }
+}
+
+/// Mixed steps (slow, medium, up to two thirds of the region) through
+/// the full pipeline.
+#[test]
+fn mixed_forward_scrolls_over_text_stitch_the_exact_page() {
+    for seed in [3u64, 5, 23] {
+        let page = text_page(1600, seed);
+        let mut rng = Rng(seed * 77 + 1);
+        let mut positions = vec![0u32];
+        while *positions.last().unwrap() < 1100 {
+            let step = match rng.r(3) {
+                0 => 8 + rng.r(20),
+                1 => 30 + rng.r(90),
+                _ => 120 + rng.r(VH * 2 / 3 - 120),
+            };
+            positions.push(positions.last().unwrap() + step);
+        }
+        let frames = frames_at(&page, &positions);
+        assert_pipeline(&format!("seed {seed}"), &page, &positions, &frames);
+    }
+}
+
+/// One flick of more than half the region between slow scrolling: the
+/// frame after it is placed, and so is everything after that.
+#[test]
+fn a_flick_of_more_than_half_the_region_does_not_stop_the_capture() {
+    let page = text_page(1200, 7);
+    for flick in [VH / 2 + 10, VH / 2 + 25, VH * 2 / 3] {
+        let mut positions: Vec<u32> = (0..6).map(|i| i * 20).collect();
+        let base = 100 + flick;
+        positions.extend((0..6).map(|i| base + i * 20));
+        let frames = frames_at(&page, &positions);
+        let what = format!("flick {flick}");
+        let kept = assert_pipeline(&what, &page, &positions, &frames);
+        assert_eq!(kept.len(), frames.len(), "{what}: every frame is kept");
+    }
+}

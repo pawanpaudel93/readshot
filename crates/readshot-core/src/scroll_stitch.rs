@@ -146,30 +146,43 @@ pub fn stitch_scrolling(
 
     let sticky = detect_sticky(frames, &config);
 
-    // Measure each frame against the last frame that contributed rows,
-    // not against its neighbour: rows are pasted relative to that frame,
-    // so a dropped frame (a duplicate, a scroll back up, a sideways
-    // move, a change the matcher can't place) must not shift the
-    // reference. A frame that can't be placed is skipped, never
-    // mis-stitched.
+    // Each frame is placed against the last frame that was placed (the
+    // anchor), and its scroll position is the anchor's plus the offset.
+    // A frame adds the rows below the furthest frame pasted so far. A
+    // frame that can't be placed (a scroll back up, a sideways move, a
+    // change no offset explains) is skipped and leaves the anchor where
+    // it is, so the next frame that does place carries on from there:
+    // nothing is mis-stitched and one bad frame never stops the rest.
     let max_motion = config.max_motion.min(h.saturating_sub(1));
     let mut accepted: Vec<u32> = Vec::with_capacity(frames.len() - 1);
-    let mut reference = 0usize;
+    let mut anchor = 0usize;
+    let mut anchor_pos: u64 = 0;
+    let mut furthest: u64 = 0;
     for (i, frame) in frames.iter().enumerate().skip(1) {
-        let prev = &frames[reference];
-        let dy = estimate_scroll(prev, frame, &sticky, &config)
-            .filter(|&dy| dy >= config.min_motion && dy <= max_motion)
-            // A frame whose content sits *lower* than the reference's
-            // (the page went back up) is not new content either, even
-            // when a repeating page also lets it match a downward
-            // offset. As in the live judge, the shorter move wins.
-            .filter(|&dy| {
-                estimate_scroll(frame, prev, &sticky, &config)
-                    .is_none_or(|back| back < config.min_motion || back >= dy)
-            })
-            .unwrap_or(0);
-        if dy > 0 {
-            reference = i;
+        let prev = &frames[anchor];
+        let placed = estimate_scroll(prev, frame, &sticky, &config)
+            .filter(|m| m.dy <= max_motion)
+            // A frame whose content sits *lower* than the anchor's (the
+            // page went back up) is refused only when that backward
+            // reading is the better match: strictly cheaper, or as cheap
+            // and the shorter move (a page that repeats matches both
+            // ways). An exact forward match always stands.
+            .filter(|fwd| {
+                estimate_scroll(frame, prev, &sticky, &config).is_none_or(|back| {
+                    back.dy < config.min_motion
+                        || back.cost > fwd.cost
+                        || (back.cost == fwd.cost && back.dy >= fwd.dy)
+                })
+            });
+        let mut dy = 0;
+        if let Some(m) = placed {
+            anchor = i;
+            anchor_pos += u64::from(m.dy);
+            let new_rows = anchor_pos.saturating_sub(furthest);
+            if new_rows >= u64::from(config.min_motion) {
+                dy = u32::try_from(new_rows).unwrap_or(u32::MAX);
+                furthest = anchor_pos;
+            }
         }
         accepted.push(dy);
     }
@@ -321,11 +334,19 @@ pub fn match_stands_out(best: u64, samples: u64, costs: &mut [u64]) -> bool {
     best.saturating_mul(MATCH_DISTINCT_RATIO) <= *median
 }
 
+/// A placed template match: the downward scroll and its (subsampled)
+/// cost, comparable between the two directions of one frame pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Match {
+    dy: u32,
+    cost: u64,
+}
+
 /// Estimate the downward scroll (in px) from `a` to `b`.
 ///
 /// Takes a horizontal strip from the bottom of `a` (above any sticky
 /// footer) and finds where it appears in `b`, scanning upward. The
-/// returned value is the number of rows the page moved. `None` when no
+/// returned offset is the number of rows the page moved. `None` when no
 /// offset matches clearly better than the rest ([`match_stands_out`]):
 /// the frame can't be placed and is skipped.
 fn estimate_scroll(
@@ -333,7 +354,7 @@ fn estimate_scroll(
     b: &RgbaImage,
     sticky: &StickyMask,
     config: &StitchConfig,
-) -> Option<u32> {
+) -> Option<Match> {
     let w = a.width();
     let h = a.height();
     let strip_h = config
@@ -373,10 +394,46 @@ fn estimate_scroll(
         y_b -= 1;
     }
     let samples = u64::from(w.div_ceil(stride)) * u64::from(strip_h.div_ceil(stride)) * 3;
+    // `costs[k]` is the cost at `y_b = hi_y_b - k`; read before the
+    // median reorders it.
+    let coarse = |y: u32| costs[(hi_y_b - y) as usize];
+    let tied: Vec<u32> = [best_y_b.wrapping_add(1), best_y_b.wrapping_sub(1)]
+        .into_iter()
+        .filter(|&y| (lo_y_b..=hi_y_b).contains(&y) && coarse(y) == best_cost)
+        .collect();
     if !match_stands_out(best_cost, samples, &mut costs) {
         return None;
     }
-    Some(template_y - best_y_b)
+    let y_b = break_subsampling_tie(best_y_b, &tied, |y| {
+        sad_strip(a, template_y, b, y, w, strip_h, 1)
+    });
+    Some(Match {
+        dy: template_y - y_b,
+        cost: best_cost,
+    })
+}
+
+/// Subsampling skips rows, so the true offset and a neighbour can cost
+/// exactly the same, and taking the wrong one leaves a 1 px seam. Among
+/// `best` and its `tied` neighbours, keep the one that matches best at
+/// full resolution; full ties keep the smaller motion (the larger `y`).
+/// A neighbour that already cost more is never reconsidered, so one row
+/// that really differs (anti-aliasing at the seam) can't pull the match
+/// off by a pixel.
+pub fn break_subsampling_tie(best: u32, tied: &[u32], cost: impl Fn(u32) -> u64) -> u32 {
+    if tied.is_empty() {
+        return best;
+    }
+    let mut pick = best;
+    let mut pick_cost = cost(best);
+    for &y in tied {
+        let c = cost(y);
+        if c < pick_cost || (c == pick_cost && y > pick) {
+            pick = y;
+            pick_cost = c;
+        }
+    }
+    pick
 }
 
 /// SAD over a horizontal strip with subsampling. Lower = better match.
@@ -389,19 +446,29 @@ fn sad_strip(
     strip_h: u32,
     stride: u32,
 ) -> u64 {
+    // Row slices, not `get_pixel`: this is the hot loop of every match.
+    let row_bytes = w as usize * 4;
+    let (ra, rb) = (a.as_raw(), b.as_raw());
+    let (aw, bw) = (a.width() as usize * 4, b.width() as usize * 4);
+    let step = stride as usize * 4;
     let mut sum: u64 = 0;
     let mut y = 0u32;
     while y < strip_h {
-        let mut x = 0u32;
-        while x < w {
-            let pa = a.get_pixel(x, a_y + y).0;
-            let pb = b.get_pixel(x, b_y + y).0;
+        let ia = (a_y + y) as usize * aw;
+        let ib = (b_y + y) as usize * bw;
+        let row_a = &ra[ia..ia + row_bytes];
+        let row_b = &rb[ib..ib + row_bytes];
+        let mut i = 0;
+        let mut row_sum: u32 = 0;
+        while i < row_bytes {
             // Compare RGB only — alpha from screen capture is always
             // opaque, and including it doubles the work for no signal.
-            sum +=
-                diff(pa[0], pb[0]) as u64 + diff(pa[1], pb[1]) as u64 + diff(pa[2], pb[2]) as u64;
-            x += stride;
+            row_sum += u32::from(row_a[i].abs_diff(row_b[i]))
+                + u32::from(row_a[i + 1].abs_diff(row_b[i + 1]))
+                + u32::from(row_a[i + 2].abs_diff(row_b[i + 2]));
+            i += step;
         }
+        sum += u64::from(row_sum);
         y += stride;
     }
     sum
@@ -601,9 +668,8 @@ mod tests {
             let v = ((x * 97 + y * 31) ^ (x * y)) as u8;
             Rgba([v, v.wrapping_mul(7), v.wrapping_add(90), 255])
         });
-        assert_eq!(
-            estimate_scroll(&a, &b, &StickyMask::default(), &StitchConfig::default()),
-            None
+        assert!(
+            estimate_scroll(&a, &b, &StickyMask::default(), &StitchConfig::default()).is_none()
         );
         let out = stitch_scrolling(&[a.clone(), b], StitchConfig::default()).unwrap();
         assert_eq!(out, a);
@@ -661,7 +727,9 @@ mod tests {
         let a = stripe_frame(32, 64, 0);
         let b = stripe_frame(32, 64, 12);
         let config = StitchConfig::default();
-        let dy = estimate_scroll(&a, &b, &StickyMask::default(), &config).unwrap();
+        let dy = estimate_scroll(&a, &b, &StickyMask::default(), &config)
+            .unwrap()
+            .dy;
         assert!((10..=14).contains(&dy), "expected dy near 12, got {dy}");
     }
 

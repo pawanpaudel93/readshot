@@ -267,7 +267,9 @@ pub(crate) fn scroll_motion_offset(a: &image::RgbaImage, b: &image::RgbaImage) -
     // headers while leaving room above it for downward scroll and
     // below it to recognise a scroll back up.
     let template_y = ((h * 2) / 3).min(h.saturating_sub(strip_h));
-    let max_down = (h / 2).max(SCROLL_MIN_ACCEPTED_MOTION_PX).min(template_y);
+    // Downward as far as the strip can go: a flick of more than half
+    // the region per tick is still placed (and stitched) exactly.
+    let max_down = template_y;
     let max_up = h - strip_h - template_y;
     let stride_x: u32 = 4;
     let stride_y: u32 = 2;
@@ -302,7 +304,23 @@ pub(crate) fn scroll_motion_offset(a: &image::RgbaImage, b: &image::RgbaImage) -
     if !readshot_core::scroll_stitch::match_stands_out(best_cost, samples, &mut costs) {
         return None;
     }
-    u32::try_from(best_shift).ok()
+    let down = u32::try_from(best_shift).ok()?;
+    // Subsampled rows can tie the true offset with its neighbour; settle
+    // an exact tie at full resolution, as the stitcher does.
+    let best_y = template_y - down;
+    let tied: Vec<u32> = [best_y + 1, best_y.wrapping_sub(1)]
+        .into_iter()
+        .filter(|&y| {
+            y <= template_y + max_up
+                && y >= template_y - max_down
+                && y != template_y + 1
+                && cost_at(y) == best_cost
+        })
+        .collect();
+    let y = readshot_core::scroll_stitch::break_subsampling_tie(best_y, &tied, |y| {
+        sad_scroll_strip(a, template_y, b, y, w, strip_h, (1, 1))
+    });
+    Some(template_y - y)
 }
 
 pub(crate) fn sad_scroll_strip(
@@ -315,18 +333,27 @@ pub(crate) fn sad_scroll_strip(
     stride: (u32, u32),
 ) -> u64 {
     let (stride_x, stride_y) = stride;
+    // Row slices, not `get_pixel`: this runs for every candidate offset.
+    let row_bytes = w as usize * 4;
+    let (ra, rb) = (a.as_raw(), b.as_raw());
+    let (aw, bw) = (a.width() as usize * 4, b.width() as usize * 4);
+    let step = stride_x as usize * 4;
     let mut sum: u64 = 0;
     let mut y = 0u32;
     while y < strip_h {
-        let mut x = 0u32;
-        while x < w {
-            let pa = a.get_pixel(x, a_y + y).0;
-            let pb = b.get_pixel(x, b_y + y).0;
-            sum += diff_u8(pa[0], pb[0]) as u64
-                + diff_u8(pa[1], pb[1]) as u64
-                + diff_u8(pa[2], pb[2]) as u64;
-            x += stride_x;
+        let ia = (a_y + y) as usize * aw;
+        let ib = (b_y + y) as usize * bw;
+        let row_a = &ra[ia..ia + row_bytes];
+        let row_b = &rb[ib..ib + row_bytes];
+        let mut i = 0;
+        let mut row_sum: u32 = 0;
+        while i < row_bytes {
+            row_sum += diff_u8(row_a[i], row_b[i])
+                + diff_u8(row_a[i + 1], row_b[i + 1])
+                + diff_u8(row_a[i + 2], row_b[i + 2]);
+            i += step;
         }
+        sum += u64::from(row_sum);
         y += stride_y;
     }
     sum

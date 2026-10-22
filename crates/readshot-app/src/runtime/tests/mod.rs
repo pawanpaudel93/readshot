@@ -1178,6 +1178,7 @@ mod large_documents;
 mod magnifier_tools;
 /// The overlay canvas driven with real mouse and key events.
 mod overlay_canvas;
+mod scroll_corpus;
 /// Capture to disk, CLI, hotkeys, preferences, boot and settings.
 mod settings_and_boot;
 /// Settings, the tray's History and Settings, reopen and the Permissions pane.
