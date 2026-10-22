@@ -248,8 +248,9 @@ pointer state:
 readshot capture --interactive --show-cursor --output pointer.png
 ```
 
-Window capture supports native shadow control when the backend supports
-it:
+Window capture keeps the native window shadow by default (`--window-shadow`
+just says so explicitly); `--no-window-shadow` leaves it out where the
+backend can:
 
 ```bash
 readshot capture-window --window 11474 --window-shadow --output window.png

@@ -201,7 +201,8 @@ pub enum Command {
         #[arg(long)]
         json: bool,
 
-        /// Include the native window shadow when the platform supports it.
+        /// Include the native window shadow (the default; this flag only
+        /// says so explicitly).
         #[arg(long, conflicts_with = "no_window_shadow")]
         window_shadow: bool,
 

@@ -142,7 +142,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   lit one, `esc` cancels.
 - **Editor tools:** `V` select, `R` rectangle, `O` ellipse, `L` line,
   `A` arrow, `P` pen, `H` highlighter, `T` text, `B` blur, `X` pixelate,
-  `S` spotlight, `N` numbered pin, `E` stamp, `M` magnifier (drag over what to enlarge; drag the bubble anywhere), `C` crop (Free / 16:9 / 4:3 / Square in the options bar; `↵` applies,
+  `S` spotlight, `N` numbered pin, `E` stamp, `M` magnifier (drag over what to enlarge; drag the bubble anywhere; the
+  Color control sets its border), `C` crop (Free / 16:9 / 4:3 / Square in the options bar; `↵` applies,
   `esc` cancels). `I` picks a color
   from the image (eyedropper). Arrow keys nudge the selection (hold `⇧` for
   larger steps), `⌫` removes it, `esc` deselects (during a drag, `esc`
@@ -189,7 +190,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
 - **History window:** `↑` / `↓` move between captures (moving past the
   last one shown loads more), `↵` opens the selected one, `⌘C` copies
   its image and `⇧⌘C` its text, `⌘P` pins it, `⌥⌘R` reveals it in Finder,
-  `⌘⌫` deletes it, `⌥⇧⌘C` copies the text of every visible capture,
+  `⌘⌫` (or `⌦`) deletes it (press twice to confirm), `⌥⇧⌘C` copies the text of every capture matching the search
+  (including ones not shown yet behind Show More),
   `⇧⌘⌫` clears all (press twice to confirm; both deletions are permanent), `⌘F` focuses the search, and
   `esc` cancels an armed prompt or clears the search. On Windows and Linux,
   Reveal is `Ctrl+Shift+R` and Copy Visible Text is `Ctrl+Shift+A`.
@@ -205,7 +207,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   steps back one level: out of the filename field, then off the ring, then
   closes the window.
 - **Scrolling-capture window:** `esc` stops and stitches the session;
-  `⇧esc` or `⌘.` discards it (press twice to confirm, or click Keep Going,
+  `⇧esc` or `⌘.` discards it (press twice to confirm once it has more than
+  its first frame, or click Keep Going,
   Resume in a narrow window, to carry on capturing; the confirmation waits for your answer). While a
   session runs, `esc` and `⇧esc` work from any app, so you don't have to
   click the window first. This reserves `esc` and `⇧esc` system-wide for

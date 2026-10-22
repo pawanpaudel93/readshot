@@ -186,7 +186,8 @@
                   <td>
                     On a redacted capture, each word a redaction covers is masked with
                     <code translate="no">█</code>. It is <code translate="no">null</code> by design when
-                    Readshot can’t prove the text is safe to serve: the record’s list of redactions
+                    Readshot can’t prove the text is safe to serve: the capture was redacted where the
+                    OCR engine reports no word positions (Windows and Linux), the record’s list of redactions
                     isn’t known to be complete, the record is a legacy one migrated on load, or a
                     cropped, redacted capture hasn’t had its text recognized with word positions yet.
                     In the last case the masked text is filled in once it has.

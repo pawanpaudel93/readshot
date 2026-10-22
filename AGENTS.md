@@ -166,7 +166,7 @@ packages beyond a stable Rust toolchain.
 The editor opens a capture or a History record. Besides the
 annotation tools (shapes, arrows, pen, highlighter, text, blur,
 pixelate, spotlight, stamps, numbered pins, magnifier `M`, crop `C` with
-Free / 16:9 / 4:3 / 1:1 presets) it has:
+Free / 16:9 / 4:3 / Square presets) it has:
 
 * the title bar's **Image** menu: resize (`⌥⌘I`), rotate (`⌘[` / `⌘]`),
   flip, and combine with another capture (below / beside) or an image
