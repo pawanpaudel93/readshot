@@ -74,6 +74,17 @@ pub struct WindowInfo {
     pub bounds: Rect,
 }
 
+/// One window in the on-screen stack, for a picker: every on-screen
+/// window (panels, the Dock and the menu bar included) in front-to-back
+/// order, so what covers a window blocks a pick of it; only `pickable`
+/// ones (ordinary app windows, the ones [`Capturer::list_windows`]
+/// returns) may be picked.
+#[derive(Clone, Debug)]
+pub struct StackedWindow {
+    pub info: WindowInfo,
+    pub pickable: bool,
+}
+
 /// The frontmost window under a point in global logical coordinates:
 /// the first in a front-to-back list whose bounds contain it.
 pub fn topmost_window_at(windows: &[WindowInfo], x: f32, y: f32) -> Option<&WindowInfo> {
@@ -264,6 +275,21 @@ pub trait Capturer: Send + Sync {
         ))
     }
 
+    /// Every on-screen window front to back, for a picker
+    /// ([`StackedWindow`]). The default, for backends that only know
+    /// ordinary windows, offers [`Self::list_windows`] as they are.
+    async fn list_window_stack(&self) -> Result<Vec<StackedWindow>, CaptureError> {
+        Ok(self
+            .list_windows()
+            .await?
+            .into_iter()
+            .map(|info| StackedWindow {
+                info,
+                pickable: true,
+            })
+            .collect())
+    }
+
     async fn capture_window(
         &self,
         _request: WindowCaptureRequest,
@@ -382,6 +408,15 @@ mod tests {
             topmost_window_at(&windows, 400.0, 10.0).map(|w| &w.id.0),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn a_backend_without_a_stack_offers_its_windows_as_pickable() {
+        let fake = crate::fake::FakeCapturer::new();
+        let listed = fake.list_windows().await.unwrap();
+        let stack = fake.list_window_stack().await.unwrap();
+        assert_eq!(stack.len(), listed.len());
+        assert!(stack.iter().all(|w| w.pickable));
     }
 
     #[test]

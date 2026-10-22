@@ -1042,13 +1042,14 @@ pub enum CaptureMsg {
     /// Tray "Capture Window…" or the window-capture shortcut: list the
     /// windows, then open the overlay as a window picker.
     WindowCaptureRequested,
-    /// The displays and windows (front to back) for the picker, or why
+    /// The displays and the on-screen window stack (front to back) for
+    /// the picker, or why
     /// they couldn't be listed.
     WindowPickerListed(
         Result<
             (
                 Vec<readshot_capture::DisplayInfo>,
-                Vec<readshot_capture::WindowInfo>,
+                Vec<readshot_capture::StackedWindow>,
             ),
             String,
         >,
@@ -1159,7 +1160,7 @@ pub struct App {
     pub overlay_opening: bool,
     /// The windows (front to back) while the overlay is a window picker
     /// (Capture Window…); `None` for the region overlay.
-    pub window_pick: Option<Vec<readshot_capture::WindowInfo>>,
+    pub window_pick: Option<Vec<readshot_capture::StackedWindow>>,
     /// Current system appearance (overlay-like windows ignore it).
     pub theme_mode: crate::runtime::ThemeMode,
     /// Live overlay selections per display. Drives the floating

@@ -34,8 +34,8 @@ use screencapturekit::stream::configuration::SCStreamConfiguration;
 use screencapturekit::stream::content_filter::SCContentFilter;
 
 use crate::{
-    rect_relative_to_display, CaptureRequest, Capturer, DisplayInfo, WindowCaptureRequest,
-    WindowId, WindowInfo,
+    rect_relative_to_display, CaptureRequest, Capturer, DisplayInfo, StackedWindow,
+    WindowCaptureRequest, WindowId, WindowInfo,
 };
 
 /// Production macOS Capturer.
@@ -143,6 +143,47 @@ impl Capturer for ScreenCaptureKitCapturer {
             // server's on-screen list is front to back.
             crate::order_front_to_back(&mut windows, &on_screen_stacking());
             Ok(windows)
+        })
+        .await
+    }
+
+    async fn list_window_stack(&self) -> Result<Vec<StackedWindow>, CaptureError> {
+        crate::run_capture_blocking("list_window_stack", || {
+            let content = SCShareableContent::get().map_err(map_err)?;
+            let primary = primary_display_id();
+            let displays = content
+                .displays()
+                .into_iter()
+                .map(|d| display_info_from_sc(d, primary))
+                .collect::<Vec<_>>();
+            let own_pid = std::process::id() as i32;
+            // Every on-screen layer at or above normal windows (panels,
+            // the Dock, the menu bar): they cover what is behind them.
+            // Negative layers are the desktop. Only layer 0 is offered.
+            let (infos, pickable): (Vec<WindowInfo>, Vec<(String, bool)>) = content
+                .windows()
+                .into_iter()
+                .filter(|window| window.is_on_screen() && window.window_layer() >= 0)
+                .filter(|window| {
+                    window
+                        .owning_application()
+                        .is_none_or(|app| app.process_id() != own_pid)
+                })
+                .filter_map(|window| {
+                    let info = window_info_from_sc(&window, &displays)?;
+                    let flag = (info.id.0.clone(), window.window_layer() == 0);
+                    Some((info, flag))
+                })
+                .unzip();
+            let mut infos = infos;
+            crate::order_front_to_back(&mut infos, &on_screen_stacking());
+            Ok(infos
+                .into_iter()
+                .map(|info| {
+                    let pickable = pickable.iter().any(|(id, ok)| *ok && *id == info.id.0);
+                    StackedWindow { info, pickable }
+                })
+                .collect())
         })
         .await
     }

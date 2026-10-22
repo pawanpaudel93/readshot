@@ -14,12 +14,15 @@ use super::*;
 use readshot_capture::WindowId;
 
 /// One window as this display's overlay sees it: its id, its visible
-/// part in window-local logical pixels, and the name to show.
+/// part in window-local logical pixels, the name to show, and whether it
+/// can be picked (a panel, the Dock or the menu bar only covers what is
+/// behind it).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PickableWindow {
     pub id: WindowId,
     pub rect: Rectangle,
     pub label: String,
+    pub pickable: bool,
 }
 
 /// The windows of one display, front to back.
@@ -39,13 +42,14 @@ pub struct WindowPickState {
 /// logical `(x, y, width, height)`), in window-local coordinates.
 /// Windows not on the display are dropped; the order is kept.
 pub(crate) fn pickable_windows(
-    windows: &[readshot_capture::WindowInfo],
+    windows: &[readshot_capture::StackedWindow],
     display: (f32, f32, f32, f32),
 ) -> Vec<PickableWindow> {
     let (dx, dy, dw, dh) = display;
     windows
         .iter()
-        .filter_map(|w| {
+        .filter_map(|stacked| {
+            let w = &stacked.info;
             let b = w.bounds;
             let x0 = b.x().max(dx);
             let y0 = b.y().max(dy);
@@ -60,6 +64,7 @@ pub(crate) fn pickable_windows(
                     height: y1 - y0,
                 },
                 label: window_label(&w.app_name, &w.title),
+                pickable: stacked.pickable,
             })
         })
         .collect()
@@ -75,22 +80,37 @@ fn window_label(app: &str, title: &str) -> String {
     }
 }
 
-/// The frontmost window under `p`.
+/// The window picked at `p`: the frontmost window there, if it can be
+/// picked. A panel, the Dock or the menu bar in front blocks the pick of
+/// whatever is behind it.
 pub(crate) fn window_index_at(windows: &[PickableWindow], p: Point) -> Option<usize> {
-    windows.iter().position(|w| rect_contains(w.rect, p))
+    windows
+        .iter()
+        .position(|w| rect_contains(w.rect, p))
+        .filter(|&i| windows[i].pickable)
 }
 
-/// The next (`forward`) or previous window after `from`, wrapping.
-fn step_index(from: Option<usize>, len: usize, forward: bool) -> Option<usize> {
+/// The next (`forward`) or previous pickable window after `from`,
+/// wrapping; `None` when none can be picked.
+fn step_pickable(from: Option<usize>, windows: &[PickableWindow], forward: bool) -> Option<usize> {
+    let len = windows.len();
     if len == 0 {
         return None;
     }
-    Some(match (from, forward) {
-        (None, true) => 0,
-        (None, false) => len - 1,
-        (Some(i), true) => (i + 1) % len,
-        (Some(i), false) => (i + len - 1) % len,
-    })
+    let start = match (from, forward) {
+        (None, true) => len - 1,
+        (None, false) => 0,
+        (Some(i), _) => i,
+    };
+    (1..=len)
+        .map(|k| {
+            if forward {
+                (start + k) % len
+            } else {
+                (start + len * k - k) % len
+            }
+        })
+        .find(|&i| windows[i].pickable)
 }
 
 /// The picker's hint pill.
@@ -109,7 +129,7 @@ pub(crate) fn window_pick_hint_segments() -> Vec<HintSeg> {
 
 impl WindowPickProgram {
     fn pick(&self, index: usize) -> Option<Action<Message>> {
-        let w = self.windows.get(index)?;
+        let w = self.windows.get(index).filter(|w| w.pickable)?;
         Some(
             Action::publish(Message::Capture(CaptureMsg::WindowPicked(w.id.clone()))).and_capture(),
         )
@@ -144,7 +164,7 @@ impl Program<Message> for WindowPickProgram {
                         Key::Named(Named::ArrowDown | Named::ArrowRight) => true,
                         _ => false,
                     };
-                    state.hovered = step_index(state.hovered, self.windows.len(), forward);
+                    state.hovered = step_pickable(state.hovered, &self.windows, forward);
                     Some(Action::request_redraw().and_capture())
                 }
                 _ => None,
@@ -156,6 +176,11 @@ impl Program<Message> for WindowPickProgram {
                     state.hovered = hovered;
                     Action::request_redraw()
                 })
+            }
+            // The pointer went to another display: this one's window is
+            // no longer the one under it.
+            Event::Mouse(mouse::Event::CursorLeft) => {
+                state.hovered.take().map(|_| Action::request_redraw())
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let p = cursor.position_in(bounds)?;
@@ -264,17 +289,76 @@ fn draw_window_label(frame: &mut Frame<Renderer>, bounds: Rectangle, w: &Pickabl
 #[cfg(test)]
 mod tests {
     use super::*;
-    use readshot_capture::WindowInfo;
+    use readshot_capture::{StackedWindow, WindowInfo};
     use readshot_core::geom::Rect;
 
-    fn info(id: &str, x: f32, y: f32, w: f32, h: f32) -> WindowInfo {
-        WindowInfo {
-            id: WindowId(id.into()),
-            title: format!("{id} title"),
-            app_name: "App".into(),
-            display_id: "d".into(),
-            bounds: Rect::from_xywh(x, y, w, h).unwrap(),
+    fn info(id: &str, x: f32, y: f32, w: f32, h: f32) -> StackedWindow {
+        StackedWindow {
+            info: WindowInfo {
+                id: WindowId(id.into()),
+                title: format!("{id} title"),
+                app_name: "App".into(),
+                display_id: "d".into(),
+                bounds: Rect::from_xywh(x, y, w, h).unwrap(),
+            },
+            pickable: true,
         }
+    }
+
+    fn panel(id: &str, x: f32, y: f32, w: f32, h: f32) -> StackedWindow {
+        StackedWindow {
+            pickable: false,
+            ..info(id, x, y, w, h)
+        }
+    }
+
+    #[test]
+    fn a_panel_or_dock_over_a_window_blocks_the_pick() {
+        let display = (0.0, 0.0, 1000.0, 800.0);
+        let windows = [
+            panel("dock", 200.0, 740.0, 600.0, 60.0),
+            info("app", 0.0, 0.0, 1000.0, 800.0),
+        ];
+        let picks = pickable_windows(&windows, display);
+        // Over the Dock: nothing is lit, nothing is picked.
+        assert_eq!(window_index_at(&picks, Point::new(300.0, 760.0)), None);
+        // Beside it: the window.
+        assert_eq!(window_index_at(&picks, Point::new(100.0, 760.0)), Some(1));
+        // The keyboard only walks windows that can be picked.
+        assert_eq!(step_pickable(None, &picks, true), Some(1));
+        assert_eq!(step_pickable(Some(1), &picks, true), Some(1));
+        assert_eq!(step_pickable(Some(1), &picks, false), Some(1));
+    }
+
+    #[test]
+    fn leaving_a_display_clears_its_highlight() {
+        let program = WindowPickProgram {
+            windows: pickable_windows(
+                &[info("w", 0.0, 0.0, 200.0, 200.0)],
+                (0.0, 0.0, 400.0, 400.0),
+            ),
+        };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 400.0,
+        };
+        let mut state = WindowPickState::default();
+        let moved = Event::Mouse(mouse::Event::CursorMoved {
+            position: Point::new(50.0, 50.0),
+        });
+        let _ = program.update(
+            &mut state,
+            &moved,
+            bounds,
+            mouse::Cursor::Available(Point::new(50.0, 50.0)),
+        );
+        assert_eq!(state.hovered, Some(0));
+        let left = Event::Mouse(mouse::Event::CursorLeft);
+        let action = program.update(&mut state, &left, bounds, mouse::Cursor::Unavailable);
+        assert!(action.is_some(), "a redraw takes the highlight down");
+        assert_eq!(state.hovered, None);
     }
 
     #[test]
@@ -317,11 +401,20 @@ mod tests {
 
     #[test]
     fn the_keyboard_walks_the_windows_and_wraps() {
-        assert_eq!(step_index(None, 3, true), Some(0));
-        assert_eq!(step_index(None, 3, false), Some(2));
-        assert_eq!(step_index(Some(2), 3, true), Some(0));
-        assert_eq!(step_index(Some(0), 3, false), Some(2));
-        assert_eq!(step_index(Some(0), 0, true), None);
+        let display = (0.0, 0.0, 1000.0, 800.0);
+        let three = pickable_windows(
+            &[
+                info("a", 0.0, 0.0, 10.0, 10.0),
+                info("b", 20.0, 0.0, 10.0, 10.0),
+                info("c", 40.0, 0.0, 10.0, 10.0),
+            ],
+            display,
+        );
+        assert_eq!(step_pickable(None, &three, true), Some(0));
+        assert_eq!(step_pickable(None, &three, false), Some(2));
+        assert_eq!(step_pickable(Some(2), &three, true), Some(0));
+        assert_eq!(step_pickable(Some(0), &three, false), Some(2));
+        assert_eq!(step_pickable(Some(0), &[], true), None);
     }
 
     #[test]

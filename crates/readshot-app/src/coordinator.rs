@@ -827,6 +827,14 @@ impl CaptureCoordinator {
         self.capturer.list_windows().await
     }
 
+    /// Every on-screen window front to back, which a picker may pick
+    /// and which only cover others (`StackedWindow::pickable`).
+    pub async fn list_window_stack(
+        &self,
+    ) -> Result<Vec<readshot_capture::StackedWindow>, CaptureError> {
+        self.capturer.list_window_stack().await
+    }
+
     pub async fn capture_window(
         &self,
         req: readshot_capture::WindowCaptureRequest,

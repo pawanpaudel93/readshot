@@ -80,7 +80,7 @@ pub(super) fn on_window_capture_requested(state: &mut App) -> Task<Message> {
                 }
                 other => other.to_string(),
             };
-            let windows = coord.list_windows().await.map_err(unsupported)?;
+            let windows = coord.list_window_stack().await.map_err(unsupported)?;
             let displays = coord.list_displays().await.map_err(unsupported)?;
             Ok((displays, windows))
         },
@@ -94,7 +94,7 @@ pub(super) fn on_window_picker_listed(
     result: Result<
         (
             Vec<readshot_capture::DisplayInfo>,
-            Vec<readshot_capture::WindowInfo>,
+            Vec<readshot_capture::StackedWindow>,
         ),
         String,
     >,
@@ -110,7 +110,7 @@ pub(super) fn on_window_picker_listed(
             });
             Task::none()
         }
-        Ok((_, windows)) if windows.is_empty() => {
+        Ok((_, windows)) if !windows.iter().any(|w| w.pickable) => {
             state.overlay_opening = false;
             state.last_capture_status = Some(Status::new(
                 StatusTone::Warning,
@@ -140,7 +140,10 @@ pub(super) fn on_window_picked(
     let Some(windows) = state.window_pick.take() else {
         return Task::none();
     };
-    let picked = windows.into_iter().find(|w| w.id == window_id);
+    let picked = windows
+        .into_iter()
+        .find(|w| w.pickable && w.info.id == window_id)
+        .map(|w| w.info);
     let display = picked.as_ref().and_then(|w| {
         state
             .overlay_displays

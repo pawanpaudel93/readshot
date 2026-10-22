@@ -1336,13 +1336,16 @@ fn picker_display(id: &str, x: f32) -> DisplayInfo {
     }
 }
 
-fn picker_window(id: &str, display: &str, x: f32) -> readshot_capture::WindowInfo {
-    readshot_capture::WindowInfo {
-        id: readshot_capture::WindowId(id.into()),
-        title: "Docs".into(),
-        app_name: "Safari".into(),
-        display_id: display.into(),
-        bounds: readshot_core::geom::Rect::from_xywh(x, 40.0, 300.0, 200.0).unwrap(),
+fn picker_window(id: &str, display: &str, x: f32) -> readshot_capture::StackedWindow {
+    readshot_capture::StackedWindow {
+        info: readshot_capture::WindowInfo {
+            id: readshot_capture::WindowId(id.into()),
+            title: "Docs".into(),
+            app_name: "Safari".into(),
+            display_id: display.into(),
+            bounds: readshot_core::geom::Rect::from_xywh(x, 40.0, 300.0, 200.0).unwrap(),
+        },
+        pickable: true,
     }
 }
 
@@ -1461,6 +1464,41 @@ fn window_capture_with_no_windows_opens_nothing() {
         app.last_capture_status.as_ref().unwrap().tone,
         StatusTone::Warning
     );
+}
+
+#[test]
+fn window_capture_with_only_panels_on_screen_opens_nothing() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::WindowCaptureRequested),
+    );
+    let mut dock = picker_window("dock", "a", 0.0);
+    dock.pickable = false;
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::WindowPickerListed(Ok((
+            vec![picker_display("a", 0.0)],
+            vec![dock],
+        )))),
+    );
+    assert!(app.window_pick.is_none());
+    assert_eq!(app.windows.kinds().count(), 0);
+}
+
+#[test]
+fn a_panel_can_not_be_picked_even_by_id() {
+    let mut app = app_with_window_picker();
+    if let Some(stack) = app.window_pick.as_mut() {
+        stack[0].pickable = false;
+    }
+    let _ = update(
+        &mut app,
+        Message::Capture(CaptureMsg::WindowPicked(readshot_capture::WindowId(
+            "w1".into(),
+        ))),
+    );
+    assert!(!app.capture_in_flight);
 }
 
 #[test]
