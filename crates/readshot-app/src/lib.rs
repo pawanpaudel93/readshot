@@ -27,6 +27,7 @@ mod icons;
 pub mod overlay;
 pub mod permissions;
 pub mod runtime;
+pub mod single_instance;
 pub mod startup;
 #[cfg(test)]
 mod test_probe;

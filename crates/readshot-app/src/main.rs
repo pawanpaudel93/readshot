@@ -103,6 +103,13 @@ fn main() -> iced::Result {
     }
 
     init_app_logging();
+    // One copy per user on Windows and Linux (macOS never starts a
+    // second one). A second launch wakes the first and exits 0.
+    #[cfg(not(target_os = "macos"))]
+    let _instance = match claim_single_instance(url_arg.as_deref()) {
+        Some(guard) => guard,
+        None => return Ok(()),
+    };
     if launched_at_login {
         runtime::set_launched_at_login();
     }
@@ -141,6 +148,39 @@ fn main() -> iced::Result {
         .default_font(iced::Font::DEFAULT)
         .font(readshot_core::render::FONT_DATA)
         .run()
+}
+
+/// `None` when another copy is running (it was asked to show itself or
+/// open the URL). Any failure to take the lock just runs without one.
+#[cfg(not(target_os = "macos"))]
+fn claim_single_instance(
+    url_arg: Option<&str>,
+) -> Option<Option<readshot_app::single_instance::InstanceGuard>> {
+    use readshot_app::single_instance::{acquire, deliver, lock_dir, Instance, WakeRequest};
+    let request = match url_arg {
+        Some(url) => WakeRequest::Url(url.to_string()),
+        None => WakeRequest::Reopen,
+    };
+    let Some(dir) = lock_dir() else {
+        return Some(None);
+    };
+    match acquire(&dir, &request, deliver) {
+        Ok(Instance::Primary(guard)) => Some(Some(guard)),
+        Ok(Instance::Secondary) => {
+            tracing::info!(
+                target: readshot_core::log::cat::APP,
+                "Readshot is already running; asked it to show itself"
+            );
+            None
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: readshot_core::log::cat::APP,
+                "single-instance lock unavailable, continuing without it: {e}"
+            );
+            Some(None)
+        }
+    }
 }
 
 /// Initialise tracing. We always log to stderr, and additionally to

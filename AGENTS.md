@@ -110,6 +110,13 @@ packages beyond a stable Rust toolchain.
   `readshot://` and `readshot://new` are actions). Clap is skipped and
   the URL becomes the boot action. While the app runs, macOS delivers
   URLs through `url_events` instead.
+* Single instance (Windows and Linux, `single_instance`): a GUI launch
+  takes an advisory `File::try_lock` on `readshot.lock` in a per-user
+  dir and listens on a loopback port named, with a random token, in
+  `readshot.instance`. A later launch sends `reopen` or its
+  `readshot://` URL there and exits 0; the first copy queues it in
+  `app_events` / `url_events`, as the macOS AppleEvent handlers do. The
+  OS drops the lock with its holder, so a crash leaves nothing stale.
 
 Logging (`readshot_core::log` has the targets, all under
 `np.com.pawanpaudel.readshot::<category>`): the GUI logs to stderr and

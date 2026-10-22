@@ -269,9 +269,13 @@ Developers can still build from source on those platforms, but the
 end-user install path is macOS until the platform capture and OCR
 backends are wired and tested.
 
-Source builds on Windows and Linux don't stop a second copy from
-starting: launching Readshot twice gives two menu icons, and the second
-copy can't register the capture shortcut. Quit one of them.
+On Windows and Linux only one copy runs per user. Launching Readshot
+again (or opening a `readshot://` link) brings the running copy forward
+instead, and the second launch exits. The lock lives in
+`$XDG_RUNTIME_DIR/readshot/` on Linux (or `~/.local/share/readshot/`
+when that isn't set) and in `%LOCALAPPDATA%\pawanpaudel\Readshot\data\`
+on Windows; a copy that crashed releases it, so it never needs
+deleting by hand.
 
 ## Building from source
 
