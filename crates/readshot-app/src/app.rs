@@ -1817,11 +1817,32 @@ impl App {
     /// this for the shared synchronous transitions.
     pub fn update_sync(&mut self, message: Message) -> bool {
         match message {
-            Message::App(AppMsg::PermissionPoll(status)) => {
+            Message::App(msg) => self.apply_app_sync(msg),
+            Message::Settings(msg) => self.apply_settings_sync(msg),
+            // These drive flows that need the iced Task machinery
+            // (capture, OCR, save, history, windows); `runtime::update`
+            // handles them. Named, not `_`, so a new wrapper is decided.
+            Message::Editor(_)
+            | Message::History(_)
+            | Message::Scroll(_)
+            | Message::Window(_)
+            | Message::Welcome(_)
+            | Message::Tick(_)
+            | Message::Capture(_)
+            | Message::NoOp => false,
+        }
+    }
+
+    /// The synchronous part of an [`AppMsg`]: the permission state
+    /// machine. Every variant is named, so a new one (or one a handler
+    /// starts delegating here) can't silently become a no-op.
+    pub fn apply_app_sync(&mut self, message: AppMsg) -> bool {
+        match message {
+            AppMsg::PermissionPoll(status) => {
                 self.permission_status = status;
                 self.welcome.observe(status)
             }
-            Message::App(AppMsg::GrantPermissionRequested) => {
+            AppMsg::GrantPermissionRequested => {
                 // Clear any decision macOS still holds for an earlier,
                 // differently signed build first. Otherwise its stale row
                 // ("Failed to match existing code requirement") means no
@@ -1832,44 +1853,76 @@ impl App {
                 self.welcome = WelcomeState::AwaitingGrant;
                 true
             }
-            Message::App(AppMsg::OpenPermissionSettingsRequested) => {
+            AppMsg::OpenPermissionSettingsRequested => {
                 self.permissions.open_settings();
                 false
             }
-            Message::App(AppMsg::ResetPermissionRequested) => {
+            AppMsg::ResetPermissionRequested => {
                 self.permissions.reset();
                 self.permissions.request();
                 self.welcome = WelcomeState::AwaitingGrant;
                 true
             }
-            Message::Settings(SettingsMsg::Edit(msg)) => {
+            // Async or process-level: handled in `runtime::app_ops`.
+            AppMsg::PermissionTick
+            | AppMsg::PermissionPollTick
+            | AppMsg::QuitRequested
+            | AppMsg::RestartRequested
+            | AppMsg::ReopenRequested => false,
+        }
+    }
+
+    /// The synchronous part of a [`SettingsMsg`]: preference edits and
+    /// the Uninstall prompt's state. Every variant is named.
+    pub fn apply_settings_sync(&mut self, message: SettingsMsg) -> bool {
+        match message {
+            SettingsMsg::Edit(msg) => {
                 let changed = readshot_ui::settings::apply(&mut self.preferences, msg);
                 if changed {
                     self.persist_preferences_if_configured();
                 }
                 changed
             }
-            Message::Settings(SettingsMsg::UninstallRequested) => {
+            SettingsMsg::UninstallRequested => {
                 // Only one destructive prompt armed at a time.
                 self.settings_reset_all_pending = false;
                 self.settings_uninstall_pending = true;
                 true
             }
-            Message::Settings(SettingsMsg::UninstallCancelled) => {
+            SettingsMsg::UninstallCancelled => {
                 let was_armed = self.settings_uninstall_pending;
                 self.settings_uninstall_pending = false;
                 was_armed
             }
-            Message::Settings(SettingsMsg::UninstallPurgeToggled(purge)) => {
+            SettingsMsg::UninstallPurgeToggled(purge) => {
                 let changed = self.settings_uninstall_purge != purge;
                 self.settings_uninstall_purge = purge;
                 changed
             }
-            // The other message variants drive UI flows that need
-            // the iced Task machinery (capture, OCR, save, history).
-            // They're handled in main.rs once the daemon is running.
-            // For now the synchronous handler is a no-op for them.
-            _ => false,
+            // Windows, pickers, the recorder and the two-stage prompts'
+            // tasks: handled in `runtime::settings_ops`.
+            SettingsMsg::OpenRequested
+            | SettingsMsg::ChooseSaveFolderRequested
+            | SettingsMsg::SaveFolderPicked(_)
+            | SettingsMsg::OpenSaveFolderRequested
+            | SettingsMsg::OpenSaveFolderDone(_)
+            | SettingsMsg::StartHotkeyRecording
+            | SettingsMsg::StartWindowHotkeyRecording
+            | SettingsMsg::HotkeyRecorded(_)
+            | SettingsMsg::HotkeyRecordingInvalid
+            | SettingsMsg::HotkeyRecordingCancelled
+            | SettingsMsg::ResetAllRequested
+            | SettingsMsg::ResetAllConfirmed
+            | SettingsMsg::ResetAllCancelled
+            | SettingsMsg::UninstallConfirmed
+            | SettingsMsg::UninstallFinished
+            | SettingsMsg::WindowReady(_)
+            | SettingsMsg::PaneSelected(_)
+            | SettingsMsg::KeyPressed { .. }
+            | SettingsMsg::OpenCliToolsRequested
+            | SettingsMsg::CliToolsWindowReady(_)
+            | SettingsMsg::CliToolsCopyRequested(_)
+            | SettingsMsg::CliToolsCopyDone(..) => false,
         }
     }
 }
@@ -1909,7 +1962,7 @@ mod tests {
     #[test]
     fn grant_request_invokes_permissions_and_advances_state() {
         let (mut app, perms) = build_app(Arc::new(FakePermissions::denied()));
-        let changed = app.update_sync(Message::App(AppMsg::GrantPermissionRequested));
+        let changed = app.apply_app_sync(AppMsg::GrantPermissionRequested);
         assert!(changed);
         assert_eq!(perms.request_calls.load(Ordering::SeqCst), 1);
         assert_eq!(app.welcome, WelcomeState::AwaitingGrant);
@@ -1920,11 +1973,9 @@ mod tests {
         let perms = Arc::new(FakePermissions::denied());
         let (mut app, _) = build_app(perms.clone());
         // User clicks "Grant", OS prompt fires, then poll sees the new state.
-        app.update_sync(Message::App(AppMsg::GrantPermissionRequested));
+        app.apply_app_sync(AppMsg::GrantPermissionRequested);
         perms.flip_to_granted();
-        let changed = app.update_sync(Message::App(AppMsg::PermissionPoll(
-            PermissionStatus::Granted,
-        )));
+        let changed = app.apply_app_sync(AppMsg::PermissionPoll(PermissionStatus::Granted));
         assert!(changed);
         assert!(!app.welcome.should_show());
     }
@@ -1937,11 +1988,9 @@ mod tests {
         let path = dir.path().join("preferences.toml");
         app.preferences_path = Some(path.clone());
 
-        app.update_sync(Message::App(AppMsg::GrantPermissionRequested));
+        app.apply_app_sync(AppMsg::GrantPermissionRequested);
         perms.flip_to_granted();
-        let changed = app.update_sync(Message::App(AppMsg::PermissionPoll(
-            PermissionStatus::Granted,
-        )));
+        let changed = app.apply_app_sync(AppMsg::PermissionPoll(PermissionStatus::Granted));
 
         assert!(changed);
         assert!(!app.preferences.onboarding_completed);
@@ -1955,33 +2004,32 @@ mod tests {
 
         // Arming an uninstall clears any reset prompt and sets pending.
         app.settings_reset_all_pending = true;
-        let changed = app.update_sync(Message::Settings(SettingsMsg::UninstallRequested));
+        let changed = app.apply_settings_sync(SettingsMsg::UninstallRequested);
         assert!(changed);
         assert!(app.settings_uninstall_pending);
         assert!(!app.settings_reset_all_pending);
 
         // The purge checkbox toggles independently of the armed state.
-        let changed = app.update_sync(Message::Settings(SettingsMsg::UninstallPurgeToggled(true)));
+        let changed = app.apply_settings_sync(SettingsMsg::UninstallPurgeToggled(true));
         assert!(changed);
         assert!(app.settings_uninstall_purge);
         // Toggling to the same value reports no change.
-        assert!(!app.update_sync(Message::Settings(SettingsMsg::UninstallPurgeToggled(true))));
+        assert!(!app.apply_settings_sync(SettingsMsg::UninstallPurgeToggled(true)));
 
         // Cancelling disarms without touching anything else.
-        let changed = app.update_sync(Message::Settings(SettingsMsg::UninstallCancelled));
+        let changed = app.apply_settings_sync(SettingsMsg::UninstallCancelled);
         assert!(changed);
         assert!(!app.settings_uninstall_pending);
         // A second cancel is a no-op.
-        assert!(!app.update_sync(Message::Settings(SettingsMsg::UninstallCancelled)));
+        assert!(!app.apply_settings_sync(SettingsMsg::UninstallCancelled));
     }
 
     #[test]
     fn settings_message_applies_to_preferences() {
         let (mut app, _) = build_app(Arc::new(FakePermissions::granted()));
         assert!(!app.preferences.debug_logging);
-        let changed = app.update_sync(Message::Settings(SettingsMsg::Edit(
-            SettingsMessage::SetDebugLogging(true),
-        )));
+        let changed =
+            app.apply_settings_sync(SettingsMsg::Edit(SettingsMessage::SetDebugLogging(true)));
         assert!(changed);
         assert!(app.preferences.debug_logging);
     }
@@ -1996,9 +2044,8 @@ mod tests {
         // Sanity: nothing on disk yet.
         assert!(!path.exists());
 
-        let changed = app.update_sync(Message::Settings(SettingsMsg::Edit(
-            SettingsMessage::SetDebugLogging(true),
-        )));
+        let changed =
+            app.apply_settings_sync(SettingsMsg::Edit(SettingsMessage::SetDebugLogging(true)));
         assert!(changed);
 
         // The mutation should have been written to disk; reading it
@@ -2012,9 +2059,8 @@ mod tests {
         let (mut app, _) = build_app(Arc::new(FakePermissions::granted()));
         // No preferences_path configured (matches CLI / test invocations).
         assert!(app.preferences_path.is_none());
-        let changed = app.update_sync(Message::Settings(SettingsMsg::Edit(
-            SettingsMessage::SetDebugLogging(true),
-        )));
+        let changed =
+            app.apply_settings_sync(SettingsMsg::Edit(SettingsMessage::SetDebugLogging(true)));
         // In-memory mutation still works; we just don't write to disk.
         assert!(changed);
         assert!(app.preferences.debug_logging);
@@ -2023,7 +2069,7 @@ mod tests {
     #[test]
     fn allow_screen_recording_clears_stale_grant_before_asking() {
         let (mut app, perms) = build_app(Arc::new(FakePermissions::denied()));
-        app.update_sync(Message::App(AppMsg::GrantPermissionRequested));
+        app.apply_app_sync(AppMsg::GrantPermissionRequested);
         assert_eq!(perms.reset_calls.load(Ordering::SeqCst), 1);
         assert_eq!(perms.request_calls.load(Ordering::SeqCst), 1);
     }
@@ -2031,7 +2077,7 @@ mod tests {
     #[test]
     fn reset_permission_clears_stale_grant_and_asks_again() {
         let (mut app, perms) = build_app(Arc::new(FakePermissions::denied()));
-        let changed = app.update_sync(Message::App(AppMsg::ResetPermissionRequested));
+        let changed = app.apply_app_sync(AppMsg::ResetPermissionRequested);
         assert!(changed);
         assert_eq!(perms.reset_calls.load(Ordering::SeqCst), 1);
         assert_eq!(perms.request_calls.load(Ordering::SeqCst), 1);
@@ -2041,7 +2087,7 @@ mod tests {
     #[test]
     fn open_settings_request_invokes_permissions_no_state_change() {
         let (mut app, perms) = build_app(Arc::new(FakePermissions::denied()));
-        let changed = app.update_sync(Message::App(AppMsg::OpenPermissionSettingsRequested));
+        let changed = app.apply_app_sync(AppMsg::OpenPermissionSettingsRequested);
         assert!(!changed);
         assert_eq!(perms.open_settings_calls.load(Ordering::SeqCst), 1);
     }

@@ -34,7 +34,7 @@ pub(super) fn handle_app_message(state: &mut App, message: AppMsg) -> Task<Messa
         AppMsg::ResetPermissionRequested => on_reset_permission(state),
         // Synchronous transitions — reuse the existing handler.
         msg @ (AppMsg::PermissionPoll(_) | AppMsg::OpenPermissionSettingsRequested) => {
-            state.update_sync(Message::App(msg));
+            state.apply_app_sync(msg);
             Task::none()
         }
     }

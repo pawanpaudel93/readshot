@@ -106,8 +106,8 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
         | SettingsMsg::UninstallCancelled
         | SettingsMsg::UninstallPurgeToggled(_) => {
             // Pure arming / cancel / checkbox transitions — handled in
-            // `App::update_sync` so the state machine is unit-testable.
-            state.update_sync(Message::Settings(message));
+            // `App::apply_settings_sync` so the state machine is unit-testable.
+            state.apply_settings_sync(message);
             Task::none()
         }
         SettingsMsg::UninstallConfirmed => on_uninstall_confirmed(state),
