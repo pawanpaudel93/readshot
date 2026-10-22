@@ -78,6 +78,9 @@ fn stdio_server_handles_core_json_rpc_methods() {
     );
 }
 
+// `--check` writes a probe file into the history folder, which on
+// Windows is the real %LOCALAPPDATA% (known folders ignore HOME).
+#[cfg(not(windows))]
 #[test]
 fn check_prints_json_diagnostics_without_stderr() {
     let home = std::env::temp_dir().join(format!(
