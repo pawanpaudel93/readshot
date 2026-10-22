@@ -23,7 +23,10 @@ find it later by searching the text inside the screenshot.
 ## Features
 
 - Region, window, and full-display capture from the menu bar or a
-  global hotkey.
+  global hotkey. **Capture Window…** in the menu lights the window under
+  the pointer and captures the one you click; give it a shortcut in
+  Settings › Capture (none by default). Window capture needs macOS; the
+  Windows and Linux source builds capture regions and displays only.
 - Scrolling capture — lock a region, scroll the page, get one tall
   stitched image with a live HUD preview.
 - Multi-monitor capture with Retina-quality output.
@@ -134,6 +137,9 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   With a selection: `⌘C` / `⇧⌘C` / `⌘S` / `⌘P` / `⌘R` copy image / copy
   text / save / pin / start a scrolling capture, the arrow keys nudge it and
   `⌥` + arrow keys resize it from its bottom-right corner (`⇧` ×10).
+- **Window picker (Capture Window…):** `Tab` / `⇧Tab` or the arrow keys
+  move between the windows on that display, `↵` or `Space` captures the
+  lit one, `esc` cancels.
 - **Editor tools:** `V` select, `R` rectangle, `O` ellipse, `L` line,
   `A` arrow, `P` pen, `H` highlighter, `T` text, `B` blur, `X` pixelate,
   `S` spotlight, `N` numbered pin, `E` stamp, `M` magnifier (drag over what to enlarge; drag the bubble anywhere), `C` crop (Free / 16:9 / 4:3 / Square in the options bar; `↵` applies,
@@ -190,7 +196,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
 - **Settings window:** `⌘1`–`⌘7` switch panes; `esc` / `⌘W` close; `⌘L`
   toggles launch-at-login and `⌘D` toggles debug logging; `⌘R` and `⌘F`
   cycle retention and the default save format; `⌘K` records a new capture
-  shortcut; `⇧⌘R` resets and `⇧⌘U` uninstalls (press twice to confirm).
+  shortcut (the window-capture shortcut has its own Record and Clear
+  buttons on the Capture pane); `⇧⌘R` resets and `⇧⌘U` uninstalls (press twice to confirm).
   Each shortcut also brings up the pane its setting lives on, and the pane
   title says what changed. `Tab` / `⇧Tab` move a focus ring through the
   pane's controls (buttons, pickers, checkboxes, the filename field), `Space`

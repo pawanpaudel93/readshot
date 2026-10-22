@@ -193,6 +193,7 @@ pub struct TrayController {
     tray: TrayIcon,
     menu: Menu,
     item_capture: MenuItem,
+    item_capture_window: MenuItem,
     item_retake_last_region: MenuItem,
     item_notifications_off: MenuItem,
     notifications_off_shown: std::cell::Cell<bool>,
@@ -225,6 +226,17 @@ impl TrayController {
         }
         if let Err(e) = self.tray.set_tooltip(Some(tray_tooltip(hotkey_label))) {
             tracing::debug!(target: readshot_core::log::cat::TRAY, "set_tooltip failed: {e}");
+        }
+    }
+
+    /// Show the window-capture shortcut beside Capture Window… (`None`
+    /// when unassigned or not registered).
+    pub fn set_window_capture_hotkey(&self, raw_hotkey: Option<&str>) {
+        if let Err(e) = self
+            .item_capture_window
+            .set_accelerator(capture_menu_accelerator(raw_hotkey))
+        {
+            tracing::debug!(target: readshot_core::log::cat::TRAY, "set window accelerator failed: {e}");
         }
     }
 
@@ -429,6 +441,7 @@ pub fn install(raw_hotkey: Option<&str>, hotkey_label: Option<&str>) -> Option<T
         tray,
         menu: menu_handle,
         item_capture,
+        item_capture_window,
         item_retake_last_region,
         item_notifications_off,
         notifications_off_shown: std::cell::Cell::new(false),

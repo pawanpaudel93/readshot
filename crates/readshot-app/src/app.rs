@@ -95,6 +95,16 @@ pub enum HistoryKeyboardAction {
     Escape,
 }
 
+/// The shortcut the Settings recorder is setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HotkeyTarget {
+    /// The capture shortcut (opens the region overlay).
+    #[default]
+    Capture,
+    /// The window-capture shortcut (opens the window picker).
+    WindowCapture,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GlobalHotkeyAction {
     Capture,
@@ -153,6 +163,8 @@ pub enum SettingsFocus {
     PermissionOpen,
     HotkeyRecord,
     HotkeyReset,
+    WindowHotkeyRecord,
+    WindowHotkeyClear,
     Retention,
     FolderChoose,
     FolderOpen,
@@ -749,6 +761,8 @@ pub enum SettingsMsg {
     OpenSaveFolderDone(Result<(), String>),
     /// User clicked "Record shortcut" in Settings.
     StartHotkeyRecording,
+    /// User clicked Record for the window-capture shortcut.
+    StartWindowHotkeyRecording,
     /// Settings shortcut recorder captured a valid key combination.
     HotkeyRecorded(String),
     /// Settings shortcut recorder captured a key that is not valid as
@@ -1279,6 +1293,12 @@ pub struct App {
     /// True while Settings is waiting for the next keyboard chord to
     /// become the global capture hotkey.
     pub settings_recording_hotkey: bool,
+    /// Which shortcut an armed recorder sets.
+    pub settings_recording_target: HotkeyTarget,
+    /// Whether the window-capture shortcut is registered with the OS.
+    pub window_hotkey_registered: bool,
+    /// The window-capture row's own problem (a refused recording).
+    pub settings_window_hotkey_error: Option<String>,
     /// Short validation message for the current hotkey recording
     /// attempt, shown inline in Settings.
     pub settings_hotkey_error: Option<String>,
@@ -1644,6 +1664,9 @@ impl App {
             preferences_path: None,
             settings_window_id: None,
             settings_recording_hotkey: false,
+            settings_recording_target: HotkeyTarget::Capture,
+            window_hotkey_registered: false,
+            settings_window_hotkey_error: None,
             settings_hotkey_error: None,
             settings_hotkey_status: None,
             settings_status: None,

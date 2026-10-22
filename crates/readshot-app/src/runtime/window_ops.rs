@@ -98,6 +98,7 @@ pub(super) fn on_window_closed(state: &mut App, id: iced::window::Id) -> Task<Me
     if state.settings_window_id == Some(id) {
         state.settings_window_id = None;
         state.settings_recording_hotkey = false;
+        state.settings_window_hotkey_error = None;
         state.settings_hotkey_error = None;
         state.settings_hotkey_status = None;
         state.settings_status = None;

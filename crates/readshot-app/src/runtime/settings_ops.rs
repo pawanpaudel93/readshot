@@ -48,8 +48,17 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
         }
         SettingsMsg::StartHotkeyRecording => {
             state.settings_recording_hotkey = true;
+            state.settings_recording_target = crate::app::HotkeyTarget::Capture;
             state.settings_hotkey_error = None;
             state.settings_hotkey_status = None;
+            state.settings_status = None;
+            state.settings_reset_all_pending = false;
+            Task::none()
+        }
+        SettingsMsg::StartWindowHotkeyRecording => {
+            state.settings_recording_hotkey = true;
+            state.settings_recording_target = crate::app::HotkeyTarget::WindowCapture;
+            state.settings_window_hotkey_error = None;
             state.settings_status = None;
             state.settings_reset_all_pending = false;
             Task::none()
@@ -57,18 +66,27 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
         SettingsMsg::HotkeyRecorded(shortcut) => on_hotkey_recorded(state, shortcut),
         SettingsMsg::HotkeyRecordingInvalid => {
             state.settings_recording_hotkey = true;
-            state.settings_hotkey_status = None;
-            state.settings_hotkey_error = Some(
+            let error = Some(
                 "That key can't be used. Combine a modifier (Command, Control, Option, or Shift) \
                  with a letter, number, arrow, or function key."
                     .to_string(),
             );
+            if state.settings_recording_target == crate::app::HotkeyTarget::WindowCapture {
+                state.settings_window_hotkey_error = error;
+            } else {
+                state.settings_hotkey_status = None;
+                state.settings_hotkey_error = error;
+            }
             Task::none()
         }
         SettingsMsg::HotkeyRecordingCancelled => {
             state.settings_recording_hotkey = false;
-            state.settings_hotkey_error = None;
-            state.settings_hotkey_status = None;
+            if state.settings_recording_target == crate::app::HotkeyTarget::WindowCapture {
+                state.settings_window_hotkey_error = None;
+            } else {
+                state.settings_hotkey_error = None;
+                state.settings_hotkey_status = None;
+            }
             Task::none()
         }
         SettingsMsg::ResetAllRequested => {
@@ -169,7 +187,14 @@ pub(crate) fn settings_focus_items(state: &App) -> Vec<SettingsFocus> {
                 vec![F::PermissionRecheck, F::PermissionReset, F::PermissionOpen]
             }
         },
-        SettingsPane::Capture => vec![F::HotkeyRecord, F::HotkeyReset, F::Retention],
+        SettingsPane::Capture => {
+            let mut v = vec![F::HotkeyRecord, F::HotkeyReset];
+            if crate::tray::WINDOW_CAPTURE_IN_MENU {
+                v.extend([F::WindowHotkeyRecord, F::WindowHotkeyClear]);
+            }
+            v.push(F::Retention);
+            v
+        }
         SettingsPane::Files => vec![
             F::FolderChoose,
             F::FolderOpen,
@@ -347,10 +372,14 @@ fn activate_settings_item(state: &mut App, item: SettingsFocus) -> Task<Message>
         F::PermissionRecheck => Message::App(AppMsg::PermissionTick),
         F::PermissionReset => Message::App(AppMsg::ResetPermissionRequested),
         F::PermissionOpen => Message::App(AppMsg::OpenPermissionSettingsRequested),
-        F::HotkeyRecord if state.settings_recording_hotkey => {
+        F::HotkeyRecord | F::WindowHotkeyRecord if state.settings_recording_hotkey => {
             Message::Settings(SettingsMsg::HotkeyRecordingCancelled)
         }
         F::HotkeyRecord => Message::Settings(SettingsMsg::StartHotkeyRecording),
+        F::WindowHotkeyRecord => Message::Settings(SettingsMsg::StartWindowHotkeyRecording),
+        F::WindowHotkeyClear => Message::Settings(SettingsMsg::Edit(
+            SettingsMessage::SetWindowCaptureHotkey(String::new()),
+        )),
         F::HotkeyReset => Message::Settings(SettingsMsg::Edit(SettingsMessage::SetCaptureHotkey(
             default_capture_hotkey().into(),
         ))),
@@ -412,7 +441,13 @@ fn activate_settings_item(state: &mut App, item: SettingsFocus) -> Task<Message>
 
 /// `SettingsMsg::Edit`: a Settings control changed.
 fn on_settings(state: &mut App, submsg: SettingsMessage) -> Task<Message> {
-    let needs_rehotkey = matches!(submsg, SettingsMessage::SetCaptureHotkey(_));
+    let needs_rehotkey = matches!(
+        submsg,
+        SettingsMessage::SetCaptureHotkey(_) | SettingsMessage::SetWindowCaptureHotkey(_)
+    );
+    if matches!(submsg, SettingsMessage::SetWindowCaptureHotkey(_)) {
+        state.settings_window_hotkey_error = None;
+    }
     let launch_at_login = match &submsg {
         SettingsMessage::SetLaunchAtLogin(v) => Some(*v),
         _ => None,
@@ -461,6 +496,9 @@ fn on_open_settings(state: &mut App) -> Task<Message> {
 /// `SettingsMsg::HotkeyRecorded`.
 fn on_hotkey_recorded(state: &mut App, shortcut: String) -> Task<Message> {
     state.settings_recording_hotkey = false;
+    if state.settings_recording_target == crate::app::HotkeyTarget::WindowCapture {
+        return on_window_hotkey_recorded(state, shortcut);
+    }
     // Reject a chord that collides with a reserved fixed hotkey
     // (History / Settings) instead of silently disabling one of
     // them. Keep the previous capture hotkey and tell the user.
@@ -481,11 +519,35 @@ fn on_hotkey_recorded(state: &mut App, shortcut: String) -> Task<Message> {
     )
 }
 
+/// The window-capture recorder caught `shortcut`: refuse a chord that
+/// another shortcut owns (keeping the previous one), else set it.
+fn on_window_hotkey_recorded(state: &mut App, shortcut: String) -> Task<Message> {
+    let candidate = Preferences {
+        window_capture_hotkey: shortcut.clone(),
+        ..state.preferences.clone()
+    };
+    if let Some(clash) = window_hotkey_conflict(&candidate) {
+        state.settings_window_hotkey_error = Some(format!(
+            "{} is already {clash}. Choose a different shortcut.",
+            pretty_hotkey(&shortcut)
+        ));
+        return Task::none();
+    }
+    state.settings_window_hotkey_error = None;
+    update(
+        state,
+        Message::Settings(SettingsMsg::Edit(SettingsMessage::SetWindowCaptureHotkey(
+            shortcut,
+        ))),
+    )
+}
+
 /// `SettingsMsg::ResetAllConfirmed`.
 fn on_reset_all_confirmed(state: &mut App) -> Task<Message> {
     state.settings_reset_all_pending = false;
     state.settings_recording_hotkey = false;
     state.settings_hotkey_error = None;
+    state.settings_window_hotkey_error = None;
     state.settings_hotkey_status = None;
     state.settings_status = Some("Settings reset to defaults.".to_string());
     let old_launch_at_login = state.preferences.launch_at_login;

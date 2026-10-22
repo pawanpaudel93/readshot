@@ -33,6 +33,7 @@ pub enum SettingsTab {
 pub enum SettingsMessage {
     SwitchTab(SettingsTab),
     SetCaptureHotkey(String),
+    SetWindowCaptureHotkey(String),
     SetSaveFolder(PathBuf),
     SetFilenameTemplate(String),
     SetDefaultFormat(ExportFormat),
@@ -67,6 +68,14 @@ pub fn apply(prefs: &mut Preferences, msg: SettingsMessage) -> bool {
                 false
             } else {
                 prefs.capture_hotkey = s;
+                true
+            }
+        }
+        SettingsMessage::SetWindowCaptureHotkey(s) => {
+            if prefs.window_capture_hotkey == s {
+                false
+            } else {
+                prefs.window_capture_hotkey = s;
                 true
             }
         }

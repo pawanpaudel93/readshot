@@ -116,6 +116,11 @@ pub struct Preferences {
     /// preferences format doesn't depend on the hotkey crate.
     pub capture_hotkey: String,
 
+    /// Shortcut for Capture Window… (same syntax as `capture_hotkey`).
+    /// Empty means unassigned, the default: a system-wide chord is only
+    /// taken from other apps when the user asks for one.
+    pub window_capture_hotkey: String,
+
     /// Folder to save captures into. An empty path means "use the
     /// platform default" (`~/Desktop` on macOS, `Pictures\Screenshots`
     /// on Windows, `$XDG_PICTURES_DIR/Screenshots` on Linux). The
@@ -210,6 +215,7 @@ impl Default for Preferences {
         Self {
             schema_version: PREFERENCES_SCHEMA_VERSION,
             capture_hotkey: "ctrl+shift+x".to_string(),
+            window_capture_hotkey: String::new(),
             save_folder: PathBuf::new(),
             filename_template: "Screenshot {YYYY-MM-DD at HH.mm.ss}".to_string(),
             default_format: ExportFormat::Png,

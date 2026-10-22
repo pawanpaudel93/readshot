@@ -255,6 +255,7 @@ fn only_the_capture_chord_is_registered_system_wide() {
     let HotkeyActions {
         actions,
         capture_registered,
+        ..
     } = register_hotkey_actions(&prefs, |h| {
         handed_to_os.push(h);
         Ok(())
@@ -284,6 +285,7 @@ fn an_invalid_or_refused_capture_chord_registers_nothing() {
     let HotkeyActions {
         actions,
         capture_registered,
+        ..
     } = register_hotkey_actions(&prefs, |_| Ok(()));
     assert!(!capture_registered);
     assert!(actions.is_empty());
@@ -295,6 +297,7 @@ fn an_invalid_or_refused_capture_chord_registers_nothing() {
     let HotkeyActions {
         actions,
         capture_registered,
+        ..
     } = register_hotkey_actions(&prefs, |_| Err("already owned".into()));
     assert!(!capture_registered);
     assert!(actions.is_empty());
@@ -311,6 +314,7 @@ fn a_capture_chord_equal_to_an_app_shortcut_is_refused() {
     let HotkeyActions {
         actions,
         capture_registered,
+        ..
     } = register_hotkey_actions(&prefs, |_| {
         attempts.set(attempts.get() + 1);
         Ok(())
@@ -1038,4 +1042,124 @@ fn a_beautified_pin_renders_off_the_ui_thread() {
     app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
     let _ = update(&mut app, Message::Editor(EditorMsg::PinRequested));
     assert_eq!(app.pins.len(), 1, "no Beautify: the pin opens at once");
+}
+
+// ---- Window-capture shortcut ----
+
+#[test]
+fn the_window_capture_shortcut_is_unassigned_by_default() {
+    let prefs = Preferences::default();
+    assert_eq!(prefs.window_capture_hotkey, "");
+    let HotkeyActions {
+        actions,
+        window_registered,
+        ..
+    } = register_hotkey_actions(&prefs, |_| Ok(()));
+    assert!(!window_registered);
+    assert!(!actions
+        .values()
+        .any(|a| *a == GlobalHotkeyAction::CaptureWindow));
+}
+
+#[test]
+fn a_set_window_capture_shortcut_is_registered_system_wide() {
+    let prefs = Preferences {
+        capture_hotkey: "ctrl+shift+x".into(),
+        window_capture_hotkey: "ctrl+shift+w".into(),
+        ..Preferences::default()
+    };
+    let mut handed = 0;
+    let HotkeyActions {
+        actions,
+        capture_registered,
+        window_registered,
+    } = register_hotkey_actions(&prefs, |_| {
+        handed += 1;
+        Ok(())
+    });
+    assert!(capture_registered && window_registered);
+    assert_eq!(handed, 2);
+    assert!(actions
+        .values()
+        .any(|a| *a == GlobalHotkeyAction::CaptureWindow));
+}
+
+#[test]
+fn a_window_shortcut_equal_to_another_shortcut_is_refused() {
+    for clash in ["ctrl+shift+x", settings_hotkey()] {
+        let prefs = Preferences {
+            capture_hotkey: "ctrl+shift+x".into(),
+            window_capture_hotkey: clash.into(),
+            ..Preferences::default()
+        };
+        let HotkeyActions {
+            window_registered,
+            capture_registered,
+            ..
+        } = register_hotkey_actions(&prefs, |_| Ok(()));
+        assert!(!window_registered, "{clash}");
+        assert!(capture_registered, "the capture chord keeps working");
+        assert!(window_hotkey_conflict(&prefs).is_some(), "{clash}");
+    }
+}
+
+#[test]
+fn recording_the_window_shortcut_sets_it_and_leaves_the_capture_one() {
+    let (mut app, _) = settings_app();
+    let capture = app.preferences.capture_hotkey.clone();
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::StartWindowHotkeyRecording),
+    );
+    assert!(app.settings_recording_hotkey);
+    assert_eq!(
+        app.settings_recording_target,
+        crate::app::HotkeyTarget::WindowCapture
+    );
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::HotkeyRecorded("ctrl+alt+w".into())),
+    );
+    assert!(!app.settings_recording_hotkey);
+    assert_eq!(app.preferences.window_capture_hotkey, "ctrl+alt+w");
+    assert_eq!(app.preferences.capture_hotkey, capture);
+}
+
+#[test]
+fn recording_the_capture_chord_as_the_window_shortcut_is_refused() {
+    let (mut app, _) = settings_app();
+    let capture = app.preferences.capture_hotkey.clone();
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::StartWindowHotkeyRecording),
+    );
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::HotkeyRecorded(capture.clone())),
+    );
+    assert_eq!(app.preferences.window_capture_hotkey, "");
+    let (hint, is_error) = crate::runtime::view::window_hotkey_hint(&app);
+    assert!(is_error, "{hint}");
+    assert!(hint.contains("capture shortcut"), "{hint}");
+}
+
+#[test]
+fn clearing_and_resetting_unassign_the_window_shortcut() {
+    let (mut app, _) = settings_app();
+    app.preferences.window_capture_hotkey = "ctrl+alt+w".into();
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::Edit(SettingsMessage::SetWindowCaptureHotkey(
+            String::new(),
+        ))),
+    );
+    assert_eq!(app.preferences.window_capture_hotkey, "");
+    let (hint, is_error) = crate::runtime::view::window_hotkey_hint(&app);
+    assert!(!is_error);
+    assert!(hint.starts_with("Not set."), "{hint}");
+
+    app.preferences.window_capture_hotkey = "ctrl+alt+w".into();
+    let _ = update(&mut app, Message::Settings(SettingsMsg::ResetAllRequested));
+    let _ = update(&mut app, Message::Settings(SettingsMsg::ResetAllConfirmed));
+    assert_eq!(app.preferences.window_capture_hotkey, "");
 }

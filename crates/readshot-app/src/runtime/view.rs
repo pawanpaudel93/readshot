@@ -4426,10 +4426,56 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
 /// Whether the capture-hotkey help line reports a problem (a rejected or
 /// unregistered chord, a fixed shortcut that failed) rather than help.
 /// Mirrors the branch order that builds the line.
+/// Whether the Settings recorder is armed for `target`.
+fn recording_target(state: &App, target: crate::app::HotkeyTarget) -> bool {
+    state.settings_recording_hotkey && state.settings_recording_target == target
+}
+
+/// The help line under the window-capture shortcut, and whether it is a
+/// problem.
+pub(crate) fn window_hotkey_hint(state: &App) -> (String, bool) {
+    let chord = state.preferences.window_capture_hotkey.trim();
+    if recording_target(state, crate::app::HotkeyTarget::WindowCapture) {
+        return match &state.settings_window_hotkey_error {
+            Some(e) => (e.clone(), true),
+            None => (String::new(), false),
+        };
+    }
+    if let Some(e) = &state.settings_window_hotkey_error {
+        return (e.clone(), true);
+    }
+    if chord.is_empty() {
+        return (
+            "Not set. Record one to pick a window to capture from any app.".to_string(),
+            false,
+        );
+    }
+    let pretty = pretty_hotkey(chord);
+    if readshot_ui::hotkey::parse(chord).is_err() {
+        return (
+            "Couldn’t read that shortcut. Press Record to choose a new one.".to_string(),
+            true,
+        );
+    }
+    if let Some(clash) = window_hotkey_conflict(&state.preferences) {
+        return (
+            format!("{pretty} is already {clash}. Choose a different shortcut."),
+            true,
+        );
+    }
+    if !state.window_hotkey_registered {
+        return (
+            format!("Another app may be using {pretty}. Choose a different shortcut."),
+            true,
+        );
+    }
+    ("Opens the window picker from any app.".to_string(), false)
+}
+
 pub(crate) fn capture_hotkey_hint_is_error(state: &App) -> bool {
     let chord = &state.preferences.capture_hotkey;
     state.settings_hotkey_error.is_some()
-        || (!state.settings_recording_hotkey
+        || (!recording_target(state, crate::app::HotkeyTarget::Capture)
             && state.settings_hotkey_status.is_none()
             && (readshot_ui::hotkey::parse(chord).is_err()
                 || capture_hotkey_conflict(chord).is_some()
@@ -4442,7 +4488,7 @@ pub(crate) fn capture_hotkey_hint_is_error(state: &App) -> bool {
 /// control, never here as well.
 pub(crate) fn capture_hotkey_hint(state: &App) -> String {
     let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
-    let mut hotkey_hint = if state.settings_recording_hotkey {
+    let mut hotkey_hint = if recording_target(state, crate::app::HotkeyTarget::Capture) {
         // The one recording instruction sits under the control; this
         // line keeps only a problem, or the plain description.
         state.settings_hotkey_error.clone().unwrap_or_default()
@@ -4490,12 +4536,14 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
     let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
     let hotkey_hint = capture_hotkey_hint(state);
     let hotkey_hint_is_error = capture_hotkey_hint_is_error(state);
-    let hotkey_label = if state.settings_recording_hotkey {
+    let recording_capture = state.settings_recording_hotkey
+        && state.settings_recording_target == crate::app::HotkeyTarget::Capture;
+    let hotkey_label = if recording_capture {
         "Press shortcut…".to_string()
     } else {
         pretty
     };
-    let settings_recording_hotkey = state.settings_recording_hotkey;
+    let settings_recording_hotkey = recording_capture;
     let lit_record = settings_lit(state, crate::app::SettingsFocus::HotkeyRecord);
     let lit_reset = settings_lit(state, crate::app::SettingsFocus::HotkeyReset);
     let hotkey_control: Element<'_, Message> = responsive(move |available| {
@@ -4575,14 +4623,24 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
         settings_lit(state, crate::app::SettingsFocus::Retention),
     );
 
+    let mut shortcut_rows = vec![settings_block_with(
+        "Capture shortcut",
+        hotkey_hint,
+        hotkey_hint_is_error.then_some(palette(state.theme_mode).danger),
+        hotkey_control,
+    )];
+    if crate::tray::WINDOW_CAPTURE_IN_MENU {
+        let (hint, is_error) = window_hotkey_hint(state);
+        shortcut_rows.push(settings_block_with(
+            "Window capture shortcut",
+            hint,
+            is_error.then_some(palette(state.theme_mode).danger),
+            window_hotkey_control(state),
+        ));
+    }
     vec![
         settings_group_heading("Shortcut", text_t3),
-        settings_group(vec![settings_block_with(
-            "Capture shortcut",
-            hotkey_hint,
-            hotkey_hint_is_error.then_some(palette(state.theme_mode).danger),
-            hotkey_control,
-        )]),
+        settings_group(shortcut_rows),
         settings_group_heading("History", text_t3),
         settings_group(vec![group_row(
             "History retention",
@@ -4590,6 +4648,66 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
             retention_control,
         )]),
     ]
+}
+
+/// The window-capture shortcut's value box, Record (Cancel while
+/// recording) and Clear.
+fn window_hotkey_control(state: &App) -> Element<'_, Message> {
+    let recording = recording_target(state, crate::app::HotkeyTarget::WindowCapture);
+    let chord = state.preferences.window_capture_hotkey.trim();
+    let value = if recording {
+        "Press shortcut…".to_string()
+    } else if chord.is_empty() {
+        "Not set".to_string()
+    } else {
+        pretty_hotkey(chord)
+    };
+    let primary: Element<'_, Message> = if recording {
+        button(text("Cancel").size(TYPE_BODY))
+            .padding([6, 12])
+            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+            .on_press(Message::Settings(SettingsMsg::HotkeyRecordingCancelled))
+            .into()
+    } else {
+        button(text("Record").size(TYPE_BODY))
+            .padding([6, 12])
+            .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+            .on_press(Message::Settings(SettingsMsg::StartWindowHotkeyRecording))
+            .into()
+    };
+    let clear = button(text("Clear").size(TYPE_BODY))
+        .padding([6, 12])
+        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+        .on_press_maybe((!chord.is_empty()).then(|| {
+            Message::Settings(SettingsMsg::Edit(SettingsMessage::SetWindowCaptureHotkey(
+                String::new(),
+            )))
+        }));
+    let main = row![
+        setting_value_box(value, recording),
+        focus_ring(
+            primary,
+            settings_lit(state, crate::app::SettingsFocus::WindowHotkeyRecord)
+        ),
+        focus_ring(
+            clear,
+            settings_lit(state, crate::app::SettingsFocus::WindowHotkeyClear)
+        ),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+    if recording {
+        column![
+            main,
+            text(format!("Press the new shortcut, or {ESC_KEY} to cancel."))
+                .size(TYPE_CAPTION)
+                .style(text_acc),
+        ]
+        .spacing(6)
+        .into()
+    } else {
+        main.into()
+    }
 }
 
 /// What each retention choice does, including the deletion it causes.

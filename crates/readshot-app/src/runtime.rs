@@ -433,6 +433,7 @@ pub fn start() -> (App, Task<Message>) {
         app.hotkey_manager = Some(registration.manager);
         app.hotkey_actions = registration.actions;
         app.capture_hotkey_registered = registration.capture_registered;
+        app.window_hotkey_registered = registration.window_registered;
     }
     if app.preferences.launch_at_login {
         if let Err(e) = crate::startup::set_launch_at_login(true) {
@@ -456,6 +457,10 @@ pub fn start() -> (App, Task<Message>) {
     // surface, will simply not see the tray entry.
     let hotkey_label = pretty_hotkey(&app.preferences.capture_hotkey);
     app.tray = crate::tray::install(Some(&app.preferences.capture_hotkey), Some(&hotkey_label));
+    if let Some(tray) = app.tray.as_ref() {
+        let window = app.preferences.window_capture_hotkey.trim();
+        tray.set_window_capture_hotkey(app.window_hotkey_registered.then_some(window));
+    }
 
     // The welcome window is a *first-run permission gate*, not the
     // app's main UI. Once Screen Recording is granted the user lives
@@ -1425,6 +1430,9 @@ fn reset_settings_to_defaults(state: &mut App) {
     let defaults = first_launch_preferences();
     state.update_sync(Message::Settings(SettingsMsg::Edit(
         SettingsMessage::SetCaptureHotkey(defaults.capture_hotkey),
+    )));
+    state.update_sync(Message::Settings(SettingsMsg::Edit(
+        SettingsMessage::SetWindowCaptureHotkey(defaults.window_capture_hotkey),
     )));
     state.update_sync(Message::Settings(SettingsMsg::Edit(
         SettingsMessage::SetSaveFolder(defaults.save_folder),

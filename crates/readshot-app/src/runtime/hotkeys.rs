@@ -17,13 +17,15 @@ pub(crate) struct HotkeyRegistration {
     pub manager: GlobalHotKeyManager,
     pub actions: HashMap<u32, GlobalHotkeyAction>,
     pub capture_registered: bool,
+    pub window_registered: bool,
 }
 
 /// Outcome of registering the system-wide hotkeys: the id→action map and
-/// whether the user's capture chord was registered.
+/// whether the user's capture and window-capture chords were registered.
 pub(crate) struct HotkeyActions {
     pub actions: HashMap<u32, GlobalHotkeyAction>,
     pub capture_registered: bool,
+    pub window_registered: bool,
 }
 
 /// Per-platform suggested default for `Preferences::capture_hotkey`.
@@ -195,6 +197,7 @@ pub(crate) fn register_default_hotkey(prefs: &Preferences) -> Option<HotkeyRegis
     let HotkeyActions {
         actions,
         capture_registered,
+        window_registered,
     } = register_hotkey_actions(prefs, |hotkey| {
         manager.register(hotkey).map_err(|e| e.to_string())
     });
@@ -205,6 +208,7 @@ pub(crate) fn register_default_hotkey(prefs: &Preferences) -> Option<HotkeyRegis
             manager,
             actions,
             capture_registered,
+            window_registered,
         })
     }
 }
@@ -299,9 +303,59 @@ where
             );
         }
     }
+    let window_registered = register_window_hotkey(prefs, &mut actions, &mut register);
     HotkeyActions {
         actions,
         capture_registered,
+        window_registered,
+    }
+}
+
+/// Why the window-capture chord can't be used, if it can't: it equals an
+/// app shortcut or the capture chord (it would shadow either). `None`
+/// when it is unassigned or doesn't parse (the hint says that instead).
+pub(crate) fn window_hotkey_conflict(prefs: &Preferences) -> Option<String> {
+    let chord = prefs.window_capture_hotkey.trim();
+    let spec = hotkey::parse(chord).ok()?;
+    if let Some(reserved) = capture_hotkey_conflict(chord) {
+        return Some(format!("the {reserved} shortcut"));
+    }
+    let capture = hotkey::parse(&prefs.capture_hotkey).ok();
+    (capture == Some(spec)).then(|| "the capture shortcut".to_string())
+}
+
+/// Register the window-capture chord when one is set and usable.
+fn register_window_hotkey<F>(
+    prefs: &Preferences,
+    actions: &mut HashMap<u32, GlobalHotkeyAction>,
+    register: &mut F,
+) -> bool
+where
+    F: FnMut(HotKey) -> Result<(), String>,
+{
+    let chord = prefs.window_capture_hotkey.trim();
+    if chord.is_empty() {
+        return false;
+    }
+    let Ok(spec) = hotkey::parse(chord) else {
+        tracing::warn!(target: readshot_core::log::cat::HOTKEY, "could not parse window_capture_hotkey `{chord}`");
+        return false;
+    };
+    if let Some(clash) = window_hotkey_conflict(prefs) {
+        tracing::warn!(target: readshot_core::log::cat::HOTKEY, "window capture hotkey `{chord}` is {clash}; not registering");
+        return false;
+    }
+    let hotkey = spec.to_global_hotkey();
+    let id = hotkey.id();
+    match register(hotkey) {
+        Ok(()) => {
+            actions.insert(id, GlobalHotkeyAction::CaptureWindow);
+            true
+        }
+        Err(e) => {
+            tracing::warn!(target: readshot_core::log::cat::HOTKEY, "failed to register `{chord}`: {e}");
+            false
+        }
     }
 }
 
@@ -411,10 +465,12 @@ pub(crate) fn refresh_hotkey_registration(state: &mut App) {
     state.scroll_escape_hotkeys.clear();
     state.scroll_escape_tried = false;
     state.capture_hotkey_registered = false;
+    state.window_hotkey_registered = false;
     if let Some(registration) = register_default_hotkey(&state.preferences) {
         state.hotkey_manager = Some(registration.manager);
         state.hotkey_actions = registration.actions;
         state.capture_hotkey_registered = registration.capture_registered;
+        state.window_hotkey_registered = registration.window_registered;
     }
 }
 
@@ -448,6 +504,8 @@ pub(crate) fn sync_tray_capture_hotkey_label(state: &App) {
     } else {
         tray.set_capture_hotkey(Some(&state.preferences.capture_hotkey), Some(&label));
     }
+    let window = state.preferences.window_capture_hotkey.trim();
+    tray.set_window_capture_hotkey(state.window_hotkey_registered.then_some(window));
 }
 pub(crate) fn global_hotkey_action(
     event: &GlobalHotKeyEvent,
