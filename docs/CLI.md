@@ -27,6 +27,7 @@ readshot completions zsh
 | Command | What it does |
 |---------|--------------|
 | `readshot` | Launches the GUI. |
+| `readshot --version` | Prints the version, for example `readshot 0.8.1`. |
 | `readshot list-displays` | Lists displays with ids, bounds, and scale. |
 | `readshot list-windows` | Lists capturable windows with ids, app names, titles, display ids, and bounds. |
 | `readshot capture` | Captures a display region or full display as an image. |
@@ -45,7 +46,10 @@ Use `--json` when scripts need stable machine-readable output. See
 
 `--interactive` opens the same Readshot region selector used by the
 app. Drag a region and release to capture immediately. Press `Enter`
-for the full display or `Esc` to cancel.
+(or `Space`) for the full display or `Esc` to cancel. A drag smaller
+than 4 pixels cancels too. A cancelled capture prints
+`readshot: invalid input: interactive capture cancelled` and exits
+with code 64.
 
 Supported commands:
 
@@ -72,6 +76,10 @@ readshot capture --display 1 --rect 100,100,800,600 --output region.png
 Rectangles are logical pixels in `x,y,width,height` form. If you need
 to override the display scale used by the backend, pass `--scale`.
 
+Limits: each `--rect` value is at most 16,384, `--scale` is at most 8,
+and one capture is at most 100 million pixels after scaling. `--delay`
+is at most 3600 seconds.
+
 For window captures, get the window id first:
 
 ```bash
@@ -94,7 +102,9 @@ readshot capture --format tiff --output capture.tiff
 readshot capture --format webp --output capture.webp
 ```
 
-Use `--clipboard` to copy the image instead of writing a file:
+Use `--clipboard` to copy the image instead of writing a file.
+`--format` doesn't apply to the clipboard, which receives the image
+itself:
 
 ```bash
 readshot capture --interactive --clipboard
@@ -128,6 +138,11 @@ readshot ocr --input capture.png --clipboard
 
 OCR uses automatic language detection by default.
 
+The text is the recognized lines as the OCR engine returns them. The
+app's Copy Text adds layout handling (Markdown tables, columns, code
+blocks) that the CLI doesn't. Recognition that hasn't finished after
+30 seconds fails with an error (macOS and Linux).
+
 Use `--clipboard` to copy text instead of printing it, or `--output` to
 write text to a file:
 
@@ -158,6 +173,10 @@ support explicit language hints. Leave it empty for automatic detection:
 readshot ocr --input capture.png --languages en-US,fr-FR
 ```
 
+Windows source builds use only the first language you pass (without
+`--languages`, the languages of your Windows user profile), and that
+language's OCR pack must be installed.
+
 Language correction is on by default where the platform OCR engine
 supports it (Apple Vision). Turn it off with `--no-language-correction`
 (or `--language-correction=false`), for example for codes, IDs or other
@@ -170,7 +189,8 @@ readshot ocr --input capture.png --no-language-correction
 ## Combined Image and OCR
 
 `capture-and-ocr` prints or writes text and can save the captured image
-at the same time:
+at the same time. `--also-image` always writes PNG, whatever the file
+name says:
 
 ```bash
 readshot capture-and-ocr --interactive --also-image capture.png --output text.txt
@@ -191,7 +211,12 @@ readshot mcp-config --command /Applications/Readshot.app/Contents/MacOS/readshot
 
 The default uses `readshot-mcp`, which is correct when the host inherits
 your shell `PATH`. Use the absolute app-bundle path for desktop hosts
-that do not inherit `~/.local/bin`.
+that do not inherit `~/.local/bin`. `--name` sets the server's key in
+the snippet (default `readshot`):
+
+```bash
+readshot mcp-config --name screenshots
+```
 
 ## Shell Completions
 
@@ -271,6 +296,35 @@ readshot capture-window --window 11474 --no-window-shadow --output tight.png
 
 Use `readshot --help` or `readshot <command> --help` for the complete
 option list.
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success. |
+| 2 | Invalid arguments (unknown option, a bad `--rect` or `--delay`). |
+| 64 | Invalid input: a bad value found after parsing (such as `--scale`), a region outside the display, or a cancelled interactive capture. |
+| 66 | The display or window id doesn't exist, or no displays were found. |
+| 70 | OCR failed. |
+| 71 | Capture failed for another reason. |
+| 74 | Reading or writing a file, decoding an image, the clipboard, or an `uninstall` step failed. |
+| 77 | Screen Recording permission is missing. |
+
+Errors are printed to stderr as `readshot: <reason>`.
+
+## Logs
+
+Commands print data to stdout and errors to stderr. Other log lines go
+to `readshot.log`, the same file the app writes:
+
+| OS | Log file |
+|----|----------|
+| macOS | `~/Library/Application Support/np.com.pawanpaudel.Readshot/readshot.log` |
+| Linux | `~/.local/share/readshot/readshot.log` |
+| Windows | `%LOCALAPPDATA%\pawanpaudel\Readshot\data\readshot.log` |
+
+Set `RUST_LOG` to change the level, for example
+`RUST_LOG=debug readshot ocr --input capture.png`.
 
 ## JSON Output
 

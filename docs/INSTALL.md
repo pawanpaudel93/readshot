@@ -111,9 +111,14 @@ This is expected for self-signed builds. Bypass:
 You only do this once. Future launches open normally. The tray menu
 includes **Check for Updates…** on macOS; it uses Sparkle to read the
 appcast published from GitHub Releases and verifies each download with
-the app's compiled-in EdDSA public key. Readshot does not check for
-updates in the background unless a future version adds an explicit
-preference for it.
+the app's compiled-in EdDSA public key. Choosing it shows a "Checking
+for updates…" notification. If this copy of Readshot can't check for
+updates, a notification says why and to reinstall Readshot from the
+website. Readshot does not check for updates in the background
+unless a future version adds an explicit preference for it.
+
+The installed version is shown at the bottom of the Settings window,
+and `readshot --version` prints it.
 
 If you'd rather use the command line:
 
@@ -155,7 +160,9 @@ welcome window walks you through it on first launch:
    already finished this once and only granted the permission again, the
    window closes by itself and a notification says Readshot is ready.)
    If macOS asks you to quit and reopen Readshot first, use the welcome
-   window's **Restart Readshot** button.
+   window's **Restart Readshot** button. If you use macOS's own **Quit &
+   Reopen** instead and it doesn't reopen Readshot, Readshot reopens
+   itself.
 
 If you accidentally denied: open **System Settings → Privacy &
 Security → Screen Recording**, find Readshot, toggle it on, and
@@ -169,6 +176,20 @@ read its controls. Every capture and OCR feature is also available from
 the command line, which does work with screen readers — see
 [CLI.md](CLI.md). The GUI's keyboard shortcuts are listed under
 [Accessibility in the README](../README.md#accessibility).
+
+## Logs
+
+Readshot writes a log file you can attach to a bug report:
+
+| OS | Log file |
+|----|----------|
+| macOS | `~/Library/Application Support/np.com.pawanpaudel.Readshot/readshot.log` |
+| Linux | `~/.local/share/readshot/readshot.log` |
+| Windows | `%LOCALAPPDATA%\pawanpaudel\Readshot\data\readshot.log` |
+
+For more detail, turn on **Settings → Diagnostics → Verbose debug
+logging** and restart Readshot. The `RUST_LOG` environment variable,
+when set, takes precedence over that setting.
 
 ## Uninstalling
 
@@ -247,6 +268,10 @@ the current public release.
 Developers can still build from source on those platforms, but the
 end-user install path is macOS until the platform capture and OCR
 backends are wired and tested.
+
+Source builds on Windows and Linux don't stop a second copy from
+starting: launching Readshot twice gives two menu icons, and the second
+copy can't register the capture shortcut. Quit one of them.
 
 ## Building from source
 

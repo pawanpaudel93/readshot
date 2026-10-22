@@ -40,7 +40,9 @@ readshot-mcp --check
 ```
 
 It prints JSON with server version, stdio transport, advertised tool
-count, and history-directory writability.
+count, and history-directory writability. `ok` is `true` when tools are
+advertised and the history folder is writable; otherwise the command
+exits with code 70. Any other argument exits with code 64.
 
 ## Tools exposed
 
@@ -246,8 +248,14 @@ succeeds at the protocol level: per the MCP spec, a tool that fails
 while running returns a normal result with `isError: true` and the
 reason as its text (`capture: screen capture permission denied`), so the
 agent can read it and ask the user to grant Screen Recording. JSON-RPC
-errors are kept for protocol problems: an unknown tool or method, or
-invalid arguments.
+errors are kept for protocol problems:
+
+| Code | When |
+|------|------|
+| `-32700` | The line isn't valid JSON, or it is longer than 8 MiB. The server answers and keeps reading. |
+| `-32600` | `jsonrpc` isn't `"2.0"`. |
+| `-32601` | Unknown method, or `tools/call` names an unknown tool. |
+| `-32602` | Invalid arguments, including an argument the tool doesn't list. |
 
 ---
 
@@ -357,7 +365,10 @@ Any MCP-compatible host needs three pieces:
    writable.
 
 The server advertises protocol version `2024-11-05` and a single
-`tools` capability. No prompts, resources, or sampling.
+`tools` capability. No prompts, resources, or sampling. It answers
+`initialize`, `tools/list`, `tools/call`, `ping` and `shutdown` (the
+last two reply `{}`); any other method is `-32601`. Notifications get
+no reply. Log lines go to stderr at info level and never to stdout.
 
 ## Verifying it works
 
