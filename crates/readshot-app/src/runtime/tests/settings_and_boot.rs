@@ -1174,6 +1174,16 @@ fn a_settings_uninstall_with_failed_steps_names_them() {
         assert!(said.text.contains("Open at Login entry"), "{}", said.text);
         assert!(said.text.contains("1 step"), "{}", said.text);
         assert!(!said.text.contains("were removed"), "{}", said.text);
+        // W5d review m7: advice the inert pane can't follow is not
+        // given; the next step is outside this process.
+        assert!(!said.text.starts_with("Run Uninstall"), "{}", said.text);
+        if program_removed {
+            assert!(said.text.contains("Trash"), "{}", said.text);
+            assert!(!said.text.contains("readshot uninstall"), "{}", said.text);
+        } else {
+            assert!(said.text.contains("Quit Readshot"), "{}", said.text);
+            assert!(said.text.contains("readshot uninstall"), "{}", said.text);
+        }
         assert!(app.uninstalled);
     }
 }

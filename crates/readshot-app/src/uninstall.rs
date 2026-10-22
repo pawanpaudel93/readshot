@@ -296,14 +296,24 @@ pub fn failed_steps(reports: &[ActionReport]) -> Vec<String> {
 }
 
 /// What Settings says when steps failed (`failed` from
-/// [`failed_steps`]): how many, which, and to run it again. Every step
-/// tolerates what an earlier run already removed.
-pub fn failure_message(failed: &[String]) -> String {
+/// [`failed_steps`]): how many, which, and how to finish. Settings is
+/// inert by then (no Uninstall to press), so the advice is for after
+/// quitting. With the program still installed, reopen it or use its CLI;
+/// with the app already in the Trash (and its CLI links pointing into
+/// it), the installer script is what's left. Every step tolerates what
+/// an earlier run already removed.
+pub fn failure_message(failed: &[String], program_removed: bool) -> String {
     let n = failed.len();
     let steps = if n == 1 { "step" } else { "steps" };
+    let next = if program_removed {
+        "Readshot is already in the Trash. To finish, run the install script with \
+         `--uninstall` (see the install guide)."
+    } else {
+        "Quit Readshot, then open it and run Uninstall again, or run \
+         `readshot uninstall` in a terminal."
+    };
     format!(
-        "The uninstall didn't finish: {n} {steps} failed ({}). Run Uninstall again, \
-         or `readshot uninstall` in a terminal.",
+        "The uninstall didn't finish: {n} {steps} failed ({}). {next}",
         failed.join("; ")
     )
 }

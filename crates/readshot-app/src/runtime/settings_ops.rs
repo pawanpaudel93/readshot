@@ -122,9 +122,11 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
         }
         // A step failed (even if the bundle went to the Trash), or the
         // program stays: Readshot stays up to say what happened.
-        SettingsMsg::UninstallFinished { purge, failed, .. } => {
-            enter_uninstalled(state, purge, &failed)
-        }
+        SettingsMsg::UninstallFinished {
+            program_removed,
+            purge,
+            failed,
+        } => enter_uninstalled(state, purge, program_removed, &failed),
         // Not while the steps still run: quitting would cut them off.
         SettingsMsg::QuitAfterUninstall if uninstall_finished(state) => {
             quit_readshot(&state.coordinator)
@@ -667,7 +669,12 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
 ///
 /// With failed steps it says which, in the error tone, the way the CLI
 /// counts them, and never that everything was removed.
-fn enter_uninstalled(state: &mut App, purge: bool, failed: &[String]) -> Task<Message> {
+fn enter_uninstalled(
+    state: &mut App,
+    purge: bool,
+    program_removed: bool,
+    failed: &[String],
+) -> Task<Message> {
     let close_others = go_inert(state);
     state.settings_uninstall_result = Some(if failed.is_empty() {
         Status::new(
@@ -675,7 +682,10 @@ fn enter_uninstalled(state: &mut App, purge: bool, failed: &[String]) -> Task<Me
             crate::uninstall::completion_message(&[], purge),
         )
     } else {
-        Status::new(StatusTone::Error, crate::uninstall::failure_message(failed))
+        Status::new(
+            StatusTone::Error,
+            crate::uninstall::failure_message(failed, program_removed),
+        )
     });
     close_others
 }
