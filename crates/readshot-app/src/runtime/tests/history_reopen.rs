@@ -384,44 +384,6 @@ fn noise(seed: u64, w: u32, h: u32) -> image::RgbaImage {
     })
 }
 
-/// The share of `img`'s pixels inside `rect` (clipped to it) that are
-/// exactly the original's, in whichever orientation of `original` (as
-/// captured, or turned a quarter, half or three quarters) matches it
-/// best; `None` when nothing of the rect is inside.
-fn share_left_as_captured(
-    img: &image::RgbaImage,
-    original: &image::RgbaImage,
-    rect: RectLike,
-) -> Option<f64> {
-    use image::imageops::{rotate180, rotate270, rotate90};
-    let x0 = rect.x.max(0.0).floor() as u32;
-    let y0 = rect.y.max(0.0).floor() as u32;
-    let x1 = ((rect.x + rect.width).ceil().max(0.0) as u32).min(img.width());
-    let y1 = ((rect.y + rect.height).ceil().max(0.0) as u32).min(img.height());
-    let total = (x1.saturating_sub(x0) * y1.saturating_sub(y0)) as f64;
-    if total == 0.0 {
-        return None;
-    }
-    [
-        original.clone(),
-        rotate90(original),
-        rotate180(original),
-        rotate270(original),
-    ]
-    .iter()
-    .filter(|o| o.dimensions() == img.dimensions())
-    .map(|o| {
-        let same = (y0..y1)
-            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
-            .filter(|&(x, y)| img.get_pixel(x, y) == o.get_pixel(x, y))
-            .count();
-        same as f64 / total
-    })
-    .fold(None, |best: Option<f64>, v| {
-        Some(best.map_or(v, |b| b.max(v)))
-    })
-}
-
 /// One History record edited, closed and reopened in random order while
 /// its writes fail or are slow. What the runtime would run as tasks is
 /// run here: a History open's load on its own thread, delivered later.
@@ -564,12 +526,24 @@ impl Interleaving {
             }
             3 => {
                 self.log.push("redact");
-                self.sync_after(|ed| {
-                    ed.model.commit_annotation(Annotation::Blur {
-                        rect: RectLike::new(2.0, 2.0, 6.0, 6.0),
-                        radius: 4.0,
-                    })
-                });
+                let rect = RectLike::new(2.0, 2.0, 6.0, 6.0);
+                let redaction = match rng.below(3) {
+                    0 => Annotation::Blur { rect, radius: 4.0 },
+                    1 => Annotation::Pixelate {
+                        rect,
+                        block_size: 3.0,
+                    },
+                    _ => Annotation::Rectangle {
+                        rect,
+                        color: Rgba::OPAQUE_BLACK,
+                        line_width: 0.0,
+                        style: readshot_core::ShapeStyle {
+                            fill: readshot_core::FillMode::Filled,
+                            ..Default::default()
+                        },
+                    },
+                };
+                self.sync_after(|ed| ed.model.commit_annotation(redaction));
             }
             4 => {
                 self.log.push("undo");
@@ -656,32 +630,67 @@ impl Interleaving {
         }
     }
 
-    /// Once writes are quiet, by pixels: under every redaction a redacted
-    /// record stores, the image no longer holds the seeded noise it was
-    /// captured with (blurred, pixelated or covered: at most a few pixels
-    /// keep their exact value), in whatever orientation it is stored.
-    fn check_redacted_pixels(&self) {
+    /// Once writes are quiet, by pixels, against what the run itself drew
+    /// (the open editor's own redactions, not the stored list): the
+    /// colours under each redaction in the editor's document must not be
+    /// in the stored image, in any place or orientation. The capture is
+    /// seeded noise, so each colour is unique to its pixel; colours that
+    /// aren't (a black cover baked earlier) prove nothing and are skipped.
+    ///
+    /// A solid redaction leaves none. A blur or pixelate rewrites every
+    /// pixel with an average of others, which matches the pixel's own
+    /// random colour exactly only by chance (about 1 in 2^24 per pixel):
+    /// at most 3 of its 36 pixels are allowed, so that one coincidence
+    /// can't fail a run, while a redaction off by a single row or column
+    /// (6 pixels left as captured) always does.
+    fn check_redacted_pixels(&mut self) {
+        let log = format!("seed {}: {:?}", self.seed, self.log);
         let stored = self.store.stored(self.id);
-        if !stored.redacted || stored.scrub_pending {
+        let png = FsHistoryStore::abs_png_path(self.store.inner.root(), &stored);
+        let Some(ed) = self.editor_of_record() else {
+            return;
+        };
+        let base = ed.model.base();
+        let mut counts: std::collections::HashMap<[u8; 4], usize> =
+            std::collections::HashMap::new();
+        for p in base.pixels() {
+            *counts.entry(p.0).or_default() += 1;
+        }
+        let checks: Vec<(Annotation, Vec<[u8; 4]>)> = ed
+            .model
+            .annotations()
+            .iter()
+            .filter(|a| a.is_redaction())
+            .filter_map(|a| {
+                let r = a.redaction_rect()?;
+                let (x0, y0) = (r.x.max(0.0) as u32, r.y.max(0.0) as u32);
+                let x1 = ((r.x + r.width) as u32).min(base.width());
+                let y1 = ((r.y + r.height) as u32).min(base.height());
+                let secret = (y0..y1)
+                    .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                    .map(|(x, y)| base.get_pixel(x, y).0)
+                    .filter(|c| counts.get(c) == Some(&1))
+                    .collect();
+                Some((a.clone(), secret))
+            })
+            .collect();
+        if checks.is_empty() {
             return;
         }
-        let png = FsHistoryStore::abs_png_path(self.store.inner.root(), &stored);
         let img = image::open(&png).expect("the stored image").to_rgba8();
-        let original = noise(self.seed, 40, 20);
-        for rect in stored
-            .redactions
-            .iter()
-            .filter_map(Annotation::redaction_rect)
-        {
-            if let Some(share) = share_left_as_captured(&img, &original, rect) {
-                assert!(
-                    share < 0.5,
-                    "{:.0}% of the pixels under {rect:?} are as captured after seed {}: {:?}",
-                    share * 100.0,
-                    self.seed,
-                    self.log
-                );
-            }
+        let present: std::collections::HashSet<[u8; 4]> = img.pixels().map(|p| p.0).collect();
+        for (redaction, secret) in checks {
+            let left = secret.iter().filter(|c| present.contains(*c)).count();
+            let allowed = if matches!(redaction, Annotation::Rectangle { .. }) {
+                0
+            } else {
+                3
+            };
+            assert!(
+                left <= allowed,
+                "{left} of {} pixels under {redaction:?} are stored as captured after {log}",
+                secret.len()
+            );
         }
     }
 
