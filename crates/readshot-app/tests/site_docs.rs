@@ -417,6 +417,7 @@ fn exit_code_tables_match_the_code() {
             reason: "r".into(),
         },
         CliError::Uninstall("u".into()),
+        CliError::AppRunning,
     ];
     let mut expected: BTreeSet<i32> = errors.iter().map(exit_code).collect();
     expected.extend([0, 2]);
