@@ -118,11 +118,15 @@ packages beyond a stable Rust toolchain.
   URLs through `url_events` instead.
 * Single instance (Windows and Linux, `single_instance`): a GUI launch
   takes an advisory `File::try_lock` on `readshot.lock` in a per-user
-  dir and listens on a loopback port named, with a random token, in
-  `readshot.instance`. A later launch sends `reopen` or its
-  `readshot://` URL there and exits 0; the first copy queues it in
-  `app_events` / `url_events`, as the macOS AppleEvent handlers do. The
-  OS drops the lock with its holder, so a crash leaves nothing stale.
+  dir. A later launch finding it held drops a request file
+  (`wake-*.req`: `reopen` or its `readshot://` URL, written to a temp
+  name and renamed) into the same dir and exits 0 at once; a
+  `--launched-at-login` launch drops nothing. The first copy reads the
+  files on its 500 ms reopen tick (`take_requests`) and queues them in
+  `app_events` / `url_events`, as the macOS AppleEvent handlers do. No
+  network surface: the dir's per-user permissions are the access
+  control. The OS drops the lock with its holder, so a crash leaves
+  nothing stale.
 
 Logging (`readshot_core::log` has the targets, all under
 `np.com.pawanpaudel.readshot::<category>`): the GUI logs to stderr and

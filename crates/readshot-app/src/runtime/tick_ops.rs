@@ -98,6 +98,11 @@ pub(super) fn on_url_tick(state: &mut App) -> Task<Message> {
 
 /// `TickMsg::AppReopen`.
 pub(super) fn on_app_reopen_tick() -> Task<Message> {
+    // Windows / Linux: requests later launches left (none on macOS, or
+    // when this copy didn't take the single-instance lock).
+    for request in crate::single_instance::take_requests() {
+        crate::single_instance::deliver(request);
+    }
     if crate::app_events::take_reopen_requests() == 0 {
         Task::none()
     } else {

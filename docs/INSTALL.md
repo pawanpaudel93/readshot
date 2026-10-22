@@ -274,7 +274,8 @@ backends are wired and tested.
 
 On Windows and Linux only one copy runs per user. Launching Readshot
 again (or opening a `readshot://` link) brings the running copy forward
-instead, and the second launch exits. The lock lives in
+within about half a second, and the second launch exits at once. A
+login launch while Readshot already runs just exits. The lock lives in
 `$XDG_RUNTIME_DIR/readshot/` on Linux (or `~/.local/share/readshot/`
 when that isn't set) and in `%LOCALAPPDATA%\pawanpaudel\Readshot\data\`
 on Windows; a copy that crashed releases it, so it never needs

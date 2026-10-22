@@ -668,13 +668,13 @@ fn background_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) 
             iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick(TickMsg::Tray)),
         );
     }
-    if cfg!(target_os = "macos") || crate::single_instance::is_listening() {
+    {
         // macOS delivers URL + reopen AppleEvents to AppKit callbacks
         // while the app is already running; on Windows and Linux a
-        // second launch sends them through `single_instance`. Either
-        // way they are queued, and these ticks drain them back into
-        // iced. Both are rare, external, user-initiated events, so a
-        // slower poll costs nothing.
+        // second launch leaves a request file (`single_instance`), read
+        // on the reopen tick. Either way they are queued, and these
+        // ticks drain them back into iced. Both are rare, external,
+        // user-initiated events, so a slower poll costs nothing.
         subs.push(
             iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick(TickMsg::Url)),
         );

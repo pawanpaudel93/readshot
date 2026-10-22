@@ -1742,3 +1742,30 @@ fn an_armed_discard_does_not_expire() {
     let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
     assert!(app.editor.is_none());
 }
+
+/// Windows / Linux: a request a later launch left is picked up on the
+/// reopen tick and becomes a reopen (W5d review I1, m2).
+#[test]
+fn a_left_request_is_picked_up_on_the_reopen_tick() {
+    use crate::single_instance::{acquire, Instance, WakeRequest};
+    let dir = tempfile::tempdir().unwrap();
+    let Instance::Primary(_guard) = acquire(dir.path(), None).unwrap() else {
+        panic!("first copy");
+    };
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    assert_eq!(
+        update(&mut app, Message::Tick(TickMsg::AppReopen)).units(),
+        0,
+        "nothing left yet"
+    );
+    assert!(matches!(
+        acquire(dir.path(), Some(&WakeRequest::Reopen)).unwrap(),
+        Instance::Secondary
+    ));
+    assert!(update(&mut app, Message::Tick(TickMsg::AppReopen)).units() > 0);
+    assert_eq!(
+        update(&mut app, Message::Tick(TickMsg::AppReopen)).units(),
+        0,
+        "taken once"
+    );
+}
