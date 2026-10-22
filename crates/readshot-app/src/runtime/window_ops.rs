@@ -85,16 +85,7 @@ pub(super) fn on_window_closed(state: &mut App, id: iced::window::Id) -> Task<Me
     } else {
         Task::none()
     };
-    if state.history_window_id == Some(id) {
-        state.history_window_id = None;
-        state.history_records.clear();
-        history_images::trim_history_image_cache();
-        state.history_status = None;
-        // An open from it that is still waiting is cancelled.
-        history_ops::cancel_history_open(state, "History was closed before it opened");
-        state.history_search.clear();
-        state.history_selected_id = None;
-    }
+    history_ops::on_history_window_closed(state, id);
     if state.settings_window_id == Some(id) {
         state.settings_window_id = None;
         state.settings_recording_hotkey = false;

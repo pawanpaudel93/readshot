@@ -28,24 +28,26 @@ pub(super) fn on_open_history(state: &mut App) -> Task<Message> {
     ])
 }
 
-/// `HistoryMsg::Closed`.
-pub(super) fn on_history_closed(state: &mut App) -> Task<Message> {
-    let id = state.history_window_id.take();
+/// The History window closed (`WindowMsg::Closed` for its id; its close
+/// button and any OS close land here). The one close path: it forgets
+/// the window and resets the whole browser, so a reopened History never
+/// inherits an armed delete or Clear All, a search, paging or a
+/// selection from the last session.
+pub(crate) fn on_history_window_closed(state: &mut App, id: iced::window::Id) {
+    if state.history_window_id != Some(id) {
+        return;
+    }
+    state.history_window_id = None;
     state.history_records.clear();
     crate::runtime::history_images::trim_history_image_cache();
     state.history_status = None;
     // An open from it that is still waiting is cancelled.
     cancel_history_open(state, "History was closed before it opened");
+    state.history_search.clear();
     state.history_selected_id = None;
     state.history_delete_pending = None;
+    state.history_clear_all_pending = false;
     state.history_page_limit = crate::app::HISTORY_PAGE_SIZE;
-    match id {
-        Some(id) => {
-            state.windows.forget(id);
-            window::close(id)
-        }
-        None => Task::none(),
-    }
 }
 
 /// `HistoryMsg::SearchChanged`.

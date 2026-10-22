@@ -7,6 +7,7 @@ use super::*;
 
 pub(crate) mod actions;
 mod browse;
+pub(crate) use browse::on_history_window_closed;
 mod records;
 
 /// Every [`HistoryMsg`]: `update` hands each `Message::History` here.
@@ -35,7 +36,6 @@ pub(crate) fn handle_history_message(state: &mut App, message: HistoryMsg) -> Ta
             Task::batch([window::gain_focus(id), focus_history_search()])
         }
         HistoryMsg::ListLoaded(result) => records::on_list_loaded(state, result),
-        HistoryMsg::Closed => browse::on_history_closed(state),
         HistoryMsg::StatusDismissed => {
             state.history_status = None;
             Task::none()

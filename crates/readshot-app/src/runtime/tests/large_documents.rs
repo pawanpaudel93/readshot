@@ -3038,8 +3038,11 @@ fn a_deferred_open_asks_before_replacing_unsaved_work() {
 fn a_deferred_open_is_cancelled_when_history_closed() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+    let history = iced::window::Id::unique();
+    app.windows.register(history, WindowKind::History);
+    app.history_window_id = Some(history);
     app.awaiting_reopen = Some(record.id);
-    let _ = update(&mut app, Message::History(HistoryMsg::Closed));
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(history)));
     let _ = update(
         &mut app,
         Message::History(HistoryMsg::ReopenedAfterSync {

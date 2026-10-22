@@ -642,8 +642,6 @@ pub enum HistoryMsg {
     /// history browser. `Err` toasts an error and leaves the list
     /// empty.
     ListLoaded(Result<Vec<readshot_core::CaptureRecord>, String>),
-    /// User closed the history browser window.
-    Closed,
     /// User typed in the history browser's search box. Empty string
     /// resets to "show every record".
     SearchChanged(String),

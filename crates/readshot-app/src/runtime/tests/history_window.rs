@@ -352,6 +352,9 @@ fn closing_history_resets_the_browser() {
         Message::History(HistoryMsg::SearchChanged("primary".into())),
     );
     app.history_status = Some(Status::new(StatusTone::Notice, "x"));
+    app.history_delete_pending = Some(newer.id);
+    app.history_clear_all_pending = true;
+    app.history_page_limit = crate::app::HISTORY_PAGE_SIZE * 3;
     assert_eq!(app.history_selected_id, Some(newer.id));
 
     let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
@@ -361,17 +364,25 @@ fn closing_history_resets_the_browser() {
     assert!(app.history_search.is_empty());
     assert_eq!(app.history_selected_id, None);
     assert!(app.history_status.is_none());
+    assert_eq!(
+        app.history_delete_pending, None,
+        "an armed delete is dropped"
+    );
+    assert!(
+        !app.history_clear_all_pending,
+        "an armed Clear All is dropped"
+    );
+    assert_eq!(app.history_page_limit, crate::app::HISTORY_PAGE_SIZE);
 
     assert!(
         history_key_message(id, &Key::Character("w".into()), command_modifiers(), true).is_none()
     );
 }
 
-/// HI-26 / HI-15, bug: Clear All armed with ⇧⌘⌫ stays armed after the
+/// HI-26 / HI-15 (B-C1): Clear All armed with ⇧⌘⌫ is disarmed when the
 /// window is closed with its close button, so after reopening History a
-/// single ⇧⌘⌫ deletes every capture, without the confirm step.
+/// single ⇧⌘⌫ only arms it again and deletes nothing.
 #[tokio::test]
-#[ignore = "bug: History's close does not disarm Clear All, so one ⇧⌘⌫ after a reopen wipes History"]
 async fn reopening_history_never_keeps_clear_all_armed() {
     let (_dir, store) = saved_store();
     for _ in 0..2 {
