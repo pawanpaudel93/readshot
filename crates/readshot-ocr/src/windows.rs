@@ -76,9 +76,16 @@ impl OCREngine for WindowsMediaOcrEngine {
         let async_op = engine
             .RecognizeAsync(&bitmap)
             .map_err(|e| OCRError::Backend(format!("RecognizeAsync: {e}")))?;
+        // A second reference to the same operation, to cancel it on a
+        // timeout: dropping the awaited future only abandons it, which
+        // would leave the recognition (and its bitmap) running.
+        let pending = async_op.clone();
         let result = crate::deadline::with_deadline(async_op, WINDOWS_OCR_TIMEOUT)
             .await
             .map_err(|_| {
+                // Best-effort: an operation that finished meanwhile
+                // ignores Cancel.
+                let _ = pending.Cancel();
                 OCRError::Backend(format!(
                     "Windows OCR timed out after {WINDOWS_OCR_TIMEOUT:?}; the OS text-recognition call did not return"
                 ))
