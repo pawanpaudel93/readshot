@@ -1388,7 +1388,7 @@ pub struct ScrollSession {
     /// session when ready.
     pub no_motion_count: u32,
     /// Consecutive frames the judge couldn't place against the last
-    /// accepted one ([`crate::runtime::scroll::SCROLL_TOO_FAST_AFTER`]
+    /// accepted one (`runtime::scroll::SCROLL_TOO_FAST_AFTER`
     /// of them show the "scrolled too fast" hint); reset when a frame
     /// is accepted.
     pub unplaced_in_a_row: u32,
