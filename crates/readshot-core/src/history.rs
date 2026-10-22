@@ -890,14 +890,24 @@ impl FsHistoryStore {
     /// fully written and fsynced by `stage_image`, so the rename can't
     /// leave a torn image. A missing staged thumbnail removes the old one
     /// (never left showing a previous image); `list` backfills it.
+    ///
+    /// For a redacted image the old thumbnail is removed **first**: if it
+    /// can't be (locked, read-only, a sharing violation), nothing is
+    /// changed and this fails, so the record stays withheld rather than
+    /// landing with a thumbnail of what it hides. (Without that, a
+    /// thumbnail neither replaced nor removed would be served once the
+    /// record stopped being pending.)
     fn place_staged(
         &self,
         record: &CaptureRecord,
         staged: &StagedImage,
     ) -> Result<(), HistoryError> {
         let abs_png = self.root.join(Self::png_path(record));
-        fs::rename(&staged.png, &abs_png)?;
         let abs_thumb = self.root.join(Self::thumbnail_path(record));
+        if record.redacted {
+            remove_if_exists(&abs_thumb)?;
+        }
+        fs::rename(&staged.png, &abs_png)?;
         let thumb_placed = staged
             .thumb
             .as_ref()
@@ -3067,6 +3077,49 @@ mod tests {
         );
         let now = decode(&fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap());
         assert_ne!(now, landed, "the finer pixelate was kept");
+    }
+
+    /// Make `r`'s thumbnail impossible to replace or remove (a non-empty
+    /// directory in its place: rename and unlink both fail on every OS).
+    fn pin_thumbnail(s: &FsHistoryStore, r: &CaptureRecord) {
+        let thumb = s.root().join(FsHistoryStore::thumbnail_path(r));
+        let _ = fs::remove_file(&thumb);
+        fs::create_dir_all(&thumb).unwrap();
+        fs::write(thumb.join("pinned"), b"x").unwrap();
+    }
+
+    /// Fix-7 review I-3: a redaction whose old thumbnail can be neither
+    /// replaced nor removed never lands: the record stays withheld (no
+    /// thumbnail served), rather than serving the pre-redaction one.
+    #[test]
+    fn a_scrub_whose_thumbnail_cant_be_replaced_stays_withheld() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        pin_thumbnail(&s, &r);
+        let _ = s.rewrite(&scrubbed_of(&r), &black_png(4, 4).1);
+        let stored = s.read_sidecar(&r).unwrap().unwrap();
+        assert!(
+            stored.scrub_pending,
+            "landed with the pre-redaction thumbnail in place"
+        );
+    }
+
+    /// Fix-7 review I-3: the same for a pending scrub finished by
+    /// recovery.
+    #[test]
+    fn a_recovery_whose_thumbnail_cant_be_replaced_stays_withheld() {
+        let (_dir, s) = store();
+        let r = record_at(Utc::now());
+        s.save(&r, &valid_png(4, 4)).unwrap();
+        pin_thumbnail(&s, &r);
+        assert!(s.begin_scrub(&scrubbed_of(&r)).unwrap());
+        s.finish_pending_scrubs();
+        let stored = s.read_sidecar(&r).unwrap().unwrap();
+        assert!(
+            stored.scrub_pending,
+            "finished with the pre-redaction thumbnail in place"
+        );
     }
 
     /// Redactions that can't be placed on the set-aside image (another
