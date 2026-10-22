@@ -474,6 +474,11 @@ pub enum CliError {
     InvalidRect { got: String, reason: String },
     #[error("uninstall failed: {0}")]
     Uninstall(String),
+    #[error(
+        "Readshot is running. Quit Readshot (its menu-bar or tray menu, Quit Readshot), \
+         then run the uninstall again"
+    )]
+    AppRunning,
 }
 
 /// Map [`CliError`] to a stable exit code so callers (CI scripts,
@@ -490,6 +495,7 @@ pub fn exit_code(err: &CliError) -> i32 {
         CliError::InvalidInput(_) | CliError::InvalidRect { .. } => 64, // EX_USAGE
         CliError::Io(_) | CliError::Image(_) | CliError::Clipboard(_) => 74, // EX_IOERR
         CliError::Uninstall(_) => 74,                            // EX_IOERR
+        CliError::AppRunning => 75,                              // EX_TEMPFAIL
     }
 }
 
@@ -923,6 +929,9 @@ fn run_uninstall(
     if plan.is_empty() {
         return Ok(());
     }
+    // A running app keeps its state in memory and would write
+    // preferences and History again after the steps (a purge included).
+    uninstall_allowed(app_is_running(), dry_run)?;
 
     if must_prompt_before_uninstall(yes, std::io::stdin().is_terminal())? {
         // Conventional prompt: default is No, `y` / `yes` confirms.
@@ -979,6 +988,54 @@ fn run_uninstall(
         crate::uninstall::completion_message(&plan, purge)
     )?;
     Ok(())
+}
+
+/// Whether an uninstall may run: not while the app runs (it could
+/// recreate what the steps remove), except a dry run, which changes
+/// nothing.
+fn uninstall_allowed(app_running: bool, dry_run: bool) -> Result<(), CliError> {
+    if app_running && !dry_run {
+        Err(CliError::AppRunning)
+    } else {
+        Ok(())
+    }
+}
+
+/// Whether the Readshot app is running for this user. macOS: Launch
+/// Services knows it by bundle id (`lsappinfo`; this CLI process is not
+/// a registered app, so it never counts). Windows and Linux: the app
+/// holds the single-instance lock. Unknown counts as not running.
+fn app_is_running() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/lsappinfo")
+            .args(["find", &format!("bundleid={}", crate::uninstall::BUNDLE_ID)])
+            .output()
+            .map(|o| lsappinfo_finds_app(&String::from_utf8_lossy(&o.stdout)))
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        crate::single_instance::lock_dir()
+            .filter(|d| d.exists())
+            .and_then(|d| instance_lock_held(&d).ok())
+            .unwrap_or(false)
+    }
+}
+
+/// `lsappinfo find` prints one `ASN:…` line per matching running app,
+/// nothing when there is none.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn lsappinfo_finds_app(output: &str) -> bool {
+    output.lines().any(|l| l.trim_start().starts_with("ASN:"))
+}
+
+/// Whether another process holds the single-instance lock in `dir`.
+/// Taking it briefly when free leaves no request (`None`).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn instance_lock_held(dir: &std::path::Path) -> std::io::Result<bool> {
+    use crate::single_instance::{acquire, Instance};
+    Ok(matches!(acquire(dir, None)?, Instance::Secondary))
 }
 
 trait ClipboardSink {
@@ -2171,6 +2228,39 @@ mod tests {
             assert!(help.contains("primary display"), "{sub}: {help}");
             assert!(!help.contains("first reported"), "{sub}");
         }
+    }
+
+    #[test]
+    fn uninstall_refuses_while_the_app_runs_except_a_dry_run() {
+        assert!(uninstall_allowed(false, false).is_ok());
+        assert!(
+            uninstall_allowed(true, true).is_ok(),
+            "a dry run changes nothing"
+        );
+        let err = uninstall_allowed(true, false).unwrap_err();
+        assert!(matches!(err, CliError::AppRunning));
+        assert_eq!(exit_code(&err), 75);
+        assert!(err.to_string().contains("Quit Readshot"), "{err}");
+    }
+
+    #[test]
+    fn lsappinfo_output_names_a_running_app() {
+        assert!(lsappinfo_finds_app("ASN:0x0-0x24024-\"Readshot\":\n"));
+        assert!(!lsappinfo_finds_app(""));
+        assert!(!lsappinfo_finds_app("\n"));
+    }
+
+    #[test]
+    fn a_held_instance_lock_means_the_app_runs() {
+        use crate::single_instance::{acquire, Instance};
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!instance_lock_held(dir.path()).unwrap());
+        let Instance::Primary(guard) = acquire(dir.path(), None).unwrap() else {
+            panic!("nobody held it");
+        };
+        assert!(instance_lock_held(dir.path()).unwrap());
+        drop(guard);
+        assert!(!instance_lock_held(dir.path()).unwrap());
     }
 
     #[test]

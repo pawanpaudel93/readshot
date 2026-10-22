@@ -276,6 +276,10 @@ settings, caches, HTTP and WebKit storage); without it, that data is
 left in place. The exit code is non-zero if any step fails, and every
 step is listed as `ok`, `skipped`, or `FAILED`.
 
+`uninstall` refuses to run while the Readshot app is running (exit code
+75): the app would write its preferences and History again afterwards.
+Quit Readshot from its menu first. A `--dry-run` still works.
+
 ## Timing, Cursor, and Window Options
 
 Use `--delay SECONDS` when capturing menus, popovers, hover states, or
@@ -327,6 +331,7 @@ option list.
 | 70 | OCR failed. |
 | 71 | Capture failed for another reason, including an interactive selector that failed or stopped unexpectedly. |
 | 74 | Reading or writing a file, decoding an image, the clipboard, or an `uninstall` step failed. |
+| 75 | `uninstall` refused because the Readshot app is running; quit it and try again. |
 | 77 | Screen Recording permission is missing, for interactive captures too. |
 
 Errors after parsing are printed to stderr as `readshot: <reason>`;
