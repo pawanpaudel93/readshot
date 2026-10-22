@@ -273,11 +273,38 @@ struct ScrubState {
 }
 
 /// A secured scrub's document frame (`CaptureRecord::geometry_id`) and
-/// redactions.
-type SecuredScrub = (Option<String>, Vec<readshot_core::Annotation>);
+/// redactions, and, while only its phase one is on disk, what that phase
+/// one recorded to draw (`None` once its image landed).
+type SecuredScrub = (
+    Option<String>,
+    Vec<readshot_core::Annotation>,
+    Option<Vec<readshot_core::Annotation>>,
+);
 
+/// `record`'s phase one as recorded (its image not landed yet).
 fn secured_key(record: &CaptureRecord) -> SecuredScrub {
-    (record.geometry_id.clone(), record.redactions.clone())
+    (
+        record.geometry_id.clone(),
+        record.redactions.clone(),
+        Some(
+            record
+                .pending_image
+                .as_ref()
+                .map(|p| p.bake.clone())
+                .unwrap_or_default(),
+        ),
+    )
+}
+
+/// Whether phase one for `record` is already on disk as it would be
+/// written now: the same redactions in the same frame, and either their
+/// image landed or the pending drawing is the same. Otherwise phase one
+/// runs again (so the pending record always holds the newest request).
+fn already_secured(secured: Option<&SecuredScrub>, record: &CaptureRecord) -> bool {
+    let want = secured_key(record);
+    secured.is_some_and(|(frame, redactions, bake)| {
+        *frame == want.0 && *redactions == want.1 && (bake.is_none() || *bake == want.2)
+    })
 }
 
 /// The frame id of a scrub's stored image when it is `crop` of the
@@ -361,6 +388,15 @@ impl Scrubs {
         let mut st = lock(&self.state);
         if st.latest.get(&id) == Some(&seq) {
             st.secured.insert(id, secured_key(record));
+        }
+    }
+
+    /// [`Self::mark_secured`] for a scrub whose image landed.
+    fn mark_landed(&self, id: readshot_core::Uuid, seq: u64, record: &CaptureRecord) {
+        let mut st = lock(&self.state);
+        if st.latest.get(&id) == Some(&seq) {
+            let (frame, redactions, _) = secured_key(record);
+            st.secured.insert(id, (frame, redactions, None));
         }
     }
 
@@ -482,7 +518,7 @@ fn apply_rewrite(
     match store.commit_rewrite(record, staged) {
         Ok(true) => {
             if record.redacted {
-                scrubs.mark_secured(id, job.seq, record);
+                scrubs.mark_landed(id, job.seq, record);
             } else {
                 scrubs.unredacted_landed(id, job.seq);
             }
@@ -501,8 +537,11 @@ fn apply_rewrite(
             Outcome::Missing
         }
         Err(e) => {
-            if record.redacted {
-                // On-disk state unknown: phase one is redone next time.
+            // On-disk state unknown: phase one is redone next time, for
+            // the newest request only (the gate is held; a newer one has
+            // its own): redoing an older one would put back what the user
+            // has since changed.
+            if record.redacted && !scrubs.is_stale(id, job.seq) {
                 lock(&scrubs.state).secured.remove(&id);
                 b.unsecured.insert(id, (job.seq, record.clone()));
             }
@@ -905,6 +944,13 @@ impl CaptureCoordinator {
             // of a reopened record would read it.
             // Redactions already in `base`: the image holds them baked.
             let already_redacted = !record.redactions.is_empty();
+            // Where the caller's editor says these redactions are in the
+            // other frames it knows (kept for phase one).
+            let other_frames = record
+                .pending_image
+                .take()
+                .map(|p| p.other_frames)
+                .unwrap_or_default();
             let shown: Vec<_> = record.redactions.iter().chain(&bake).cloned().collect();
             let magnified = readshot_core::scrub::magnified_redactions(&shown);
             record
@@ -915,7 +961,7 @@ impl CaptureCoordinator {
             // annotation baked with them), in the document frame before
             // any crop: should its image never land, phase one's record of
             // what to draw onto the stored image (`HistoryStore::begin_scrub`).
-            record.pending_image = Some(readshot_core::PendingImage {
+            record.pending_image = Some(Box::new(readshot_core::PendingImage {
                 geometry_id: record.geometry_id.clone(),
                 width: base.width(),
                 height: base.height(),
@@ -925,7 +971,9 @@ impl CaptureCoordinator {
                     .cloned()
                     .collect(),
                 already_redacted,
-            });
+                other_frames,
+                ..Default::default()
+            }));
         }
         // The stored image is `bake` rendered onto `base`: a baked Crop
         // makes it the crop. The record then describes that image, not the
@@ -1002,7 +1050,7 @@ impl CaptureCoordinator {
             let seq = next_rewrite_seq();
             st.latest.insert(id, seq);
             st.scrub_owners.insert(id, owner);
-            let phase_one = st.secured.get(&id) != Some(&secured_key(&record));
+            let phase_one = !already_secured(st.secured.get(&id), &record);
             (seq, phase_one)
         };
         let job = RewriteJob {
@@ -1377,7 +1425,7 @@ fn save_capture(
             let saved = history.commit_save(&scrubbed, staged);
             match &saved {
                 // A parked frame rewrite is not a scrub: nothing to mark.
-                Ok(()) if scrubbed.redacted => scrubs.mark_secured(record.id, job.seq, &scrubbed),
+                Ok(()) if scrubbed.redacted => scrubs.mark_landed(record.id, job.seq, &scrubbed),
                 Ok(()) => {}
                 Err(_) => {
                     b.parked.insert(record.id, job);
@@ -2689,6 +2737,82 @@ mod tests {
             "the other annotation"
         );
         assert_eq!(png.get_pixel(7, 0).0, [255, 255, 255, 255]);
+    }
+
+    /// Lands a redaction (`bake`) of a fresh 8×8 white record, then makes
+    /// every later rewrite fail.
+    fn landed_then_failing(
+        dir: &std::path::Path,
+        bake: Vec<readshot_core::Annotation>,
+    ) -> (CaptureRecord, Arc<FlakyStore>, CaptureCoordinator) {
+        let record = saved_record(dir);
+        let store = flaky(dir, 0);
+        let coord = history_coord(store.clone());
+        drop(coord.rewrite_history_as(Some(1), scrubbed(&record), Arc::new(white(8, 8)), bake));
+        coord.flush_history_updates();
+        store
+            .fail_rewrites
+            .store(1000, std::sync::atomic::Ordering::SeqCst);
+        (record, store, coord)
+    }
+
+    fn solid(x: f32, y: f32, w: f32, h: f32) -> readshot_core::Annotation {
+        readshot_core::Annotation::Rectangle {
+            rect: readshot_core::RectLike::new(x, y, w, h),
+            color: readshot_core::Rgba::OPAQUE_BLACK,
+            line_width: 0.0,
+            style: readshot_core::ShapeStyle {
+                fill: readshot_core::FillMode::Filled,
+                ..readshot_core::ShapeStyle::default()
+            },
+        }
+    }
+
+    fn black_pixels(img: &image::RgbaImage) -> usize {
+        img.pixels().filter(|p| p.0 == [0, 0, 0, 255]).count()
+    }
+
+    /// Fix-6 review P2: a redaction and a crop landed; a later edit by the
+    /// same session (an outline) fails, and the capture is reopened. Its
+    /// redaction is already in the stored (cropped) image: it is put back
+    /// as it was, never blacked out.
+    #[test]
+    fn a_failed_edit_after_a_landed_crop_keeps_the_image() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut bake = pixelate();
+        bake.push(readshot_core::Annotation::Crop {
+            rect: readshot_core::RectLike::new(0.0, 0.0, 7.0, 7.0),
+        });
+        let (record, store, coord) = landed_then_failing(dir.path(), bake.clone());
+        let landed = png_on_disk(&store.inner, &record).unwrap();
+        bake.push(readshot_core::Annotation::Rectangle {
+            rect: readshot_core::RectLike::new(5.0, 5.0, 1.0, 1.0),
+            color: readshot_core::Rgba::OPAQUE_BLACK,
+            line_width: 1.0,
+            style: readshot_core::ShapeStyle::default(),
+        });
+        drop(coord.rewrite_history_as(Some(1), scrubbed(&record), Arc::new(white(8, 8)), bake));
+        coord.settle_record_writes(record.id);
+        assert!(coord.finish_pending_scrub(record.id));
+        let png = png_on_disk(&store.inner, &record).unwrap();
+        assert_eq!(png, landed, "{} of 49 pixels black", black_pixels(&png));
+    }
+
+    /// A genuinely new redaction next to one already baked is still
+    /// enforced when its write fails: drawn where it is, the rest kept.
+    #[test]
+    fn a_new_redaction_next_to_a_baked_one_is_still_drawn() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (record, store, coord) = landed_then_failing(dir.path(), pixelate());
+        let mut bake = pixelate();
+        bake.push(solid(5.0, 5.0, 3.0, 3.0));
+        drop(coord.rewrite_history_as(Some(1), scrubbed(&record), Arc::new(white(8, 8)), bake));
+        coord.settle_record_writes(record.id);
+        assert!(coord.finish_pending_scrub(record.id));
+        let png = png_on_disk(&store.inner, &record).unwrap();
+        assert_eq!(png.get_pixel(1, 1).0, [0, 0, 0, 255], "the baked one");
+        assert_eq!(png.get_pixel(6, 6).0, [0, 0, 0, 255], "the new one");
+        assert_eq!(png.get_pixel(4, 6).0, [255, 255, 255, 255], "nothing else");
     }
 
     /// Never stores anything: every image fails to stage.

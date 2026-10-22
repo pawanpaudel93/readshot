@@ -836,3 +836,125 @@ fn a_withheld_record_hands_out_no_image() {
         );
     }
 }
+
+/// An app whose one 40×20 History record is seeded noise (every pixel's
+/// colour unique), with its editor open.
+fn noise_app() -> (
+    tempfile::TempDir,
+    Arc<GatedStore>,
+    App,
+    readshot_core::CaptureRecord,
+    image::RgbaImage,
+) {
+    let (dir, store, mut app, record) = history_app();
+    let img = noise(7, 40, 20);
+    store.delete(record.id).unwrap();
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+    store
+        .save(&record, &readshot_core::encode_png(&img).unwrap())
+        .unwrap();
+    app.history_records = store.list().unwrap();
+    let mut ed = crate::editor::EditorSession::from_history(img.clone(), record.clone());
+    let id = iced::window::Id::unique();
+    ed.window_id = Some(id);
+    app.windows.register(id, WindowKind::Editor);
+    app.editor = Some(ed);
+    (dir, store, app, record, img)
+}
+
+fn redact_and_sync(app: &mut App, a: Annotation) {
+    let coord = app.coordinator.clone();
+    let ed = app.editor.as_mut().unwrap();
+    ed.model.commit_annotation(a);
+    super::super::editor_ops::sync_editor_history(ed, &coord);
+}
+
+fn reopen(app: &mut App, store: &GatedStore, id: readshot_core::Uuid) {
+    let _ = update(app, Message::History(HistoryMsg::OpenInEditor(id)));
+    let msg = start_load(app, id)
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap();
+    store.fail_next_commits(0);
+    let _ = update(app, msg);
+    assert!(app.editor.is_some(), "{:?}", app.history_status);
+    app.coordinator.drain_history_writes();
+}
+
+fn solid_at(x: f32, y: f32, w: f32, h: f32) -> Annotation {
+    Annotation::Rectangle {
+        rect: RectLike::new(x, y, w, h),
+        color: Rgba::OPAQUE_BLACK,
+        line_width: 0.0,
+        style: readshot_core::ShapeStyle {
+            fill: readshot_core::FillMode::Filled,
+            ..Default::default()
+        },
+    }
+}
+
+/// The colours under `rect` in the editor's present document.
+fn colours_under(app: &App, rect: RectLike) -> Vec<image::Rgba<u8>> {
+    let base = app.editor.as_ref().unwrap().model.base();
+    let (x0, y0) = (rect.x as u32, rect.y as u32);
+    (y0..y0 + rect.height as u32)
+        .flat_map(|y| (x0..x0 + rect.width as u32).map(move |x| (x, y)))
+        .map(|(x, y)| *base.get_pixel(x, y))
+        .collect()
+}
+
+fn stored_image(store: &GatedStore, id: readshot_core::Uuid) -> image::RgbaImage {
+    let png = FsHistoryStore::abs_png_path(store.inner.root(), &store.stored(id));
+    image::open(png).unwrap().to_rgba8()
+}
+
+/// Fix-6 review P1: the session that redacted (it landed) rotates; that
+/// write fails and the capture is reopened. Its redaction is already in
+/// the stored image: the capture comes back as it was stored, never
+/// blacked out, and the redaction is still there.
+#[test]
+fn a_failed_rotate_after_a_landed_redaction_keeps_the_image() {
+    let (_dir, store, mut app, record, img) = noise_app();
+    let secret = colours_under(&app, RectLike::new(2.0, 2.0, 6.0, 6.0));
+    redact_and_sync(&mut app, solid_at(2.0, 2.0, 6.0, 6.0));
+    app.coordinator.drain_history_writes();
+    store.fail_next_commits(1000);
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
+    );
+    reopen(&mut app, &store, record.id);
+    let stored = stored_image(&store, record.id);
+    assert_eq!(stored.dimensions(), (40, 20));
+    assert_eq!(
+        stored.get_pixel(30, 15),
+        img.get_pixel(30, 15),
+        "blacked out"
+    );
+    assert!(
+        !stored.pixels().any(|p| secret.contains(p)),
+        "the redaction is gone"
+    );
+}
+
+/// A redaction drawn after that rotate (genuinely new, in another frame
+/// than the stored image) is still enforced when the write fails and the
+/// capture is reopened: none of the colours it hid is stored.
+#[test]
+fn a_new_redaction_after_a_failed_rotate_is_still_hidden() {
+    let (_dir, store, mut app, record, _img) = noise_app();
+    let first = colours_under(&app, RectLike::new(2.0, 2.0, 6.0, 6.0));
+    redact_and_sync(&mut app, solid_at(2.0, 2.0, 6.0, 6.0));
+    app.coordinator.drain_history_writes();
+    store.fail_next_commits(1000);
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
+    );
+    let second = colours_under(&app, RectLike::new(10.0, 25.0, 5.0, 5.0));
+    redact_and_sync(&mut app, solid_at(10.0, 25.0, 5.0, 5.0));
+    reopen(&mut app, &store, record.id);
+    let stored = stored_image(&store, record.id);
+    assert!(!stored
+        .pixels()
+        .any(|p| first.contains(p) || second.contains(p)));
+}

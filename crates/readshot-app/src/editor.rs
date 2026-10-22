@@ -1224,6 +1224,15 @@ pub struct EditorSession {
     pub history_geometry_base: Option<String>,
     /// The frame History's image was last written in by this session.
     pub history_frame_written: HistoryFrame,
+    /// Every document frame this session opened in or wrote to History
+    /// (newest last, a few kept), with its geometry: a scrub request says
+    /// where its redactions are in each, so a stored image in one of them
+    /// can tell which are already baked into it (never covering a
+    /// capture for a redaction that already landed).
+    pub history_frames: Vec<(
+        Option<String>,
+        std::sync::Arc<readshot_core::document::DocGeometry>,
+    )>,
     /// Outcome of the newest queued History rewrite, taken by the runtime
     /// and turned into `TextPanelMsg::HistoryWritten`.
     pub history_write:
@@ -1445,8 +1454,10 @@ impl EditorSession {
             history_nonce: readshot_core::Uuid::new_v4(),
             history_geometry_base: None,
             history_frame_written: HistoryFrame::Known(None),
+            history_frames: Vec::new(),
             history_write: None,
         }
+        .with_opened_frame()
     }
 
     pub fn from_history(image: image::RgbaImage, record: CaptureRecord) -> Self {
@@ -1530,8 +1541,20 @@ impl EditorSession {
             history_nonce: readshot_core::Uuid::new_v4(),
             history_frame_written: HistoryFrame::Known(history_geometry_base.clone()),
             history_geometry_base,
+            history_frames: Vec::new(),
             history_write: None,
         }
+        .with_opened_frame()
+    }
+
+    /// Remember the frame the session opened in (its image is what History
+    /// holds until this session writes).
+    fn with_opened_frame(mut self) -> Self {
+        self.history_frames = vec![(
+            self.history_geometry_base.clone(),
+            std::sync::Arc::clone(self.model.geometry()),
+        )];
+        self
     }
 
     pub fn actual_size_zoom(&self) -> EditorZoom {

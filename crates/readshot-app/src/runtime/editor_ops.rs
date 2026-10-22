@@ -548,6 +548,13 @@ pub(crate) fn write_editor_history(
     record.redactions = inherited.unwrap_or_default();
     // A restore of a never-scrubbed image is a clean, unredacted record.
     record.redactions_complete = record.redacted && complete;
+    // Where this request's redactions are in every frame this session
+    // wrote or opened in (see `EditorSession::history_frames`).
+    record.pending_image = Some(Box::new(readshot_core::PendingImage {
+        other_frames: redactions_in_known_frames(ed, &frame, &record.redactions),
+        ..Default::default()
+    }));
+    remember_frame(ed, &frame);
     let annotations = ed.model.annotations();
     let known = crate::editor::HistoryFrame::Known(frame);
     if readshot_core::scrub::has_redaction(annotations) {
@@ -587,6 +594,51 @@ pub(crate) fn write_editor_history(
         // several parts, or text masked since the editor opened.
         record.ocr_text = None;
         coord.update_history_async(record);
+    }
+}
+
+/// The editor's redactions (drawn, and `inherited`: those already in its
+/// base) placed in each frame it knows other than `present_frame`.
+fn redactions_in_known_frames(
+    ed: &crate::editor::EditorSession,
+    present_frame: &Option<String>,
+    inherited: &[readshot_core::Annotation],
+) -> Vec<readshot_core::PendingImage> {
+    let present = ed.model.geometry();
+    let redactions: Vec<_> = ed
+        .model
+        .drawn_annotations()
+        .into_iter()
+        .chain(inherited.iter().cloned())
+        .filter(|a| a.is_redaction())
+        .collect();
+    if redactions.is_empty() {
+        return Vec::new();
+    }
+    ed.history_frames
+        .iter()
+        .filter(|(id, _)| id != present_frame)
+        .map(|(id, g)| {
+            let (width, height) = g.size();
+            readshot_core::PendingImage {
+                geometry_id: id.clone(),
+                width,
+                height,
+                bake: readshot_core::document::remap_annotations(present, g, &redactions),
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
+/// Remember `frame` (the present geometry) as one this session wrote.
+fn remember_frame(ed: &mut crate::editor::EditorSession, frame: &Option<String>) {
+    const KEPT: usize = 16;
+    ed.history_frames.retain(|(id, _)| id != frame);
+    ed.history_frames
+        .push((frame.clone(), std::sync::Arc::clone(ed.model.geometry())));
+    if ed.history_frames.len() > KEPT {
+        ed.history_frames.remove(0);
     }
 }
 
