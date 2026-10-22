@@ -64,10 +64,22 @@ pub(super) fn on_pin_key_pressed(
     // focused window is actually a live pin. Copy the opacity out
     // so the immutable pin borrow is dropped before `update`
     // needs `&mut state`.
-    let Some(opacity) = state.pins.get(&window).map(|pin| pin.opacity) else {
+    let Some((opacity, locked)) = state.pins.get(&window).map(|pin| (pin.opacity, pin.locked))
+    else {
         return Task::none();
     };
-    match pin_key_action(&key, modifiers) {
+    let action = pin_key_action(&key, modifiers);
+    // Locked means fixed in place and look: no nudge, no opacity, the
+    // same as with the mouse. Close and unlock still work.
+    if locked
+        && matches!(
+            action,
+            Some(PinKeyAction::OpacityUp | PinKeyAction::OpacityDown | PinKeyAction::Nudge(..))
+        )
+    {
+        return Task::none();
+    }
+    match action {
         Some(PinKeyAction::Close) => update(
             state,
             Message::Editor(EditorMsg::Pin(PinMsg::ClosePressed(window))),
@@ -120,7 +132,7 @@ pub(super) fn on_pin_opacity_changed(
     id: iced::window::Id,
     opacity: f32,
 ) -> Task<Message> {
-    if let Some(pin) = state.pins.get_mut(&id) {
+    if let Some(pin) = state.pins.get_mut(&id).filter(|pin| !pin.locked) {
         pin.opacity = opacity.clamp(0.2, 1.0);
     }
     Task::none()

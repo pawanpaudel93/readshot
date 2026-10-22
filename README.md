@@ -89,8 +89,9 @@ find it later by searching the text inside the screenshot.
   a redacted capture on Windows or Linux (their OCR gives no word
   positions to mask by); History says "Text hidden" for it.
 - Pin captures as always-on-top reference windows. Double-click a pin
-  (or press `L`) to lock or unlock it; a locked pin can't be dragged.
-  Opacity goes from 20 % to 100 % in steps of 5 %.
+  (or press `L`) to lock or unlock it; a locked pin can't be moved
+  (by dragging or the arrow keys) and keeps its opacity. Opacity goes
+  from 20 % to 100 % in steps of 5 %.
 - In-app updates via "Check for Updates…" in the menu bar.
 - Clean uninstall from Settings, `readshot uninstall`, or the installer
   script — including the login item, CLI links, and permission.

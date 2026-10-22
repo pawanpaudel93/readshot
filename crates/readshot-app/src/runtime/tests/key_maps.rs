@@ -511,3 +511,42 @@ fn history_command_chords_work_with_the_platform_command_key() {
         )))
     ));
 }
+
+/// A locked pin can't be moved or have its opacity changed from the
+/// keyboard any more than with the mouse; `L` and Esc still work.
+#[test]
+fn a_locked_pin_ignores_nudge_and_opacity_keys() {
+    use iced::keyboard::{key::Named, Key, Modifiers};
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let id = iced::window::Id::unique();
+    let mut pin = crate::app::PinState::new(iced::widget::image::Handle::from_rgba(
+        1,
+        1,
+        vec![0, 0, 0, 255],
+    ));
+    pin.locked = true;
+    let before = pin.opacity;
+    app.pins.insert(id, pin);
+    let key = |app: &mut App, key: Key| {
+        update(
+            app,
+            Message::Editor(EditorMsg::Pin(PinMsg::KeyPressed {
+                window: id,
+                key,
+                modifiers: Modifiers::empty(),
+            })),
+        )
+    };
+    assert_eq!(key(&mut app, Key::Named(Named::ArrowLeft)).units(), 0);
+    let _ = key(&mut app, Key::Character("-".into()));
+    assert_eq!(app.pins[&id].opacity, before);
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Pin(PinMsg::OpacityChanged(id, 0.3))),
+    );
+    assert_eq!(app.pins[&id].opacity, before);
+    let _ = key(&mut app, Key::Character("l".into()));
+    assert!(!app.pins[&id].locked);
+    let _ = key(&mut app, Key::Character("-".into()));
+    assert!(app.pins[&id].opacity < before);
+}
