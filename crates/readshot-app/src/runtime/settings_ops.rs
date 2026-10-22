@@ -636,8 +636,9 @@ fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
     state.preferences.launch_at_login = false;
     let prefs_path = state.preferences_path.clone();
     // Inert from now, before any step runs: nothing done meanwhile can
-    // write what the steps remove.
-    let close_others = go_inert(state);
+    // write what the steps remove. Kept History first gets every
+    // editor's owed writes (the flush below waits for them).
+    let close_others = go_inert(state, !purge);
     if purge {
         // A History write stuck past the flush below (bounded at 5 s)
         // can still finish after the purge; it must fail, not make the
@@ -723,7 +724,7 @@ fn enter_uninstalled(
     program_removed: bool,
     failed: &[String],
 ) -> Task<Message> {
-    let close_others = go_inert(state);
+    let close_others = go_inert(state, !purge);
     state.settings_uninstall_result = Some(if failed.is_empty() {
         Status::new(
             StatusTone::Warning,
@@ -739,9 +740,25 @@ fn enter_uninstalled(
 }
 
 /// Make Readshot inert for the rest of the process (`App::uninstalled`):
-/// shortcuts released, other windows closed without a History sync,
-/// Open at Login off in memory. Idempotent.
-fn go_inert(state: &mut App) -> Task<Message> {
+/// shortcuts released, other windows closed, Open at Login off in
+/// memory. Idempotent. With `keep_history` (no purge) every open or
+/// retiring editor is finished first, so what it owes History, a
+/// redaction above all, is queued (and flushed before the steps run)
+/// rather than dropped: a kept record never stays unredacted. Under a
+/// purge they are dropped: History is about to be deleted.
+fn go_inert(state: &mut App, keep_history: bool) -> Task<Message> {
+    if keep_history {
+        let coord = state.coordinator.clone();
+        let editors: Vec<_> = state
+            .editor
+            .take()
+            .into_iter()
+            .chain(std::mem::take(&mut state.retiring_editors))
+            .collect();
+        for ed in editors {
+            super::compose_jobs::finish_editor_now(ed, &coord);
+        }
+    }
     state.uninstalled = true;
     state.settings_uninstall_pending = false;
     state.settings_recording_hotkey = false;

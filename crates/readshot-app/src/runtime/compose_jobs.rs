@@ -1060,14 +1060,10 @@ pub(crate) fn retire_editor(state: &mut App, mut ed: EditorSession) -> Task<Mess
 /// the user asked to open this editor's record meanwhile and no other
 /// editor of it is still finishing, that open now goes ahead, from disk,
 /// once these writes land ([`super::history_ops::load_when_finished`]).
-fn finish_retiring(state: &mut App, mut ed: EditorSession) -> Task<Message> {
+fn finish_retiring(state: &mut App, ed: EditorSession) -> Task<Message> {
     let coord = state.coordinator.clone();
-    settle_all(&mut ed, &coord);
-    cancel_editor_previews(&mut ed);
-    commit_pending_editor_text(&mut ed, &coord);
-    super::editor_ops::sync_owed_history(&mut ed, &coord);
     let record = ed.source_record.as_ref().map(|r| r.id);
-    drop_editor(ed);
+    finish_editor_now(ed, &coord);
     let still_finishing = |state: &App, id| {
         state
             .retiring_editors
@@ -1080,6 +1076,23 @@ fn finish_retiring(state: &mut App, mut ed: EditorSession) -> Task<Message> {
         }
         _ => Task::none(),
     }
+}
+
+/// Finish an editor here and now: settle its pending steps (waiting for
+/// a compose still running), commit what is pending, queue its owed
+/// History sync (redactions through the store's fail-closed scrub), and
+/// drop it. Only for when the editor can't wait for its worker: retiring
+/// lands here once nothing composes; an uninstall that keeps History
+/// ([`super::settings_ops`]'s `go_inert`) must not drop owed writes.
+pub(crate) fn finish_editor_now(
+    mut ed: EditorSession,
+    coord: &crate::coordinator::CaptureCoordinator,
+) {
+    settle_all(&mut ed, coord);
+    cancel_editor_previews(&mut ed);
+    commit_pending_editor_text(&mut ed, coord);
+    super::editor_ops::sync_owed_history(&mut ed, coord);
+    drop_editor(ed);
 }
 
 /// Let go of an editor nobody will use again (discarded, pinned or

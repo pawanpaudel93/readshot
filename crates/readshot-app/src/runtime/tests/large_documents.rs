@@ -3113,3 +3113,58 @@ fn reopening_the_open_record_asks_before_dropping_beautify() {
     assert!(app.editor.is_none(), "closed (retired) for the reopen");
     assert_eq!(app.awaiting_reopen, Some(record.id));
 }
+
+/// Final review c1: a Settings uninstall that keeps History must not drop
+/// an editor whose redaction is still owed to History (here behind a
+/// large rotate still composing, its editor already closed and retiring).
+/// The kept record ends redacted, or withheld while its scrub is pending;
+/// never left unredacted.
+#[test]
+fn an_uninstall_that_keeps_history_lands_a_redaction_still_composing() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(readshot_core::FsHistoryStore::new(dir.path().join("h")));
+    let mut app = build_app_with_history(Arc::new(FakePermissions::granted()), store.clone());
+    let img = ramp(40, 20);
+    let record = readshot_core::CaptureRecord::new(chrono::Utc::now(), 40, 20, "d");
+    store
+        .save(&record, &readshot_core::encode_png(&img).unwrap())
+        .unwrap();
+    let mut ed = async_compose(crate::editor::EditorSession::from_history(img, record));
+    let id = iced::window::Id::unique();
+    ed.window_id = Some(id);
+    app.windows.register(id, WindowKind::Editor);
+    app.editor = Some(ed);
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
+    );
+    // The redaction is drawn while the rotate composes: its History sync
+    // waits for the step to land.
+    {
+        let ed = app.editor.as_mut().unwrap();
+        ed.model.commit_annotation(Annotation::Blur {
+            rect: RectLike::new(4.0, 4.0, 10.0, 10.0),
+            radius: 4.0,
+        });
+        ed.history_sync_owed = true;
+    }
+    app.coordinator.flush_history_updates();
+    assert!(
+        !store.list().unwrap()[0].redacted,
+        "the redaction isn't in History yet"
+    );
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
+    assert_eq!(app.retiring_editors.len(), 1, "still composing");
+
+    app.settings_uninstall_purge = false;
+    app.settings_uninstall_pending = true;
+    let _ = update(&mut app, Message::Settings(SettingsMsg::UninstallConfirmed));
+    assert!(app.uninstalled);
+    assert!(app.retiring_editors.is_empty() && app.editor.is_none());
+    app.coordinator.flush_history_updates();
+    let stored = store.list().unwrap().into_iter().next().unwrap();
+    assert!(
+        stored.redacted || stored.scrub_pending,
+        "the kept record was left unredacted"
+    );
+}
