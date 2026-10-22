@@ -32,7 +32,7 @@ use global_hotkey::GlobalHotKeyEvent;
 use iced::window;
 use iced::{Color, Element, Subscription, Task, Theme};
 
-use readshot_capture::{display_local_bounds, CaptureRequest};
+use readshot_capture::CaptureRequest;
 use readshot_core::Preferences;
 use readshot_ui::SettingsMessage;
 
@@ -523,7 +523,6 @@ pub fn title(state: &App, id: window::Id) -> String {
         Some(WindowKind::Pin) => "Readshot — Pin".into(),
         Some(WindowKind::History) => "Readshot — History".into(),
         Some(WindowKind::Settings) => "Readshot — Settings".into(),
-        Some(WindowKind::CliTools) => "Readshot — Command Line Tools".into(),
         Some(WindowKind::ScrollHud) => "Readshot — Scrolling Capture".into(),
         Some(WindowKind::ScrollRegion) => "Readshot — Capture Region".into(),
     }
@@ -764,8 +763,8 @@ fn editor_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
         // ⌘S / Ctrl+S = Save. Iced 0.14's `event::listen_with` is the
         // window-agnostic event tap; we filter to KeyPressed events
         // and only react when the editor window is the focused one
-        // (the canvas gets first chance to handle Escape; unhandled
-        // Escape falls through here as the advertised Discard shortcut).
+        // (the canvas captures Escape; Esc is always a cancel, never
+        // Discard, which is ⌘W).
         subs.push(iced::event::listen_with(|event, status, window| {
             use iced::event::Status;
             use iced::keyboard::Event as KbEvent;
@@ -1272,7 +1271,6 @@ pub fn view(state: &App, id: window::Id) -> Element<'_, Message> {
         Some(WindowKind::Pin) => pin_view(state, id),
         Some(WindowKind::History) => history_view(state),
         Some(WindowKind::Settings) => settings_view(state),
-        Some(WindowKind::CliTools) => cli_tools_view(state),
         Some(WindowKind::ScrollHud) => scroll_hud_view(state),
         Some(WindowKind::ScrollRegion) => scroll_region_view(state),
     }
@@ -1295,43 +1293,6 @@ fn show_or_focus_welcome(state: &mut App) -> Task<Message> {
     let (id, open_task) = window::open(welcome_window_settings());
     register_window(state, id, WindowKind::Welcome);
     open_task.map(|a| Message::Welcome(WelcomeMsg::WindowReady(a)))
-}
-
-/// Async helper: capture the primary display's full bounds and write
-/// the PNG to `~/Desktop/Readshot-<timestamp>.png`. Returns the saved
-/// path on success.
-async fn capture_primary_to_desktop(
-    coord: CaptureCoordinator,
-    format: readshot_core::ExportFormat,
-) -> Result<PathBuf, CaptureRunError> {
-    let displays = coord.list_displays().await?;
-    let primary = pick_primary(&displays).ok_or(CaptureRunError::NoDisplays)?;
-    let req = CaptureRequest {
-        display_id: primary.id.clone(),
-        rect: display_local_bounds(primary),
-        scale: primary.scale,
-        hide_cursor: true,
-    };
-    capture_request_to_desktop(coord, req, format).await
-}
-
-async fn capture_request_to_desktop(
-    coord: CaptureCoordinator,
-    req: CaptureRequest,
-    format: readshot_core::ExportFormat,
-) -> Result<PathBuf, CaptureRunError> {
-    let img = coord.capture_region(req).await?;
-    save_to_desktop(&img, format)
-}
-
-#[cfg(test)]
-async fn capture_request_to_dir(
-    coord: CaptureCoordinator,
-    req: CaptureRequest,
-    dir: &Path,
-) -> Result<PathBuf, CaptureRunError> {
-    let img = coord.capture_region(req).await?;
-    save_to_dir(&img, dir, readshot_core::ExportFormat::Png)
 }
 
 async fn capture_region_to_image(
@@ -1676,27 +1637,6 @@ fn history_record_for_capture(
         img.height(),
         display_id.to_string(),
     ))
-}
-
-fn save_to_desktop(
-    img: &image::RgbaImage,
-    format: readshot_core::ExportFormat,
-) -> Result<PathBuf, CaptureRunError> {
-    let dir = directories::UserDirs::new()
-        .and_then(|d| d.desktop_dir().map(PathBuf::from))
-        .unwrap_or_else(std::env::temp_dir);
-    save_to_dir(img, &dir, format)
-}
-
-fn save_to_dir(
-    img: &image::RgbaImage,
-    dir: &Path,
-    format: readshot_core::ExportFormat,
-) -> Result<PathBuf, CaptureRunError> {
-    let stamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S").to_string();
-    let path = dir.join(format!("Readshot-{stamp}.{}", format.extension()));
-    readshot_core::export::save(img, &path, format)?;
-    Ok(path)
 }
 
 /// Open a native file-save dialog seeded at `seed_dir` (or

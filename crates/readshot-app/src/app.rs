@@ -56,8 +56,6 @@ pub enum WindowKind {
     /// Single instance — re-opening focuses the existing window
     /// rather than spawning a duplicate.
     Settings,
-    /// Command-line setup instructions window.
-    CliTools,
     /// Heads-up display shown while a scrolling-capture session is
     /// active. Floats above the user's content with a frame counter
     /// and a Stop button so the user can end the session manually.
@@ -812,14 +810,6 @@ pub enum SettingsMsg {
         /// only leaves the field.
         captured: bool,
     },
-    /// User asked for the command-line setup instructions window.
-    OpenCliToolsRequested,
-    /// First `view` call after the command-line setup window opens.
-    CliToolsWindowReady(iced::window::Id),
-    /// User clicked Copy Commands for one shell in the command-line setup window.
-    CliToolsCopyRequested(crate::cli_tools::Shell),
-    /// Command-line setup instructions were copied, or failed to copy.
-    CliToolsCopyDone(crate::cli_tools::Shell, Result<(), String>),
 }
 
 /// Scrolling-capture messages: the HUD and region windows, the frame
@@ -983,8 +973,6 @@ pub enum TickMsg {
 /// Handled by `runtime::capture_ops::handle_capture_message`.
 #[derive(Clone, Debug)]
 pub enum CaptureMsg {
-    /// User clicked "Capture primary display" in the welcome window.
-    FullPrimaryRequested,
     /// Shift modifier toggled while an overlay window is open. Drives
     /// the "hold Shift = square selection" constraint; iced 0.14 does
     /// not reliably route modifier changes to the canvas, so the runtime
@@ -1058,9 +1046,6 @@ pub enum CaptureMsg {
     ),
     /// A window was picked in the overlay: capture it into the editor.
     WindowPicked(readshot_capture::WindowId),
-    /// Background capture-and-save task finished. Carries the final
-    /// PNG path or a stringified error.
-    Saved(Result<PathBuf, String>),
 }
 
 /// App-level messages: the screen-recording permission, quit, restart
@@ -1349,10 +1334,6 @@ pub struct App {
     /// destructive prompt that guards against accidentally nuking
     /// every saved capture.
     pub history_clear_all_pending: bool,
-    /// `window::Id` of the live command-line setup instructions window.
-    pub cli_tools_window_id: Option<iced::window::Id>,
-    /// Copy status shown in the command-line setup window.
-    pub cli_tools_status: Option<crate::editor::Status>,
     /// Active scrolling-capture session, if any. Holds the per-frame
     /// state (captured frames, no-motion counter, HUD window id) so
     /// the runtime can drive the capture loop, render the HUD, and
@@ -1606,11 +1587,6 @@ impl App {
         self.last_capture_status.as_ref().map(|s| s.text.as_str())
     }
 
-    /// The command-line setup window's copy status text, if any.
-    pub fn cli_tools_status_text(&self) -> Option<&str> {
-        self.cli_tools_status.as_ref().map(|s| s.text.as_str())
-    }
-
     /// Forget held ⌘/⇧. Called when an editor opens or closes: the
     /// key-up for a modifier released while no editor window had focus
     /// never arrives, and a stale flag would turn the next click into a
@@ -1697,8 +1673,6 @@ impl App {
             settings_focus: None,
             settings_key_feedback: None,
             history_clear_all_pending: false,
-            cli_tools_window_id: None,
-            cli_tools_status: None,
             scroll_session: None,
             reduce_motion: false,
         }
@@ -1944,11 +1918,7 @@ impl App {
             | SettingsMsg::QuitAfterUninstall
             | SettingsMsg::WindowReady(_)
             | SettingsMsg::PaneSelected(_)
-            | SettingsMsg::KeyPressed { .. }
-            | SettingsMsg::OpenCliToolsRequested
-            | SettingsMsg::CliToolsWindowReady(_)
-            | SettingsMsg::CliToolsCopyRequested(_)
-            | SettingsMsg::CliToolsCopyDone(..) => false,
+            | SettingsMsg::KeyPressed { .. } => false,
         }
     }
 }

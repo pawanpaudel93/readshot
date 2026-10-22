@@ -132,9 +132,6 @@ pub(crate) fn editor_key_message(
         (Key::Character(c), true, false) if c == "0" => {
             return Some(Message::Editor(EditorMsg::ZoomActual));
         }
-        (Key::Named(Named::Escape), _, _) if status_ignored => {
-            return Some(Message::Editor(EditorMsg::DiscardRequested));
-        }
         // The annotation canvas captures every Escape (publishing
         // `Cancelled` for any live drag), so this is a real Esc press.
         // EditorTextCancel is its single cancel action: it closes an open

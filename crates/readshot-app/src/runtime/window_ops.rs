@@ -104,10 +104,6 @@ pub(super) fn on_window_closed(state: &mut App, id: iced::window::Id) -> Task<Me
         state.settings_status = None;
         state.settings_reset_all_pending = false;
     }
-    if state.cli_tools_window_id == Some(id) {
-        state.cli_tools_window_id = None;
-        state.cli_tools_status = None;
-    }
     let restore = match state.editor.take_if(|ed| ed.window_id == Some(id)) {
         Some(ed) => {
             // Never composes here: a step still composing finishes

@@ -10,8 +10,6 @@ pub(super) fn handle_capture_message(state: &mut App, message: CaptureMsg) -> Ta
     match message {
         CaptureMsg::OverlayShiftChanged(held) => on_overlay_shift_changed(state, held),
 
-        CaptureMsg::FullPrimaryRequested => on_capture_full_primary(state),
-
         CaptureMsg::OpenOverlayRequested => on_open_overlay(state),
 
         CaptureMsg::RetakeLastRegionRequested => on_retake_last_region(state),
@@ -42,8 +40,6 @@ pub(super) fn handle_capture_message(state: &mut App, message: CaptureMsg) -> Ta
         CaptureMsg::OverlaySaveDone(result) => on_overlay_save_done(state, result),
         CaptureMsg::OverlayCopyTextDone(result) => on_overlay_copy_text_done(state, result),
         CaptureMsg::CliInteractiveWritten(result) => on_cli_interactive_written(state, result),
-
-        CaptureMsg::Saved(result) => on_capture_saved(state, result),
 
         CaptureMsg::WindowCaptureRequested => on_window_capture_requested(state),
         CaptureMsg::WindowPickerListed(result) => on_window_picker_listed(state, result),
@@ -188,17 +184,6 @@ pub(super) fn on_overlay_shift_changed(state: &mut App, held: bool) -> Task<Mess
     // view(); the state update itself schedules the next view,
     // so this does not need the animation tick to be active.
     Task::none()
-}
-
-/// `CaptureMsg::FullPrimaryRequested`.
-pub(super) fn on_capture_full_primary(state: &mut App) -> Task<Message> {
-    let coord = state.coordinator.clone();
-    state.capture_in_flight = true;
-    state.last_capture_status = None;
-    let format = state.preferences.default_format;
-    Task::perform(capture_primary_to_desktop(coord, format), |result| {
-        Message::Capture(CaptureMsg::Saved(result.map_err(|e| e.to_string())))
-    })
 }
 
 /// `CaptureMsg::OpenOverlayRequested`.
@@ -862,20 +847,4 @@ pub(super) fn on_cli_interactive_written(
     state.overlay_opening = false;
     clear_pending_capture_state(state);
     iced::exit()
-}
-
-/// `CaptureMsg::Saved`.
-pub(super) fn on_capture_saved(
-    state: &mut App,
-    result: Result<std::path::PathBuf, String>,
-) -> Task<Message> {
-    state.capture_in_flight = false;
-    state.last_capture_status = Some(match &result {
-        Ok(path) => Status::new(StatusTone::Success, format!("Saved to {}.", path.display())),
-        Err(e) => {
-            tracing::warn!(target: readshot_core::log::cat::CAPTURE, "capture failed: {e}");
-            Status::new(StatusTone::Error, history_ops::friendly_capture_error(e))
-        }
-    });
-    Task::none()
 }

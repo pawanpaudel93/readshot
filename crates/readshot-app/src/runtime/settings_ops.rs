@@ -141,32 +141,6 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
             modifiers,
             captured,
         } => on_settings_key_pressed(state, window, key, modifiers, captured),
-        SettingsMsg::OpenCliToolsRequested => {
-            if let Some(id) = state.cli_tools_window_id {
-                return window::gain_focus(id);
-            }
-            state.cli_tools_status = None;
-            let (id, open_task) = window::open(cli_tools_window_settings());
-            register_window(state, id, WindowKind::CliTools);
-            state.cli_tools_window_id = Some(id);
-            open_task.map(|a| Message::Settings(SettingsMsg::CliToolsWindowReady(a)))
-        }
-        SettingsMsg::CliToolsWindowReady(id) => {
-            state.cli_tools_window_id = Some(id);
-            Task::none()
-        }
-        SettingsMsg::CliToolsCopyRequested(shell) => Task::perform(
-            copy_text_to_clipboard(cli_tools_setup_commands(shell)),
-            move |result| {
-                Message::Settings(SettingsMsg::CliToolsCopyDone(
-                    shell,
-                    result.map_err(|e| e.to_string()),
-                ))
-            },
-        ),
-        SettingsMsg::CliToolsCopyDone(shell, result) => {
-            on_cli_tools_copy_done(state, shell, result)
-        }
     }
 }
 
@@ -719,7 +693,6 @@ fn go_inert(state: &mut App) -> Task<Message> {
         tasks.push(window::close(id));
     }
     state.history_window_id = None;
-    state.cli_tools_window_id = None;
     state.settings_pane = SettingsPane::App;
     state.settings_focus = None;
     Task::batch(tasks)
@@ -887,33 +860,4 @@ fn on_settings_key_pressed(
             }
         }
     }
-}
-
-/// `SettingsMsg::CliToolsCopyDone`.
-fn on_cli_tools_copy_done(
-    state: &mut App,
-    shell: crate::cli_tools::Shell,
-    result: Result<(), String>,
-) -> Task<Message> {
-    state.cli_tools_status = Some(match result {
-        Ok(()) => Status::new(
-            StatusTone::Success,
-            format!(
-                "{} commands copied. Paste them into Terminal.",
-                shell.label()
-            ),
-        ),
-        Err(e) => {
-            tracing::warn!(target: readshot_core::log::cat::PREFERENCES, "copy cli commands failed: {e}");
-            Status::new(
-                StatusTone::Error,
-                super::history_ops::friendly_string_error_with(
-                    "copy the commands",
-                    &e,
-                    Some(super::history_ops::RETRY_HINT),
-                ),
-            )
-        }
-    });
-    Task::none()
 }

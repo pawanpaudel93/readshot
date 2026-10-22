@@ -111,7 +111,6 @@ fn theme_poll_runs_only_while_a_system_themed_window_is_open() {
         WindowKind::Editor,
         WindowKind::History,
         WindowKind::Settings,
-        WindowKind::CliTools,
     ] {
         let mut app = build_app(Arc::new(FakePermissions::granted()));
         app.windows.register(window::Id::unique(), kind);

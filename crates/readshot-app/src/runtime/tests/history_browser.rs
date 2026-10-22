@@ -814,20 +814,6 @@ fn welcome_ready_marks_onboarding_completed_after_grant() {
 }
 
 #[test]
-fn capture_request_marks_in_flight_and_clears_on_completion() {
-    let mut app = build_app(Arc::new(FakePermissions::granted()));
-    let _ = update(&mut app, Message::Capture(CaptureMsg::FullPrimaryRequested));
-    assert!(app.capture_in_flight);
-    let _ = update(
-        &mut app,
-        Message::Capture(CaptureMsg::Saved(Ok(PathBuf::from("/tmp/x.png")))),
-    );
-    assert!(!app.capture_in_flight);
-    let toast = app.last_capture_status_text().unwrap();
-    assert!(toast.contains("/tmp/x.png"));
-}
-
-#[test]
 fn welcome_status_dismissed_clears_capture_status() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.last_capture_status = Some(crate::editor::Status::new(
@@ -836,18 +822,6 @@ fn welcome_status_dismissed_clears_capture_status() {
     ));
     let _ = update(&mut app, Message::Welcome(WelcomeMsg::StatusDismissed));
     assert!(app.last_capture_status.is_none());
-}
-
-#[test]
-fn capture_failure_message_lands_in_toast() {
-    let mut app = build_app(Arc::new(FakePermissions::granted()));
-    let _ = update(
-        &mut app,
-        Message::Capture(CaptureMsg::Saved(Err("permission denied".into()))),
-    );
-    assert!(!app.capture_in_flight);
-    let toast = app.last_capture_status_text().unwrap();
-    assert!(toast.contains("permission denied"));
 }
 
 #[test]

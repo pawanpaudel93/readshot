@@ -1355,7 +1355,7 @@ fn editor_key_events_ignore_non_editor_windows() {
 }
 
 #[test]
-fn escape_cancels_live_canvas_drag_before_discarding() {
+fn escape_cancels_a_live_canvas_drag_and_never_discards() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     let editor_id = iced::window::Id::unique();
     let mut ed = crate::editor::EditorSession::new(solid(64, 64));
@@ -1391,8 +1391,8 @@ fn escape_cancels_live_canvas_drag_before_discarding() {
     assert!(!ed.canvas_drag_active);
     assert_eq!(ed.drag_cancel_seq, seq_before.wrapping_add(1));
 
-    // A second Escape with no drag in progress falls through to the
-    // discard shortcut (two-stage: first arms the confirmation).
+    // A second Escape with no drag in progress is still only a cancel:
+    // Esc never discards the editor (⌘W does).
     let _ = update(
         &mut app,
         Message::Editor(EditorMsg::KeyPressed {
@@ -1402,16 +1402,8 @@ fn escape_cancels_live_canvas_drag_before_discarding() {
             status_ignored: true,
         }),
     );
-    let ed = app
-        .editor
-        .as_ref()
-        .expect("dirty editor arms discard, stays open");
-    // The discard path doesn't touch the drag-cancel sequence.
-    assert_eq!(ed.drag_cancel_seq, seq_before.wrapping_add(1));
-    assert!(
-        ed.discard_armed(),
-        "second Escape should arm the discard confirmation"
-    );
+    let ed = app.editor.as_ref().expect("Esc never closes the editor");
+    assert!(!ed.discard_armed(), "Esc never arms Discard");
 }
 
 #[test]
@@ -1606,20 +1598,6 @@ fn editor_arrow_keys_nudge_selection_with_shift_coarsening() {
 }
 
 #[test]
-fn editor_escape_maps_to_discard_when_not_handled_by_canvas() {
-    let discard = editor_key_message(
-        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
-        iced::keyboard::Modifiers::empty(),
-        true,
-    );
-
-    assert!(matches!(
-        discard,
-        Some(Message::Editor(EditorMsg::DiscardRequested))
-    ));
-}
-
-#[test]
 fn editor_escape_keeps_canvas_cancellation_when_already_handled() {
     // The annotation canvas captures every Esc, so this is the path a
     // real Esc press takes: one EditorTextCancel per press.
@@ -1631,6 +1609,16 @@ fn editor_escape_keeps_canvas_cancellation_when_already_handled() {
 
     assert!(matches!(
         cancel,
+        Some(Message::Editor(EditorMsg::TextCancel))
+    ));
+    // Nor is an Esc the canvas didn't capture ever a Discard.
+    let uncaptured = editor_key_message(
+        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+        iced::keyboard::Modifiers::empty(),
+        true,
+    );
+    assert!(matches!(
+        uncaptured,
         Some(Message::Editor(EditorMsg::TextCancel))
     ));
 }

@@ -19,7 +19,6 @@
 pub mod app;
 pub mod app_events;
 pub mod cli;
-pub mod cli_tools;
 pub mod coordinator;
 pub mod editor;
 #[cfg(target_os = "macos")]

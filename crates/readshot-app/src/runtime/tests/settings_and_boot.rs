@@ -2,61 +2,8 @@
 
 use super::*;
 
-#[test]
-fn pick_primary_prefers_primary_then_first() {
-    let primary = DisplayInfo {
-        id: "p".into(),
-        bounds: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 100.0, 100.0).unwrap(),
-        scale: 1.0,
-        name: "main".into(),
-        is_primary: true,
-    };
-    let secondary = DisplayInfo {
-        id: "s".into(),
-        bounds: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 100.0, 100.0).unwrap(),
-        scale: 1.0,
-        name: "side".into(),
-        is_primary: false,
-    };
-    assert_eq!(
-        pick_primary(&[secondary.clone(), primary.clone()])
-            .unwrap()
-            .id,
-        "p"
-    );
-    assert_eq!(
-        pick_primary(std::slice::from_ref(&secondary)).unwrap().id,
-        "s"
-    );
-    assert!(pick_primary(&[]).is_none());
-}
-
 #[tokio::test]
-async fn capture_request_to_dir_writes_png() {
-    let perms = Arc::new(FakePermissions::granted());
-    let coord = CaptureCoordinator::new(
-        Arc::new(FakeCapturer::new()),
-        Arc::new(FakeOcrEngine::with_text("hi")),
-        perms,
-        None,
-    );
-    let dir = tempfile::TempDir::new().unwrap();
-    let req = CaptureRequest {
-        display_id: "fake-0".into(),
-        rect: readshot_core::geom::Rect::from_xywh(0.0, 0.0, 256.0, 256.0).unwrap(),
-        scale: 1.0,
-        hide_cursor: true,
-    };
-    let path = capture_request_to_dir(coord, req, dir.path())
-        .await
-        .unwrap();
-    let bytes = std::fs::read(&path).unwrap();
-    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
-    assert!(path.starts_with(dir.path()));
-}
-
-#[tokio::test]
-async fn capture_request_to_dir_preserves_physical_pixel_dimensions() {
+async fn capture_region_to_image_preserves_physical_pixel_dimensions() {
     struct HiDpiCapturer;
 
     #[async_trait]
@@ -88,8 +35,6 @@ async fn capture_request_to_dir_preserves_physical_pixel_dimensions() {
         perms,
         None,
     );
-    let dir = tempfile::TempDir::new().unwrap();
-
     let img = capture_region_to_image(
         coord,
         "retina".into(),
@@ -98,11 +43,8 @@ async fn capture_request_to_dir_preserves_physical_pixel_dimensions() {
     )
     .await
     .unwrap();
-    let path = save_to_dir(&img, dir.path(), readshot_core::ExportFormat::Png).unwrap();
-
-    let saved = image::open(&path).unwrap();
-    assert_eq!(saved.width(), 256);
-    assert_eq!(saved.height(), 256);
+    assert_eq!(img.width(), 256);
+    assert_eq!(img.height(), 256);
 }
 
 #[tokio::test]
@@ -433,18 +375,6 @@ fn a_picked_save_writes_the_resolved_format() {
     assert_eq!(
         image::guess_format(&bytes).unwrap(),
         image::ImageFormat::WebP
-    );
-}
-
-#[test]
-fn quick_save_to_a_folder_uses_the_default_format() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let path = save_to_dir(&solid(8, 8), dir.path(), readshot_core::ExportFormat::Jpeg).unwrap();
-    assert_eq!(path.extension().unwrap(), "jpg");
-    let bytes = std::fs::read(&path).unwrap();
-    assert_eq!(
-        image::guess_format(&bytes).unwrap(),
-        image::ImageFormat::Jpeg
     );
 }
 
@@ -1188,24 +1118,6 @@ fn clearing_and_resetting_unassign_the_window_shortcut() {
     let _ = update(&mut app, Message::Settings(SettingsMsg::ResetAllRequested));
     let _ = update(&mut app, Message::Settings(SettingsMsg::ResetAllConfirmed));
     assert_eq!(app.preferences.window_capture_hotkey, "");
-}
-
-/// The CLI tools window shows a copy failure as a failure (red), not in
-/// the same grey as success (w4d review, Minor 5).
-#[test]
-fn a_failed_cli_commands_copy_is_shown_as_an_error() {
-    let mut app = build_app(Arc::new(FakePermissions::granted()));
-    let shell = crate::cli_tools::Shell::ALL[0];
-    let _ = update(
-        &mut app,
-        Message::Settings(SettingsMsg::CliToolsCopyDone(shell, Err("busy".into()))),
-    );
-    assert!(crate::runtime::view::cli_tools_status_is_error(&app));
-    let _ = update(
-        &mut app,
-        Message::Settings(SettingsMsg::CliToolsCopyDone(shell, Ok(()))),
-    );
-    assert!(!crate::runtime::view::cli_tools_status_is_error(&app));
 }
 
 /// An app left uninstalled (Windows, Linux, a plain binary: the

@@ -6,14 +6,8 @@ use std::path::Path;
 
 use iced::Task;
 
-use readshot_capture::DisplayInfo;
-
 use crate::app::Message;
 use crate::editor::StatusTone;
-
-pub(crate) fn cli_tools_setup_commands(shell: crate::cli_tools::Shell) -> String {
-    crate::cli_tools::setup_commands(shell)
-}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ClipboardError {
@@ -180,13 +174,6 @@ pub(crate) fn os_theme_mode() -> crate::runtime::ThemeMode {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn os_theme_mode() -> crate::runtime::ThemeMode {
     crate::runtime::ThemeMode::Dark
-}
-
-pub(crate) fn pick_primary(displays: &[DisplayInfo]) -> Option<&DisplayInfo> {
-    displays
-        .iter()
-        .find(|d| d.is_primary)
-        .or_else(|| displays.first())
 }
 
 pub(crate) fn quit_readshot(coord: &crate::coordinator::CaptureCoordinator) -> Task<Message> {

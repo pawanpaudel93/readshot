@@ -258,24 +258,6 @@ pub(crate) fn settings_window_settings() -> window::Settings {
     })
 }
 
-pub(crate) fn cli_tools_window_settings() -> window::Settings {
-    const W: f32 = 760.0;
-    const H: f32 = 620.0;
-    let size = iced::Size::new(W, H);
-    with_app_identity(window::Settings {
-        size,
-        min_size: Some(iced::Size::new(560.0, 420.0)),
-        position: centered_window_position_on_active_display(size)
-            .unwrap_or(window::Position::Centered),
-        resizable: true,
-        decorations: true,
-        transparent: false,
-        visible: true,
-        platform_specific: macos_fullsize_titlebar(),
-        ..Default::default()
-    })
-}
-
 /// Window settings for one overlay window covering a single display.
 ///
 /// Borderless transparent `AlwaysOnTop` window positioned at the
@@ -658,7 +640,6 @@ mod app_identity_tests {
             ("editor", editor_window_settings(None)),
             ("history", history_window_settings()),
             ("settings", settings_window_settings()),
-            ("cli tools", cli_tools_window_settings()),
             ("pin", pin_window_settings((400, 300), None)),
             (
                 "scroll hud",
