@@ -397,6 +397,11 @@ struct Interleaving {
     loads: std::collections::VecDeque<std::sync::mpsc::Receiver<Message>>,
     /// An editor opened the record redacted: History must keep it so.
     shown_redacted: bool,
+    /// The redactions (and the colours they hid) an editor of the record
+    /// held when an open cancelled its writes: what History has must hide
+    /// them from then on, however it came to be (landed, or finished from
+    /// the set-aside image by recovery).
+    hidden_at_open: Vec<(Annotation, Vec<[u8; 4]>)>,
     log: Vec<&'static str>,
 }
 
@@ -411,6 +416,7 @@ impl Interleaving {
             seed: 0,
             loads: std::collections::VecDeque::new(),
             shown_redacted: false,
+            hidden_at_open: Vec::new(),
             log: Vec::new(),
         }
     }
@@ -438,6 +444,7 @@ impl Interleaving {
         self.id = record.id;
         self.seed = seed;
         self.shown_redacted = false;
+        self.hidden_at_open.clear();
         self.log.clear();
     }
 
@@ -503,7 +510,7 @@ impl Interleaving {
     }
 
     fn step(&mut self, rng: &mut Rng) {
-        match rng.below(12) {
+        match rng.below(14) {
             0 | 1 => {
                 self.log.push("edit");
                 let at = rng.below(20) as f32;
@@ -524,9 +531,14 @@ impl Interleaving {
                     })));
                 }
             }
-            3 => {
+            3 | 12 | 13 => {
                 self.log.push("redact");
-                let rect = RectLike::new(2.0, 2.0, 6.0, 6.0);
+                // Anywhere in the (possibly turned) 40×20 or 20×40
+                // document, so a later redaction is usually new, not one
+                // already stored.
+                let (x, y) = (rng.below(14) as f32, rng.below(14) as f32);
+                let (w, h) = (3.0 + rng.below(5) as f32, 3.0 + rng.below(5) as f32);
+                let rect = RectLike::new(x, y, w, h);
                 let redaction = match rng.below(3) {
                     0 => Annotation::Blur { rect, radius: 4.0 },
                     1 => Annotation::Pixelate {
@@ -561,16 +573,20 @@ impl Interleaving {
             }
             6 => {
                 self.log.push("open");
-                self.send(Message::History(HistoryMsg::OpenInEditor(self.id)));
+                self.open();
             }
             7 => {
                 self.log.push("second-open");
-                self.send(Message::History(HistoryMsg::OpenInEditor(self.id)));
+                self.open();
                 self.send(Message::History(HistoryMsg::OpenInEditor(self.id)));
             }
             8 => {
                 self.log.push("write-failure");
-                self.store.fail_next_commits(1 + rng.below(2) as usize);
+                // Once or twice (a retry soon lands), or until the disk
+                // recovers ("write-done"): then only an open, which
+                // cancels the write, or recovery can finish it.
+                let failures = [1, 2, 1000][rng.below(3) as usize];
+                self.store.fail_next_commits(failures);
             }
             9 => {
                 self.log.push("write-slow");
@@ -579,6 +595,7 @@ impl Interleaving {
             10 => {
                 self.log.push("write-done");
                 self.store.release();
+                self.store.fail_next_commits(0);
             }
             _ => {
                 self.log.push("load-lands");
@@ -646,34 +663,12 @@ impl Interleaving {
     fn check_redacted_pixels(&mut self) {
         let log = format!("seed {}: {:?}", self.seed, self.log);
         let stored = self.store.stored(self.id);
-        let png = FsHistoryStore::abs_png_path(self.store.inner.root(), &stored);
-        let Some(ed) = self.editor_of_record() else {
-            return;
-        };
-        let base = ed.model.base();
-        let mut counts: std::collections::HashMap<[u8; 4], usize> =
-            std::collections::HashMap::new();
-        for p in base.pixels() {
-            *counts.entry(p.0).or_default() += 1;
+        if stored.scrub_pending {
+            return; // withheld: nothing of it is served (`check_withheld`)
         }
-        let checks: Vec<(Annotation, Vec<[u8; 4]>)> = ed
-            .model
-            .annotations()
-            .iter()
-            .filter(|a| a.is_redaction())
-            .filter_map(|a| {
-                let r = a.redaction_rect()?;
-                let (x0, y0) = (r.x.max(0.0) as u32, r.y.max(0.0) as u32);
-                let x1 = ((r.x + r.width) as u32).min(base.width());
-                let y1 = ((r.y + r.height) as u32).min(base.height());
-                let secret = (y0..y1)
-                    .flat_map(|y| (x0..x1).map(move |x| (x, y)))
-                    .map(|(x, y)| base.get_pixel(x, y).0)
-                    .filter(|c| counts.get(c) == Some(&1))
-                    .collect();
-                Some((a.clone(), secret))
-            })
-            .collect();
+        let png = FsHistoryStore::abs_png_path(self.store.inner.root(), &stored);
+        let mut checks = self.editor_secrets();
+        checks.extend(self.hidden_at_open.iter().cloned());
         if checks.is_empty() {
             return;
         }
@@ -692,6 +687,47 @@ impl Interleaving {
                 secret.len()
             );
         }
+    }
+
+    /// The open editor's redactions, each with the colours under it in its
+    /// document that occur nowhere else there (seeded noise: almost all).
+    fn editor_secrets(&mut self) -> Vec<(Annotation, Vec<[u8; 4]>)> {
+        let Some(ed) = self.editor_of_record() else {
+            return Vec::new();
+        };
+        let base = ed.model.base();
+        let mut counts: std::collections::HashMap<[u8; 4], usize> =
+            std::collections::HashMap::new();
+        for p in base.pixels() {
+            *counts.entry(p.0).or_default() += 1;
+        }
+        ed.model
+            .annotations()
+            .iter()
+            .filter(|a| a.is_redaction())
+            .filter_map(|a| {
+                let r = a.redaction_rect()?;
+                let (x0, y0) = (r.x.max(0.0) as u32, r.y.max(0.0) as u32);
+                let x1 = ((r.x + r.width) as u32).min(base.width());
+                let y1 = ((r.y + r.height) as u32).min(base.height());
+                let secret = (y0..y1)
+                    .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                    .map(|(x, y)| base.get_pixel(x, y).0)
+                    .filter(|c| counts.get(c) == Some(&1))
+                    .collect();
+                Some((a.clone(), secret))
+            })
+            .collect()
+    }
+
+    /// Open the record from History. The open cancels whatever the
+    /// current editor of it hasn't written yet, so what it shows as
+    /// redacted right now is remembered: History must hide it from here
+    /// on, through recovery if need be.
+    fn open(&mut self) {
+        let secrets = self.editor_secrets();
+        self.hidden_at_open.extend(secrets);
+        self.send(Message::History(HistoryMsg::OpenInEditor(self.id)));
     }
 
     /// After every write drained, an open always opens the record, and
@@ -751,11 +787,11 @@ fn reopens_under_random_slow_and_failing_writes_keep_editor_and_history_in_step(
     // this tests.
     readshot_core::skip_fsync_in_this_process();
     let mut run = Interleaving::new();
-    for seed in 0..300u64 {
+    for seed in 0..500u64 {
         let mut rng = Rng::new(seed);
         run.next_run(seed);
         run.send(Message::History(HistoryMsg::OpenInEditor(run.id)));
-        for _ in 0..24 {
+        for _ in 0..40 {
             run.step(&mut rng);
         }
         run.settle();
@@ -764,7 +800,7 @@ fn reopens_under_random_slow_and_failing_writes_keep_editor_and_history_in_step(
         run.check_redacted_pixels();
         run.check_editor_matches_store();
         run.log.push("final-open");
-        run.send(Message::History(HistoryMsg::OpenInEditor(run.id)));
+        run.open();
         run.settle();
         run.check_privacy();
         run.check_final_open();
