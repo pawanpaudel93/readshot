@@ -119,9 +119,10 @@ fn judged_frame(app: &mut App, seq: u64, moved: bool, unplaced: bool) {
 }
 
 /// SC-16 / I-1: frames that keep failing to place (the page jumped past
-/// any overlap) show "Scrolled too fast — scroll back up a little" after
-/// two in a row; a still frame or a scroll back up neither shows nor
-/// clears it, a frame that places clears it, and Stop hides it.
+/// any overlap) show "Scrolled too fast — scroll back up a little" from
+/// the second in a row. Any other verdict (a still page, a scroll back
+/// up, a frame that places) ends the run and clears it, and Stop hides
+/// it.
 #[test]
 fn frames_that_keep_failing_to_place_say_the_scroll_was_too_fast() {
     use crate::runtime::scroll::{scroll_too_fast, SCROLL_TOO_FAST_AFTER, SCROLL_TOO_FAST_HINT};
@@ -137,24 +138,39 @@ fn frames_that_keep_failing_to_place_say_the_scroll_was_too_fast() {
     app.scroll_session = Some(session);
     let too_fast = |app: &App| scroll_too_fast(app.scroll_session.as_ref().unwrap());
 
-    judged_frame(&mut app, 1, false, false);
+    judged_frame(&mut app, 1, false, true);
+    assert!(!too_fast(&app), "one unplaced frame is not enough");
+    judged_frame(&mut app, 2, false, false);
+    judged_frame(&mut app, 3, false, true);
     assert!(
         !too_fast(&app),
-        "a still page or a scroll back up says nothing"
+        "a still frame or a scroll back up ends the run"
     );
-    judged_frame(&mut app, 2, false, true);
-    assert!(!too_fast(&app), "one unplaced frame is not enough");
-    judged_frame(&mut app, 3, false, false);
     judged_frame(&mut app, 4, false, true);
-    assert!(too_fast(&app), "two unplaced frames show the hint");
+    assert!(too_fast(&app), "two unplaced frames in a row show the hint");
+    assert!(
+        app.scroll_session.as_ref().unwrap().last_refused.is_some(),
+        "the refused frame is kept for the next verdict"
+    );
     judged_frame(&mut app, 5, false, false);
-    assert!(too_fast(&app), "a still frame doesn't clear it");
-    judged_frame(&mut app, 6, true, false);
-    assert!(!too_fast(&app), "a frame that places clears it");
-    assert_eq!(app.scroll_session.as_ref().unwrap().frames.len(), 2);
-
+    assert!(
+        !too_fast(&app),
+        "a still frame or a scroll back up clears it"
+    );
+    judged_frame(&mut app, 6, false, true);
     judged_frame(&mut app, 7, false, true);
-    judged_frame(&mut app, 8, false, true);
+    assert!(too_fast(&app));
+    judged_frame(&mut app, 8, true, false);
+    assert!(!too_fast(&app), "a frame that places clears it");
+    let s = app.scroll_session.as_ref().unwrap();
+    assert_eq!(s.frames.len(), 2);
+    assert!(
+        s.last_refused.is_none(),
+        "an accepted frame is the new anchor"
+    );
+
+    judged_frame(&mut app, 9, false, true);
+    judged_frame(&mut app, 10, false, true);
     assert!(too_fast(&app));
     app.scroll_session.as_mut().unwrap().stopping = true;
     assert!(!too_fast(&app), "stitching hides it");

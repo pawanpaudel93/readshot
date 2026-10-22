@@ -1387,11 +1387,15 @@ pub struct ScrollSession {
     /// Surfaced for diagnostics; the user explicitly stops the
     /// session when ready.
     pub no_motion_count: u32,
-    /// Consecutive frames the judge couldn't place against the last
-    /// accepted one (`runtime::scroll::SCROLL_TOO_FAST_AFTER`
-    /// of them show the "scrolled too fast" hint); reset when a frame
-    /// is accepted.
+    /// Consecutive frames the judge couldn't place at all against the
+    /// last accepted one (not a still page, not a scroll back up);
+    /// `runtime::scroll::SCROLL_TOO_FAST_AFTER` of them show the
+    /// "scrolled too fast" hint. Any other verdict resets it.
     pub unplaced_in_a_row: u32,
+    /// The last frame the judge refused, while no frame has been
+    /// accepted since: the "frame just before" a new one is judged
+    /// against to tell a long scroll back up from a jump down.
+    pub last_refused: Option<std::sync::Arc<image::RgbaImage>>,
     /// `window::Id` of the HUD floating above the capture region.
     pub hud_window_id: Option<iced::window::Id>,
     /// `window::Id` of the transparent click-through overlay that
@@ -1482,6 +1486,7 @@ impl ScrollSession {
             frames: Vec::new(),
             no_motion_count: 0,
             unplaced_in_a_row: 0,
+            last_refused: None,
             hud_window_id: None,
             region_window_id: None,
             display_size: None,

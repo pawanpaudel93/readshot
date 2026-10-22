@@ -31,8 +31,9 @@ pub(crate) const SCROLL_TOO_FAST_AFTER: u32 = 2;
 pub(crate) const SCROLL_TOO_FAST_HINT: &str = "Scrolled too fast — scroll back up a little.";
 
 /// Whether the window shows [`SCROLL_TOO_FAST_HINT`]: a running session
-/// whose last [`SCROLL_TOO_FAST_AFTER`] or more frames couldn't be
-/// placed. A frame that places clears it.
+/// whose last [`SCROLL_TOO_FAST_AFTER`] or more frames in a row couldn't
+/// be placed at all. Any other verdict (a frame that places, a still
+/// page, a scroll back up) clears it.
 pub(crate) fn scroll_too_fast(session: &crate::app::ScrollSession) -> bool {
     !session.stopping && session.unplaced_in_a_row >= SCROLL_TOO_FAST_AFTER
 }
@@ -148,6 +149,10 @@ pub(crate) fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession)
                     accept_scroll_frame(session, image, Some(rows), None);
                     continue;
                 };
+                // The frame just before this one, when the judge refused
+                // it: a scroll back up past any overlap with `prev` still
+                // places backward against it.
+                let recent = session.last_refused.clone();
                 session.judge_in_flight = Some(seq);
                 return Task::perform(
                     async move {
@@ -162,7 +167,8 @@ pub(crate) fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession)
                             };
                             let moved = !same_dims
                                 || offset.is_some_and(|dy| dy >= SCROLL_MIN_ACCEPTED_MOTION_PX);
-                            let unplaced = same_dims && motion == ScrollMotion::Unplaced;
+                            let unplaced =
+                                same_dims && counts_as_unplaced(motion, recent.as_deref(), &image);
                             let rows = moved.then(|| {
                                 preview_rows(&image, if same_dims { offset } else { None })
                             });
@@ -239,6 +245,7 @@ pub(crate) fn accept_scroll_frame(
         .saturating_add(offset.unwrap_or(image.height()));
     session.no_motion_count = 0;
     session.unplaced_in_a_row = 0;
+    session.last_refused = None;
     // Scrolling on answers an armed Cancel with "keep going"; momentum
     // frames right after the click don't.
     if session
@@ -291,24 +298,113 @@ pub(crate) fn scroll_motion_offset(a: &image::RgbaImage, b: &image::RgbaImage) -
     }
 }
 
-/// Judge `b` against `a`. A lower-middle template is searched both ways
-/// ([`template_motion`]). When it finds no downward scroll, the
-/// stitcher's own placement decides
-/// ([`readshot_core::scroll_stitch::place_by_overlap`]): its bottom
-/// strip still overlaps after a move of up to the frame height minus the
-/// strip, which the template (at two thirds) can't see. So the judge
-/// keeps every frame the stitcher can place, and refuses a scroll back
-/// up by the same cost rule.
+/// Judge `b` against `a`.
+///
+/// - A lower-middle template is searched both ways
+///   ([`template_motion`]). An exact downward match is taken as it is.
+/// - A downward match that isn't exact is checked against the reverse
+///   placement: if `a` places below `b`
+///   ([`readshot_core::scroll_stitch::place_by_overlap`] of `b` then
+///   `a`), the page went back up, even though a line-aligned candidate
+///   looked like a scroll down.
+/// - When the template finds no downward scroll, the stitcher's own
+///   placement decides: its bottom strip still overlaps after a move of
+///   up to the frame height minus the strip, which the template (at two
+///   thirds) can't see. So the judge keeps every frame the stitcher can
+///   place.
+/// - Otherwise the frame is a scroll back up only when the reverse
+///   placement places it exactly (this also covers moves past the
+///   template's upward window), a still page when the bottom strip or
+///   most detailed rows match in place ([`looks_still`]: a video or a
+///   spinner moving), and else [`ScrollMotion::Unplaced`]: only that
+///   last one counts towards the "scrolled too fast" hint.
 pub(crate) fn scroll_motion(a: &image::RgbaImage, b: &image::RgbaImage) -> ScrollMotion {
-    let verdict = template_motion(a, b);
-    if matches!(verdict, ScrollMotion::Down(_)) || a.dimensions() != b.dimensions() {
+    use readshot_core::scroll_stitch::{place_by_overlap, place_exactly_by_overlap, StitchConfig};
+    let (verdict, exact) = template_motion(a, b);
+    if a.dimensions() != b.dimensions() {
         return verdict;
     }
-    let config = readshot_core::scroll_stitch::StitchConfig::default();
-    match readshot_core::scroll_stitch::place_by_overlap(a, b, &config) {
-        Some(dy) if dy >= SCROLL_MIN_ACCEPTED_MOTION_PX => ScrollMotion::Down(dy),
-        _ => verdict,
+    let config = StitchConfig::default();
+    // `a` sits exactly below `b`: the page went back up. Exact, so a
+    // line-aligned look-alike on unrelated content never counts.
+    let went_back_up = || {
+        place_exactly_by_overlap(b, a, &config)
+            .is_some_and(|dy| dy >= SCROLL_MIN_ACCEPTED_MOTION_PX)
+    };
+    match verdict {
+        ScrollMotion::Down(dy)
+            if dy >= SCROLL_MIN_ACCEPTED_MOTION_PX && !exact && went_back_up() =>
+        {
+            ScrollMotion::Back
+        }
+        ScrollMotion::Down(_) => verdict,
+        // The template's Back is trusted only when the exact reverse
+        // placement agrees: a local change across the template strip (a
+        // video) can make an upward candidate stand out on a still page.
+        ScrollMotion::Back | ScrollMotion::Unplaced => match place_by_overlap(a, b, &config) {
+            Some(dy) if dy >= SCROLL_MIN_ACCEPTED_MOTION_PX => ScrollMotion::Down(dy),
+            _ if went_back_up() => ScrollMotion::Back,
+            // The bottom strip sits still: a local change above it.
+            Some(dy) => ScrollMotion::Down(dy),
+            None if looks_still(a, b) => ScrollMotion::Down(0),
+            None => ScrollMotion::Unplaced,
+        },
     }
+}
+
+/// Whether a frame judged `motion` against the last accepted frame counts
+/// towards the "scrolled too fast" hint: no offset placed it, and it is
+/// not a scroll back up against `recent`, the frame just before it (when
+/// the judge refused that one). A long scroll back up runs past any
+/// overlap with the last accepted frame, but each frame still places
+/// backward against the one before it; a jump down past the overlap
+/// doesn't.
+pub(crate) fn counts_as_unplaced(
+    motion: ScrollMotion,
+    recent: Option<&image::RgbaImage>,
+    image: &image::RgbaImage,
+) -> bool {
+    motion == ScrollMotion::Unplaced
+        && recent.is_none_or(|r| scroll_motion(r, image) != ScrollMotion::Back)
+}
+
+/// True when most rows of `a` that carry detail are unchanged, in place,
+/// in `b`: a still page where something local (a video, a spinner, an
+/// animated ad) moves. Flat rows (blank space) are left out, since they
+/// match at any offset and say nothing about motion.
+pub(crate) fn looks_still(a: &image::RgbaImage, b: &image::RgbaImage) -> bool {
+    if a.dimensions() != b.dimensions() {
+        return false;
+    }
+    let (w, h) = a.dimensions();
+    let (ra, rb) = (a.as_raw(), b.as_raw());
+    let row_bytes = w as usize * 4;
+    let step = 4 * 4; // every 4th pixel
+    let samples = u64::from(w.div_ceil(4)) * 3;
+    let (mut detailed, mut unchanged) = (0u32, 0u32);
+    for y in (0..h).step_by(2) {
+        let start = y as usize * row_bytes;
+        let row_a = &ra[start..start + row_bytes];
+        let row_b = &rb[start..start + row_bytes];
+        let (mut lo, mut hi, mut diff) = (u8::MAX, u8::MIN, 0u64);
+        let mut i = 0;
+        while i < row_bytes {
+            lo = lo.min(row_a[i]).min(row_a[i + 1]).min(row_a[i + 2]);
+            hi = hi.max(row_a[i]).max(row_a[i + 1]).max(row_a[i + 2]);
+            diff += u64::from(diff_u8(row_a[i], row_b[i]))
+                + u64::from(diff_u8(row_a[i + 1], row_b[i + 1]))
+                + u64::from(diff_u8(row_a[i + 2], row_b[i + 2]));
+            i += step;
+        }
+        if hi - lo < 16 {
+            continue;
+        }
+        detailed += 1;
+        if diff <= samples * readshot_core::scroll_stitch::MATCH_EXACT_MEAN_DIFF {
+            unchanged += 1;
+        }
+    }
+    detailed > 0 && unchanged * 2 > detailed
 }
 
 /// The template search alone: a strip at two thirds of `a`, searched
@@ -317,17 +413,17 @@ pub(crate) fn scroll_motion(a: &image::RgbaImage, b: &image::RgbaImage) -> Scrol
 /// nearest downward one, and a best match that doesn't stand out
 /// ([`readshot_core::scroll_stitch::match_stands_out`]) is
 /// [`ScrollMotion::Unplaced`].
-fn template_motion(a: &image::RgbaImage, b: &image::RgbaImage) -> ScrollMotion {
+fn template_motion(a: &image::RgbaImage, b: &image::RgbaImage) -> (ScrollMotion, bool) {
     if a.dimensions() != b.dimensions() {
-        return ScrollMotion::Unplaced;
+        return (ScrollMotion::Unplaced, false);
     }
     let (w, h) = a.dimensions();
     if w == 0 || h == 0 {
-        return ScrollMotion::Unplaced;
+        return (ScrollMotion::Unplaced, false);
     }
     let strip_h = (h / 8).clamp(16, 80).min(h / 3).max(1);
     if strip_h >= h {
-        return ScrollMotion::Unplaced;
+        return (ScrollMotion::Unplaced, false);
     }
     // Use the lower-middle content region. It usually avoids sticky
     // headers while leaving room above it for downward scroll and
@@ -368,10 +464,10 @@ fn template_motion(a: &image::RgbaImage, b: &image::RgbaImage) -> ScrollMotion {
     }
     let samples = u64::from(w.div_ceil(stride_x)) * u64::from(strip_h.div_ceil(stride_y)) * 3;
     if !readshot_core::scroll_stitch::match_stands_out(best_cost, samples, &mut costs) {
-        return ScrollMotion::Unplaced;
+        return (ScrollMotion::Unplaced, false);
     }
     let Ok(down) = u32::try_from(best_shift) else {
-        return ScrollMotion::Back;
+        return (ScrollMotion::Back, false);
     };
     // Subsampled rows can tie the true offset with its neighbour; settle
     // an exact tie at full resolution, as the stitcher does.
@@ -388,7 +484,9 @@ fn template_motion(a: &image::RgbaImage, b: &image::RgbaImage) -> ScrollMotion {
     let y = readshot_core::scroll_stitch::break_subsampling_tie(best_y, &tied, |y| {
         sad_scroll_strip(a, template_y, b, y, w, strip_h, (1, 1))
     });
-    ScrollMotion::Down(template_y - y)
+    let exact =
+        best_cost <= samples.saturating_mul(readshot_core::scroll_stitch::MATCH_EXACT_MEAN_DIFF);
+    (ScrollMotion::Down(template_y - y), exact)
 }
 
 pub(crate) fn sad_scroll_strip(
@@ -597,11 +695,16 @@ fn on_frame_judged(
     session.judge_in_flight = None;
     match image {
         Some(image) if moved => accept_scroll_frame(session, image, rows, offset),
-        _ => {
+        refused => {
+            session.last_refused = refused.map(std::sync::Arc::new);
             session.no_motion_count += 1;
-            if unplaced {
-                session.unplaced_in_a_row = session.unplaced_in_a_row.saturating_add(1);
-            }
+            // Only frames no offset explains count: a still page or a
+            // scroll back up ends the run.
+            session.unplaced_in_a_row = if unplaced {
+                session.unplaced_in_a_row.saturating_add(1)
+            } else {
+                0
+            };
         }
     }
     drain_ready_scroll_frames(session)

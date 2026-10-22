@@ -241,3 +241,120 @@ fn a_jump_past_any_overlap_is_reported_and_never_stitched_in() {
     let kept_frames: Vec<RgbaImage> = kept.iter().map(|&i| frames[i].clone()).collect();
     assert_stitches("jump", &page, 0, positions[7], &kept_frames);
 }
+
+/// A large scroll back up is judged Back, never Unplaced (so it can't
+/// show "Scrolled too fast") and never Down: a 300 px flick up and
+/// repeated 100 px steps up on a 600 px region (120 and 40 px here),
+/// past the judge template's upward window (50 px here) but within the
+/// overlap with the last accepted frame.
+#[test]
+fn a_large_scroll_back_up_is_judged_back() {
+    use crate::runtime::scroll::{scroll_motion, ScrollMotion};
+    for seed in [7u64, 11] {
+        let page = text_page(1400, seed);
+        let anchor = frames_at(&page, &[400]).remove(0);
+        for up in [120u32, 40, 80, 120, 160] {
+            let frame = frames_at(&page, &[400 - up]).remove(0);
+            assert_eq!(
+                scroll_motion(&anchor, &frame),
+                ScrollMotion::Back,
+                "seed {seed}: back up {up}"
+            );
+        }
+    }
+}
+
+/// A still page with something animated across the judge's template
+/// strip (a video, a spinner) is a still page, not an unplaced frame:
+/// the frame is not motion and doesn't count towards the hint.
+#[test]
+fn an_animated_element_on_a_still_page_is_still() {
+    use crate::runtime::scroll::{scroll_motion, ScrollMotion};
+    let page = text_page(1400, 7);
+    let base = frames_at(&page, &[300]).remove(0);
+    let mut rng = Rng(99);
+    for top in [140u32, 150, 30, 200] {
+        let mut frame = base.clone();
+        for y in top..top + 32 {
+            for x in 60..140 {
+                let v = rng.r(256) as u8;
+                frame.put_pixel(x, y, Rgba([v, v, v, 255]));
+            }
+        }
+        assert_eq!(
+            scroll_motion(&base, &frame),
+            ScrollMotion::Down(0),
+            "box at y {top}"
+        );
+    }
+}
+
+/// The window's "Scrolled too fast" hint over whole sequences, counted
+/// as the session counts it: shown from the second frame in a row that
+/// no offset places (`counts_as_unplaced`), reset by any other verdict.
+fn hint_shown(frames: &[RgbaImage]) -> Vec<bool> {
+    use crate::runtime::scroll::{
+        counts_as_unplaced, scroll_motion, ScrollMotion, SCROLL_TOO_FAST_AFTER,
+    };
+    let (mut anchor, mut refused, mut count) = (0usize, None::<usize>, 0u32);
+    let mut shown = vec![false];
+    for (i, f) in frames.iter().enumerate().skip(1) {
+        let motion = scroll_motion(&frames[anchor], f);
+        if matches!(motion, ScrollMotion::Down(dy) if dy >= SCROLL_MIN_ACCEPTED_MOTION_PX) {
+            (anchor, refused, count) = (i, None, 0);
+        } else {
+            let unplaced = counts_as_unplaced(motion, refused.map(|r| &frames[r]), f);
+            count = if unplaced { count + 1 } else { 0 };
+            refused = Some(i);
+        }
+        shown.push(count >= SCROLL_TOO_FAST_AFTER);
+    }
+    shown
+}
+
+/// The hint shows after a real jump past any overlap, and never on a
+/// still page with an animation, a 300 px flick up, repeated 100 px
+/// steps up, or a long slow scroll back up past the overlap with the
+/// last accepted frame (each frame still places backward against the
+/// one before it).
+#[test]
+fn the_too_fast_hint_shows_only_after_a_jump_past_any_overlap() {
+    let page = text_page(2000, 11);
+    let down: Vec<u32> = (0..=10).map(|i| i * 40).collect();
+    let with = |tail: &[u32]| {
+        let mut p = down.clone();
+        p.extend_from_slice(tail);
+        frames_at(&page, &p)
+    };
+    let none = |what: &str, frames: &[RgbaImage]| {
+        let shown = hint_shown(frames);
+        assert!(!shown.contains(&true), "{what}: hint at {shown:?}");
+    };
+    none("flick up 120 then still", &with(&[280, 280, 280, 280]));
+    none(
+        "up 40 x4 then down",
+        &with(&[360, 320, 280, 240, 280, 320, 360, 400, 440]),
+    );
+    let slow_back: Vec<u32> = (1..=20).map(|i| 400 - i * 16).collect();
+    none("slow scroll back up past the overlap", &with(&slow_back));
+    let mut still = vec![frames_at(&page, &[300]).remove(0); 8];
+    let mut rng = Rng(5);
+    for f in still.iter_mut().skip(1) {
+        for y in 145..177 {
+            for x in 60..140 {
+                let v = rng.r(256) as u8;
+                f.put_pixel(x, y, Rgba([v, v, v, 255]));
+            }
+        }
+    }
+    none("still page with an animation", &still);
+
+    let jump = 400 + VH + 60;
+    let frames = with(&[jump, jump + 20, jump + 40, jump + 60]);
+    let shown = hint_shown(&frames);
+    assert_eq!(
+        &shown[11..],
+        &[false, true, true, true],
+        "jump past any overlap: from the second unplaced frame"
+    );
+}

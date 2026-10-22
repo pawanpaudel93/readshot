@@ -302,12 +302,22 @@ fn place_frame(
     sticky: &StickyMask,
     config: &StitchConfig,
 ) -> Option<u32> {
+    place_match(prev, frame, sticky, config).map(|m| m.dy)
+}
+
+/// [`place_frame`], keeping the forward match's cost and exactness.
+fn place_match(
+    prev: &RgbaImage,
+    frame: &RgbaImage,
+    sticky: &StickyMask,
+    config: &StitchConfig,
+) -> Option<Match> {
     let fwd = estimate_scroll(prev, frame, sticky, config)?;
     let refused = estimate_scroll(frame, prev, sticky, config).is_some_and(|back| {
         back.dy >= config.min_motion
             && (back.cost < fwd.cost || (back.cost == fwd.cost && back.dy < fwd.dy))
     });
-    (!refused).then_some(fwd.dy)
+    (!refused).then_some(fwd)
 }
 
 /// The stitcher's own placement of `b` below `a` (bottom strip, the
@@ -322,6 +332,23 @@ pub fn place_by_overlap(a: &RgbaImage, b: &RgbaImage, config: &StitchConfig) -> 
         return None;
     }
     place_frame(a, b, &StickyMask::default(), config)
+}
+
+/// [`place_by_overlap`], but only for a near-exact match: the rows of
+/// `a` really are in `b` at that offset (as on any real scroll), not a
+/// line-aligned look-alike that merely stands out. The scroll judge
+/// uses it to call a frame a scroll back up with confidence.
+pub fn place_exactly_by_overlap(
+    a: &RgbaImage,
+    b: &RgbaImage,
+    config: &StitchConfig,
+) -> Option<u32> {
+    if a.dimensions() != b.dimensions() || a.width() == 0 || a.height() == 0 {
+        return None;
+    }
+    place_match(a, b, &StickyMask::default(), config)
+        .filter(|m| m.exact)
+        .map(|m| m.dy)
 }
 
 /// How many times better than the typical candidate a template match
@@ -360,6 +387,8 @@ pub fn match_stands_out(best: u64, samples: u64, costs: &mut [u64]) -> bool {
 struct Match {
     dy: u32,
     cost: u64,
+    /// Near-exact: mean difference within [`MATCH_EXACT_MEAN_DIFF`].
+    exact: bool,
 }
 
 /// Estimate the downward scroll (in px) from `a` to `b`.
@@ -430,6 +459,7 @@ fn estimate_scroll(
     Some(Match {
         dy: template_y - y_b,
         cost: best_cost,
+        exact: best_cost <= samples.saturating_mul(MATCH_EXACT_MEAN_DIFF),
     })
 }
 
