@@ -855,6 +855,23 @@ impl Cli {
     }
 }
 
+/// Whether an uninstall must ask `Continue? [y/N]` first: not with
+/// `--yes`, and without a terminal to ask on it refuses outright, so a
+/// script never removes anything it didn't explicitly confirm.
+fn must_prompt_before_uninstall(yes: bool, stdin_is_terminal: bool) -> Result<bool, CliError> {
+    if yes {
+        return Ok(false);
+    }
+    if !stdin_is_terminal {
+        return Err(CliError::InvalidInput(
+            "refusing to uninstall without confirmation; re-run with -y/--yes \
+             (or -n/--dry-run to preview)"
+                .into(),
+        ));
+    }
+    Ok(true)
+}
+
 /// `y` / `yes` in any case confirms; anything else (including Enter) is No.
 fn confirms_yes(answer: &str) -> bool {
     matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
@@ -883,14 +900,7 @@ fn run_uninstall(
         return Ok(());
     }
 
-    if !yes {
-        if !std::io::stdin().is_terminal() {
-            return Err(CliError::InvalidInput(
-                "refusing to uninstall without confirmation; re-run with -y/--yes \
-                 (or -n/--dry-run to preview)"
-                    .into(),
-            ));
-        }
+    if must_prompt_before_uninstall(yes, std::io::stdin().is_terminal())? {
         // Conventional prompt: default is No, `y` / `yes` confirms.
         write!(stdout, "\nContinue? [y/N] ")?;
         stdout.flush()?;
@@ -1623,6 +1633,23 @@ mod tests {
         assert!(!confirms_yes("\n"));
         assert!(!confirms_yes("no\n"));
         assert!(!confirms_yes("yeah\n"));
+    }
+
+    /// CLI-40: without `--yes` and without a terminal the uninstall
+    /// refuses (exit 64) before any step; with a terminal it prompts;
+    /// `--yes` skips the prompt.
+    #[test]
+    fn uninstall_refuses_without_a_terminal_unless_yes() {
+        let err = must_prompt_before_uninstall(false, false).unwrap_err();
+        assert!(
+            matches!(err, CliError::InvalidInput(ref msg)
+                if msg.contains("refusing to uninstall without confirmation")),
+            "{err:?}"
+        );
+        assert_eq!(exit_code(&err), 64);
+        assert!(must_prompt_before_uninstall(false, true).unwrap());
+        assert!(!must_prompt_before_uninstall(true, false).unwrap());
+        assert!(!must_prompt_before_uninstall(true, true).unwrap());
     }
 
     #[test]

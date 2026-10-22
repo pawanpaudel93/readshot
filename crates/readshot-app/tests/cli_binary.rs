@@ -5,10 +5,19 @@
 //! file, or print a static document. Each run gets its own home, data
 //! and config folders ([`Sandbox`]), so the CLI's log file and the
 //! uninstall planner never see the real user's folders on macOS and
-//! Linux. (Windows reads its known folders from the system, not the
-//! environment, so the log file there still lands in the real
-//! `%LOCALAPPDATA%`.)
+//! Linux. Windows reads its known folders from the system, not the
+//! environment, and there is no override, so every test that gets as
+//! far as starting the CLI's logging (any subcommand that parses) is
+//! off on Windows; only clap-level runs (`--help`, `--version`,
+//! argument errors) and the internal child's argument check run there.
+//!
+//! No test here can run a real uninstall: the only uninstall run is
+//! `--dry-run` without `--yes` and without a terminal, so a regression
+//! in the dry-run branch still stops at the no-terminal refusal (which
+//! `cli::tests::uninstall_refuses_without_a_terminal_unless_yes` covers
+//! at the function level).
 
+#[cfg(not(windows))]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -49,6 +58,7 @@ impl Sandbox {
         self.command().args(args).output().unwrap()
     }
 
+    #[cfg(not(windows))]
     fn run_with_stdin(&self, args: &[&str], stdin: &[u8]) -> Output {
         let mut child = self
             .command()
@@ -92,7 +102,7 @@ fn assert_cli_error(output: &Output, code: i32, reason: &str) {
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "integration"))]
 fn png_bytes(width: u32, height: u32) -> Vec<u8> {
     let img = image::RgbaImage::from_pixel(width, height, image::Rgba([255, 255, 255, 255]));
     let mut bytes = std::io::Cursor::new(Vec::new());
@@ -133,6 +143,7 @@ fn version_prints_the_package_version() {
     }
 }
 
+#[cfg(not(windows))]
 #[test]
 fn invalid_scale_exits_usage_error_without_capture_or_log_noise() {
     let sandbox = Sandbox::new();
@@ -232,6 +243,7 @@ fn argument_errors_exit_2_before_anything_runs() {
 /// CLI-18, CLI-34: JSON metadata needs a clean stdout, so the image
 /// commands refuse `--json` without a file or the clipboard before
 /// they capture anything.
+#[cfg(not(windows))]
 #[test]
 fn json_without_a_destination_exits_64_before_capturing() {
     let sandbox = Sandbox::new();
@@ -254,6 +266,7 @@ fn json_without_a_destination_exits_64_before_capturing() {
 
 /// CLI-29: language correction can be turned off on the real binary
 /// (all three spellings parse; the missing input file is what fails).
+#[cfg(not(windows))]
 #[test]
 fn language_correction_can_be_turned_off() {
     let sandbox = Sandbox::new();
@@ -275,6 +288,7 @@ fn language_correction_can_be_turned_off() {
 /// CLI-30, CLI-31, CLI-44 (74): input problems exit 74, and `-i -`
 /// really reads stdin (garbage there is a decode error, not a missing
 /// file called `-`).
+#[cfg(not(windows))]
 #[test]
 fn ocr_input_errors_exit_74() {
     let sandbox = Sandbox::new();
@@ -307,7 +321,7 @@ fn ocr_input_errors_exit_74() {
 /// metadata to the file and keeps stdout empty; plain `-o FILE` writes
 /// the text with no newline added. A blank image keeps the result
 /// independent of what the engine reads.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "integration"))]
 #[test]
 fn ocr_reads_stdin_with_the_real_engine_and_writes_to_files() {
     let sandbox = Sandbox::new();
@@ -377,6 +391,7 @@ fn internal_interactive_child_rejects_bad_arguments() {
     );
 }
 
+#[cfg(not(windows))]
 #[test]
 fn mcp_config_prints_json_without_log_noise() {
     let output = Sandbox::new().run(&["mcp-config"]);
@@ -393,6 +408,7 @@ fn mcp_config_prints_json_without_log_noise() {
 }
 
 /// CLI-36: `--name` and `--command` replace the server key and command.
+#[cfg(not(windows))]
 #[test]
 fn mcp_config_takes_a_name_and_a_command() {
     let output = Sandbox::new().run(&[
@@ -419,6 +435,7 @@ fn mcp_config_takes_a_name_and_a_command() {
 }
 
 /// CLI-37: every supported shell gets a script on stdout.
+#[cfg(not(windows))]
 #[test]
 fn completions_prints_shell_script_without_log_noise() {
     let sandbox = Sandbox::new();
@@ -436,6 +453,7 @@ fn completions_prints_shell_script_without_log_noise() {
 
 /// Lay out an installed-looking home: a login agent, and (on Unix) the
 /// two CLI links pointing into a `Readshot.app`.
+#[cfg(not(windows))]
 fn installed_home(sandbox: &Sandbox) -> Vec<PathBuf> {
     let agents = sandbox.home().join("Library/LaunchAgents");
     std::fs::create_dir_all(&agents).unwrap();
@@ -462,6 +480,7 @@ fn installed_home(sandbox: &Sandbox) -> Vec<PathBuf> {
 
 /// CLI-38, CLI-39, CLI-42: `uninstall -n` prints the ordered plan
 /// (including what `--purge` adds) and changes nothing.
+#[cfg(not(windows))]
 #[test]
 fn uninstall_dry_run_prints_the_plan_and_changes_nothing() {
     let sandbox = Sandbox::new();
@@ -510,46 +529,6 @@ fn uninstall_dry_run_prints_the_plan_and_changes_nothing() {
         !without_purge.contains("Delete preferences"),
         "{without_purge}"
     );
-}
-
-/// CLI-40: without a terminal and without `-y` the uninstall refuses
-/// with 64 and leaves everything in place.
-#[test]
-fn uninstall_without_a_terminal_or_yes_refuses() {
-    let sandbox = Sandbox::new();
-    let kept = installed_home(&sandbox);
-
-    for args in [&["uninstall"][..], &["uninstall", "--purge"][..]] {
-        let output = sandbox.run(args);
-        assert_eq!(
-            output.status.code(),
-            Some(64),
-            "{args:?}: {}",
-            stderr(&output)
-        );
-        assert!(
-            stderr(&output).contains("refusing to uninstall without confirmation"),
-            "{}",
-            stderr(&output)
-        );
-        let printed = stdout(&output);
-        assert!(
-            printed.starts_with("This will:\n"),
-            "the plan is shown first"
-        );
-        assert!(
-            !printed.contains("Continue? [y/N]"),
-            "no prompt without a terminal"
-        );
-        assert!(!printed.contains("  ok "), "no step may run: {printed}");
-    }
-    for path in &kept {
-        assert!(
-            std::fs::symlink_metadata(path).is_ok(),
-            "{}",
-            path.display()
-        );
-    }
 }
 
 /// CLI-45, CLI-46: the CLI logs to `readshot.log` in the data folder,

@@ -16,6 +16,13 @@ path = "src/lib.rs"
 name = "readshot"
 path = "src/main.rs"
 
+[features]
+default = []
+# Enables tests that run the real OCR engine through the `readshot`
+# binary (Apple Vision on macOS). Off by default like readshot-ocr's
+# own `integration` feature; the nightly CI job turns it on.
+integration = ["readshot-ocr/integration"]
+
 [dependencies]
 arboard = { workspace = true }
 async-trait = { workspace = true }

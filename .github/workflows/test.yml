@@ -132,4 +132,4 @@ jobs:
           # the first runner that needs it.
           echo "Screen Recording pre-grant is not implemented; capture smoke tests self-skip."
       - name: cargo nextest run --features integration
-        run: cargo nextest run --workspace --features readshot-capture/integration,readshot-ocr/integration --no-fail-fast
+        run: cargo nextest run --workspace --features readshot-capture/integration,readshot-ocr/integration,readshot-app/integration --no-fail-fast
