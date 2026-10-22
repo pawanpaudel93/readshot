@@ -1753,6 +1753,9 @@ fn a_left_request_is_picked_up_on_the_reopen_tick() {
         panic!("first copy");
     };
     let mut app = build_app(Arc::new(FakePermissions::granted()));
+    // As `runtime::start` does from `single_instance::register`; given
+    // per test, so tests in one process don't share a mailbox (fix1 n4).
+    app.instance_mailbox = Some(dir.path().to_path_buf());
     assert_eq!(
         update(&mut app, Message::Tick(TickMsg::AppReopen)).units(),
         0,

@@ -410,6 +410,7 @@ pub fn start() -> (App, Task<Message>) {
     // refreshed when an animated surface opens (see the overlay/scroll
     // handlers) in case the user toggles it while Readshot runs.
     app.reduce_motion = os_reduce_motion();
+    app.instance_mailbox = crate::single_instance::registered_mailbox();
     let cli_interactive_request = take_cli_interactive_request();
     if let Some(request) = cli_interactive_request.as_ref() {
         app.cli_interactive_output = Some(request.output.clone());

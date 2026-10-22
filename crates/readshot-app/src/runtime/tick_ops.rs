@@ -14,7 +14,7 @@ pub(super) fn handle_tick_message(state: &mut App, message: TickMsg) -> Task<Mes
 
         TickMsg::Url => on_url_tick(state),
 
-        TickMsg::AppReopen => on_app_reopen_tick(),
+        TickMsg::AppReopen => on_app_reopen_tick(state),
 
         TickMsg::TrayAction(action) => on_tray_action(state, action),
 
@@ -97,11 +97,13 @@ pub(super) fn on_url_tick(state: &mut App) -> Task<Message> {
 }
 
 /// `TickMsg::AppReopen`.
-pub(super) fn on_app_reopen_tick() -> Task<Message> {
+pub(super) fn on_app_reopen_tick(state: &App) -> Task<Message> {
     // Windows / Linux: requests later launches left (none on macOS, or
     // when this copy didn't take the single-instance lock).
-    for request in crate::single_instance::take_requests() {
-        crate::single_instance::deliver(request);
+    if let Some(dir) = &state.instance_mailbox {
+        for request in crate::single_instance::take_requests(dir) {
+            crate::single_instance::deliver(request);
+        }
     }
     if crate::app_events::take_reopen_requests() == 0 {
         Task::none()

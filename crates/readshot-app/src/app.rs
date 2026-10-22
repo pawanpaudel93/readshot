@@ -786,7 +786,8 @@ pub enum SettingsMsg {
     UninstallConfirmed,
     /// The uninstall executor finished; drives the app quit.
     UninstallFinished {
-        /// The app bundle was moved to the Trash (macOS).
+        /// The app bundle was moved to the Trash (macOS): its step ran
+        /// and succeeded (`uninstall::program_trashed`), not just planned.
         program_removed: bool,
         /// History and preferences were deleted too.
         purge: bool,
@@ -1348,6 +1349,9 @@ pub struct App {
     /// "● Recording" label) stay. Defaults to `false`; the runtime
     /// fills it from `os_reduce_motion()` so `App::new` stays pure.
     pub reduce_motion: bool,
+    /// Windows / Linux: where later launches leave their requests, when
+    /// this copy holds the single-instance lock (`single_instance`).
+    pub instance_mailbox: Option<std::path::PathBuf>,
 }
 
 /// State for an active scrolling-capture session.
@@ -1677,6 +1681,7 @@ impl App {
             history_clear_all_pending: false,
             scroll_session: None,
             reduce_motion: false,
+            instance_mailbox: None,
         }
     }
 

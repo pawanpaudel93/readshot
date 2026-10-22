@@ -121,9 +121,13 @@ packages beyond a stable Rust toolchain.
   dir. A later launch finding it held drops a request file
   (`wake-*.req`: `reopen` or its `readshot://` URL, written to a temp
   name and renamed) into the same dir and exits 0 at once; a
-  `--launched-at-login` launch drops nothing. The first copy reads the
-  files on its 500 ms reopen tick (`take_requests`) and queues them in
-  `app_events` / `url_events`, as the macOS AppleEvent handlers do. No
+  `--launched-at-login` launch drops nothing. `main` registers the dir
+  (`single_instance::register`), `runtime::start` copies it into
+  `App::instance_mailbox`, and the 500 ms reopen tick reads the files
+  (`take_requests`: regular files only, at most 1 KiB, links removed
+  unread) and queues them in `app_events` / `url_events`, as the macOS
+  AppleEvent handlers do. Taking the lock drops only requests named
+  before that moment; `.tmp` leftovers go after a minute. No
   network surface: the dir's per-user permissions are the access
   control. The OS drops the lock with its holder, so a crash leaves
   nothing stale.

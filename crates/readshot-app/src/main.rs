@@ -170,7 +170,10 @@ fn claim_single_instance(
         return Some(None);
     };
     match acquire(&dir, request.as_ref()) {
-        Ok(Instance::Primary(guard)) => Some(Some(guard)),
+        Ok(Instance::Primary(guard)) => {
+            readshot_app::single_instance::register(&guard);
+            Some(Some(guard))
+        }
         Ok(Instance::Secondary) => {
             tracing::info!(
                 target: readshot_core::log::cat::APP,
