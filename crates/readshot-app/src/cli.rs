@@ -2813,4 +2813,516 @@ mod tests {
         let err = CliError::Capture(CaptureError::PermissionDenied);
         assert_eq!(exit_code(&err), 77);
     }
+
+    // ── W5c: what the dispatcher hands the capturer and the OCR engine ──
+
+    /// A capturer that records each request it receives, over a set of
+    /// displays the test chooses.
+    struct RecordingCapturer {
+        inner: FakeCapturer,
+        displays: Vec<DisplayInfo>,
+        regions: Mutex<Vec<(CaptureRequest, std::time::Instant)>>,
+        windows: Mutex<Vec<WindowCaptureRequest>>,
+    }
+
+    impl RecordingCapturer {
+        fn new() -> Self {
+            let display =
+                |id: &str, x: f32, w: f32, h: f32, scale: f32, primary: bool| DisplayInfo {
+                    id: id.to_string(),
+                    bounds: Rect::from_xywh(x, 0.0, w, h).unwrap(),
+                    scale,
+                    name: id.to_string(),
+                    is_primary: primary,
+                };
+            // The primary display is deliberately not the first one listed.
+            Self {
+                inner: FakeCapturer::new(),
+                displays: vec![
+                    display("side", -800.0, 800.0, 600.0, 1.0, false),
+                    display("main", 0.0, 1440.0, 900.0, 2.0, true),
+                ],
+                regions: Mutex::new(Vec::new()),
+                windows: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn regions(&self) -> Vec<CaptureRequest> {
+            self.regions
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(req, _)| req.clone())
+                .collect()
+        }
+
+        fn windows(&self) -> Vec<WindowCaptureRequest> {
+            self.windows.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Capturer for RecordingCapturer {
+        async fn list_displays(&self) -> Result<Vec<DisplayInfo>, CaptureError> {
+            Ok(self.displays.clone())
+        }
+
+        async fn capture_region(&self, req: CaptureRequest) -> Result<RgbaImage, CaptureError> {
+            self.regions
+                .lock()
+                .unwrap()
+                .push((req.clone(), std::time::Instant::now()));
+            self.inner.capture_region(req).await
+        }
+
+        async fn list_windows(&self) -> Result<Vec<WindowInfo>, CaptureError> {
+            self.inner.list_windows().await
+        }
+
+        async fn capture_window(
+            &self,
+            req: WindowCaptureRequest,
+        ) -> Result<RgbaImage, CaptureError> {
+            self.windows.lock().unwrap().push(req.clone());
+            self.inner.capture_window(req).await
+        }
+    }
+
+    /// An OCR engine that records the languages and correction flag of
+    /// each request.
+    struct RecordingOcr {
+        inner: FakeOcrEngine,
+        requests: Mutex<Vec<(Vec<String>, bool)>>,
+    }
+
+    impl RecordingOcr {
+        fn new() -> Self {
+            Self {
+                inner: FakeOcrEngine::with_text("hello world"),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn requests(&self) -> Vec<(Vec<String>, bool)> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl OCREngine for RecordingOcr {
+        fn supported_languages(&self) -> Vec<String> {
+            self.inner.supported_languages()
+        }
+
+        async fn recognise(&self, req: OCRRequest) -> Result<readshot_ocr::OCRResult, OCRError> {
+            self.requests
+                .lock()
+                .unwrap()
+                .push((req.languages.clone(), req.use_language_correction));
+            self.inner.recognise(req).await
+        }
+    }
+
+    async fn run_recorded(
+        args: &[&str],
+    ) -> (
+        Result<(), CliError>,
+        Vec<u8>,
+        Arc<RecordingCapturer>,
+        Arc<RecordingOcr>,
+        FakeClipboard,
+    ) {
+        let cap = Arc::new(RecordingCapturer::new());
+        let ocr = Arc::new(RecordingOcr::new());
+        let clipboard = FakeClipboard::default();
+        let mut out = Vec::new();
+        let result = Cli::try_parse_from(args.iter().copied())
+            .unwrap()
+            .run_with_clipboard(cap.clone(), ocr.clone(), &mut out, &clipboard)
+            .await;
+        (result, out, cap, ocr, clipboard)
+    }
+
+    /// CLI-08: no `--display`/`--rect`/`--scale` → the primary display
+    /// (even when it is not listed first), its full display-local bounds,
+    /// its scale, and the cursor hidden.
+    #[tokio::test]
+    async fn capture_defaults_to_the_primary_display_its_bounds_and_scale() {
+        for cmd in ["capture", "capture-text", "capture-and-ocr"] {
+            let args: &[&str] = if cmd == "capture" {
+                &["readshot", "capture", "--clipboard"]
+            } else {
+                &["readshot", cmd]
+            };
+            let (result, _, cap, _, _) = run_recorded(args).await;
+            result.unwrap();
+            let reqs = cap.regions();
+            assert_eq!(reqs.len(), 1, "{cmd}");
+            let req = &reqs[0];
+            assert_eq!(req.display_id, "main", "{cmd}");
+            assert_eq!(
+                (
+                    req.rect.x(),
+                    req.rect.y(),
+                    req.rect.width(),
+                    req.rect.height()
+                ),
+                (0.0, 0.0, 1440.0, 900.0),
+                "{cmd}"
+            );
+            assert_eq!(req.scale, 2.0, "{cmd}");
+            assert!(req.hide_cursor, "{cmd}: the cursor is hidden by default");
+        }
+
+        let (result, _, cap, _, _) = run_recorded(&[
+            "readshot",
+            "capture",
+            "--display",
+            "side",
+            // A leading `-` needs the `=` form, or clap reads a flag.
+            "--rect=-10,5,100,50",
+            "--scale",
+            "3",
+            "--clipboard",
+        ])
+        .await;
+        result.unwrap();
+        let req = &cap.regions()[0];
+        assert_eq!(req.display_id, "side");
+        assert_eq!(
+            (
+                req.rect.x(),
+                req.rect.y(),
+                req.rect.width(),
+                req.rect.height()
+            ),
+            (-10.0, 5.0, 100.0, 50.0),
+            "negative x is allowed"
+        );
+        assert_eq!(req.scale, 3.0);
+    }
+
+    /// CLI-13: `--show-cursor` reaches the capturer (and the JSON source)
+    /// for every region command.
+    #[tokio::test]
+    async fn show_cursor_reaches_the_capture_request() {
+        for cmd in ["capture", "capture-text", "capture-and-ocr"] {
+            let mut args = vec!["readshot", cmd, "--show-cursor"];
+            if cmd == "capture" {
+                args.push("--clipboard");
+            }
+            let (result, _, cap, _, _) = run_recorded(&args).await;
+            result.unwrap();
+            assert!(!cap.regions()[0].hide_cursor, "{cmd}");
+        }
+
+        let (result, out, _, _, _) = run_recorded(&[
+            "readshot",
+            "capture",
+            "--show-cursor",
+            "--clipboard",
+            "--json",
+        ])
+        .await;
+        result.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(value["source"]["hide_cursor"], false);
+    }
+
+    /// CLI-21, CLI-22: the shadow flag reaches the window capture; the
+    /// shared flags (clipboard + JSON, other formats) work for windows.
+    #[tokio::test]
+    async fn window_shadow_flags_reach_the_window_request() {
+        for (flag, ignore) in [
+            (None, false),
+            (Some("--window-shadow"), false),
+            (Some("--no-window-shadow"), true),
+        ] {
+            let mut args = vec![
+                "readshot",
+                "capture-window",
+                "--window",
+                "fake-window-0",
+                "--clipboard",
+                "--json",
+            ];
+            args.extend(flag);
+            let (result, out, cap, _, clipboard) = run_recorded(&args).await;
+            result.unwrap();
+            let reqs = cap.windows();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].ignore_shadows, ignore, "{flag:?}");
+            assert_eq!(clipboard.image_size(), Some((256, 256)));
+            let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+            assert_eq!(value["kind"], "capture-window");
+            assert_eq!(value["source"]["type"], "window");
+            assert_eq!(value["source"]["window_id"], "fake-window-0");
+            assert_eq!(value["source"]["ignore_shadows"], ignore);
+            assert_eq!(value["output"], serde_json::Value::Null);
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("window.webp");
+        let (result, out, _, _, _) = run_recorded(&[
+            "readshot",
+            "capture-window",
+            "--window",
+            "fake-window-0",
+            "--format",
+            "webp",
+            "-o",
+            path.to_str().unwrap(),
+        ])
+        .await;
+        result.unwrap();
+        assert!(out.is_empty());
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(
+            image::guess_format(&bytes).unwrap(),
+            image::ImageFormat::WebP
+        );
+    }
+
+    /// CLI-28, CLI-29: `--languages` and the correction switch reach the
+    /// OCR request for all three OCR commands.
+    #[tokio::test]
+    async fn language_hints_and_correction_reach_the_ocr_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("in.png");
+        readshot_core::save_png(&image::RgbaImage::new(8, 8), &png).unwrap();
+        let png = png.to_str().unwrap();
+
+        for base in [
+            &["readshot", "ocr", "-i", png][..],
+            &["readshot", "capture-text"][..],
+            &["readshot", "capture-and-ocr"][..],
+        ] {
+            let (result, _, _, ocr, _) = run_recorded(base).await;
+            result.unwrap();
+            assert_eq!(ocr.requests(), vec![(Vec::new(), true)], "{base:?}");
+
+            for off in ["--no-language-correction", "--language-correction=false"] {
+                let mut args = base.to_vec();
+                args.extend(["--languages", "en-US,fr-FR", off]);
+                let (result, _, _, ocr, _) = run_recorded(&args).await;
+                result.unwrap();
+                assert_eq!(
+                    ocr.requests(),
+                    vec![(vec!["en-US".to_string(), "fr-FR".to_string()], false)],
+                    "{args:?}"
+                );
+            }
+        }
+    }
+
+    /// CLI-14: `--delay` waits before the capture.
+    #[tokio::test]
+    async fn delay_waits_before_capturing() {
+        let started = std::time::Instant::now();
+        let (result, _, cap, _, _) =
+            run_recorded(&["readshot", "capture", "--delay", "0.2", "--clipboard"]).await;
+        result.unwrap();
+        let captured_at = cap.regions.lock().unwrap()[0].1;
+        assert!(
+            captured_at.duration_since(started) >= Duration::from_millis(200),
+            "captured after {:?}",
+            captured_at.duration_since(started)
+        );
+    }
+
+    /// CLI-15, CLI-17: TIFF and WebP are real files of that type; the
+    /// default `-o -` writes PNG bytes to stdout; an unwritable path is an
+    /// I/O error (74).
+    #[tokio::test]
+    async fn image_formats_destinations_and_write_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        for (format, expected) in [
+            ("tiff", image::ImageFormat::Tiff),
+            ("webp", image::ImageFormat::WebP),
+        ] {
+            let path = dir.path().join(format!("out.{format}"));
+            let (result, out, _, _, _) = run_recorded(&[
+                "readshot",
+                "capture",
+                "--format",
+                format,
+                "-o",
+                path.to_str().unwrap(),
+            ])
+            .await;
+            result.unwrap();
+            assert!(out.is_empty(), "{format}");
+            let bytes = std::fs::read(&path).unwrap();
+            assert_eq!(image::guess_format(&bytes).unwrap(), expected);
+            let img = image::load_from_memory(&bytes).unwrap();
+            assert_eq!((img.width(), img.height()), (256, 256), "{format}");
+        }
+
+        let (result, out, _, _, _) = run_recorded(&["readshot", "capture"]).await;
+        result.unwrap();
+        assert_eq!(&out[..8], b"\x89PNG\r\n\x1a\n", "default output is stdout");
+
+        let unwritable = dir.path().join("missing-dir").join("x.png");
+        let (result, out, _, _, _) =
+            run_recorded(&["readshot", "capture", "-o", unwritable.to_str().unwrap()]).await;
+        let err = result.unwrap_err();
+        assert!(matches!(err, CliError::Io(_)), "{err:?}");
+        assert_eq!(exit_code(&err), 74);
+        assert!(out.is_empty());
+    }
+
+    /// CLI-25: `capture-text --clipboard` copies the text and prints nothing.
+    #[tokio::test]
+    async fn capture_text_clipboard_copies_text_without_stdout() {
+        let (result, out, _, _, clipboard) =
+            run_recorded(&["readshot", "capture-text", "--clipboard"]).await;
+        result.unwrap();
+        assert!(out.is_empty());
+        assert_eq!(clipboard.text(), Some("hello world".to_string()));
+        assert_eq!(clipboard.image_size(), None);
+    }
+
+    /// CLI-26, CLI-27: `-o FILE` gets the text exactly (no newline added,
+    /// unlike stdout) or the JSON; stdout stays empty.
+    #[tokio::test]
+    async fn text_commands_write_text_or_json_to_the_output_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("in.png");
+        readshot_core::save_png(&image::RgbaImage::new(8, 8), &png).unwrap();
+        let png = png.to_str().unwrap();
+        let text_path = dir.path().join("out.txt");
+        let text_out = text_path.to_str().unwrap();
+
+        for args in [
+            &["readshot", "ocr", "-i", png, "-o", text_out][..],
+            &["readshot", "capture-text", "-o", text_out][..],
+            &["readshot", "capture-and-ocr", "-o", text_out][..],
+        ] {
+            let _ = std::fs::remove_file(&text_path);
+            let (result, out, _, _, _) = run_recorded(args).await;
+            result.unwrap();
+            assert!(out.is_empty(), "{args:?}");
+            assert_eq!(std::fs::read_to_string(&text_path).unwrap(), "hello world");
+        }
+
+        let (result, out, _, _, _) = run_recorded(&["readshot", "ocr", "-i", png]).await;
+        result.unwrap();
+        assert_eq!(out, b"hello world\n", "stdout gets a trailing newline");
+
+        let json_path = dir.path().join("out.json");
+        for (args, kind) in [
+            (vec!["readshot", "ocr", "-i", png, "--json"], "ocr"),
+            (vec!["readshot", "capture-text", "--json"], "capture-text"),
+            (
+                vec!["readshot", "capture-and-ocr", "--json"],
+                "capture-and-ocr",
+            ),
+        ] {
+            let mut args = args;
+            args.extend(["-o", json_path.to_str().unwrap()]);
+            let (result, out, _, _, _) = run_recorded(&args).await;
+            result.unwrap();
+            assert!(out.is_empty(), "{args:?}");
+            let value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&json_path).unwrap()).unwrap();
+            assert_eq!(value["kind"], kind);
+            assert_eq!(value["text"], "hello world");
+        }
+    }
+
+    /// CLI-44: every error class maps to its documented exit code.
+    #[test]
+    fn every_error_maps_to_its_documented_exit_code() {
+        let io = || std::io::Error::other("disk");
+        let cases: Vec<(CliError, i32)> = vec![
+            (CliError::Capture(CaptureError::PermissionDenied), 77),
+            (
+                CliError::Capture(CaptureError::DisplayNotFound("d".into())),
+                66,
+            ),
+            (
+                CliError::Capture(CaptureError::WindowNotFound("w".into())),
+                66,
+            ),
+            (
+                CliError::Capture(CaptureError::InvalidRegion("r".into())),
+                64,
+            ),
+            (CliError::Capture(CaptureError::Backend("b".into())), 71),
+            (CliError::Capture(CaptureError::Unsupported("u".into())), 71),
+            (CliError::Ocr(OCRError::NoText), 70),
+            (CliError::Ocr(OCRError::Backend("o".into())), 70),
+            (CliError::Io(io()), 74),
+            (CliError::Image(image::ImageError::IoError(io())), 74),
+            (CliError::Clipboard("c".into()), 74),
+            (CliError::DisplayNotFound("d".into()), 66),
+            (CliError::NoDisplays, 66),
+            (CliError::InvalidInput("i".into()), 64),
+            (
+                CliError::InvalidRect {
+                    got: "1".into(),
+                    reason: "r".into(),
+                },
+                64,
+            ),
+            (CliError::Uninstall("1 step(s)".into()), 74),
+        ];
+        for (err, code) in cases {
+            assert_eq!(exit_code(&err), code, "{err:?}");
+        }
+    }
+
+    /// CLI-47: handoff entries older than a day are removed; fresh ones,
+    /// and entries that aren't Readshot's, stay.
+    #[cfg(unix)]
+    #[test]
+    fn stale_interactive_handoff_entries_are_removed() {
+        let tmp = std::env::temp_dir();
+        let tag = format!(
+            "w5c-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )
+        .replace(['(', ')'], "");
+        let stale_dir = tmp.join(format!("readshot-interactive-stale-dir-{tag}"));
+        let stale_file = tmp.join(format!("readshot-interactive-stale-{tag}.png"));
+        let fresh_dir = tmp.join(format!("readshot-interactive-fresh-{tag}"));
+        let foreign = tmp.join(format!("not-readshot-interactive-{tag}"));
+        std::fs::create_dir_all(&stale_dir).unwrap();
+        std::fs::write(stale_dir.join("capture.png"), b"old").unwrap();
+        std::fs::write(&stale_file, b"old").unwrap();
+        std::fs::create_dir_all(&fresh_dir).unwrap();
+        std::fs::write(&foreign, b"keep").unwrap();
+        let two_days_ago = SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60);
+        for path in [&stale_dir, &stale_file, &foreign] {
+            std::fs::File::open(path)
+                .unwrap()
+                .set_modified(two_days_ago)
+                .unwrap();
+        }
+
+        cleanup_stale_interactive_temp_files();
+
+        assert!(!stale_dir.exists(), "a stale handoff dir is removed");
+        assert!(!stale_file.exists(), "a stale handoff file is removed");
+        assert!(fresh_dir.exists(), "a fresh handoff dir stays");
+        assert!(foreign.exists(), "other entries are never touched");
+        let _ = std::fs::remove_dir_all(&fresh_dir);
+        let _ = std::fs::remove_file(&foreign);
+    }
+
+    /// MCP-38: the GUI keeps history in the folder `readshot-mcp` reads
+    /// (readshot-mcp's `history_tools_read_the_gui_history_folder` pins
+    /// the same path from the server side).
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn gui_history_folder_is_the_one_readshot_mcp_reads() {
+        let root = crate::runtime::default_history_root().unwrap();
+        #[cfg(target_os = "macos")]
+        let expected =
+            std::path::Path::new("Library/Application Support/np.com.pawanpaudel.Readshot/history");
+        #[cfg(target_os = "linux")]
+        let expected = std::path::Path::new("readshot/history");
+        assert!(root.ends_with(expected), "{}", root.display());
+    }
 }
