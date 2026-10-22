@@ -480,6 +480,13 @@ pub(super) fn on_overlay_selection_changed(
     rect: Option<readshot_core::geom::Rect>,
 ) -> Task<Message> {
     match rect {
+        // An overlay that confirms on its own (CLI, tray Scrolling
+        // Capture, Add Capture) has no action bar, so it keeps no
+        // committed selection: an arrow-key selection there stays in the
+        // canvas until Enter confirms it with the preset intent.
+        Some(_) if super::view::overlay_auto_confirm_intent(state).is_some() => {
+            state.overlay_selections.remove(&display_id);
+        }
         Some(r) => {
             state.overlay_selections.insert(display_id, r);
         }

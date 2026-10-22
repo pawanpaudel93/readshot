@@ -3693,7 +3693,6 @@ pub(crate) fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> 
             .into();
     }
     let auto_confirm_intent = overlay_auto_confirm_intent(state);
-    let cli_interactive = auto_confirm_intent == Some(crate::app::CaptureIntent::CliInteractive);
 
     let canvas = Canvas::new(crate::overlay::OverlayProgram {
         display_id,
@@ -3719,18 +3718,9 @@ pub(crate) fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> 
     // committed selection. Layered above the canvas so its buttons
     // intercept clicks before the overlay's "click outside =
     // restart drag" path sees them.
-    let toolbar_layer = if cli_interactive {
-        None
-    } else {
-        overlay_record
-            .and_then(|d| {
-                state
-                    .overlay_selections
-                    .get(&d.display_id)
-                    .map(|rect| (d, rect))
-            })
-            .map(|(d, rect)| overlay_toolbar_layer(&d.display_id, rect, d.width, d.height))
-    };
+    let toolbar_layer = overlay_record
+        .and_then(|d| overlay_action_bar_rect(state, &d.display_id).map(|rect| (d, rect)))
+        .map(|(d, rect)| overlay_toolbar_layer(&d.display_id, rect, d.width, d.height));
 
     // Keep the overlay root as a stack even before the toolbar appears.
     // The canvas owns the in-progress selection state; changing the
@@ -3741,6 +3731,20 @@ pub(crate) fn overlay_view(state: &App, id: window::Id) -> Element<'_, Message> 
     } else {
         stack![canvas_layer].into()
     }
+}
+
+/// The selection the overlay's action bar sits on for `display_id`, or
+/// `None` when no bar is drawn: nothing is selected there, or the
+/// overlay confirms on its own (CLI, tray Scrolling Capture, Add
+/// Capture), which never shows one.
+pub(crate) fn overlay_action_bar_rect<'a>(
+    state: &'a App,
+    display_id: &str,
+) -> Option<&'a readshot_core::geom::Rect> {
+    if overlay_auto_confirm_intent(state).is_some() {
+        return None;
+    }
+    state.overlay_selections.get(display_id)
 }
 
 pub(crate) fn overlay_auto_confirm_intent(state: &App) -> Option<crate::app::CaptureIntent> {

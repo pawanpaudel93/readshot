@@ -727,19 +727,16 @@ fn clicking_a_window_in_the_picker_captures_it_on_its_display() {
     assert_eq!(app.pending_intent, None);
 }
 
-/// OV-09 (bug): tray-scroll and Add Capture overlays confirm on their
-/// own and should show no action bar. A mouse drag never commits an
-/// editable selection there, but an arrow key does, and `overlay_view`
-/// hides the bar only in CLI mode, so the bar appears. Its buttons then
-/// confirm with their own intent (Copy, Save…) instead of the preset
-/// one. The check mirrors `overlay_view`'s rule: a bar is drawn for a
-/// display with a selection unless the overlay is the CLI's.
+/// OV-09: tray-scroll and Add Capture overlays confirm on their own and
+/// show no action bar, also for an arrow-key selection: the runtime
+/// keeps no committed selection for them, and the view draws the bar
+/// from the same `overlay_action_bar_rect`. Enter then confirms with
+/// the preset intent; in tray scroll mode that starts the session.
 #[test]
-#[ignore = "bug: an arrow-key selection shows the action bar in tray-scroll and Add Capture overlays (OV-09)"]
 fn an_auto_confirm_overlay_shows_no_action_bar_for_a_keyboard_selection() {
     let bar_shown = |app: &App| {
-        app.overlay_selections.contains_key("a")
-            && overlay_auto_confirm_intent(app) != Some(I::CliInteractive)
+        crate::runtime::view::overlay_action_bar_rect(app, "a").is_some()
+            || !app.overlay_selections.is_empty()
     };
     let mut app = granted_app();
     open_overlays(
@@ -750,6 +747,13 @@ fn an_auto_confirm_overlay_shows_no_action_bar_for_a_keyboard_selection() {
     let mut a = OverlayCanvas::on(&app, "a");
     let _ = a.key(&mut app, Key::Named(Named::ArrowRight), Modifiers::empty());
     assert!(!bar_shown(&app), "tray scroll capture");
+    let (_, _, intent) = selected(a.key(&mut app, Key::Named(Named::Enter), Modifiers::empty()));
+    assert_eq!(intent, I::ScrollCapture);
+    assert_eq!(overlay_count(&app), 0);
+    assert!(
+        app.scroll_session.is_some(),
+        "Enter starts the scroll session"
+    );
 
     let mut app = granted_app();
     start_add_capture(&mut app);
@@ -758,4 +762,20 @@ fn an_auto_confirm_overlay_shows_no_action_bar_for_a_keyboard_selection() {
     let mut a = OverlayCanvas::on(&app, "a");
     let _ = a.key(&mut app, Key::Named(Named::ArrowRight), Modifiers::empty());
     assert!(!bar_shown(&app), "Add Capture");
+    let (_, _, intent) = selected(a.key(&mut app, Key::Named(Named::Enter), Modifiers::empty()));
+    assert_eq!(intent, I::CombineIntoEditor);
+
+    // An ordinary overlay still shows the bar for the same selection.
+    let mut app = granted_app();
+    open_overlays(
+        &mut app,
+        crate::tray::TrayAction::Capture,
+        vec![display("a", 0.0, 1.0)],
+    );
+    let mut a = OverlayCanvas::on(&app, "a");
+    let _ = a.key(&mut app, Key::Named(Named::ArrowRight), Modifiers::empty());
+    assert!(
+        crate::runtime::view::overlay_action_bar_rect(&app, "a").is_some(),
+        "an ordinary overlay"
+    );
 }
