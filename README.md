@@ -27,8 +27,21 @@ find it later by searching the text inside the screenshot.
   the pointer and captures the one you click; give it a shortcut in
   Settings › Capture (none by default). Window capture needs macOS; the
   Windows and Linux source builds capture regions and displays only.
+- **Retake Last Region** in the menu captures the region you last
+  selected again, on the same display, and opens it in the editor. It is
+  available once you have selected a region, and Readshot forgets the
+  region when it quits.
+- On macOS, captures taken in the app leave out Readshot's own windows
+  (pins, the scrolling-capture outline and window), and the selection
+  can cover the menu bar and the Dock. The Windows and Linux source
+  builds don't leave them out, so a pin under the selection shows in the
+  capture.
 - Scrolling capture — lock a region, scroll the page, get one tall
-  stitched image with a live HUD preview.
+  stitched image with a live HUD preview. **Scrolling Capture…** in the
+  menu starts the session as soon as you release the drag (or press
+  `↵`). A session stops by itself at 120 frames and stitches what it
+  has; a result taller than 16,384 pixels can't be stitched. The stitched
+  image opens in the editor and is saved to History.
 - Multi-monitor capture with Retina-quality output.
 - Annotation editor with shapes (filled, dashed, rounded), curved and
   hand-drawn arrows, pen, highlighter, multi-line text (sizes, pill,
@@ -36,19 +49,46 @@ find it later by searching the text inside the screenshot.
   (free, 16:9, 4:3 or square), undo, and redo.
   Hold Shift for squares, circles, and 45° lines.
 - An **Image** menu to resize, rotate, and flip a capture, or combine it
-  with another capture or an image file.
+  with another capture or an image file (an image file is always added
+  below).
 - A side panel with a **Text** tab (recognized lines to copy, and
   one-click redaction of sensitive text) and a **Beautify** tab
   (background, padding, rounded corners, shadow, canvas size, and
   presets).
+- The Text tab finds email addresses, phone numbers, card numbers, and
+  API keys and tokens (known prefixes such as `sk_live_`, `ghp_` or
+  `AKIA`, and long random-looking strings). **Redact All** covers every
+  match, and a line's **Redact** button only that line. The style picker
+  chooses Solid block (the default), Pixelate, or Blur; the choice isn't
+  remembered after the editor closes. Finding and redacting needs word
+  positions, so it is macOS only.
+- Beautify's **Save Preset** keeps up to 12 presets of your own;
+  removing one offers Undo. Picking a background while the padding is 0
+  sets the padding to 48. History keeps the capture without Beautify, so
+  a capture reopened from History has no background, padding, or
+  shadow.
 - Offline OCR via Apple Vision with layout-aware copied text and a
-  choice of recognition languages.
+  choice of recognition languages. The text you copy in the app (Copy
+  Text, the editor, History) turns aligned rows into a Markdown table,
+  reads two-column text one column at a time, puts code and terminal
+  output in a fenced code block, and trims extra blank lines and
+  trailing spaces. The table, column, and code handling needs line
+  positions, so it is macOS only. The CLI and MCP server return the
+  recognized lines as they come from the OCR engine.
 - Searchable capture history with open, reveal, copy, pin, and delete
-  actions. Deleting is permanent (not the Trash). A redacted capture whose
+  actions. Search matches the recognized text, the capture time
+  (`YYYY-MM-DD HH:MM:SS`), the display id, and the size (`1280x800`).
+  Double-click a row to open it. **History retention** in Settings ›
+  Capture is Last 50 captures by default; Last 30 days and Unlimited are
+  the other limits, and Off saves no new captures but keeps the ones you
+  have. Captures over the limit are deleted at the next capture, not
+  when you change the setting. Deleting is permanent (not the Trash). A redacted capture whose
   redactions can't all be accounted for keeps no text, and neither does
   a redacted capture on Windows or Linux (their OCR gives no word
   positions to mask by); History says "Text hidden" for it.
-- Pin captures as always-on-top reference windows.
+- Pin captures as always-on-top reference windows. Double-click a pin
+  (or press `L`) to lock or unlock it; a locked pin can't be dragged.
+  Opacity goes from 20 % to 100 % in steps of 5 %.
 - In-app updates via "Check for Updates…" in the menu bar.
 - Clean uninstall from Settings, `readshot uninstall`, or the installer
   script — including the login item, CLI links, and permission.
@@ -84,6 +124,20 @@ or press the default shortcut:
 ```text
 Command + Shift + X
 ```
+
+On macOS, `open readshot://new` (or a link to `readshot://new`) opens
+the same capture overlay, for launchers and automation tools. It never
+captures without you selecting a region.
+
+If a capture started from the shortcut or the menu fails (or Retake
+Last Region has no region yet), macOS shows a notification. When Readshot's
+notifications are turned off, the welcome window shows the problem
+instead, and the menu gains **Notifications Are Off — Turn On…**. On
+Windows and Linux the welcome window always shows it.
+
+Once Screen Recording is allowed, Open at Login (Settings › App) starts
+Readshot without opening a window; on macOS a notification says it is
+running in the menu bar.
 
 CLI examples:
 
@@ -133,8 +187,10 @@ See [docs/CLI.md](docs/CLI.md) for the complete command reference.
 Inside the GUI, keyboard shortcuts cover the main workflows:
 
 - **Capture overlay:** drag to select a region, or press an arrow key to
-  start a centred one; `↵` captures the full display; `esc` cancels.
-  With a selection: `⌘C` / `⇧⌘C` / `⌘S` / `⌘P` / `⌘R` copy image / copy
+  start a centred one; `↵` or `Space` captures the full display, or the
+  selection if there is one, and opens it in the editor; `esc` cancels.
+  A drag smaller than 4 pixels selects nothing and the hint asks for a
+  larger area. With a selection: `⌘C` / `⇧⌘C` / `⌘S` / `⌘P` / `⌘R` copy image / copy
   text / save / pin / start a scrolling capture, the arrow keys nudge it and
   `⌥` + arrow keys resize it from its bottom-right corner (`⇧` ×10).
 - **Window picker (Capture Window…):** `Tab` / `⇧Tab` or the arrow keys
@@ -157,7 +213,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   edits the selected text annotation.
 - **Editor actions:** `⌘C` copy image, `⇧⌘C` copy all text (the side panel's Text tab also copies selected lines), `⌘S` save,
   `⌘P` pin, `⌥⌘P` show or hide the side panel, `⌘Z` / `⇧⌘Z` undo and
-  redo, `⌘[` / `⌘]` rotate left / right, `⇧⌘H` / `⇧⌘V` flip horizontally /
+  redo, `⌘=` / `⌘-` zoom in / out, `⌘0` actual pixels (the title bar's
+  **1:1**; **Fit** fits the window), `⌘[` / `⌘]` rotate left / right, `⇧⌘H` / `⇧⌘V` flip horizontally /
   vertically, `⌥⌘I` resize (focus starts in Width; `Tab` moves between the
   fields, `⌥P` switches px / %, `⌥L` locks the aspect), `⇧⌘I` opens the Image
   menu (`↑` / `↓` choose a row, `↵` runs it; `-` / `+` change the gap and
@@ -202,6 +259,8 @@ Inside the GUI, keyboard shortcuts cover the main workflows:
   cycle retention and the default save format; `⌘K` records a new capture
   shortcut (the window-capture shortcut has its own Record and Clear
   buttons on the Capture pane); `⇧⌘R` resets and `⇧⌘U` uninstalls (press twice to confirm).
+  The capture shortcut can't be `⌘Y` or `⌘,` (History and Settings) or
+  the window-capture shortcut; Settings says so and keeps the old one.
   Each shortcut also brings up the pane its setting lives on, and the pane
   title says what changed. `Tab` / `⇧Tab` move a focus ring through the
   pane's controls (buttons, pickers, checkboxes, the filename field), `Space`
