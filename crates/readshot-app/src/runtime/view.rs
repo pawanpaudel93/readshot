@@ -4167,6 +4167,31 @@ fn settings_block<'a>(
     settings_block_with(label, help, None, control)
 }
 
+/// A [`group_row`] whose help line is an error: set in `danger` with an
+/// Alert glyph, as [`settings_block_with`] does.
+fn group_row_error<'a>(
+    label: &'a str,
+    error: String,
+    danger: Color,
+    control: Element<'a, Message>,
+) -> Element<'a, Message> {
+    let line = row![
+        crate::icons::icon(crate::icons::AppIcon::Alert, danger, 14.0),
+        text(error)
+            .size(TYPE_CAPTION)
+            .style(text_danger)
+            .wrapping(iced::widget::text::Wrapping::Word)
+    ]
+    .spacing(6)
+    .align_y(Alignment::Start);
+    let left = column![text(label).size(TYPE_BODY).style(text_t1), line].spacing(2);
+    row![left.width(Length::Fill), control]
+        .spacing(SP3)
+        .align_y(Alignment::Center)
+        .padding([10, 14])
+        .into()
+}
+
 /// [`settings_block`] whose help line can be an error: with
 /// `error_icon` (the palette's danger colour) it is set in `danger` with
 /// an Alert glyph, not in the neutral help grey.
@@ -4908,11 +4933,15 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
     }
     vec![
         settings_group_heading("Startup", text_t3),
-        settings_group(vec![group_row(
-            "Open Readshot at login",
-            "",
-            startup_toggle,
-        )]),
+        settings_group(vec![match &state.settings_launch_at_login_error {
+            Some(why) => group_row_error(
+                "Open Readshot at login",
+                why.clone(),
+                palette(state.theme_mode).danger,
+                startup_toggle,
+            ),
+            None => group_row("Open Readshot at login", "", startup_toggle),
+        }]),
         settings_group_heading("Danger zone", text_danger),
         settings_group(match uninstalled_row(state) {
             // Uninstalled: only the outcome and Quit; nothing else to do.

@@ -363,11 +363,11 @@ fn open_at_login_that_cannot_be_set_turns_back_off() {
     assert!(!saved(&dir).launch_at_login, "reverted on disk");
 }
 
-/// BUG (ST-18): after the revert, ⌘L still says "Open at login: On",
-/// and nothing says the change failed.
+/// ST-18 (macOS): after the revert, ⌘L announces the real state (Off)
+/// and why the change failed, and the toggle's row shows the reason in
+/// the error tone until Settings closes.
 #[cfg(target_os = "macos")]
 #[test]
-#[ignore = "bug: a failed Open at Login toggle still announces \"Open at login: On\""]
 fn a_failed_open_at_login_toggle_does_not_announce_on() {
     let exe = std::env::current_exe().unwrap();
     assert!(!exe.to_string_lossy().contains(".app/Contents/MacOS/"));
@@ -375,5 +375,36 @@ fn a_failed_open_at_login_toggle_does_not_announce_on() {
     press_settings_key(&mut app, id, "l", false);
     assert!(!app.preferences.launch_at_login);
     let feedback = app.settings_key_feedback.clone().unwrap_or_default();
-    assert_ne!(feedback, "Open at login: On", "says On while it is Off");
+    assert!(
+        feedback.starts_with("Open at login: Off. Couldn’t turn on Open at login"),
+        "announces the real state and the failure: {feedback}"
+    );
+    let why = app
+        .settings_launch_at_login_error
+        .clone()
+        .expect("an error is shown");
+    assert!(why.contains("Readshot.app"), "{why}");
+    assert!(feedback.ends_with(&why), "{feedback}");
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
+    assert_eq!(app.settings_launch_at_login_error, None, "cleared on close");
+}
+
+/// ST-18: the failure line names the change, a reason the user can act
+/// on, and the next step; it never shows a raw path or error.
+#[test]
+fn an_open_at_login_failure_says_what_failed_and_why() {
+    use crate::startup::StartupError;
+    let io = StartupError::Io {
+        path: "/secret/LaunchAgents/x.plist".into(),
+        source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+    };
+    let off = crate::runtime::settings_ops::launch_at_login_failure(false, &io);
+    assert_eq!(
+        off,
+        "Couldn’t turn off Open at login — permission denied. Try again."
+    );
+    let bundle = StartupError::UnsupportedBundleLayout("/tmp/readshot".into());
+    let on = crate::runtime::settings_ops::launch_at_login_failure(true, &bundle);
+    assert!(on.starts_with("Couldn’t turn on Open at login — "), "{on}");
+    assert!(!on.contains("/tmp/readshot"), "{on}");
 }

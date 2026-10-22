@@ -330,6 +330,15 @@ fn adjust_settings_item(state: &mut App, item: SettingsFocus, step: i32) -> Task
         _ => return Task::none(),
     };
     let task = update(state, Message::Settings(SettingsMsg::Edit(msg)));
+    // Open at login can fail and snap back: announce the state it is
+    // really in, and why, never the one that was asked for.
+    let feedback = match (item, &state.settings_launch_at_login_error) {
+        (F::LaunchAtLogin, Some(why)) => format!(
+            "Open at login: {}. {why}",
+            on_off(state.preferences.launch_at_login)
+        ),
+        _ => feedback,
+    };
     state.settings_key_feedback = Some(feedback);
     task
 }
@@ -454,17 +463,42 @@ fn on_settings(state: &mut App, submsg: SettingsMessage) -> Task<Message> {
         sync_tray_capture_hotkey_label(state);
     }
     if let Some(enabled) = launch_at_login {
-        if let Err(e) = crate::startup::set_launch_at_login(enabled) {
-            tracing::warn!(
-                target: readshot_core::log::cat::APP,
-                "launch-at-login update failed: {e}",
-            );
-            state.update_sync(Message::Settings(SettingsMsg::Edit(
-                SettingsMessage::SetLaunchAtLogin(!enabled),
-            )));
+        match crate::startup::set_launch_at_login(enabled) {
+            Ok(()) => state.settings_launch_at_login_error = None,
+            Err(e) => {
+                tracing::warn!(
+                    target: readshot_core::log::cat::APP,
+                    "launch-at-login update failed: {e}",
+                );
+                state.update_sync(Message::Settings(SettingsMsg::Edit(
+                    SettingsMessage::SetLaunchAtLogin(!enabled),
+                )));
+                state.settings_launch_at_login_error = Some(launch_at_login_failure(enabled, &e));
+            }
         }
     }
     Task::none()
+}
+
+/// What the user sees when Open at login couldn't be changed: the
+/// change, the reason when it is one they can act on, and what to do.
+pub(crate) fn launch_at_login_failure(enabled: bool, e: &crate::startup::StartupError) -> String {
+    let action = if enabled {
+        "turn on Open at login"
+    } else {
+        "turn off Open at login"
+    };
+    if matches!(e, crate::startup::StartupError::UnsupportedBundleLayout(_)) {
+        return format!(
+            "Couldn’t {action} — Readshot isn’t running from Readshot.app. \
+             Open the installed app and try again."
+        );
+    }
+    super::history_ops::friendly_string_error_with(
+        action,
+        &e.to_string(),
+        Some(super::history_ops::RETRY_HINT),
+    )
 }
 
 /// `SettingsMsg::OpenRequested`.
@@ -579,6 +613,7 @@ fn on_reset_all_confirmed(state: &mut App) -> Task<Message> {
             state.update_sync(Message::Settings(SettingsMsg::Edit(
                 SettingsMessage::SetLaunchAtLogin(true),
             )));
+            state.settings_launch_at_login_error = Some(launch_at_login_failure(false, &e));
         }
     }
     Task::none()

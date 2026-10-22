@@ -93,6 +93,7 @@ pub(super) fn on_window_closed(state: &mut App, id: iced::window::Id) -> Task<Me
         state.settings_hotkey_error = None;
         state.settings_hotkey_status = None;
         state.settings_status = None;
+        state.settings_launch_at_login_error = None;
         state.settings_reset_all_pending = false;
     }
     let restore = match state.editor.take_if(|ed| ed.window_id == Some(id)) {

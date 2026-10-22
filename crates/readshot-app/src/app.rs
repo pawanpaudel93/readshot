@@ -1312,6 +1312,10 @@ pub struct App {
     /// Short general-purpose status text shown at the bottom of
     /// Settings.
     pub settings_status: Option<String>,
+    /// Why the last Open at login change failed (the toggle is back to
+    /// its real state), shown in the error tone under the toggle until
+    /// a change succeeds or Settings closes.
+    pub settings_launch_at_login_error: Option<String>,
     /// True after the user asks to reset settings and before they
     /// confirm or cancel.
     pub settings_reset_all_pending: bool,
@@ -1670,6 +1674,7 @@ impl App {
             settings_hotkey_error: None,
             settings_hotkey_status: None,
             settings_status: None,
+            settings_launch_at_login_error: None,
             settings_reset_all_pending: false,
             settings_uninstall_pending: false,
             settings_uninstall_purge: false,
