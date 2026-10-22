@@ -905,7 +905,10 @@ fn run_uninstall(
     if !purge {
         if let Some(path) = crate::runtime::default_preferences_path() {
             if let Err(e) = crate::uninstall::record_open_at_login_off(&path) {
-                writeln!(stdout, "  note     couldn't record Open at Login as off: {e}")?;
+                writeln!(
+                    stdout,
+                    "  note     couldn't record Open at Login as off: {e}"
+                )?;
             }
         }
     }
