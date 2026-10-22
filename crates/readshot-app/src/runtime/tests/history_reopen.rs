@@ -1186,12 +1186,14 @@ fn a_box_one_pixel_larger_then_a_failed_rotate_keeps_its_ring_hidden() {
     );
 }
 
-/// Fix-8 review I-4, app level: a pixelate with sides 5 and block 4
-/// lands. Its grid used to clip to a 1×1 far corner left as captured;
-/// now that cell joins its neighbour (W3 review m1), so the corner is
-/// hidden from the start. The disk fails; the user fixes that corner
-/// with the same tool and turns the image; the capture is reopened. The
-/// corner stays hidden.
+/// Fix-8 review I-4, app level: a landed pixelate, then a smaller one
+/// with the same tool over a corner that straddles its cells (in the
+/// user's eyes, an edge that still reads). The disk fails, the image is
+/// turned, the capture is reopened: recovery must draw the fix, not take
+/// it as already stored. The fix's single 2×2 cell is the average of the
+/// four landed cells under it, a colour the landed image doesn't have;
+/// it must be in the stored image (in whatever orientation), so the test
+/// fails if recovery skips the fix (W5d review m6).
 #[test]
 fn an_edge_fixed_with_the_same_pixelate_then_turned_is_hidden() {
     let (_dir, store, mut app, record, _img) = noise_app();
@@ -1199,14 +1201,23 @@ fn an_edge_fixed_with_the_same_pixelate_then_turned_is_hidden() {
         rect: RectLike::new(x, y, w, h),
         block_size: 4.0,
     };
-    redact_and_sync(&mut app, pixelate(2.0, 2.0, 5.0, 5.0));
+    // Cells [2,6) and [6,10) on each axis.
+    redact_and_sync(&mut app, pixelate(2.0, 2.0, 8.0, 8.0));
     app.coordinator.drain_history_writes();
-    let corner = colours_under(&app, RectLike::new(6.0, 6.0, 1.0, 1.0));
+    let landed = stored_image(&store, record.id);
+    let under_fix: Vec<[u8; 4]> = [(5, 5), (6, 5), (5, 6), (6, 6)]
+        .iter()
+        .map(|&(x, y)| landed.get_pixel(x, y).0)
+        .collect();
+    // As `filters::pixelate_rect` averages a cell (opaque, so the PNG's
+    // straight colours are its premultiplied ones).
+    let mut fixed = [0u8; 4];
+    for (c, out) in fixed.iter_mut().enumerate() {
+        *out = (under_fix.iter().map(|p| p[c] as u32).sum::<u32>() / 4) as u8;
+    }
     assert!(
-        !stored_image(&store, record.id)
-            .pixels()
-            .any(|p| corner.contains(p)),
-        "the landed pixelate leaves its corner as captured"
+        !landed.pixels().any(|p| p.0 == fixed),
+        "the fix's colour must be new for the check to mean anything"
     );
     store.fail_next_commits(1000);
     redact_and_sync(&mut app, pixelate(5.0, 5.0, 2.0, 2.0));
@@ -1216,9 +1227,10 @@ fn an_edge_fixed_with_the_same_pixelate_then_turned_is_hidden() {
     );
     reopen(&mut app, &store, record.id);
     let stored = stored_image(&store, record.id);
-    assert!(
-        !stored.pixels().any(|p| corner.contains(p)),
-        "the corner is stored as captured"
+    assert_eq!(
+        stored.pixels().filter(|p| p.0 == fixed).count(),
+        4,
+        "recovery didn't draw the fix pixelate"
     );
 }
 
