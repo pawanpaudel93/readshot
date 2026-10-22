@@ -44,7 +44,7 @@ pub fn default_shortcut(message: ActionMessage) -> Option<&'static str> {
         ActionMessage::CopyText => "Ctrl+Shift+C",
         ActionMessage::Save => "Ctrl+S",
         ActionMessage::Pin => "Ctrl+P",
-        ActionMessage::Discard => "Esc",
+        ActionMessage::Discard => "Ctrl+W",
         ActionMessage::Undo => "Ctrl+Z",
         ActionMessage::Redo => "Ctrl+Shift+Z",
     })

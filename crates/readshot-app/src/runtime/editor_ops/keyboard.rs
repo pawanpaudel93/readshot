@@ -59,9 +59,8 @@ pub(super) fn on_key_pressed(
     }
     // Fallback for an Escape no widget captured during a live
     // shape/freehand drag: bump the cancel sequence so the canvas
-    // drops the drag on its next event instead of Escape reaching
-    // the discard flow. (Normally the canvas captures Escape itself
-    // and publishes `Cancelled`.)
+    // drops the drag on its next event. (Normally the canvas captures
+    // Escape itself and publishes `Cancelled`; Esc is never Discard.)
     if status_ignored
         && matches!(
             key,
