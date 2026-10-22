@@ -869,9 +869,10 @@ impl CaptureCoordinator {
     pub async fn recognise(&self, req: OCRRequest) -> Result<String, OCRError> {
         // Layout-aware reconstruction when the engine exposes per-line
         // bounding boxes, the engine's flat text otherwise, then the
-        // cleanup pass. This is the single chokepoint — every consumer
-        // (overlay / history sidecar / editor Copy Text) gets the same
-        // string.
+        // cleanup pass (`readshot_core::text_lines::layout_text`). Every
+        // GUI consumer (overlay / history sidecar / editor Copy Text)
+        // goes through here; the CLI and MCP call the same core function
+        // via `OCRResult::with_layout_text`, so all three match.
         Ok(self.recognise_document(req).await?.layout_text)
     }
 

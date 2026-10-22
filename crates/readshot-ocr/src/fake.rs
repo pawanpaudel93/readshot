@@ -69,6 +69,30 @@ impl FakeOcrEngine {
         }
     }
 
+    /// A small two-column table reported column by column, the way
+    /// Apple Vision often orders observations. The engine's flat `text`
+    /// is therefore column-major; the layout pass puts it back in rows.
+    /// Shared by the GUI, CLI and MCP tests that prove all three return
+    /// the same layout text.
+    pub fn layout_fixture_lines() -> Vec<RecognizedLine> {
+        let cell = |text: &str, x: f32, y: f32| RecognizedLine {
+            text: text.to_string(),
+            x,
+            y,
+            w: 0.2,
+            h: 0.05,
+            words: Vec::new(),
+        };
+        vec![
+            cell("Name", 0.1, 0.1),
+            cell("apple", 0.1, 0.2),
+            cell("pear", 0.1, 0.3),
+            cell("Qty", 0.5, 0.1),
+            cell("3", 0.5, 0.2),
+            cell("12", 0.5, 0.3),
+        ]
+    }
+
     pub fn with_supported_languages(mut self, langs: Vec<String>) -> Self {
         self.languages = langs;
         self

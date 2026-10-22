@@ -491,7 +491,8 @@ impl McpServer {
             .ocr
             .recognise(ocr_request_from(args, img)?)
             .await
-            .map_err(ocr_to_rpc)?;
+            .map_err(ocr_to_rpc)?
+            .with_layout_text();
         Ok(json!({
             "text": result.text,
             "average_confidence": result.average_confidence,
@@ -521,7 +522,8 @@ impl McpServer {
             .ocr
             .recognise(ocr_request_from(args, img)?)
             .await
-            .map_err(ocr_to_rpc)?;
+            .map_err(ocr_to_rpc)?
+            .with_layout_text();
         Ok(json!({
             "image_base64": png,
             "text": result.text,
@@ -1569,6 +1571,31 @@ mod tests {
         )
         .await;
         assert_eq!(resp["result"]["structuredContent"]["text"], "hello mcp",);
+    }
+
+    /// The MCP capture tools return the GUI's layout text
+    /// (`readshot_core::text_lines::layout_text`, which
+    /// `CaptureCoordinator::recognise` returns), not the engine's flat
+    /// lines. The app's `cli_ocr_text_equals_the_gui_pipeline` ties the
+    /// same core function to the coordinator.
+    #[tokio::test]
+    async fn capture_text_tools_return_the_gui_layout_text() {
+        let lines = FakeOcrEngine::layout_fixture_lines();
+        let gui =
+            readshot_core::text_lines::TextDocument::from_recognized(&lines, 32, 32).layout_text;
+        let flat: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_ne!(gui, flat.join("\n"));
+        let s = McpServer::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::new(FakeOcrEngine::with_lines(lines)),
+        );
+        for tool in ["capture_text", "capture_region_and_text"] {
+            let req = format!(
+                r#"{{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{{"name":"{tool}","arguments":{{"rect":{{"x":0,"y":0,"width":32,"height":32}}}}}}}}"#
+            );
+            let resp = call(&s, &req).await;
+            assert_eq!(resp["result"]["structuredContent"]["text"], gui, "{tool}");
+        }
     }
 
     #[tokio::test]

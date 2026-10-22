@@ -138,9 +138,11 @@ readshot ocr --input capture.png --clipboard
 
 OCR uses automatic language detection by default.
 
-The text is the recognized lines as the OCR engine returns them. The
-app's Copy Text adds layout handling (Markdown tables, columns, code
-blocks) that the CLI doesn't. Recognition that hasn't finished after
+The text is the same layout-aware text the app's Copy Text produces:
+aligned rows become a Markdown table, two-column text is read one
+column at a time, code goes in a fenced code block, and extra blank
+lines and trailing spaces are trimmed. The table, column, and code
+handling needs line positions, so it is macOS only. Recognition that hasn't finished after
 30 seconds fails with an error (macOS and Linux).
 
 Use `--clipboard` to copy text instead of printing it, or `--output` to
@@ -421,8 +423,9 @@ shape as image capture metadata. `input` is present for `ocr`.
 `languages` is the explicit BCP-47 hint list passed to the command. An
 empty array means automatic/default language detection.
 
-`lines` contains positioned OCR lines when the platform OCR engine
-returns layout data. Bounds are normalized to `[0, 1]` with origin at
+`lines` contains positioned OCR lines, as the engine reported them,
+when the platform OCR engine returns layout data. `text` is built from
+them by the layout pass, so its order can differ from `lines`. Bounds are normalized to `[0, 1]` with origin at
 the top-left of the image. Engines without positioned output return an
 empty array.
 

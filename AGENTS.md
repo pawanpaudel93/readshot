@@ -164,6 +164,7 @@ under `$HOME` or typed strings (see the module doc).
 | App / brand icon                    | `packaging/macos/icon.svg` (+ `icon-small.svg` for 20–32 px, `icon-16.svg` for 16 px on the macOS grid, `icon-16-tile.svg` for the 16 px `.ico` and favicon frames), then run `packaging/render-icons.sh` to regenerate every committed raster (in-app, Linux hicolor, Windows `.ico`/`.res`, website) |
 | macOS notifications                 | `readshot-app::runtime::platform` (`show_macos_notification`) → `readshot-app/src/macos_notify.swift` (built by `build.rs`) |
 | New OCR engine option               | `readshot-ocr` + `default_engine` switch       |
+| OCR text shape (tables, columns)    | `readshot-core` `text_lines::layout_text`; GUI, CLI and MCP all use it |
 | New capture backend                 | `readshot-capture` (mind the `Capturer` trait) |
 | New CLI subcommand                  | `readshot-app::cli`                            |
 | New MCP tool                        | `readshot-mcp` (lib.rs `tool_*` + descriptors) |

@@ -69,6 +69,19 @@ pub struct OCRResult {
     pub lines: Vec<readshot_core::ocr_layout::RecognizedLine>,
 }
 
+impl OCRResult {
+    /// Replace `text` with the layout text the GUI produces
+    /// ([`readshot_core::text_lines::layout_text`]: reading order,
+    /// tables, code fences, cleanup). The CLI and the MCP capture tools
+    /// call this so all three surfaces return the same string for the
+    /// same image. `lines` is kept as the engine reported it.
+    #[must_use]
+    pub fn with_layout_text(mut self) -> Self {
+        self.text = readshot_core::text_lines::layout_text(&self.text, &self.lines);
+        self
+    }
+}
+
 /// The single trait every Readshot OCR backend implements. `Send + Sync`
 /// because the capture coordinator holds a `Box<dyn OCREngine>`
 /// inside a `tokio::task` that may move between runtime threads.

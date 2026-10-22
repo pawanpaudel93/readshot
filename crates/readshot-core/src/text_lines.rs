@@ -55,6 +55,19 @@ fn union(a: RectLike, b: RectLike) -> RectLike {
     RectLike::new(x0, y0, x1 - x0, y1 - y0)
 }
 
+/// The text every OCR consumer returns: the GUI (Copy Text, History
+/// sidecar, Text panel), the CLI and the MCP capture tools. With
+/// positioned `lines` it is the layout pass (reading order, rows,
+/// Markdown tables, code fences); without them the engine's flat
+/// `plain` text. Either way the cleanup pass runs last.
+pub fn layout_text(plain: &str, lines: &[RecognizedLine]) -> String {
+    if lines.is_empty() {
+        clean(plain)
+    } else {
+        clean(&reconstruct(lines))
+    }
+}
+
 impl TextDocument {
     /// Positioned engine output (normalised, top-left) → base pixels.
     pub fn from_recognized(lines: &[RecognizedLine], image_w: u32, image_h: u32) -> Self {
@@ -82,13 +95,13 @@ impl TextDocument {
         Self {
             positioned: !out.is_empty(),
             lines: out,
-            layout_text: clean(&reconstruct(lines)),
+            layout_text: layout_text("", lines),
         }
     }
 
     /// Engines without positions: one line per non-blank text line.
     pub fn from_plain(text: &str) -> Self {
-        let layout_text = clean(text);
+        let layout_text = layout_text(text, &[]);
         let lines = layout_text
             .lines()
             .map(str::trim)

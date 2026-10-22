@@ -151,7 +151,11 @@ For agents that only need text, use `capture_text`: it captures the
 requested region, runs OCR, and returns text without an image payload.
 For agents that need both pixels and OCR, use `capture_region_and_text`.
 The GUI equivalent of text-only capture is the overlay toolbar's
-**Copy Text** button.
+**Copy Text** button, and both return the same text: aligned rows
+become a Markdown table, two-column text is read one column at a time,
+code goes in a fenced code block, and extra blank lines are trimmed
+(table, column, and code handling is macOS only). The History tools
+return the text History stored, which the app produced the same way.
 
 Use `latest_capture` when an agent needs the newest saved capture
 without guessing a limit. Use `get_capture` after `recent_captures` or

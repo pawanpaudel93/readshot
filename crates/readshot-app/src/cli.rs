@@ -707,7 +707,8 @@ impl Cli {
                         languages: languages.clone(),
                         use_language_correction: language_correction,
                     })
-                    .await?;
+                    .await?
+                    .with_layout_text();
                 if use_clipboard {
                     clipboard.copy_text(&result.text)?;
                 } else if json {
@@ -746,7 +747,8 @@ impl Cli {
                         languages: languages.clone(),
                         use_language_correction: language_correction,
                     })
-                    .await?;
+                    .await?
+                    .with_layout_text();
                 if use_clipboard {
                     clipboard.copy_text(&result.text)?;
                 } else if json {
@@ -815,7 +817,8 @@ impl Cli {
                         languages: languages.clone(),
                         use_language_correction: language_correction,
                     })
-                    .await?;
+                    .await?
+                    .with_layout_text();
                 if json {
                     write_json(
                         &output,
@@ -2396,6 +2399,71 @@ mod tests {
         cli.run(cap, ocr, &mut out).await.unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with("hello world"));
+    }
+
+    /// The CLI's `ocr` and `capture-text` return exactly what the GUI's
+    /// `CaptureCoordinator::recognise` returns: the layout pass, not the
+    /// engine's flat lines.
+    #[tokio::test]
+    async fn cli_ocr_text_equals_the_gui_pipeline() {
+        use crate::coordinator::CaptureCoordinator;
+        use crate::permissions::fake::FakePermissions;
+        let dir = tempfile::tempdir().unwrap();
+        let png_path = dir.path().join("in.png");
+        let img = image::RgbaImage::new(40, 20);
+        readshot_core::save_png(&img, &png_path).unwrap();
+        let lines = FakeOcrEngine::layout_fixture_lines();
+        let ocr: Arc<dyn OCREngine> = Arc::new(FakeOcrEngine::with_lines(lines.clone()));
+        let coord = CaptureCoordinator::new(
+            Arc::new(FakeCapturer::new()),
+            Arc::clone(&ocr),
+            Arc::new(FakePermissions::granted()),
+            None,
+        );
+        let gui = coord
+            .recognise(OCRRequest {
+                image: img,
+                languages: Vec::new(),
+                use_language_correction: true,
+            })
+            .await
+            .unwrap();
+        let flat: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_ne!(
+            gui,
+            flat.join("\n"),
+            "the fixture must exercise the layout pass"
+        );
+
+        let cli =
+            Cli::try_parse_from(["readshot", "ocr", "-i", png_path.to_str().unwrap()]).unwrap();
+        let mut out = Vec::new();
+        cli.run(Arc::new(FakeCapturer::new()), Arc::clone(&ocr), &mut out)
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8(out).unwrap().trim_end(), gui.trim_end());
+
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "ocr",
+            "-i",
+            png_path.to_str().unwrap(),
+            "--json",
+        ])
+        .unwrap();
+        let mut out = Vec::new();
+        cli.run(Arc::new(FakeCapturer::new()), Arc::clone(&ocr), &mut out)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(value["text"], gui);
+
+        let cli = Cli::try_parse_from(["readshot", "capture-text", "--rect", "0,0,40,20"]).unwrap();
+        let mut out = Vec::new();
+        cli.run(Arc::new(FakeCapturer::new()), Arc::clone(&ocr), &mut out)
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8(out).unwrap().trim_end(), gui.trim_end());
     }
 
     #[tokio::test]

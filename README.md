@@ -67,14 +67,14 @@ find it later by searching the text inside the screenshot.
   sets the padding to 48. History keeps the capture without Beautify, so
   a capture reopened from History has no background, padding, or
   shadow.
-- Offline OCR via Apple Vision with layout-aware copied text and a
-  choice of recognition languages. The text you copy in the app (Copy
-  Text, the editor, History) turns aligned rows into a Markdown table,
-  reads two-column text one column at a time, puts code and terminal
-  output in a fenced code block, and trims extra blank lines and
-  trailing spaces. The table, column, and code handling needs line
-  positions, so it is macOS only. The CLI and MCP server return the
-  recognized lines as they come from the OCR engine.
+- Offline OCR via Apple Vision with layout-aware text and a choice of
+  recognition languages. The recognized text (Copy Text, the editor,
+  History, the CLI, and the MCP server) turns aligned rows into a
+  Markdown table, reads two-column text one column at a time, puts code
+  and terminal output in a fenced code block, and trims extra blank
+  lines and trailing spaces. The app, the CLI, and the MCP server return
+  the same text for the same image. The table, column, and code handling
+  needs line positions, so it is macOS only.
 - Searchable capture history with open, reveal, copy, pin, and delete
   actions. Search matches the recognized text, the capture time
   (`YYYY-MM-DD HH:MM:SS`), the display id, and the size (`1280x800`).

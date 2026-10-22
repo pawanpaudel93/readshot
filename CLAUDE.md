@@ -58,7 +58,7 @@ file in sync when the rules change.
 | History window           | `crates/readshot-app/src/runtime/{history_ops,history_select,history_images}.rs` |
 | UI theme / look          | `crates/readshot-app/src/runtime/{tokens,ui_kit}.rs`, `crates/readshot-app/src/icons.rs` |
 | Region capture           | `crates/readshot-capture/src/lib.rs` + per-OS `*.rs`     |
-| OCR                      | `crates/readshot-ocr/src/lib.rs` + per-OS `*.rs`         |
+| OCR                      | `crates/readshot-ocr/src/lib.rs` + per-OS `*.rs`; text shape: `crates/readshot-core/src/text_lines.rs` (`layout_text`, shared by GUI, CLI, MCP) |
 | CLI                      | `crates/readshot-app/src/cli.rs`                         |
 | MCP server               | `crates/readshot-mcp/src/lib.rs`                         |
 | History / preferences    | `crates/readshot-core/src/{history,preferences}.rs`      |
