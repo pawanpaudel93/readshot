@@ -320,13 +320,20 @@ pub struct PendingImage {
     pub other_frames: Vec<PendingImage>,
 }
 
-/// `r` is already in an image whose baked redactions are `baked`: one of
-/// them hides every pixel `r` hides (the whole pixels each snaps to,
-/// [`crate::render::redaction_pixels`], with no slack) at least as strongly:
-/// a solid cover holds any redaction; a blur or pixelate holds only one
-/// of its own kind no stronger than itself (radius, block size). Anything
-/// it can't prove counts as new, and is drawn (fail closed). Not a
-/// redaction: trivially.
+/// `r` is already in an image whose baked redactions are `baked`, proven
+/// in whole pixels ([`crate::render::redaction_pixels`], the snapping the
+/// render uses, with no slack):
+///
+/// - a solid cover holds any redaction whose pixels it contains;
+/// - a blur or pixelate holds only an identical one (the same pixels, the
+///   same radius or block size), which redrawing would leave unchanged.
+///   Nothing weaker is proven: a pixelate's grid starts at its own corner
+///   and clips its edge cells (a 1×1 edge cell is left as captured), and a
+///   blur clamps its window at its own edges, so a different rect or
+///   strength can hide pixels the stored one doesn't.
+///
+/// Anything it can't prove counts as new, and is drawn (fail closed). Not
+/// a redaction: trivially.
 fn already_baked(r: &Annotation, baked: &[Annotation]) -> bool {
     let Some(rr) = r.redaction_rect() else {
         return true;
@@ -336,22 +343,22 @@ fn already_baked(r: &Annotation, baked: &[Annotation]) -> bool {
         let Some(have) = b.redaction_rect().map(crate::render::redaction_pixels) else {
             return false;
         };
-        let contains = have.x <= need.x
-            && have.y <= need.y
-            && need.x + need.width <= have.x + have.width
-            && need.y + need.height <= have.y + have.height;
-        contains && at_least_as_strong(b, r)
+        if b.is_solid_redaction() {
+            have.x <= need.x
+                && have.y <= need.y
+                && need.x + need.width <= have.x + have.width
+                && need.y + need.height <= have.y + have.height
+        } else {
+            have == need && same_effect(b, r)
+        }
     })
 }
 
-/// `b` hides what it covers at least as well as `r` would.
-fn at_least_as_strong(b: &Annotation, r: &Annotation) -> bool {
-    if b.is_solid_redaction() {
-        return true;
-    }
+/// `b` and `r` are the same blur or the same pixelate (kind and strength).
+fn same_effect(b: &Annotation, r: &Annotation) -> bool {
     match (b, r) {
         (Annotation::Blur { radius: have, .. }, Annotation::Blur { radius: want, .. }) => {
-            have >= want
+            have == want
         }
         (
             Annotation::Pixelate {
@@ -360,7 +367,7 @@ fn at_least_as_strong(b: &Annotation, r: &Annotation) -> bool {
             Annotation::Pixelate {
                 block_size: want, ..
             },
-        ) => have >= want,
+        ) => have == want,
         _ => false,
     }
 }
@@ -3077,6 +3084,33 @@ mod tests {
         );
         let now = decode(&fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap());
         assert_ne!(now, landed, "the finer pixelate was kept");
+    }
+
+    /// Fix-8 review I-4: a stored pixelate doesn't hold a smaller one
+    /// inside it with a block no bigger than its own. Its grid starts at
+    /// its own corner and clips the edge cells: landed (0,0,5,5) block 4
+    /// leaves (4,4) a 1×1 cell, as captured. The new (3,3,2,2) block 4
+    /// hides (4,4); recovery must draw it, not take it as already stored.
+    #[test]
+    fn a_smaller_pixelate_inside_a_landed_one_is_drawn() {
+        let (_dir, s, r, landed) = landed_noise(Annotation::Pixelate {
+            rect: crate::geom::RectLike::new(0.0, 0.0, 5.0, 5.0),
+            block_size: 4.0,
+        });
+        request_from_another_frame(
+            &s,
+            &r,
+            Annotation::Pixelate {
+                rect: crate::geom::RectLike::new(3.0, 3.0, 2.0, 2.0),
+                block_size: 4.0,
+            },
+        );
+        let now = decode(&fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap());
+        assert_ne!(
+            now.get_pixel(4, 4),
+            landed.get_pixel(4, 4),
+            "(4,4) is still as captured"
+        );
     }
 
     /// Make `r`'s thumbnail impossible to replace or remove (a non-empty

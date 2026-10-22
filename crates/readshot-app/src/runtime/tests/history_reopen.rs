@@ -1107,3 +1107,37 @@ fn a_box_one_pixel_larger_then_a_failed_rotate_keeps_its_ring_hidden() {
         ring.len()
     );
 }
+
+/// Fix-8 review I-4, app level: a pixelate with sides 5 and block 4
+/// lands; its grid clips to a 1×1 far corner, left as captured. The disk
+/// fails; the user fixes that corner with the same tool and turns the
+/// image; the capture is reopened. The corner is hidden.
+#[test]
+fn an_edge_fixed_with_the_same_pixelate_then_turned_is_hidden() {
+    let (_dir, store, mut app, record, _img) = noise_app();
+    let pixelate = |x: f32, y: f32, w: f32, h: f32| Annotation::Pixelate {
+        rect: RectLike::new(x, y, w, h),
+        block_size: 4.0,
+    };
+    redact_and_sync(&mut app, pixelate(2.0, 2.0, 5.0, 5.0));
+    app.coordinator.drain_history_writes();
+    let corner = colours_under(&app, RectLike::new(6.0, 6.0, 1.0, 1.0));
+    assert!(
+        stored_image(&store, record.id)
+            .pixels()
+            .any(|p| corner.contains(p)),
+        "the landed pixelate's corner cell is 1×1"
+    );
+    store.fail_next_commits(1000);
+    redact_and_sync(&mut app, pixelate(5.0, 5.0, 2.0, 2.0));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
+    );
+    reopen(&mut app, &store, record.id);
+    let stored = stored_image(&store, record.id);
+    assert!(
+        !stored.pixels().any(|p| corner.contains(p)),
+        "the corner is stored as captured"
+    );
+}
