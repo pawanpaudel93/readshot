@@ -1170,6 +1170,8 @@ mod keyboard_focus;
 mod large_documents;
 /// Magnifier drags and keyboard width bumps.
 mod magnifier_tools;
+/// The overlay canvas driven with real mouse and key events.
+mod overlay_canvas;
 /// Capture to disk, CLI, hotkeys, preferences, boot and settings.
 mod settings_and_boot;
 /// Style sliders and the eyedropper.
