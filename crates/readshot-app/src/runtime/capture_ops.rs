@@ -428,6 +428,7 @@ pub(super) fn on_overlay_selected(
             scale: display_scale,
             frames: Vec::new(),
             no_motion_count: 0,
+            unplaced_in_a_row: 0,
             hud_window_id: None,
             region_window_id: None,
             display_size: Some(bounds),

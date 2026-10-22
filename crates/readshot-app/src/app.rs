@@ -841,6 +841,10 @@ pub enum ScrollMsg {
         moved: bool,
         offset: Option<u32>,
         rows: Option<image::RgbaImage>,
+        /// No offset placed the frame against the previous accepted
+        /// one (a jump past any overlap, a sideways move, content that
+        /// changed outright); not a still page or a scroll back up.
+        unplaced: bool,
     },
     /// User clicked Stop in the HUD (or pressed Esc / hit an auto-
     /// stop limit). Closes the HUD and kicks off stitching of the
@@ -1383,6 +1387,11 @@ pub struct ScrollSession {
     /// Surfaced for diagnostics; the user explicitly stops the
     /// session when ready.
     pub no_motion_count: u32,
+    /// Consecutive frames the judge couldn't place against the last
+    /// accepted one ([`crate::runtime::scroll::SCROLL_TOO_FAST_AFTER`]
+    /// of them show the "scrolled too fast" hint); reset when a frame
+    /// is accepted.
+    pub unplaced_in_a_row: u32,
     /// `window::Id` of the HUD floating above the capture region.
     pub hud_window_id: Option<iced::window::Id>,
     /// `window::Id` of the transparent click-through overlay that
@@ -1472,6 +1481,7 @@ impl ScrollSession {
             scale,
             frames: Vec::new(),
             no_motion_count: 0,
+            unplaced_in_a_row: 0,
             hud_window_id: None,
             region_window_id: None,
             display_size: None,

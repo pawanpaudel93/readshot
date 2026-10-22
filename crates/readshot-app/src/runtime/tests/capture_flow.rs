@@ -77,6 +77,7 @@ fn scroll_capture_drains_out_of_order_frames_in_sequence() {
             moved: true,
             offset: None,
             rows: None,
+            unplaced: false,
         }),
     );
     let session = app.scroll_session.as_ref().unwrap();
@@ -92,12 +93,71 @@ fn scroll_capture_drains_out_of_order_frames_in_sequence() {
             moved: true,
             offset: None,
             rows: None,
+            unplaced: false,
         }),
     );
     let session = app.scroll_session.as_ref().unwrap();
     assert_eq!(session.frames.len(), 3);
     assert_eq!(session.judge_in_flight, None);
     assert_eq!(session.next_frame_seq_to_process, 3);
+}
+
+/// A verdict for `seq` on the running session.
+fn judged_frame(app: &mut App, seq: u64, moved: bool, unplaced: bool) {
+    app.scroll_session.as_mut().unwrap().judge_in_flight = Some(seq);
+    let _ = update(
+        app,
+        Message::Scroll(ScrollMsg::FrameJudged {
+            seq,
+            image: Some(scrolling_texture(80, 120, 14)),
+            moved,
+            offset: moved.then_some(14),
+            rows: None,
+            unplaced,
+        }),
+    );
+}
+
+/// SC-16 / I-1: frames that keep failing to place (the page jumped past
+/// any overlap) show "Scrolled too fast — scroll back up a little" after
+/// two in a row; a still frame or a scroll back up neither shows nor
+/// clears it, a frame that places clears it, and Stop hides it.
+#[test]
+fn frames_that_keep_failing_to_place_say_the_scroll_was_too_fast() {
+    use crate::runtime::scroll::{scroll_too_fast, SCROLL_TOO_FAST_AFTER, SCROLL_TOO_FAST_HINT};
+    assert_eq!(SCROLL_TOO_FAST_AFTER, 2);
+    assert_eq!(
+        SCROLL_TOO_FAST_HINT,
+        "Scrolled too fast — scroll back up a little."
+    );
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let rect = readshot_core::geom::Rect::from_xywh(0.0, 0.0, 80.0, 120.0).unwrap();
+    let mut session = crate::app::ScrollSession::new("display-a".into(), rect, 1.0);
+    session.frames.push(Arc::new(scrolling_texture(80, 120, 0)));
+    app.scroll_session = Some(session);
+    let too_fast = |app: &App| scroll_too_fast(app.scroll_session.as_ref().unwrap());
+
+    judged_frame(&mut app, 1, false, false);
+    assert!(
+        !too_fast(&app),
+        "a still page or a scroll back up says nothing"
+    );
+    judged_frame(&mut app, 2, false, true);
+    assert!(!too_fast(&app), "one unplaced frame is not enough");
+    judged_frame(&mut app, 3, false, false);
+    judged_frame(&mut app, 4, false, true);
+    assert!(too_fast(&app), "two unplaced frames show the hint");
+    judged_frame(&mut app, 5, false, false);
+    assert!(too_fast(&app), "a still frame doesn't clear it");
+    judged_frame(&mut app, 6, true, false);
+    assert!(!too_fast(&app), "a frame that places clears it");
+    assert_eq!(app.scroll_session.as_ref().unwrap().frames.len(), 2);
+
+    judged_frame(&mut app, 7, false, true);
+    judged_frame(&mut app, 8, false, true);
+    assert!(too_fast(&app));
+    app.scroll_session.as_mut().unwrap().stopping = true;
+    assert!(!too_fast(&app), "stitching hides it");
 }
 
 #[test]
@@ -118,6 +178,7 @@ fn scroll_judge_rejection_counts_no_motion_and_stale_verdicts_drop() {
             moved: true,
             offset: None,
             rows: None,
+            unplaced: false,
         }),
     );
     let session = app.scroll_session.as_ref().unwrap();
@@ -133,6 +194,7 @@ fn scroll_judge_rejection_counts_no_motion_and_stale_verdicts_drop() {
             moved: false,
             offset: None,
             rows: None,
+            unplaced: false,
         }),
     );
     let session = app.scroll_session.as_ref().unwrap();
@@ -474,6 +536,7 @@ fn frames_arriving_after_stop_do_not_touch_the_session() {
             moved: true,
             offset: Some(14),
             rows: Some(image::RgbaImage::new(PREVIEW_STRIP_W, 60)),
+            unplaced: false,
         }),
     );
     let _ = update(

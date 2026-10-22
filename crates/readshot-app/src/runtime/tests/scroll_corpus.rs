@@ -172,12 +172,36 @@ fn mixed_forward_scrolls_over_text_stitch_the_exact_page() {
     }
 }
 
-/// One flick of more than half the region between slow scrolling: the
-/// frame after it is placed, and so is everything after that.
+/// The stitcher's strip height at this frame size (a quarter of it),
+/// so the largest move whose frames still overlap is `VH - STRIP`.
+const STRIP: u32 = VH / 4;
+
+/// One flick between slow scrolling: more than half the region, up to
+/// two thirds (the judge's own template), and on into the band between
+/// two thirds and the last overlap (`VH - STRIP`), where only the
+/// stitcher's bottom strip still matches. On a 600 px region that band
+/// is 400–520 px; 420, 450, 500 and 515 px scale to 163, 168, 176 and
+/// 179 here. The frame after the flick is placed, and so is everything
+/// after it.
 #[test]
 fn a_flick_of_more_than_half_the_region_does_not_stop_the_capture() {
     let page = text_page(1200, 7);
-    for flick in [VH / 2 + 10, VH / 2 + 25, VH * 2 / 3] {
+    let band = |on_600: u32| {
+        let (lo, hi) = (VH * 2 / 3, VH - STRIP);
+        lo + (on_600 - 400) * (hi - lo) / 120
+    };
+    let flicks = [
+        VH / 2 + 10,
+        VH / 2 + 25,
+        VH * 2 / 3,
+        band(420),
+        band(450),
+        band(500),
+        band(515),
+        VH - STRIP,
+    ];
+    assert_eq!(&flicks[3..7], &[163, 168, 176, 179]);
+    for flick in flicks {
         let mut positions: Vec<u32> = (0..6).map(|i| i * 20).collect();
         let base = 100 + flick;
         positions.extend((0..6).map(|i| base + i * 20));
@@ -186,4 +210,34 @@ fn a_flick_of_more_than_half_the_region_does_not_stop_the_capture() {
         let kept = assert_pipeline(&what, &page, &positions, &frames);
         assert_eq!(kept.len(), frames.len(), "{what}: every frame is kept");
     }
+}
+
+/// A jump past any overlap (more than `VH - STRIP`) can't be placed:
+/// the frames after it are reported unplaced (the window then says the
+/// scroll was too fast), nothing is stitched in, and scrolling back up
+/// into range joins again exactly.
+#[test]
+fn a_jump_past_any_overlap_is_reported_and_never_stitched_in() {
+    use crate::runtime::scroll::{scroll_motion, ScrollMotion};
+    let page = text_page(1400, 11);
+    let mut positions: Vec<u32> = (0..4).map(|i| i * 20).collect();
+    let jump = 60 + VH; // no shared rows with the frame at 60
+    positions.extend([jump, jump + 20, 60 + VH - STRIP - 20, 60 + VH - STRIP]);
+    let frames = frames_at(&page, &positions);
+    assert_eq!(
+        scroll_motion(&frames[3], &frames[4]),
+        ScrollMotion::Unplaced
+    );
+    assert_eq!(
+        scroll_motion(&frames[3], &frames[5]),
+        ScrollMotion::Unplaced
+    );
+    let kept = judged(&frames);
+    assert_eq!(
+        kept,
+        vec![0, 1, 2, 3, 6, 7],
+        "back in range, it joins again"
+    );
+    let kept_frames: Vec<RgbaImage> = kept.iter().map(|&i| frames[i].clone()).collect();
+    assert_stitches("jump", &page, 0, positions[7], &kept_frames);
 }

@@ -22,6 +22,21 @@ pub(crate) const SCROLL_MAX_CONCURRENT_CAPTURES: u32 = 3;
 /// duplicate frames, hover/caret animation, or a tiny inertial nudge
 /// that would repeat content in the stitched output.
 pub(crate) const SCROLL_MIN_ACCEPTED_MOTION_PX: u32 = 8;
+/// Frames in a row the judge can't place before the window says the
+/// scroll was too fast (one alone is often a passing animation).
+pub(crate) const SCROLL_TOO_FAST_AFTER: u32 = 2;
+/// The window's line while frames keep failing to place: the page moved
+/// past any overlap with the last kept frame, and scrolling back up a
+/// little lets the next frame join again.
+pub(crate) const SCROLL_TOO_FAST_HINT: &str = "Scrolled too fast — scroll back up a little.";
+
+/// Whether the window shows [`SCROLL_TOO_FAST_HINT`]: a running session
+/// whose last [`SCROLL_TOO_FAST_AFTER`] or more frames couldn't be
+/// placed. A frame that places clears it.
+pub(crate) fn scroll_too_fast(session: &crate::app::ScrollSession) -> bool {
+    !session.stopping && session.unplaced_in_a_row >= SCROLL_TOO_FAST_AFTER
+}
+
 /// Tick interval (ms) driving the per-frame capture loop. 120 ms ≈
 /// 8.3 fps — fast enough that a brisk trackpad scroll produces many
 /// frames and the session feels live. Captures are debounced inside
@@ -140,25 +155,31 @@ pub(crate) fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession)
                             // Motion verdict and the preview slice are
                             // both computed here, off the UI thread.
                             let same_dims = prev.dimensions() == image.dimensions();
-                            let offset = scroll_motion_offset(&prev, &image);
+                            let motion = scroll_motion(&prev, &image);
+                            let offset = match motion {
+                                ScrollMotion::Down(dy) => Some(dy),
+                                ScrollMotion::Back | ScrollMotion::Unplaced => None,
+                            };
                             let moved = !same_dims
                                 || offset.is_some_and(|dy| dy >= SCROLL_MIN_ACCEPTED_MOTION_PX);
+                            let unplaced = same_dims && motion == ScrollMotion::Unplaced;
                             let rows = moved.then(|| {
                                 preview_rows(&image, if same_dims { offset } else { None })
                             });
-                            (image, moved, offset, rows)
+                            (image, moved, offset, rows, unplaced)
                         })
                         .await
                         .ok()
                     },
                     move |judged| match judged {
-                        Some((image, moved, offset, rows)) => {
+                        Some((image, moved, offset, rows, unplaced)) => {
                             Message::Scroll(ScrollMsg::FrameJudged {
                                 seq,
                                 image: Some(image),
                                 moved,
                                 offset,
                                 rows,
+                                unplaced,
                             })
                         }
                         None => Message::Scroll(ScrollMsg::FrameJudged {
@@ -167,6 +188,7 @@ pub(crate) fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession)
                             moved: false,
                             offset: None,
                             rows: None,
+                            unplaced: false,
                         }),
                     },
                 );
@@ -216,6 +238,7 @@ pub(crate) fn accept_scroll_frame(
         .stitched_rows
         .saturating_add(offset.unwrap_or(image.height()));
     session.no_motion_count = 0;
+    session.unplaced_in_a_row = 0;
     // Scrolling on answers an armed Cancel with "keep going"; momentum
     // frames right after the click don't.
     if session
@@ -244,31 +267,74 @@ pub(crate) fn frame_has_scroll_motion(a: &image::RgbaImage, b: &image::RgbaImage
     scroll_motion_offset(a, b).is_some_and(|dy| dy >= SCROLL_MIN_ACCEPTED_MOTION_PX)
 }
 
+/// The live judge's verdict on a frame against the last accepted one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScrollMotion {
+    /// The page moved down by this many px (0 = a still page).
+    Down(u32),
+    /// The page went back up: never new content.
+    Back,
+    /// No offset explains the change: a sideways move, a jump past any
+    /// overlap with the last frame, or content that changed outright.
+    Unplaced,
+}
+
 /// The downward scroll (px) from `a` to `b`, or `None` when `b` isn't
 /// `a` scrolled down: a different size, a scroll back up, a sideways
-/// move, or a change no offset explains clearly
-/// ([`readshot_core::scroll_stitch::match_stands_out`]). `Some(0)` is a
-/// still page. Only downward motion may join the stitch, so the strip is
-/// searched both ways and an upward best match is refused rather than
-/// read as the nearest downward one.
+/// move, or a change no offset explains clearly. `Some(0)` is a still
+/// page. See [`scroll_motion`].
+#[cfg(test)]
 pub(crate) fn scroll_motion_offset(a: &image::RgbaImage, b: &image::RgbaImage) -> Option<u32> {
+    match scroll_motion(a, b) {
+        ScrollMotion::Down(dy) => Some(dy),
+        ScrollMotion::Back | ScrollMotion::Unplaced => None,
+    }
+}
+
+/// Judge `b` against `a`. A lower-middle template is searched both ways
+/// ([`template_motion`]). When it finds no downward scroll, the
+/// stitcher's own placement decides
+/// ([`readshot_core::scroll_stitch::place_by_overlap`]): its bottom
+/// strip still overlaps after a move of up to the frame height minus the
+/// strip, which the template (at two thirds) can't see. So the judge
+/// keeps every frame the stitcher can place, and refuses a scroll back
+/// up by the same cost rule.
+pub(crate) fn scroll_motion(a: &image::RgbaImage, b: &image::RgbaImage) -> ScrollMotion {
+    let verdict = template_motion(a, b);
+    if matches!(verdict, ScrollMotion::Down(_)) || a.dimensions() != b.dimensions() {
+        return verdict;
+    }
+    let config = readshot_core::scroll_stitch::StitchConfig::default();
+    match readshot_core::scroll_stitch::place_by_overlap(a, b, &config) {
+        Some(dy) if dy >= SCROLL_MIN_ACCEPTED_MOTION_PX => ScrollMotion::Down(dy),
+        _ => verdict,
+    }
+}
+
+/// The template search alone: a strip at two thirds of `a`, searched
+/// both ways in `b`. Only downward motion may join the stitch, so an
+/// upward best match is [`ScrollMotion::Back`] rather than read as the
+/// nearest downward one, and a best match that doesn't stand out
+/// ([`readshot_core::scroll_stitch::match_stands_out`]) is
+/// [`ScrollMotion::Unplaced`].
+fn template_motion(a: &image::RgbaImage, b: &image::RgbaImage) -> ScrollMotion {
     if a.dimensions() != b.dimensions() {
-        return None;
+        return ScrollMotion::Unplaced;
     }
     let (w, h) = a.dimensions();
     if w == 0 || h == 0 {
-        return None;
+        return ScrollMotion::Unplaced;
     }
     let strip_h = (h / 8).clamp(16, 80).min(h / 3).max(1);
     if strip_h >= h {
-        return None;
+        return ScrollMotion::Unplaced;
     }
     // Use the lower-middle content region. It usually avoids sticky
     // headers while leaving room above it for downward scroll and
     // below it to recognise a scroll back up.
     let template_y = ((h * 2) / 3).min(h.saturating_sub(strip_h));
-    // Downward as far as the strip can go: a flick of more than half
-    // the region per tick is still placed (and stitched) exactly.
+    // Downward as far as the template can go; larger moves fall back on
+    // the stitcher's placement (`scroll_motion`).
     let max_down = template_y;
     let max_up = h - strip_h - template_y;
     let stride_x: u32 = 4;
@@ -302,9 +368,11 @@ pub(crate) fn scroll_motion_offset(a: &image::RgbaImage, b: &image::RgbaImage) -
     }
     let samples = u64::from(w.div_ceil(stride_x)) * u64::from(strip_h.div_ceil(stride_y)) * 3;
     if !readshot_core::scroll_stitch::match_stands_out(best_cost, samples, &mut costs) {
-        return None;
+        return ScrollMotion::Unplaced;
     }
-    let down = u32::try_from(best_shift).ok()?;
+    let Ok(down) = u32::try_from(best_shift) else {
+        return ScrollMotion::Back;
+    };
     // Subsampled rows can tie the true offset with its neighbour; settle
     // an exact tie at full resolution, as the stitcher does.
     let best_y = template_y - down;
@@ -320,7 +388,7 @@ pub(crate) fn scroll_motion_offset(a: &image::RgbaImage, b: &image::RgbaImage) -
     let y = readshot_core::scroll_stitch::break_subsampling_tie(best_y, &tied, |y| {
         sad_scroll_strip(a, template_y, b, y, w, strip_h, (1, 1))
     });
-    Some(template_y - y)
+    ScrollMotion::Down(template_y - y)
 }
 
 pub(crate) fn sad_scroll_strip(
@@ -439,7 +507,8 @@ pub(crate) fn handle_scroll_message(state: &mut App, message: ScrollMsg) -> Task
             moved,
             offset,
             rows,
-        } => on_frame_judged(state, seq, image, moved, offset, rows),
+            unplaced,
+        } => on_frame_judged(state, seq, image, (moved, unplaced), offset, rows),
 
         ScrollMsg::CancelRequested => on_scroll_cancel(state),
 
@@ -512,7 +581,7 @@ fn on_frame_judged(
     state: &mut App,
     seq: u64,
     image: Option<image::RgbaImage>,
-    moved: bool,
+    (moved, unplaced): (bool, bool),
     offset: Option<u32>,
     rows: Option<image::RgbaImage>,
 ) -> Task<Message> {
@@ -528,7 +597,12 @@ fn on_frame_judged(
     session.judge_in_flight = None;
     match image {
         Some(image) if moved => accept_scroll_frame(session, image, rows, offset),
-        _ => session.no_motion_count += 1,
+        _ => {
+            session.no_motion_count += 1;
+            if unplaced {
+                session.unplaced_in_a_row = session.unplaced_in_a_row.saturating_add(1);
+            }
+        }
     }
     drain_ready_scroll_frames(session)
 }

@@ -794,6 +794,15 @@ fn scroll_hud_footer<'a>(
         .into(),
         ScrollHudState::Waiting | ScrollHudState::Recording => {
             let waiting = hud == ScrollHudState::Waiting;
+            if scroll_too_fast(session) {
+                footer = footer.push(
+                    text(SCROLL_TOO_FAST_HINT)
+                        .size(TYPE_CAPTION)
+                        .color(DARK.warn)
+                        .wrapping(iced::widget::text::Wrapping::Word),
+                );
+                footer = footer.push(Space::new().height(Length::Fixed(10.0)));
+            }
             row![
                 tooltip_with_key(
                     scroll_hud_button(

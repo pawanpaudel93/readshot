@@ -159,25 +159,12 @@ pub fn stitch_scrolling(
     let mut anchor_pos: u64 = 0;
     let mut furthest: u64 = 0;
     for (i, frame) in frames.iter().enumerate().skip(1) {
-        let prev = &frames[anchor];
-        let placed = estimate_scroll(prev, frame, &sticky, &config)
-            .filter(|m| m.dy <= max_motion)
-            // A frame whose content sits *lower* than the anchor's (the
-            // page went back up) is refused only when that backward
-            // reading is the better match: strictly cheaper, or as cheap
-            // and the shorter move (a page that repeats matches both
-            // ways). An exact forward match always stands.
-            .filter(|fwd| {
-                estimate_scroll(frame, prev, &sticky, &config).is_none_or(|back| {
-                    back.dy < config.min_motion
-                        || back.cost > fwd.cost
-                        || (back.cost == fwd.cost && back.dy >= fwd.dy)
-                })
-            });
+        let placed =
+            place_frame(&frames[anchor], frame, &sticky, &config).filter(|&dy| dy <= max_motion);
         let mut dy = 0;
         if let Some(m) = placed {
             anchor = i;
-            anchor_pos += u64::from(m.dy);
+            anchor_pos += u64::from(m);
             let new_rows = anchor_pos.saturating_sub(furthest);
             if new_rows >= u64::from(config.min_motion) {
                 dy = u32::try_from(new_rows).unwrap_or(u32::MAX);
@@ -302,6 +289,39 @@ fn blend_overlap_rows(out: &mut RgbaImage, frame: &RgbaImage, blend: OverlapBlen
 fn blend_channel(prev: u8, next: u8, prev_weight: u32, next_weight: u32, denom: u32) -> u8 {
     let total = prev as u32 * prev_weight + next as u32 * next_weight;
     ((total + denom / 2) / denom) as u8
+}
+
+/// Place `frame` below `prev`: the downward scroll between them, or
+/// `None` when it can't be placed (no offset stands out) or the page
+/// went back up. A backward reading wins only when it is the better
+/// match: strictly cheaper, or as cheap and the shorter move (a page that
+/// repeats matches both ways). An exact forward match always stands.
+fn place_frame(
+    prev: &RgbaImage,
+    frame: &RgbaImage,
+    sticky: &StickyMask,
+    config: &StitchConfig,
+) -> Option<u32> {
+    let fwd = estimate_scroll(prev, frame, sticky, config)?;
+    let refused = estimate_scroll(frame, prev, sticky, config).is_some_and(|back| {
+        back.dy >= config.min_motion
+            && (back.cost < fwd.cost || (back.cost == fwd.cost && back.dy < fwd.dy))
+    });
+    (!refused).then_some(fwd.dy)
+}
+
+/// The stitcher's own placement of `b` below `a` (bottom strip, the
+/// whole frame searched, the backward check), for two frames with no
+/// sticky rows known. The live scroll judge falls back on it when its
+/// own template can't place a frame, so the judge accepts every move
+/// the stitcher will place: anything up to the frame height minus the
+/// strip. `None` for a frame that can't be placed or went back up;
+/// `Some(dy)` may be below `config.min_motion` (a still page).
+pub fn place_by_overlap(a: &RgbaImage, b: &RgbaImage, config: &StitchConfig) -> Option<u32> {
+    if a.dimensions() != b.dimensions() || a.width() == 0 || a.height() == 0 {
+        return None;
+    }
+    place_frame(a, b, &StickyMask::default(), config)
 }
 
 /// How many times better than the typical candidate a template match
