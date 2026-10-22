@@ -1154,6 +1154,8 @@ mod combine_capture;
 mod copy_conventions;
 /// Editor text drafts, discard, output and editor keys.
 mod editor_drafts;
+/// Editor tools, Image menu, Beautify and Combine through the update loop.
+mod editor_tools;
 /// Rotate, flip, resize and crop.
 mod geometry_and_crop;
 /// Sync and async geometry steps land in the same editor state.
