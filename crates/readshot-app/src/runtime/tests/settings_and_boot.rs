@@ -1228,7 +1228,10 @@ fn uninstalled_app(purge: bool) -> (tempfile::TempDir, App) {
             purge,
         }),
     );
-    // What the executor removed under purge.
+    // The History writer's launch-time sweep has run (in the app it ran
+    // at launch, long before any uninstall), then what the executor
+    // removed under purge is gone.
+    app.coordinator.flush_history_updates();
     if purge {
         let _ = std::fs::remove_dir_all(dir.path().join("data"));
         let _ = std::fs::remove_dir_all(dir.path().join("config"));
