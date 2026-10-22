@@ -1693,3 +1693,37 @@ fn an_unanswered_focus_query_still_moves_the_selection() {
     assert!(tab_field_focused(&[true]));
     assert!(!tab_field_focused(&[false]));
 }
+
+/// Undoing a numbered pin gives its number back: the next pin follows
+/// the highest one still on the document, and Redo moves it on again.
+#[test]
+fn undoing_a_numbered_pin_rewinds_the_counter() {
+    use readshot_ui::{CanvasMessage, ToolbarMessage};
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    app.editor = Some(crate::editor::EditorSession::new(solid(64, 64)));
+    for n in 1..=3 {
+        let number = app.editor.as_ref().unwrap().next_pin_number;
+        assert_eq!(number, n);
+        let _ = update(
+            &mut app,
+            Message::Editor(EditorMsg::Canvas(CanvasMessage::CommitAnnotation(
+                Annotation::NumberedPin {
+                    origin: PointLike::new(5.0 * n as f32, 5.0),
+                    number,
+                    color: Rgba::OPAQUE_BLACK,
+                },
+            ))),
+        );
+    }
+    assert_eq!(app.editor.as_ref().unwrap().next_pin_number, 4);
+    let undo = || Message::Editor(EditorMsg::Toolbar(ToolbarMessage::Undo));
+    let _ = update(&mut app, undo());
+    assert_eq!(app.editor.as_ref().unwrap().next_pin_number, 3);
+    let _ = update(&mut app, undo());
+    assert_eq!(app.editor.as_ref().unwrap().next_pin_number, 2);
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Toolbar(ToolbarMessage::Redo)),
+    );
+    assert_eq!(app.editor.as_ref().unwrap().next_pin_number, 3);
+}

@@ -1496,6 +1496,8 @@ fn land(
     let Some(last) = landed.last() else {
         return;
     };
+    // An undo or redo can take a numbered pin off or put it back.
+    ed.next_pin_number = crate::editor::next_pin_number_after(ed.model.annotations());
     ed.clear_eyedropper_loupe();
     ed.clear_discard_confirmation();
     let status = landed_status(ed, last.kind);

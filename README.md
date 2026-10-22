@@ -47,7 +47,9 @@ find it later by searching the text inside the screenshot.
   hand-drawn arrows, pen, highlighter, multi-line text (sizes, pill,
   bold), blur, pixelate, spotlight, stamps, numbered pins, magnifier, crop
   (free, 16:9, 4:3 or square), undo, and redo.
-  Hold Shift for squares, circles, and 45° lines.
+  Hold Shift for squares, circles, and 45° lines. A new numbered pin
+  takes the number after the highest pin on the capture, so undoing a
+  pin gives its number back.
 - An **Image** menu to resize, rotate, and flip a capture, or combine it
   with another capture or an image file (an image file is always added
   below).

@@ -2227,7 +2227,9 @@ fn rects_meet(a: readshot_core::RectLike, b: readshot_core::RectLike) -> bool {
     ax0 < bx1 && bx0 < ax1 && ay0 < by1 && by0 < ay1
 }
 
-fn next_pin_number_after(annotations: &[Annotation]) -> u32 {
+/// The number the next numbered pin gets: one past the highest pin on
+/// the document, so undoing a pin gives its number back.
+pub(crate) fn next_pin_number_after(annotations: &[Annotation]) -> u32 {
     annotations
         .iter()
         .filter_map(|annotation| match annotation {
