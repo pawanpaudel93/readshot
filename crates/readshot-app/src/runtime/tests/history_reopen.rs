@@ -384,9 +384,8 @@ fn noise(seed: u64, w: u32, h: u32) -> image::RgbaImage {
     })
 }
 
-/// A redaction, the colours it hid, and those a correct drawing of it
-/// still leaves as they are.
-type Secret = (Annotation, Vec<[u8; 4]>, Vec<[u8; 4]>);
+/// A redaction and the captured colours it hid.
+type Secret = (Annotation, Vec<[u8; 4]>);
 
 /// One History record edited, closed and reopened in random order while
 /// its writes fail or are slow. What the runtime would run as tasks is
@@ -536,10 +535,10 @@ impl Interleaving {
                 }
             }
             14 => {
-                // A pixelate lands whose grid clips to a 1×1 far corner
-                // (sides 5, block 4); then the disk fails, and the user
-                // fixes that corner with the same tool and turns the
-                // image. The fix is in another frame than what is stored,
+                // A pixelate lands with sides 5 and block 4 (whose far
+                // corner was once a 1×1 cell left as captured); then the
+                // disk fails, and the user fixes that corner with the
+                // same tool and turns the image. The fix is in another frame than what is stored,
                 // and only an open (recovery) can finish it.
                 self.log.push("pixelate-lands-edge-fix-turn");
                 if self.editor_of_record().is_some() {
@@ -568,8 +567,8 @@ impl Interleaving {
                 // document, so a later redaction is usually new, not one
                 // already stored. A pixelate's sides are often 5 with a
                 // block of 4 (the least the editor keeps after a turn): its
-                // grid then clips to a 1×1 far corner, the cell a correct
-                // drawing leaves as captured.
+                // grid then clips to a 1 px far row and column, which the
+                // filter merges into their neighbours.
                 let (x, y) = (rng.below(14) as f32, rng.below(14) as f32);
                 let mut side = || {
                     if rng.below(2) == 0 {
@@ -703,12 +702,10 @@ impl Interleaving {
     /// seeded noise, so each colour is unique to its pixel; colours that
     /// aren't (a black cover baked earlier) prove nothing and are skipped.
     ///
-    /// A solid redaction leaves none. A blur or pixelate rewrites every
-    /// pixel with an average of others, which matches the pixel's own
-    /// random colour exactly only by chance (about 1 in 2^24 per pixel):
-    /// at most 3 of its 36 pixels are allowed, so that one coincidence
-    /// can't fail a run, while a redaction off by a single row or column
-    /// (6 pixels left as captured) always does.
+    /// None may be left: a solid redaction leaves none, and a blur or
+    /// pixelate rewrites every pixel with an average that includes other
+    /// pixels, which matches a captured colour only by chance (about 1 in
+    /// 2^24 per pixel).
     fn check_redacted_pixels(&mut self) {
         let log = format!("seed {}: {:?}", self.seed, self.log);
         let stored = self.store.stored(self.id);
@@ -723,11 +720,8 @@ impl Interleaving {
         }
         let img = image::open(&png).expect("the stored image").to_rgba8();
         let present: std::collections::HashSet<[u8; 4]> = img.pixels().map(|p| p.0).collect();
-        for (redaction, secret, may_stay) in checks {
-            let left = secret
-                .iter()
-                .filter(|c| present.contains(*c) && !may_stay.contains(*c))
-                .count();
+        for (redaction, secret) in checks {
+            let left = secret.iter().filter(|c| present.contains(*c)).count();
             assert_eq!(
                 left,
                 0,
@@ -739,19 +733,13 @@ impl Interleaving {
 
     /// The open editor's redactions, each with the colours under it in its
     /// document that were in the capture and occur nowhere else there
-    /// (seeded noise: almost all), and those of them a correct drawing
-    /// still leaves as they are.
+    /// (seeded noise: almost all). None of them may be stored.
     ///
-    /// That is exact, not a tolerance. A solid cover or a blur changes
-    /// every pixel it covers (a blur's average of random colours equals
-    /// the pixel's own only by chance, about 1 in 2^24). A pixelate
-    /// averages each cell of its grid, which starts at a corner of the
-    /// rect and clips the far cells: only a 1×1 cell keeps its pixel, and
-    /// there is one exactly when the rect's width and height are both 1
-    /// more than a multiple of the block. Which corner it is depends on
-    /// the frame the grid was drawn in (the image may be turned since),
-    /// so any of the four corners may keep its pixel then, and nothing
-    /// else may.
+    /// No allowance: a solid cover or a blur changes every pixel it
+    /// covers (a blur's average of random colours equals the pixel's own
+    /// only by chance, about 1 in 2^24), and so does a pixelate, whose
+    /// grid has no 1×1 cell (a 1 px far row or column joins its
+    /// neighbour, `filters::pixelate_rect`).
     fn editor_secrets(&mut self) -> Vec<Secret> {
         // Only what the capture showed counts: a colour some earlier
         // redaction produced (a pixelate cell's average, say) hides
@@ -784,23 +772,7 @@ impl Interleaving {
                     .map(|(x, y)| base.get_pixel(x, y).0)
                     .filter(|c| counts.get(c) == Some(&1) && captured.contains(c))
                     .collect();
-                let may_stay = match a {
-                    Annotation::Pixelate { block_size, .. } => {
-                        let (w, h) = (x1 - x0, y1 - y0);
-                        // As `filters::pixelate_rect` sizes its cells.
-                        let block = (block_size.round().max(2.0) as u32).min(w.max(h));
-                        if w % block == 1 && h % block == 1 {
-                            [(x0, y0), (x1 - 1, y0), (x0, y1 - 1), (x1 - 1, y1 - 1)]
-                                .iter()
-                                .map(|&(x, y)| base.get_pixel(x, y).0)
-                                .collect()
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    _ => Vec::new(),
-                };
-                Some((a.clone(), secret, may_stay))
+                Some((a.clone(), secret))
             })
             .collect()
     }
@@ -1215,9 +1187,11 @@ fn a_box_one_pixel_larger_then_a_failed_rotate_keeps_its_ring_hidden() {
 }
 
 /// Fix-8 review I-4, app level: a pixelate with sides 5 and block 4
-/// lands; its grid clips to a 1×1 far corner, left as captured. The disk
-/// fails; the user fixes that corner with the same tool and turns the
-/// image; the capture is reopened. The corner is hidden.
+/// lands. Its grid used to clip to a 1×1 far corner left as captured;
+/// now that cell joins its neighbour (W3 review m1), so the corner is
+/// hidden from the start. The disk fails; the user fixes that corner
+/// with the same tool and turns the image; the capture is reopened. The
+/// corner stays hidden.
 #[test]
 fn an_edge_fixed_with_the_same_pixelate_then_turned_is_hidden() {
     let (_dir, store, mut app, record, _img) = noise_app();
@@ -1229,10 +1203,10 @@ fn an_edge_fixed_with_the_same_pixelate_then_turned_is_hidden() {
     app.coordinator.drain_history_writes();
     let corner = colours_under(&app, RectLike::new(6.0, 6.0, 1.0, 1.0));
     assert!(
-        stored_image(&store, record.id)
+        !stored_image(&store, record.id)
             .pixels()
             .any(|p| corner.contains(p)),
-        "the landed pixelate's corner cell is 1×1"
+        "the landed pixelate leaves its corner as captured"
     );
     store.fail_next_commits(1000);
     redact_and_sync(&mut app, pixelate(5.0, 5.0, 2.0, 2.0));

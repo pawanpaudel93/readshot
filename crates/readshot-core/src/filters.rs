@@ -168,7 +168,9 @@ fn checked_average(acc: [u32; 4], count: u32) -> Option<[u8; 4]> {
 /// In-place pixelate: replace every pixel in each `block × block` cell
 /// inside the rect with the cell's average colour. Cells that overlap the
 /// rect's edge are partially-clipped — the average is taken over only the
-/// pixels actually inside the rect.
+/// pixels actually inside the rect — and a clipped cell only 1 px wide
+/// joins its neighbour ([`cell_spans`]), so no cell is a single pixel
+/// left as captured unless the whole rect is one pixel.
 pub fn pixelate_rect(
     pixmap: &mut Pixmap,
     rect_x: i32,
@@ -199,12 +201,10 @@ pub fn pixelate_rect(
     };
     let data = pixmap.data_mut();
 
-    let mut by = y0;
-    while by < y1 {
-        let mut bx = x0;
-        while bx < x1 {
-            let cell_x_end = (bx + block).min(x1);
-            let cell_y_end = (by + block).min(y1);
+    let cols = cell_spans(x0, x1, block);
+    let rows = cell_spans(y0, y1, block);
+    for &(by, cell_y_end) in &rows {
+        for &(bx, cell_x_end) in &cols {
             // Compute the cell's average premultiplied RGBA.
             let mut acc = [0u32; 4];
             let mut count = 0u32;
@@ -229,10 +229,30 @@ pub fn pixelate_rect(
                     }
                 }
             }
-            bx += block;
         }
-        by += block;
     }
+}
+
+/// One axis of the pixelate grid: `[start, end)` spans of `block` from
+/// `start`, the last clipped to `end`. A last span only 1 px wide is
+/// merged into the one before it: with both sides one more than a
+/// multiple of the block it would otherwise make a 1×1 corner cell that
+/// keeps its captured pixel.
+fn cell_spans(start: i32, end: i32, block: i32) -> Vec<(i32, i32)> {
+    let mut spans = Vec::new();
+    let mut at = start;
+    while at < end {
+        let next = at.saturating_add(block).min(end);
+        spans.push((at, next));
+        at = next;
+    }
+    if spans.len() >= 2 && spans[spans.len() - 1].1 - spans[spans.len() - 1].0 == 1 {
+        let (_, last_end) = spans.pop().unwrap_or_default();
+        if let Some(prev) = spans.last_mut() {
+            prev.1 = last_end;
+        }
+    }
+    spans
 }
 
 #[cfg(test)]
@@ -294,6 +314,31 @@ mod tests {
         let data = p.data();
         for px in data.as_chunks::<4>().0 {
             assert_eq!(px, &[10, 20, 30, 255]);
+        }
+    }
+
+    /// No cell is a single pixel, so no pixel keeps its captured value
+    /// (W3 review m1): with sides one more than a multiple of the block
+    /// the far 1×1 corner cell used to stay as captured. One bright pixel
+    /// anywhere in the rect is always averaged with darker ones.
+    #[test]
+    fn pixelate_leaves_no_pixel_as_captured() {
+        for block in 2..=5 {
+            for w in 2..=11 {
+                for h in 2..=11 {
+                    for (wx, wy) in (0..h).flat_map(|y| (0..w).map(move |x| (x, y))) {
+                        let mut p = solid_pixmap(w as u32 + 2, h as u32 + 2, [0, 0, 0, 255]);
+                        let i = (((wy + 1) * (w + 2) + wx + 1) * 4) as usize;
+                        p.data_mut()[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
+                        pixelate_rect(&mut p, 1, 1, w, h, block as f32);
+                        assert_ne!(
+                            &p.data()[i..i + 4],
+                            &[255, 255, 255, 255],
+                            "block {block}, rect {w}x{h}: ({wx},{wy}) kept as captured"
+                        );
+                    }
+                }
+            }
         }
     }
 

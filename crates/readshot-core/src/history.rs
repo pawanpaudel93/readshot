@@ -328,9 +328,9 @@ pub struct PendingImage {
 /// - a blur or pixelate holds only an identical one (the same pixels, the
 ///   same radius or block size), which redrawing would leave unchanged.
 ///   Nothing weaker is proven: a pixelate's grid starts at its own corner
-///   and clips its edge cells (a 1×1 edge cell is left as captured), and a
-///   blur clamps its window at its own edges, so a different rect or
-///   strength can hide pixels the stored one doesn't.
+///   and clips its edge cells, and a blur clamps its window at its own
+///   edges, so a different rect or strength averages pixels the stored
+///   one doesn't.
 ///
 /// Anything it can't prove counts as new, and is drawn (fail closed). Not
 /// a redaction: trivially.
@@ -3088,28 +3088,30 @@ mod tests {
 
     /// Fix-8 review I-4: a stored pixelate doesn't hold a smaller one
     /// inside it with a block no bigger than its own. Its grid starts at
-    /// its own corner and clips the edge cells: landed (0,0,5,5) block 4
-    /// leaves (4,4) a 1×1 cell, as captured. The new (3,3,2,2) block 4
-    /// hides (4,4); recovery must draw it, not take it as already stored.
+    /// its own corner, so a pixelate on another grid averages different
+    /// pixels: landed (0,0,8,8) block 4 has four 4×4 cells; the new
+    /// (2,2,4,4) block 4 straddles all four. Recovery must draw it, not
+    /// take it as already stored. (The 1×1 corner cell that first showed
+    /// this is gone: `filters::cell_spans` merges it, W3 review m1.)
     #[test]
     fn a_smaller_pixelate_inside_a_landed_one_is_drawn() {
         let (_dir, s, r, landed) = landed_noise(Annotation::Pixelate {
-            rect: crate::geom::RectLike::new(0.0, 0.0, 5.0, 5.0),
+            rect: crate::geom::RectLike::new(0.0, 0.0, 8.0, 8.0),
             block_size: 4.0,
         });
         request_from_another_frame(
             &s,
             &r,
             Annotation::Pixelate {
-                rect: crate::geom::RectLike::new(3.0, 3.0, 2.0, 2.0),
+                rect: crate::geom::RectLike::new(2.0, 2.0, 4.0, 4.0),
                 block_size: 4.0,
             },
         );
         let now = decode(&fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap());
         assert_ne!(
-            now.get_pixel(4, 4),
-            landed.get_pixel(4, 4),
-            "(4,4) is still as captured"
+            now.get_pixel(2, 2),
+            landed.get_pixel(2, 2),
+            "the smaller pixelate wasn't drawn"
         );
     }
 
