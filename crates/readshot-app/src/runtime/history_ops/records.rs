@@ -114,7 +114,7 @@ pub(super) fn on_reopened_after_sync(
             if unsaved.is_some() {
                 show_open_status(
                     state,
-                    StatusTone::Warning,
+                    open_status_tone(&unsaved),
                     format!("{said}{}", not_saved(&unsaved)),
                 );
             }

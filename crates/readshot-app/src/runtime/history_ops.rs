@@ -530,10 +530,12 @@ fn show_open_status(state: &mut App, tone: StatusTone, message: String) {
 }
 
 /// A cancelled open is a notice; one that also names edits that weren't
-/// saved to History is a warning.
-fn open_status_tone(unsaved: &Option<String>) -> StatusTone {
+/// saved to History is an error: those writes failed and the edits are
+/// lost, which is a failure, not a caution. Every "weren't all saved"
+/// status uses this tone.
+pub(super) fn open_status_tone(unsaved: &Option<String>) -> StatusTone {
     if unsaved.is_some() {
-        StatusTone::Warning
+        StatusTone::Error
     } else {
         StatusTone::Notice
     }
@@ -560,7 +562,7 @@ pub(crate) fn open_reopened(
     );
     let opened = open_editor_window_replacing(state, editor, None);
     if let (Some(reason), Some(ed)) = (unsaved, state.editor.as_mut()) {
-        ed.set_status(StatusTone::Warning, format!(
+        ed.set_status(StatusTone::Error, format!(
             "Your last edits in the previous window weren’t all saved to History ({reason}). This is the capture as History has it."
         ));
     }

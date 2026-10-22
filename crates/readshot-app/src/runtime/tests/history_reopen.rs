@@ -1247,3 +1247,83 @@ fn an_edge_fixed_with_the_same_pixelate_then_turned_is_hidden() {
         "the corner is stored as captured"
     );
 }
+
+// ---- Tones of a History open (w4d review, Minor 4) ----
+
+/// Waiting for earlier edits of the record to be written is progress,
+/// not a problem: History says so in the Progress tone.
+#[test]
+fn waiting_for_earlier_edits_is_shown_as_progress() {
+    let (_dir, store, mut app, record) = history_app();
+    edit_record(&mut app, &record);
+    store.hold();
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
+    );
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::OpenInEditor(record.id)),
+    );
+    let status = app.history_status.as_ref().expect("History says it waits");
+    assert_eq!(
+        status.text,
+        "Finishing your previous edits to this capture…"
+    );
+    assert_eq!(status.tone, StatusTone::Progress);
+    let rx = start_load(&app, record.id);
+    store.release();
+    let msg = rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
+    let _ = update(&mut app, msg);
+}
+
+/// A new capture cancels a waiting open: a notice when nothing was lost,
+/// an error (red, and notified) when earlier edits weren't saved to
+/// History, since that is lost work, not a caution.
+#[test]
+fn a_cancelled_open_is_a_notice_unless_edits_were_lost() {
+    for (note, tone) in [
+        (None, StatusTone::Notice),
+        (Some("disk full".to_string()), StatusTone::Error),
+    ] {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = readshot_core::Uuid::new_v4();
+        app.awaiting_reopen = Some(id);
+        app.history_open_note = note.clone();
+        let capture = crate::editor::EditorSession::new(solid(10, 10));
+        let _ =
+            super::super::window_settings::open_editor_window_replacing(&mut app, capture, None);
+        assert_eq!(app.awaiting_reopen, None);
+        let status = app
+            .last_capture_status
+            .as_ref()
+            .expect("the cancel is said");
+        assert!(
+            status.text.starts_with("Didn’t open the capture"),
+            "{}",
+            status.text
+        );
+        assert_eq!(status.tone, tone, "{note:?}: {}", status.text);
+        assert!(crate::runtime::capture_status_is_problem(status) == note.is_some());
+    }
+}
+
+/// The writes of a cancelled open finish failing after the cancel: the
+/// lost edits are named, as an error like the cancel itself.
+#[test]
+fn edits_lost_after_a_cancelled_open_are_an_error() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let id = readshot_core::Uuid::new_v4();
+    app.cancelled_history_open = Some((id, "Didn’t open the capture: x.".to_string()));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::ReopenedAfterSync {
+            record_id: id,
+            result: Err("gone".into()),
+            unsaved: Some("write failed".into()),
+        }),
+    );
+    let status = app.last_capture_status.as_ref().unwrap();
+    assert!(status.text.contains("weren’t all saved"), "{}", status.text);
+    assert_eq!(status.tone, StatusTone::Error);
+}
