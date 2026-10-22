@@ -2296,6 +2296,59 @@ mod tests {
         assert_eq!(FsHistoryStore::new(&root).list().unwrap().len(), 8);
     }
 
+    /// HI-23: separate processes saving into one History keep every
+    /// index entry. Nothing in-process is shared between them, so only
+    /// the advisory lock file serialises their read-modify-write cycles.
+    /// The test binary re-runs this test as each writer process.
+    #[test]
+    fn cross_process_saves_keep_every_index_entry() {
+        const ROOT: &str = "READSHOT_TEST_HISTORY_WRITER_ROOT";
+        const SLOT: &str = "READSHOT_TEST_HISTORY_WRITER_SLOT";
+        const WRITERS: u32 = 4;
+        const PER_WRITER: u32 = 12;
+        if let (Ok(root), Ok(slot)) = (std::env::var(ROOT), std::env::var(SLOT)) {
+            let slot: u32 = slot.parse().unwrap();
+            let store = FsHistoryStore::new(&root);
+            for i in 0..PER_WRITER {
+                let t = Utc.with_ymd_and_hms(2026, 1, 1, slot, i, 0).unwrap();
+                store.save(&record_at(t), &fake_png()).unwrap();
+            }
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("history");
+        let exe = std::env::current_exe().unwrap();
+        let writers: Vec<_> = (0..WRITERS)
+            .map(|slot| {
+                std::process::Command::new(&exe)
+                    .args([
+                        "--exact",
+                        "history::tests::cross_process_saves_keep_every_index_entry",
+                        "--test-threads=1",
+                    ])
+                    .env(ROOT, &root)
+                    .env(SLOT, slot.to_string())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        for writer in writers {
+            let out = writer.wait_with_output().unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success(),
+                "{stdout}{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            // The filter matched this test: the writer really ran.
+            assert!(stdout.contains("1 passed"), "{stdout}");
+        }
+        let listed = FsHistoryStore::new(&root).list().unwrap();
+        assert_eq!(listed.len(), (WRITERS * PER_WRITER) as usize);
+    }
+
     #[test]
     fn list_skips_entries_with_unsafe_paths() {
         // A tampered or corrupt index must not be able to steer file I/O

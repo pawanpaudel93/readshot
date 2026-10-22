@@ -1166,6 +1166,8 @@ mod history_browser;
 mod history_reopen;
 /// History scrub after a redaction (B10).
 mod history_scrub;
+/// History window and store: retention, search, pin, thumbnails, close.
+mod history_window;
 /// Key maps of the scroll HUD, welcome, History, pins and Settings.
 mod key_maps;
 /// Editor keyboard focus zones, Tab selection, keyboard crop and resize.
