@@ -406,7 +406,8 @@ pub enum Command {
         shell: clap_complete::Shell,
     },
 
-    /// Uninstall Readshot from this Mac.
+    /// Uninstall Readshot for this user: login entry, command-line links,
+    /// permission and (with --purge) data; on macOS the app too.
     ///
     /// Removes the launch-at-login item, the `readshot` / `readshot-mcp`
     /// command-line symlinks (only when they point into a Readshot.app
@@ -921,7 +922,7 @@ fn run_uninstall(
             "{failures} step(s) could not be completed; see the list above"
         )));
     }
-    writeln!(stdout, "\nReadshot has been removed.")?;
+    writeln!(stdout, "\n{}", crate::uninstall::completion_message(&plan))?;
     Ok(())
 }
 

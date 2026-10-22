@@ -94,6 +94,12 @@ pub struct UninstallPaths {
     /// The user's `~/Library`, for macOS-managed per-app storage
     /// (defaults plist, caches, HTTP/WebKit storage) cleared on purge.
     pub library_dir: PathBuf,
+    /// Whether there is a Screen Recording grant to reset (macOS TCC).
+    /// Windows and Linux have none, so the step isn't planned there.
+    pub screen_recording_grant: bool,
+    /// Whether Open at Login is registered outside a LaunchAgent: the
+    /// XDG autostart entry (Linux) or the HKCU Run value (Windows).
+    pub open_at_login_entry: bool,
 }
 
 /// What a purge-deletion covers, for plain-language descriptions.
@@ -112,8 +118,11 @@ pub enum UninstallAction {
     RemoveLoginItem { label: String, plist: PathBuf },
     /// Delete a CLI symlink that points into a `Readshot.app` bundle.
     RemoveCliSymlink { path: PathBuf, target: PathBuf },
-    /// Reset the Screen Recording TCC grant for the bundle id.
+    /// Reset the Screen Recording TCC grant for the bundle id (macOS).
     ResetScreenRecording { bundle_id: String },
+    /// Remove the Open at Login entry on Windows / Linux
+    /// (`startup::set_launch_at_login(false)`; absent is fine).
+    DisableOpenAtLogin,
     /// Delete a user-data directory (only planned under `purge`).
     DeleteDir { path: PathBuf, kind: DataKind },
     /// Clear the app's macOS defaults domain (`~/Library/Preferences/<id>.plist`,
@@ -140,6 +149,9 @@ impl UninstallAction {
             }
             UninstallAction::ResetScreenRecording { bundle_id } => {
                 format!("Reset the Screen Recording permission ({bundle_id})")
+            }
+            UninstallAction::DisableOpenAtLogin => {
+                "Remove the Open at Login entry, if there is one".to_string()
             }
             UninstallAction::DeleteDir { path, kind } => match kind {
                 DataKind::Preferences => format!("Delete preferences ({})", path.display()),
@@ -185,10 +197,17 @@ pub fn plan_uninstall(paths: &UninstallPaths, purge: bool) -> Vec<UninstallActio
         }
     }
 
-    // 3. Screen Recording permission.
-    actions.push(UninstallAction::ResetScreenRecording {
-        bundle_id: BUNDLE_ID.to_string(),
-    });
+    // 1b. Open at Login outside macOS (autostart entry / Run value).
+    if paths.open_at_login_entry {
+        actions.push(UninstallAction::DisableOpenAtLogin);
+    }
+
+    // 3. Screen Recording permission (macOS only).
+    if paths.screen_recording_grant {
+        actions.push(UninstallAction::ResetScreenRecording {
+            bundle_id: BUNDLE_ID.to_string(),
+        });
+    }
 
     // 4. User data (purge only). De-duplicate when the two dirs coincide.
     if purge {
@@ -246,6 +265,21 @@ pub fn plan_uninstall(paths: &UninstallPaths, purge: bool) -> Vec<UninstallActio
     }
 
     actions
+}
+
+/// The CLI's closing line after a clean run. Only a run that moved the
+/// app bundle to the Trash removed the program itself; otherwise (a
+/// Windows or Linux build, or a plain binary) say what remains.
+pub fn completion_message(actions: &[UninstallAction]) -> &'static str {
+    if actions
+        .iter()
+        .any(|a| matches!(a, UninstallAction::TrashAppBundle { .. }))
+    {
+        "Readshot has been removed."
+    } else {
+        "Readshot's login entry, command-line links and the data you chose were removed. \
+         The readshot program itself is still installed: remove it the way you installed it."
+    }
 }
 
 /// Render the plan as plain text for the CLI.
@@ -306,6 +340,9 @@ pub trait UninstallSystem {
     /// Clear the app's defaults domain so `cfprefsd` drops its cached
     /// copy (best-effort; the plist file is removed afterwards too).
     fn clear_defaults(&self, domain: &str) -> io::Result<()>;
+
+    /// Remove the Windows / Linux Open at Login entry.
+    fn disable_open_at_login(&self) -> io::Result<()>;
 }
 
 /// Production [`UninstallSystem`] that shells out to macOS tooling.
@@ -339,6 +376,11 @@ impl UninstallSystem for RealSystem {
             let _ = (label, plist);
             Ok(())
         }
+    }
+
+    fn disable_open_at_login(&self) -> io::Result<()> {
+        // On macOS the LaunchAgent step covers it; this is never planned.
+        crate::startup::set_launch_at_login(false).map_err(io::Error::other)
     }
 
     fn clear_defaults(&self, domain: &str) -> io::Result<()> {
@@ -395,6 +437,11 @@ pub enum UninstallError {
     #[error("could not move {from} to the Trash: {source}")]
     Trash {
         from: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not remove the Open at Login entry: {source}")]
+    LoginEntry {
         #[source]
         source: io::Error,
     },
@@ -468,6 +515,12 @@ fn execute_one(
                     bundle_id: bundle_id.clone(),
                     source,
                 })?;
+            Ok(ActionStatus::Done)
+        }
+        UninstallAction::DisableOpenAtLogin => {
+            system
+                .disable_open_at_login()
+                .map_err(|source| UninstallError::LoginEntry { source })?;
             Ok(ActionStatus::Done)
         }
         UninstallAction::DeleteDir { path, .. } => remove_dir_if_present(path),
@@ -586,6 +639,8 @@ pub fn default_uninstall_paths() -> UninstallPaths {
         data_dir,
         trash_dir: home.join(".Trash"),
         library_dir: home.join("Library"),
+        screen_recording_grant: cfg!(target_os = "macos"),
+        open_at_login_entry: !cfg!(target_os = "macos"),
     }
 }
 
@@ -631,6 +686,7 @@ mod tests {
         unloaded: Mutex<Vec<String>>,
         tcc_reset: Mutex<Vec<String>>,
         defaults_cleared: Mutex<Vec<String>>,
+        open_at_login_disabled: Mutex<usize>,
     }
 
     impl UninstallSystem for RecordingSystem {
@@ -640,6 +696,10 @@ mod tests {
         }
         fn reset_screen_recording(&self, bundle_id: &str) -> io::Result<()> {
             self.tcc_reset.lock().unwrap().push(bundle_id.to_string());
+            Ok(())
+        }
+        fn disable_open_at_login(&self) -> io::Result<()> {
+            *self.open_at_login_disabled.lock().unwrap() += 1;
             Ok(())
         }
         fn clear_defaults(&self, domain: &str) -> io::Result<()> {
@@ -717,7 +777,43 @@ mod tests {
             data_dir: root.join("data"),
             trash_dir: root.join("Trash"),
             library_dir: root.join("Library"),
+            screen_recording_grant: true,
+            open_at_login_entry: false,
         }
+    }
+
+    #[test]
+    fn off_macos_the_plan_has_no_screen_recording_step_and_clears_open_at_login() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = UninstallPaths {
+            screen_recording_grant: false,
+            open_at_login_entry: true,
+            ..paths_in(root.path(), None)
+        };
+        let plan = plan_uninstall(&paths, false);
+        assert!(!plan
+            .iter()
+            .any(|a| matches!(a, UninstallAction::ResetScreenRecording { .. })));
+        assert!(plan.contains(&UninstallAction::DisableOpenAtLogin));
+        let system = RecordingSystem::default();
+        for report in execute(&plan, &system) {
+            assert!(report.outcome.is_ok(), "{report:?}");
+        }
+        assert_eq!(*system.open_at_login_disabled.lock().unwrap(), 1);
+        assert!(system.tcc_reset.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_closing_line_says_whether_the_program_itself_is_gone() {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = root.path().join("Readshot.app");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let with_app = plan_uninstall(&paths_in(root.path(), Some(bundle)), false);
+        assert_eq!(completion_message(&with_app), "Readshot has been removed.");
+        let without = plan_uninstall(&paths_in(root.path(), None), false);
+        let msg = completion_message(&without);
+        assert!(msg.contains("still installed"), "{msg}");
+        assert!(!msg.contains("Mac"), "{msg}");
     }
 
     #[test]
