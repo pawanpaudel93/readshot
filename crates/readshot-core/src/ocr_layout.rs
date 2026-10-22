@@ -108,10 +108,13 @@ pub fn reconstruct(lines: &[RecognizedLine]) -> String {
     let rows = cluster_rows(&active, row_tol);
 
     let min_x = active.iter().map(|l| l.x).fold(f32::INFINITY, f32::min);
-    // Left edges closer than half a line height are the same edge:
+    // Left edges closer than 0.8 of a character are the same edge:
     // Vision's boxes jitter by several pixels, often more than half a
-    // character, and that must not read as a one-space indent.
-    let jitter = (med_h * 0.5).max(em * 0.5);
+    // character, and that must not read as a one-space indent. The
+    // threshold stays in x units (fractions of image width), like the
+    // offset; line height is in y units and would scale with the
+    // capture's aspect ratio.
+    let jitter = em * JITTER_EM;
     if let Some(table) = render_markdown_table(&rows, em) {
         return table;
     }
@@ -191,6 +194,9 @@ fn cluster_rows<'a>(active: &[&'a RecognizedLine], row_tol: f32) -> Vec<Row<'a>>
 
     rows
 }
+
+/// Left-edge offsets under this many characters are box jitter.
+const JITTER_EM: f32 = 0.8;
 
 fn render_plain_text(rows: &[Row<'_>], min_x: f32, em: f32, jitter: f32) -> String {
     let mut out = String::new();
@@ -678,6 +684,87 @@ mod tests {
         assert_eq!(rows[0], "let a = 1;");
         assert_eq!(rows[1], "let b = 2;", "{out:?}");
         assert_eq!(rows[2], "    nested(b);", "{out:?}");
+    }
+
+    /// Lines laid out in pixels on a `w` x `h` capture, normalised per
+    /// axis as the engines report them: `(indent in chars, text)` rows
+    /// at `char_px` per character and `line_px` per line.
+    fn code_capture(
+        w: f32,
+        h: f32,
+        char_px: f32,
+        line_px: f32,
+        rows: &[(usize, &str)],
+    ) -> Vec<RecognizedLine> {
+        rows.iter()
+            .enumerate()
+            .map(|(i, (indent, text))| {
+                let x = 20.0 + *indent as f32 * char_px;
+                let y = 10.0 + i as f32 * line_px * 1.3;
+                line(
+                    text,
+                    x / w,
+                    y / h,
+                    text.chars().count() as f32 * char_px / w,
+                    line_px / h,
+                )
+            })
+            .collect()
+    }
+
+    fn unfenced(out: &str) -> Vec<String> {
+        out.lines()
+            .filter(|l| *l != "```")
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn wide_and_tall_captures_keep_code_indents_and_the_fence() {
+        // C1: the jitter threshold must be in x units only, or a wide
+        // capture (line height a large fraction of image height) loses
+        // every indent under it.
+        let python: &[(usize, &str)] = &[
+            (0, "def handler(event):"),
+            (4, "if event.ok:"),
+            (8, "return process(event)"),
+            (4, "for item in event.items:"),
+            (8, "log(item)"),
+            (4, "return None"),
+        ];
+        for (w, h, char_px, line_px) in [
+            (1600.0, 400.0, 9.0, 22.0),
+            (2000.0, 200.0, 10.0, 20.0),
+            (2000.0, 2000.0, 10.0, 20.0),
+            (400.0, 1600.0, 9.0, 22.0),
+        ] {
+            let out = reconstruct(&code_capture(w, h, char_px, line_px, python));
+            assert!(out.starts_with("```\n"), "{w}x{h}: {out}");
+            let expected: Vec<String> = python
+                .iter()
+                .map(|(indent, text)| format!("{}{text}", " ".repeat(*indent)))
+                .collect();
+            assert_eq!(unfenced(&out), expected, "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn wide_captures_keep_two_space_yaml_nesting() {
+        let yaml: &[(usize, &str)] = &[
+            (0, "server:"),
+            (2, "port: 8080"),
+            (2, "tls:"),
+            (4, "enabled: true"),
+            (0, "logging: debug"),
+        ];
+        for (w, h) in [(1600.0, 400.0), (2000.0, 200.0)] {
+            let out = reconstruct(&code_capture(w, h, 10.0, 20.0, yaml));
+            let expected: Vec<String> = yaml
+                .iter()
+                .map(|(indent, text)| format!("{}{text}", " ".repeat(*indent)))
+                .collect();
+            assert_eq!(unfenced(&out), expected, "{w}x{h}: {out}");
+        }
     }
 
     #[test]

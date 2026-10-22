@@ -409,7 +409,10 @@ type.
 When `clipboard` is `true`, `output` is `null`.
 
 For a display capture, `source.rect` is the region captured: the part
-of the requested rectangle on the display. `source.scale` is the scale
+of the requested rectangle on the display, in display-local
+coordinates (a global rectangle for a non-primary display, which is
+still accepted, is reported relative to that display's top-left).
+`source.scale` is the scale
 of the image produced (`image.width` over `rect.width`).
 
 ### OCR Metadata
