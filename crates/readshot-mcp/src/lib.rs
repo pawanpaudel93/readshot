@@ -29,10 +29,10 @@
 //! |----------------------------|------------------------------|---------------------------------|
 //! | `list_displays`            | (none)                       | `[{ id, name, bounds, ... }]`   |
 //! | `list_windows`             | (none)                       | `[{ id, app_name, bounds, ... }]` |
-//! | `capture_region`           | display?, rect?, scale?      | `{ image_base64 }` (PNG)        |
-//! | `capture_window`           | window, rect?                | `{ image_base64 }` (PNG)        |
-//! | `capture_text`             | display?, rect?, scale?, ... | `{ text }`                      |
-//! | `capture_region_and_text`  | display?, rect?, scale?, ... | `{ image_base64, text }`        |
+//! | `capture_region`           | display?, rect?, scale?, hide_cursor? | `{ image_base64 }` (PNG) |
+//! | `capture_window`           | window, rect?, ignore_shadows? | `{ image_base64 }` (PNG)      |
+//! | `capture_text`             | display?, rect?, scale?, hide_cursor?, languages?, language_correction? | `{ text, average_confidence }` |
+//! | `capture_region_and_text`  | as `capture_text`            | `{ image_base64, text, average_confidence }` |
 //! | `recent_captures`          | limit?                       | recent history records          |
 //! | `latest_capture`           | (none)                       | newest history record           |
 //! | `get_capture`              | id                           | one history record              |
@@ -283,6 +283,20 @@ impl McpServer {
                 message: "tools/call missing `name`".into(),
             })?;
         let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+
+        // The capture tools check their own arguments; these have no
+        // other parsing step, and their schemas promise
+        // `additionalProperties: false` too.
+        let allowed: Option<&[&str]> = match name {
+            "list_displays" | "list_windows" | "latest_capture" => Some(&[]),
+            "recent_captures" => Some(&["limit"]),
+            "get_capture" => Some(&["id"]),
+            "search_captures" => Some(&["query", "limit"]),
+            _ => None,
+        };
+        if let Some(allowed) = allowed {
+            validate_args_object(&args, allowed)?;
+        }
 
         let result = match name {
             "list_displays" => self.tool_list_displays().await,
@@ -1016,7 +1030,7 @@ fn tool_descriptors() -> Value {
         },
         {
             "name": "search_captures",
-            "description": "Search saved captures by OCR text or capture timestamp.",
+            "description": "Search saved captures by OCR text, capture time (local, YYYY-MM-DD HH:MM:SS), display id or size (WxH). Case-insensitive substring match.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1657,6 +1671,45 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("unknown argument `rectangle`"));
+    }
+
+    /// Every tool's schema says `additionalProperties: false`, so every
+    /// tool refuses an argument it doesn't know (history and list tools
+    /// used to ignore one, so a typo like `limt` silently did nothing).
+    #[tokio::test]
+    async fn every_tool_refuses_an_unknown_argument() {
+        let s = server();
+        for (i, tool) in [
+            "list_displays",
+            "list_windows",
+            "recent_captures",
+            "latest_capture",
+            "get_capture",
+            "search_captures",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let resp = call(
+                &s,
+                &format!(
+                    r#"{{"jsonrpc":"2.0","id":{i},"method":"tools/call","params":{{"name":"{tool}","arguments":{{"limt":3}}}}}}"#
+                ),
+            )
+            .await;
+            assert_eq!(
+                resp["error"]["code"],
+                codes::INVALID_PARAMS,
+                "{tool}: {resp}"
+            );
+            assert!(
+                resp["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("unknown argument `limt`"),
+                "{tool}: {resp}"
+            );
+        }
     }
 
     #[tokio::test]

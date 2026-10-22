@@ -96,7 +96,11 @@ History arguments:
 | `recent_captures` | `limit` from 1 to 100, default 20. |
 | `latest_capture` | none. |
 | `get_capture` | `id` from a history result. |
-| `search_captures` | `query`, plus optional `limit`. |
+| `search_captures` | `query`, plus optional `limit`. Case-insensitive substring match on the OCR text, the local capture time (`YYYY-MM-DD HH:MM:SS`), the display id and the size (`WxH`), as in the History window. |
+
+Every tool rejects an argument it doesn't list (JSON-RPC
+`-32602`, "unknown argument"), as its `additionalProperties: false`
+schema says.
 
 When `display` is omitted, the primary display is used. When `rect`
 is omitted, the chosen display's full bounds are captured.
