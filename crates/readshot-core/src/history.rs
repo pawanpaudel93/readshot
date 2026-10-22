@@ -321,21 +321,48 @@ pub struct PendingImage {
 }
 
 /// `r` is already in an image whose baked redactions are `baked`: one of
-/// the same kind holds its whole rect (a pixel of slack: stored lists are
-/// whole pixels, a mapped rect may not be). Not a redaction: trivially.
+/// them hides every pixel `r` hides (the whole pixels each snaps to,
+/// [`crate::render::redaction_pixels`], with no slack) at least as strongly:
+/// a solid cover holds any redaction; a blur or pixelate holds only one
+/// of its own kind no stronger than itself (radius, block size). Anything
+/// it can't prove counts as new, and is drawn (fail closed). Not a
+/// redaction: trivially.
 fn already_baked(r: &Annotation, baked: &[Annotation]) -> bool {
     let Some(rr) = r.redaction_rect() else {
         return true;
     };
+    let need = crate::render::redaction_pixels(rr);
     baked.iter().any(|b| {
-        std::mem::discriminant(b) == std::mem::discriminant(r)
-            && b.redaction_rect().is_some_and(|br| {
-                br.x - 1.0 <= rr.x
-                    && br.y - 1.0 <= rr.y
-                    && rr.x + rr.width <= br.x + br.width + 1.0
-                    && rr.y + rr.height <= br.y + br.height + 1.0
-            })
+        let Some(have) = b.redaction_rect().map(crate::render::redaction_pixels) else {
+            return false;
+        };
+        let contains = have.x <= need.x
+            && have.y <= need.y
+            && need.x + need.width <= have.x + have.width
+            && need.y + need.height <= have.y + have.height;
+        contains && at_least_as_strong(b, r)
     })
+}
+
+/// `b` hides what it covers at least as well as `r` would.
+fn at_least_as_strong(b: &Annotation, r: &Annotation) -> bool {
+    if b.is_solid_redaction() {
+        return true;
+    }
+    match (b, r) {
+        (Annotation::Blur { radius: have, .. }, Annotation::Blur { radius: want, .. }) => {
+            have >= want
+        }
+        (
+            Annotation::Pixelate {
+                block_size: have, ..
+            },
+            Annotation::Pixelate {
+                block_size: want, ..
+            },
+        ) => have >= want,
+        _ => false,
+    }
 }
 
 /// A solid cover over the whole of a `width` × `height` image: what a
@@ -2928,6 +2955,118 @@ mod tests {
             !s.root().join(FsHistoryStore::png_path(&r)).exists(),
             "its unredacted image is served"
         );
+    }
+
+    /// An 8×8 capture of distinct noise, saved, with `landed` redacted into
+    /// it as a landed scrub (its stored list is `landed`).
+    fn landed_noise(
+        landed: Annotation,
+    ) -> (TempDir, FsHistoryStore, CaptureRecord, image::RgbaImage) {
+        let (dir, s) = store();
+        let mut r = record_at(Utc::now());
+        r.width_px = 8;
+        r.height_px = 8;
+        let mut seed = 0x9E37_79B9u32;
+        let img = image::RgbaImage::from_fn(8, 8, |_, _| {
+            let mut c = || {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                (seed & 0xFF) as u8
+            };
+            image::Rgba([c(), c(), c(), 255])
+        });
+        s.save(&r, &crate::png::encode(&img).unwrap()).unwrap();
+        let mut scrub = scrubbed_of(&r);
+        scrub.redactions = vec![landed.clone()];
+        let png = crate::png::encode(&crate::render::render(&img, &[landed])).unwrap();
+        assert!(s.rewrite(&scrub, &png).unwrap());
+        let landed_img = decode(&fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap());
+        (dir, s, r, landed_img)
+    }
+
+    /// A scrub request of `r` in another frame ("rot") whose editor places
+    /// `redaction` in the stored frame at the same spot; then recovery.
+    fn request_from_another_frame(s: &FsHistoryStore, r: &CaptureRecord, redaction: Annotation) {
+        let mut req = scrubbed_of(r);
+        req.width_px = 8;
+        req.height_px = 8;
+        req.geometry_id = Some("rot".into());
+        req.redactions = vec![redaction.clone()];
+        req.pending_image = Some(Box::new(PendingImage {
+            geometry_id: Some("rot".into()),
+            width: 8,
+            height: 8,
+            bake: vec![redaction.clone()],
+            other_frames: vec![PendingImage {
+                geometry_id: None,
+                width: 8,
+                height: 8,
+                bake: vec![redaction],
+                ..PendingImage::default()
+            }],
+            ..PendingImage::default()
+        }));
+        assert!(s.begin_scrub(&req).unwrap());
+        assert_eq!(s.finish_pending_scrubs(), 1);
+    }
+
+    fn solid_rect(x: f32, y: f32, w: f32, h: f32) -> Annotation {
+        Annotation::Rectangle {
+            rect: crate::geom::RectLike::new(x, y, w, h),
+            color: crate::annotation::Rgba::OPAQUE_BLACK,
+            line_width: 0.0,
+            style: crate::annotation::ShapeStyle {
+                fill: crate::annotation::FillMode::Filled,
+                ..crate::annotation::ShapeStyle::default()
+            },
+        }
+    }
+
+    /// Fix-7 review I-1: a redaction 1 px larger on every side than the
+    /// landed one isn't held by it: its ring is drawn on recovery, never
+    /// served as captured.
+    #[test]
+    fn a_redaction_one_pixel_larger_than_the_landed_one_is_drawn() {
+        let (_dir, s, r, _) = landed_noise(solid_rect(2.0, 2.0, 3.0, 3.0));
+        request_from_another_frame(&s, &r, solid_rect(1.0, 1.0, 5.0, 5.0));
+        let now = decode(&fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap());
+        let raw = (1..6)
+            .flat_map(|y| (1..6).map(move |x| (x, y)))
+            .filter(|&(x, y)| now.get_pixel(x, y).0 != [0, 0, 0, 255])
+            .count();
+        assert_eq!(raw, 0, "{raw} of 25 pixels under the new redaction are raw");
+    }
+
+    /// Fix-7 review I-2: a blur made stronger after its weaker version
+    /// landed is drawn at the new strength on recovery.
+    #[test]
+    fn a_blur_made_stronger_is_drawn_at_the_new_strength() {
+        let rect = crate::geom::RectLike::new(1.0, 1.0, 6.0, 6.0);
+        let (_dir, s, r, landed) = landed_noise(Annotation::Blur { rect, radius: 1.0 });
+        request_from_another_frame(&s, &r, Annotation::Blur { rect, radius: 20.0 });
+        let now = decode(&fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap());
+        assert_ne!(now, landed, "the weaker blur was kept");
+    }
+
+    /// Fix-7 review I-2: the same for a pixelate made coarser.
+    #[test]
+    fn a_pixelate_made_coarser_is_drawn_at_the_new_block_size() {
+        let rect = crate::geom::RectLike::new(0.0, 0.0, 8.0, 8.0);
+        let (_dir, s, r, landed) = landed_noise(Annotation::Pixelate {
+            rect,
+            block_size: 1.0,
+        });
+        request_from_another_frame(
+            &s,
+            &r,
+            Annotation::Pixelate {
+                rect,
+                block_size: 8.0,
+            },
+        );
+        let now = decode(&fs::read(s.root().join(FsHistoryStore::png_path(&r))).unwrap());
+        assert_ne!(now, landed, "the finer pixelate was kept");
     }
 
     /// Redactions that can't be placed on the set-aside image (another

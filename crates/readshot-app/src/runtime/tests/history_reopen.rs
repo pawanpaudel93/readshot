@@ -1038,3 +1038,36 @@ fn launch_recovery_never_finishes_this_runs_own_redaction() {
         "the deleted outline was baked"
     );
 }
+
+/// Fix-7 review I-1, app level: a solid box (2,2,6,6) lands; writes then
+/// fail; the user draws a box 1 px larger on every side (1,1,8,8) to
+/// cover an edge sliver, then rotates; the capture is reopened. The ring
+/// the larger box added is never stored as captured.
+#[test]
+fn a_box_one_pixel_larger_then_a_failed_rotate_keeps_its_ring_hidden() {
+    let (_dir, store, mut app, record, _img) = noise_app();
+    redact_and_sync(&mut app, solid_at(2.0, 2.0, 6.0, 6.0));
+    app.coordinator.drain_history_writes();
+    store.fail_next_commits(1000);
+    let larger = colours_under(&app, RectLike::new(1.0, 1.0, 8.0, 8.0));
+    let inner = colours_under(&app, RectLike::new(2.0, 2.0, 6.0, 6.0));
+    let ring: Vec<_> = larger
+        .iter()
+        .filter(|c| !inner.contains(c))
+        .copied()
+        .collect();
+    redact_and_sync(&mut app, solid_at(1.0, 1.0, 8.0, 8.0));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Image(ImageMsg::Rotate { clockwise: true })),
+    );
+    reopen(&mut app, &store, record.id);
+    let stored = stored_image(&store, record.id);
+    let raw = stored.pixels().filter(|p| ring.contains(p)).count();
+    assert_eq!(
+        raw,
+        0,
+        "{raw} of {} ring pixels stored as captured",
+        ring.len()
+    );
+}
