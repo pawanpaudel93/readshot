@@ -1180,6 +1180,9 @@ mod overlay_canvas;
 mod settings_and_boot;
 /// Style sliders and the eyedropper.
 mod styles_and_eyedropper;
+/// OCR requests and layout, smart-redact marks, what counts as a
+/// redaction and word masking, through the real paths.
+mod text_ocr;
 /// Text panel: recognition, copy, redact lines.
 mod text_recognition;
 /// History, Settings and Welcome keyboard paths and the Settings focus ring.

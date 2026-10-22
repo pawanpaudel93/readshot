@@ -1447,4 +1447,77 @@ mod tests {
         let share = hits as f64 / trials as f64;
         assert!(share >= 0.95, "lowercase+digits+3 caps flagged {share}");
     }
+
+    /// TX-23: every documented key prefix, each at exactly its minimum
+    /// body length, is an API key; one char shorter it is not. The
+    /// bodies are a single repeated letter, so only the prefix rule can
+    /// flag them (the high-entropy rule never would).
+    #[test]
+    fn each_key_prefix_flags_from_its_minimum_body_length() {
+        // (prefix, minimum body), split so no literal reads as a key.
+        let table: [(&[&str], usize); 29] = [
+            (&["sk_", "live_"], 10),
+            (&["sk_", "test_"], 10),
+            (&["pk_", "live_"], 10),
+            (&["pk_", "test_"], 10),
+            (&["rk_", "live_"], 10),
+            (&["rk_", "test_"], 10),
+            (&["github", "_pat_"], 20),
+            (&["gh", "p_"], 20),
+            (&["gh", "o_"], 20),
+            (&["gh", "u_"], 20),
+            (&["gh", "s_"], 20),
+            (&["gh", "r_"], 20),
+            (&["gl", "pat-"], 16),
+            (&["xo", "xb-"], 10),
+            (&["xo", "xp-"], 10),
+            (&["xo", "xa-"], 10),
+            (&["xo", "xs-"], 10),
+            (&["AK", "IA"], 16),
+            (&["AS", "IA"], 16),
+            (&["AI", "za"], 30),
+            (&["sk", "-"], 20),
+            (&["S", "G."], 20),
+            (&["ey", "J"], 20),
+            (&["np", "m_"], 36),
+            (&["h", "f_"], 30),
+            (&["shp", "at_"], 32),
+            (&["shp", "ss_"], 32),
+            (&["do", "p_v1_"], 64),
+            (&["xa", "pp-"], 10),
+        ];
+        for (parts, body) in table {
+            let prefix = parts.concat();
+            let key = format!("{prefix}{}", "x".repeat(body));
+            assert_eq!(
+                found(&format!("token {key} here")),
+                [(key.clone(), RedactKind::ApiKey)],
+                "{prefix} with {body}"
+            );
+            let short = format!("{prefix}{}", "x".repeat(body - 1));
+            assert!(
+                found(&format!("token {short} here")).is_empty(),
+                "{prefix} with {} is too short",
+                body - 1
+            );
+        }
+    }
+
+    /// TX-23: a phone spans at most 15 digits and 32 chars.
+    #[test]
+    fn phones_stop_at_fifteen_digits_and_thirty_two_chars() {
+        // One international block: 15 digits is a phone, 16 is not.
+        let fifteen = "+123456789012345";
+        assert_eq!(found(fifteen), [(fifteen.to_string(), RedactKind::Phone)]);
+        assert!(!found("+1234567890123457")
+            .iter()
+            .any(|(_, k)| *k == RedactKind::Phone));
+        // Padded with separators: a 32-char number is found whole; at 33
+        // chars the candidate stops at the cap, before the last group.
+        let pad = |n: usize| format!("+44{}20 7946 0958", " ".repeat(n));
+        assert_eq!(pad(17).chars().count(), 32);
+        assert_eq!(found(&pad(17)), [(pad(17), RedactKind::Phone)]);
+        let capped = format!("+44{}20 7946", " ".repeat(18));
+        assert_eq!(found(&pad(18)), [(capped, RedactKind::Phone)]);
+    }
 }

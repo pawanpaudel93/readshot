@@ -469,6 +469,30 @@ ocr_languages = ["en"]
         assert!(prefs.ocr_languages.is_empty());
     }
 
+    /// TX-05: only the old default (exactly `["en"]` in a pre-v2 file)
+    /// is cleared. A choice the user made is kept: English picked in a
+    /// v2+ file, or a v1 list that holds more than the default.
+    #[test]
+    fn migration_keeps_ocr_languages_the_user_chose() {
+        for (file, want) in [
+            ("schema_version = 0\nocr_languages = [\"en\"]\n", vec![]),
+            ("schema_version = 2\nocr_languages = [\"en\"]\n", vec!["en"]),
+            ("schema_version = 3\nocr_languages = [\"en\"]\n", vec!["en"]),
+            (
+                "schema_version = 1\nocr_languages = [\"en\", \"fr\"]\n",
+                vec!["en", "fr"],
+            ),
+            ("schema_version = 1\nocr_languages = [\"de\"]\n", vec!["de"]),
+            ("schema_version = 1\n", vec![]),
+        ] {
+            let (_dir, path) = temp_path();
+            std::fs::write(&path, file).unwrap();
+            let prefs = Preferences::load(&path).unwrap();
+            assert_eq!(prefs.ocr_languages, want, "{file}");
+            assert_eq!(prefs.schema_version, PREFERENCES_SCHEMA_VERSION, "{file}");
+        }
+    }
+
     #[test]
     fn migration_marks_existing_users_onboarded() {
         let (_dir, path) = temp_path();
