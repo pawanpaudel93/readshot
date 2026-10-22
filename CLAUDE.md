@@ -63,7 +63,7 @@ file in sync when the rules change.
 | MCP server               | `crates/readshot-mcp/src/lib.rs`                         |
 | History / preferences    | `crates/readshot-core/src/{history,preferences}.rs`      |
 | Annotations / rendering  | `crates/readshot-core/src/{annotation,render}.rs`        |
-| Logs / RUST_LOG          | `crates/readshot-core/src/log.rs`, `crates/readshot-app/src/main.rs` (`init_logging`) |
+| Logs / RUST_LOG          | `crates/readshot-core/src/log.rs`, `crates/readshot-app/src/main.rs` (`init_logging`), `crates/readshot-mcp/src/lib.rs` (`log_filter`) |
 | Releases / packaging     | `.github/workflows/release.yml`, `packaging/`            |
 
 ## Things to confirm with the user before doing

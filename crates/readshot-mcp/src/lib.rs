@@ -599,6 +599,14 @@ fn ocr_request_from(args: &Value, image: RgbaImage) -> Result<OCRRequest, RpcErr
 
 // Request safety limits are shared with the CLI — single source of
 // truth in readshot-capture so the two surfaces can't drift.
+/// The stderr log filter: `RUST_LOG` when it is set and valid (as the
+/// app and CLI honour it), else info. `rust_log` is the variable's value.
+pub fn log_filter(rust_log: Option<&str>) -> tracing_subscriber::EnvFilter {
+    rust_log
+        .and_then(|v| tracing_subscriber::EnvFilter::try_new(v).ok())
+        .unwrap_or_else(|| tracing_subscriber::EnvFilter::new("info"))
+}
+
 use readshot_capture::{MAX_RECT_DIM, MAX_SCALE};
 
 fn validate_args_object(args: &Value, allowed: &[&str]) -> Result<(), RpcErr> {
@@ -1560,6 +1568,20 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("vision crashed"));
+    }
+
+    #[test]
+    fn rust_log_sets_the_log_level_and_info_is_the_default() {
+        use tracing_subscriber::filter::LevelFilter;
+        assert_eq!(log_filter(None).max_level_hint(), Some(LevelFilter::INFO));
+        assert_eq!(
+            log_filter(Some("debug")).max_level_hint(),
+            Some(LevelFilter::DEBUG)
+        );
+        assert_eq!(
+            log_filter(Some("warn")).max_level_hint(),
+            Some(LevelFilter::WARN)
+        );
     }
 
     #[tokio::test]

@@ -372,7 +372,9 @@ The server advertises protocol version `2024-11-05` and a single
 `tools` capability. No prompts, resources, or sampling. It answers
 `initialize`, `tools/list`, `tools/call`, `ping` and `shutdown` (the
 last two reply `{}`); any other method is `-32601`. Notifications get
-no reply. Log lines go to stderr at info level and never to stdout.
+no reply. Log lines go to stderr at info level and never to stdout. Set
+`RUST_LOG` in the server's environment to change the level, for example
+`RUST_LOG=debug`.
 
 ## Verifying it works
 

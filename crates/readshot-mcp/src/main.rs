@@ -20,7 +20,6 @@ use readshot_mcp::McpServer;
 use readshot_ocr::default_engine;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use tracing::Level;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -40,9 +39,12 @@ async fn main() -> std::io::Result<()> {
         }
     }
 
+    // `RUST_LOG` picks the level, as for the app and the CLI; info
+    // otherwise. Logs go to stderr: stdout carries the protocol.
+    let rust_log = std::env::var("RUST_LOG").ok();
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
-        .with_max_level(Level::INFO)
+        .with_env_filter(readshot_mcp::log_filter(rust_log.as_deref()))
         .with_target(true)
         .init();
 

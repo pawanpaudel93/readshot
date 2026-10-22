@@ -126,8 +126,8 @@ Logging (`readshot_core::log` has the targets, all under
 to `readshot.log` in `ProjectDirs::data_local_dir` (falling back to the
 temp dir), at info level, or debug when the Settings toggle was on at
 launch. The CLI logs to the same file only. `RUST_LOG` overrides both.
-`readshot-mcp` logs to stderr at info level and doesn't read
-`RUST_LOG`. Log calls never carry captured pixels, OCR text, paths
+`readshot-mcp` logs to stderr only, at info level unless `RUST_LOG`
+says otherwise (`readshot_mcp::log_filter`). Log calls never carry captured pixels, OCR text, paths
 under `$HOME` or typed strings (see the module doc).
 
 ## House style for code changes
