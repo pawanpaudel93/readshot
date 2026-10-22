@@ -237,9 +237,13 @@ inherits the launching agent's TCC / portal grants.
   The Windows capture/OCR backend is not part of the supported
   end-user surface today.
 
-If a capture fails for permission reasons, the server returns a
-JSON-RPC error with `code = -32001` and a `message` you can show to
-the user.
+If a capture fails for permission reasons, the `tools/call` still
+succeeds at the protocol level: per the MCP spec, a tool that fails
+while running returns a normal result with `isError: true` and the
+reason as its text (`capture: screen capture permission denied`), so the
+agent can read it and ask the user to grant Screen Recording. JSON-RPC
+errors are kept for protocol problems: an unknown tool or method, or
+invalid arguments.
 
 ---
 
@@ -342,8 +346,11 @@ Any MCP-compatible host needs three pieces:
 
 1. **Command:** absolute path to `readshot-mcp`.
 2. **Transport:** stdio (newline-delimited JSON-RPC 2.0).
-3. **Working directory** *(optional)*: not required — the server keeps
-   no state on disk.
+3. **Working directory** *(optional)*: not required. The server writes
+   nothing during normal use: it reads the GUI's capture history (for
+   the history tools) and keeps no files of its own. `--check` writes
+   and removes one probe file in the history folder to test that it is
+   writable.
 
 The server advertises protocol version `2024-11-05` and a single
 `tools` capability. No prompts, resources, or sampling.
@@ -414,7 +421,7 @@ machine.
 | Symptom                                         | Likely cause                              |
 |-------------------------------------------------|-------------------------------------------|
 | `command not found`                             | Wrong path; check the install location.   |
-| Captures return `code = -32001 capture: permission denied` | Host process lacks Screen Recording grant. |
+| A capture returns `isError: true` with `capture: screen capture permission denied` | Host process lacks Screen Recording grant. |
 | Empty `displays` array                          | Wayland portal denied or no monitors.     |
 | `tools/list` shows no tools                     | Agent connected to a different binary.    |
 | A capture tool returns empty OCR text           | Region too small or no text rendered.     |

@@ -435,8 +435,11 @@ command = "/Applications/Readshot.app/Contents/MacOS/readshot-mcp"</code></pre>
               Recording permission in macOS System Settings.
             </p>
             <p>
-              Permission failures return a JSON-RPC error with
-              <code translate="no">code = -32001</code> and a message that the host can show to the user.
+              A permission failure is a tool result with
+              <code translate="no">isError: true</code> whose text says why
+              (<code translate="no">capture: screen capture permission denied</code>), as the MCP spec
+              asks for errors raised while a tool runs, so the agent can show it to the user.
+              JSON-RPC errors are only for protocol problems such as an unknown tool or invalid arguments.
             </p>
           </section>
 
@@ -474,7 +477,7 @@ printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' \
                   <td>The host is using the wrong binary path.</td>
                 </tr>
                 <tr>
-                  <td><code translate="no">code = -32001</code></td>
+                  <td><code translate="no">isError: true</code>, “screen capture permission denied”</td>
                   <td>The host app lacks Screen Recording permission.</td>
                 </tr>
                 <tr>

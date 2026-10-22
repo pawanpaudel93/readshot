@@ -48,9 +48,11 @@
 //! The MCP server inherits the host process's TCC / portal grants.
 //! On macOS, agents must launch `readshot-mcp` from a Terminal /
 //! launcher that already has Screen Recording permission, or grant
-//! the agent's parent application directly. Failed captures surface
-//! as JSON-RPC errors with `code = -32001` (server error) and a
-//! human-readable `message` so the agent can prompt the user.
+//! the agent's parent application directly. A failed capture (permission
+//! included) is a tool result with `isError: true` and a human-readable
+//! text, per the MCP spec for errors raised while a tool runs, so the
+//! agent can prompt the user. JSON-RPC errors are only for protocol
+//! problems (unknown tool or method, invalid arguments).
 
 // No unsafe code here: platform FFI lives in readshot-app, -capture and
 // -ocr (AGENTS.md, "Things to avoid").
