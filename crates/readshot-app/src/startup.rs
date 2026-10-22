@@ -94,7 +94,7 @@ fn run_reg(args: &[String]) -> Result<(), StartupError> {
     use std::os::windows::process::CommandExt;
     /// No console window flashes up for `reg.exe`.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let out = std::process::Command::new("reg")
+    let out = std::process::Command::new(reg_exe_path(std::env::var_os("SystemRoot")))
         .args(args)
         .creation_flags(CREATE_NO_WINDOW)
         .output()
@@ -111,6 +111,18 @@ fn run_reg(args: &[String]) -> Result<(), StartupError> {
             String::from_utf8_lossy(&out.stderr).trim()
         )))
     }
+}
+
+/// `reg.exe` by full path, `%SystemRoot%\System32\reg.exe`: a bare
+/// `reg` is looked up in the application's own folder first, where
+/// anything able to write next to readshot.exe could shadow it.
+#[cfg(any(target_os = "windows", test))]
+fn reg_exe_path(system_root: Option<std::ffi::OsString>) -> PathBuf {
+    let root = system_root
+        .filter(|r| !r.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    root.join("System32").join("reg.exe")
 }
 
 /// The per-user Run key and the value Readshot owns in it.
@@ -390,6 +402,24 @@ mod tests {
         assert!(!path.exists());
         // Removing what isn't there is fine (toggle off twice).
         super::remove_login_file(&path).unwrap();
+    }
+
+    #[test]
+    fn reg_exe_is_run_from_system32_never_by_bare_name() {
+        let path = super::reg_exe_path(Some(OsString::from(r"D:\Win")));
+        assert!(path.starts_with(r"D:\Win"), "{path:?}");
+        assert!(
+            path.ends_with(Path::new("System32").join("reg.exe")),
+            "{path:?}"
+        );
+        for unset in [None, Some(OsString::new())] {
+            let path = super::reg_exe_path(unset);
+            assert!(path.starts_with(r"C:\Windows"), "{path:?}");
+            assert!(
+                path.ends_with(Path::new("System32").join("reg.exe")),
+                "{path:?}"
+            );
+        }
     }
 
     #[test]
