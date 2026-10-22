@@ -155,7 +155,7 @@ welcome window walks you through it on first launch:
    already finished this once and only granted the permission again, the
    window closes by itself and a notification says Readshot is ready.)
    If macOS asks you to quit and reopen Readshot first, use the welcome
-   window's **Restart** button.
+   window's **Restart Readshot** button.
 
 If you accidentally denied: open **System Settings → Privacy &
 Security → Screen Recording**, find Readshot, toggle it on, and
