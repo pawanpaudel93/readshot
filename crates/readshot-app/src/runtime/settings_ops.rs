@@ -526,6 +526,19 @@ fn on_hotkey_recorded(state: &mut App, shortcut: String) -> Task<Message> {
         ));
         return Task::none();
     }
+    // The window chord is checked both ways: taking it as the capture
+    // chord would silently switch the window shortcut off.
+    let window = state.preferences.window_capture_hotkey.trim();
+    if !window.is_empty()
+        && readshot_ui::hotkey::parse(window).ok() == readshot_ui::hotkey::parse(&shortcut).ok()
+    {
+        state.settings_hotkey_status = None;
+        state.settings_hotkey_error = Some(format!(
+            "{} is already the window capture shortcut. Choose a different shortcut.",
+            pretty_hotkey(&shortcut)
+        ));
+        return Task::none();
+    }
     state.settings_hotkey_error = None;
     update(
         state,

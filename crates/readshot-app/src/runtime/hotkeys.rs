@@ -334,7 +334,10 @@ where
     F: FnMut(HotKey) -> Result<(), String>,
 {
     let chord = prefs.window_capture_hotkey.trim();
-    if chord.is_empty() {
+    // Only where window capture exists, the same condition as the
+    // Settings row: a chord left in a copied or hand-edited file must not
+    // take a key from other apps for a feature that isn't there.
+    if chord.is_empty() || !crate::tray::WINDOW_CAPTURE_IN_MENU {
         return false;
     }
     let Ok(spec) = hotkey::parse(chord) else {

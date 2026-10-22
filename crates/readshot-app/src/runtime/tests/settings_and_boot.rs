@@ -1077,11 +1077,37 @@ fn a_set_window_capture_shortcut_is_registered_system_wide() {
         handed += 1;
         Ok(())
     });
-    assert!(capture_registered && window_registered);
-    assert_eq!(handed, 2);
-    assert!(actions
-        .values()
-        .any(|a| *a == GlobalHotkeyAction::CaptureWindow));
+    // Only where window capture exists (the Settings row's condition):
+    // elsewhere a chord left in the file must not take a key system-wide.
+    let supported = crate::tray::WINDOW_CAPTURE_IN_MENU;
+    assert!(capture_registered);
+    assert_eq!(window_registered, supported);
+    assert_eq!(handed, if supported { 2 } else { 1 });
+    assert_eq!(
+        actions
+            .values()
+            .any(|a| *a == GlobalHotkeyAction::CaptureWindow),
+        supported
+    );
+}
+
+#[test]
+fn recording_the_window_chord_as_the_capture_shortcut_is_refused() {
+    let (mut app, _) = settings_app();
+    app.preferences.window_capture_hotkey = "ctrl+alt+w".into();
+    let capture = app.preferences.capture_hotkey.clone();
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::StartHotkeyRecording),
+    );
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::HotkeyRecorded("ctrl+alt+w".into())),
+    );
+    assert_eq!(app.preferences.capture_hotkey, capture, "kept");
+    assert_eq!(app.preferences.window_capture_hotkey, "ctrl+alt+w");
+    let error = app.settings_hotkey_error.clone().unwrap_or_default();
+    assert!(error.contains("window capture shortcut"), "{error}");
 }
 
 #[test]
