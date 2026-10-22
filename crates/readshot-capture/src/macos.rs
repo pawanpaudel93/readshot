@@ -177,16 +177,9 @@ impl Capturer for ScreenCaptureKitCapturer {
                 .filter_map(|window| {
                     let info = window_info_from_sc(&window, &displays)?;
                     let layer0 = window.window_layer() == 0;
-                    // Not in the window server's on-screen list: not seen.
-                    let alpha = alpha_of(&info.id.0)?;
-                    // An invisible window is neither picked nor in the way.
-                    if alpha <= 0.01 {
-                        return None;
-                    }
-                    if !layer0 && !crate::blocks_window_pick(alpha, info.bounds, &displays) {
-                        return None;
-                    }
-                    let flag = (info.id.0.clone(), layer0);
+                    let pickable =
+                        crate::stack_role(layer0, alpha_of(&info.id.0), info.bounds, &displays)?;
+                    let flag = (info.id.0.clone(), pickable);
                     Some((info, flag))
                 })
                 .unzip();

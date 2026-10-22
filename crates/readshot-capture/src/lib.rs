@@ -106,6 +106,26 @@ pub fn blocks_window_pick(alpha: f64, bounds: Rect, displays: &[DisplayInfo]) ->
     })
 }
 
+/// A window's place in a picker's stack: `Some(true)` pickable,
+/// `Some(false)` a blocker in front of others, `None` left out.
+/// `layer0` is an ordinary app window; `alpha` comes from the window
+/// server's list (`None` when that list missed it or failed). A missing
+/// alpha fails open: an ordinary window stays pickable, and an unknown
+/// panel isn't assumed to be in the way.
+pub fn stack_role(
+    layer0: bool,
+    alpha: Option<f64>,
+    bounds: Rect,
+    displays: &[DisplayInfo],
+) -> Option<bool> {
+    match alpha {
+        None => layer0.then_some(true),
+        Some(a) if a <= 0.01 => None,
+        Some(_) if layer0 => Some(true),
+        Some(a) => blocks_window_pick(a, bounds, displays).then_some(false),
+    }
+}
+
 /// The frontmost window under a point in global logical coordinates:
 /// the first in a front-to-back list whose bounds contain it.
 pub fn topmost_window_at(windows: &[WindowInfo], x: f32, y: f32) -> Option<&WindowInfo> {
@@ -439,6 +459,21 @@ mod tests {
             name: String::new(),
             is_primary: x == 0.0,
         }
+    }
+
+    #[test]
+    fn a_window_the_window_server_list_misses_is_still_offered() {
+        let displays = [display(0.0, 1512.0, 982.0)];
+        let window = rect(100.0, 100.0, 400.0, 300.0);
+        // Missing from the CG list (or the list call failed): an
+        // ordinary window stays pickable (fail open), an unknown panel
+        // is not assumed to be in the way.
+        assert_eq!(stack_role(true, None, window, &displays), Some(true));
+        assert_eq!(stack_role(false, None, window, &displays), None);
+        // Known alpha: invisible windows are left out, panels block.
+        assert_eq!(stack_role(true, Some(0.0), window, &displays), None);
+        assert_eq!(stack_role(true, Some(1.0), window, &displays), Some(true));
+        assert_eq!(stack_role(false, Some(1.0), window, &displays), Some(false));
     }
 
     #[test]
