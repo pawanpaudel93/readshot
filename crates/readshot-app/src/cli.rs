@@ -1356,6 +1356,9 @@ fn capture_request_json(req: &CaptureRequest) -> serde_json::Value {
     })
 }
 
+/// `image.format` in capture JSON when the image went to the clipboard.
+const CLIPBOARD_FORMAT: &str = "rgba";
+
 fn capture_json(
     kind: &str,
     img: &RgbaImage,
@@ -1369,7 +1372,9 @@ fn capture_json(
         "image": {
             "width": img.width(),
             "height": img.height(),
-            "format": format.as_str(),
+            // The clipboard gets the raw pixels whatever `--format`
+            // says; the system stores them in its own image type.
+            "format": if clipboard { CLIPBOARD_FORMAT } else { format.as_str() },
         },
         "source": source,
         "output": if clipboard {
@@ -2317,6 +2322,30 @@ mod tests {
 
         assert!(out.is_empty());
         assert_eq!(clipboard.image_size(), Some((256, 256)));
+    }
+
+    /// `--format` doesn't apply to `--clipboard` (the raw pixels go
+    /// there), so the JSON reports `rgba`, not the requested format.
+    #[tokio::test]
+    async fn clipboard_json_reports_what_the_clipboard_got() {
+        let (cap, ocr) = fakes();
+        let clipboard = FakeClipboard::default();
+        let cli = Cli::try_parse_from([
+            "readshot",
+            "capture",
+            "--clipboard",
+            "--format",
+            "jpg",
+            "--json",
+        ])
+        .unwrap();
+        let mut out = Vec::new();
+        cli.run_with_clipboard(cap, ocr, &mut out, &clipboard)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(value["image"]["format"], "rgba");
+        assert_eq!(value["clipboard"], true);
     }
 
     #[tokio::test]

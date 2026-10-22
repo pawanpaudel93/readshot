@@ -370,6 +370,11 @@ Shape:
 
 `kind` is `capture` or `capture-window`.
 
+`image.format` is the file format written to `output`. With
+`--clipboard` it is `rgba`: `--format` doesn't apply there, and the
+clipboard gets the raw pixels, which the system stores in its own image
+type.
+
 `source.type` is one of:
 
 | Type | Extra fields |
