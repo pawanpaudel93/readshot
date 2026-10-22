@@ -76,6 +76,9 @@ readshot capture --display 1 --rect 100,100,800,600 --output region.png
 
 Rectangles are logical pixels in `x,y,width,height` form. If you need
 to override the display scale used by the backend, pass `--scale`.
+A rectangle that starts with `-` (a negative x) needs the `=` form,
+`--rect=-100,0,800,600`; written as `--rect -100,0,800,600` it is read
+as an unknown option.
 
 Limits: each `--rect` value is at most 16,384, `--scale` is at most 8,
 and one display or region capture is at most 100 million pixels after

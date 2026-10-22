@@ -263,7 +263,7 @@ readshot capture --interactive --clipboard --json</code></pre>
             <p>
               <code translate="no">capture-text</code> captures a region, runs OCR,
               and writes recognized text. <code translate="no">ocr</code> runs OCR
-              on an existing image. Without <code translate="no">--languages</code>, OCR uses the engine's default languages.
+              on an existing image. Without <code translate="no">--languages</code>, OCR detects the language automatically.
               The text matches the app's Copy Text: aligned rows become a Markdown table, columns are read one at a time,
               and code goes in a fenced block (macOS only, since it needs line positions).
             </p>
