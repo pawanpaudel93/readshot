@@ -491,6 +491,8 @@ pub(crate) struct RedactState {
     pub pending: Vec<(RedactMatch, RectLike)>,
     /// Covered only by a Blur/Pixelate (pending too when Solid is chosen).
     pub weak: Vec<RedactMatch>,
+    /// The `weak` ones no Blur covers: only a Pixelate does.
+    pub pixelated: Vec<RedactMatch>,
     /// Covered by any redaction (solid or weak).
     pub covered: Vec<RedactMatch>,
     /// Detected but can't be placed on the image.
@@ -522,6 +524,13 @@ pub(crate) fn redact_state(ed: &EditorSession) -> RedactState {
             out.covered.push(m.clone());
         }
         if cov == Coverage::Weak {
+            let blurred = drawn.iter().any(|a| {
+                matches!(a, readshot_core::Annotation::Blur { .. })
+                    && is_covered(rect, std::slice::from_ref(a))
+            });
+            if !blurred {
+                out.pixelated.push(m.clone());
+            }
             out.weak.push(m.clone());
         }
         let done = match cov {
@@ -540,21 +549,44 @@ fn items(n: usize) -> String {
     counted(n, "item", "items")
 }
 
-/// Toast text after a redaction of `n` items with `missed` that couldn't
-/// be located.
-pub(crate) fn redact_status(n: usize, missed: usize) -> String {
+/// Toast text after a redaction of `n` items in `style` with `missed`
+/// that couldn't be located. A Blur or Pixelate is named as such, never
+/// "redacted", and says it can sometimes be reversed.
+pub(crate) fn redact_status(n: usize, missed: usize, style: RedactStyle) -> String {
     let pronoun = if missed == 1 { "it" } else { "them" };
+    let (verb, note) = match style {
+        RedactStyle::Solid => ("Redacted", ""),
+        RedactStyle::Blur => (
+            "Blurred",
+            " Blur can sometimes be reversed; use Solid block for passwords.",
+        ),
+        RedactStyle::Pixelate => (
+            "Pixelated",
+            " Pixelation can sometimes be reversed; use Solid block for passwords.",
+        ),
+    };
     match (n, missed) {
         (0, 0) => "No sensitive items left to redact.".to_string(),
         (0, m) => format!(
             "Couldn’t locate {}. Cover {pronoun} by hand.",
             counted(m, "sensitive item", "sensitive items")
         ),
-        (n, 0) => format!("Redacted {}.", items(n)),
+        (n, 0) => format!("{verb} {}.{note}", items(n)),
         (n, m) => format!(
-            "Redacted {}. {m} more couldn’t be located; cover {pronoun} by hand.",
+            "{verb} {}. {m} more couldn’t be located; cover {pronoun} by hand.{note}",
             items(n)
         ),
+    }
+}
+
+/// The marker on line `line`'s covered matches: "redacted" only when a
+/// solid block covers every one; otherwise the weaker style that does.
+pub(crate) fn line_chip_label(rs: &RedactState, line: usize) -> &'static str {
+    let on = |v: &[RedactMatch]| v.iter().filter(|m| m.line == line).count();
+    match on(&rs.weak) {
+        0 => "redacted",
+        weak if on(&rs.pixelated) == weak => "pixelated",
+        _ => "blurred",
     }
 }
 
@@ -583,7 +615,7 @@ fn redact(state: &mut App, only_line: Option<usize>) -> Task<Message> {
         .collect();
     let missed = rs.unlocatable.into_iter().filter(|m| in_scope(m)).count();
     let n = ed.model.commit_annotations(annotations);
-    let status = redact_status(n, missed);
+    let status = redact_status(n, missed, style);
     if n == 0 {
         // Nothing left to redact is a notice; items it couldn't place
         // are a failure.
@@ -1137,8 +1169,8 @@ pub(crate) const REDACT_BUTTON_ROOM: f32 = 64.0;
 /// One recognized line: hover outlines it on the image, click selects
 /// (⇧ range, ⌘ toggle). `marks` (char ranges) are underlined;
 /// `redacted` spans (already covered on the image) are muted and the
-/// row gets a "redacted" marker, because copying still copies the
-/// original text. With `redact_button` (hovered line with pending
+/// row gets a `chip` marker ("redacted", or "blurred" / "pixelated" for a
+/// weaker cover), because copying still copies the original text. With `redact_button` (hovered line with pending
 /// matches) a Redact button sits on the row's trailing edge.
 #[allow(clippy::too_many_arguments)]
 fn line_row<'a>(
@@ -1149,6 +1181,7 @@ fn line_row<'a>(
     selected: bool,
     marks: &[Range<usize>],
     redacted: &[Range<usize>],
+    chip: &'static str,
     redact_button: bool,
     p: &'static Palette,
 ) -> Element<'a, Message> {
@@ -1173,7 +1206,7 @@ fn line_row<'a>(
     .align_y(Alignment::Center);
     if !redacted.is_empty() && !redact_button {
         inner = inner.push(tooltip_with_key(
-            container(text("redacted").size(TYPE_MICRO).style(text_t3))
+            container(text(chip).size(TYPE_MICRO).style(text_t3))
                 .padding([1, 6])
                 .style(chip_style),
             "Copied as ████",
@@ -1284,6 +1317,7 @@ fn lines_view<'a>(
             tp.selected.contains(&i),
             &marks,
             &redacted,
+            line_chip_label(&rs, i),
             hovered && !marks.is_empty() && !ed.busy,
             p,
         ));
@@ -1863,16 +1897,39 @@ mod tests {
 
     #[test]
     fn redact_status_counts_items_and_reports_unlocatable_ones() {
-        assert_eq!(redact_status(0, 0), "No sensitive items left to redact.");
-        assert_eq!(redact_status(1, 0), "Redacted 1 item.");
-        assert_eq!(redact_status(4, 0), "Redacted 4 items.");
+        let solid = RedactStyle::Solid;
         assert_eq!(
-            redact_status(2, 1),
+            redact_status(0, 0, solid),
+            "No sensitive items left to redact."
+        );
+        assert_eq!(redact_status(1, 0, solid), "Redacted 1 item.");
+        assert_eq!(redact_status(4, 0, solid), "Redacted 4 items.");
+        assert_eq!(
+            redact_status(2, 1, solid),
             "Redacted 2 items. 1 more couldn’t be located; cover it by hand."
         );
         assert_eq!(
-            redact_status(0, 3),
+            redact_status(0, 3, solid),
             "Couldn’t locate 3 sensitive items. Cover them by hand."
+        );
+    }
+
+    /// B#2: a Blur or Pixelate never reads as "redacted", and says it can
+    /// sometimes be reversed.
+    #[test]
+    fn a_weak_redaction_says_what_it_did_and_that_it_can_be_reversed() {
+        assert_eq!(
+            redact_status(3, 0, RedactStyle::Blur),
+            "Blurred 3 items. Blur can sometimes be reversed; use Solid block for passwords."
+        );
+        assert_eq!(
+            redact_status(1, 0, RedactStyle::Pixelate),
+            "Pixelated 1 item. Pixelation can sometimes be reversed; use Solid block for passwords."
+        );
+        assert_eq!(
+            redact_status(2, 1, RedactStyle::Blur),
+            "Blurred 2 items. 1 more couldn’t be located; cover it by hand. \
+             Blur can sometimes be reversed; use Solid block for passwords."
         );
     }
 

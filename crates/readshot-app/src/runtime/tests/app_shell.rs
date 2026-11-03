@@ -1386,7 +1386,8 @@ fn refusals_and_partial_failures_toast_as_sticky_warnings() {
 
 #[test]
 fn a_partial_redaction_status_is_a_warning() {
-    let s = super::super::text_panel::redact_status(2, 1);
+    let s =
+        super::super::text_panel::redact_status(2, 1, readshot_core::redact::RedactStyle::Solid);
     assert!(s.contains("cover it by hand"), "{s}");
     let mut ed = debug_editor_qa_session();
     ed.set_status_with_action(

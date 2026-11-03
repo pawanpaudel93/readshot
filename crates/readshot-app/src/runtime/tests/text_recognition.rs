@@ -1100,7 +1100,9 @@ fn redact_line_uses_the_chosen_style() {
         ed.model.annotations()[0],
         Annotation::Pixelate { .. }
     ));
-    assert_eq!(ed.status_text(), Some("Redacted 1 item."));
+    assert_eq!(ed.status_text(), Some(
+        "Pixelated 1 item. Pixelation can sometimes be reversed; use Solid block for passwords."
+    ));
     let _ = update(
         &mut app,
         Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactLine(0))),
@@ -1254,9 +1256,21 @@ fn a_blur_redaction_does_not_count_as_solid() {
     );
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.model.annotations().len(), 2);
+    assert!(
+        ed.status_text()
+            .unwrap()
+            .starts_with("Blurred 2 items. Blur can sometimes be reversed"),
+        "{:?}",
+        ed.status_text()
+    );
     let rs = super::super::text_panel::redact_state(ed);
     assert!(rs.pending.is_empty(), "Blur chosen: blurred items are done");
     assert_eq!(rs.weak.len(), 2);
+    let line = rs.covered[0].line;
+    assert_eq!(
+        super::super::text_panel::line_chip_label(&rs, line),
+        "blurred"
+    );
     // Blur again: no duplicates.
     let _ = update(
         &mut app,
@@ -1286,6 +1300,37 @@ fn a_blur_redaction_does_not_count_as_solid() {
     let rs = super::super::text_panel::redact_state(ed);
     assert!(rs.pending.is_empty() && rs.weak.is_empty());
     assert_eq!(rs.covered.len(), 2);
+    let line = rs.covered[0].line;
+    assert_eq!(
+        super::super::text_panel::line_chip_label(&rs, line),
+        "redacted"
+    );
+}
+
+/// A line covered only by a pixelate reads "pixelated", never "redacted".
+#[test]
+fn a_pixelated_line_is_labelled_pixelated() {
+    use readshot_core::redact::RedactStyle;
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    ready_editor(&mut app);
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactStyleChanged(
+            RedactStyle::Pixelate,
+        ))),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::TextPanel(TextPanelMsg::RedactAll)),
+    );
+    let ed = app.editor.as_ref().unwrap();
+    assert!(ed.status_text().unwrap().starts_with("Pixelated 2 items."));
+    let rs = super::super::text_panel::redact_state(ed);
+    let line = rs.covered[0].line;
+    assert_eq!(
+        super::super::text_panel::line_chip_label(&rs, line),
+        "pixelated"
+    );
 }
 
 #[test]
