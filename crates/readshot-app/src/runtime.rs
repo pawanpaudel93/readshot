@@ -710,11 +710,8 @@ fn capture_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
             _status: iced::event::Status,
             _window: iced::window::Id,
         ) -> Option<Message> {
-            use iced::keyboard::Event as KbEvent;
-            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                return scroll_key_message_beside_globals(&key, modifiers, PLAIN, SHIFT);
-            }
-            None
+            let (key, modifiers) = key_press(event)?;
+            scroll_key_message_beside_globals(&key, modifiers, PLAIN, SHIFT)
         }
         subs.push(iced::event::listen_with(
             match scroll_escape_globals(state) {
@@ -784,10 +781,10 @@ fn editor_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
         // window-agnostic event tap; we filter to KeyPressed events
         // and only react when the editor window is the focused one
         // (the canvas captures Escape; Esc is always a cancel, never
-        // Discard, which is ⌘W).
+        // Discard, which is ⌘W). `key_press` drops auto-repeats of all
+        // but navigation and zoom keys, so a held ⌘W never discards.
         subs.push(iced::event::listen_with(|event, status, window| {
             use iced::event::Status;
-            use iced::keyboard::Event as KbEvent;
             if let iced::Event::Window(iced::window::Event::Rescaled(scale)) = event {
                 return Some(Message::Window(WindowMsg::Rescaled(window, scale)));
             }
@@ -796,15 +793,13 @@ fn editor_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
                     window, size.width,
                 )));
             }
-            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                return Some(Message::Editor(EditorMsg::KeyPressed {
-                    window,
-                    key,
-                    modifiers,
-                    status_ignored: status == Status::Ignored,
-                }));
-            }
-            None
+            let (key, modifiers) = key_press(event)?;
+            Some(Message::Editor(EditorMsg::KeyPressed {
+                window,
+                key,
+                modifiers,
+                status_ignored: status == Status::Ignored,
+            }))
         }));
         // Global Shift watcher for the editor — iced 0.14 doesn't reliably route
         // modifier changes into canvas widgets, so the editor canvas's
@@ -860,43 +855,30 @@ fn editor_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
 fn window_key_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
     if state.settings_recording_hotkey {
         subs.push(iced::event::listen_with(|event, _status, _window| {
-            use iced::keyboard::Event as KbEvent;
-            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                if shortcut_cancelled_by_keypress(&key, modifiers) {
-                    return Some(Message::Settings(SettingsMsg::HotkeyRecordingCancelled));
-                }
-                // Ignore bare modifier presses: the user is mid-chord,
-                // holding Cmd/Ctrl/Shift before the real key. Reporting
-                // those as invalid is what made recording feel stuck.
-                if is_modifier_key(&key) {
-                    return None;
-                }
-                return Some(
-                    shortcut_string_from_keypress(&key, modifiers)
-                        .map(|a| Message::Settings(SettingsMsg::HotkeyRecorded(a)))
-                        .unwrap_or(Message::Settings(SettingsMsg::HotkeyRecordingInvalid)),
-                );
+            let (key, modifiers) = key_press(event)?;
+            if shortcut_cancelled_by_keypress(&key, modifiers) {
+                return Some(Message::Settings(SettingsMsg::HotkeyRecordingCancelled));
             }
-            None
+            // Ignore bare modifier presses: the user is mid-chord,
+            // holding Cmd/Ctrl/Shift before the real key. Reporting
+            // those as invalid is what made recording feel stuck.
+            if is_modifier_key(&key) {
+                return None;
+            }
+            Some(
+                shortcut_string_from_keypress(&key, modifiers)
+                    .map(|a| Message::Settings(SettingsMsg::HotkeyRecorded(a)))
+                    .unwrap_or(Message::Settings(SettingsMsg::HotkeyRecordingInvalid)),
+            )
         }));
     } else {
         subs.push(iced::event::listen_with(|event, _status, _window| {
-            use iced::keyboard::Event as KbEvent;
-            let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event else {
-                return None;
-            };
+            let (key, modifiers) = key_press(event)?;
             app_window_shortcut_message(key, modifiers)
         }));
     }
     if state.history_window_id.is_some() {
-        subs.push(iced::event::listen_with(|event, status, window| {
-            use iced::event::Status;
-            use iced::keyboard::Event as KbEvent;
-            let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event else {
-                return None;
-            };
-            history_key_message(window, &key, modifiers, status == Status::Ignored)
-        }));
+        subs.push(iced::event::listen_with(history_event_message));
     }
     if state.settings_window_id.is_some() && !state.settings_recording_hotkey {
         // Settings is pointer-only (togglers, pick-lists, buttons), none
@@ -905,16 +887,13 @@ fn window_key_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) 
         // text_input keeps plain typing because every shortcut is
         // ⌘-prefixed (Esc aside). See `settings_key_action`.
         subs.push(iced::event::listen_with(|event, status, window| {
-            use iced::keyboard::Event as KbEvent;
-            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                return Some(Message::Settings(SettingsMsg::KeyPressed {
-                    window,
-                    key,
-                    modifiers,
-                    captured: status == iced::event::Status::Captured,
-                }));
-            }
-            None
+            let (key, modifiers) = key_press(event)?;
+            Some(Message::Settings(SettingsMsg::KeyPressed {
+                window,
+                key,
+                modifiers,
+                captured: status == iced::event::Status::Captured,
+            }))
         }));
     }
     if !state.pins.is_empty() {
@@ -922,15 +901,12 @@ fn window_key_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) 
         // chrome is pointer-driven; give the focused pin a keyboard map
         // (close / lock / opacity / move). See `pin_key_action`.
         subs.push(iced::event::listen_with(|event, _status, window| {
-            use iced::keyboard::Event as KbEvent;
-            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                return Some(Message::Editor(EditorMsg::Pin(PinMsg::KeyPressed {
-                    window,
-                    key,
-                    modifiers,
-                })));
-            }
-            None
+            let (key, modifiers) = key_press(event)?;
+            Some(Message::Editor(EditorMsg::Pin(PinMsg::KeyPressed {
+                window,
+                key,
+                modifiers,
+            })))
         }));
     }
     if state.windows.kinds().any(|k| k == WindowKind::Welcome) {
@@ -938,17 +914,30 @@ fn window_key_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) 
         // permission / capture flow is operable without the mouse.
         // See `welcome_key_message`.
         subs.push(iced::event::listen_with(|event, _status, window| {
-            use iced::keyboard::Event as KbEvent;
-            if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
-                return Some(Message::Welcome(WelcomeMsg::KeyPressed {
-                    window,
-                    key,
-                    modifiers,
-                }));
-            }
-            None
+            let (key, modifiers) = key_press(event)?;
+            Some(Message::Welcome(WelcomeMsg::KeyPressed {
+                window,
+                key,
+                modifiers,
+            }))
         }));
     }
+}
+
+/// The History window's key listener: `history_key_message` for a key
+/// press `key_press` passes (an auto-repeat of ⇧⌘⌫ or ⌦ never confirms).
+pub(crate) fn history_event_message(
+    event: iced::Event,
+    status: iced::event::Status,
+    window: iced::window::Id,
+) -> Option<Message> {
+    let (key, modifiers) = key_press(event)?;
+    history_key_message(
+        window,
+        &key,
+        modifiers,
+        status == iced::event::Status::Ignored,
+    )
 }
 
 /// Map a key press in the History window to a message. `status_ignored`

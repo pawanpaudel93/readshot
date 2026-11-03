@@ -582,3 +582,56 @@ fn ctrl_alt_is_altgr_off_macos_and_runs_no_command() {
         }
     }
 }
+
+/// Every window listener drops an auto-repeat (a held ↵ / Space must not
+/// press a focused Remove, Reset or Uninstall confirm again), except
+/// navigation and zoom keys.
+#[test]
+fn key_press_drops_repeats_except_navigation_and_zoom() {
+    use iced::keyboard::{key::Named, Key, Modifiers};
+    let ev = |key: Key, repeat| {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            modified_key: key.clone(),
+            key,
+            physical_key: iced::keyboard::key::Physical::Unidentified(
+                iced::keyboard::key::NativeCode::Unidentified,
+            ),
+            location: iced::keyboard::Location::Standard,
+            modifiers: Modifiers::empty(),
+            text: None,
+            repeat,
+        })
+    };
+    for key in [
+        Key::Named(Named::Space),
+        Key::Named(Named::Enter),
+        Key::Named(Named::Delete),
+        Key::Named(Named::Backspace),
+        Key::Named(Named::Escape),
+        Key::Character("w".into()),
+        Key::Character("u".into()),
+    ] {
+        assert!(
+            crate::runtime::key_press(ev(key.clone(), false)).is_some(),
+            "{key:?}"
+        );
+        assert!(
+            crate::runtime::key_press(ev(key.clone(), true)).is_none(),
+            "{key:?}"
+        );
+    }
+    for key in [
+        Key::Named(Named::ArrowUp),
+        Key::Named(Named::ArrowRight),
+        Key::Named(Named::Tab),
+        Key::Named(Named::PageDown),
+        Key::Named(Named::Home),
+        Key::Character("=".into()),
+        Key::Character("-".into()),
+    ] {
+        assert!(
+            crate::runtime::key_press(ev(key.clone(), true)).is_some(),
+            "{key:?}"
+        );
+    }
+}

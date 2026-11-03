@@ -189,7 +189,10 @@ readshot ocr --input capture.png --output text.txt    # OCR an existing image
 
 See [docs/CLI.md](docs/CLI.md) for the complete command reference.
 
-Inside the GUI, keyboard shortcuts cover the main workflows:
+Inside the GUI, keyboard shortcuts cover the main workflows. Holding a
+key counts as one press, except the arrow keys, `Tab`, `Page Up` / `Page
+Down`, `Home` / `End` and the zoom keys, so a held key never confirms a
+"press twice" prompt:
 
 - **Capture overlay:** drag to select a region, or press an arrow key to
   start a centred one; `↵` or `Space` captures the full display, or the

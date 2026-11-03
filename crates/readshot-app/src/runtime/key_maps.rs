@@ -37,6 +37,45 @@ pub(crate) fn altgr(modifiers: iced::keyboard::Modifiers) -> bool {
     !cfg!(target_os = "macos") && modifiers.control() && modifiers.alt()
 }
 
+/// The key and modifiers of a key press, for every window's key
+/// listener, or `None` for any other event and for an auto-repeat of a
+/// key that isn't navigation (arrows, Tab, Page Up/Down, Home/End) or
+/// zoom / step (`=` `+` `-`). A held key starts repeating after about
+/// half a second, and a repeat must never be the second press of a
+/// two-step confirm (Clear All, Delete, Reset, Uninstall, Discard) or
+/// press a focused control again.
+pub(crate) fn key_press(
+    event: iced::Event,
+) -> Option<(iced::keyboard::Key, iced::keyboard::Modifiers)> {
+    use iced::keyboard::{key::Named, Event as KbEvent, Key};
+    let iced::Event::Keyboard(KbEvent::KeyPressed {
+        key,
+        modifiers,
+        repeat,
+        ..
+    }) = event
+    else {
+        return None;
+    };
+    let repeats = match &key {
+        Key::Named(n) => matches!(
+            n,
+            Named::ArrowUp
+                | Named::ArrowDown
+                | Named::ArrowLeft
+                | Named::ArrowRight
+                | Named::Tab
+                | Named::PageUp
+                | Named::PageDown
+                | Named::Home
+                | Named::End
+        ),
+        Key::Character(c) => matches!(c.as_str(), "=" | "+" | "-"),
+        Key::Unidentified => false,
+    };
+    (!repeat || repeats).then_some((key, modifiers))
+}
+
 pub(crate) fn editor_key_message(
     key: iced::keyboard::Key,
     modifiers: iced::keyboard::Modifiers,

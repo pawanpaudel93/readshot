@@ -406,3 +406,102 @@ async fn reopening_history_never_keeps_clear_all_armed() {
         "one press after a reopen must only arm Clear All"
     );
 }
+
+/// A key press event as iced delivers it, `repeat` when the key is held.
+fn key_event(key: Key, modifiers: iced::keyboard::Modifiers, repeat: bool) -> iced::Event {
+    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+        modified_key: key.clone(),
+        key,
+        physical_key: iced::keyboard::key::Physical::Unidentified(
+            iced::keyboard::key::NativeCode::Unidentified,
+        ),
+        location: iced::keyboard::Location::Standard,
+        modifiers,
+        text: None,
+        repeat,
+    })
+}
+
+/// A key held in the History window: one press, then `repeats`
+/// auto-repeats, each through the window's real key listener, the list
+/// reloading after each like the running app's.
+fn hold_history_key(
+    app: &mut App,
+    id: iced::window::Id,
+    key: Key,
+    modifiers: iced::keyboard::Modifiers,
+    repeats: usize,
+) {
+    for i in 0..=repeats {
+        let event = key_event(key.clone(), modifiers, i > 0);
+        if let Some(msg) = history_event_message(event, iced::event::Status::Ignored, id) {
+            let _ = update(app, msg);
+            // The list reload a delete queues, as its task would land.
+            let records = app.coordinator.history_list().map_err(|e| e.to_string());
+            let _ = update(app, Message::History(HistoryMsg::ListLoaded(records)));
+        }
+    }
+}
+
+fn history_with(
+    n: usize,
+) -> (
+    tempfile::TempDir,
+    Arc<FsHistoryStore>,
+    App,
+    iced::window::Id,
+) {
+    let (dir, store) = saved_store();
+    for i in 0..n {
+        let at = chrono::Utc::now() - chrono::Duration::seconds(i as i64);
+        let r = readshot_core::CaptureRecord::new(at, 2, 2, "d");
+        store.save(&r, &png(&solid(2, 2))).unwrap();
+    }
+    let (app, id) = history_app(&store);
+    (dir, store, app, id)
+}
+
+/// Holding ⇧⌘⌫ arms Clear All once; its auto-repeats never confirm it.
+#[test]
+fn a_held_clear_all_chord_only_arms() {
+    let (_dir, store, mut app, id) = history_with(3);
+    let (key, m) = clear_all_chord();
+    hold_history_key(&mut app, id, key, m, 5);
+    assert!(app.history_clear_all_pending, "the first press arms");
+    assert_eq!(store.list().unwrap().len(), 3, "a repeat never confirms");
+}
+
+/// Holding ⌦ deletes at most one capture (it only arms the first).
+#[test]
+fn a_held_delete_key_deletes_at_most_one_capture() {
+    let (_dir, store, mut app, id) = history_with(3);
+    assert!(app.history_selected_id.is_some());
+    hold_history_key(
+        &mut app,
+        id,
+        Key::Named(Named::Delete),
+        iced::keyboard::Modifiers::empty(),
+        8,
+    );
+    assert!(store.list().unwrap().len() >= 2, "at most one is deleted");
+    assert!(app.history_delete_pending.is_some(), "the press armed it");
+}
+
+/// A held ↓ still walks the list: arrows auto-repeat.
+#[test]
+fn a_repeated_arrow_still_moves_the_selection() {
+    let (_dir, _store, mut app, id) = history_with(3);
+    let first = app.history_selected_id;
+    let event = key_event(
+        Key::Named(Named::ArrowDown),
+        iced::keyboard::Modifiers::empty(),
+        true,
+    );
+    let msg = history_event_message(event, iced::event::Status::Ignored, id)
+        .expect("a repeated arrow passes");
+    let _ = update(&mut app, msg);
+    assert_ne!(
+        app.history_selected_id, first,
+        "the repeat moved the selection"
+    );
+}
