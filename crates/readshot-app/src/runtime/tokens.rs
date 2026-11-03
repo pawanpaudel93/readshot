@@ -156,6 +156,15 @@ pub(crate) const SP4: f32 = 16.0;
 /// `acc_text` outline that marks a selected value.
 pub(crate) const FOCUS_RING_WIDTH: f32 = 2.0;
 
+/// The halo inside the ring: a 1.5 px line in the window colour that
+/// separates the ring from a filled control (the ring alone is 1:1 on
+/// Primary and 2.3:1 on the dark danger fill).
+pub(crate) const FOCUS_HALO_WIDTH: f32 = 1.5;
+
+pub(crate) fn focus_halo_color(p: &Palette) -> Color {
+    p.bg
+}
+
 pub(crate) fn focus_ring_color(p: &Palette) -> Color {
     p.t1
 }
@@ -302,6 +311,26 @@ mod tests {
                     let r = contrast_ratio(ring, bg);
                     assert!(r >= 3.0, "focus ring on {bg:?} is {r:.2}:1");
                 }
+            }
+        }
+    }
+
+    /// On a filled control (Primary, the solid-red confirms) the ring sits
+    /// on the fill, so an inner halo in `bg` separates them: the ring
+    /// meets 3:1 against the window and the halo, and the halo against
+    /// every fill.
+    #[test]
+    fn the_focus_ring_shows_on_filled_controls() {
+        for p in both() {
+            let ring = focus_ring_color(p);
+            let halo = focus_halo_color(p);
+            assert!(contrast_ratio(ring, halo) >= 3.0);
+            for fill in [p.pri_bg, p.danger] {
+                let r = contrast_ratio(halo, fill);
+                assert!(r >= 3.0, "halo on fill {fill:?} is {r:.2}:1");
+            }
+            for base in [p.bg, p.surface, p.raised] {
+                assert!(contrast_ratio(ring, base) >= 3.0);
             }
         }
     }

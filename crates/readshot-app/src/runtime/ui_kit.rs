@@ -470,7 +470,13 @@ pub(crate) fn focus_ring<'a>(
     // The stack takes the control's own sizing, so a Fill button in a row
     // still shares the row as before.
     let size = content.as_widget().size();
-    let ring = container(Space::new().width(Length::Fill).height(Length::Fill))
+    // The halo sits just inside the ring, so the ring shows on a fill too.
+    let halo = container(Space::new().width(Length::Fill).height(Length::Fill))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |theme| focus_halo_style(theme, on));
+    let ring = container(halo)
+        .padding(FOCUS_RING_WIDTH)
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |theme| focus_ring_style(theme, on));
@@ -488,6 +494,23 @@ pub(crate) fn focus_ring_style(theme: &Theme, on: bool) -> container::Style {
             width: if on { FOCUS_RING_WIDTH } else { 0.0 },
             color: if on {
                 focus_ring_color(p)
+            } else {
+                Color::TRANSPARENT
+            },
+        },
+        ..container::Style::default()
+    }
+}
+
+/// The `bg` halo just inside a lit focus ring.
+pub(crate) fn focus_halo_style(theme: &Theme, on: bool) -> container::Style {
+    let p = palette_for(theme);
+    container::Style {
+        border: Border {
+            radius: (R_BUTTON - FOCUS_RING_WIDTH).into(),
+            width: if on { FOCUS_HALO_WIDTH } else { 0.0 },
+            color: if on {
+                focus_halo_color(p)
             } else {
                 Color::TRANSPARENT
             },
@@ -919,6 +942,11 @@ mod focus_ring_tests {
             assert!(on.background.is_none(), "the ring never hides the control");
             let off = focus_ring_style(&theme, false);
             assert_eq!(off.border.width, 0.0);
+            let halo = focus_halo_style(&theme, true);
+            assert_eq!(halo.border.width, FOCUS_HALO_WIDTH);
+            assert_eq!(halo.border.color, focus_halo_color(p));
+            assert!(halo.background.is_none());
+            assert_eq!(focus_halo_style(&theme, false).border.width, 0.0);
         }
     }
 
