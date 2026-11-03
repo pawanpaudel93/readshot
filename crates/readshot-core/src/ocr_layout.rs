@@ -101,9 +101,10 @@ pub fn reconstruct(lines: &[RecognizedLine]) -> String {
     let med_h = median_height(&active);
     // Two fragments are part of the same visual row when their Y
     // centres are within half a line height of each other. The floor
-    // (0.005 of image height) keeps the heuristic stable when
-    // bounding boxes are unusually thin.
-    let row_tol = (med_h * 0.5).max(0.005);
+    // (1e-4 of image height) keeps the heuristic stable when bounding
+    // boxes are degenerate; it stays tiny because it scales with the
+    // image: 0.005 was 80 px on a 16,000 px scroll stitch, merging lines.
+    let row_tol = (med_h * 0.5).max(1e-4);
 
     let rows = cluster_rows(&active, row_tol);
 
@@ -139,7 +140,7 @@ pub fn reading_order(lines: &[RecognizedLine]) -> Vec<usize> {
         return Vec::new();
     }
     let refs: Vec<&RecognizedLine> = active.iter().map(|&i| &lines[i]).collect();
-    let row_tol = (median_height(&refs) * 0.5).max(0.005);
+    let row_tol = (median_height(&refs) * 0.5).max(1e-4);
     let centre = |i: usize| lines[i].y + lines[i].h / 2.0;
     active.sort_by(|&a, &b| centre(a).total_cmp(&centre(b)));
 
@@ -894,6 +895,33 @@ mod tests {
         // "left" and "right" share a row (centres 0.135 / 0.125, tolerance
         // half a line height); the empty line is dropped.
         assert_eq!(reading_order(&lines), vec![2, 0, 1]);
+    }
+
+    /// On a 16,000 px tall capture (a long scroll stitch), 24 px lines
+    /// 40 px apart are distinct rows: the row tolerance floor must not
+    /// be a fraction of image height large enough to merge them (0.005
+    /// was 80 px), which also swapped their order by x.
+    #[test]
+    fn close_lines_on_a_very_tall_image_stay_separate_and_in_order() {
+        let px = |v: f32| v / 16_000.0;
+        let lines: Vec<_> = ["one", "two", "three", "four"]
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                // Later lines sit further left: merged, they would reverse.
+                line(
+                    t,
+                    0.40 - 0.05 * i as f32,
+                    px(1000.0 + 40.0 * i as f32),
+                    0.3,
+                    px(24.0),
+                )
+            })
+            .collect();
+        assert_eq!(reading_order(&lines), vec![0, 1, 2, 3]);
+        let text = reconstruct(&lines);
+        let rows: Vec<_> = text.lines().map(str::trim).collect();
+        assert_eq!(rows, ["one", "two", "three", "four"], "{text:?}");
     }
 
     #[test]
