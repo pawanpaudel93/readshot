@@ -3552,8 +3552,8 @@ pub(crate) fn editor_compact_hint(tool: readshot_ui::editor::ToolState) -> Strin
         T::Pen => "Drag to draw freehand.".into(),
         T::Highlighter => "Drag over text to highlight it.".into(),
         T::Text => format!("Click, type, then press {COMMIT_TEXT_KEY}."),
-        T::Blur => "Drag over an area to blur it. Blur can sometimes be reversed; for passwords, use the Text tab’s Solid block.".into(),
-        T::Pixelate => "Drag over an area to pixelate it. Pixelation can sometimes be reversed; for passwords, use the Text tab’s Solid block.".into(),
+        T::Blur => "Drag over an area to blur it. Blur can sometimes be reversed; for passwords, draw a filled Rectangle instead.".into(),
+        T::Pixelate => "Drag over an area to pixelate it. Pixelation can sometimes be reversed; for passwords, draw a filled Rectangle instead.".into(),
         T::Spotlight => "Drag an area to spotlight; the rest dims.".into(),
         T::NumberedPin => "Click to drop the next number.".into(),
         T::Stamp => "Click to place a stamp.".into(),
@@ -5896,6 +5896,23 @@ mod tests {
             5
         );
         assert_eq!(history_word_count(None), 0);
+    }
+
+    /// B#5 (fix round 1): the Blur and Pixelate hints warn that they can
+    /// be reversed and point at what works on every platform, a filled
+    /// Rectangle (the Text tab's Solid block is macOS only, and only shows
+    /// when something sensitive was found).
+    #[test]
+    fn the_weak_tool_hints_point_at_a_filled_rectangle() {
+        use readshot_ui::editor::ToolState as T;
+        assert_eq!(
+            super::editor_compact_hint(T::Blur),
+            "Drag over an area to blur it. Blur can sometimes be reversed; for passwords, draw a filled Rectangle instead."
+        );
+        assert_eq!(
+            super::editor_compact_hint(T::Pixelate),
+            "Drag over an area to pixelate it. Pixelation can sometimes be reversed; for passwords, draw a filled Rectangle instead."
+        );
     }
 
     /// A#4: only an uninstall Error is shown as one.
