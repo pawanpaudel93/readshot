@@ -866,6 +866,15 @@ pub enum StatusTone {
     DiscardPrompt,
 }
 
+/// The armed-Discard prompt: it names the key that confirms and the way
+/// back ("Ctrl+W" off macOS), since most arms come from that key.
+pub fn discard_prompt() -> String {
+    format!(
+        "Unsaved edits. Press {} again to discard them, or keep editing.",
+        crate::runtime::CLOSE_KEY
+    )
+}
+
 /// The editor's status line: its text, its tone, when it was set, and
 /// what belongs to it (a toast button, a key guide, a removed preset
 /// to put back). Every field goes together: a new status replaces all
@@ -1642,10 +1651,7 @@ impl EditorSession {
     pub fn arm_discard_prompt(&mut self, now: std::time::Instant) {
         self.status = Some(Status {
             set_at: now,
-            ..Status::new(
-                StatusTone::DiscardPrompt,
-                "Unsaved edits. Press Discard again to close without saving.",
-            )
+            ..Status::new(StatusTone::DiscardPrompt, discard_prompt())
         });
     }
 

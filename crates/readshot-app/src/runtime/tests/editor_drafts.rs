@@ -922,7 +922,7 @@ fn editor_discard_requires_confirmation_for_non_empty_pending_text() {
     assert!(ed.discard_armed());
     assert_eq!(
         ed.status_text(),
-        Some("Unsaved edits. Press Discard again to close without saving.")
+        Some(crate::editor::discard_prompt().as_str())
     );
 
     let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
@@ -1004,7 +1004,7 @@ fn editor_os_close_request_confirms_unsaved_work() {
     assert!(ed.discard_armed());
     assert_eq!(
         ed.status_text(),
-        Some("Unsaved edits. Press Discard again to close without saving.")
+        Some(crate::editor::discard_prompt().as_str())
     );
 
     // Second request within the confirm window closes it.
@@ -1122,7 +1122,7 @@ fn editor_discard_requires_confirmation_for_changed_text_edit() {
     assert!(ed.discard_armed());
     assert_eq!(
         ed.status_text(),
-        Some("Unsaved edits. Press Discard again to close without saving.")
+        Some(crate::editor::discard_prompt().as_str())
     );
 }
 
@@ -1139,7 +1139,7 @@ fn editor_discard_requires_confirmation_for_selected_frame() {
     assert!(ed.discard_armed());
     assert_eq!(
         ed.status_text(),
-        Some("Unsaved edits. Press Discard again to close without saving.")
+        Some(crate::editor::discard_prompt().as_str())
     );
 }
 
@@ -1726,4 +1726,16 @@ fn undoing_a_numbered_pin_rewinds_the_counter() {
         Message::Editor(EditorMsg::Toolbar(ToolbarMessage::Redo)),
     );
     assert_eq!(app.editor.as_ref().unwrap().next_pin_number, 3);
+}
+
+/// B#6: the Discard prompt names the key and the way back, never only a
+/// button (most arms come from ⌘W).
+#[test]
+fn the_discard_prompt_names_the_key_and_the_way_back() {
+    let want = if cfg!(target_os = "macos") {
+        "Unsaved edits. Press ⌘W again to discard them, or keep editing."
+    } else {
+        "Unsaved edits. Press Ctrl+W again to discard them, or keep editing."
+    };
+    assert_eq!(crate::editor::discard_prompt(), want);
 }
