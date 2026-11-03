@@ -1323,3 +1323,60 @@ fn fit_to_view_has_a_key() {
         }
     );
 }
+
+/// Fix round 1 (review finding 1): presets that differ, Space twice on
+/// Remove. The second Space applies the next preset, whose status
+/// replaces the Removed toast; ⌘Z still puts the removed one back.
+#[test]
+fn space_twice_on_remove_then_cmd_z_restores_the_preset() {
+    use readshot_core::beautify::SavedBeautifyPreset;
+    let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
+    app.preferences.editor_beautify_presets = [8, 24, 40]
+        .iter()
+        .enumerate()
+        .map(|(i, &pad)| {
+            let mut p = SavedBeautifyPreset {
+                name: format!("Preset {}", i + 1),
+                ..SavedBeautifyPreset::default()
+            };
+            p.settings.padding = pad;
+            p
+        })
+        .collect();
+    let before = app.preferences.editor_beautify_presets.clone();
+    press(&mut app, id, ch("b"), editor_alt_modifiers());
+    while focus(&app) != at(FocusZone::Panel, FocusItem::BeautifyRemoveSaved(0)) {
+        press(&mut app, id, named(Named::Tab), plain());
+    }
+    press(&mut app, id, named(Named::Space), plain());
+    press(&mut app, id, named(Named::Space), plain());
+    assert_eq!(
+        app.editor.as_ref().unwrap().model.beautify().padding,
+        24,
+        "the second Space applied Preset 2"
+    );
+    press(&mut app, id, ch("z"), command_modifiers());
+    assert_eq!(app.preferences.editor_beautify_presets, before);
+}
+
+/// A removed preset stays restorable only until its toast would have
+/// expired.
+#[test]
+fn a_removed_preset_is_restorable_until_its_toast_would_expire() {
+    let (mut app, _id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SavePreset)),
+    );
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::DeletePreset(0))),
+    );
+    app.editor.as_mut().unwrap().presets_removed_at =
+        Some(std::time::Instant::now() - crate::editor::STATUS_AUTO_DISMISS * 2);
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::RestorePreset)),
+    );
+    assert!(app.preferences.editor_beautify_presets.is_empty());
+}

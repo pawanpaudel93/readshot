@@ -997,7 +997,7 @@ fn saved_presets_persist_apply_and_cap_at_twelve() {
 }
 
 #[test]
-fn undo_for_a_removed_preset_expires_with_its_toast() {
+fn undo_for_a_removed_preset_outlives_a_later_status() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.editor = Some(crate::editor::EditorSession::new(solid(32, 32)));
     let _ = update(
@@ -1008,7 +1008,8 @@ fn undo_for_a_removed_preset_expires_with_its_toast() {
         &mut app,
         Message::Editor(EditorMsg::Beautify(BeautifyMsg::DeletePreset(0))),
     );
-    // Any later status replaces the toast and its Undo.
+    // A later status replaces the toast, but not the pending Undo: it
+    // lasts as long as the toast would have (⌘Z still restores).
     app.editor
         .as_mut()
         .unwrap()
@@ -1017,7 +1018,7 @@ fn undo_for_a_removed_preset_expires_with_its_toast() {
         &mut app,
         Message::Editor(EditorMsg::Beautify(BeautifyMsg::RestorePreset)),
     );
-    assert!(app.preferences.editor_beautify_presets.is_empty());
+    assert_eq!(app.preferences.editor_beautify_presets.len(), 1);
 }
 
 #[test]

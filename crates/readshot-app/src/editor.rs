@@ -876,8 +876,7 @@ pub fn discard_prompt() -> String {
 }
 
 /// The editor's status line: its text, its tone, when it was set, and
-/// what belongs to it (a toast button, a key guide, a removed preset
-/// to put back). Every field goes together: a new status replaces all
+/// what belongs to it (a toast button, a key guide). Every field goes together: a new status replaces all
 /// of them, and clearing the status clears them all.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Status {
@@ -891,10 +890,6 @@ pub struct Status {
     /// Set as a keyboard guide: what it explains. It stays while that
     /// is going on ([`EditorSession::key_guide_live`]).
     pub guide: Option<KeyGuide>,
-    /// The saved Beautify presets just removed, oldest first, each with
-    /// its list index, while the toast offers Undo for them. A removal
-    /// while the toast shows adds to it, so Undo puts every one back.
-    pub removed_preset: Vec<(usize, readshot_core::beautify::SavedBeautifyPreset)>,
 }
 
 impl Status {
@@ -906,7 +901,6 @@ impl Status {
             set_at: std::time::Instant::now(),
             action: None,
             guide: None,
-            removed_preset: Vec::new(),
         }
     }
 
@@ -965,6 +959,13 @@ pub(crate) fn next_session_id() -> u64 {
 /// belong inside the pure model.
 pub struct EditorSession {
     pub model: Model,
+    /// The saved Beautify presets just removed, oldest first, each with
+    /// its list index. They stay restorable (⌘Z, the toast's Undo) until
+    /// [`STATUS_AUTO_DISMISS`] after the last removal, even when a newer
+    /// status replaces the toast; a removal meanwhile adds to them.
+    pub removed_presets: Vec<(usize, readshot_core::beautify::SavedBeautifyPreset)>,
+    /// When the last preset in `removed_presets` was removed.
+    pub presets_removed_at: Option<std::time::Instant>,
     /// The status line ([`Status`]). Write it through
     /// [`Self::set_status`] and the other setters, which also disarm
     /// Discard.
@@ -1399,6 +1400,8 @@ impl EditorSession {
         let output_checkpoint = EditorOutputCheckpoint(model.snapshot());
         Self {
             model,
+            removed_presets: Vec::new(),
+            presets_removed_at: None,
             status: None,
             busy: false,
             window_id: None,
@@ -1486,6 +1489,8 @@ impl EditorSession {
         let history_geometry_base = record.geometry_id.clone();
         Self {
             model,
+            removed_presets: Vec::new(),
+            presets_removed_at: None,
             status: None,
             busy: false,
             window_id: None,
@@ -1683,6 +1688,15 @@ impl EditorSession {
         self.status.as_ref().is_some_and(Status::is_sticky) || self.key_guide_live() == Some(true)
     }
 
+    /// Whether removed Beautify presets can still be put back: their
+    /// toast would not have expired yet.
+    pub fn preset_restore_pending(&self) -> bool {
+        !self.removed_presets.is_empty()
+            && self
+                .presets_removed_at
+                .is_some_and(|at| at.elapsed() < STATUS_AUTO_DISMISS)
+    }
+
     /// The toast button to show: a redaction's Undo only while that
     /// redaction is still the newest history step.
     pub fn visible_toast_action(&self) -> Option<EditorToastAction> {
@@ -1692,7 +1706,7 @@ impl EditorSession {
                 self.model.history_generation() == *generation
             }
             EditorToastAction::RetryRecognition => true,
-            EditorToastAction::RestorePreset => !status.removed_preset.is_empty(),
+            EditorToastAction::RestorePreset => self.preset_restore_pending(),
         })
     }
 

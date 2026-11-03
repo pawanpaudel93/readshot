@@ -84,10 +84,12 @@ pub(super) fn on_key_pressed(
         return task;
     }
     let message = editor_key_message(key, modifiers, status_ignored);
-    // While a removed preset's toast offers Undo, ⌘Z is that Undo.
-    let restore_shown = state.editor.as_ref().is_some_and(|ed| {
-        ed.visible_toast_action() == Some(crate::editor::EditorToastAction::RestorePreset)
-    });
+    // While a removed preset can still be put back, ⌘Z is its Undo
+    // (even after a newer status replaced the toast).
+    let restore_shown = state
+        .editor
+        .as_ref()
+        .is_some_and(|ed| ed.preset_restore_pending());
     let message = message.map(|m| match m {
         Message::Editor(EditorMsg::Toolbar(readshot_ui::ToolbarMessage::Undo)) if restore_shown => {
             Message::Editor(EditorMsg::Beautify(BeautifyMsg::RestorePreset))

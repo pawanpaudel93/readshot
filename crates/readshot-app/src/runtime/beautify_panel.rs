@@ -85,20 +85,14 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: BeautifyMsg) -> 
         // Removing is immediate and persisted, so the toast offers Undo.
         if let Some(removed) = state.delete_beautify_preset(i) {
             if let Some(ed) = state.editor.as_mut() {
-                // A removal while the last one's Undo still shows joins
-                // it, so that Undo puts both back.
-                let mut pending = if ed.visible_toast_action()
-                    == Some(crate::editor::EditorToastAction::RestorePreset)
-                {
-                    ed.status
-                        .as_mut()
-                        .map(|s| std::mem::take(&mut s.removed_preset))
-                        .unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
-                pending.push((i, removed));
-                let status = match pending.as_slice() {
+                // A removal while the last one is still restorable joins
+                // it, so one Undo puts both back.
+                if !ed.preset_restore_pending() {
+                    ed.removed_presets.clear();
+                }
+                ed.removed_presets.push((i, removed));
+                ed.presets_removed_at = Some(std::time::Instant::now());
+                let status = match ed.removed_presets.as_slice() {
                     [(_, one)] => format!("Removed {}.", one.name),
                     many => format!("Removed {} presets.", many.len()),
                 };
@@ -107,9 +101,6 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: BeautifyMsg) -> 
                     status,
                     crate::editor::EditorToastAction::RestorePreset,
                 );
-                if let Some(status) = ed.status.as_mut() {
-                    status.removed_preset = pending;
-                }
             }
         }
         return Task::none();
@@ -118,11 +109,8 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: BeautifyMsg) -> 
         let pending = state
             .editor
             .as_mut()
-            .filter(|ed| {
-                ed.visible_toast_action() == Some(crate::editor::EditorToastAction::RestorePreset)
-            })
-            .and_then(|ed| ed.status.as_mut())
-            .map(|s| std::mem::take(&mut s.removed_preset))
+            .filter(|ed| ed.preset_restore_pending())
+            .map(|ed| std::mem::take(&mut ed.removed_presets))
             .unwrap_or_default();
         if pending.is_empty() {
             return Task::none();
