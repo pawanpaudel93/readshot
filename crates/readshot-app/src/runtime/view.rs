@@ -1441,7 +1441,7 @@ fn history_split<'a>(
                     } else {
                         Color::TRANSPARENT
                     },
-                    width: if is_selected { 1.0 } else { 0.0 },
+                    width: if is_selected { SELECTED_OUTLINE } else { 0.0 },
                     radius: R_BUTTON.into(),
                 },
                 ..container::Style::default()
@@ -1877,8 +1877,10 @@ pub(crate) fn history_selected_fill(p: &Palette) -> Color {
     p.acc_tint
 }
 
+/// The selected row's outline, drawn `SELECTED_OUTLINE` wide: the
+/// `acc_text` selection cue (≥ 3:1 on the list in both themes).
 pub(crate) fn history_selected_border(p: &Palette) -> Color {
-    Color { a: 0.35, ..p.acc }
+    p.acc_text
 }
 
 /// Preview and text boxes in the detail pane.
@@ -5883,9 +5885,16 @@ mod tests {
     fn history_selection_colors_read_tokens() {
         assert_eq!(history_selected_fill(&DARK), DARK.acc_tint);
         assert_eq!(history_selected_fill(&LIGHT), LIGHT.acc_tint);
-        let b = history_selected_border(&DARK);
-        assert_eq!((b.r, b.g, b.b), (DARK.acc.r, DARK.acc.g, DARK.acc.b));
-        assert!((b.a - 0.35).abs() < 1e-6);
+        // A#5: the outline is the only mark of where ↑/↓ and ⌦ act, so
+        // it meets 3:1 against the list and the row's own tint.
+        for p in [&DARK, &LIGHT] {
+            let b = history_selected_border(p);
+            let tint = crate::runtime::tokens::over(history_selected_fill(p), p.bg);
+            for bg in [p.bg, tint] {
+                let r = crate::runtime::tokens::contrast_ratio(b, bg);
+                assert!(r >= 3.0, "selected row outline on {bg:?} is {r:.2}:1");
+            }
+        }
     }
 
     #[test]
