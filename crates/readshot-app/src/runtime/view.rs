@@ -4969,17 +4969,26 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
 /// After an uninstall that left the program (`App::uninstalled`): what
 /// was removed and what is left, in its tone, under the Uninstall
 /// heading, with Quit Readshot.
+/// The Uninstall row's status line, and whether it is an error. Only an
+/// Error is red with the alert glyph; Progress, Warning and Success stay
+/// neutral, led by their own toast glyph (• ! ✓), so a step that is
+/// running or worked never reads as a failure.
+pub(crate) fn uninstall_status_help(tone: StatusTone, text: &str) -> (String, bool) {
+    if tone == StatusTone::Error {
+        (text.to_string(), true)
+    } else {
+        let glyph = toast_glyph(status_toast_kind(tone));
+        (format!("{glyph} {text}"), false)
+    }
+}
+
 fn uninstalled_row(state: &App) -> Option<Element<'_, Message>> {
     let result = state.settings_uninstall_result.as_ref()?;
-    let tone = match result.tone {
-        StatusTone::Error => palette(state.theme_mode).danger,
-        StatusTone::Warning => palette(state.theme_mode).warn,
-        _ => palette(state.theme_mode).t2,
-    };
+    let (help, error) = uninstall_status_help(result.tone, &result.text);
     Some(settings_block_with(
         "Uninstall Readshot",
-        result.text.clone(),
-        Some(tone),
+        help,
+        error.then_some(palette(state.theme_mode).danger),
         // The default button (↵ presses it); disabled while the steps run.
         focus_ring(
             button(text("Quit Readshot").size(TYPE_BODY))
@@ -5669,7 +5678,7 @@ mod tests {
     use super::{ellipsize, history_title_budget, HISTORY_LIST_WIDTH};
     use super::{
         highlight_spans, history_age_label, history_first_line, history_selected_border,
-        history_selected_fill, history_word_count,
+        history_selected_fill, history_word_count, uninstall_status_help,
     };
     use crate::runtime::{DARK, LIGHT};
 
@@ -5879,6 +5888,28 @@ mod tests {
             5
         );
         assert_eq!(history_word_count(None), 0);
+    }
+
+    /// A#4: only an uninstall Error is shown as one.
+    #[test]
+    fn only_an_uninstall_error_reads_as_an_error() {
+        use crate::editor::StatusTone as T;
+        assert_eq!(
+            uninstall_status_help(T::Error, "Couldn’t remove it."),
+            ("Couldn’t remove it.".to_string(), true)
+        );
+        assert_eq!(
+            uninstall_status_help(T::Progress, "Uninstalling Readshot…"),
+            ("• Uninstalling Readshot…".to_string(), false)
+        );
+        assert_eq!(
+            uninstall_status_help(T::Warning, "Done, but one step was skipped."),
+            ("! Done, but one step was skipped.".to_string(), false)
+        );
+        assert_eq!(
+            uninstall_status_help(T::Success, "Readshot was uninstalled."),
+            ("✓ Readshot was uninstalled.".to_string(), false)
+        );
     }
 
     #[test]
