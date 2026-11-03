@@ -781,26 +781,10 @@ fn editor_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
         // window-agnostic event tap; we filter to KeyPressed events
         // and only react when the editor window is the focused one
         // (the canvas captures Escape; Esc is always a cancel, never
-        // Discard, which is ⌘W). `key_press` drops auto-repeats of all
-        // but navigation and zoom keys, so a held ⌘W never discards.
-        subs.push(iced::event::listen_with(|event, status, window| {
-            use iced::event::Status;
-            if let iced::Event::Window(iced::window::Event::Rescaled(scale)) = event {
-                return Some(Message::Window(WindowMsg::Rescaled(window, scale)));
-            }
-            if let iced::Event::Window(iced::window::Event::Resized(size)) = event {
-                return Some(Message::Window(WindowMsg::EditorWindowResized(
-                    window, size.width,
-                )));
-            }
-            let (key, modifiers) = key_press(event)?;
-            Some(Message::Editor(EditorMsg::KeyPressed {
-                window,
-                key,
-                modifiers,
-                status_ignored: status == Status::Ignored,
-            }))
-        }));
+        // Discard, which is ⌘W). `editor_key_press` drops auto-repeats
+        // of all but navigation, step and undo keys, so a held ⌘W never
+        // discards.
+        subs.push(iced::event::listen_with(editor_event_message));
         // Global Shift watcher for the editor — iced 0.14 doesn't reliably route
         // modifier changes into canvas widgets, so the editor canvas's
         // "hold Shift = constrain" relies on this forwarding modifier
@@ -922,6 +906,31 @@ fn window_key_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) 
             }))
         }));
     }
+}
+
+/// The editor window's listener: scale and size changes, and key presses
+/// as `editor_key_press` passes them (a held ⌘W never discards; a held ⌘Z
+/// or `]` still repeats).
+pub(crate) fn editor_event_message(
+    event: iced::Event,
+    status: iced::event::Status,
+    window: iced::window::Id,
+) -> Option<Message> {
+    if let iced::Event::Window(iced::window::Event::Rescaled(scale)) = event {
+        return Some(Message::Window(WindowMsg::Rescaled(window, scale)));
+    }
+    if let iced::Event::Window(iced::window::Event::Resized(size)) = event {
+        return Some(Message::Window(WindowMsg::EditorWindowResized(
+            window, size.width,
+        )));
+    }
+    let (key, modifiers) = editor_key_press(event)?;
+    Some(Message::Editor(EditorMsg::KeyPressed {
+        window,
+        key,
+        modifiers,
+        status_ignored: status == iced::event::Status::Ignored,
+    }))
 }
 
 /// The History window's key listener: `history_key_message` for a key

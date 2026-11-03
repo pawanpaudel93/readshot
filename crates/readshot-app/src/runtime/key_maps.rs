@@ -47,6 +47,29 @@ pub(crate) fn altgr(modifiers: iced::keyboard::Modifiers) -> bool {
 pub(crate) fn key_press(
     event: iced::Event,
 ) -> Option<(iced::keyboard::Key, iced::keyboard::Modifiers)> {
+    key_press_repeating(event, |_, _| false)
+}
+
+/// The editor's [`key_press`]: undo / redo (⌘Z, ⇧⌘Z) and the `[` `]`
+/// `,` `.` steps repeat too, as they always did. None of them confirms
+/// anything, and each can be undone.
+pub(crate) fn editor_key_press(
+    event: iced::Event,
+) -> Option<(iced::keyboard::Key, iced::keyboard::Modifiers)> {
+    key_press_repeating(event, |key, m| match key {
+        iced::keyboard::Key::Character(c) => {
+            matches!(c.as_str(), "[" | "]" | "," | ".")
+                || (m.command() && c.eq_ignore_ascii_case("z"))
+        }
+        _ => false,
+    })
+}
+
+/// [`key_press`], with `also` naming more keys whose repeats pass.
+fn key_press_repeating(
+    event: iced::Event,
+    also: impl Fn(&iced::keyboard::Key, iced::keyboard::Modifiers) -> bool,
+) -> Option<(iced::keyboard::Key, iced::keyboard::Modifiers)> {
     use iced::keyboard::{key::Named, Event as KbEvent, Key};
     let iced::Event::Keyboard(KbEvent::KeyPressed {
         key,
@@ -73,7 +96,7 @@ pub(crate) fn key_press(
         Key::Character(c) => matches!(c.as_str(), "=" | "+" | "-"),
         Key::Unidentified => false,
     };
-    (!repeat || repeats).then_some((key, modifiers))
+    (!repeat || repeats || also(&key, modifiers)).then_some((key, modifiers))
 }
 
 pub(crate) fn editor_key_message(

@@ -1876,3 +1876,42 @@ fn cmd_z_restores_a_removed_preset_while_its_toast_shows() {
     let (_, key, _) = toast_action_parts(crate::editor::EditorToastAction::RestorePreset);
     assert_eq!(key, Some(UNDO_KEY));
 }
+
+/// Fix round 1 (review finding 2): in the editor a held ⌘Z still undoes
+/// step after step, as at base; a held ⌘W still only arms Discard.
+#[test]
+fn a_held_cmd_z_repeats_but_a_held_cmd_w_never_discards() {
+    let (mut app, id) = dirty_editor_window();
+    let ev = |c: &str, repeat| {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            modified_key: iced::keyboard::Key::Character(c.into()),
+            key: iced::keyboard::Key::Character(c.into()),
+            physical_key: iced::keyboard::key::Physical::Unidentified(
+                iced::keyboard::key::NativeCode::Unidentified,
+            ),
+            location: iced::keyboard::Location::Standard,
+            modifiers: command_modifiers(),
+            text: None,
+            repeat,
+        })
+    };
+    let send = |app: &mut App, e| {
+        if let Some(m) = editor_event_message(e, iced::event::Status::Ignored, id) {
+            let _ = update(app, m);
+        }
+    };
+    let drawn = app.editor.as_ref().unwrap().model.annotations().len();
+    send(&mut app, ev("z", false));
+    send(&mut app, ev("z", true));
+    send(&mut app, ev("z", true));
+    assert_eq!(
+        app.editor.as_ref().unwrap().model.annotations().len(),
+        drawn - 3,
+        "each repeat undid a step"
+    );
+    send(&mut app, ev("w", false));
+    send(&mut app, ev("w", true));
+    send(&mut app, ev("w", true));
+    let ed = app.editor.as_ref().expect("a held ⌘W never discards");
+    assert!(ed.discard_armed());
+}
