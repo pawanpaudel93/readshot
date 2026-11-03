@@ -103,6 +103,10 @@ pub(crate) fn editor_key_message(
     if editor_alt_chord(&key, modifiers, RESIZE_LETTER) {
         return Some(Message::Editor(EditorMsg::Image(ImageMsg::ResizeOpen)));
     }
+    // ⌥⌘0 / Ctrl+Shift+0: Fit to View (before ⌘0, which ignores ⌥).
+    if editor_alt_chord(&key, modifiers, "0") {
+        return Some(Message::Editor(EditorMsg::ZoomFit));
+    }
     // The new chords never fire while a text field has the caret
     // (`status_ignored` false): a field's own ⇧⌘V pastes, and must not
     // also flip the image.

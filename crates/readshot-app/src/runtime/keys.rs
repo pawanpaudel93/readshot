@@ -17,6 +17,8 @@ pub(crate) const CLOSE_KEY: &str = platform_key("⌘W", "Ctrl+W");
 pub(crate) const ZOOM_OUT_KEY: &str = platform_key("⌘−", "Ctrl+-");
 pub(crate) const ZOOM_IN_KEY: &str = platform_key("⌘=", "Ctrl+=");
 pub(crate) const ZOOM_ACTUAL_KEY: &str = platform_key("⌘0", "Ctrl+0");
+/// Fit to View: Ctrl+Shift off macOS, where Ctrl+Alt is AltGr.
+pub(crate) const ZOOM_FIT_KEY: &str = platform_key("⌥⌘0", "Ctrl+Shift+0");
 pub(crate) const SCROLL_CAPTURE_KEY: &str = platform_key("⌘R", "Ctrl+R");
 /// Commits the inline text editor (plain ↵ is a new line).
 pub(crate) const COMMIT_TEXT_KEY: &str = platform_key("⌘↵", "Ctrl+Enter");
@@ -115,6 +117,7 @@ mod tests {
             ZOOM_OUT_KEY,
             ZOOM_IN_KEY,
             ZOOM_ACTUAL_KEY,
+            ZOOM_FIT_KEY,
             SCROLL_CAPTURE_KEY,
             COMMIT_TEXT_KEY,
             UNDO_HINT,
@@ -143,6 +146,7 @@ mod tests {
             ZOOM_OUT_KEY,
             ZOOM_IN_KEY,
             ZOOM_ACTUAL_KEY,
+            ZOOM_FIT_KEY,
             SCROLL_CAPTURE_KEY,
             COMMIT_TEXT_KEY,
             DELETE_KEY,

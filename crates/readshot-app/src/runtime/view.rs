@@ -3058,7 +3058,7 @@ fn editor_zoom_segment(
                 (!busy).then_some(Message::Editor(EditorMsg::ZoomFit)),
             ),
             "Fit to View",
-            None,
+            Some(ZOOM_FIT_KEY),
             Position::Bottom,
         ),
     ]

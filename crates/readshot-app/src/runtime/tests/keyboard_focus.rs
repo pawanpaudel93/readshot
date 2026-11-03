@@ -137,6 +137,7 @@ fn every_editor_chord_is_unique_and_reaches_its_action() {
             mods(true, false, false, false),
             "Editor(ZoomActual)",
         ),
+        (ch("0"), editor_alt_modifiers(), "Editor(ZoomFit)"),
         (ch("i"), plain(), "Editor(EyedropperToggled)"),
         (ch("c"), plain(), "SelectTool(Crop)"),
         (ch("["), plain(), "Editor(WidthBump(-1.0))"),
@@ -1294,5 +1295,31 @@ fn removing_the_last_preset_by_keyboard_focuses_the_one_before() {
     assert_eq!(
         focus(&app),
         at(FocusZone::Panel, FocusItem::BeautifySaved(0))
+    );
+}
+
+/// B#4: Fit to View has a key: ⌥⌘0 (Ctrl+Shift+0 off macOS, where
+/// Ctrl+Alt is AltGr and never a command); ⌘0 stays actual pixels.
+#[test]
+fn fit_to_view_has_a_key() {
+    let fit = editor_key_message(ch("0"), editor_alt_modifiers(), true);
+    assert!(matches!(fit, Some(Message::Editor(EditorMsg::ZoomFit))));
+    let actual = editor_key_message(ch("0"), mods(true, false, false, false), true);
+    assert!(matches!(
+        actual,
+        Some(Message::Editor(EditorMsg::ZoomActual))
+    ));
+    if !cfg!(target_os = "macos") {
+        // AltGr+0 types a character; it never zooms.
+        let altgr = editor_key_message(ch("0"), mods(true, false, true, true), true);
+        assert!(altgr.is_none(), "{altgr:?}");
+    }
+    assert_eq!(
+        ZOOM_FIT_KEY,
+        if cfg!(target_os = "macos") {
+            "⌥⌘0"
+        } else {
+            "Ctrl+Shift+0"
+        }
     );
 }

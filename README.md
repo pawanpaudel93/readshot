@@ -224,7 +224,7 @@ Down`, `Home` / `End` and the zoom keys, so a held key never confirms a
 - **Editor actions:** `⌘C` copy image, `⇧⌘C` copy all text (the side panel's Text tab also copies selected lines), `⌘S` save,
   `⌘P` pin, `⌥⌘P` show or hide the side panel, `⌘Z` / `⇧⌘Z` undo and
   redo, `⌘=` / `⌘-` zoom in / out, `⌘0` actual pixels (the title bar's
-  **1:1**; **Fit** fits the window), `⌘[` / `⌘]` rotate left / right,
+  **1:1**), `⌥⌘0` fits the window (**Fit**), `⌘[` / `⌘]` rotate left / right,
   `⇧⌘H` / `⇧⌘V` flip horizontally /
   vertically, `⌥⌘I` resize (focus starts in Width; `Tab` moves between the
   fields, `⌥P` switches px / %, `⌥L` locks the aspect), `⇧⌘I` opens the Image
@@ -250,7 +250,8 @@ Down`, `Home` / `End` and the zoom keys, so a held key never confirms a
   `↵` or `⌘C` copies and `R` redacts the line. A ring marks the focused
   control. On Windows and Linux, `Ctrl` replaces `⌘` and `Alt` replaces `⌥`,
   except the `⌥⌘` chords: there they are `Ctrl+Shift` (`Ctrl+Shift+P` panel,
-  `Ctrl+Shift+R` resize, `Ctrl+Shift+T` / `Ctrl+Shift+B` panel tabs), because
+  `Ctrl+Shift+R` resize, `Ctrl+Shift+T` / `Ctrl+Shift+B` panel tabs,
+  `Ctrl+Shift+0` fit), because
   `Ctrl+Alt` is AltGr on many keyboards and `Ctrl+Alt+T` opens a terminal.
   Editor chords never fire while a text field has the caret. `Tab` in the
   Color popover applies a typed hex (as `↵` does) and returns to the bar;
