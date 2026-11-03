@@ -51,7 +51,8 @@ impl fmt::Display for ExportFormat {
 /// `Preferences::default()` without a file gets: tests, the CLI). The
 /// app itself starts a new user on Last 50 (`first_launch_preferences`
 /// in readshot-app, also used by Reset All Settings), and Settings says
-/// so.
+/// so. A `preferences.toml` that exists but won't parse is moved aside
+/// and the app starts on `Off`, which never prunes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HistoryRetention {

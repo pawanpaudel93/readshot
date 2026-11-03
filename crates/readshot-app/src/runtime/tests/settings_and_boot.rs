@@ -767,13 +767,28 @@ fn boot_still_opens_permission_window_for_url_launch_when_blocked() {
 fn load_preferences_falls_back_when_file_is_corrupt() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("preferences.toml");
-    std::fs::write(&path, "this is not [valid toml").unwrap();
+    let bytes = b"this is not [valid toml";
+    std::fs::write(&path, bytes).unwrap();
     let prefs = load_preferences(Some(&path));
-    // Corrupt file → first-launch defaults rather than a panic.
+    // Corrupt file → no panic, and never a pruning retention: the
+    // user's real setting is unknown, so History must not be cut to 50.
     assert_eq!(
         prefs.history_retention,
-        readshot_core::HistoryRetention::Last50,
+        readshot_core::HistoryRetention::Off
     );
+    // The original bytes were moved aside, intact, not overwritten.
+    assert!(!path.exists());
+    let quarantined: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("preferences.toml.corrupt-")
+        })
+        .collect();
+    assert_eq!(quarantined.len(), 1);
+    assert_eq!(std::fs::read(quarantined[0].path()).unwrap(), bytes);
 }
 
 #[test]
