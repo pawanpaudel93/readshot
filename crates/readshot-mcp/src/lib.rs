@@ -29,10 +29,10 @@
 //! |----------------------------|------------------------------|---------------------------------|
 //! | `list_displays`            | (none)                       | `[{ id, name, bounds, ... }]`   |
 //! | `list_windows`             | (none)                       | `[{ id, app_name, bounds, ... }]` |
-//! | `capture_region`           | display?, rect?, scale?, hide_cursor? | `{ image_base64 }` (PNG) |
-//! | `capture_window`           | window, rect?, ignore_shadows? | `{ image_base64 }` (PNG)      |
+//! | `capture_region`           | display?, rect?, scale?, hide_cursor? | PNG image block |
+//! | `capture_window`           | window, rect?, ignore_shadows? | PNG image block               |
 //! | `capture_text`             | display?, rect?, scale?, hide_cursor?, languages?, language_correction? | `{ text, average_confidence }` |
-//! | `capture_region_and_text`  | as `capture_text`            | `{ image_base64, text, average_confidence }` |
+//! | `capture_region_and_text`  | as `capture_text`            | PNG image block + `{ text, average_confidence }` |
 //! | `recent_captures`          | limit?                       | recent history records          |
 //! | `latest_capture`           | (none)                       | newest history record           |
 //! | `get_capture`              | id                           | one history record              |
@@ -888,11 +888,25 @@ fn history_to_rpc(e: HistoryError) -> RpcErr {
 /// A successful `tools/call` result: the JSON payload as a text content
 /// part, `isError: false`, plus the structured payload at the top level
 /// for clients that prefer it (optional per MCP; ignorable by others).
-fn tool_result_ok(payload: Value) -> Value {
+///
+/// A payload's `image_base64` (a PNG, often tens of MB) is sent once, as
+/// an MCP image content block, and taken out of the text block and
+/// `structuredContent`: clients feed text blocks to the model. The text
+/// block is left out when the image was the only field.
+fn tool_result_ok(mut payload: Value) -> Value {
+    let image = payload
+        .as_object_mut()
+        .and_then(|o| o.remove("image_base64"));
+    let mut content = Vec::new();
+    let only_image = image.is_some() && payload.as_object().is_some_and(|o| o.is_empty());
+    if let Some(data) = image {
+        content.push(json!({ "type": "image", "data": data, "mimeType": "image/png" }));
+    }
+    if !only_image {
+        content.push(json!({ "type": "text", "text": payload.to_string() }));
+    }
     json!({
-        "content": [
-            { "type": "text", "text": payload.to_string() }
-        ],
+        "content": content,
         "isError": false,
         "structuredContent": payload,
     })
@@ -1006,12 +1020,12 @@ fn tool_descriptors() -> Value {
         },
         {
             "name": "capture_region",
-            "description": "Capture a region (or full display) and return a base64-encoded PNG.",
+            "description": "Capture a region (or full display) and return it as a PNG image content block.",
             "inputSchema": capture_args
         },
         {
             "name": "capture_window",
-            "description": "Capture a full window or a window-relative region and return a base64-encoded PNG.",
+            "description": "Capture a full window or a window-relative region and return it as a PNG image content block.",
             "inputSchema": capture_window_args
         },
         {
@@ -1505,9 +1519,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"capture_region","arguments":{"rect":{"x":0,"y":0,"width":64,"height":64}}}}"#,
         )
         .await;
-        let b64 = resp["result"]["structuredContent"]["image_base64"]
-            .as_str()
-            .unwrap();
+        let b64 = png_block(&resp);
         let bytes = B64.decode(b64).unwrap();
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
     }
@@ -1520,9 +1532,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"capture_window","arguments":{"window":"fake-window-0"}}}"#,
         )
         .await;
-        let b64 = resp["result"]["structuredContent"]["image_base64"]
-            .as_str()
-            .unwrap();
+        let b64 = png_block(&resp);
         let bytes = B64.decode(b64).unwrap();
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
     }
@@ -1535,9 +1545,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"capture_window","arguments":{"window":"fake-window-0","rect":{"x":8,"y":12,"width":32,"height":24}}}}"#,
         )
         .await;
-        let b64 = resp["result"]["structuredContent"]["image_base64"]
-            .as_str()
-            .unwrap();
+        let b64 = png_block(&resp);
         let bytes = B64.decode(b64).unwrap();
         let img = image::load_from_memory(&bytes).unwrap().to_rgba8();
         assert_eq!(img.width(), 32);
@@ -1642,9 +1650,38 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"capture_region_and_text","arguments":{"rect":{"x":0,"y":0,"width":32,"height":32}}}}"#,
         )
         .await;
+        let bytes = B64.decode(png_block(&resp)).unwrap();
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
         let payload = &resp["result"]["structuredContent"];
-        assert!(payload["image_base64"].is_string());
         assert_eq!(payload["text"], "hello mcp");
+        // The other fields ride in one text block, as JSON.
+        let texts: Vec<_> = resp["result"]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["type"] == "text")
+            .collect();
+        assert_eq!(texts.len(), 1);
+        let text: Value = serde_json::from_str(texts[0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(text["text"], "hello mcp");
+        assert!(text.get("image_base64").is_none());
+    }
+
+    /// The PNG of an image tool result, checked to be sent exactly once:
+    /// as an MCP image content block, never in a text block or in
+    /// `structuredContent` (no tool declares an `outputSchema`).
+    fn png_block(resp: &Value) -> &str {
+        let result = &resp["result"];
+        assert!(result["structuredContent"].get("image_base64").is_none());
+        let content = result["content"].as_array().unwrap();
+        let images: Vec<_> = content.iter().filter(|c| c["type"] == "image").collect();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0]["mimeType"], "image/png");
+        let data = images[0]["data"].as_str().unwrap();
+        for c in content.iter().filter(|c| c["type"] == "text") {
+            assert!(!c["text"].as_str().unwrap().contains(data));
+        }
+        data
     }
 
     #[tokio::test]

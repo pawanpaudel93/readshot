@@ -51,10 +51,10 @@ exits with code 64.
 |----------------------------|-------------------------------------------------|-----------------------------------|
 | `list_displays`            | (none)                                          | `{ displays: [...] }`             |
 | `list_windows`             | (none)                                          | `{ windows: [...] }`              |
-| `capture_region`           | `display?`, `rect?`, `scale?`, `hide_cursor?`   | `{ image_base64 }` (PNG)          |
-| `capture_window`           | `window`, `rect?`, `ignore_shadows?`            | `{ image_base64 }` (PNG)          |
+| `capture_region`           | `display?`, `rect?`, `scale?`, `hide_cursor?`   | PNG image block                   |
+| `capture_window`           | `window`, `rect?`, `ignore_shadows?`            | PNG image block                   |
 | `capture_text`             | …same plus `languages`, `language_correction`   | `{ text, average_confidence }`    |
-| `capture_region_and_text`  | …same                                           | `{ image_base64, text, … }`       |
+| `capture_region_and_text`  | …same                                           | PNG image block + `{ text, … }`   |
 | `recent_captures`          | `limit?`                                        | `{ captures: [...] }`             |
 | `latest_capture`           | (none)                                          | `{ capture: {...} }`              |
 | `get_capture`              | `id`                                            | `{ capture: {...} }`              |
@@ -171,6 +171,12 @@ Use `latest_capture` when an agent needs the newest saved capture
 without guessing a limit. Use `get_capture` after `recent_captures` or
 `search_captures` when the agent already has a capture id and needs
 the full metadata again.
+
+A tool's PNG comes back once, as an MCP image content block:
+`{ "type": "image", "data": "<base64>", "mimeType": "image/png" }`.
+Any other fields come back as JSON in a text block and in
+`structuredContent`, without the image, so a client that hands text
+blocks to the model never feeds it megabytes of base64.
 
 ## Tool Call Examples
 
@@ -447,8 +453,8 @@ printf '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"capture_
   | python3 -m json.tool
 ```
 
-These capture calls return a base64-encoded PNG in
-`result.structuredContent.image_base64`. You should see the tool
+These capture calls return the PNG as an image content block:
+`result.content[0]` is `{ "type": "image", "data": "<base64>", "mimeType": "image/png" }`. You should see the tool
 descriptors with their JSON Schemas in the first command. If
 the binary errors out with `Library not loaded: @rpath/libswift_Concurrency.dylib`,
 it was built against a Swift toolchain that isn't installed; reinstall

@@ -126,7 +126,7 @@
                 </tr>
                 <tr>
                   <td><code translate="no">capture_region</code></td>
-                  <td>Capture a display region and return a PNG payload.</td>
+                  <td>Capture a display region and return a PNG image block.</td>
                 </tr>
                 <tr>
                   <td><code translate="no">capture_window</code></td>
@@ -163,6 +163,12 @@
               When <code translate="no">rect</code> is omitted, the selected display or window is captured in full.
             </p>
 
+            <p>
+              A tool’s PNG comes back once, as an MCP image content block
+              (<code translate="no">type: "image"</code>, base64 <code translate="no">data</code>,
+              <code translate="no">mimeType: "image/png"</code>). Any other fields come back as JSON in a
+              text block and in <code translate="no">structuredContent</code>, without the image.
+            </p>
             <h3 id="history-results">History results</h3>
             <p>
               The history tools read the same local archive as the app. Each result includes
