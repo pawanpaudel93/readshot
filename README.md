@@ -189,10 +189,13 @@ readshot ocr --input capture.png --output text.txt    # OCR an existing image
 
 See [docs/CLI.md](docs/CLI.md) for the complete command reference.
 
-Inside the GUI, keyboard shortcuts cover the main workflows. Holding a
-key counts as one press, except the arrow keys, `Tab`, `Page Up` / `Page
-Down`, `Home` / `End` and the zoom keys, so a held key never confirms a
-"press twice" prompt:
+Inside the GUI, keyboard shortcuts cover the main workflows. In
+Readshot's windows, holding a key counts as one press, so a held key never
+confirms a "press twice" prompt. These keys still repeat: the arrow keys,
+`Tab`, `Page Up` / `Page Down`, `Home` / `End`, and `-` / `=` / `+` (with
+`⌘`, zoom; alone, steps such as pin opacity or a gap). In the editor,
+`⌘Z` / `⇧⌘Z`, `[` / `]` and `,` / `.` repeat too. In the capture overlay
+and the window picker, a held key repeats, but `↵` captures only once:
 
 - **Capture overlay:** drag to select a region, or press an arrow key to
   start a centred one; `↵` or `Space` captures the full display, or the
