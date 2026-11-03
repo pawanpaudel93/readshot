@@ -39,8 +39,9 @@ find it later by searching the text inside the screenshot.
 - Scrolling capture — lock a region, scroll the page, get one tall
   stitched image with a live HUD preview. **Scrolling Capture…** in the
   menu starts the session as soon as you release the drag (or press
-  `↵`). A session stops by itself at 120 frames, or before the result
-  would pass 16,384 pixels tall, and stitches what it has. The stitched
+  `↵`). A session stops by itself at 120 frames, before the result
+  would pass 16,384 pixels tall, or once its frames hold 1.5 GB, and
+  stitches what it has. The stitched
   image opens in the editor and is saved to History.
 - Multi-monitor capture with Retina-quality output.
 - Annotation editor with shapes (filled, dashed, rounded), curved and

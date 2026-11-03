@@ -630,6 +630,48 @@ async fn a_session_at_the_height_cap_stops_itself_and_keeps_the_stitch() {
     assert!(ed.source_record.is_some(), "and is saved to History");
 }
 
+/// Frames waiting for the single judge are bounded: while two are queued
+/// (counting the one being judged) a tick takes no new capture.
+#[test]
+fn a_tick_waits_while_the_judge_has_a_backlog() {
+    let mut app = session_with_frames(1);
+    let s = app.scroll_session.as_mut().unwrap();
+    s.judge_in_flight = Some(1);
+    let _ = update(&mut app, Message::Scroll(ScrollMsg::Tick));
+    let s = app.scroll_session.as_mut().unwrap();
+    assert_eq!(s.capture_in_flight, 1, "one queued: still capturing");
+    s.capture_in_flight = 0;
+    s.pending_frames.insert(3, Ok(solid(8, 8)));
+    let task = update(&mut app, Message::Scroll(ScrollMsg::Tick));
+    let s = app.scroll_session.as_ref().unwrap();
+    assert_eq!(s.capture_in_flight, 0, "two queued: no capture");
+    assert_eq!(task.units(), 0);
+    assert!(!s.stopping);
+}
+
+/// Frames held by a session are bounded in bytes too (a 6K frame is
+/// ~81 MB): past the budget the session stops itself like at 120 frames.
+#[test]
+fn a_session_past_the_frame_memory_budget_stops_itself() {
+    // 16 MiB a frame. One shared buffer stands in for each frame, so the
+    // test holds 16 MiB, not the 1.5 GiB it counts.
+    let big = |n: usize| {
+        let mut app = session_with_frames(0);
+        let s = app.scroll_session.as_mut().unwrap();
+        let frame = Arc::new(image::RgbaImage::new(2048, 2048));
+        s.frames = vec![frame; n];
+        app
+    };
+    let mut app = big(90);
+    let _ = update(&mut app, Message::Scroll(ScrollMsg::Tick));
+    assert_eq!(app.scroll_session.as_ref().unwrap().capture_in_flight, 1);
+
+    let mut app = big(100);
+    let task = update(&mut app, Message::Scroll(ScrollMsg::Tick));
+    assert_eq!(app.scroll_session.as_ref().unwrap().capture_in_flight, 0);
+    assert_eq!(task.units(), 1, "the tick asks for a stop instead");
+}
+
 /// SC-12: a stitch taller than the cap fails with a status that says to
 /// start again, and closes the session's windows.
 #[test]

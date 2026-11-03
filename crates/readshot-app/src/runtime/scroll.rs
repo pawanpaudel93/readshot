@@ -11,6 +11,13 @@ use iced::Task;
 /// output and doesn't gobble gigabytes of RAM. The limits below cover
 /// roughly 30 s of continuous scrolling at the configured tick rate.
 pub(crate) const SCROLL_MAX_FRAMES: usize = 120;
+/// Bytes of frames a session may hold before it stops itself: 120 frames
+/// of a 6K display (~81 MB each) would be ~9.7 GB of RAM.
+pub(crate) const SCROLL_MAX_FRAME_BYTES: usize = 1536 * 1024 * 1024;
+/// Captured frames that may wait for the single judge (counting the one
+/// being judged) before a tick stops taking new ones: a judge can lag
+/// the 120 ms tick on a big display, and the queue would grow unbounded.
+pub(crate) const SCROLL_MAX_QUEUED_FRAMES: usize = 2;
 /// The way back from a failed scrolling capture.
 pub(crate) const SCROLL_RETRY_HINT: &str = "Start the scrolling capture again.";
 /// Maximum captures allowed in flight at once. Lets a fast scroll
@@ -123,13 +130,15 @@ pub(crate) fn cancel_armed(session: &crate::app::ScrollSession) -> bool {
 }
 
 /// Whether the session must stop before taking another frame: one more
-/// could take the stitch past its height cap, and a stitch over the cap
-/// fails whole (`OutputTooTall`), losing every frame. `stitched_rows` is
+/// could take the stitch past its height cap (a stitch over the cap
+/// fails whole, `OutputTooTall`, losing every frame), or its frames
+/// already hold more than [`SCROLL_MAX_FRAME_BYTES`]. `stitched_rows` is
 /// the judge's running estimate of the stitched height.
 pub(crate) fn scroll_session_full(session: &crate::app::ScrollSession) -> bool {
     let cap = readshot_core::scroll_stitch::StitchConfig::default().max_output_height;
     let next = session.frames.last().map_or(0, |f| f.height());
-    session.stitched_rows.saturating_add(next) > cap
+    let bytes: usize = session.frames.iter().map(|f| f.as_raw().len()).sum();
+    session.stitched_rows.saturating_add(next) > cap || bytes > SCROLL_MAX_FRAME_BYTES
 }
 
 /// Process in-order completed captures. Frames needing a motion
@@ -649,6 +658,10 @@ fn on_scroll_tick(state: &mut App) -> Task<Message> {
     }
     if session.frames.len() >= SCROLL_MAX_FRAMES || scroll_session_full(session) {
         return Task::done(Message::Scroll(ScrollMsg::StopRequested));
+    }
+    let queued = session.pending_frames.len() + usize::from(session.judge_in_flight.is_some());
+    if queued >= SCROLL_MAX_QUEUED_FRAMES {
+        return Task::none();
     }
     session.capture_in_flight += 1;
     session.next_capture_seq = session.next_capture_seq.saturating_add(1);
