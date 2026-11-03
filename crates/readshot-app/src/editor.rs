@@ -882,9 +882,10 @@ pub struct Status {
     /// Set as a keyboard guide: what it explains. It stays while that
     /// is going on ([`EditorSession::key_guide_live`]).
     pub guide: Option<KeyGuide>,
-    /// A saved Beautify preset just removed, with its list index, while
-    /// the toast offers Undo for it.
-    pub removed_preset: Option<(usize, readshot_core::beautify::SavedBeautifyPreset)>,
+    /// The saved Beautify presets just removed, oldest first, each with
+    /// its list index, while the toast offers Undo for them. A removal
+    /// while the toast shows adds to it, so Undo puts every one back.
+    pub removed_preset: Vec<(usize, readshot_core::beautify::SavedBeautifyPreset)>,
 }
 
 impl Status {
@@ -896,7 +897,7 @@ impl Status {
             set_at: std::time::Instant::now(),
             action: None,
             guide: None,
-            removed_preset: None,
+            removed_preset: Vec::new(),
         }
     }
 
@@ -1685,7 +1686,7 @@ impl EditorSession {
                 self.model.history_generation() == *generation
             }
             EditorToastAction::RetryRecognition => true,
-            EditorToastAction::RestorePreset => status.removed_preset.is_some(),
+            EditorToastAction::RestorePreset => !status.removed_preset.is_empty(),
         })
     }
 

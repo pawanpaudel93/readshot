@@ -679,7 +679,26 @@ fn activate(state: &mut App, focus: KeyFocus, pos: usize) -> Task<Message> {
     if busy {
         return Task::none();
     }
+    let presets_before = state.preferences.editor_beautify_presets.len();
     let task = update(state, msg);
+    // A removed preset moves the ring off Remove, onto the preset now in
+    // its place (or the one before), so a second press never removes
+    // the next preset too.
+    if let F::BeautifyRemoveSaved(i) = focus.item {
+        let left = state.preferences.editor_beautify_presets.len();
+        let removed = left < presets_before;
+        if let Some(ed) = state.editor.as_mut().filter(|_| removed && left > 0) {
+            if ed.key_focus == Some(focus) {
+                set_focus(
+                    ed,
+                    Some(KeyFocus {
+                        zone: focus.zone,
+                        item: F::BeautifySaved(i.min(left - 1)),
+                    }),
+                );
+            }
+        }
+    }
     // A removed preset (or another change) can take the control away:
     // stay at the same place in the list.
     if let Some(ed) = state.editor.as_ref() {

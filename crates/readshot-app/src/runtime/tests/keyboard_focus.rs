@@ -1232,3 +1232,67 @@ fn a_queued_c_still_opens_the_keyboard_crop_draft() {
         "the queued C opened its crop draft"
     );
 }
+
+/// B#1: removing a saved Beautify preset from the keyboard moves the ring
+/// off Remove (onto the preset now in that place), so a second Space
+/// never removes the next one; and removing A then B, then Undo, puts
+/// both back in order.
+#[test]
+fn removing_presets_by_keyboard_keeps_each_one_undoable() {
+    let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
+    for _ in 0..3 {
+        let _ = update(
+            &mut app,
+            Message::Editor(EditorMsg::Beautify(BeautifyMsg::SavePreset)),
+        );
+    }
+    let before = app.preferences.editor_beautify_presets.clone();
+    press(&mut app, id, ch("b"), editor_alt_modifiers());
+    while focus(&app) != at(FocusZone::Panel, FocusItem::BeautifyRemoveSaved(0)) {
+        press(&mut app, id, named(Named::Tab), plain());
+    }
+    press(&mut app, id, named(Named::Space), plain());
+    assert_eq!(
+        focus(&app),
+        at(FocusZone::Panel, FocusItem::BeautifySaved(0)),
+        "the ring leaves Remove"
+    );
+    // Back onto Remove (now B's) and remove that too.
+    press(&mut app, id, named(Named::Tab), plain());
+    assert_eq!(
+        focus(&app),
+        at(FocusZone::Panel, FocusItem::BeautifyRemoveSaved(0))
+    );
+    press(&mut app, id, named(Named::Enter), plain());
+    assert_eq!(app.preferences.editor_beautify_presets, before[2..]);
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::RestorePreset)),
+    );
+    assert_eq!(
+        app.preferences.editor_beautify_presets, before,
+        "Undo puts A and B back, in order"
+    );
+}
+
+/// Removing the last saved preset leaves the ring on the one before it.
+#[test]
+fn removing_the_last_preset_by_keyboard_focuses_the_one_before() {
+    let (mut app, id) = editor_app(crate::editor::EditorSession::new(solid(40, 20)));
+    for _ in 0..2 {
+        let _ = update(
+            &mut app,
+            Message::Editor(EditorMsg::Beautify(BeautifyMsg::SavePreset)),
+        );
+    }
+    press(&mut app, id, ch("b"), editor_alt_modifiers());
+    while focus(&app) != at(FocusZone::Panel, FocusItem::BeautifyRemoveSaved(1)) {
+        press(&mut app, id, named(Named::Tab), plain());
+    }
+    press(&mut app, id, named(Named::Space), plain());
+    assert_eq!(app.preferences.editor_beautify_presets.len(), 1);
+    assert_eq!(
+        focus(&app),
+        at(FocusZone::Panel, FocusItem::BeautifySaved(0))
+    );
+}

@@ -85,39 +85,72 @@ pub(crate) fn handle_beautify_message(state: &mut App, message: BeautifyMsg) -> 
         // Removing is immediate and persisted, so the toast offers Undo.
         if let Some(removed) = state.delete_beautify_preset(i) {
             if let Some(ed) = state.editor.as_mut() {
-                let status = format!("Removed {}.", removed.name);
+                // A removal while the last one's Undo still shows joins
+                // it, so that Undo puts both back.
+                let mut pending = if ed.visible_toast_action()
+                    == Some(crate::editor::EditorToastAction::RestorePreset)
+                {
+                    ed.status
+                        .as_mut()
+                        .map(|s| std::mem::take(&mut s.removed_preset))
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                pending.push((i, removed));
+                let status = match pending.as_slice() {
+                    [(_, one)] => format!("Removed {}.", one.name),
+                    many => format!("Removed {} presets.", many.len()),
+                };
                 ed.set_status_with_action(
                     StatusTone::Success,
                     status,
                     crate::editor::EditorToastAction::RestorePreset,
                 );
                 if let Some(status) = ed.status.as_mut() {
-                    status.removed_preset = Some((i, removed));
+                    status.removed_preset = pending;
                 }
             }
         }
         return Task::none();
     }
     if let BeautifyMsg::RestorePreset = message {
-        let pending = state.editor.as_mut().and_then(|ed| {
-            (ed.visible_toast_action() == Some(crate::editor::EditorToastAction::RestorePreset))
-                .then(|| ed.status.as_mut().and_then(|s| s.removed_preset.take()))
-                .flatten()
-        });
-        if let Some((i, preset)) = pending {
+        let pending = state
+            .editor
+            .as_mut()
+            .filter(|ed| {
+                ed.visible_toast_action() == Some(crate::editor::EditorToastAction::RestorePreset)
+            })
+            .and_then(|ed| ed.status.as_mut())
+            .map(|s| std::mem::take(&mut s.removed_preset))
+            .unwrap_or_default();
+        if pending.is_empty() {
+            return Task::none();
+        }
+        // Newest first, so each goes back at the index it was taken from.
+        let mut names = Vec::new();
+        let mut refused = None;
+        for (i, preset) in pending.into_iter().rev() {
             let name = preset.name.clone();
-            let restored = state.restore_beautify_preset(i, preset);
-            if let Some(ed) = state.editor.as_mut() {
-                if restored {
-                    ed.set_status(StatusTone::Success, format!("Restored {name}."));
-                } else {
-                    ed.set_status(
-                        StatusTone::Error,
-                        format!(
+            if state.restore_beautify_preset(i, preset) {
+                names.push(name);
+            } else {
+                refused.get_or_insert(name);
+            }
+        }
+        names.reverse();
+        if let Some(ed) = state.editor.as_mut() {
+            match refused {
+                None => ed.set_status(
+                    StatusTone::Success,
+                    format!("Restored {}.", names.join(", ")),
+                ),
+                Some(name) => ed.set_status(
+                    StatusTone::Error,
+                    format!(
                         "Couldn’t restore {name}: you can keep up to {MAX_SAVED_PRESETS} presets."
                     ),
-                    );
-                }
+                ),
             }
         }
         return Task::none();
