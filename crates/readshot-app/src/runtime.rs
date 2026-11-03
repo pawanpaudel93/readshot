@@ -1414,10 +1414,12 @@ pub fn default_preferences_path() -> Option<PathBuf> {
 /// defaults when the file is missing.
 ///
 /// A file that exists but can't be read or parsed is renamed aside to
-/// `preferences.toml.corrupt-<unix-ts>` (so the next settings save
-/// can't overwrite it) and the app starts with the first-launch set
-/// except `history_retention = Off`: the user's real retention is
-/// unknown, and `Off` never prunes History.
+/// `preferences.toml.corrupt-<unix-ts>` (so no save can overwrite it)
+/// and the app starts with the first-launch set except
+/// `history_retention = Unlimited`: the user's real retention is
+/// unknown, and `Unlimited` never prunes yet keeps saving to History.
+/// That set is saved in the file's place (only after a successful
+/// rename), so the next launch isn't a first launch on Last 50.
 ///
 /// The first-launch fallback overrides two fields from
 /// [`Preferences::default`]: `history_retention` is bumped to `Last50`
@@ -1442,16 +1444,20 @@ pub fn load_preferences(path: Option<&Path>) -> Preferences {
             let mut quarantine = path.as_os_str().to_owned();
             quarantine.push(format!(".corrupt-{ts}"));
             let moved = std::fs::rename(path, &quarantine).is_ok();
+            let prefs = Preferences {
+                history_retention: readshot_core::HistoryRetention::Unlimited,
+                ..first_launch_preferences()
+            };
+            // Saved in its place so the next launch isn't a first launch
+            // (Last 50). Only once the original is safely aside.
+            let saved = moved && prefs.save(path).is_ok();
             // Redaction policy (see `log.rs`): no $HOME-rooted path.
             tracing::warn!(
                 target: readshot_core::log::cat::PREFERENCES,
                 "preferences.toml unreadable ({e}); moved aside: {moved}; \
-                 starting with defaults and History retention off",
+                 defaults saved: {saved}; History retention unlimited",
             );
-            Preferences {
-                history_retention: readshot_core::HistoryRetention::Off,
-                ..first_launch_preferences()
-            }
+            prefs
         }
     }
 }

@@ -772,12 +772,13 @@ fn load_preferences_falls_back_when_file_is_corrupt() {
     let prefs = load_preferences(Some(&path));
     // Corrupt file → no panic, and never a pruning retention: the
     // user's real setting is unknown, so History must not be cut to 50.
-    assert_eq!(
-        prefs.history_retention,
-        readshot_core::HistoryRetention::Off
-    );
+    // Unlimited (not Off) also keeps captures reaching History.
+    let unlimited = readshot_core::HistoryRetention::Unlimited;
+    assert_eq!(prefs.history_retention, unlimited);
+    // The fallback was saved in its place, so the next launch is not a
+    // first launch (which would start on Last 50 and prune).
+    assert_eq!(load_preferences(Some(&path)).history_retention, unlimited);
     // The original bytes were moved aside, intact, not overwritten.
-    assert!(!path.exists());
     let quarantined: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .flatten()
