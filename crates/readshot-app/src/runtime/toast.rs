@@ -23,7 +23,7 @@ pub(crate) fn toast_action_parts(
         ),
         A::RestorePreset => (
             "Undo",
-            None,
+            Some(UNDO_KEY),
             Message::Editor(EditorMsg::Beautify(BeautifyMsg::RestorePreset)),
         ),
     }

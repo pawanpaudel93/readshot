@@ -236,7 +236,10 @@ Down`, `Home` / `End` and the zoom keys, so a held key never confirms a
   edits the first press only warns; press again to discard, or click
   Keep Editing (the warning waits for your answer). Anything that takes
   the warning down without discarding backs out of it, so the next `⌘W`
-  warns again.
+  warns again; `esc` does, once nothing else is left to cancel. `esc`
+  also takes down an error or warning toast, `⌘Z` is a removed Beautify
+  preset's Undo while its toast shows, and a failed recognition's Retry
+  is also the Text tab's Retry button (`⌥⌘T`, then `Tab` to it and `↵`).
 - **Editor keyboard focus:** `⌃Tab` / `F6` move the keyboard between the
   canvas, the options bar and the side panel (`⌃⇧Tab` / `⇧F6` go back);
   `⌥⌘T` / `⌥⌘B` open the side panel's Text / Beautify tab. Inside the bar or
@@ -263,7 +266,7 @@ Down`, `Home` / `End` and the zoom keys, so a held key never confirms a
   `⌘⌫` (or `⌦`) deletes it (press twice to confirm), `⌥⇧⌘C` copies the text of every capture matching the search
   (including ones not shown yet behind Show More),
   `⇧⌘⌫` clears all (press twice to confirm; both deletions are permanent), `⌘F` focuses the search, and
-  `esc` cancels an armed prompt or clears the search. On Windows and Linux,
+  `esc` cancels an armed prompt, clears the search, or dismisses a message. On Windows and Linux,
   Reveal is `Ctrl+Shift+R` and Copy Visible Text is `Ctrl+Shift+A`.
 - **Settings window:** `⌘1`–`⌘7` switch panes; `esc` / `⌘W` close; `⌘L`
   toggles launch-at-login and `⌘D` toggles debug logging; `⌘R` and `⌘F`
@@ -294,7 +297,8 @@ Down`, `Home` / `End` and the zoom keys, so a held key never confirms a
   arrow keys move the window by 1 pixel (hold `⇧` for 10).
 - **Welcome screen:** `↵` triggers the primary action (Allow / Open System
   Settings / Capture); `⌘R` restarts Readshot and `⇧⌘R` resets the Screen
-  Recording permission when those buttons are shown.
+  Recording permission when those buttons are shown; `esc` dismisses a
+  message.
 
 Readshot also respects the system Reduce Motion setting, dropping non-essential
 animation when it is enabled.

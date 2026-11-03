@@ -635,3 +635,16 @@ fn key_press_drops_repeats_except_navigation_and_zoom() {
         );
     }
 }
+
+/// A#6: esc in the Welcome window takes down its status message.
+#[test]
+fn welcome_esc_dismisses_the_status() {
+    use crate::welcome::WelcomeState;
+    use iced::keyboard::{key::Named, Key, Modifiers};
+    let esc = Key::Named(Named::Escape);
+    let msg = welcome_key_message(WelcomeState::Granted, false, &esc, Modifiers::empty());
+    assert!(matches!(
+        msg,
+        Some(Message::Welcome(WelcomeMsg::StatusDismissed))
+    ));
+}

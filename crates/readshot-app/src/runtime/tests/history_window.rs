@@ -505,3 +505,30 @@ fn a_repeated_arrow_still_moves_the_selection() {
         "the repeat moved the selection"
     );
 }
+
+/// A#6: esc steps back through History: a search first, then an error
+/// toast (which never expires and had only a pointer Dismiss).
+#[test]
+fn esc_clears_the_search_then_dismisses_the_toast() {
+    let (_dir, _store, mut app, id) = history_with(1);
+    app.history_status = Some(Status::new(StatusTone::Error, "Couldn’t copy. Try again."));
+    let _ = update(
+        &mut app,
+        Message::History(HistoryMsg::SearchChanged("x".into())),
+    );
+    history_key(
+        &mut app,
+        id,
+        Key::Named(Named::Escape),
+        iced::keyboard::Modifiers::empty(),
+    );
+    assert!(app.history_search.is_empty());
+    assert!(app.history_status.is_some(), "one step per esc");
+    history_key(
+        &mut app,
+        id,
+        Key::Named(Named::Escape),
+        iced::keyboard::Modifiers::empty(),
+    );
+    assert!(app.history_status.is_none());
+}

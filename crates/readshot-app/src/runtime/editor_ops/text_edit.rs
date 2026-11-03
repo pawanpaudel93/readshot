@@ -176,6 +176,15 @@ pub(super) fn on_text_cancel(state: &mut App) -> Task<Message> {
             ed.text_panel.anchor = None;
             return Task::none();
         }
+        // Last of all, once the canvas has nothing left to cancel: back
+        // out of an armed Discard (as Keep Editing does), or take down a
+        // toast that waits to be dismissed (an error, a warning).
+        let canvas_idle = ed.pending_text.is_none() && ed.model.selected_annotation().is_none();
+        if canvas_idle && ed.status_is_sticky() {
+            ed.clear_discard_confirmation();
+            ed.clear_status();
+            return Task::none();
+        }
         let keep_selection = ed
             .pending_text
             .as_ref()

@@ -1773,3 +1773,105 @@ fn a_left_request_is_picked_up_on_the_reopen_tick() {
         "taken once"
     );
 }
+
+// ===== UI-1 item 4: keyboard paths for toasts =====
+
+/// A dirty editor in a window, nothing selected.
+fn dirty_editor_window() -> (App, iced::window::Id) {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let mut ed = debug_editor_qa_session();
+    ed.model.commit_annotation(Annotation::Rectangle {
+        rect: RectLike::new(0.0, 0.0, 20.0, 20.0),
+        color: Rgba::OPAQUE_BLACK,
+        line_width: 2.0,
+        style: Default::default(),
+    });
+    ed.model.clear_selection();
+    let id = iced::window::Id::unique();
+    ed.window_id = Some(id);
+    app.editor = Some(ed);
+    (app, id)
+}
+
+fn esc(id: iced::window::Id) -> Message {
+    key_press(
+        id,
+        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+        false,
+    )
+}
+
+/// B#3: with nothing left to cancel, esc backs out of an armed Discard
+/// (as README §Accessibility promises), so the next ⌘W warns again.
+#[test]
+fn esc_backs_out_of_an_armed_discard() {
+    let (mut app, id) = dirty_editor_window();
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
+    assert!(app.editor.as_ref().unwrap().discard_armed());
+    let _ = update(&mut app, esc(id));
+    let ed = app.editor.as_ref().expect("esc never discards");
+    assert!(!ed.discard_armed());
+    let _ = update(&mut app, Message::Editor(EditorMsg::DiscardRequested));
+    assert!(
+        app.editor.as_ref().expect("still open").discard_armed(),
+        "the next close warns again"
+    );
+}
+
+/// Esc takes down an error or warning toast, which never expires.
+#[test]
+fn esc_dismisses_a_sticky_editor_toast() {
+    let (mut app, id) = dirty_editor_window();
+    for tone in [Tone::Error, Tone::Warning] {
+        app.editor
+            .as_mut()
+            .unwrap()
+            .set_status(tone, "Couldn’t save. Try again.");
+        let _ = update(&mut app, esc(id));
+        assert_eq!(app.editor.as_ref().unwrap().status_text(), None, "{tone:?}");
+    }
+}
+
+/// Esc with a selection deselects first; the toast stays for the next esc.
+#[test]
+fn esc_deselects_before_it_dismisses_a_toast() {
+    let (mut app, id) = dirty_editor_window();
+    let ed = app.editor.as_mut().unwrap();
+    ed.model.select_at(PointLike { x: 10.0, y: 10.0 });
+    assert!(ed.model.selected_annotation().is_some());
+    ed.set_status(Tone::Error, "Couldn’t save. Try again.");
+    let _ = update(&mut app, esc(id));
+    assert!(app.editor.as_ref().unwrap().status_text().is_some());
+    let _ = update(&mut app, esc(id));
+    assert!(app.editor.as_ref().unwrap().status_text().is_none());
+}
+
+/// While a removed preset's Undo shows, ⌘Z is that Undo (and leaves the
+/// drawing alone); the toast's button names the key.
+#[test]
+fn cmd_z_restores_a_removed_preset_while_its_toast_shows() {
+    let (mut app, id) = dirty_editor_window();
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::SavePreset)),
+    );
+    let before = app.preferences.editor_beautify_presets.clone();
+    let drawn = app.editor.as_ref().unwrap().model.annotations().len();
+    let _ = update(
+        &mut app,
+        Message::Editor(EditorMsg::Beautify(BeautifyMsg::DeletePreset(0))),
+    );
+    assert!(app.preferences.editor_beautify_presets.is_empty());
+    let _ = update(
+        &mut app,
+        key_press(id, iced::keyboard::Key::Character("z".into()), true),
+    );
+    assert_eq!(app.preferences.editor_beautify_presets, before);
+    assert_eq!(
+        app.editor.as_ref().unwrap().model.annotations().len(),
+        drawn,
+        "the drawing is not undone"
+    );
+    let (_, key, _) = toast_action_parts(crate::editor::EditorToastAction::RestorePreset);
+    assert_eq!(key, Some(UNDO_KEY));
+}

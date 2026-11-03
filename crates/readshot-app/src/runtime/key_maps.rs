@@ -479,6 +479,8 @@ pub(crate) fn welcome_key_message(
     }
     match key {
         Key::Named(Named::Enter) => welcome_primary_message(welcome, capture_in_flight),
+        // The status message has only a pointer Dismiss otherwise.
+        Key::Named(Named::Escape) => Some(Message::Welcome(WelcomeMsg::StatusDismissed)),
         _ => None,
     }
 }

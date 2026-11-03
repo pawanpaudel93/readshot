@@ -195,12 +195,14 @@ pub(super) fn on_keyboard_shortcut(
             }
         }
         // One esc, one step back: an armed prompt first, then the
-        // search.
+        // search, then the status toast (an error never expires).
         HistoryKeyboardAction::Escape => {
             if state.history_clear_all_pending {
                 update(state, Message::History(HistoryMsg::ClearAllCancelled))
             } else if state.history_delete_pending.is_some() {
                 update(state, Message::History(HistoryMsg::DeleteCancelled))
+            } else if state.history_search.is_empty() && state.history_status.is_some() {
+                update(state, Message::History(HistoryMsg::StatusDismissed))
             } else {
                 update(
                     state,
