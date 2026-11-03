@@ -438,15 +438,20 @@ fn fit_hint_segments(mut segs: Vec<HintSeg>, max_w: f32) -> Vec<HintSeg> {
     segs
 }
 
-fn draw_overlay_hint(frame: &mut Frame<Renderer>, bounds: Rectangle, segs: Vec<HintSeg>) {
+/// The hint's segments as they fit `bounds`, and the pill they are drawn
+/// in (centred, `HINT_TOP` from the top).
+fn hint_pill_rect(bounds: Rectangle, segs: Vec<HintSeg>) -> (Vec<HintSeg>, Rectangle) {
     let segs = fit_hint_segments(segs, bounds.width - 48.0);
     let box_w = segs_width(&segs);
     let x0 = ((bounds.width - box_w) / 2.0).max(0.0);
-    let pill = Path::rounded_rectangle(
-        Point::new(x0, HINT_TOP),
-        iced::Size::new(box_w, HINT_H),
-        (HINT_H / 2.0).into(),
-    );
+    let rect = Rectangle::new(Point::new(x0, HINT_TOP), iced::Size::new(box_w, HINT_H));
+    (segs, rect)
+}
+
+fn draw_overlay_hint(frame: &mut Frame<Renderer>, bounds: Rectangle, segs: Vec<HintSeg>) {
+    let (segs, rect) = hint_pill_rect(bounds, segs);
+    let x0 = rect.x;
+    let pill = Path::rounded_rectangle(rect.position(), rect.size(), (HINT_H / 2.0).into());
     frame.fill(&pill, CHROME_FILL);
     frame.stroke(
         &pill,

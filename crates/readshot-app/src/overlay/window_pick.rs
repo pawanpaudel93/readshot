@@ -231,7 +231,8 @@ impl Program<Message> for WindowPickProgram {
                 &outline,
                 Stroke::default().with_color(Color::WHITE).with_width(2.0),
             );
-            draw_window_label(&mut frame, bounds, w);
+            let hint = hint_pill_rect(bounds, window_pick_hint_segments()).1;
+            draw_window_label(&mut frame, bounds, w, hint);
         }
         draw_overlay_hint(&mut frame, bounds, window_pick_hint_segments());
         vec![frame.into_geometry()]
@@ -251,25 +252,82 @@ impl Program<Message> for WindowPickProgram {
     }
 }
 
-/// The lit window's name in a pill at its top-left corner, inside the
-/// window when there is no room above it.
-fn draw_window_label(frame: &mut Frame<Renderer>, bounds: Rectangle, w: &PickableWindow) {
-    const MAX_CHARS: usize = 60;
-    let label: String = if w.label.chars().count() > MAX_CHARS {
-        let mut s: String = w.label.chars().take(MAX_CHARS - 1).collect();
-        s.push('…');
-        s
+/// Advance of one Latin glyph of the 11.5 px label, and the pill's
+/// horizontal padding.
+const LABEL_ADVANCE: f32 = 7.0;
+const LABEL_PAD: f32 = 16.0;
+
+/// Advances of `c` in the label: a wide glyph (CJK, Hangul, emoji…)
+/// draws about one em, twice a Latin one.
+/// shortcut: a code-point estimate, not shaping; measure with iced's
+/// `Paragraph` if the workspace ever enables iced's `advanced` feature.
+fn label_units(c: char) -> f32 {
+    if c as u32 >= 0x1100 {
+        2.0
     } else {
-        w.label.clone()
-    };
-    let badge_w = 16.0 + label.chars().count() as f32 * 7.0;
+        1.0
+    }
+}
+
+/// The label as the pill shows it and the pill's width: cut with "…" to
+/// 60 characters and to `max_w`.
+fn fit_window_label(label: &str, max_w: f32) -> (String, f32) {
+    const MAX_CHARS: usize = 60;
+    let width = |units: f32| LABEL_PAD + units * LABEL_ADVANCE;
+    let units: f32 = label.chars().take(MAX_CHARS + 1).map(label_units).sum();
+    if label.chars().count() <= MAX_CHARS && width(units) <= max_w {
+        return (label.to_string(), width(units));
+    }
+    let mut out = String::new();
+    let mut used = 1.0; // the ellipsis
+    for c in label.chars().take(MAX_CHARS - 1) {
+        if width(used + label_units(c)) > max_w {
+            break;
+        }
+        used += label_units(c);
+        out.push(c);
+    }
+    out.push('…');
+    (out, width(used))
+}
+
+/// Where the name pill goes: above the window's top-left corner (inside
+/// it when there is no room above), but below the hint band when it
+/// would sit under the hint pill.
+fn window_label_rect(
+    bounds: Rectangle,
+    window: Rectangle,
+    badge_w: f32,
+    badge_h: f32,
+    hint: Rectangle,
+) -> Rectangle {
+    let (bx, by) = size_badge_origin(bounds, window, badge_w, badge_h);
+    let rect = Rectangle::new(Point::new(bx, by), iced::Size::new(badge_w, badge_h));
+    if rect.intersects(&hint) {
+        Rectangle::new(Point::new(bx, hint.y + hint.height + 6.0), rect.size())
+    } else {
+        rect
+    }
+}
+
+/// The lit window's name in a pill at its top-left corner, inside the
+/// window when there is no room above it, never under the hint pill.
+fn draw_window_label(
+    frame: &mut Frame<Renderer>,
+    bounds: Rectangle,
+    w: &PickableWindow,
+    hint: Rectangle,
+) {
+    let max_w = w
+        .rect
+        .width
+        .min(bounds.width)
+        .max(LABEL_PAD + 2.0 * LABEL_ADVANCE);
+    let (label, badge_w) = fit_window_label(&w.label, max_w);
     let badge_h = 22.0;
-    let (bx, by) = size_badge_origin(bounds, w.rect, badge_w, badge_h);
-    let badge = Path::rounded_rectangle(
-        Point::new(bx, by),
-        iced::Size::new(badge_w, badge_h),
-        6.0.into(),
-    );
+    let pill = window_label_rect(bounds, w.rect, badge_w, badge_h, hint);
+    let (bx, by) = (pill.x, pill.y);
+    let badge = Path::rounded_rectangle(pill.position(), pill.size(), 6.0.into());
     frame.fill(&badge, CHROME_FILL);
     frame.stroke(
         &badge,
@@ -444,5 +502,36 @@ mod tests {
         let segs = window_pick_hint_segments();
         assert!(segs.contains(&HintSeg::Key(crate::runtime::ESC_KEY)));
         assert!(segs.contains(&HintSeg::Muted("Cancel")));
+    }
+
+    /// C#2: a wide glyph (CJK, emoji) takes about twice a Latin one, so
+    /// the pill is sized for it, and a long name is cut with "…" to the
+    /// window's width.
+    #[test]
+    fn the_name_pill_fits_wide_glyphs_and_the_window() {
+        let (_, latin) = fit_window_label("abcd", 1000.0);
+        let (_, cjk) = fit_window_label("微信聊天", 1000.0);
+        assert_eq!(latin, LABEL_PAD + 4.0 * LABEL_ADVANCE);
+        assert_eq!(cjk, LABEL_PAD + 8.0 * LABEL_ADVANCE);
+        let (text, w) = fit_window_label(&"微".repeat(40), 200.0);
+        assert!(w <= 200.0, "{w}");
+        assert!(text.ends_with('…'), "{text}");
+    }
+
+    /// C#1: the name pill never sits under the hint pill: one that would
+    /// overlap it moves below the hint band.
+    #[test]
+    fn the_name_pill_never_sits_under_the_hint() {
+        let bounds = Rectangle::new(Point::ORIGIN, iced::Size::new(1200.0, 800.0));
+        let hint = hint_pill_rect(bounds, window_pick_hint_segments()).1;
+        // A centred dialog whose top sits just under the hint band.
+        let window = Rectangle::new(Point::new(500.0, 80.0), iced::Size::new(300.0, 200.0));
+        let pill = window_label_rect(bounds, window, 120.0, 22.0, hint);
+        assert!(!pill.intersects(&hint), "{pill:?} under {hint:?}");
+        assert!(pill.y >= hint.y + hint.height);
+        // Away from the hint it keeps its place above the window.
+        let low = Rectangle::new(Point::new(500.0, 400.0), iced::Size::new(300.0, 200.0));
+        let pill = window_label_rect(bounds, low, 120.0, 22.0, hint);
+        assert_eq!((pill.x, pill.y), (500.0, 400.0 - 22.0 - 6.0));
     }
 }
