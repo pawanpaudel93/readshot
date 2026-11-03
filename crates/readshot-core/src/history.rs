@@ -604,7 +604,7 @@ pub trait HistoryStore: Send + Sync {
     /// unredacted save onto a record stored as redacted only registers
     /// the index entry.
     fn commit_save(&self, record: &CaptureRecord, staged: StagedImage) -> Result<(), HistoryError>;
-    /// Remove staging files a crash left behind (older than a few
+    /// Remove staging files and `write_atomic` temps a crash left behind (older than a few
     /// minutes, so another process's in-flight write is left alone).
     fn sweep_staging(&self);
     /// Whether `record` is redacted as stored (`Ok(false)` when it isn't
@@ -707,6 +707,12 @@ pub fn thumbnail_png_from_bytes(png: &[u8]) -> Option<Vec<u8>> {
 
 /// Staging files older than this are leftovers of a crash.
 const STALE_STAGING_AGE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// A staged image (`*.stage.png`, `*.stage-thumb.png`) or a temp file a
+/// crashed `write_atomic` left behind (`<name>.tmp.<pid>.<n>`).
+fn is_leftover_write(name: &str) -> bool {
+    name.ends_with(".stage.png") || name.ends_with(".stage-thumb.png") || name.contains(".tmp.")
+}
 
 /// File-system backed history store. All filesystem state is rooted at
 /// `root`.
@@ -911,9 +917,10 @@ impl FsHistoryStore {
             .join(format!("{}.thumb.png", record.id))
     }
 
-    /// Remove every staging file of `record` (`<id>.*.stage*.png`): a
-    /// crash can leave one holding unredacted bytes, and a deleted or
-    /// pruned record must not keep any of its image data on disk.
+    /// Remove every staging file of `record` (`<id>.*.stage*.png`, and
+    /// `write_atomic` temps `<id>.*.tmp.*`): a crash can leave one holding
+    /// unredacted bytes or OCR text, and a deleted or pruned record must
+    /// not keep any of its data on disk.
     fn remove_staging_for(&self, record: &CaptureRecord) {
         let abs_png = self.root.join(Self::png_path(record));
         let Some(dir) = abs_png.parent() else {
@@ -926,8 +933,7 @@ impl FsHistoryStore {
         for file in files.flatten() {
             let name = file.file_name();
             let name = name.to_string_lossy();
-            let staging = name.ends_with(".stage.png") || name.ends_with(".stage-thumb.png");
-            if staging && name.starts_with(&prefix) {
+            if is_leftover_write(&name) && name.starts_with(&prefix) {
                 let _ = fs::remove_file(file.path());
             }
         }
@@ -1581,8 +1587,7 @@ impl HistoryStore for FsHistoryStore {
                 for file in files.flatten() {
                     let name = file.file_name();
                     let name = name.to_string_lossy();
-                    let staging =
-                        name.ends_with(".stage.png") || name.ends_with(".stage-thumb.png");
+                    let staging = is_leftover_write(&name);
                     let stale = file
                         .metadata()
                         .and_then(|m| m.modified())
@@ -2823,9 +2828,13 @@ mod tests {
                 .to_path_buf();
             let png = dir.join(format!("{}.9-0.stage.png", r.id));
             let thumb = dir.join(format!("{}.9-0.stage-thumb.png", r.id));
-            fs::write(&png, b"raw").unwrap();
-            fs::write(&thumb, b"raw").unwrap();
-            [png, thumb]
+            // A crashed `write_atomic` temp of the image / the sidecar.
+            let tmp_png = dir.join(format!("{}.png.tmp.9.0", r.id));
+            let tmp_json = dir.join(format!("{}.json.tmp.9.1", r.id));
+            for f in [&png, &thumb, &tmp_png, &tmp_json] {
+                fs::write(f, b"raw").unwrap();
+            }
+            [png, thumb, tmp_png, tmp_json]
         };
         let (k, p, d) = (stage(&keep), stage(&pruned), stage(&deleted));
         s.delete(deleted.id).unwrap();
@@ -2852,18 +2861,28 @@ mod tests {
             .to_path_buf();
         let old = dir.join(format!("{}.1-0.stage.png", r.id));
         let fresh = dir.join(format!("{}.1-1.stage-thumb.png", r.id));
-        fs::write(&old, b"x").unwrap();
-        fs::write(&fresh, b"x").unwrap();
+        // Crashed `write_atomic` temps: a partial PNG, an OCR-text sidecar.
+        let old_tmp = dir.join(format!("{}.json.tmp.7.0", r.id));
+        let fresh_tmp = dir.join(format!("{}.png.tmp.7.1", r.id));
+        for f in [&old, &fresh, &old_tmp, &fresh_tmp] {
+            fs::write(f, b"x").unwrap();
+        }
         let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
-        fs::File::options()
-            .write(true)
-            .open(&old)
-            .unwrap()
-            .set_modified(hour_ago)
-            .unwrap();
+        for f in [&old, &old_tmp] {
+            fs::File::options()
+                .write(true)
+                .open(f)
+                .unwrap()
+                .set_modified(hour_ago)
+                .unwrap();
+        }
         s.sweep_staging();
-        assert!(!old.exists());
+        assert!(!old.exists() && !old_tmp.exists());
         assert!(fresh.exists(), "may be another process's in-flight write");
+        assert!(
+            fresh_tmp.exists(),
+            "may be another process's in-flight write"
+        );
         assert!(s.root().join(FsHistoryStore::png_path(&r)).exists());
     }
 
