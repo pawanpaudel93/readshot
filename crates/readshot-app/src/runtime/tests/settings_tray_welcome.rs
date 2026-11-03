@@ -255,18 +255,29 @@ fn the_save_folder_is_picked_reset_and_opened_through_the_loop() {
         &mut app,
         Message::Settings(SettingsMsg::OpenSaveFolderDone(Ok(()))),
     );
-    assert_eq!(app.settings_status.as_deref(), Some("Opened save folder."));
+    // A#3: the folder opening is the feedback; the App pane's Reset help
+    // is never replaced.
+    assert_eq!(app.settings_folder_status, None);
+    assert_eq!(app.settings_status, None);
     let _ = update(
         &mut app,
         Message::Settings(SettingsMsg::OpenSaveFolderDone(Err(
             "No such file or directory (os error 2)".into(),
         ))),
     );
-    let status = app.settings_status.clone().unwrap();
+    assert_eq!(app.settings_status, None, "the Reset row keeps its help");
+    let status = app.settings_folder_status.clone().unwrap();
     assert!(
-        status.starts_with("Couldn’t open the save folder"),
+        status.starts_with("Couldn’t open the save folder")
+            && status.ends_with("Choose another folder, or Reset to use the default."),
         "{status}"
     );
+    // A later Open that works takes the error down.
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::OpenSaveFolderDone(Ok(()))),
+    );
+    assert_eq!(app.settings_folder_status, None);
 
     // Reset (focus ring: Choose, Open, Reset).
     app.settings_pane = SettingsPane::Files;

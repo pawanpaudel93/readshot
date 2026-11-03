@@ -4711,11 +4711,19 @@ fn settings_files_pane(state: &App) -> Vec<Element<'_, Message>> {
     vec![
         settings_group_heading("Save location and naming", text_t3),
         settings_group(vec![
-            settings_block(
-                "Default save folder",
-                "Starting folder for Save. Platform default uses your system screenshots location.",
-                save_folder_control,
-            ),
+            match &state.settings_folder_status {
+                Some(error) => settings_block_with(
+                    "Default save folder",
+                    error.clone(),
+                    Some(palette(state.theme_mode).danger),
+                    save_folder_control,
+                ),
+                None => settings_block(
+                    "Default save folder",
+                    "Starting folder for Save. Platform default uses your system screenshots location.",
+                    save_folder_control,
+                ),
+            },
             settings_block(
                 "Filename template",
                 "Tokens: {YYYY-MM-DD at HH.mm.ss} · {YYYY-MM-DD} · {HH.mm.ss} · {YYYY} · {timestamp}",

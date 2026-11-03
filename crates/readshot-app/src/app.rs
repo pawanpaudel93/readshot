@@ -1316,6 +1316,10 @@ pub struct App {
     /// Short general-purpose status text shown at the bottom of
     /// Settings.
     pub settings_status: Option<String>,
+    /// Why the save folder couldn't be opened, shown in the error tone
+    /// under the folder buttons on the Files pane until the next Open
+    /// works or Settings closes. A folder that opens shows nothing.
+    pub settings_folder_status: Option<String>,
     /// Why the last Open at login change failed (the toggle is back to
     /// its real state), shown in the error tone under the toggle until
     /// a change succeeds or Settings closes.
@@ -1689,6 +1693,7 @@ impl App {
             settings_hotkey_error: None,
             settings_hotkey_status: None,
             settings_status: None,
+            settings_folder_status: None,
             settings_launch_at_login_error: None,
             settings_reset_all_pending: false,
             settings_uninstall_pending: false,

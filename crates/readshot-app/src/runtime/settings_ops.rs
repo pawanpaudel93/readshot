@@ -37,12 +37,15 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
             )
         }
         SettingsMsg::OpenSaveFolderDone(result) => {
-            state.settings_status = Some(match result {
-                Ok(()) => "Opened save folder.".to_string(),
-                Err(e) => {
-                    tracing::warn!(target: readshot_core::log::cat::PREFERENCES, "open save folder failed: {e}");
-                    super::history_ops::friendly_string_error("open the save folder", &e)
-                }
+            // The folder opening is the feedback; only a failure shows,
+            // on the Files pane next to Open.
+            state.settings_folder_status = result.err().map(|e| {
+                tracing::warn!(target: readshot_core::log::cat::PREFERENCES, "open save folder failed: {e}");
+                super::history_ops::friendly_string_error_with(
+                    "open the save folder",
+                    &e,
+                    Some("Choose another folder, or Reset to use the default."),
+                )
             });
             Task::none()
         }
