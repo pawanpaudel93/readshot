@@ -603,7 +603,9 @@ pub(crate) fn text_input_style(
         border: Border {
             radius: R_BUTTON.into(),
             width: if focused { 2.0 } else { 1.0 },
-            color: if focused { p.acc } else { p.border },
+            // The unfocused edge is t3: `border` was 1.3:1, so a field
+            // barely read as one until it was focused (WCAG 1.4.11).
+            color: if focused { p.acc } else { p.t3 },
         },
         icon: p.t3,
         placeholder: p.t3,
@@ -930,6 +932,26 @@ mod chip_tests {
 #[cfg(test)]
 mod focus_ring_tests {
     use super::*;
+
+    /// A#7: an unfocused text field's edge is a UI boundary: 3:1 against
+    /// the field and every surface a field sits on, in both themes.
+    #[test]
+    fn a_text_field_edge_meets_non_text_contrast() {
+        use iced::widget::text_input::Status;
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            let p = palette(mode);
+            let theme = readshot_theme_for(mode);
+            for status in [Status::Active, Status::Hovered] {
+                let edge = text_input_style(&theme, status).border.color;
+                for base in [p.bg, p.surface, p.raised] {
+                    for bg in [base, over(p.float, base)] {
+                        let r = contrast_ratio(edge, bg);
+                        assert!(r >= 3.0, "{mode:?} field edge on {bg:?} is {r:.2}:1");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn the_focus_ring_shows_only_when_on_and_uses_the_ring_token() {
