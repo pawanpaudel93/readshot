@@ -122,6 +122,16 @@ pub(crate) fn cancel_armed(session: &crate::app::ScrollSession) -> bool {
     session.cancel_armed_at.is_some()
 }
 
+/// Whether the session must stop before taking another frame: one more
+/// could take the stitch past its height cap, and a stitch over the cap
+/// fails whole (`OutputTooTall`), losing every frame. `stitched_rows` is
+/// the judge's running estimate of the stitched height.
+pub(crate) fn scroll_session_full(session: &crate::app::ScrollSession) -> bool {
+    let cap = readshot_core::scroll_stitch::StitchConfig::default().max_output_height;
+    let next = session.frames.last().map_or(0, |f| f.height());
+    session.stitched_rows.saturating_add(next) > cap
+}
+
 /// Process in-order completed captures. Frames needing a motion
 /// verdict are compared against the previous accepted frame on a
 /// blocking worker — the SAD scan over a Retina-sized region is tens
@@ -134,10 +144,16 @@ pub(crate) fn drain_ready_scroll_frames(session: &mut crate::app::ScrollSession)
     if session.stopping || session.judge_in_flight.is_some() {
         return Task::none();
     }
-    while let Some(result) = session
-        .pending_frames
-        .remove(&session.next_frame_seq_to_process)
-    {
+    loop {
+        if scroll_session_full(session) {
+            return Task::done(Message::Scroll(ScrollMsg::StopRequested));
+        }
+        let Some(result) = session
+            .pending_frames
+            .remove(&session.next_frame_seq_to_process)
+        else {
+            break;
+        };
         let seq = session.next_frame_seq_to_process;
         session.next_frame_seq_to_process = seq.saturating_add(1);
         match result {
@@ -631,7 +647,7 @@ fn on_scroll_tick(state: &mut App) -> Task<Message> {
     if session.stopping || session.capture_in_flight >= SCROLL_MAX_CONCURRENT_CAPTURES {
         return Task::none();
     }
-    if session.frames.len() >= SCROLL_MAX_FRAMES {
+    if session.frames.len() >= SCROLL_MAX_FRAMES || scroll_session_full(session) {
         return Task::done(Message::Scroll(ScrollMsg::StopRequested));
     }
     session.capture_in_flight += 1;

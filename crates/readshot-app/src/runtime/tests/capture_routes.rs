@@ -580,6 +580,56 @@ fn at_120_frames_the_session_stops_and_shows_the_limit() {
     assert_eq!(scroll_hud_state(s), ScrollHudState::Limit);
 }
 
+/// SC-11: a session whose next frame could take the stitch past its
+/// height cap stops itself, so everything up to the cap is kept instead
+/// of the whole stitch failing with "too tall".
+#[tokio::test]
+async fn a_session_at_the_height_cap_stops_itself_and_keeps_the_stitch() {
+    let cap = readshot_core::scroll_stitch::StitchConfig::default().max_output_height;
+    let (h, step) = (1000, 600);
+    let (mut app, _, _) = app_with_scroll_windows(false);
+    let s = app.scroll_session.as_mut().unwrap();
+    accept_scroll_frame(s, noise_rows(0, 0, h), None, None);
+    let mut stopped = false;
+    for seq in 1..100u64 {
+        let s = app.scroll_session.as_mut().unwrap();
+        s.next_frame_seq_to_process = seq + 1;
+        s.judge_in_flight = Some(seq);
+        let task = update(
+            &mut app,
+            Message::Scroll(ScrollMsg::FrameJudged {
+                seq,
+                image: Some(noise_rows(seq as u32 * step, 0, h)),
+                moved: true,
+                offset: Some(step),
+                rows: None,
+                unplaced: false,
+            }),
+        );
+        if task.units() == 1 {
+            stopped = true;
+            break;
+        }
+    }
+    assert!(stopped, "the session asked for a stop by itself");
+    let s = app.scroll_session.as_ref().unwrap();
+    assert!(s.stitched_rows <= cap && s.stitched_rows + h > cap);
+    // A tick captures nothing more and asks for the stop again.
+    let task = update(&mut app, Message::Scroll(ScrollMsg::Tick));
+    assert_eq!(app.scroll_session.as_ref().unwrap().capture_in_flight, 0);
+    assert_eq!(task.units(), 1);
+    // The frames stitch (no "too tall"), and the result is kept.
+    let frames = app.scroll_session.as_ref().unwrap().frames.clone();
+    let _ = update(&mut app, Message::Scroll(ScrollMsg::StopRequested));
+    assert!(app.scroll_session.as_ref().unwrap().stopping);
+    let stitched = stitch_frames_async(frames).await.unwrap();
+    assert!(stitched.height() <= cap && stitched.height() > cap - h);
+    app.preferences.history_retention = readshot_core::HistoryRetention::Last50;
+    let _ = update(&mut app, Message::Scroll(ScrollMsg::Stitched(Ok(stitched))));
+    let ed = app.editor.as_ref().expect("the stitch opens the editor");
+    assert!(ed.source_record.is_some(), "and is saved to History");
+}
+
 /// SC-12: a stitch taller than the cap fails with a status that says to
 /// start again, and closes the session's windows.
 #[test]
