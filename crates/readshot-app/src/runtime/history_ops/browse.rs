@@ -20,7 +20,7 @@ pub(super) fn on_open_history(state: &mut App) -> Task<Message> {
     register_window(state, id, WindowKind::History);
     state.history_window_id = Some(id);
     state.history_status = None;
-    state.history_delete_pending = None;
+    state.history_prompt = HistoryPrompt::None;
     state.history_page_limit = crate::app::HISTORY_PAGE_SIZE;
     Task::batch([
         open_task.map(|a| Message::History(HistoryMsg::WindowReady(a))),
@@ -45,8 +45,8 @@ pub(crate) fn on_history_window_closed(state: &mut App, id: iced::window::Id) {
     cancel_history_open(state, "History was closed before it opened");
     state.history_search.clear();
     state.history_selected_id = None;
-    state.history_delete_pending = None;
-    state.history_clear_all_pending = false;
+    // An armed Clear All / row delete must not resurface.
+    state.history_prompt = HistoryPrompt::None;
     state.history_page_limit = crate::app::HISTORY_PAGE_SIZE;
 }
 
@@ -55,7 +55,7 @@ pub(super) fn on_search_changed(state: &mut App, q: String) -> Task<Message> {
     // A search change (Escape maps here too) cancels an armed
     // delete and resets paging so the first page of the new
     // result set is shown.
-    state.history_delete_pending = None;
+    state.history_prompt.cancel_delete();
     state.history_page_limit = crate::app::HISTORY_PAGE_SIZE;
     state.history_search = q;
     state.history_selected_id = preferred_history_selection(
@@ -68,8 +68,8 @@ pub(super) fn on_search_changed(state: &mut App, q: String) -> Task<Message> {
 
 /// `HistoryMsg::Select`.
 pub(super) fn on_select(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
-    if state.history_delete_pending != Some(id) {
-        state.history_delete_pending = None;
+    if state.history_prompt.delete_target() != Some(id) {
+        state.history_prompt.cancel_delete();
     }
     if history_record_visible(&state.history_records, &state.history_search, id) {
         state.history_selected_id = Some(id);
@@ -79,7 +79,7 @@ pub(super) fn on_select(state: &mut App, id: readshot_core::Uuid) -> Task<Messag
 
 /// `HistoryMsg::SelectPrevious`.
 pub(super) fn on_select_previous(state: &mut App) -> Task<Message> {
-    state.history_delete_pending = None;
+    state.history_prompt.cancel_delete();
     state.history_selected_id = adjacent_history_selection(
         &state.history_records,
         &state.history_search,
@@ -91,7 +91,7 @@ pub(super) fn on_select_previous(state: &mut App) -> Task<Message> {
 
 /// `HistoryMsg::SelectNext`.
 pub(super) fn on_select_next(state: &mut App) -> Task<Message> {
-    state.history_delete_pending = None;
+    state.history_prompt.cancel_delete();
     state.history_selected_id = adjacent_history_selection(
         &state.history_records,
         &state.history_search,
@@ -188,7 +188,7 @@ pub(super) fn on_keyboard_shortcut(
         HistoryKeyboardAction::ClearAll => {
             if state.history_records.is_empty() {
                 Task::none()
-            } else if state.history_clear_all_pending {
+            } else if state.history_prompt.is_clear_all() {
                 update(state, Message::History(HistoryMsg::ClearAllConfirmed))
             } else {
                 update(state, Message::History(HistoryMsg::ClearAllRequested))
@@ -197,9 +197,9 @@ pub(super) fn on_keyboard_shortcut(
         // One esc, one step back: an armed prompt first, then the
         // search, then the status toast (an error never expires).
         HistoryKeyboardAction::Escape => {
-            if state.history_clear_all_pending {
+            if state.history_prompt.is_clear_all() {
                 update(state, Message::History(HistoryMsg::ClearAllCancelled))
-            } else if state.history_delete_pending.is_some() {
+            } else if state.history_prompt.delete_target().is_some() {
                 update(state, Message::History(HistoryMsg::DeleteCancelled))
             } else if state.history_search.is_empty() && state.history_status.is_some() {
                 update(state, Message::History(HistoryMsg::StatusDismissed))
@@ -219,15 +219,13 @@ pub(super) fn on_clear_all_requested(state: &mut App) -> Task<Message> {
     // flips to "Confirm Clear · Cancel" so the user has a
     // visible second step before everything is wiped. Arming
     // Clear All also cancels any pending single-row delete.
-    state.history_delete_pending = None;
-    state.history_clear_all_pending = true;
+    state.history_prompt = HistoryPrompt::ClearAll;
     Task::none()
 }
 
 /// `HistoryMsg::ClearAllConfirmed`.
 pub(super) fn on_clear_all_confirmed(state: &mut App) -> Task<Message> {
-    state.history_clear_all_pending = false;
-    state.history_delete_pending = None;
+    state.history_prompt = HistoryPrompt::None;
     if let Err(e) = state.coordinator.clear_history() {
         tracing::warn!(target: readshot_core::log::cat::HISTORY, "clear history failed: {e}");
         state.history_status = Some(Status::new(

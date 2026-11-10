@@ -3156,8 +3156,7 @@ fn an_uninstall_that_keeps_history_lands_a_redaction_still_composing() {
     let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
     assert_eq!(app.retiring_editors.len(), 1, "still composing");
 
-    app.settings_uninstall_purge = false;
-    app.settings_uninstall_pending = true;
+    app.settings_mode = SettingsMode::ConfirmUninstall { purge: false };
     let _ = update(&mut app, Message::Settings(SettingsMsg::UninstallConfirmed));
     assert!(app.uninstalled);
     assert!(app.retiring_editors.is_empty() && app.editor.is_none());

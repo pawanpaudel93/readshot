@@ -183,10 +183,10 @@ fn history_second_delete_key_confirms() {
         HistoryKeyboardAction::Delete,
     ));
     let _ = update(&mut app, del.clone());
-    assert_eq!(app.history_delete_pending, Some(rec));
+    assert_eq!(app.history_prompt.delete_target(), Some(rec));
     // Second press goes down the confirm path (pending is consumed).
     let _ = update(&mut app, del);
-    assert_ne!(app.history_delete_pending, Some(rec));
+    assert_ne!(app.history_prompt.delete_target(), Some(rec));
 }
 
 #[test]
@@ -366,9 +366,9 @@ fn destructive_shortcut_from_another_pane_arms_and_shows_app() {
     for (key, armed) in [
         (
             "r",
-            (|a: &App| a.settings_reset_all_pending) as fn(&App) -> bool,
+            (|a: &App| a.settings_mode.is_confirming_reset_all()) as fn(&App) -> bool,
         ),
-        ("u", |a: &App| a.settings_uninstall_pending),
+        ("u", |a: &App| a.settings_mode.uninstall_purge().is_some()),
     ] {
         let (mut app, id) = settings_app();
         app.settings_pane = SettingsPane::Permissions;
@@ -382,11 +382,14 @@ fn destructive_shortcut_from_another_pane_arms_and_shows_app() {
 fn reset_confirm_from_another_pane_only_shows_the_prompt() {
     let (mut app, id) = settings_app();
     app.preferences.debug_logging = true;
-    app.settings_reset_all_pending = true;
+    app.settings_mode = SettingsMode::ConfirmResetAll;
     app.settings_pane = SettingsPane::Capture;
     press_settings_key(&mut app, id, "r", true);
     assert_eq!(app.settings_pane, SettingsPane::App);
-    assert!(app.settings_reset_all_pending, "still armed, not confirmed");
+    assert!(
+        app.settings_mode.is_confirming_reset_all(),
+        "still armed, not confirmed"
+    );
     assert!(app.preferences.debug_logging, "preferences not wiped");
 }
 
@@ -394,10 +397,10 @@ fn reset_confirm_from_another_pane_only_shows_the_prompt() {
 fn reset_confirm_on_app_pane_still_resets() {
     let (mut app, id) = settings_app();
     app.preferences.debug_logging = true;
-    app.settings_reset_all_pending = true;
+    app.settings_mode = SettingsMode::ConfirmResetAll;
     app.settings_pane = SettingsPane::App;
     press_settings_key(&mut app, id, "r", true);
-    assert!(!app.settings_reset_all_pending);
+    assert!(!app.settings_mode.is_confirming_reset_all());
     assert_eq!(
         app.preferences.debug_logging,
         Preferences::default().debug_logging
@@ -407,11 +410,14 @@ fn reset_confirm_on_app_pane_still_resets() {
 #[test]
 fn uninstall_confirm_from_another_pane_only_shows_the_prompt() {
     let (mut app, id) = settings_app();
-    app.settings_uninstall_pending = true;
+    app.settings_mode = SettingsMode::ConfirmUninstall { purge: false };
     app.settings_pane = SettingsPane::Files;
     press_settings_key(&mut app, id, "u", true);
     assert_eq!(app.settings_pane, SettingsPane::App);
-    assert!(app.settings_uninstall_pending, "still armed, not confirmed");
+    assert!(
+        app.settings_mode.uninstall_purge().is_some(),
+        "still armed, not confirmed"
+    );
 }
 
 #[test]
@@ -428,17 +434,20 @@ fn setting_shortcut_switches_to_its_pane() {
 fn leaving_capture_pane_cancels_hotkey_recording() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
     app.settings_pane = SettingsPane::Capture;
-    app.settings_recording_hotkey = true;
+    app.settings_mode = SettingsMode::RecordingHotkey;
     let _ = update(
         &mut app,
         Message::Settings(SettingsMsg::PaneSelected(SettingsPane::Capture)),
     );
-    assert!(app.settings_recording_hotkey, "staying on Capture keeps it");
+    assert!(
+        app.settings_mode.is_recording_hotkey(),
+        "staying on Capture keeps it"
+    );
     let _ = update(
         &mut app,
         Message::Settings(SettingsMsg::PaneSelected(SettingsPane::Files)),
     );
-    assert!(!app.settings_recording_hotkey);
+    assert!(!app.settings_mode.is_recording_hotkey());
     assert_eq!(app.settings_pane, SettingsPane::Files);
 }
 

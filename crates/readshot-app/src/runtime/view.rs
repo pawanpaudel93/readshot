@@ -1047,7 +1047,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
 
     // An armed Clear All states its consequence before the second press.
     let mut page = column![title_row, hairline()];
-    if state.history_clear_all_pending {
+    if state.history_prompt.is_clear_all() {
         page = page.push(
             container(toast(ToastKind::Warn, history_clear_warning(total), None))
                 .width(Length::Fill)
@@ -1133,7 +1133,7 @@ fn history_title_row<'a>(
     );
     // Two-stage Clear All: the idle (outlined danger) button arms; armed
     // shows a solid danger confirm plus Cancel.
-    let clear_controls: Element<'_, Message> = if state.history_clear_all_pending {
+    let clear_controls: Element<'_, Message> = if state.history_prompt.is_clear_all() {
         row![
             tooltip_with_key(
                 bar_button(
@@ -1187,7 +1187,7 @@ fn history_title_row<'a>(
                 .style(text_t1)
         }))
         .push(container(search).center_x(Length::Fill));
-    if !state.history_clear_all_pending {
+    if !state.history_prompt.is_clear_all() {
         title_content = title_content.push(copy_visible);
     }
     let title_content = title_content
@@ -1508,7 +1508,8 @@ fn history_split<'a>(
     let selected = state
         .history_selected_id
         .and_then(|id| visible.iter().copied().find(|record| record.id == id));
-    let delete_pending = selected.is_some_and(|r| state.history_delete_pending == Some(r.id));
+    let delete_pending =
+        selected.is_some_and(|r| state.history_prompt.delete_target() == Some(r.id));
     let detail = history_selected_panel(
         selected,
         root,
@@ -4350,7 +4351,7 @@ fn settings_permissions_pane(state: &App) -> Vec<Element<'_, Message>> {
 
 /// Whether the Settings recorder is armed for `target`.
 fn recording_target(state: &App, target: crate::app::HotkeyTarget) -> bool {
-    state.settings_recording_hotkey && state.settings_recording_target == target
+    state.settings_mode.is_recording_hotkey() && state.settings_recording_target == target
 }
 
 /// The help line under the window-capture shortcut, and whether it is a
@@ -4461,7 +4462,7 @@ fn settings_capture_pane(state: &App) -> Vec<Element<'_, Message>> {
     let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
     let hotkey_hint = capture_hotkey_hint(state);
     let hotkey_hint_is_error = capture_hotkey_hint_is_error(state);
-    let recording_capture = state.settings_recording_hotkey
+    let recording_capture = state.settings_mode.is_recording_hotkey()
         && state.settings_recording_target == crate::app::HotkeyTarget::Capture;
     let hotkey_label = if recording_capture {
         "Press shortcut…".to_string()
@@ -4836,7 +4837,7 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
     // Both destructive rows keep the two-step arm/confirm pattern: the
     // idle button (outlined red) arms, the armed step shows a filled-red
     // confirm plus Cancel. ⇧⌘R / ⇧⌘U press the same two steps.
-    let reset_row: Element<'_, Message> = if state.settings_reset_all_pending {
+    let reset_row: Element<'_, Message> = if state.settings_mode.is_confirming_reset_all() {
         settings_block(
             "Reset all settings",
             "Resets the capture shortcut, save folder, filename template, retention, OCR, and startup options. History records are kept.",
@@ -4889,64 +4890,65 @@ fn settings_app_pane(state: &App) -> Vec<Element<'_, Message>> {
         )
     };
 
-    let uninstall_row: Element<'_, Message> = if state.settings_uninstall_pending {
-        let purge_checkbox = focus_ring(
-            container(
-                iced::widget::checkbox(state.settings_uninstall_purge)
-                    .label("Also delete history and preferences")
-                    .size(16)
-                    .text_size(TYPE_BODY)
-                    .on_toggle(|a| Message::Settings(SettingsMsg::UninstallPurgeToggled(a))),
+    let uninstall_row: Element<'_, Message> =
+        if let Some(uninstall_purge) = state.settings_mode.uninstall_purge() {
+            let purge_checkbox = focus_ring(
+                container(
+                    iced::widget::checkbox(uninstall_purge)
+                        .label("Also delete history and preferences")
+                        .size(16)
+                        .text_size(TYPE_BODY)
+                        .on_toggle(|a| Message::Settings(SettingsMsg::UninstallPurgeToggled(a))),
+                )
+                .padding([2, 4]),
+                settings_lit(state, F::UninstallPurge),
+            );
+            let actions = row![
+                focus_ring(
+                    tooltip_with_key(
+                        button(text("Uninstall").size(TYPE_BODY))
+                            .padding([6, 12])
+                            .style(|t, s| action_button_style(t, s, ActionKind::Danger))
+                            .on_press(Message::Settings(SettingsMsg::UninstallConfirmed)),
+                        "Confirm Uninstall",
+                        Some(SETTINGS_UNINSTALL_KEY),
+                        Position::Top,
+                    ),
+                    settings_lit(state, F::UninstallConfirm)
+                ),
+                focus_ring(
+                    button(text("Cancel").size(TYPE_BODY))
+                        .padding([6, 12])
+                        .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
+                        .on_press(Message::Settings(SettingsMsg::UninstallCancelled)),
+                    settings_lit(state, F::UninstallCancel)
+                ),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center);
+            settings_block(
+                "Uninstall Readshot",
+                crate::uninstall::settings_uninstall_copy(cfg!(target_os = "macos")).detail,
+                column![purge_checkbox, actions].spacing(10).into(),
             )
-            .padding([2, 4]),
-            settings_lit(state, F::UninstallPurge),
-        );
-        let actions = row![
-            focus_ring(
-                tooltip_with_key(
-                    button(text("Uninstall").size(TYPE_BODY))
-                        .padding([6, 12])
-                        .style(|t, s| action_button_style(t, s, ActionKind::Danger))
-                        .on_press(Message::Settings(SettingsMsg::UninstallConfirmed)),
-                    "Confirm Uninstall",
-                    Some(SETTINGS_UNINSTALL_KEY),
-                    Position::Top,
+        } else {
+            group_row(
+                "Uninstall Readshot",
+                crate::uninstall::settings_uninstall_copy(cfg!(target_os = "macos")).summary,
+                focus_ring(
+                    tooltip_with_key(
+                        button(text("Uninstall…").size(TYPE_BODY))
+                            .padding([6, 12])
+                            .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
+                            .on_press(Message::Settings(SettingsMsg::UninstallRequested)),
+                        "Uninstall Readshot",
+                        Some(SETTINGS_UNINSTALL_KEY),
+                        Position::Top,
+                    ),
+                    settings_lit(state, F::Uninstall),
                 ),
-                settings_lit(state, F::UninstallConfirm)
-            ),
-            focus_ring(
-                button(text("Cancel").size(TYPE_BODY))
-                    .padding([6, 12])
-                    .style(|t, s| action_button_style(t, s, ActionKind::Secondary))
-                    .on_press(Message::Settings(SettingsMsg::UninstallCancelled)),
-                settings_lit(state, F::UninstallCancel)
-            ),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center);
-        settings_block(
-            "Uninstall Readshot",
-            crate::uninstall::settings_uninstall_copy(cfg!(target_os = "macos")).detail,
-            column![purge_checkbox, actions].spacing(10).into(),
-        )
-    } else {
-        group_row(
-            "Uninstall Readshot",
-            crate::uninstall::settings_uninstall_copy(cfg!(target_os = "macos")).summary,
-            focus_ring(
-                tooltip_with_key(
-                    button(text("Uninstall…").size(TYPE_BODY))
-                        .padding([6, 12])
-                        .style(|t, s| action_button_style(t, s, ActionKind::DangerQuiet))
-                        .on_press(Message::Settings(SettingsMsg::UninstallRequested)),
-                    "Uninstall Readshot",
-                    Some(SETTINGS_UNINSTALL_KEY),
-                    Position::Top,
-                ),
-                settings_lit(state, F::Uninstall),
-            ),
-        )
-    };
+            )
+        };
 
     if state.uninstalled {
         return vec![

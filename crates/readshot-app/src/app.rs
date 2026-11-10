@@ -1268,12 +1268,12 @@ pub struct App {
     /// currently-visible filtered list, so keyboard navigation and
     /// selected-row actions have a deterministic target.
     pub history_selected_id: Option<readshot_core::Uuid>,
-    /// Capture whose single-row delete is armed (awaiting a confirm
-    /// press). `Some(id)` flips that row's Delete button to a
-    /// two-stage "Delete Capture / Cancel" prompt, mirroring the
-    /// "Clear All" guard. Cleared on confirm, cancel, Escape, a search
-    /// change, or moving the selection.
-    pub history_delete_pending: Option<readshot_core::Uuid>,
+    /// Destructive confirmation armed in the history browser ("Clear
+    /// All" or a single-row delete), see [`HistoryPrompt`]. A row
+    /// delete is cleared on confirm, cancel, Escape, a search change,
+    /// or moving the selection; everything is cleared when the window
+    /// closes.
+    pub history_prompt: HistoryPrompt,
     /// How many matching rows the browser renders at once. The list
     /// is built eagerly (iced 0.14 has no virtual list), so an
     /// Unlimited-retention history would otherwise build thousands of
@@ -1298,10 +1298,11 @@ pub struct App {
     /// `window::Id` of the live settings window, if any. Single
     /// instance — re-opening just refocuses the existing window.
     pub settings_window_id: Option<iced::window::Id>,
-    /// True while Settings is waiting for the next keyboard chord to
-    /// become the global capture hotkey.
-    pub settings_recording_hotkey: bool,
-    /// Which shortcut an armed recorder sets.
+    /// Hotkey recording / armed destructive prompt in Settings. See
+    /// [`SettingsMode`]. Reset to `Idle` when the window closes.
+    pub settings_mode: SettingsMode,
+    /// Which shortcut an armed recorder sets (read while
+    /// `settings_mode` is [`SettingsMode::RecordingHotkey`]).
     pub settings_recording_target: HotkeyTarget,
     /// Whether the window-capture shortcut is registered with the OS.
     pub window_hotkey_registered: bool,
@@ -1324,16 +1325,6 @@ pub struct App {
     /// its real state), shown in the error tone under the toggle until
     /// a change succeeds or Settings closes.
     pub settings_launch_at_login_error: Option<String>,
-    /// True after the user asks to reset settings and before they
-    /// confirm or cancel.
-    pub settings_reset_all_pending: bool,
-    /// True after the user clicks "Uninstall Readshot…" in Settings and
-    /// before they confirm or cancel. Drives the two-stage destructive
-    /// prompt that guards the built-in uninstall.
-    pub settings_uninstall_pending: bool,
-    /// Whether the armed uninstall's "Also delete history and
-    /// preferences" checkbox is ticked.
-    pub settings_uninstall_purge: bool,
     /// Settings sidebar page on screen. Kept across window reopenings
     /// (not persisted across launches).
     pub settings_pane: SettingsPane,
@@ -1342,11 +1333,6 @@ pub struct App {
     /// What the last Settings shortcut changed ("Default format: JPEG"),
     /// shown by the pane title so a ⌘-key change is never silent.
     pub settings_key_feedback: Option<String>,
-    /// True after the user clicks "Clear All" in the history browser
-    /// and before they confirm or cancel. Drives the two-stage
-    /// destructive prompt that guards against accidentally nuking
-    /// every saved capture.
-    pub history_clear_all_pending: bool,
     /// Active scrolling-capture session, if any. Holds the per-frame
     /// state (captured frames, no-motion counter, HUD window id) so
     /// the runtime can drive the capture loop, render the HUD, and
@@ -1510,6 +1496,115 @@ impl ScrollSession {
             last_frame_rows_scaled: 0,
             stitch_frame_count: 0,
             recent_join_heights: std::collections::VecDeque::new(),
+        }
+    }
+}
+
+/// Interaction mode of the Settings window.
+///
+/// Hotkey recording and the two destructive confirm prompts (Reset
+/// All, Uninstall) are mutually exclusive: each takes over part of the
+/// window (recording also grabs every keypress globally), so arming
+/// one ends any other. Modelled as one enum instead of independent
+/// flags so a "recording *and* uninstall armed" state can't exist, and
+/// so closing the window resets everything with a single assignment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SettingsMode {
+    /// Nothing armed; the window is just showing preferences.
+    #[default]
+    Idle,
+    /// Waiting for the next keyboard chord to become a global hotkey
+    /// (which one: `App::settings_recording_target`).
+    RecordingHotkey,
+    /// "Reset All Settings" clicked; waiting for Confirm / Cancel.
+    ConfirmResetAll,
+    /// "Uninstall Readshot…" clicked; waiting for Confirm / Cancel.
+    /// `purge` mirrors the "Also delete history and preferences"
+    /// checkbox. It lives inside the armed state so every fresh arm
+    /// starts unticked — the most destructive option is never carried
+    /// over from an earlier, cancelled attempt.
+    ConfirmUninstall { purge: bool },
+}
+
+impl SettingsMode {
+    pub fn is_recording_hotkey(self) -> bool {
+        self == Self::RecordingHotkey
+    }
+
+    pub fn is_confirming_reset_all(self) -> bool {
+        self == Self::ConfirmResetAll
+    }
+
+    /// `Some(purge)` while the uninstall prompt is armed.
+    pub fn uninstall_purge(self) -> Option<bool> {
+        match self {
+            Self::ConfirmUninstall { purge } => Some(purge),
+            _ => None,
+        }
+    }
+
+    /// Drop either destructive prompt, leaving hotkey recording alone.
+    pub fn cancel_confirmations(&mut self) {
+        if matches!(self, Self::ConfirmResetAll | Self::ConfirmUninstall { .. }) {
+            *self = Self::Idle;
+        }
+    }
+
+    /// Disarm Reset All, leaving any other mode alone.
+    pub fn cancel_reset_all(&mut self) {
+        if self.is_confirming_reset_all() {
+            *self = Self::Idle;
+        }
+    }
+
+    /// End hotkey recording, leaving any other mode alone.
+    pub fn stop_recording(&mut self) {
+        if self.is_recording_hotkey() {
+            *self = Self::Idle;
+        }
+    }
+}
+
+/// Destructive confirmation armed in the history browser.
+///
+/// "Clear All" and a single-row delete each use a two-press guard; at
+/// most one can be armed at a time, so they share one enum rather than
+/// a `bool` plus an `Option<Uuid>` that could both be set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HistoryPrompt {
+    #[default]
+    None,
+    /// "Clear All" clicked; waiting for Confirm / Cancel.
+    ClearAll,
+    /// Delete clicked for this capture; a second press (or the
+    /// row's Confirm button) removes it.
+    Delete(readshot_core::Uuid),
+}
+
+impl HistoryPrompt {
+    pub fn is_clear_all(self) -> bool {
+        self == Self::ClearAll
+    }
+
+    /// Capture whose single-row delete is armed, if any.
+    pub fn delete_target(self) -> Option<readshot_core::Uuid> {
+        match self {
+            Self::Delete(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Disarm a pending single-row delete, leaving "Clear All" alone.
+    pub fn cancel_delete(&mut self) {
+        if matches!(self, Self::Delete(_)) {
+            *self = Self::None;
+        }
+    }
+
+    /// Disarm "Clear All", leaving a pending single-row delete alone.
+    pub fn cancel_clear_all(&mut self) {
+        if self.is_clear_all() {
+            *self = Self::None;
         }
     }
 }
@@ -1680,13 +1775,13 @@ impl App {
             cancelled_history_open: None,
             history_search: String::new(),
             history_selected_id: None,
-            history_delete_pending: None,
+            history_prompt: HistoryPrompt::None,
             history_page_limit: HISTORY_PAGE_SIZE,
             preferences_path: None,
             uninstalled: false,
             settings_uninstall_result: None,
             settings_window_id: None,
-            settings_recording_hotkey: false,
+            settings_mode: SettingsMode::Idle,
             settings_recording_target: HotkeyTarget::Capture,
             window_hotkey_registered: false,
             settings_window_hotkey_error: None,
@@ -1695,13 +1790,9 @@ impl App {
             settings_status: None,
             settings_folder_status: None,
             settings_launch_at_login_error: None,
-            settings_reset_all_pending: false,
-            settings_uninstall_pending: false,
-            settings_uninstall_purge: false,
             settings_pane: SettingsPane::default(),
             settings_focus: None,
             settings_key_feedback: None,
-            history_clear_all_pending: false,
             scroll_session: None,
             reduce_motion: false,
             instance_mailbox: None,
@@ -1913,21 +2004,31 @@ impl App {
                 changed
             }
             SettingsMsg::UninstallRequested => {
-                // Only one destructive prompt armed at a time.
-                self.settings_reset_all_pending = false;
-                self.settings_uninstall_pending = true;
+                // Only one mode at a time: arming uninstall ends hotkey
+                // recording and disarms Reset All. Re-arming while
+                // already armed keeps the current checkbox state.
+                if self.settings_mode.uninstall_purge().is_some() {
+                    return false;
+                }
+                self.settings_mode = SettingsMode::ConfirmUninstall { purge: false };
                 true
             }
             SettingsMsg::UninstallCancelled => {
-                let was_armed = self.settings_uninstall_pending;
-                self.settings_uninstall_pending = false;
+                let was_armed = self.settings_mode.uninstall_purge().is_some();
+                if was_armed {
+                    self.settings_mode = SettingsMode::Idle;
+                }
                 was_armed
             }
-            SettingsMsg::UninstallPurgeToggled(purge) => {
-                let changed = self.settings_uninstall_purge != purge;
-                self.settings_uninstall_purge = purge;
-                changed
-            }
+            SettingsMsg::UninstallPurgeToggled(purge) => match self.settings_mode {
+                // The checkbox is only rendered while armed; a stray
+                // toggle otherwise has nothing to change.
+                SettingsMode::ConfirmUninstall { purge: current } if current != purge => {
+                    self.settings_mode = SettingsMode::ConfirmUninstall { purge };
+                    true
+                }
+                _ => false,
+            },
             // Windows, pickers, the recorder and the two-stage prompts'
             // tasks: handled in `runtime::settings_ops`.
             SettingsMsg::OpenRequested
@@ -2026,28 +2127,73 @@ mod tests {
     #[test]
     fn uninstall_prompt_arms_and_cancels_without_executing() {
         let (mut app, _) = build_app(Arc::new(FakePermissions::granted()));
-        assert!(!app.settings_uninstall_pending);
+        assert_eq!(app.settings_mode, SettingsMode::Idle);
 
-        // Arming an uninstall clears any reset prompt and sets pending.
-        app.settings_reset_all_pending = true;
+        // Arming an uninstall replaces any reset prompt.
+        app.settings_mode = SettingsMode::ConfirmResetAll;
         let changed = app.apply_settings_sync(SettingsMsg::UninstallRequested);
         assert!(changed);
-        assert!(app.settings_uninstall_pending);
-        assert!(!app.settings_reset_all_pending);
+        assert_eq!(app.settings_mode.uninstall_purge(), Some(false));
+        assert!(!app.settings_mode.is_confirming_reset_all());
 
-        // The purge checkbox toggles independently of the armed state.
+        // The purge checkbox toggles while armed.
         let changed = app.apply_settings_sync(SettingsMsg::UninstallPurgeToggled(true));
         assert!(changed);
-        assert!(app.settings_uninstall_purge);
+        assert_eq!(app.settings_mode.uninstall_purge(), Some(true));
         // Toggling to the same value reports no change.
         assert!(!app.apply_settings_sync(SettingsMsg::UninstallPurgeToggled(true)));
+        // Re-arming while armed keeps the checkbox as the user left it.
+        assert!(!app.apply_settings_sync(SettingsMsg::UninstallRequested));
+        assert_eq!(app.settings_mode.uninstall_purge(), Some(true));
 
         // Cancelling disarms without touching anything else.
         let changed = app.apply_settings_sync(SettingsMsg::UninstallCancelled);
         assert!(changed);
-        assert!(!app.settings_uninstall_pending);
+        assert_eq!(app.settings_mode, SettingsMode::Idle);
         // A second cancel is a no-op.
         assert!(!app.apply_settings_sync(SettingsMsg::UninstallCancelled));
+    }
+
+    #[test]
+    fn uninstall_purge_never_carries_over_to_a_fresh_arm() {
+        let (mut app, _) = build_app(Arc::new(FakePermissions::granted()));
+        app.apply_settings_sync(SettingsMsg::UninstallRequested);
+        app.apply_settings_sync(SettingsMsg::UninstallPurgeToggled(true));
+        app.apply_settings_sync(SettingsMsg::UninstallCancelled);
+
+        app.apply_settings_sync(SettingsMsg::UninstallRequested);
+        assert_eq!(app.settings_mode.uninstall_purge(), Some(false));
+    }
+
+    #[test]
+    fn uninstall_purge_toggle_is_ignored_when_not_armed() {
+        let (mut app, _) = build_app(Arc::new(FakePermissions::granted()));
+        assert!(!app.apply_settings_sync(SettingsMsg::UninstallPurgeToggled(true)));
+        assert_eq!(app.settings_mode, SettingsMode::Idle);
+    }
+
+    #[test]
+    fn arming_uninstall_ends_hotkey_recording() {
+        let (mut app, _) = build_app(Arc::new(FakePermissions::granted()));
+        app.settings_mode = SettingsMode::RecordingHotkey;
+        app.apply_settings_sync(SettingsMsg::UninstallRequested);
+        assert!(!app.settings_mode.is_recording_hotkey());
+    }
+
+    #[test]
+    fn history_prompt_helpers_only_disarm_their_own_variant() {
+        let id = readshot_core::Uuid::new_v4();
+        let mut prompt = HistoryPrompt::ClearAll;
+        prompt.cancel_delete();
+        assert!(prompt.is_clear_all());
+        prompt.cancel_clear_all();
+        assert_eq!(prompt, HistoryPrompt::None);
+
+        let mut prompt = HistoryPrompt::Delete(id);
+        prompt.cancel_clear_all();
+        assert_eq!(prompt.delete_target(), Some(id));
+        prompt.cancel_delete();
+        assert_eq!(prompt, HistoryPrompt::None);
     }
 
     #[test]

@@ -187,7 +187,7 @@ fn recording_a_reserved_chord_keeps_the_previous_shortcut() {
             &mut app,
             Message::Settings(SettingsMsg::HotkeyRecorded(reserved.into())),
         );
-        assert!(!app.settings_recording_hotkey, "{reserved}");
+        assert!(!app.settings_mode.is_recording_hotkey(), "{reserved}");
         assert_eq!(app.preferences.capture_hotkey, "ctrl+alt+k", "{reserved}");
         let error = app.settings_hotkey_error.clone().unwrap_or_default();
         assert_eq!(

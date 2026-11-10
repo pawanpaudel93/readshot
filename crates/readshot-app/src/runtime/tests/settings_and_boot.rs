@@ -836,13 +836,65 @@ fn window_closed_clears_settings_window_id() {
     let id = iced::window::Id::unique();
     app.windows.register(id, WindowKind::Settings);
     app.settings_window_id = Some(id);
-    app.settings_recording_hotkey = true;
+    app.settings_mode = SettingsMode::RecordingHotkey;
     app.settings_hotkey_error = Some("bad shortcut".into());
     let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
     assert!(app.settings_window_id.is_none());
-    assert!(!app.settings_recording_hotkey);
+    assert!(!app.settings_mode.is_recording_hotkey());
     assert!(app.settings_hotkey_error.is_none());
     assert!(app.windows.kind(id).is_none());
+}
+
+#[test]
+fn closing_settings_disarms_uninstall_prompt() {
+    // Regression: the window-close reset used to clear Reset All but
+    // not Uninstall, so reopening Settings showed the armed
+    // destructive prompt again.
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let id = iced::window::Id::unique();
+    app.windows.register(id, WindowKind::Settings);
+    app.settings_window_id = Some(id);
+    let _ = update(&mut app, Message::Settings(SettingsMsg::UninstallRequested));
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::UninstallPurgeToggled(true)),
+    );
+    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
+    assert_eq!(app.settings_mode, SettingsMode::Idle);
+}
+
+#[test]
+fn settings_modes_are_mutually_exclusive() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let _ = update(&mut app, Message::Settings(SettingsMsg::UninstallRequested));
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::StartHotkeyRecording),
+    );
+    assert_eq!(app.settings_mode, SettingsMode::RecordingHotkey);
+    let _ = update(&mut app, Message::Settings(SettingsMsg::ResetAllRequested));
+    assert_eq!(app.settings_mode, SettingsMode::ConfirmResetAll);
+    let _ = update(&mut app, Message::Settings(SettingsMsg::UninstallRequested));
+    assert_eq!(
+        app.settings_mode,
+        SettingsMode::ConfirmUninstall { purge: false }
+    );
+    // Cancelling a prompt that isn't armed leaves the other alone.
+    let _ = update(&mut app, Message::Settings(SettingsMsg::ResetAllCancelled));
+    assert!(app.settings_mode.uninstall_purge().is_some());
+    let _ = update(
+        &mut app,
+        Message::Settings(SettingsMsg::HotkeyRecordingCancelled),
+    );
+    assert!(app.settings_mode.uninstall_purge().is_some());
+}
+
+#[test]
+fn uninstall_confirm_without_arming_does_nothing() {
+    let mut app = build_app(Arc::new(FakePermissions::granted()));
+    let _ = update(&mut app, Message::Settings(SettingsMsg::UninstallConfirmed));
+    assert_eq!(app.settings_mode, SettingsMode::Idle);
+    assert!(!app.uninstalled, "a stray confirm must not uninstall");
 }
 
 #[test]
@@ -921,12 +973,12 @@ fn hotkey_problems_are_flagged_as_errors_not_help() {
 #[test]
 fn shortcut_hints_name_a_way_back_and_recording_says_it_once() {
     let mut app = build_app(Arc::new(FakePermissions::granted()));
-    app.settings_recording_hotkey = true;
+    app.settings_mode = SettingsMode::RecordingHotkey;
     let hint = crate::runtime::view::capture_hotkey_hint(&app);
     // The recording instruction lives under the control only.
     assert!(!hint.to_lowercase().contains("esc"), "{hint}");
     assert!(!hint.to_lowercase().contains("press"), "{hint}");
-    app.settings_recording_hotkey = false;
+    app.settings_mode = SettingsMode::Idle;
     app.preferences.capture_hotkey = "cmd+shift+x".into();
     app.capture_hotkey_registered = false;
     let hint = crate::runtime::view::capture_hotkey_hint(&app);
@@ -1083,7 +1135,7 @@ fn recording_the_window_shortcut_sets_it_and_leaves_the_capture_one() {
         &mut app,
         Message::Settings(SettingsMsg::StartWindowHotkeyRecording),
     );
-    assert!(app.settings_recording_hotkey);
+    assert!(app.settings_mode.is_recording_hotkey());
     assert_eq!(
         app.settings_recording_target,
         crate::app::HotkeyTarget::WindowCapture
@@ -1092,7 +1144,7 @@ fn recording_the_window_shortcut_sets_it_and_leaves_the_capture_one() {
         &mut app,
         Message::Settings(SettingsMsg::HotkeyRecorded("ctrl+alt+w".into())),
     );
-    assert!(!app.settings_recording_hotkey);
+    assert!(!app.settings_mode.is_recording_hotkey());
     assert_eq!(app.preferences.window_capture_hotkey, "ctrl+alt+w");
     assert_eq!(app.preferences.capture_hotkey, capture);
 }
@@ -1148,7 +1200,7 @@ fn uninstalled_app(purge: bool) -> (tempfile::TempDir, App) {
     app.preferences.launch_at_login = true;
     app.hotkey_actions.insert(7, GlobalHotkeyAction::Capture);
     app.settings_window_id = Some(iced::window::Id::unique());
-    app.settings_uninstall_pending = true;
+    app.settings_mode = SettingsMode::ConfirmUninstall { purge: false };
     let _ = update(
         &mut app,
         Message::Settings(SettingsMsg::UninstallFinished {
@@ -1213,7 +1265,7 @@ fn a_settings_uninstall_that_leaves_the_program_says_what_is_left() {
     assert!(said.text.contains("still installed"), "{}", said.text);
     assert_eq!(said.tone, StatusTone::Warning);
     assert!(app.settings_status.is_none(), "not under another row");
-    assert!(!app.settings_uninstall_pending);
+    assert!(!app.settings_mode.uninstall_purge().is_some());
 }
 
 /// After it, Readshot is inert until it quits: no shortcut, no tray
@@ -1285,8 +1337,7 @@ fn confirming_app(purge: bool, prefs_on_disk: bool) -> (tempfile::TempDir, App) 
     app.preferences_path = Some(path);
     app.hotkey_actions.insert(7, GlobalHotkeyAction::Capture);
     app.settings_window_id = Some(iced::window::Id::unique());
-    app.settings_uninstall_pending = true;
-    app.settings_uninstall_purge = purge;
+    app.settings_mode = SettingsMode::ConfirmUninstall { purge };
     app.coordinator.flush_history_updates();
     (dir, app)
 }

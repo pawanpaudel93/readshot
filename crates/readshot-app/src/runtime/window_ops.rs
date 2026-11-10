@@ -88,14 +88,15 @@ pub(super) fn on_window_closed(state: &mut App, id: iced::window::Id) -> Task<Me
     history_ops::on_history_window_closed(state, id);
     if state.settings_window_id == Some(id) {
         state.settings_window_id = None;
-        state.settings_recording_hotkey = false;
+        // Ends hotkey recording and disarms Reset All *and*
+        // Uninstall, so a reopened window starts clean.
+        state.settings_mode = SettingsMode::Idle;
         state.settings_window_hotkey_error = None;
         state.settings_hotkey_error = None;
         state.settings_hotkey_status = None;
         state.settings_status = None;
         state.settings_folder_status = None;
         state.settings_launch_at_login_error = None;
-        state.settings_reset_all_pending = false;
     }
     let restore = match state.editor.take_if(|ed| ed.window_id == Some(id)) {
         Some(ed) => {

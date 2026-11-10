@@ -373,8 +373,8 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
 
 use crate::app::{
     App, AppMsg, BeautifyMsg, CaptureMsg, CombineMsg, EditorMsg, FocusMsg, GlobalHotkeyAction,
-    HistoryKeyboardAction, HistoryMsg, ImageMsg, Message, PinMsg, ScrollMsg, SettingsMsg,
-    TextPanelMsg, TickMsg, WelcomeMsg, WindowKind, WindowMsg,
+    HistoryKeyboardAction, HistoryMsg, HistoryPrompt, ImageMsg, Message, PinMsg, ScrollMsg,
+    SettingsMode, SettingsMsg, TextPanelMsg, TickMsg, WelcomeMsg, WindowKind, WindowMsg,
 };
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
@@ -837,7 +837,7 @@ fn editor_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
 /// The shortcut recorder, the app-wide shortcuts, and the History,
 /// Settings, pin and Welcome windows' key maps.
 fn window_key_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) {
-    if state.settings_recording_hotkey {
+    if state.settings_mode.is_recording_hotkey() {
         subs.push(iced::event::listen_with(|event, _status, _window| {
             let (key, modifiers) = key_press(event)?;
             if shortcut_cancelled_by_keypress(&key, modifiers) {
@@ -864,7 +864,7 @@ fn window_key_subscriptions(state: &App, subs: &mut Vec<Subscription<Message>>) 
     if state.history_window_id.is_some() {
         subs.push(iced::event::listen_with(history_event_message));
     }
-    if state.settings_window_id.is_some() && !state.settings_recording_hotkey {
+    if state.settings_window_id.is_some() && !state.settings_mode.is_recording_hotkey() {
         // Settings is pointer-only (togglers, pick-lists, buttons), none
         // of which iced 0.14 can focus. Tap keys and route them to the
         // settings handler, which validates the window id. The filename

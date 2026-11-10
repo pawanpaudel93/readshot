@@ -29,7 +29,7 @@ pub(crate) const WITHHELD_NOTE: &str =
 
 /// `HistoryMsg::Reveal`.
 pub(super) fn on_reveal(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
-    state.history_delete_pending = None;
+    state.history_prompt.cancel_delete();
     let Some(path) = served_image(state, id) else {
         return Task::none();
     };
@@ -45,7 +45,7 @@ pub(super) fn on_reveal(state: &mut App, id: readshot_core::Uuid) -> Task<Messag
 
 /// `HistoryMsg::CopyImage`.
 pub(super) fn on_copy_image(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
-    state.history_delete_pending = None;
+    state.history_prompt.cancel_delete();
     let Some(path) = served_image(state, id) else {
         return Task::none();
     };
@@ -77,7 +77,7 @@ pub(super) fn on_copy_image_done(state: &mut App, result: Result<(), String>) ->
 
 /// `HistoryMsg::CopyText`.
 pub(super) fn on_copy_text(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
-    state.history_delete_pending = None;
+    state.history_prompt.cancel_delete();
     match state
         .history_records
         .iter()
@@ -187,7 +187,7 @@ pub(super) fn on_copy_visible_text_done(
 
 /// `HistoryMsg::Pin`.
 pub(super) fn on_pin(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
-    state.history_delete_pending = None;
+    state.history_prompt.cancel_delete();
     let Some(path) = served_image(state, id) else {
         return Task::none();
     };
@@ -231,10 +231,10 @@ pub(super) fn on_delete(state: &mut App, id: readshot_core::Uuid) -> Task<Messag
     // arms the prompt (the row's button flips to "Confirm
     // delete?"); a second press for the same id confirms. This
     // also makes the Delete key confirm on a repeat press.
-    if state.history_delete_pending == Some(id) {
+    if state.history_prompt.delete_target() == Some(id) {
         return delete_history_record(state, id);
     }
-    state.history_clear_all_pending = false;
-    state.history_delete_pending = Some(id);
+    // Replaces an armed Clear All or a different row's delete.
+    state.history_prompt = HistoryPrompt::Delete(id);
     Task::none()
 }

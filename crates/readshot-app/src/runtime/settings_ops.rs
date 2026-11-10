@@ -3,7 +3,7 @@
 //! the moved arms compile unchanged.
 
 use super::*;
-use crate::app::{SettingsFocus, SettingsPane};
+use crate::app::{SettingsFocus, SettingsMode, SettingsPane};
 use crate::permissions::PermissionStatus;
 
 /// Every [`SettingsMsg`]: `update` hands each `Message::Settings` here.
@@ -50,25 +50,24 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
             Task::none()
         }
         SettingsMsg::StartHotkeyRecording => {
-            state.settings_recording_hotkey = true;
+            // Recording replaces any armed Reset All / Uninstall prompt.
+            state.settings_mode = SettingsMode::RecordingHotkey;
             state.settings_recording_target = crate::app::HotkeyTarget::Capture;
             state.settings_hotkey_error = None;
             state.settings_hotkey_status = None;
             state.settings_status = None;
-            state.settings_reset_all_pending = false;
             Task::none()
         }
         SettingsMsg::StartWindowHotkeyRecording => {
-            state.settings_recording_hotkey = true;
+            state.settings_mode = SettingsMode::RecordingHotkey;
             state.settings_recording_target = crate::app::HotkeyTarget::WindowCapture;
             state.settings_window_hotkey_error = None;
             state.settings_status = None;
-            state.settings_reset_all_pending = false;
             Task::none()
         }
         SettingsMsg::HotkeyRecorded(shortcut) => on_hotkey_recorded(state, shortcut),
         SettingsMsg::HotkeyRecordingInvalid => {
-            state.settings_recording_hotkey = true;
+            state.settings_mode = SettingsMode::RecordingHotkey;
             let error = Some(
                 "That key can't be used. Combine a modifier (Command, Control, Option, or Shift) \
                  with a letter, number, arrow, or function key."
@@ -83,7 +82,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
             Task::none()
         }
         SettingsMsg::HotkeyRecordingCancelled => {
-            state.settings_recording_hotkey = false;
+            state.settings_mode.stop_recording();
             if state.settings_recording_target == crate::app::HotkeyTarget::WindowCapture {
                 state.settings_window_hotkey_error = None;
             } else {
@@ -93,15 +92,15 @@ pub(crate) fn handle_settings_message(state: &mut App, message: SettingsMsg) -> 
             Task::none()
         }
         SettingsMsg::ResetAllRequested => {
-            state.settings_reset_all_pending = true;
-            state.settings_uninstall_pending = false;
+            // Replaces hotkey recording or an armed Uninstall prompt.
+            state.settings_mode = SettingsMode::ConfirmResetAll;
             state.settings_hotkey_error = None;
             state.settings_hotkey_status = None;
             state.settings_status = None;
             Task::none()
         }
         SettingsMsg::ResetAllCancelled => {
-            state.settings_reset_all_pending = false;
+            state.settings_mode.cancel_reset_all();
             Task::none()
         }
         SettingsMsg::ResetAllConfirmed => on_reset_all_confirmed(state),
@@ -202,12 +201,12 @@ pub(crate) fn settings_focus_items(state: &App) -> Vec<SettingsFocus> {
         SettingsPane::Diagnostics => vec![F::DebugLogging],
         SettingsPane::App => {
             let mut v = vec![F::LaunchAtLogin];
-            if state.settings_reset_all_pending {
+            if state.settings_mode.is_confirming_reset_all() {
                 v.extend([F::ResetConfirm, F::ResetCancel]);
             } else {
                 v.push(F::ResetAll);
             }
-            if state.settings_uninstall_pending {
+            if state.settings_mode.uninstall_purge().is_some() {
                 v.extend([F::UninstallPurge, F::UninstallConfirm, F::UninstallCancel]);
             } else {
                 v.push(F::Uninstall);
@@ -374,7 +373,7 @@ fn activate_settings_item(state: &mut App, item: SettingsFocus) -> Task<Message>
         F::PermissionRecheck => Message::App(AppMsg::PermissionTick),
         F::PermissionReset => Message::App(AppMsg::ResetPermissionRequested),
         F::PermissionOpen => Message::App(AppMsg::OpenPermissionSettingsRequested),
-        F::HotkeyRecord | F::WindowHotkeyRecord if state.settings_recording_hotkey => {
+        F::HotkeyRecord | F::WindowHotkeyRecord if state.settings_mode.is_recording_hotkey() => {
             Message::Settings(SettingsMsg::HotkeyRecordingCancelled)
         }
         F::HotkeyRecord => Message::Settings(SettingsMsg::StartHotkeyRecording),
@@ -416,7 +415,7 @@ fn activate_settings_item(state: &mut App, item: SettingsFocus) -> Task<Message>
         F::ResetCancel => Message::Settings(SettingsMsg::ResetAllCancelled),
         F::Uninstall => Message::Settings(SettingsMsg::UninstallRequested),
         F::UninstallPurge => Message::Settings(SettingsMsg::UninstallPurgeToggled(
-            !state.settings_uninstall_purge,
+            !state.settings_mode.uninstall_purge().unwrap_or(false),
         )),
         F::UninstallConfirm => Message::Settings(SettingsMsg::UninstallConfirmed),
         F::UninstallCancel => Message::Settings(SettingsMsg::UninstallCancelled),
@@ -457,8 +456,7 @@ fn on_settings(state: &mut App, submsg: SettingsMessage) -> Task<Message> {
     if !matches!(submsg, SettingsMessage::SetCaptureHotkey(_)) {
         state.settings_hotkey_status = None;
     }
-    state.settings_reset_all_pending = false;
-    state.settings_uninstall_pending = false;
+    state.settings_mode.cancel_confirmations();
     state.update_sync(Message::Settings(SettingsMsg::Edit(submsg)));
     if needs_rehotkey {
         refresh_hotkey_registration(state);
@@ -534,7 +532,7 @@ fn on_open_settings(state: &mut App) -> Task<Message> {
 
 /// `SettingsMsg::HotkeyRecorded`.
 fn on_hotkey_recorded(state: &mut App, shortcut: String) -> Task<Message> {
-    state.settings_recording_hotkey = false;
+    state.settings_mode.stop_recording();
     if state.settings_recording_target == crate::app::HotkeyTarget::WindowCapture {
         return on_window_hotkey_recorded(state, shortcut);
     }
@@ -596,8 +594,8 @@ fn on_window_hotkey_recorded(state: &mut App, shortcut: String) -> Task<Message>
 
 /// `SettingsMsg::ResetAllConfirmed`.
 fn on_reset_all_confirmed(state: &mut App) -> Task<Message> {
-    state.settings_reset_all_pending = false;
-    state.settings_recording_hotkey = false;
+    state.settings_mode.cancel_reset_all();
+    state.settings_mode.stop_recording();
     state.settings_hotkey_error = None;
     state.settings_window_hotkey_error = None;
     state.settings_hotkey_status = None;
@@ -627,11 +625,15 @@ fn on_reset_all_confirmed(state: &mut App) -> Task<Message> {
 
 /// `SettingsMsg::UninstallConfirmed`.
 fn on_uninstall_confirmed(state: &mut App) -> Task<Message> {
-    state.settings_uninstall_pending = false;
+    // Only the armed prompt's Confirm can get here; a stray confirm
+    // with nothing armed must not uninstall.
+    let Some(purge) = state.settings_mode.uninstall_purge() else {
+        return Task::none();
+    };
+    state.settings_mode = SettingsMode::Idle;
     // Build the plan on the UI thread (read-only, fast), then run
     // the I/O-heavy executor on a blocking worker so moving the
     // bundle to Trash and deleting data dirs can't stall the UI.
-    let purge = state.settings_uninstall_purge;
     let paths = crate::uninstall::default_uninstall_paths();
     let plan = crate::uninstall::plan_uninstall(&paths, purge);
     // Off in memory now; in the kept preferences file only once the
@@ -763,8 +765,8 @@ fn go_inert(state: &mut App, keep_history: bool) -> Task<Message> {
         }
     }
     state.uninstalled = true;
-    state.settings_uninstall_pending = false;
-    state.settings_recording_hotkey = false;
+    // Ends recording and disarms the Uninstall prompt.
+    state.settings_mode = SettingsMode::Idle;
     state.settings_status = None;
     // System-wide shortcuts released (dropping the manager unregisters).
     state.hotkey_manager = None;
@@ -836,7 +838,7 @@ fn on_pane_selected(state: &mut App, pane: SettingsPane) -> Task<Message> {
     // A recording armed on Capture must not keep listening once
     // its prompt is off-screen, or the next chord would silently
     // become the capture hotkey.
-    if pane != SettingsPane::Capture && state.settings_recording_hotkey {
+    if pane != SettingsPane::Capture && state.settings_mode.is_recording_hotkey() {
         let _ = update(
             state,
             Message::Settings(SettingsMsg::HotkeyRecordingCancelled),
@@ -927,7 +929,7 @@ fn on_settings_key_pressed(
             adjust_settings_item(state, item, 1)
         }
         SettingsKeyAction::RecordShortcut => {
-            if state.settings_recording_hotkey {
+            if state.settings_mode.is_recording_hotkey() {
                 Task::none()
             } else {
                 update(state, Message::Settings(SettingsMsg::StartHotkeyRecording))
@@ -938,7 +940,7 @@ fn on_settings_key_pressed(
         // A confirm only proceeds when its prompt was already
         // visible; from another pane the press just shows it.
         SettingsKeyAction::ResetAll => {
-            if state.settings_reset_all_pending {
+            if state.settings_mode.is_confirming_reset_all() {
                 if !prompt_visible {
                     return Task::none();
                 }
@@ -951,7 +953,7 @@ fn on_settings_key_pressed(
             update(state, Message::Settings(SettingsMsg::PaneSelected(pane)))
         }
         SettingsKeyAction::Uninstall => {
-            if state.settings_uninstall_pending {
+            if state.settings_mode.uninstall_purge().is_some() {
                 if !prompt_visible {
                     return Task::none();
                 }

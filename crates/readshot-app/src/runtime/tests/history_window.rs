@@ -343,40 +343,44 @@ async fn a_corrupt_index_is_rebuilt_when_history_lists() {
 /// search, selection, status. History binds no ⌘W of its own.
 #[test]
 fn closing_history_resets_the_browser() {
-    let (_dir, _store, mut app, newer, _older) = app_with_two_saved_records();
-    let id = iced::window::Id::unique();
-    app.windows.register(id, WindowKind::History);
-    app.history_window_id = Some(id);
-    let _ = update(
-        &mut app,
-        Message::History(HistoryMsg::SearchChanged("primary".into())),
-    );
-    app.history_status = Some(Status::new(StatusTone::Notice, "x"));
-    app.history_delete_pending = Some(newer.id);
-    app.history_clear_all_pending = true;
-    app.history_page_limit = crate::app::HISTORY_PAGE_SIZE * 3;
-    assert_eq!(app.history_selected_id, Some(newer.id));
+    // Either armed prompt (they exclude each other) is dropped.
+    for armed in ["delete", "clear all"] {
+        let (_dir, _store, mut app, newer, _older) = app_with_two_saved_records();
+        let id = iced::window::Id::unique();
+        app.windows.register(id, WindowKind::History);
+        app.history_window_id = Some(id);
+        let _ = update(
+            &mut app,
+            Message::History(HistoryMsg::SearchChanged("primary".into())),
+        );
+        app.history_status = Some(Status::new(StatusTone::Notice, "x"));
+        app.history_prompt = if armed == "delete" {
+            HistoryPrompt::Delete(newer.id)
+        } else {
+            HistoryPrompt::ClearAll
+        };
+        app.history_page_limit = crate::app::HISTORY_PAGE_SIZE * 3;
+        assert_eq!(app.history_selected_id, Some(newer.id));
 
-    let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
-    assert_eq!(app.history_window_id, None);
-    assert_eq!(app.windows.kind(id), None);
-    assert!(app.history_records.is_empty());
-    assert!(app.history_search.is_empty());
-    assert_eq!(app.history_selected_id, None);
-    assert!(app.history_status.is_none());
-    assert_eq!(
-        app.history_delete_pending, None,
-        "an armed delete is dropped"
-    );
-    assert!(
-        !app.history_clear_all_pending,
-        "an armed Clear All is dropped"
-    );
-    assert_eq!(app.history_page_limit, crate::app::HISTORY_PAGE_SIZE);
+        let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
+        assert_eq!(app.history_window_id, None);
+        assert_eq!(app.windows.kind(id), None);
+        assert!(app.history_records.is_empty());
+        assert!(app.history_search.is_empty());
+        assert_eq!(app.history_selected_id, None);
+        assert!(app.history_status.is_none());
+        assert_eq!(
+            app.history_prompt,
+            HistoryPrompt::None,
+            "an armed {armed} is dropped"
+        );
+        assert_eq!(app.history_page_limit, crate::app::HISTORY_PAGE_SIZE);
 
-    assert!(
-        history_key_message(id, &Key::Character("w".into()), command_modifiers(), true).is_none()
-    );
+        assert!(
+            history_key_message(id, &Key::Character("w".into()), command_modifiers(), true)
+                .is_none()
+        );
+    }
 }
 
 /// HI-26 / HI-15 (B-C1): Clear All armed with ⇧⌘⌫ is disarmed when the
@@ -392,7 +396,7 @@ async fn reopening_history_never_keeps_clear_all_armed() {
     let (mut app, id) = history_app(&store);
     let (key, m) = clear_all_chord();
     history_key(&mut app, id, key.clone(), m);
-    assert!(app.history_clear_all_pending, "the first press arms");
+    assert!(app.history_prompt.is_clear_all(), "the first press arms");
     let _ = update(&mut app, Message::Window(WindowMsg::Closed(id)));
 
     let _ = update(&mut app, Message::History(HistoryMsg::OpenRequested));
@@ -467,7 +471,7 @@ fn a_held_clear_all_chord_only_arms() {
     let (_dir, store, mut app, id) = history_with(3);
     let (key, m) = clear_all_chord();
     hold_history_key(&mut app, id, key, m, 5);
-    assert!(app.history_clear_all_pending, "the first press arms");
+    assert!(app.history_prompt.is_clear_all(), "the first press arms");
     assert_eq!(store.list().unwrap().len(), 3, "a repeat never confirms");
 }
 
@@ -484,7 +488,10 @@ fn a_held_delete_key_deletes_at_most_one_capture() {
         8,
     );
     assert!(store.list().unwrap().len() >= 2, "at most one is deleted");
-    assert!(app.history_delete_pending.is_some(), "the press armed it");
+    assert!(
+        app.history_prompt.delete_target().is_some(),
+        "the press armed it"
+    );
 }
 
 /// A held ↓ still walks the list: arrows auto-repeat.

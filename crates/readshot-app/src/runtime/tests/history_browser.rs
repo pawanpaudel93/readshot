@@ -481,17 +481,17 @@ fn history_clear_all_removes_records_and_resets_browser_state() {
 
     // First click arms the destructive prompt; records stay intact.
     let _ = update(&mut app, Message::History(HistoryMsg::ClearAllRequested));
-    assert!(app.history_clear_all_pending);
+    assert!(app.history_prompt.is_clear_all());
     assert_eq!(app.history_records.len(), 2);
     // Cancel exits the armed state without touching anything.
     let _ = update(&mut app, Message::History(HistoryMsg::ClearAllCancelled));
-    assert!(!app.history_clear_all_pending);
+    assert!(!app.history_prompt.is_clear_all());
     assert_eq!(app.history_records.len(), 2);
     // Re-arm and confirm; now the records actually go.
     let _ = update(&mut app, Message::History(HistoryMsg::ClearAllRequested));
     let _ = update(&mut app, Message::History(HistoryMsg::ClearAllConfirmed));
 
-    assert!(!app.history_clear_all_pending);
+    assert!(!app.history_prompt.is_clear_all());
     assert!(store.list().unwrap().is_empty());
     assert!(app.history_records.is_empty());
     assert!(app
@@ -506,7 +506,7 @@ fn single_delete_arms_before_removing_anything() {
 
     // First press only arms the prompt; nothing is removed.
     let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
-    assert_eq!(app.history_delete_pending, Some(newer.id));
+    assert_eq!(app.history_prompt.delete_target(), Some(newer.id));
     assert_eq!(store.list().unwrap().len(), 2);
 
     // Explicit confirm removes exactly the armed record.
@@ -514,7 +514,7 @@ fn single_delete_arms_before_removing_anything() {
         &mut app,
         Message::History(HistoryMsg::DeleteConfirmed(newer.id)),
     );
-    assert_eq!(app.history_delete_pending, None);
+    assert_eq!(app.history_prompt.delete_target(), None);
     let remaining = store.list().unwrap();
     assert_eq!(remaining.len(), 1);
     assert!(remaining.iter().all(|r| r.id != newer.id));
@@ -526,7 +526,7 @@ fn single_delete_second_press_confirms() {
     let (_dir, store, mut app, newer, _older) = app_with_two_saved_records();
     let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
     let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
-    assert_eq!(app.history_delete_pending, None);
+    assert_eq!(app.history_prompt.delete_target(), None);
     assert_eq!(store.list().unwrap().len(), 1);
 }
 
@@ -537,7 +537,7 @@ fn single_delete_cancelled_by_other_actions() {
     // Selecting another row cancels the armed delete.
     let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
     let _ = update(&mut app, Message::History(HistoryMsg::Select(older.id)));
-    assert_eq!(app.history_delete_pending, None);
+    assert_eq!(app.history_prompt.delete_target(), None);
 
     // A search change (Escape maps here too) cancels it.
     let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
@@ -545,18 +545,32 @@ fn single_delete_cancelled_by_other_actions() {
         &mut app,
         Message::History(HistoryMsg::SearchChanged("x".into())),
     );
-    assert_eq!(app.history_delete_pending, None);
+    assert_eq!(app.history_prompt.delete_target(), None);
 
     // Explicit cancel clears it as well.
     let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
     let _ = update(&mut app, Message::History(HistoryMsg::DeleteCancelled));
-    assert_eq!(app.history_delete_pending, None);
+    assert_eq!(app.history_prompt.delete_target(), None);
 
     // Nothing was ever removed while only arming/cancelling.
     assert_eq!(store.list().unwrap().len(), 2);
 }
 
 // ---- #7: open browser refreshes on save and on OCR result ----
+
+#[test]
+fn clear_all_and_row_delete_replace_each_other() {
+    let (_dir, store, mut app, newer, _older) = app_with_two_saved_records();
+    let _ = update(&mut app, Message::History(HistoryMsg::ClearAllRequested));
+    let _ = update(&mut app, Message::History(HistoryMsg::Delete(newer.id)));
+    assert_eq!(app.history_prompt, HistoryPrompt::Delete(newer.id));
+    let _ = update(&mut app, Message::History(HistoryMsg::ClearAllRequested));
+    assert_eq!(app.history_prompt, HistoryPrompt::ClearAll);
+    // Row actions that only cancel a pending delete leave Clear All armed.
+    let _ = update(&mut app, Message::History(HistoryMsg::SelectNext));
+    assert!(app.history_prompt.is_clear_all());
+    assert_eq!(store.list().unwrap().len(), 2);
+}
 
 #[test]
 fn history_record_saved_refreshes_only_when_browser_open() {

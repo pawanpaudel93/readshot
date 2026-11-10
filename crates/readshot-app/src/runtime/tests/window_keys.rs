@@ -105,10 +105,10 @@ fn clear_all_arms_then_confirms_and_esc_cancels_it() {
         HistoryKeyboardAction::Escape,
     ));
     let _ = update(&mut app, clear.clone());
-    assert!(app.history_clear_all_pending);
+    assert!(app.history_prompt.is_clear_all());
     assert_eq!(app.history_records.len(), 2, "one press only arms");
     let _ = update(&mut app, esc);
-    assert!(!app.history_clear_all_pending, "esc cancels the prompt");
+    assert!(!app.history_prompt.is_clear_all(), "esc cancels the prompt");
     let _ = update(&mut app, clear.clone());
     let _ = update(&mut app, clear);
     assert!(app.history_records.is_empty());
@@ -172,7 +172,7 @@ fn tab_walks_the_settings_pane_and_space_presses() {
         Modifiers::empty(),
         false,
     );
-    assert!(app.settings_reset_all_pending);
+    assert!(app.settings_mode.is_confirming_reset_all());
     assert_eq!(app.settings_focus, Some(SettingsFocus::ResetConfirm));
     settings_key(
         &mut app,
@@ -189,7 +189,7 @@ fn tab_walks_the_settings_pane_and_space_presses() {
         Modifiers::empty(),
         false,
     );
-    assert!(!app.settings_reset_all_pending);
+    assert!(!app.settings_mode.is_confirming_reset_all());
     // ⇧Tab wraps backwards.
     settings_key(
         &mut app,
@@ -220,7 +220,7 @@ fn settings_items_cover_every_pointer_only_control() {
     app.permission_status = PermissionStatus::Denied;
     assert_eq!(settings_ops::settings_focus_items(&app).len(), 3);
     app.settings_pane = SettingsPane::App;
-    app.settings_uninstall_pending = true;
+    app.settings_mode = SettingsMode::ConfirmUninstall { purge: false };
     assert!(settings_ops::settings_focus_items(&app).contains(&SettingsFocus::UninstallPurge));
 }
 
@@ -300,7 +300,7 @@ fn command_k_records_a_shortcut() {
     );
     let (mut app, id) = settings_app();
     press_settings_key(&mut app, id, "k", false);
-    assert!(app.settings_recording_hotkey);
+    assert!(app.settings_mode.is_recording_hotkey());
     assert_eq!(app.settings_pane, SettingsPane::Capture);
 }
 

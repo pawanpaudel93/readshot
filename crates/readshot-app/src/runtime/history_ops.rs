@@ -79,12 +79,12 @@ pub(crate) fn handle_history_message(state: &mut App, message: HistoryMsg) -> Ta
         }
         HistoryMsg::ClearAllRequested => browse::on_clear_all_requested(state),
         HistoryMsg::ClearAllCancelled => {
-            state.history_clear_all_pending = false;
+            state.history_prompt.cancel_clear_all();
             Task::none()
         }
         HistoryMsg::ClearAllConfirmed => browse::on_clear_all_confirmed(state),
         HistoryMsg::OpenInEditor(id) => {
-            state.history_delete_pending = None;
+            state.history_prompt.cancel_delete();
             open_history_record(state, id)
         }
         HistoryMsg::ReopenedAfterSync {
@@ -106,7 +106,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: HistoryMsg) -> Ta
         HistoryMsg::Delete(id) => actions::on_delete(state, id),
         HistoryMsg::DeleteConfirmed(id) => delete_history_record(state, id),
         HistoryMsg::DeleteCancelled => {
-            state.history_delete_pending = None;
+            state.history_prompt.cancel_delete();
             Task::none()
         }
         HistoryMsg::ShowMore => {
@@ -122,7 +122,7 @@ pub(crate) fn handle_history_message(state: &mut App, message: HistoryMsg) -> Ta
 /// Clears the armed-delete guard first so the confirm button reverts
 /// regardless of outcome.
 fn delete_history_record(state: &mut App, id: readshot_core::Uuid) -> Task<Message> {
-    state.history_delete_pending = None;
+    state.history_prompt.cancel_delete();
     if let Err(e) = state.coordinator.delete_history(id) {
         tracing::warn!(target: readshot_core::log::cat::HISTORY, "delete failed: {e}");
         state.history_status = Some(Status::new(
