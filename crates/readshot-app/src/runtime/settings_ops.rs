@@ -24,8 +24,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             if !matches!(submsg, SettingsMessage::SetCaptureHotkey(_)) {
                 state.settings_hotkey_status = None;
             }
-            state.settings_reset_all_pending = false;
-            state.settings_uninstall_pending = false;
+            state.settings_mode.cancel_confirmations();
             state.update_sync(Message::Settings(submsg));
             if needs_rehotkey {
                 refresh_hotkey_registration(state);
@@ -89,15 +88,15 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             Task::none()
         }
         Message::SettingsStartHotkeyRecording => {
-            state.settings_recording_hotkey = true;
+            // Recording replaces any armed Reset All / Uninstall prompt.
+            state.settings_mode = SettingsMode::RecordingHotkey;
             state.settings_hotkey_error = None;
             state.settings_hotkey_status = None;
             state.settings_status = None;
-            state.settings_reset_all_pending = false;
             Task::none()
         }
         Message::SettingsHotkeyRecorded(shortcut) => {
-            state.settings_recording_hotkey = false;
+            state.settings_mode.stop_recording();
             // Reject a chord that collides with a reserved fixed hotkey
             // (History / Settings) instead of silently disabling one of
             // them. Keep the previous capture hotkey and tell the user.
@@ -116,7 +115,7 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             )
         }
         Message::SettingsHotkeyRecordingInvalid => {
-            state.settings_recording_hotkey = true;
+            state.settings_mode = SettingsMode::RecordingHotkey;
             state.settings_hotkey_status = None;
             state.settings_hotkey_error = Some(
                 "That key can't be used. Combine a modifier (Command, Control, Option, or Shift) \
@@ -126,26 +125,27 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             Task::none()
         }
         Message::SettingsHotkeyRecordingCancelled => {
-            state.settings_recording_hotkey = false;
+            state.settings_mode.stop_recording();
             state.settings_hotkey_error = None;
             state.settings_hotkey_status = None;
             Task::none()
         }
         Message::SettingsResetAllRequested => {
-            state.settings_reset_all_pending = true;
-            state.settings_uninstall_pending = false;
+            // Replaces hotkey recording or an armed Uninstall prompt.
+            state.settings_mode = SettingsMode::ConfirmResetAll;
             state.settings_hotkey_error = None;
             state.settings_hotkey_status = None;
             state.settings_status = None;
             Task::none()
         }
         Message::SettingsResetAllCancelled => {
-            state.settings_reset_all_pending = false;
+            if state.settings_mode.is_confirming_reset_all() {
+                state.settings_mode = SettingsMode::Idle;
+            }
             Task::none()
         }
         Message::SettingsResetAllConfirmed => {
-            state.settings_reset_all_pending = false;
-            state.settings_recording_hotkey = false;
+            state.settings_mode = SettingsMode::Idle;
             state.settings_hotkey_error = None;
             state.settings_hotkey_status = None;
             state.settings_status = Some("Settings reset to defaults.".to_string());
@@ -174,11 +174,15 @@ pub(crate) fn handle_settings_message(state: &mut App, message: Message) -> Task
             Task::none()
         }
         Message::SettingsUninstallConfirmed => {
-            state.settings_uninstall_pending = false;
+            // Only the armed prompt's Confirm button can get here; a
+            // stray confirm with nothing armed must not uninstall.
+            let Some(purge) = state.settings_mode.uninstall_purge() else {
+                return Task::none();
+            };
+            state.settings_mode = SettingsMode::Idle;
             // Build the plan on the UI thread (read-only, fast), then run
             // the I/O-heavy executor on a blocking worker so moving the
             // bundle to Trash and deleting data dirs can't stall the UI.
-            let purge = state.settings_uninstall_purge;
             let paths = crate::uninstall::default_uninstall_paths();
             let plan = crate::uninstall::plan_uninstall(&paths, purge);
             Task::perform(

@@ -77,6 +77,13 @@ extra system packages beyond a stable Rust toolchain.
   `FakePermissions` live next to their traits. Any new test that hits
   the real OS belongs in a `#[cfg(target_os = "...")]` smoke-test
   module or behind the `[run integration]` CI gate.
+* **Mutually exclusive UI modes are enums, not flag pairs.** If two
+  `bool` / `Option` fields on `App` must never both be set (an armed
+  confirm prompt, a recording mode, …), model them as one enum with
+  small helper methods, so the invalid combination can't be written
+  and a window-close reset is one assignment. Examples:
+  `app::SettingsMode`, `app::HistoryPrompt`, `welcome::WelcomeState`,
+  `overlay::Active`.
 * **Snapshots use `insta`.** `cargo insta review` to accept changes;
   PNG snapshots are stored as `*.snap.png` next to the test source.
 * **Commit straight to `main`.** No per-task feature branches in this

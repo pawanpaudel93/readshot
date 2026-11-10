@@ -581,7 +581,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
     // button. Armed: the button flips to "Confirm Clear" and a
     // companion "Cancel" button appears next to it so the user has
     // an obvious second-step before everything is wiped.
-    let clear_button: Element<'_, Message> = if state.history_clear_all_pending {
+    let clear_button: Element<'_, Message> = if state.history_prompt.is_clear_all() {
         row![
             button(text(format!("Confirm Clear ({total})")).size(12))
                 .padding([8, 10])
@@ -630,7 +630,7 @@ pub(crate) fn history_view(state: &App) -> Element<'_, Message> {
         Space::new().height(Length::Fixed(0.0)).into()
     } else {
         let delete_pending =
-            selected.is_some() && state.history_delete_pending == selected.map(|r| r.id);
+            selected.is_some() && state.history_prompt.delete_target() == selected.map(|r| r.id);
         history_selected_panel(selected, delete_pending)
     };
     // Only push the count / status lines when they have something to
@@ -3316,7 +3316,7 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     .align_y(Alignment::Center);
 
     let pretty = pretty_hotkey(&state.preferences.capture_hotkey);
-    let mut hotkey_hint = if state.settings_recording_hotkey {
+    let mut hotkey_hint = if state.settings_mode.is_recording_hotkey() {
         state
             .settings_hotkey_error
             .clone()
@@ -3357,7 +3357,7 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
             format!("{hotkey_hint}  {warning}")
         };
     }
-    let hotkey_label = if state.settings_recording_hotkey {
+    let hotkey_label = if state.settings_mode.is_recording_hotkey() {
         "Press shortcut…".to_string()
     } else {
         pretty_hotkey(&state.preferences.capture_hotkey)
@@ -3379,7 +3379,7 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
     let (permission_title, permission_hint) = permission_settings_summary(permission_status);
 
     let history_retention = state.preferences.history_retention;
-    let settings_recording_hotkey = state.settings_recording_hotkey;
+    let settings_recording_hotkey = state.settings_mode.is_recording_hotkey();
     let permission_control: Element<'_, Message> = responsive(move |available| {
         let status = column![
             text(permission_title).size(13),
@@ -3656,7 +3656,7 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
         .into(),
     );
 
-    let reset_pending = state.settings_reset_all_pending;
+    let reset_pending = state.settings_mode.is_confirming_reset_all();
     let reset_status = state
         .settings_status
         .as_deref()
@@ -3721,10 +3721,9 @@ pub(crate) fn settings_view(state: &App) -> Element<'_, Message> {
 
     // Uninstall is the loudest destructive control, so it sits last in
     // its own section, following the same two-step arm/confirm pattern.
-    let uninstall_pending = state.settings_uninstall_pending;
-    let uninstall_purge = state.settings_uninstall_purge;
+    let uninstall_armed = state.settings_mode.uninstall_purge();
     let uninstall_controls: Element<'_, Message> = responsive(move |available| {
-        if uninstall_pending {
+        if let Some(uninstall_purge) = uninstall_armed {
             let explanation = text(
                 "Removes the launch-at-login item, the readshot command-line tools, and the \
                  Screen Recording permission, then moves Readshot to the Trash.",

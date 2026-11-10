@@ -267,7 +267,10 @@ fn debug_editor_qa_annotations() -> Vec<readshot_core::Annotation> {
     ]
 }
 
-use crate::app::{App, GlobalHotkeyAction, HistoryKeyboardAction, Message, WindowKind};
+use crate::app::{
+    App, GlobalHotkeyAction, HistoryKeyboardAction, HistoryPrompt, Message, SettingsMode,
+    WindowKind,
+};
 use crate::coordinator::CaptureCoordinator;
 use crate::permissions::default_provider;
 use crate::welcome::WelcomeState;
@@ -612,7 +615,7 @@ pub fn subscription(state: &App) -> Subscription<Message> {
             }
         }));
     }
-    if state.settings_recording_hotkey {
+    if state.settings_mode.is_recording_hotkey() {
         subs.push(iced::event::listen_with(|event, _status, _window| {
             use iced::keyboard::Event as KbEvent;
             if let iced::Event::Keyboard(KbEvent::KeyPressed { key, modifiers, .. }) = event {
@@ -1429,14 +1432,19 @@ pub fn update(state: &mut App, message: Message) -> Task<Message> {
                 state.history_status = None;
                 state.history_search.clear();
                 state.history_selected_id = None;
+                // An armed Clear All / row delete must not resurface
+                // the next time the browser opens.
+                state.history_prompt = HistoryPrompt::None;
+                state.history_page_limit = crate::app::HISTORY_PAGE_SIZE;
             }
             if state.settings_window_id == Some(id) {
                 state.settings_window_id = None;
-                state.settings_recording_hotkey = false;
+                // Ends hotkey recording and disarms Reset All *and*
+                // Uninstall, so a reopened window starts clean.
+                state.settings_mode = SettingsMode::Idle;
                 state.settings_hotkey_error = None;
                 state.settings_hotkey_status = None;
                 state.settings_status = None;
-                state.settings_reset_all_pending = false;
             }
             if state.cli_tools_window_id == Some(id) {
                 state.cli_tools_window_id = None;
@@ -3296,17 +3304,17 @@ mod tests {
 
         // First click arms the destructive prompt; records stay intact.
         let _ = update(&mut app, Message::HistoryClearAllRequested);
-        assert!(app.history_clear_all_pending);
+        assert!(app.history_prompt.is_clear_all());
         assert_eq!(app.history_records.len(), 2);
         // Cancel exits the armed state without touching anything.
         let _ = update(&mut app, Message::HistoryClearAllCancelled);
-        assert!(!app.history_clear_all_pending);
+        assert!(!app.history_prompt.is_clear_all());
         assert_eq!(app.history_records.len(), 2);
         // Re-arm and confirm; now the records actually go.
         let _ = update(&mut app, Message::HistoryClearAllRequested);
         let _ = update(&mut app, Message::HistoryClearAllConfirmed);
 
-        assert!(!app.history_clear_all_pending);
+        assert!(!app.history_prompt.is_clear_all());
         assert!(store.list().unwrap().is_empty());
         assert!(app.history_records.is_empty());
         assert!(app
@@ -3346,12 +3354,12 @@ mod tests {
 
         // First press only arms the prompt; nothing is removed.
         let _ = update(&mut app, Message::HistoryDelete(newer.id));
-        assert_eq!(app.history_delete_pending, Some(newer.id));
+        assert_eq!(app.history_prompt.delete_target(), Some(newer.id));
         assert_eq!(store.list().unwrap().len(), 2);
 
         // Explicit confirm removes exactly the armed record.
         let _ = update(&mut app, Message::HistoryDeleteConfirmed(newer.id));
-        assert_eq!(app.history_delete_pending, None);
+        assert_eq!(app.history_prompt.delete_target(), None);
         let remaining = store.list().unwrap();
         assert_eq!(remaining.len(), 1);
         assert!(remaining.iter().all(|r| r.id != newer.id));
@@ -3363,7 +3371,7 @@ mod tests {
         let (_dir, store, mut app, newer, _older) = app_with_two_saved_records();
         let _ = update(&mut app, Message::HistoryDelete(newer.id));
         let _ = update(&mut app, Message::HistoryDelete(newer.id));
-        assert_eq!(app.history_delete_pending, None);
+        assert_eq!(app.history_prompt.delete_target(), None);
         assert_eq!(store.list().unwrap().len(), 1);
     }
 
@@ -3374,19 +3382,65 @@ mod tests {
         // Selecting another row cancels the armed delete.
         let _ = update(&mut app, Message::HistoryDelete(newer.id));
         let _ = update(&mut app, Message::HistorySelect(older.id));
-        assert_eq!(app.history_delete_pending, None);
+        assert_eq!(app.history_prompt.delete_target(), None);
 
         // A search change (Escape maps here too) cancels it.
         let _ = update(&mut app, Message::HistoryDelete(newer.id));
         let _ = update(&mut app, Message::HistorySearchChanged("x".into()));
-        assert_eq!(app.history_delete_pending, None);
+        assert_eq!(app.history_prompt.delete_target(), None);
 
         // Explicit cancel clears it as well.
         let _ = update(&mut app, Message::HistoryDelete(newer.id));
         let _ = update(&mut app, Message::HistoryDeleteCancelled);
-        assert_eq!(app.history_delete_pending, None);
+        assert_eq!(app.history_prompt.delete_target(), None);
 
         // Nothing was ever removed while only arming/cancelling.
+        assert_eq!(store.list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn closing_history_disarms_destructive_prompts() {
+        // Regression: closing the browser left Clear All armed, so the
+        // next open showed "Confirm Clear" straight away.
+        for close_via_window_event in [false, true] {
+            let (_dir, store, mut app, newer, _older) = app_with_two_saved_records();
+            let id = iced::window::Id::unique();
+            app.windows.register(id, WindowKind::History);
+            app.history_window_id = Some(id);
+
+            let _ = update(&mut app, Message::HistoryClearAllRequested);
+            assert!(app.history_prompt.is_clear_all());
+            let close = if close_via_window_event {
+                Message::WindowClosed(id)
+            } else {
+                Message::HistoryClosed
+            };
+            let _ = update(&mut app, close);
+            assert_eq!(app.history_prompt, HistoryPrompt::None);
+
+            let _ = update(&mut app, Message::OpenHistoryRequested);
+            assert_eq!(app.history_prompt, HistoryPrompt::None);
+
+            // An armed row delete is dropped the same way.
+            let _ = update(&mut app, Message::HistoryDelete(newer.id));
+            assert_eq!(app.history_prompt.delete_target(), Some(newer.id));
+            let _ = update(&mut app, Message::HistoryClosed);
+            assert_eq!(app.history_prompt, HistoryPrompt::None);
+            assert_eq!(store.list().unwrap().len(), 2);
+        }
+    }
+
+    #[test]
+    fn clear_all_and_row_delete_replace_each_other() {
+        let (_dir, store, mut app, newer, _older) = app_with_two_saved_records();
+        let _ = update(&mut app, Message::HistoryClearAllRequested);
+        let _ = update(&mut app, Message::HistoryDelete(newer.id));
+        assert_eq!(app.history_prompt, HistoryPrompt::Delete(newer.id));
+        let _ = update(&mut app, Message::HistoryClearAllRequested);
+        assert_eq!(app.history_prompt, HistoryPrompt::ClearAll);
+        // Row actions that only cancel a pending delete leave Clear All armed.
+        let _ = update(&mut app, Message::HistorySelectNext);
+        assert!(app.history_prompt.is_clear_all());
         assert_eq!(store.list().unwrap().len(), 2);
     }
 
@@ -4370,13 +4424,55 @@ mod tests {
         let id = iced::window::Id::unique();
         app.windows.register(id, WindowKind::Settings);
         app.settings_window_id = Some(id);
-        app.settings_recording_hotkey = true;
+        app.settings_mode = SettingsMode::RecordingHotkey;
         app.settings_hotkey_error = Some("bad shortcut".into());
         let _ = update(&mut app, Message::WindowClosed(id));
         assert!(app.settings_window_id.is_none());
-        assert!(!app.settings_recording_hotkey);
+        assert_eq!(app.settings_mode, SettingsMode::Idle);
         assert!(app.settings_hotkey_error.is_none());
         assert!(app.windows.kind(id).is_none());
+    }
+
+    #[test]
+    fn closing_settings_disarms_uninstall_prompt() {
+        // Regression: the window-close reset used to clear Reset All
+        // but not Uninstall, so reopening Settings showed the armed
+        // destructive prompt again.
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let id = iced::window::Id::unique();
+        app.windows.register(id, WindowKind::Settings);
+        app.settings_window_id = Some(id);
+        let _ = update(&mut app, Message::SettingsUninstallRequested);
+        let _ = update(&mut app, Message::SettingsUninstallPurgeToggled(true));
+        let _ = update(&mut app, Message::WindowClosed(id));
+        assert_eq!(app.settings_mode, SettingsMode::Idle);
+    }
+
+    #[test]
+    fn settings_modes_are_mutually_exclusive() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let _ = update(&mut app, Message::SettingsUninstallRequested);
+        let _ = update(&mut app, Message::SettingsStartHotkeyRecording);
+        assert_eq!(app.settings_mode, SettingsMode::RecordingHotkey);
+        let _ = update(&mut app, Message::SettingsResetAllRequested);
+        assert_eq!(app.settings_mode, SettingsMode::ConfirmResetAll);
+        let _ = update(&mut app, Message::SettingsUninstallRequested);
+        assert_eq!(
+            app.settings_mode,
+            SettingsMode::ConfirmUninstall { purge: false }
+        );
+        // Cancelling a prompt that isn't armed leaves the other alone.
+        let _ = update(&mut app, Message::SettingsResetAllCancelled);
+        assert!(app.settings_mode.uninstall_purge().is_some());
+        let _ = update(&mut app, Message::SettingsHotkeyRecordingCancelled);
+        assert!(app.settings_mode.uninstall_purge().is_some());
+    }
+
+    #[test]
+    fn uninstall_confirm_without_arming_does_nothing() {
+        let mut app = build_app(Arc::new(FakePermissions::granted()));
+        let _ = update(&mut app, Message::SettingsUninstallConfirmed);
+        assert_eq!(app.settings_mode, SettingsMode::Idle);
     }
 
     #[test]
