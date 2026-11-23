@@ -16,16 +16,6 @@ yanked = "warn"
 # Re-audit when bumping `tray-icon` / `muda` / `image`. A real
 # vulnerability advisory is NOT ignored and will still fail the gate.
 ignore = [
-    # gtk-rs GTK3 bindings — pulled in transitively by tray-icon /
-    # libappindicator for the Linux tray; the whole gtk3 binding family
-    # is unmaintained and there is no maintained drop-in replacement yet.
-    "RUSTSEC-2024-0412",
-    "RUSTSEC-2024-0413",
-    "RUSTSEC-2024-0415",
-    "RUSTSEC-2024-0416",
-    "RUSTSEC-2024-0418",
-    "RUSTSEC-2024-0419",
-    "RUSTSEC-2024-0420",
     # paste — unmaintained proc-macro, transitive build dependency only.
     "RUSTSEC-2024-0436",
     # proc-macro-error — unmaintained, transitive via the gtk3 macros.
