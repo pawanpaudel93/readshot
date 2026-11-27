@@ -1265,7 +1265,7 @@ fn a_settings_uninstall_that_leaves_the_program_says_what_is_left() {
     assert!(said.text.contains("still installed"), "{}", said.text);
     assert_eq!(said.tone, StatusTone::Warning);
     assert!(app.settings_status.is_none(), "not under another row");
-    assert!(!app.settings_mode.uninstall_purge().is_some());
+    assert!(app.settings_mode.uninstall_purge().is_none());
 }
 
 /// After it, Readshot is inert until it quits: no shortcut, no tray
